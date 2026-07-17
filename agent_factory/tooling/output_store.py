@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from agent_factory.tooling.output_compressor import compress_tool_output
 from agent_factory.tooling.envelope import tool_envelope
+from agent_factory.tooling.execution_context import current_tool_output_session_id
 from agent_factory.tooling.spec import ToolOutputCompressionActionConfig, ToolOutputCompressionConfig
 
 
@@ -35,12 +36,18 @@ class ToolOutputProjection:
 
 
 class ToolOutputStore:
-    """Filesystem-backed store for full tool outputs hidden from model context."""
+    """Filesystem-backed, session-scoped store for full tool outputs."""
 
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root).expanduser().resolve()
-        self.records_dir = self.root / "records"
-        self.records_dir.mkdir(parents=True, exist_ok=True)
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def records_dir(self) -> Path:
+        session_id = current_tool_output_session_id() or "unscoped"
+        records_dir = self.root / "sessions" / session_id / "records"
+        records_dir.mkdir(parents=True, exist_ok=True)
+        return records_dir
 
     def write_output(
         self,

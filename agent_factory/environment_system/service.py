@@ -4,6 +4,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,9 @@ from .runtime_image import (
 from .versions import DEPENDENCY_POOL_VERSION, ENVIRONMENT_LOCK_VERSION
 
 
+EnvironmentProgress = Callable[[str, dict[str, Any]], None]
+
+
 class EnvironmentResolutionError(RuntimeError):
     def __init__(self, status: str, message: str) -> None:
         super().__init__(message)
@@ -32,8 +36,14 @@ class EnvironmentResolver:
     def __init__(self, pool: DependencyPool | None = None) -> None:
         self.pool = pool or DependencyPool()
 
-    def ensure(self, package_root: str | Path) -> dict[str, Any]:
+    def ensure(
+        self,
+        package_root: str | Path,
+        *,
+        on_progress: EnvironmentProgress | None = None,
+    ) -> dict[str, Any]:
         root = Path(package_root).expanduser().resolve()
+        _notify(on_progress, "checking_contract", package_root=str(root))
         contract = load_dependencies_contract(root)
         config = contract.config
         base_image = str(config.base_image or "agentfactory-runtime-python:3.12").strip()
@@ -49,8 +59,9 @@ class EnvironmentResolver:
             request_fingerprint = _fingerprint(request)
             existing = self._read_lock_payload(root)
             if self._is_reusable_lock(existing, request_fingerprint):
+                _notify(on_progress, "ready", cache_status="lock_hit", dependency_count=0)
                 return existing
-            return self._write_lock(
+            result = self._write_lock(
                 root,
                 {
                     "version": ENVIRONMENT_LOCK_VERSION,
@@ -64,9 +75,12 @@ class EnvironmentResolver:
                     "verified_at": _now(),
                 },
             )
+            _notify(on_progress, "ready", cache_status="lock_created", dependency_count=0)
+            return result
         docker = shutil.which("docker")
         if not docker:
             raise EnvironmentResolutionError("docker_unavailable", "Docker CLI is required to resolve package dependencies")
+        _notify(on_progress, "checking_runtime", base_image=base_image)
         architecture = _docker_architecture(docker)
         allowed = set(config.platform_architectures)
         if allowed and architecture not in allowed:
@@ -89,7 +103,19 @@ class EnvironmentResolver:
         request_fingerprint = _fingerprint(request)
         existing = self._read_lock_payload(root)
         if self._is_reusable_lock(existing, request_fingerprint):
+            _notify(
+                on_progress,
+                "ready",
+                cache_status="lock_hit",
+                dependency_count=_dependency_count(request),
+            )
             return existing
+        _notify(
+            on_progress,
+            "resolving_dependencies",
+            cache_status="resolving_profile",
+            dependency_count=_dependency_count(request),
+        )
         try:
             resolution = self.pool.resolve(
                 docker=docker,
@@ -102,6 +128,15 @@ class EnvironmentResolver:
             )
         except DependencyPoolError as exc:
             raise EnvironmentResolutionError(exc.status, str(exc)) from exc
+        _notify(
+            on_progress,
+            "dependency_profile_ready",
+            cache_status=resolution.cache_status,
+            profile_key=resolution.profile_key,
+            python_artifact_count=len(resolution.python_entries),
+            system_artifact_count=len(resolution.system_entries),
+            npm_profile_ready=resolution.npm_profile is not None,
+        )
         payload = {
             "version": ENVIRONMENT_LOCK_VERSION,
             "status": "ready",
@@ -113,7 +148,14 @@ class EnvironmentResolver:
             "pool": resolution.to_lock_payload(),
             "verified_at": _now(),
         }
-        return self._write_lock(root, payload)
+        result = self._write_lock(root, payload)
+        _notify(
+            on_progress,
+            "ready",
+            cache_status="pool_ready",
+            dependency_count=_dependency_count(request),
+        )
+        return result
 
     def read_lock(self, package_root: str | Path) -> dict[str, Any]:
         root = Path(package_root).expanduser().resolve()
@@ -198,6 +240,18 @@ def _normalized_values(values: list[str]) -> list[str]:
 
 def _has_materializable_dependencies(*, enabled: bool, config: Any) -> bool:
     return bool(enabled and (config.python_requirements or config.system_packages or config.npm_requirements))
+
+
+def _dependency_count(request: dict[str, Any]) -> int:
+    return sum(
+        len(request.get(key) or [])
+        for key in ("python_requirements", "system_packages", "npm_requirements")
+    )
+
+
+def _notify(callback: EnvironmentProgress | None, stage: str, **payload: Any) -> None:
+    if callback is not None:
+        callback(stage, payload)
 
 
 def _fingerprint(value: dict[str, Any]) -> str:

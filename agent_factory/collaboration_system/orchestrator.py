@@ -77,6 +77,27 @@ class CollaborationOrchestrator:
         self.store = store or CollaborationStore()
         self.runtime = runtime or AgentPackageRuntimeManager()
 
+    def _update_task(
+        self,
+        collaboration_id: str,
+        task_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        session = self.store.update_task(collaboration_id, task_id, payload)
+        self._publish_session(collaboration_id, session=session)
+        return session
+
+    def _publish_session(
+        self,
+        collaboration_id: str,
+        *,
+        session: dict[str, Any] | None = None,
+    ) -> None:
+        self.runtime.emit_collaboration_session_updated(
+            collaboration_id=collaboration_id,
+            session=session or self.store.get_session(collaboration_id),
+        )
+
     def start_ready_tasks(self, collaboration_id: str, *, limit: int | None = None) -> dict[str, Any]:
         remaining = limit if limit is None else max(0, limit)
         results: list[CollaborationRunTaskResult] = []
@@ -323,7 +344,7 @@ class CollaborationOrchestrator:
         session = self.store.get_session(collaboration_id)
         task = _task_by_id(session, task_id)
         if not _dependencies_satisfied(session, task):
-            self.store.update_task(collaboration_id, task_id, {"status": "queued"})
+            self._update_task(collaboration_id, task_id, {"status": "queued"})
             self.store.record_message(
                 collaboration_id,
                 speaker_type="system",
@@ -346,7 +367,7 @@ class CollaborationOrchestrator:
             raise ValueError("task assignee_package_id is required")
         if not self.store.acquire_worker_lease(collaboration_id, task_id):
             summary = f"子 Agent {package_id} 正在执行其他任务，本任务保持排队。"
-            self.store.update_task(
+            self._update_task(
                 collaboration_id,
                 task_id,
                 {
@@ -364,7 +385,7 @@ class CollaborationOrchestrator:
                 artifact_refs=list(task.get("artifact_refs") or []),
             )
         init_request_id = f"collab-init-{task_id}"
-        self.store.update_task(
+        self._update_task(
             collaboration_id,
             task_id,
             {
@@ -379,7 +400,7 @@ class CollaborationOrchestrator:
         )
         self.runtime.initialize_package(package_id, request_id=init_request_id)
         run_request_id = f"collab-task-{task_id}-{uuid4().hex[:8]}"
-        self.store.update_task(
+        self._update_task(
             collaboration_id,
             task_id,
             {
@@ -413,7 +434,7 @@ class CollaborationOrchestrator:
         assignee_session_id = str(worker_session.get("session_id") or task.get("assignee_session_id") or "").strip()
         if not assignee_session_id:
             raise RuntimeError("collaboration worker session was not created")
-        self.store.update_task(
+        self._update_task(
             collaboration_id,
             task_id,
             {"assignee_session_id": assignee_session_id},
@@ -428,7 +449,7 @@ class CollaborationOrchestrator:
         missing_materials = _missing_shared_materials(shared_materials)
         if missing_materials:
             summary = "授权共享材料缺失，任务未启动：" + "、".join(missing_materials)
-            self.store.update_task(
+            self._update_task(
                 collaboration_id,
                 task_id,
                 {
@@ -483,6 +504,7 @@ class CollaborationOrchestrator:
             collaboration_id=collaboration_id,
             task_id=task_id,
             package_id=package_id,
+            on_change=lambda: self._publish_session(collaboration_id),
         )
         outcome = self._consume_worker_run(
             run=run,
@@ -547,6 +569,7 @@ class CollaborationOrchestrator:
             collaboration_id=collaboration_id,
             task_id=task_id,
             package_id=package_id,
+            on_change=lambda: self._publish_session(collaboration_id),
         )
         approval = resume_payload.get("approval") if isinstance(resume_payload.get("approval"), dict) else {}
         approved_by = str(approval.get("approved_by") or "user").strip()
@@ -557,7 +580,7 @@ class CollaborationOrchestrator:
             if isinstance(task.get("result_payload"), dict)
             else {}
         )
-        self.store.update_task(
+        self._update_task(
             collaboration_id,
             task_id,
             {
@@ -632,7 +655,7 @@ class CollaborationOrchestrator:
         )
         if shared_material_changes:
             summary = "worker 写入或修改了只读共享材料目录 share_files/，交付被拒绝：" + "、".join(shared_material_changes)
-            self.store.update_task(
+            self._update_task(
                 collaboration_id,
                 task_id,
                 {
@@ -676,7 +699,7 @@ class CollaborationOrchestrator:
             task=task,
         )
         artifact_refs = [delivery_artifact, *worker_artifacts]
-        self.store.update_task(
+        self._update_task(
             collaboration_id,
             task_id,
             {
@@ -753,7 +776,7 @@ class CollaborationOrchestrator:
                 summary = "worker runtime completed without satisfying the delivery contract: " + "; ".join(
                     delivery_validation.errors
                 )
-                self.store.update_task(
+                self._update_task(
                     collaboration_id,
                     task_id,
                     {
@@ -788,7 +811,7 @@ class CollaborationOrchestrator:
         if outcome.status != "completed":
             summary = outcome.message or f"worker runtime finished with status {outcome.status}"
             task_status = "blocked" if outcome.status == "blocked" else "failed"
-            self.store.update_task(
+            self._update_task(
                 collaboration_id,
                 task_id,
                 {
@@ -882,7 +905,7 @@ class CollaborationOrchestrator:
     ) -> WorkerRunOutcome:
         assignee_session_id = str((run.session or {}).get("session_id") or "").strip() or None
         if assignee_session_id:
-            self.store.update_task(
+            self._update_task(
                 collaboration_id,
                 task_id,
                 {"assignee_session_id": assignee_session_id},
@@ -1273,6 +1296,7 @@ def _worker_prompt(*, session: dict[str, Any], task: dict[str, Any], shared_mate
             "你的交付物必须写入当前工作区的普通路径，例如 result.md、logo.png、reports/summary.md；不要写入 share_files/。宿主会自动收集这些普通工作区文件作为任务交付物。",
             "delivery_standard 是交付路径的唯一权威来源；任务描述中的路径如果与其冲突，必须以 delivery_standard 为准。路径均相对于当前工作区根目录，不要添加工作区名称、宿主路径或容器挂载路径前缀。",
             f"本任务必须创建或更新以下交付文件：\n{delivery_paths}",
+            "delivery_standard.acceptance_criteria 是主 Agent 将在读取真实产物后逐项执行的语义验收标准；请让产物本身完整提供可核查证据，不要只在最终回复中声称已满足。",
             "visible_context 是纯文本提示，不代表文件已存在；只有下面共享材料列表里的路径才是已授权文件。",
             f"协作会话：{session.get('title') or session.get('collaboration_id')}",
             f"任务 ID：{task.get('task_id')}",
@@ -1293,13 +1317,11 @@ def _materialize_authorized_artifacts(
     worker_workdir: Path,
     artifacts: list[Any],
 ) -> dict[str, Any]:
-    requested_paths = _authorized_artifact_paths(artifacts)
-    if not requested_paths:
-        return {"items": []}
     materialized_root = worker_workdir / SHARE_FILES_DIR
     if materialized_root.exists():
         shutil.rmtree(materialized_root)
     materialized_root.mkdir(parents=True, exist_ok=True)
+    requested_paths = _authorized_artifact_paths(artifacts)
     items: list[dict[str, Any]] = []
     for relative in requested_paths:
         source = _safe_shared_path(shared_workspace, relative)

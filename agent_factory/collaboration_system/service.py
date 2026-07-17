@@ -173,12 +173,16 @@ class CollaborationService:
 
     def create_task(self, collaboration_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         session = self.store.create_task(collaboration_id, payload)
+        self.runtime_factory().emit_collaboration_session_updated(
+            collaboration_id=collaboration_id,
+            session=session,
+        )
         if session.get("approval_mode") == "main_agent_delegated":
             self.dispatch_soon(collaboration_id)
         return session
 
     def update_task(self, collaboration_id: str, task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-        session = self.store.update_task(collaboration_id, task_id, payload)
+        session = self._update_task(collaboration_id, task_id, payload)
         self._cancel_cancelled_task_requests(session)
         if session.get("approval_mode") == "main_agent_delegated":
             self.dispatch_soon(collaboration_id)
@@ -193,6 +197,10 @@ class CollaborationService:
         replacement = self.store.retry_task(collaboration_id, task_id, payload)
         self.cleanup_retried_task_sessions()
         session = replacement["session"]
+        self.runtime_factory().emit_collaboration_session_updated(
+            collaboration_id=collaboration_id,
+            session=session,
+        )
         if session.get("approval_mode") == "main_agent_delegated":
             self.dispatch_soon(collaboration_id)
         return replacement
@@ -233,7 +241,7 @@ class CollaborationService:
         task = _task_by_id(session, task_id)
         notes = str((payload or {}).get("review_notes") or "用户停止了该子任务。").strip()
         result_payload = task.get("result_payload") if isinstance(task.get("result_payload"), dict) else {}
-        session = self.store.update_task(
+        session = self._update_task(
             collaboration_id,
             task_id,
             {
@@ -641,6 +649,19 @@ class CollaborationService:
         with self._lock:
             self._dispatching_sessions.discard(collaboration_id)
 
+    def _update_task(
+        self,
+        collaboration_id: str,
+        task_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        session = self.store.update_task(collaboration_id, task_id, payload)
+        self.runtime_factory().emit_collaboration_session_updated(
+            collaboration_id=collaboration_id,
+            session=session,
+        )
+        return session
+
     def _dispatch_capacity(self, *, limit: int | None = None) -> CollaborationDispatchCapacity:
         inference = self.inference_capacity_probe()
         max_parallel = _max_parallel_worker_tasks(inference)
@@ -680,7 +701,7 @@ class CollaborationService:
                 exc,
             )
             try:
-                self.store.update_task(
+                self._update_task(
                     collaboration_id,
                     task_id,
                     {

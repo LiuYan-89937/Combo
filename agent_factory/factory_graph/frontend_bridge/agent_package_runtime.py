@@ -321,24 +321,44 @@ class AgentPackageRuntimeManager:
         request_id: str | None = None,
     ) -> dict[str, Any]:
         package = self.load_package(package_id)
-        initializing_status = self._instance_status_payload(
+        initialization_lock = self._package_initialization_lock(package_id)
+        acquired = initialization_lock.acquire(blocking=False)
+        if not acquired:
+            self._publish_instance_status(
+                package_id=package_id,
+                package=package,
+                request_id=request_id,
+                status="initializing",
+                ready=False,
+                stage="waiting_for_package_initialization",
+            )
+            initialization_lock.acquire()
+        try:
+            if self._package_runtime_is_initialized(package_id, package):
+                return self.package_instance_status(package_id)
+            return self._initialize_package_locked(
+                package_id,
+                package=package,
+                request_id=request_id,
+            )
+        finally:
+            initialization_lock.release()
+
+    def _initialize_package_locked(
+        self,
+        package_id: str,
+        *,
+        package: LoadedAgentPackage,
+        request_id: str | None,
+    ) -> dict[str, Any]:
+        self._publish_instance_status(
             package_id=package_id,
             package=package,
+            request_id=request_id,
             status="initializing",
             ready=False,
+            stage="preparing_environment",
         )
-        self._instance_status_overrides[package_id] = initializing_status
-        if self._emit is not None:
-            self._emit(
-                event(
-                    "agent_package_instance_updated",
-                    request_id=request_id,
-                    mode="agent_package",
-                    graph_id="agent_package_runtime",
-                    producer_type="factory_runtime",
-                    payload=initializing_status,
-                )
-            )
         command = {
             "type": "initialize_runtime",
             "request_id": request_id or uuid4().hex,
@@ -352,9 +372,28 @@ class AgentPackageRuntimeManager:
         latest_status: dict[str, Any] | None = None
         environment_prepared = False
         try:
-            EnvironmentResolver().ensure(package.package_root)
+            EnvironmentResolver().ensure(
+                package.package_root,
+                on_progress=lambda stage, detail: self._publish_instance_status(
+                    package_id=package_id,
+                    package=package,
+                    request_id=request_id,
+                    status="initializing",
+                    ready=False,
+                    stage=stage,
+                    detail=detail,
+                ),
+            )
             environment_prepared = True
             self._environment_preparation_errors.pop(package_id, None)
+            self._publish_instance_status(
+                package_id=package_id,
+                package=package,
+                request_id=request_id,
+                status="initializing",
+                ready=False,
+                stage="starting_runtime",
+            )
             for stream_mode, chunk in self._runtime_events(package_id, package=package, command=command):
                 if stream_mode != "frontend_event":
                     continue
@@ -363,51 +402,29 @@ class AgentPackageRuntimeManager:
                     latest_status = dict(item.payload or {})
                     self._instance_status_overrides[package_id] = latest_status
                 elif item.event_type == "run_failed":
-                    latest_status = self._instance_status_payload(
+                    latest_status = self._publish_instance_status(
                         package_id=package_id,
                         package=package,
+                        request_id=request_id,
                         status="failed",
                         ready=False,
+                        stage="failed",
                         error=str(item.message or item.payload.get("message") or "initialize failed"),
                     )
-                    self._instance_status_overrides[package_id] = latest_status
-                    if self._emit is not None:
-                        self._emit(
-                            event(
-                                "agent_package_instance_updated",
-                                request_id=request_id,
-                                mode="agent_package",
-                                graph_id="agent_package_runtime",
-                                producer_type="factory_runtime",
-                                severity="error",
-                                payload=latest_status,
-                            )
-                        )
                 if self._emit is not None:
                     self._emit(item)
         except Exception as exc:
             if not environment_prepared:
                 self._environment_preparation_errors[package_id] = f"{type(exc).__name__}: {exc}"
-            latest_status = self._instance_status_payload(
+            latest_status = self._publish_instance_status(
                 package_id=package_id,
                 package=package,
+                request_id=request_id,
                 status="failed",
                 ready=False,
+                stage="failed",
                 error=f"{type(exc).__name__}: {exc}",
             )
-            self._instance_status_overrides[package_id] = latest_status
-            if self._emit is not None:
-                self._emit(
-                    event(
-                        "agent_package_instance_updated",
-                        request_id=request_id,
-                        mode="agent_package",
-                        graph_id="agent_package_runtime",
-                        producer_type="factory_runtime",
-                        severity="error",
-                        payload=latest_status,
-                    )
-                )
             raise
         return latest_status or self.package_instance_status(package_id)
 
@@ -1359,6 +1376,8 @@ class AgentPackageRuntimeManager:
         package: LoadedAgentPackage,
         status: str,
         ready: bool,
+        stage: str | None = None,
+        detail: dict[str, Any] | None = None,
         error: str | None = None,
     ) -> dict[str, Any]:
         backend = "host" if _is_host_system_package(package) else "container"
@@ -1374,6 +1393,46 @@ class AgentPackageRuntimeManager:
         }
         if error:
             payload["error"] = error
+        if stage:
+            payload["stage"] = stage
+        if detail:
+            payload["detail"] = detail
+        return payload
+
+    def _publish_instance_status(
+        self,
+        *,
+        package_id: str,
+        package: LoadedAgentPackage,
+        request_id: str | None,
+        status: str,
+        ready: bool,
+        stage: str | None = None,
+        detail: dict[str, Any] | None = None,
+        error: str | None = None,
+    ) -> dict[str, Any]:
+        payload = self._instance_status_payload(
+            package_id=package_id,
+            package=package,
+            status=status,
+            ready=ready,
+            stage=stage,
+            detail=detail,
+            error=error,
+        )
+        self._instance_status_overrides[package_id] = payload
+        if self._emit is not None:
+            self._emit(
+                event(
+                    "agent_package_instance_updated",
+                    request_id=request_id,
+                    mode="agent_package",
+                    graph_id="agent_package_runtime",
+                    producer_type="factory_runtime",
+                    severity="error" if error else None,
+                    payload=payload,
+                )
+            )
         return payload
 
     def _container(

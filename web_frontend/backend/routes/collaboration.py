@@ -15,15 +15,15 @@ def create_collaboration_router(runtime_bridge: RuntimeBridge, service: Collabor
     router = APIRouter(prefix="/api/collaboration")
 
     @router.get("/agents")
-    async def list_collaboration_agents():
+    def list_collaboration_agents():
         return {"agents": _collaboration_agents(runtime_bridge)}
 
     @router.get("/sessions")
-    async def list_sessions():
+    def list_sessions():
         return {"sessions": service.store.list_sessions()}
 
     @router.get("/event-archives/{collaboration_id}")
-    async def archived_main_agent_events(collaboration_id: str, limit: int = 200):
+    def archived_main_agent_events(collaboration_id: str, limit: int = 200):
         try:
             return {
                 "collaboration_id": collaboration_id,
@@ -36,7 +36,7 @@ def create_collaboration_router(runtime_bridge: RuntimeBridge, service: Collabor
             raise _http_error(exc) from exc
 
     @router.post("/sessions")
-    async def create_session(payload: dict[str, Any]):
+    def create_session(payload: dict[str, Any]):
         try:
             session = service.store.create_session(
                 title=str(payload.get("title") or ""),
@@ -48,42 +48,42 @@ def create_collaboration_router(runtime_bridge: RuntimeBridge, service: Collabor
         return {"session": session}
 
     @router.get("/sessions/{collaboration_id}")
-    async def get_session(collaboration_id: str):
+    def get_session(collaboration_id: str):
         try:
             return {"session": service.store.get_session(collaboration_id)}
         except Exception as exc:
             raise _http_error(exc) from exc
 
     @router.patch("/sessions/{collaboration_id}")
-    async def update_session(collaboration_id: str, payload: dict[str, Any]):
+    def update_session(collaboration_id: str, payload: dict[str, Any]):
         try:
             return {"session": service.store.update_session(collaboration_id, payload)}
         except Exception as exc:
             raise _http_error(exc) from exc
 
     @router.post("/sessions/{collaboration_id}/complete")
-    async def complete_session(collaboration_id: str, payload: dict[str, Any]):
+    def complete_session(collaboration_id: str, payload: dict[str, Any]):
         try:
             return {"session": service.complete_session(collaboration_id, {**payload, "speaker_type": "user"})}
         except Exception as exc:
             raise _http_error(exc) from exc
 
     @router.delete("/sessions/{collaboration_id}")
-    async def delete_session(collaboration_id: str):
+    def delete_session(collaboration_id: str):
         try:
             return service.delete_session(collaboration_id)
         except Exception as exc:
             raise _http_error(exc) from exc
 
     @router.post("/sessions/{collaboration_id}/messages")
-    async def add_message(collaboration_id: str, payload: dict[str, Any]):
+    def add_message(collaboration_id: str, payload: dict[str, Any]):
         try:
             return {"session": service.store.add_message(collaboration_id, payload)}
         except Exception as exc:
             raise _http_error(exc) from exc
 
     @router.post("/sessions/{collaboration_id}/main-agent-prompt")
-    async def main_agent_prompt(collaboration_id: str, payload: dict[str, Any]):
+    def main_agent_prompt(collaboration_id: str, payload: dict[str, Any]):
         try:
             prompt = service.build_main_agent_prompt(
                 collaboration_id=collaboration_id,
@@ -97,14 +97,14 @@ def create_collaboration_router(runtime_bridge: RuntimeBridge, service: Collabor
             raise _http_error(exc) from exc
 
     @router.post("/sessions/{collaboration_id}/tasks")
-    async def create_task(collaboration_id: str, payload: dict[str, Any]):
+    def create_task(collaboration_id: str, payload: dict[str, Any]):
         try:
             return {"session": service.create_task(collaboration_id, payload)}
         except Exception as exc:
             raise _http_error(exc) from exc
 
     @router.post("/sessions/{collaboration_id}/dispatch-ready")
-    async def dispatch_ready_tasks(collaboration_id: str, payload: dict[str, Any] | None = None):
+    def dispatch_ready_tasks(collaboration_id: str, payload: dict[str, Any] | None = None):
         try:
             limit = payload.get("limit") if isinstance(payload, dict) else None
             return service.dispatch_ready(
@@ -115,7 +115,7 @@ def create_collaboration_router(runtime_bridge: RuntimeBridge, service: Collabor
             raise _http_error(exc) from exc
 
     @router.post("/sessions/{collaboration_id}/tasks/{task_id}/start")
-    async def start_task(collaboration_id: str, task_id: str):
+    def start_task(collaboration_id: str, task_id: str):
         try:
             response = service.start_task(collaboration_id, task_id)
             result = response.get("result")
@@ -128,14 +128,14 @@ def create_collaboration_router(runtime_bridge: RuntimeBridge, service: Collabor
             raise _http_error(exc) from exc
 
     @router.post("/sessions/{collaboration_id}/tasks/{task_id}/cancel")
-    async def cancel_task(collaboration_id: str, task_id: str, payload: dict[str, Any] | None = None):
+    def cancel_task(collaboration_id: str, task_id: str, payload: dict[str, Any] | None = None):
         try:
             return {"session": service.cancel_task(collaboration_id, task_id, payload or {})}
         except Exception as exc:
             raise _http_error(exc) from exc
 
     @router.post("/sessions/{collaboration_id}/tasks/{task_id}/retry")
-    async def retry_task(collaboration_id: str, task_id: str, payload: dict[str, Any] | None = None):
+    def retry_task(collaboration_id: str, task_id: str, payload: dict[str, Any] | None = None):
         try:
             replacement = service.retry_task(collaboration_id, task_id, payload or {})
             return {
@@ -147,7 +147,7 @@ def create_collaboration_router(runtime_bridge: RuntimeBridge, service: Collabor
             raise _http_error(exc) from exc
 
     @router.post("/sessions/{collaboration_id}/tasks/{task_id}/approval")
-    async def resolve_task_approval(collaboration_id: str, task_id: str, payload: dict[str, Any]):
+    def resolve_task_approval(collaboration_id: str, task_id: str, payload: dict[str, Any]):
         try:
             response = service.resolve_task_approval(collaboration_id, task_id, payload)
             result = response.get("result")
@@ -160,7 +160,7 @@ def create_collaboration_router(runtime_bridge: RuntimeBridge, service: Collabor
             raise _http_error(exc) from exc
 
     @router.patch("/sessions/{collaboration_id}/tasks/{task_id}")
-    async def update_task(collaboration_id: str, task_id: str, payload: dict[str, Any]):
+    def update_task(collaboration_id: str, task_id: str, payload: dict[str, Any]):
         try:
             return {"session": service.update_task(collaboration_id, task_id, payload)}
         except Exception as exc:

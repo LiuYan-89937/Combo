@@ -41,6 +41,7 @@ from web_frontend.backend.routes.scheduler import create_scheduler_router
 from web_frontend.backend.routes.tips import create_tip_router
 from web_frontend.backend.routes.workspace import create_workspace_router
 from web_frontend.backend.runtime_bridge import RuntimeBridge
+from web_frontend.backend.event_loop_watchdog import EventLoopWatchdog
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -48,6 +49,7 @@ load_agentfactory_dotenv()
 
 app = FastAPI(title="FastAgentFactory Web Runtime Service")
 runtime_bridge = RuntimeBridge()
+event_loop_watchdog = EventLoopWatchdog(logger)
 collaboration_service = CollaborationService(
     runtime_factory=lambda: _agent_package_runtime(runtime_bridge),
     factory_session_deleter=lambda session_id, owned_chat_session_ids: _delete_collaboration_factory_session(
@@ -117,7 +119,7 @@ def _observe_agent_group_runtime_event(event_payload: dict) -> None:
     group_id = str(payload.get("group_id") or "").strip()
     if not group_id or event_payload.get("event_type") not in {"run_completed", "run_failed", "run_cancelled"}:
         return
-    asyncio.create_task(_dispatch_queued_agent_group_runs(group_id))
+    runtime_bridge.schedule_coroutine(_dispatch_queued_agent_group_runs(group_id))
 
 
 async def _dispatch_queued_agent_group_runs(group_id: str) -> None:
@@ -169,6 +171,7 @@ async def _ensure_skillhub_cli() -> None:
 
 @app.on_event("startup")
 async def startup_event():
+    event_loop_watchdog.start(asyncio.get_running_loop())
     await _ensure_skillhub_cli()
     await runtime_bridge.start()
     recovered_group_commits = agent_group_service.recover_workspace_transactions()
@@ -184,6 +187,7 @@ async def shutdown_event():
     agent_group_service.shutdown()
     runtime_bridge.remove_event_observer(_observe_agent_group_runtime_event)
     await runtime_bridge.stop()
+    event_loop_watchdog.stop()
 
 
 def _agent_package_runtime(runtime_bridge: RuntimeBridge) -> AgentPackageRuntimeManager:

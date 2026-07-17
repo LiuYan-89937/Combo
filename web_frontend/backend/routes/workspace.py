@@ -114,7 +114,7 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         return {"event": event}
 
     @router.get("/raw")
-    async def workspace_raw_file(
+    def workspace_raw_file(
         scope: str = "workdir",
         path: str = "",
         package_id: str | None = None,
@@ -158,7 +158,7 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         )
 
     @router.delete("/file")
-    async def delete_workspace_file(
+    def delete_workspace_file(
         scope: str = "workdir",
         path: str = "",
         package_id: str | None = None,

@@ -27,16 +27,16 @@ def create_model_pool_router() -> APIRouter:
     router = APIRouter(prefix="/api/model-pool")
 
     @router.get("/providers")
-    async def list_providers():
+    def list_providers():
         return {"providers": list_model_pool_provider_profiles()}
 
     @router.get("/credentials")
-    async def list_credentials():
+    def list_credentials():
         store = ModelPoolStore()
         return {"credentials": [item.to_public().model_dump(mode="json") for item in store.list_credentials()]}
 
     @router.post("/credentials")
-    async def upsert_credential(payload: dict[str, Any]):
+    def upsert_credential(payload: dict[str, Any]):
         store = ModelPoolStore()
         try:
             credential = store.upsert_credential(_credential_from_payload(payload, store=store))
@@ -45,7 +45,7 @@ def create_model_pool_router() -> APIRouter:
         return {"credential": credential.to_public().model_dump(mode="json")}
 
     @router.patch("/credentials/{credential_id}")
-    async def patch_credential(credential_id: str, payload: dict[str, Any]):
+    def patch_credential(credential_id: str, payload: dict[str, Any]):
         store = ModelPoolStore()
         try:
             credential = store.patch_credential(credential_id, payload)
@@ -54,7 +54,7 @@ def create_model_pool_router() -> APIRouter:
         return {"credential": credential.to_public().model_dump(mode="json")}
 
     @router.delete("/credentials/{credential_id}")
-    async def delete_credential(credential_id: str):
+    def delete_credential(credential_id: str):
         store = ModelPoolStore()
         try:
             return {"deleted": store.delete_credential(credential_id)}
@@ -62,7 +62,7 @@ def create_model_pool_router() -> APIRouter:
             raise _http_error(exc) from exc
 
     @router.get("/profiles")
-    async def list_profiles(kind: str | None = None):
+    def list_profiles(kind: str | None = None):
         store = ModelPoolStore()
         credentials = {item.credential_id: item for item in store.list_credentials()}
         profile_kind = (kind or "").strip().lower() or None
@@ -82,7 +82,7 @@ def create_model_pool_router() -> APIRouter:
         return ModelUsageStore().summary(group_by=value, days=days)
 
     @router.post("/profiles")
-    async def upsert_profile(payload: dict[str, Any]):
+    def upsert_profile(payload: dict[str, Any]):
         store = ModelPoolStore()
         try:
             profile = store.upsert_profile(_profile_from_payload(payload, store=store))
@@ -92,7 +92,7 @@ def create_model_pool_router() -> APIRouter:
         return {"profile": profile.to_public(credential).model_dump(mode="json")}
 
     @router.patch("/profiles/{profile_id}")
-    async def patch_profile(profile_id: str, payload: dict[str, Any]):
+    def patch_profile(profile_id: str, payload: dict[str, Any]):
         store = ModelPoolStore()
         try:
             profile = store.patch_profile(profile_id, payload)
@@ -102,7 +102,7 @@ def create_model_pool_router() -> APIRouter:
         return {"profile": profile.to_public(credential).model_dump(mode="json")}
 
     @router.delete("/profiles/{profile_id}")
-    async def delete_profile(profile_id: str):
+    def delete_profile(profile_id: str):
         return {"deleted": ModelPoolStore().delete_profile(profile_id)}
 
     @router.post("/profiles/{profile_id}/ping")
@@ -118,13 +118,13 @@ def create_model_pool_router() -> APIRouter:
         return result
 
     @router.post("/profiles/delete")
-    async def delete_profiles(payload: dict[str, Any]):
+    def delete_profiles(payload: dict[str, Any]):
         ids = [str(item).strip() for item in payload.get("profile_ids", []) if str(item).strip()]
         store = ModelPoolStore()
         return {"deleted": {profile_id: store.delete_profile(profile_id) for profile_id in ids}}
 
     @router.post("/select")
-    async def select_models(payload: dict[str, Any]):
+    def select_models(payload: dict[str, Any]):
         try:
             request = ModelSelectionRequest.model_validate(payload)
             result = ModelPoolSelector().select(request)

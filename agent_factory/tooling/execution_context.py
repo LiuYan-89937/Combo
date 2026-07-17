@@ -29,6 +29,10 @@ _TOOL_APPROVAL_OVERRIDE: ContextVar[ToolApprovalOverride | None] = ContextVar(
     "agentfactory_tool_approval_override",
     default=None,
 )
+_TOOL_OUTPUT_SESSION_ID: ContextVar[str | None] = ContextVar(
+    "agentfactory_tool_output_session_id",
+    default=None,
+)
 
 
 @contextmanager
@@ -66,6 +70,20 @@ def tool_approval_override(*, reason: str) -> Iterator[None]:
         _TOOL_APPROVAL_OVERRIDE.reset(token)
 
 
+@contextmanager
+def tool_output_session_context(session_id: str) -> Iterator[None]:
+    normalized = str(session_id or "").strip()
+    if not normalized:
+        raise ValueError("tool output session id is required")
+    if normalized in {".", ".."} or "/" in normalized or "\\" in normalized:
+        raise ValueError("tool output session id must be a path-safe identifier")
+    token = _TOOL_OUTPUT_SESSION_ID.set(normalized)
+    try:
+        yield
+    finally:
+        _TOOL_OUTPUT_SESSION_ID.reset(token)
+
+
 def current_tool_call() -> CurrentToolCall | None:
     return _CURRENT_TOOL_CALL.get()
 
@@ -82,3 +100,7 @@ def current_tool_runtime_resource_overrides() -> Mapping[str, Any]:
 
 def current_tool_approval_override() -> ToolApprovalOverride | None:
     return _TOOL_APPROVAL_OVERRIDE.get()
+
+
+def current_tool_output_session_id() -> str | None:
+    return _TOOL_OUTPUT_SESSION_ID.get()
