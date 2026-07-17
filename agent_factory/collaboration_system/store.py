@@ -81,6 +81,7 @@ class CollaborationStore:
             if self.ready_tasks(str(session.get("collaboration_id") or ""))
             or self.list_active_manufacturing_requests(str(session.get("collaboration_id") or ""))
             or self.pending_main_agent_event_count(str(session.get("collaboration_id") or "")) > 0
+            or self.list_pending_task_approval_decisions(str(session.get("collaboration_id") or ""))
         ]
 
     def recover_interrupted_tasks(self) -> dict[str, Any]:
@@ -1255,6 +1256,193 @@ class CollaborationStore:
             )
             self._mark_session_running_conn(conn, collaboration_id, now)
         return self.get_session(collaboration_id)
+
+    def queue_task_approval_decision(
+        self,
+        collaboration_id: str,
+        task_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        action = str(payload.get("action") or "").strip()
+        if action not in {"approve", "deny", "revise"}:
+            raise CollaborationStoreError(f"unsupported collaboration approval action: {action}")
+        reason = str(payload.get("decision_reason") or "").strip()
+        if not reason:
+            raise CollaborationStoreError("decision_reason is required for a main Agent approval decision")
+        revision_guidance = str(payload.get("revision_guidance") or "").strip()
+        if action == "revise" and not revision_guidance:
+            raise CollaborationStoreError("revision_guidance is required when revising a worker tool call")
+        now = utc_now_text()
+        with self._connect() as conn:
+            conn.execute("begin immediate")
+            session_row = conn.execute(
+                "select approval_mode from collaboration_sessions where collaboration_id = ?",
+                (collaboration_id,),
+            ).fetchone()
+            if session_row is None:
+                raise CollaborationStoreError(f"collaboration session not found: {collaboration_id}")
+            if str(session_row["approval_mode"] or "") != "main_agent_delegated":
+                raise CollaborationStoreError("main Agent approval decisions require main_agent_delegated mode")
+            row = conn.execute(
+                "select * from collaboration_tasks where collaboration_id = ? and task_id = ?",
+                (collaboration_id, task_id),
+            ).fetchone()
+            if row is None:
+                raise CollaborationStoreError(f"collaboration task not found: {task_id}")
+            task = self._task_view(row)
+            if str(task.get("status") or "") != "blocked":
+                raise CollaborationStoreError("only a blocked task can receive a tool approval decision")
+            result_payload = task.get("result_payload") if isinstance(task.get("result_payload"), dict) else {}
+            pending_interrupt = (
+                result_payload.get("pending_interrupt")
+                if isinstance(result_payload.get("pending_interrupt"), dict)
+                else {}
+            )
+            resume_payload = (
+                pending_interrupt.get("resume_payload")
+                if isinstance(pending_interrupt.get("resume_payload"), dict)
+                else {}
+            )
+            if str(resume_payload.get("type") or "") != "tool_approval":
+                raise CollaborationStoreError("blocked task is not waiting for a tool approval decision")
+            existing = result_payload.get("approval_decision")
+            if isinstance(existing, dict) and str(existing.get("status") or "") in {"pending", "processing"}:
+                raise CollaborationStoreError("a tool approval decision is already pending for this task")
+            decision = {
+                "action": action,
+                "decision_reason": reason,
+                "revision_guidance": revision_guidance,
+                "decided_by": "main_agent",
+                "status": "pending",
+                "created_at": now,
+                "updated_at": now,
+            }
+            decision_message = _main_agent_approval_message(action, reason, revision_guidance)
+            conn.execute(
+                """
+                update collaboration_tasks
+                set result_summary = ?, result_payload_json = ?, updated_at = ?
+                where collaboration_id = ? and task_id = ?
+                """,
+                (
+                    decision_message,
+                    json_dumps({**result_payload, "approval_decision": decision}),
+                    now,
+                    collaboration_id,
+                    task_id,
+                ),
+            )
+            self._insert_message_conn(
+                conn,
+                collaboration_id=collaboration_id,
+                speaker_type="main_agent",
+                speaker_package_id=None,
+                message_kind="approval",
+                content=decision_message,
+                task_id=task_id,
+                event_ref=None,
+                created_at=now,
+            )
+            self._touch_session_conn(conn, collaboration_id, now)
+        return self.get_session(collaboration_id)
+
+    def list_pending_task_approval_decisions(self, collaboration_id: str) -> list[dict[str, Any]]:
+        session = self.get_session(collaboration_id)
+        result: list[dict[str, Any]] = []
+        for task in session.get("tasks") or []:
+            if str(task.get("status") or "") != "blocked":
+                continue
+            payload = task.get("result_payload") if isinstance(task.get("result_payload"), dict) else {}
+            decision = payload.get("approval_decision") if isinstance(payload.get("approval_decision"), dict) else {}
+            if str(decision.get("status") or "") == "pending":
+                result.append({"task": task, "decision": decision})
+        return result
+
+    def claim_task_approval_decision(self, collaboration_id: str, task_id: str) -> dict[str, Any] | None:
+        now = utc_now_text()
+        with self._connect() as conn:
+            row = conn.execute(
+                "select * from collaboration_tasks where collaboration_id = ? and task_id = ?",
+                (collaboration_id, task_id),
+            ).fetchone()
+            if row is None:
+                return None
+            task = self._task_view(row)
+            payload = task.get("result_payload") if isinstance(task.get("result_payload"), dict) else {}
+            decision = payload.get("approval_decision") if isinstance(payload.get("approval_decision"), dict) else {}
+            if str(task.get("status") or "") != "blocked" or str(decision.get("status") or "") != "pending":
+                return None
+            claimed = {**decision, "status": "processing", "updated_at": now}
+            conn.execute(
+                """
+                update collaboration_tasks
+                set result_payload_json = ?, updated_at = ?
+                where collaboration_id = ? and task_id = ?
+                """,
+                (json_dumps({**payload, "approval_decision": claimed}), now, collaboration_id, task_id),
+            )
+        return {"task": task, "decision": claimed}
+
+    def fail_task_approval_decision(self, collaboration_id: str, task_id: str, error: str) -> None:
+        now = utc_now_text()
+        with self._connect() as conn:
+            row = conn.execute(
+                "select result_payload_json from collaboration_tasks where collaboration_id = ? and task_id = ?",
+                (collaboration_id, task_id),
+            ).fetchone()
+            if row is None:
+                return
+            payload = json_loads(row["result_payload_json"], {})
+            decision = payload.get("approval_decision") if isinstance(payload.get("approval_decision"), dict) else {}
+            failed = {**decision, "status": "failed", "error": error, "updated_at": now}
+            conn.execute(
+                """
+                update collaboration_tasks
+                set status = ?, result_summary = ?, result_payload_json = ?, updated_at = ?
+                where collaboration_id = ? and task_id = ?
+                """,
+                (
+                    "blocked",
+                    f"主 Agent 审批决定执行失败：{error}",
+                    json_dumps({**payload, "approval_decision": failed}),
+                    now,
+                    collaboration_id,
+                    task_id,
+                ),
+            )
+            self._insert_message_conn(
+                conn,
+                collaboration_id=collaboration_id,
+                speaker_type="system",
+                speaker_package_id=None,
+                message_kind="approval",
+                content=f"主 Agent 审批决定执行失败：{error}",
+                task_id=task_id,
+                event_ref=None,
+                created_at=now,
+            )
+            self._touch_session_conn(conn, collaboration_id, now)
+
+    def recover_processing_task_approval_decisions(self) -> int:
+        recovered = 0
+        now = utc_now_text()
+        with self._connect() as conn:
+            rows = conn.execute(
+                "select task_id, result_payload_json from collaboration_tasks where status = ?",
+                ("blocked",),
+            ).fetchall()
+            for row in rows:
+                payload = json_loads(row["result_payload_json"], {})
+                decision = payload.get("approval_decision") if isinstance(payload.get("approval_decision"), dict) else {}
+                if str(decision.get("status") or "") != "processing":
+                    continue
+                pending = {**decision, "status": "pending", "updated_at": now}
+                conn.execute(
+                    "update collaboration_tasks set result_payload_json = ?, updated_at = ? where task_id = ?",
+                    (json_dumps({**payload, "approval_decision": pending}), now, row["task_id"]),
+                )
+                recovered += 1
+        return recovered
 
     def delete_session(self, collaboration_id: str) -> dict[str, Any]:
         existing = self.get_session(collaboration_id)
@@ -2521,6 +2709,14 @@ def validate_approval_mode(value: str) -> str:
     if mode not in APPROVAL_MODES:
         raise CollaborationStoreError(f"unsupported collaboration approval mode: {mode}")
     return mode
+
+
+def _main_agent_approval_message(action: str, reason: str, revision_guidance: str) -> str:
+    if action == "approve":
+        return f"主 Agent 批准 worker 工具调用。理由：{reason}"
+    if action == "deny":
+        return f"主 Agent 拒绝 worker 工具调用。理由：{reason}"
+    return f"主 Agent 要求 worker 修改工具调用。理由：{reason} 修改意见：{revision_guidance}"
 
 
 def _ensure_acyclic_dependency_graph(graph: dict[str, list[str]]) -> None:

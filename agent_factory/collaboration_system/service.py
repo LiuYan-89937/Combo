@@ -128,6 +128,9 @@ class CollaborationService:
         recovered_cleanup_count = self.store.recover_task_retry_cleanups()
         if recovered_cleanup_count:
             self.logger.info("Recovered %s collaboration task retry cleanup(s)", recovered_cleanup_count)
+        recovered_approval_count = self.store.recover_processing_task_approval_decisions()
+        if recovered_approval_count:
+            self.logger.info("Recovered %s collaboration task approval decision(s)", recovered_approval_count)
         self._stop_event.clear()
         self._thread = threading.Thread(
             target=self._run_loop,
@@ -469,7 +472,7 @@ class CollaborationService:
         try:
             session = self.store.get_session(collaboration_id)
             task = _task_by_id(session, task_id)
-            resume_payload = _approval_resume_payload(task, payload)
+            resume_payload = _approval_resume_payload(task, payload, decided_by="user")
             self.store.record_message(
                 collaboration_id,
                 speaker_type="user",
@@ -501,6 +504,7 @@ class CollaborationService:
             if not collaboration_id:
                 continue
             try:
+                self.process_task_approval_decisions(collaboration_id)
                 self.process_manufacturing_requests(collaboration_id)
                 self._drain_main_agent_events(collaboration_id)
                 self.dispatch_ready(collaboration_id)
@@ -540,6 +544,7 @@ class CollaborationService:
     def _dispatch_soon_worker(self, collaboration_id: str) -> None:
         try:
             self.cleanup_retried_task_sessions()
+            self.process_task_approval_decisions(collaboration_id)
             self._drain_main_agent_events(collaboration_id)
             self.dispatch_ready(collaboration_id)
         except Exception as exc:
@@ -548,6 +553,78 @@ class CollaborationService:
                 collaboration_id,
                 type(exc).__name__,
                 exc,
+            )
+
+    def process_task_approval_decisions(self, collaboration_id: str) -> None:
+        claimed_decisions: list[tuple[str, dict[str, Any]]] = []
+        with self._dispatch_lock:
+            capacity = self._dispatch_capacity().capacity
+            if capacity <= 0:
+                return
+            pending = self.store.list_pending_task_approval_decisions(collaboration_id)
+            for item in pending:
+                if len(claimed_decisions) >= capacity:
+                    break
+                task = item.get("task") if isinstance(item.get("task"), dict) else {}
+                task_id = str(task.get("task_id") or "").strip()
+                if not task_id:
+                    continue
+                claimed = self.store.claim_task_approval_decision(collaboration_id, task_id)
+                if claimed is None:
+                    continue
+                self._reserved_worker_tasks.add((collaboration_id, task_id))
+                claimed_decisions.append((task_id, claimed))
+        for task_id, claimed in claimed_decisions:
+            threading.Thread(
+                target=self._run_task_approval_decision,
+                args=(collaboration_id, task_id, claimed),
+                name=f"collaboration-approval-{task_id[:8]}",
+                daemon=True,
+            ).start()
+
+    def _run_task_approval_decision(
+        self,
+        collaboration_id: str,
+        task_id: str,
+        claimed: dict[str, Any],
+    ) -> None:
+        task = claimed.get("task") if isinstance(claimed.get("task"), dict) else {}
+        decision = claimed.get("decision") if isinstance(claimed.get("decision"), dict) else {}
+        result = None
+        try:
+            orchestrator = CollaborationOrchestrator(
+                store=self.store,
+                runtime=self.runtime_factory(),
+            )
+            result = orchestrator.resume_task_approval(
+                collaboration_id,
+                task_id,
+                resume_payload=_approval_resume_payload(
+                    task,
+                    decision,
+                    decided_by="main_agent",
+                ),
+            )
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            self.store.fail_task_approval_decision(collaboration_id, task_id, error)
+            self.logger.warning(
+                "Main Agent approval decision failed for %s/%s: %s",
+                collaboration_id,
+                task_id,
+                error,
+            )
+        finally:
+            with self._dispatch_lock:
+                self._reserved_worker_tasks.discard((collaboration_id, task_id))
+            self.store.release_worker_lease_unless_blocked(collaboration_id, task_id)
+        if result is not None:
+            self._continue_after_worker_result(collaboration_id, result)
+        else:
+            self._continue_after_worker_result(
+                collaboration_id,
+                None,
+                fallback_message=f"子任务 {task_id} 的主 Agent 工具审批决定执行失败，请检查并重新处理。",
             )
 
     def _claim_session(self, collaboration_id: str) -> bool:
@@ -1271,7 +1348,12 @@ def _assignee_package_id_for_task(session: dict[str, Any], task_id: str) -> str 
     return None
 
 
-def _approval_resume_payload(task: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+def _approval_resume_payload(
+    task: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    decided_by: str,
+) -> dict[str, Any]:
     result_payload = task.get("result_payload") if isinstance(task.get("result_payload"), dict) else {}
     pending = result_payload.get("pending_interrupt") if isinstance(result_payload.get("pending_interrupt"), dict) else {}
     base = pending.get("resume_payload") if isinstance(pending.get("resume_payload"), dict) else {}
@@ -1283,6 +1365,11 @@ def _approval_resume_payload(task: dict[str, Any], payload: dict[str, Any]) -> d
         **base,
         "action": action,
         "approved": approved,
+        "approval": {
+            "decision": action,
+            "approved_by": decided_by,
+            "reason": str(payload.get("decision_reason") or payload.get("revision_guidance") or "").strip(),
+        },
     }
     guidance = str(payload.get("revision_guidance") or "").strip()
     if action == "revise" and guidance:

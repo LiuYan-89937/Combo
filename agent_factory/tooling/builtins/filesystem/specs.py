@@ -89,10 +89,6 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
                     ),
                 },
                 "create_dirs": {"type": "boolean", "default": True, "description": "是否创建缺失父目录；默认创建。"},
-                "fallback_reason": {
-                    "type": "string",
-                    "description": "executor 节点调用时必填：说明为什么当前可用的 package/runtime 工具无法完成此计划步骤，必须退回通用写文件能力。",
-                },
             },
             "required": ["path", "content"],
             "additionalProperties": False,
@@ -125,10 +121,6 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
                 "old_text": {"type": "string", "description": "需要被替换的原文本。"},
                 "new_text": {"type": "string", "description": "替换后的文本。"},
                 "replace_all": {"type": "boolean", "default": False, "description": "是否替换全部匹配项。"},
-                "fallback_reason": {
-                    "type": "string",
-                    "description": "executor 节点调用时必填：说明为什么当前可用的 package/runtime 工具无法完成此计划步骤，必须退回通用编辑能力。",
-                },
             },
             "required": ["path", "old_text", "new_text"],
             "additionalProperties": False,
@@ -170,10 +162,6 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
                         "required": ["old_text", "new_text"],
                         "additionalProperties": False,
                     },
-                },
-                "fallback_reason": {
-                    "type": "string",
-                    "description": "executor 节点调用时必填：说明为什么当前可用的 package/runtime 工具无法完成此计划步骤，必须退回通用编辑能力。",
                 },
             },
             "required": ["path", "edits"],

@@ -11,7 +11,11 @@ from typing import Any
 from uuid import uuid4
 
 from agent_factory.collaboration_system.event_projection import CollaborationWorkerEventRecorder
-from agent_factory.collaboration_system.delivery import WorkerDeliveryValidation, validate_worker_delivery
+from agent_factory.collaboration_system.delivery import (
+    CollaborationDeliveryStandard,
+    WorkerDeliveryValidation,
+    validate_worker_delivery,
+)
 from agent_factory.collaboration_system.prompting import build_main_agent_collaboration_prompt
 from agent_factory.collaboration_runtime_policy import collaboration_runtime_tool_access
 from agent_factory.collaboration_system.store import CollaborationStore
@@ -32,7 +36,6 @@ SHARE_FILES_DIR = "share_files"
 WORKER_ARTIFACT_SKIP_DIRS = {"input_files", SHARE_FILES_DIR, ".cache", "__pycache__"}
 DEFAULT_MAX_COLLABORATION_ARTIFACT_BYTES = 200 * 1024 * 1024
 MAX_COLLABORATION_ARTIFACT_BYTES_ENV = "AGENTFACTORY_COLLABORATION_MAX_ARTIFACT_BYTES"
-MAX_DELEGATED_APPROVALS_PER_TASK = 20
 ACTIVE_MAIN_AGENT_TURN_STATUSES = frozenset({"running", "interrupted"})
 SUCCESSFUL_MAIN_AGENT_CONTINUATION_STATUSES = frozenset({"completed", "waiting_for_workers"})
 
@@ -366,6 +369,7 @@ class CollaborationOrchestrator:
             task_id,
             {
                 "status": "accepted",
+                "result_summary": f"正在初始化子 Agent {package_id} 的运行环境。",
                 "result_payload": {
                     "runtime_status": "initializing",
                     "active_request_id": init_request_id,
@@ -380,6 +384,7 @@ class CollaborationOrchestrator:
             task_id,
             {
                 "status": "working",
+                "result_summary": f"子 Agent {package_id} 已开始执行任务。",
                 "result_payload": {
                     "runtime_status": "working",
                     "active_request_id": run_request_id,
@@ -484,7 +489,6 @@ class CollaborationOrchestrator:
             package_id=package_id,
             collaboration_id=collaboration_id,
             task_id=task_id,
-            approval_mode=str(session.get("approval_mode") or ""),
             output=output,
             event_recorder=event_recorder,
         )
@@ -544,14 +548,23 @@ class CollaborationOrchestrator:
             task_id=task_id,
             package_id=package_id,
         )
-        resume_request_id = f"collab-user-approval-{task_id}-{uuid4().hex[:8]}"
+        approval = resume_payload.get("approval") if isinstance(resume_payload.get("approval"), dict) else {}
+        approved_by = str(approval.get("approved_by") or "user").strip()
+        actor_label = "主 Agent" if approved_by == "main_agent" else "用户"
+        resume_request_id = f"collab-approval-{task_id}-{uuid4().hex[:8]}"
+        existing_result_payload = (
+            task.get("result_payload")
+            if isinstance(task.get("result_payload"), dict)
+            else {}
+        )
         self.store.update_task(
             collaboration_id,
             task_id,
             {
                 "status": "working",
-                "result_summary": "用户已处理 worker 审批，任务继续执行。",
+                "result_summary": f"{actor_label}已处理 worker 工具审批，任务继续执行。",
                 "result_payload": {
+                    **existing_result_payload,
                     "runtime_status": "resumed",
                     "active_request_id": resume_request_id,
                     "active_package_id": package_id,
@@ -570,7 +583,6 @@ class CollaborationOrchestrator:
             package_id=package_id,
             collaboration_id=collaboration_id,
             task_id=task_id,
-            approval_mode=str(session.get("approval_mode") or ""),
             output=output,
             event_recorder=event_recorder,
         )
@@ -865,97 +877,49 @@ class CollaborationOrchestrator:
         package_id: str,
         collaboration_id: str,
         task_id: str,
-        approval_mode: str,
         output: VisibleAssistantOutputAccumulator,
         event_recorder: CollaborationWorkerEventRecorder,
     ) -> WorkerRunOutcome:
-        current_run = run
-        assignee_session_id = str((current_run.session or {}).get("session_id") or "").strip() or None
+        assignee_session_id = str((run.session or {}).get("session_id") or "").strip() or None
         if assignee_session_id:
             self.store.update_task(
                 collaboration_id,
                 task_id,
                 {"assignee_session_id": assignee_session_id},
             )
-        delegated_approval_count = 0
         tool_activities: list[dict[str, Any]] = []
-        while True:
-            interrupted: FactoryFrontendEvent | None = None
-            for stream_mode, chunk in current_run.events:
-                if stream_mode != "frontend_event":
-                    continue
-                item = chunk if isinstance(chunk, FactoryFrontendEvent) else FactoryFrontendEvent.model_validate(chunk)
-                output.accept(item)
-                event_recorder.accept(item)
-                if item.process_event:
-                    self.runtime.emit_frontend_event(
-                        _worker_agent_frontend_event(item, package_id=package_id, session_id=assignee_session_id)
-                    )
-                _upsert_tool_activity(tool_activities, item)
-                if item.event_type in RUN_TERMINAL_EVENT_TYPES:
-                    return WorkerRunOutcome(
-                        status=runtime_stream_status(item),
-                        message=str(item.message or item.payload.get("message") or "").strip(),
-                        assignee_session_id=assignee_session_id,
-                        tool_activities=tool_activities,
-                    )
-                if item.event_type in INTERRUPT_TERMINAL_EVENT_TYPES:
-                    interrupted = item
-                    break
-            if interrupted is None:
+        for stream_mode, chunk in run.events:
+            if stream_mode != "frontend_event":
+                continue
+            item = chunk if isinstance(chunk, FactoryFrontendEvent) else FactoryFrontendEvent.model_validate(chunk)
+            output.accept(item)
+            event_recorder.accept(item)
+            if item.process_event:
+                self.runtime.emit_frontend_event(
+                    _worker_agent_frontend_event(item, package_id=package_id, session_id=assignee_session_id)
+                )
+            _upsert_tool_activity(tool_activities, item)
+            if item.event_type in RUN_TERMINAL_EVENT_TYPES:
                 return WorkerRunOutcome(
-                    status="failed",
-                    message="worker runtime stream ended without terminal status",
+                    status=runtime_stream_status(item),
+                    message=str(item.message or item.payload.get("message") or "").strip(),
                     assignee_session_id=assignee_session_id,
                     tool_activities=tool_activities,
                 )
-            if not _is_tool_approval_interrupt(interrupted):
+            if item.event_type in INTERRUPT_TERMINAL_EVENT_TYPES:
                 return WorkerRunOutcome(
                     status="blocked",
-                    message=_interrupt_summary(interrupted),
+                    message=_interrupt_summary(item),
                     assignee_session_id=assignee_session_id,
                     tool_activities=tool_activities,
-                    interrupt_payload=_pending_interrupt_payload(interrupted),
+                    interrupt_payload=_pending_interrupt_payload(item),
                 )
-            if approval_mode != "main_agent_delegated":
-                return WorkerRunOutcome(
-                    status="blocked",
-                    message=_interrupt_summary(interrupted),
-                    assignee_session_id=assignee_session_id,
-                    tool_activities=tool_activities,
-                    interrupt_payload=_pending_interrupt_payload(interrupted),
-                )
-            delegated_approval_count += 1
-            if delegated_approval_count > MAX_DELEGATED_APPROVALS_PER_TASK:
-                return WorkerRunOutcome(
-                    status="blocked",
-                    message="主 Agent 代理审批次数超过上限，任务已暂停。",
-                    assignee_session_id=assignee_session_id,
-                    tool_activities=tool_activities,
-                )
-            if not assignee_session_id:
-                return WorkerRunOutcome(
-                    status="blocked",
-                    message="worker runtime interrupted before a session id was available.",
-                    assignee_session_id=assignee_session_id,
-                    tool_activities=tool_activities,
-                    interrupt_payload=_pending_interrupt_payload(interrupted),
-                )
-            self.store.record_message(
-                collaboration_id,
-                speaker_type="main_agent",
-                speaker_package_id=None,
-                message_kind="approval",
-                content="主 Agent 代理批准 worker 工具调用。",
-                task_id=task_id,
-                event_ref=f"{interrupted.event_id}:delegated-approval",
-            )
-            current_run = self.runtime.resume_stream(
-                package_id,
-                session_id=assignee_session_id,
-                resume_payload=_approval_resume_payload(interrupted),
-                request_id=f"collab-approve-{task_id}-{delegated_approval_count}-{uuid4().hex[:8]}",
-            )
+        return WorkerRunOutcome(
+            status="failed",
+            message="worker runtime stream ended without terminal status",
+            assignee_session_id=assignee_session_id,
+            tool_activities=tool_activities,
+        )
 
     def _finish_worker_session_turn(
         self,
@@ -1118,8 +1082,6 @@ def _approval_resume_payload(item: FactoryFrontendEvent) -> dict[str, Any]:
     ]
     first = next((request for request in requests if isinstance(request, dict)), {})
     return {
-        "action": "approve",
-        "approved": True,
         "type": "tool_approval",
         "interrupt_event_id": item.event_id,
         "pending_request_id": item.request_id,
@@ -1128,11 +1090,6 @@ def _approval_resume_payload(item: FactoryFrontendEvent) -> dict[str, Any]:
         "tool_name": first.get("tool_name") or first.get("tool_id") or first.get("name"),
         "tool_call_ids": tool_call_ids or None,
         "requests": requests,
-        "approval": {
-            "decision": "approve",
-            "approved_by": "collaboration_main_agent",
-            "reason": "collaboration session approval_mode=main_agent_delegated",
-        },
     }
 
 
@@ -1297,6 +1254,8 @@ def _interrupt_summary(item: FactoryFrontendEvent) -> str:
 
 def _worker_prompt(*, session: dict[str, Any], task: dict[str, Any], shared_materials: dict[str, Any]) -> str:
     materials = _shared_materials_prompt(shared_materials)
+    delivery_standard = CollaborationDeliveryStandard.model_validate(task.get("delivery_standard"))
+    delivery_paths = "\n".join(f"- {path}" for path in delivery_standard.expected_output_paths)
     visible_context = task.get("visible_context") if isinstance(task.get("visible_context"), dict) else {}
     retry_context = visible_context.get("retry") if isinstance(visible_context.get("retry"), dict) else None
     retry_guidance = (
@@ -1312,11 +1271,13 @@ def _worker_prompt(*, session: dict[str, Any], task: dict[str, Any], shared_mate
             "只完成当前任务，不要假设自己能看到其他子 Agent 的完整对话。需要使用共享材料时，只读取下面列出的授权文件。",
             f"{SHARE_FILES_DIR}/ 是只读上游材料目录，只能读取，不能创建、修改、删除其中的任何文件。",
             "你的交付物必须写入当前工作区的普通路径，例如 result.md、logo.png、reports/summary.md；不要写入 share_files/。宿主会自动收集这些普通工作区文件作为任务交付物。",
+            "delivery_standard 是交付路径的唯一权威来源；任务描述中的路径如果与其冲突，必须以 delivery_standard 为准。路径均相对于当前工作区根目录，不要添加工作区名称、宿主路径或容器挂载路径前缀。",
+            f"本任务必须创建或更新以下交付文件：\n{delivery_paths}",
             "visible_context 是纯文本提示，不代表文件已存在；只有下面共享材料列表里的路径才是已授权文件。",
             f"协作会话：{session.get('title') or session.get('collaboration_id')}",
             f"任务 ID：{task.get('task_id')}",
             f"任务要求：{task.get('task_text')}",
-            f"验收标准：{task.get('delivery_standard')}",
+            f"验收标准：{delivery_standard.model_dump(mode='json', exclude_none=True)}",
             f"可见上下文：{visible_context}",
             retry_guidance,
             materials,
@@ -1583,5 +1544,12 @@ def _safe_shared_path(root: Path, relative: str) -> Path:
 
 
 def _short_summary(content: str) -> str:
-    text = " ".join(str(content or "").split())
-    return text[:500] if len(text) > 500 else text
+    text = str(content or "").strip()
+    if len(text) <= 500:
+        return text
+    boundary = text.rfind("\n", 0, 500)
+    if boundary <= 0:
+        boundary = text.rfind(" ", 0, 500)
+    if boundary <= 0:
+        boundary = 500
+    return text[:boundary].rstrip() + "\n\n…"

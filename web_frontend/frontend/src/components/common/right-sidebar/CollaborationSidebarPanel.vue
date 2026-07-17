@@ -179,7 +179,7 @@
               <strong>{{ approvalToolName(request) }}</strong>
               <span v-if="approvalRiskLabel(request)">{{ approvalRiskLabel(request) }}</span>
             </div>
-            <div class="task-actions">
+            <div v-if="store.activeSession?.approval_mode === 'user_controlled'" class="task-actions">
               <n-button size="tiny" @click="resolveTaskApproval(task, 'deny')">
                 {{ t('tool.deny') }}
               </n-button>
@@ -575,8 +575,6 @@ function toggleTaskExpanded(taskId: string) {
 }
 
 function taskSummary(task: CollaborationTaskView): string {
-  const result = String(task.result_summary || '').trim()
-  if (result) return result
   const text = String(task.task_text || '').replace(/\s+/g, ' ').trim()
   if (!text) return t('collaboration.taskNoSummary')
   return text.length > 120 ? `${text.slice(0, 120)}...` : text

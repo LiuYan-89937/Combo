@@ -18,6 +18,8 @@ def get_collaboration_tool_specs() -> list[ToolSpec]:
                 "worker 交付物应写入当前工作区普通路径，宿主会自动收集为 artifact_refs。visible_context 只表示文本上下文，不授权文件读取。"
                 "inspect 是状态同步动作；只有运行中任务且没有 submitted/blocked/failed 时，inspect 会返回轻量 deferred，主 Agent 应等待状态变化而不是连续查看。"
                 "验收 worker 交付物时使用 read_task_artifacts 并传 task_id，由宿主解析权威 artifact_refs；"
+                "blocked 任务包含 pending_approval 时，主 Agent 必须根据任务目标、工具参数和风险调用 resolve_task_approval，"
+                "明确批准、拒绝或要求修改；宿主随后恢复原 worker。"
                 "read_shared 仅用于读取已知的普通共享路径。验收后 update_task 为 completed 或 revision_requested。"
                 "需要重跑 failed/revision_requested/cancelled 任务时必须使用 retry_task；宿主会原子替换旧任务并清理旧 worker 会话，禁止另行 create_task。"
                 "所有任务验收完成并形成最终答复后，用 complete_session 写入最终交付并结束协作会话。"
@@ -31,6 +33,7 @@ def get_collaboration_tool_specs() -> list[ToolSpec]:
                     "action": {"type": "string"},
                     "status": {"type": "string"},
                     "message": {"type": "string"},
+                    "response_guidance": {"type": "string"},
                     "session": {"type": "object", "additionalProperties": True},
                     "task": {"type": "object", "additionalProperties": True},
                     "active_tasks": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
@@ -42,6 +45,7 @@ def get_collaboration_tool_specs() -> list[ToolSpec]:
                         "items": {"type": "object", "additionalProperties": True},
                     },
                     "dispatch_hint": {"type": "string"},
+                    "approval": {"type": "object", "additionalProperties": True},
                 },
                 "required": ["action", "status", "message"],
                 "additionalProperties": False,
@@ -62,7 +66,8 @@ def _collaboration_input_schema() -> dict:
         "type": "object",
         "description": (
             "可执行的交付契约。至少提供 output_path 或非空 output_paths；路径必须是 worker 工作区内的安全相对路径，"
-            "且不得位于 share_files/。runtime 正常结束后，指定文件必须由本轮新建或修改。"
+            "且不得位于 share_files/。路径直接相对于工作区根目录，不得添加工作区名称、宿主路径或容器挂载路径前缀。"
+            "runtime 正常结束后，指定文件必须由本轮新建或修改。"
         ),
         "properties": {
             "format": {"type": "string"},
@@ -143,6 +148,7 @@ def _collaboration_input_schema() -> dict:
         "update_task",
         "retry_task",
         "cancel_task",
+        "resolve_task_approval",
         "read_shared",
         "read_task_artifacts",
         "write_shared",
@@ -164,6 +170,9 @@ def _collaboration_input_schema() -> dict:
             "result_summary": {"type": "string"},
             "review_notes": {"type": "string"},
             "retry_guidance": {"type": "string"},
+            "decision": {"type": "string", "enum": ["approve", "deny", "revise"]},
+            "decision_reason": {"type": "string", "minLength": 1},
+            "revision_guidance": {"type": "string", "minLength": 1},
             "artifact_refs": artifact_array,
             "path": {"type": "string"},
             "max_chars": {"type": "integer", "minimum": 1, "maximum": 1000000},
@@ -178,6 +187,17 @@ def _collaboration_input_schema() -> dict:
             _action_requirements("update_task", ["task_id"]),
             _action_requirements("retry_task", ["task_id"]),
             _action_requirements("cancel_task", ["task_id"]),
+            _action_requirements("resolve_task_approval", ["task_id", "decision", "decision_reason"]),
+            {
+                "if": {
+                    "properties": {
+                        "action": {"const": "resolve_task_approval"},
+                        "decision": {"const": "revise"},
+                    },
+                    "required": ["action", "decision"],
+                },
+                "then": {"required": ["revision_guidance"]},
+            },
             _action_requirements("read_shared", ["path"]),
             _action_requirements("read_task_artifacts", ["task_id"]),
             _action_requirements("write_shared", ["path", "content"]),
