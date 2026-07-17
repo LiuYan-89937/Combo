@@ -18,6 +18,7 @@ class LlamaImplementationBuild(BaseModel):
     implementation: LlamaImplementationId
     display_name: str
     source_revision: str
+    source_build_number: int
     source_sha256: str
     binary_path: str
     binary_sha256: str

@@ -595,6 +595,8 @@ validate_stable_diffusion_source() {
         ggml/CMakeLists.txt \
         thirdparty/libwebm/build/cxx_flags.cmake \
         thirdparty/libwebm/build/msvc_runtime.cmake \
+        thirdparty/libwebm/build/x86-mingw-gcc.cmake \
+        thirdparty/libwebm/build/x86_64-mingw-gcc.cmake \
         .fastagentfactory-revision; do
         [[ -f "${source_dir}/${required_file}" ]] \
             || fail "stable-diffusion.cpp source is incomplete: ${source_dir}/${required_file}"

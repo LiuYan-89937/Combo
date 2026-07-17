@@ -1,6 +1,7 @@
 *.MKV
 *.a
 *.cmake
+!build/*.cmake
 *.d
 *.exe
 *.mkv

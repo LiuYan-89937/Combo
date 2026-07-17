@@ -250,6 +250,7 @@ export interface LlamaImplementationBuild {
   implementation: LlamaImplementationId
   display_name: string
   source_revision: string
+  source_build_number: number
   source_sha256: string
   binary_path: string
   binary_sha256: string

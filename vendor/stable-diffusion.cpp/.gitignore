@@ -1,4 +1,6 @@
 build*/
+!thirdparty/libwebm/build/
+!thirdparty/libwebm/build/*.cmake
 cmake-build-*/
 test/
 .vscode/
