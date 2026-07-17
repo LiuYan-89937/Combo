@@ -35,6 +35,7 @@ TASK_STATUSES = {
     "cancelled",
 }
 READY_TO_START_STATUSES = {"assigned", "queued"}
+READY_TO_START_STATUS_PLACEHOLDERS = ", ".join("?" for _ in READY_TO_START_STATUSES)
 RETRYABLE_TASK_STATUSES = {"failed", "revision_requested", "cancelled"}
 DEPENDENCY_SATISFIED_TASK_STATUSES = {"completed"}
 RECOVERABLE_RUNNING_TASK_STATUSES = {"accepted", "planning", "working"}
@@ -1887,10 +1888,11 @@ class CollaborationStore:
                     "inference_capacity": capacity,
                 }
                 updated = conn.execute(
-                    """
+                    f"""
                     update collaboration_tasks
                     set result_summary = ?, result_payload_json = ?, updated_at = ?
-                    where collaboration_id = ? and task_id = ? and status in (?, ?, ?)
+                    where collaboration_id = ? and task_id = ?
+                      and status in ({READY_TO_START_STATUS_PLACEHOLDERS})
                     """,
                     (
                         message,
@@ -2090,10 +2092,11 @@ class CollaborationStore:
                     )
                     continue
                 claimed = conn.execute(
-                    """
+                    f"""
                     update collaboration_tasks
                     set status = ?, input_artifacts_json = ?, result_summary = ?, result_payload_json = ?, updated_at = ?
-                    where collaboration_id = ? and task_id = ? and status in (?, ?, ?)
+                    where collaboration_id = ? and task_id = ?
+                      and status in ({READY_TO_START_STATUS_PLACEHOLDERS})
                     """,
                     (
                         "accepted",
