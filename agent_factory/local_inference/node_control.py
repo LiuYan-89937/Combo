@@ -76,8 +76,17 @@ class InferenceNodeClient:
         return payload
 
     async def llama_implementation(self) -> LlamaImplementationStatus:
-        software = await self.software()
-        payload = software.get("llama_implementation")
+        endpoint = load_inference_telemetry_endpoint()
+        async with create_private_async_http_client(endpoint) as client:
+            response = await client.get(endpoint.endpoint("/runtime/llama"))
+            if response.status_code == 404:
+                response = await client.get(endpoint.endpoint("/runtime/software"))
+                response.raise_for_status()
+                software = response.json()
+                payload = software.get("llama_implementation") if isinstance(software, dict) else None
+            else:
+                response.raise_for_status()
+                payload = response.json()
         if not isinstance(payload, dict):
             return LlamaImplementationStatus(
                 error="inference node does not report llama.cpp implementation metadata",

@@ -86,7 +86,7 @@ Docker 用于 AgentPackage、MCP 和子 Agent 的隔离运行，不用于 Radeon
 - Notebook Path：留空
 - SSH Access：开启
 
-一键脚本要求远端可以通过 SSH Key 登录，并具有 AMD GPU、ROCm 和 PyTorch HIP。脚本只会在缺失时安装 CMake、Ninja、Git、curl、编译器等普通构建工具，**不会升级或重装 ROCm、GPU 驱动或 PyTorch**。
+一键脚本要求远端可以通过 SSH Key 登录，并具有 AMD GPU、ROCm 和 PyTorch HIP。脚本只会在缺失时安装 CMake、Ninja、curl、编译器等普通构建工具，**不会升级或重装 ROCm、GPU 驱动或 PyTorch**。
 
 ## 一键部署
 
@@ -130,11 +130,11 @@ ssh root@<RadeonCloud-IP> -p <SSH-Port>
 
 1. 校验本机配置和 SSH Key 登录。
 2. 验证仓库内置的官方与 AMD 两套 llama.cpp 源码，不在线拉取 llama.cpp。
-3. 准备缺失的普通构建工具并验证远端 HTTPS CA 信任链；仅在证书链缺失或损坏时重建并按需重装 `ca-certificates`，随后让 Git、curl、pip 与 ModelScope 共用同一 CA bundle。
+3. 准备缺失的普通构建工具并验证远端国内下载源的 HTTPS CA 信任链；仅在证书链缺失或损坏时重建并按需重装 `ca-certificates`。
 4. 探查 RadeonCloud GPU、显存、磁盘、`/dev/kfd`、ROCm 用户态组件与 PyTorch HIP。
 5. 仅在缺失时安装 ROCm 用户态构建组件和配置指定的 PyTorch HIP 包；云平台 GPU 驱动不会在工作空间内安装。
-6. 仅同步推理控制、模型池所需的最小 Python bundle，以及两套 llama.cpp 源码到远端；Factory 前后端不上传。
-7. 独立构建 `official` 与 `amd` 两个 ROCm llama-server；远端按固定 revision 递归拉取 stable-diffusion.cpp 及其子模块，再构建 HIPBLAS `sd-server`。
+6. 仅同步推理控制、模型池所需的最小 Python bundle，以及三套完整原生推理源码到远端；Factory 前后端不上传。
+7. 独立构建 `official` 与 `amd` 两个 ROCm llama-server，并从本机完整 vendor 源码构建 HIPBLAS `sd-server`；远端不访问 GitHub。
 8. 从国内镜像断点续传 Chat GGUF 和 mmproj，并校验官方 SHA256。
 9. 从 ModelScope 下载或复用 `BAAI/bge-m3`。
 10. 从 ModelScope 国内直链断点续传并校验 FLUX.1-dev Q4_0、VAE、CLIP-L 与 T5XXL。
@@ -267,6 +267,7 @@ Image Profile 默认允许在显存预算足够时与 Chat 同时驻留，模型
 ```text
 vendor/llama.cpp-official/   固定官方 Baseline，不接受 AMD 算子修改
 vendor/llama.cpp-amd/        AMD 优化承载目录
+vendor/stable-diffusion.cpp/ 完整图片推理源码与递归子模块
 ```
 
 当前 AMD 目录与官方基线计算实现相同，仅构建产物名称和实现元数据独立，状态会显示 `optimization_status=placeholder`。后续自定义算子只修改 AMD 目录：
@@ -298,6 +299,7 @@ deploy/deploy.env            一键部署配置，不提交
 .agent_runtime/              Agent 工作区、Trace 与 Checkpoint，不提交
 vendor/llama.cpp-official/   随仓库提交的官方 Baseline 源码
 vendor/llama.cpp-amd/        随仓库提交的 AMD 优化源码
+vendor/stable-diffusion.cpp/ 随仓库提交的图片推理源码与递归子模块
 ```
 
 ### RadeonCloud
@@ -310,7 +312,7 @@ vendor/llama.cpp-amd/        随仓库提交的 AMD 优化源码
 /root/models                 GGUF、mmproj 与 ModelScope 模型
 /root/fastagentfactory-llama-sources  两套同步源码
 /root/.fastagentfactory/llama        两套构建、清单和活动软链接
-/root/stable-diffusion.cpp           远端固定 revision 与递归子模块源码、构建产物
+/root/stable-diffusion.cpp           从本机 vendor 同步的完整源码与远端构建产物
 ```
 
 `/root` 是否持久取决于实例类型。若平台提供持久卷，应在 `deploy/deploy.env` 将模型、状态和 llama.cpp 路径改到其挂载点；否则工作空间到期前必须备份 Benchmark、Profile、Trace、演示材料和 llama.cpp 改动。
@@ -318,7 +320,7 @@ vendor/llama.cpp-amd/        随仓库提交的 AMD 优化源码
 ## 安全边界
 
 - SSH 必须使用 Key 登录，不在配置文件中保存密码。
-- `deploy/deploy.env`、`.env`、模型文件和运行状态均已排除 Git 提交；两套 llama.cpp 属于交付源码，stable-diffusion.cpp 仅在远端按固定 revision 获取。
+- `deploy/deploy.env`、`.env`、模型文件和运行状态均已排除 Git 提交；两套 llama.cpp 和 stable-diffusion.cpp 完整源码属于交付内容。
 - 远端 `8002`、`8003`、`8004` 只监听 `127.0.0.1`，不要直接暴露公网。
 - `AGENTFACTORY_RESOURCE_MASTER_KEY` 首次部署自动生成并写入本机 `.env`；丢失后旧的加密资源无法恢复。
 - 部署脚本先复用可用的 ROCm/PyTorch HIP 环境，仅在缺失且配置允许时安装用户态组件。GPU 驱动和 `/dev/kfd` 必须由 RadeonCloud 工作空间提供。

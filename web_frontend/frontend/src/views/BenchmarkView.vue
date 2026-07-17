@@ -42,6 +42,7 @@
           <label class="field field-wide">
             <span>{{ t('benchmark.profile') }}</span>
             <n-select
+              class="profile-select"
               v-model:value="form.profile_id"
               :options="profileOptions"
               :disabled="Boolean(activeRun)"
@@ -398,9 +399,7 @@ const profileOptions = computed(() => readyChatProfiles.value.map((profile) => (
 function profileOptionLabel(profile: LocalModelProfile): string {
   const displayName = profile.display_name.trim()
   const servedModelName = profile.served_model_name.trim()
-  return !servedModelName || servedModelName.localeCompare(displayName, undefined, { sensitivity: 'base' }) === 0
-    ? displayName
-    : `${displayName} · ${servedModelName}`
+  return displayName || servedModelName || profile.profile_id
 }
 const telemetryIntervalOptions = [100, 250, 500, 1000].map((value) => ({
   label: t('benchmark.milliseconds', { value }),
@@ -733,6 +732,19 @@ onUnmounted(() => {
 .field-wide { grid-column: span 3; }
 .field-full { grid-column: 1 / -1; }
 .field > span { color: var(--app-text); font-size: 12px; font-weight: 600; }
+.profile-select { width: 100%; min-width: 0; max-width: 100%; }
+.profile-select :deep(.n-base-selection),
+.profile-select :deep(.n-base-selection-label),
+.profile-select :deep(.n-base-selection-input),
+.profile-select :deep(.n-base-selection-input__content) {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+.profile-select :deep(.n-base-selection-input__content) {
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .form-actions { margin-top: var(--app-space-lg); display: flex; justify-content: flex-end; }
 
 .run-progress {

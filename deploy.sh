@@ -43,11 +43,11 @@ set +a
 required_config=(
     SSH_HOST SSH_PORT SSH_USER REMOTE_PROJECT_ROOT REMOTE_STATE_ROOT REMOTE_MODEL_ROOT
     REMOTE_LLAMA_SOURCE_ROOT REMOTE_LLAMA_RUNTIME_ROOT
-    LOCAL_LLAMA_OFFICIAL_DIR LOCAL_LLAMA_AMD_DIR
+    LOCAL_LLAMA_OFFICIAL_DIR LOCAL_LLAMA_AMD_DIR LOCAL_STABLE_DIFFUSION_CPP_DIR
     LLAMA_OFFICIAL_REVISION LLAMA_OFFICIAL_BUILD_NUMBER
     LLAMA_AMD_BASE_REVISION LLAMA_AMD_BASE_BUILD_NUMBER LLAMA_DEFAULT_IMPLEMENTATION
-    REMOTE_STABLE_DIFFUSION_CPP_DIR STABLE_DIFFUSION_CPP_REPOSITORY STABLE_DIFFUSION_CPP_REVISION
-    REMOTE_CA_BUNDLE REMOTE_REPAIR_CA_TRUST
+    REMOTE_STABLE_DIFFUSION_CPP_DIR STABLE_DIFFUSION_CPP_REVISION
+    REMOTE_CA_BUNDLE REMOTE_REPAIR_CA_TRUST REMOTE_CA_PROBE_URL
     CHAT_MODEL_REPOSITORY CHAT_MODEL_REVISION CHAT_MODEL_FILENAME CHAT_MODEL_SHA256
     CHAT_MMPROJ_FILENAME CHAT_MMPROJ_SHA256 EMBEDDING_MODEL_ID EMBEDDING_MODEL_REVISION
     CHAT_PROFILE_ID CHAT_SERVED_MODEL_NAME CHAT_CONTEXT_SIZE CHAT_MAX_OUTPUT_TOKENS
@@ -129,6 +129,10 @@ LOCAL_LLAMA_AMD_PATH="${LOCAL_LLAMA_AMD_DIR}"
 if [[ "${LOCAL_LLAMA_AMD_PATH}" != /* ]]; then
     LOCAL_LLAMA_AMD_PATH="${PROJECT_ROOT}/${LOCAL_LLAMA_AMD_PATH}"
 fi
+LOCAL_STABLE_DIFFUSION_CPP_PATH="${LOCAL_STABLE_DIFFUSION_CPP_DIR}"
+if [[ "${LOCAL_STABLE_DIFFUSION_CPP_PATH}" != /* ]]; then
+    LOCAL_STABLE_DIFFUSION_CPP_PATH="${PROJECT_ROOT}/${LOCAL_STABLE_DIFFUSION_CPP_PATH}"
+fi
 ssh_run() {
     ssh "${SSH_ARGS[@]}" "${SSH_TARGET}" "$@"
 }
@@ -161,9 +165,26 @@ validate_llama_source_tree() {
     done
 }
 
+validate_stable_diffusion_source_tree() {
+    local source_dir="$1"
+    local required_file
+    for required_file in \
+        CMakeLists.txt \
+        ggml/CMakeLists.txt \
+        thirdparty/libwebm/build/cxx_flags.cmake \
+        thirdparty/libwebm/build/msvc_runtime.cmake \
+        .fastagentfactory-revision; do
+        [[ -f "${source_dir}/${required_file}" ]] \
+            || fail "Bundled stable-diffusion.cpp source is incomplete: ${source_dir}/${required_file}"
+    done
+    [[ "$(<"${source_dir}/.fastagentfactory-revision")" == "${STABLE_DIFFUSION_CPP_REVISION}" ]] \
+        || fail "Bundled stable-diffusion.cpp revision does not match STABLE_DIFFUSION_CPP_REVISION"
+}
+
 prepare_local_sources() {
     validate_llama_source_tree official "${LOCAL_LLAMA_OFFICIAL_PATH}"
     validate_llama_source_tree amd "${LOCAL_LLAMA_AMD_PATH}"
+    validate_stable_diffusion_source_tree "${LOCAL_STABLE_DIFFUSION_CPP_PATH}"
 }
 
 sync_sources() {
@@ -206,6 +227,12 @@ sync_sources() {
         -e "${rsync_transport% }" \
         --exclude 'build*/' \
         "${LOCAL_LLAMA_AMD_PATH}/" "${SSH_TARGET}:${REMOTE_LLAMA_SOURCE_ROOT}/amd/"
+    log "Synchronizing bundled stable-diffusion.cpp source"
+    rsync -az --delete \
+        -e "${rsync_transport% }" \
+        --exclude '.git/' \
+        --exclude '/build*/' \
+        "${LOCAL_STABLE_DIFFUSION_CPP_PATH}/" "${SSH_TARGET}:${REMOTE_STABLE_DIFFUSION_CPP_DIR}/"
 }
 
 configure_local_env() {
@@ -334,7 +361,11 @@ case "${COMMAND}" in
         ;;
     models|image-models|build-llama|build-sd|switch-llama|list-llama-builds|rollback-llama|restart|down|status|doctor|logs)
         upload_controller
-        remote_command "${COMMAND}" "${REMOTE_COMMAND_ARGS[@]}"
+        if (( ${#REMOTE_COMMAND_ARGS[@]} > 0 )); then
+            remote_command "${COMMAND}" "${REMOTE_COMMAND_ARGS[@]}"
+        else
+            remote_command "${COMMAND}"
+        fi
         ;;
     *)
         fail "Unsupported command: ${COMMAND}. Use up, bootstrap, sync, models, image-models, build-llama, build-sd, switch-llama, list-llama-builds, rollback-llama, restart, down, status, doctor, or logs."

@@ -25,8 +25,8 @@ required_config=(
     REMOTE_PROJECT_ROOT REMOTE_STATE_ROOT REMOTE_MODEL_ROOT REMOTE_LLAMA_SOURCE_ROOT
     REMOTE_LLAMA_RUNTIME_ROOT LLAMA_OFFICIAL_REVISION LLAMA_OFFICIAL_BUILD_NUMBER
     LLAMA_AMD_BASE_REVISION LLAMA_AMD_BASE_BUILD_NUMBER LLAMA_DEFAULT_IMPLEMENTATION
-    REMOTE_STABLE_DIFFUSION_CPP_DIR STABLE_DIFFUSION_CPP_REPOSITORY STABLE_DIFFUSION_CPP_REVISION
-    REMOTE_CA_BUNDLE REMOTE_REPAIR_CA_TRUST PYPI_INDEX_URL HF_ENDPOINT
+    REMOTE_STABLE_DIFFUSION_CPP_DIR STABLE_DIFFUSION_CPP_REVISION
+    REMOTE_CA_BUNDLE REMOTE_REPAIR_CA_TRUST REMOTE_CA_PROBE_URL PYPI_INDEX_URL HF_ENDPOINT
     CHAT_MODEL_REPOSITORY CHAT_MODEL_REVISION
     CHAT_MODEL_FILENAME CHAT_MODEL_SHA256 CHAT_MODEL_SIZE_BYTES
     CHAT_MMPROJ_FILENAME CHAT_MMPROJ_SHA256 CHAT_MMPROJ_SIZE_BYTES
@@ -173,7 +173,7 @@ probe_remote_tls_trust() {
         --max-time 20 \
         --cacert "${REMOTE_CA_BUNDLE}" \
         --output /dev/null \
-        "${STABLE_DIFFUSION_CPP_REPOSITORY}"
+        "${REMOTE_CA_PROBE_URL}"
 }
 
 activate_remote_ca_environment() {
@@ -199,7 +199,7 @@ prepare_ca_trust() {
     fi
 
     if [[ "${probe_status}" != "60" && "${probe_status}" != "77" ]]; then
-        fail "TLS probe failed with curl status ${probe_status}; check DNS, routing, proxy, or firewall access to ${STABLE_DIFFUSION_CPP_REPOSITORY}"
+        fail "TLS probe failed with curl status ${probe_status}; check DNS, routing, proxy, or firewall access to ${REMOTE_CA_PROBE_URL}"
     fi
     [[ "${REMOTE_REPAIR_CA_TRUST}" == "1" ]] \
         || fail "Remote CA trust is unavailable and REMOTE_REPAIR_CA_TRUST is disabled"
@@ -219,20 +219,16 @@ prepare_ca_trust() {
         update-ca-certificates --fresh
     fi
     probe_remote_tls_trust \
-        || fail "Remote CA trust repair completed, but TLS verification still fails for ${STABLE_DIFFUSION_CPP_REPOSITORY}"
+        || fail "Remote CA trust repair completed, but TLS verification still fails for ${REMOTE_CA_PROBE_URL}"
     activate_remote_ca_environment
     CA_TRUST_PREPARED=1
     log "System CA trust repair completed"
 }
 
-git_with_ca() {
-    git -c http.sslCAInfo="${REMOTE_CA_BUNDLE}" "$@"
-}
-
 prepare_host() {
     local missing=()
     local command_name
-    for command_name in git curl cmake ninja g++ python3 rsync sha256sum; do
+    for command_name in curl cmake ninja g++ python3 rsync sha256sum; do
         command_exists "${command_name}" || missing+=("${command_name}")
     done
     if command_exists python3 && ! python3 -m venv --help >/dev/null 2>&1; then
@@ -249,7 +245,7 @@ prepare_host() {
         export DEBIAN_FRONTEND=noninteractive
         apt-get -o Acquire::Retries=5 update
         apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
-            build-essential ca-certificates cmake curl git ninja-build python3-pip python3-venv rsync
+            build-essential ca-certificates cmake curl ninja-build python3-pip python3-venv rsync
     fi
     prepare_ca_trust
     mkdir -p \
@@ -598,48 +594,17 @@ validate_stable_diffusion_source() {
         CMakeLists.txt \
         ggml/CMakeLists.txt \
         thirdparty/libwebm/build/cxx_flags.cmake \
-        thirdparty/libwebm/build/msvc_runtime.cmake; do
+        thirdparty/libwebm/build/msvc_runtime.cmake \
+        .fastagentfactory-revision; do
         [[ -f "${source_dir}/${required_file}" ]] \
             || fail "stable-diffusion.cpp source is incomplete: ${source_dir}/${required_file}"
     done
-}
-
-sync_stable_diffusion_source() {
-    prepare_ca_trust
-    local source_dir="${REMOTE_STABLE_DIFFUSION_CPP_DIR}"
-    local source_parent temp_dir current_revision
-    source_parent="$(dirname "${source_dir}")"
-    mkdir -p "${source_parent}"
-
-    if [[ ! -d "${source_dir}/.git" ]]; then
-        temp_dir="${source_dir}.clone"
-        rm -rf "${temp_dir}"
-        log "Cloning stable-diffusion.cpp revision ${STABLE_DIFFUSION_CPP_REVISION} with recursive submodules"
-        git_with_ca init "${temp_dir}"
-        git_with_ca -C "${temp_dir}" remote add origin "${STABLE_DIFFUSION_CPP_REPOSITORY}"
-        git_with_ca -C "${temp_dir}" fetch --depth 1 origin "${STABLE_DIFFUSION_CPP_REVISION}"
-        git_with_ca -C "${temp_dir}" checkout --detach FETCH_HEAD
-        git_with_ca -C "${temp_dir}" submodule sync --recursive
-        git_with_ca -C "${temp_dir}" submodule update --init --recursive --force --depth 1 --jobs "$(nproc)"
-        validate_stable_diffusion_source "${temp_dir}"
-        rm -rf "${source_dir}"
-        mv "${temp_dir}" "${source_dir}"
-    else
-        git_with_ca -C "${source_dir}" remote set-url origin "${STABLE_DIFFUSION_CPP_REPOSITORY}"
-        git_with_ca -C "${source_dir}" fetch --depth 1 origin "${STABLE_DIFFUSION_CPP_REVISION}"
-        git_with_ca -C "${source_dir}" checkout --detach --force FETCH_HEAD
-        git_with_ca -C "${source_dir}" submodule sync --recursive
-        git_with_ca -C "${source_dir}" submodule update --init --recursive --force --depth 1 --jobs "$(nproc)"
-        validate_stable_diffusion_source "${source_dir}"
-    fi
-
-    current_revision="$(git -C "${source_dir}" rev-parse HEAD)"
-    [[ "${current_revision}" == "${STABLE_DIFFUSION_CPP_REVISION}" ]] \
-        || fail "stable-diffusion.cpp revision mismatch: expected ${STABLE_DIFFUSION_CPP_REVISION}, got ${current_revision}"
+    [[ "$(<"${source_dir}/.fastagentfactory-revision")" == "${STABLE_DIFFUSION_CPP_REVISION}" ]] \
+        || fail "stable-diffusion.cpp source revision does not match STABLE_DIFFUSION_CPP_REVISION"
 }
 
 build_sd() {
-    sync_stable_diffusion_source
+    validate_stable_diffusion_source "${REMOTE_STABLE_DIFFUSION_CPP_DIR}"
     local gfx_name c_compiler cxx_compiler
     gfx_name="$(rocminfo 2>/dev/null | awk '/Name: *gfx[0-9]/ && !found {value=$2; found=1} END {print value}')"
     [[ -n "${gfx_name}" ]] || fail "Unable to detect AMD GPU target from rocminfo"

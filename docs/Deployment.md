@@ -21,13 +21,14 @@
 | 本机 | Telemetry SSH 转发 | `127.0.0.1:18004 -> remote:8004` |
 | 本机 | 官方 llama.cpp 源码 | `vendor/llama.cpp-official` |
 | 本机 | AMD llama.cpp 源码 | `vendor/llama.cpp-amd` |
+| 本机 | stable-diffusion.cpp 完整源码与递归子模块 | `vendor/stable-diffusion.cpp` |
 | 远端 | llama-server ROCm | `127.0.0.1:8003` |
 | 远端 | Embedding 服务 | `127.0.0.1:8002` |
 | 远端 | 推理控制与遥测 | `127.0.0.1:8004` |
 | 远端 | 最小推理 bundle | `/root/FastAgentFactory` |
 | 远端 | 两套 llama.cpp 源码 | `/root/fastagentfactory-llama-sources` |
 | 远端 | 两套构建与活动入口 | `/root/.fastagentfactory/llama` |
-| 远端 | stable-diffusion.cpp 完整 Git 源码与子模块 | `/root/stable-diffusion.cpp` |
+| 远端 | stable-diffusion.cpp 同步源码与构建产物 | `/root/stable-diffusion.cpp` |
 | 远端 | 模型文件 | `/root/models` |
 | 远端 | 推理状态与日志 | `/root/.fastagentfactory` |
 
@@ -146,9 +147,9 @@ SSH_KEY=
 | `REMOTE_LLAMA_RUNTIME_ROOT` | 两套构建、清单和活动软链接 | `/root/.fastagentfactory/llama` |
 | `LOCAL_LLAMA_OFFICIAL_DIR` | 仓库内官方 Baseline 源码 | `vendor/llama.cpp-official` |
 | `LOCAL_LLAMA_AMD_DIR` | 仓库内 AMD 优化源码 | `vendor/llama.cpp-amd` |
+| `LOCAL_STABLE_DIFFUSION_CPP_DIR` | 仓库内完整图片推理源码 | `vendor/stable-diffusion.cpp` |
 | `REMOTE_STABLE_DIFFUSION_CPP_DIR` | 远端 stable-diffusion.cpp 源码与构建 | `/root/stable-diffusion.cpp` |
-| `STABLE_DIFFUSION_CPP_REPOSITORY` | 远端获取图片推理源码的 Git 仓库 | stable-diffusion.cpp 官方仓库 |
-| `STABLE_DIFFUSION_CPP_REVISION` | 远端图片推理源码 revision | 固定 Commit SHA |
+| `STABLE_DIFFUSION_CPP_REVISION` | 本机 vendor 图片推理源码 revision | 固定 Commit SHA |
 | `LLAMA_OFFICIAL_REVISION` | 官方 Baseline 来源 revision | 固定 Commit SHA |
 | `LLAMA_OFFICIAL_BUILD_NUMBER` | 官方 Baseline 的上游构建序号 | 与固定 revision 对应的提交计数 |
 | `LLAMA_AMD_BASE_REVISION` | AMD 版本基于的官方 revision | 与 Baseline 对齐 |
@@ -170,8 +171,9 @@ SSH_KEY=
 | `AGENTFACTORY_COLLABORATION_EVENT_BATCH_LIMIT` | 单次主 Agent 恢复最多合并的原始事件数 | `64` |
 | `TAVILY_API_KEY` | 内置 `web_search` 的 Tavily Provider 密钥；只配置在本机 `.env`，由 MCP 子进程继承 | 留空时回退到 SearXNG/DuckDuckGo |
 | `REMOTE_INSTALL_BUILD_TOOLS` | 缺少普通工具时允许 apt 安装 | `1` |
-| `REMOTE_CA_BUNDLE` | Git、curl、pip 和 ModelScope 共用的远端 CA bundle | `/etc/ssl/certs/ca-certificates.crt` |
+| `REMOTE_CA_BUNDLE` | curl、pip、Requests 和 ModelScope 共用的远端 CA bundle | `/etc/ssl/certs/ca-certificates.crt` |
 | `REMOTE_REPAIR_CA_TRUST` | 证书链缺失或损坏时允许重建并按需重装 `ca-certificates` | `1` |
+| `REMOTE_CA_PROBE_URL` | CA 探针使用的国内 HTTPS 地址 | 清华 PyPI |
 | `REMOTE_INSTALL_ROCM_USERSPACE` | 缺失时安装 ROCm 用户态探查与 HIP 构建组件 | `1` |
 | `ROCM_USERSPACE_PACKAGES` | 镜像对应的 ROCm 用户态包列表 | `rocminfo rocm-hip-sdk` |
 | `REMOTE_INSTALL_PYTORCH` | 缺失时允许安装配置指定的 PyTorch HIP | `1` |
@@ -198,11 +200,11 @@ SSH_KEY=
 
 1. 检查本机 Git、Python、uv、Node、npm、Docker、SSH 与 rsync。
 2. 验证 SSH Key 登录和端口配置。
-3. 验证仓库自带的 `vendor/llama.cpp-official` 与 `vendor/llama.cpp-amd`；图片推理源码不进入仓库。
+3. 验证仓库自带的两套 llama.cpp、stable-diffusion.cpp 固定 revision 标记及递归子模块完整性。
 4. 上传远端控制脚本，准备缺失的普通编译工具，验证并按需修复系统 CA 信任链。
 5. 探查 GPU、显存、磁盘、ROCm 和 PyTorch HIP；仅在缺失时安装 ROCm 用户态组件和配置指定的 PyTorch HIP 包。
 6. 同步 FastAgentFactory 当前工作树到远端项目目录。
-7. 同步官方与 AMD 两套 llama.cpp 源码并使用独立目录构建两个 ROCm llama-server；远端检出固定 stable-diffusion.cpp revision、递归初始化完整子模块并构建 HIPBLAS sd-server。
+7. 同步官方与 AMD 两套 llama.cpp，以及完整 stable-diffusion.cpp 源码；远端不访问 GitHub，直接构建两个 ROCm llama-server 和 HIPBLAS sd-server。
 8. 从国内镜像断点续传 Chat GGUF 和 mmproj。
 9. 校验模型文件大小和 SHA256；损坏的完整文件不会被复用。
 10. 从 ModelScope 下载或复用 `BAAI/bge-m3`。
@@ -230,8 +232,8 @@ FLUX.1-dev 使用 Non-Commercial License，不等同于 Apache/MIT。比赛演�
 - 部分 GGUF 使用 HTTP Range 继续下载；
 - ModelScope 复用自身缓存；
 - llama.cpp 使用 Ninja 增量构建；
-- stable-diffusion.cpp 固定 revision 的 Git 工作树和递归子模块会幂等复用，并使用 Ninja 增量构建；
-- 远端会先验证 stable-diffusion.cpp 仓库的 TLS 信任链；仅在 curl 返回证书链错误时重建 CA，DNS、路由或防火墙问题会原样报错；
+- stable-diffusion.cpp 固定 revision 的完整 vendor 源码会幂等同步，并使用 Ninja 增量构建；
+- 远端无需访问 GitHub；CA 探针只验证国内 Python/模型下载链路，DNS、路由或防火墙问题会原样报错；
 - Profile 按固定 ID 更新，不重复创建随机记录；
 - 本机 `.env` 保留已有 `AGENTFACTORY_RESOURCE_MASTER_KEY`。
 
@@ -343,7 +345,7 @@ git pull --ff-only origin AMD-Hackson
 ./deploy.sh up
 ```
 
-远端同步以本机工作树为代码源，只传输 inference node、model pool 及其必要公共模块，并使用 `rsync --delete-excluded` 清除 bundle 中不属于该边界的旧文件。Factory 前后端、制造系统、会话与知识库代码不会上传；远端模型、状态、venv、llama.cpp build 和 stable-diffusion.cpp Git 工作树位于 bundle 之外，不在删除范围内。
+远端同步以本机工作树为代码源，只传输 inference node、model pool 及其必要公共模块，并使用 `rsync --delete-excluded` 清除 bundle 中不属于该边界的旧文件。Factory 前后端、制造系统、会话与知识库代码不会上传；原生推理源码分别通过独立 rsync 边界同步，远端模型、状态、venv 与构建目录不进入应用 bundle。
 
 ## 9. llama.cpp 算子开发与部署
 
