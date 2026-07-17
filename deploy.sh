@@ -44,7 +44,8 @@ required_config=(
     SSH_HOST SSH_PORT SSH_USER REMOTE_PROJECT_ROOT REMOTE_STATE_ROOT REMOTE_MODEL_ROOT
     REMOTE_LLAMA_SOURCE_ROOT REMOTE_LLAMA_RUNTIME_ROOT
     LOCAL_LLAMA_OFFICIAL_DIR LOCAL_LLAMA_AMD_DIR
-    LLAMA_OFFICIAL_REVISION LLAMA_AMD_BASE_REVISION LLAMA_DEFAULT_IMPLEMENTATION
+    LLAMA_OFFICIAL_REVISION LLAMA_OFFICIAL_BUILD_NUMBER
+    LLAMA_AMD_BASE_REVISION LLAMA_AMD_BASE_BUILD_NUMBER LLAMA_DEFAULT_IMPLEMENTATION
     REMOTE_STABLE_DIFFUSION_CPP_DIR LOCAL_STABLE_DIFFUSION_CPP_DIR
     STABLE_DIFFUSION_CPP_REVISION
     CHAT_MODEL_REPOSITORY CHAT_MODEL_REVISION CHAT_MODEL_FILENAME CHAT_MODEL_SHA256
@@ -63,6 +64,9 @@ for name in "${required_config[@]}"; do
 done
 [[ "${SSH_PORT}" =~ ^[0-9]+$ ]] || fail "SSH_PORT must be an integer"
 (( SSH_PORT >= 1 && SSH_PORT <= 65535 )) || fail "SSH_PORT must be between 1 and 65535"
+for name in LLAMA_OFFICIAL_BUILD_NUMBER LLAMA_AMD_BASE_BUILD_NUMBER; do
+    [[ "${!name}" =~ ^[0-9]+$ ]] || fail "${name} must be a non-negative integer"
+done
 for name in LOCAL_CHAT_PORT LOCAL_EMBEDDING_PORT LOCAL_TELEMETRY_PORT LOCAL_IMAGE_PORT; do
     [[ "${!name}" =~ ^[0-9]+$ ]] && (( ${!name} >= 1 && ${!name} <= 65535 )) \
         || fail "${name} must be an integer between 1 and 65535"
@@ -145,11 +149,24 @@ remote_command() {
     ssh_run /tmp/remote_runtime.sh "${command_name}" /tmp/"$(basename "${CONFIG_FILE}")" "$@"
 }
 
+validate_llama_source_tree() {
+    local implementation="$1"
+    local source_dir="$2"
+    local required_file
+    for required_file in \
+        CMakeLists.txt \
+        cmake/build-info.cmake \
+        common/CMakeLists.txt \
+        common/build-info.cpp.in \
+        common/build-info.h; do
+        [[ -f "${source_dir}/${required_file}" ]] \
+            || fail "Bundled ${implementation} llama.cpp source is incomplete: ${source_dir}/${required_file}"
+    done
+}
+
 prepare_local_sources() {
-    [[ -f "${LOCAL_LLAMA_OFFICIAL_PATH}/CMakeLists.txt" ]] \
-        || fail "Bundled official llama.cpp source is missing: ${LOCAL_LLAMA_OFFICIAL_PATH}"
-    [[ -f "${LOCAL_LLAMA_AMD_PATH}/CMakeLists.txt" ]] \
-        || fail "Bundled AMD llama.cpp source is missing: ${LOCAL_LLAMA_AMD_PATH}"
+    validate_llama_source_tree official "${LOCAL_LLAMA_OFFICIAL_PATH}"
+    validate_llama_source_tree amd "${LOCAL_LLAMA_AMD_PATH}"
     [[ -f "${LOCAL_SD_PATH}/CMakeLists.txt" ]] \
         || fail "Bundled stable-diffusion.cpp source is missing: ${LOCAL_SD_PATH}"
     [[ -f "${LOCAL_SD_PATH}/ggml/CMakeLists.txt" ]] \

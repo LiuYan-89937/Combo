@@ -149,7 +149,9 @@ SSH_KEY=
 | `LOCAL_STABLE_DIFFUSION_CPP_DIR` | 仓库内 stable-diffusion.cpp 源码 | `vendor/stable-diffusion.cpp` |
 | `STABLE_DIFFUSION_CPP_REVISION` | 仓库内图片推理源码的上游基线 revision | 固定 Commit SHA |
 | `LLAMA_OFFICIAL_REVISION` | 官方 Baseline 来源 revision | 固定 Commit SHA |
+| `LLAMA_OFFICIAL_BUILD_NUMBER` | 官方 Baseline 的上游构建序号 | 与固定 revision 对应的提交计数 |
 | `LLAMA_AMD_BASE_REVISION` | AMD 版本基于的官方 revision | 与 Baseline 对齐 |
+| `LLAMA_AMD_BASE_BUILD_NUMBER` | AMD 版本基线的上游构建序号 | 与 Baseline 对齐 |
 | `LLAMA_DEFAULT_IMPLEMENTATION` | 一键部署后激活的实现 | `amd` |
 | `PYPI_INDEX_URL` | 远端 Python 依赖源 | 清华 PyPI |
 | `HF_ENDPOINT` | GGUF 下载源 | Hugging Face 国内镜像 |

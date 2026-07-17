@@ -23,8 +23,8 @@ set +a
 
 required_config=(
     REMOTE_PROJECT_ROOT REMOTE_STATE_ROOT REMOTE_MODEL_ROOT REMOTE_LLAMA_SOURCE_ROOT
-    REMOTE_LLAMA_RUNTIME_ROOT LLAMA_OFFICIAL_REVISION LLAMA_AMD_BASE_REVISION
-    LLAMA_DEFAULT_IMPLEMENTATION
+    REMOTE_LLAMA_RUNTIME_ROOT LLAMA_OFFICIAL_REVISION LLAMA_OFFICIAL_BUILD_NUMBER
+    LLAMA_AMD_BASE_REVISION LLAMA_AMD_BASE_BUILD_NUMBER LLAMA_DEFAULT_IMPLEMENTATION
     REMOTE_STABLE_DIFFUSION_CPP_DIR
     PYPI_INDEX_URL HF_ENDPOINT CHAT_MODEL_REPOSITORY CHAT_MODEL_REVISION
     CHAT_MODEL_FILENAME CHAT_MODEL_SHA256 CHAT_MODEL_SIZE_BYTES
@@ -49,6 +49,7 @@ for name in "${required_config[@]}"; do
 done
 
 numeric_config=(
+    LLAMA_OFFICIAL_BUILD_NUMBER LLAMA_AMD_BASE_BUILD_NUMBER
     CHAT_MODEL_SIZE_BYTES CHAT_MMPROJ_SIZE_BYTES CHAT_CONTEXT_SIZE CHAT_MAX_OUTPUT_TOKENS
     CHAT_COMPRESSION_THRESHOLD CHAT_GPU_LAYERS CHAT_PARALLEL_SLOTS EMBEDDING_DIMENSIONS
     REMOTE_CHAT_PORT REMOTE_EMBEDDING_PORT REMOTE_TELEMETRY_PORT
@@ -122,6 +123,21 @@ llama_source_dir() {
         amd) printf '%s\n' "${LLAMA_AMD_SOURCE_DIR}" ;;
         *) return 2 ;;
     esac
+}
+
+validate_llama_source_tree() {
+    local implementation="$1"
+    local source_dir="$2"
+    local required_file
+    for required_file in \
+        CMakeLists.txt \
+        cmake/build-info.cmake \
+        common/CMakeLists.txt \
+        common/build-info.cpp.in \
+        common/build-info.h; do
+        [[ -f "${source_dir}/${required_file}" ]] \
+            || fail "Bundled ${implementation} llama.cpp source is incomplete: ${source_dir}/${required_file}"
+    done
 }
 
 llama_build_dir() {
@@ -376,18 +392,19 @@ llama_source_digest() {
 build_llama_implementation() {
     local implementation="$1"
     validate_llama_implementation "${implementation}"
-    local source_dir build_dir cmake_dir source_revision source_digest binary binary_sha custom_kernels
+    local source_dir build_dir cmake_dir source_revision source_build_number source_digest binary binary_sha custom_kernels
     source_dir="$(llama_source_dir "${implementation}")"
     build_dir="$(llama_build_dir "${implementation}")"
     cmake_dir="${build_dir}/cmake"
     binary="$(llama_binary_path "${implementation}")"
-    [[ -f "${source_dir}/CMakeLists.txt" ]] \
-        || fail "Bundled ${implementation} llama.cpp source is not synchronized to ${source_dir}"
+    validate_llama_source_tree "${implementation}" "${source_dir}"
     if [[ "${implementation}" == "official" ]]; then
         source_revision="${LLAMA_OFFICIAL_REVISION}"
+        source_build_number="${LLAMA_OFFICIAL_BUILD_NUMBER}"
         custom_kernels=false
     else
         source_revision="${LLAMA_AMD_BASE_REVISION}"
+        source_build_number="${LLAMA_AMD_BASE_BUILD_NUMBER}"
         custom_kernels=false
     fi
     log "Configuring ${implementation} llama.cpp with GGML_HIP=ON"
@@ -400,6 +417,8 @@ build_llama_implementation() {
         -DLLAMA_CURL=OFF \
         -DLLAMA_BUILD_UI=OFF \
         -DLLAMA_USE_PREBUILT_UI=OFF \
+        -DLLAMA_BUILD_COMMIT="${source_revision}" \
+        -DLLAMA_BUILD_NUMBER="${source_build_number}" \
         -DCMAKE_BUILD_TYPE=Release
     log "Building ${implementation} llama-server"
     cmake --build "${cmake_dir}" --target llama-server --parallel "$(nproc)"
@@ -410,7 +429,7 @@ build_llama_implementation() {
     source_digest="$(llama_source_digest "${source_dir}")"
     binary_sha="$(sha256sum "${binary}" | awk '{print $1}')"
     python3 - "${build_dir}/manifest.json" "${implementation}" "${source_revision}" \
-        "${source_digest}" "${binary}" "${binary_sha}" "${custom_kernels}" <<'PY'
+        "${source_build_number}" "${source_digest}" "${binary}" "${binary_sha}" "${custom_kernels}" <<'PY'
 import datetime
 import json
 import pathlib
@@ -422,10 +441,11 @@ payload = {
     "implementation": implementation,
     "display_name": "Official llama.cpp" if implementation == "official" else "AMD llama.cpp",
     "source_revision": sys.argv[3],
-    "source_sha256": sys.argv[4],
-    "binary_path": sys.argv[5],
-    "binary_sha256": sys.argv[6],
-    "custom_kernels": sys.argv[7].lower() == "true",
+    "source_build_number": int(sys.argv[4]),
+    "source_sha256": sys.argv[5],
+    "binary_path": sys.argv[6],
+    "binary_sha256": sys.argv[7],
+    "custom_kernels": sys.argv[8].lower() == "true",
     "optimization_status": "baseline" if implementation == "official" else "placeholder",
     "build_options": {
         "GGML_HIP": True,
