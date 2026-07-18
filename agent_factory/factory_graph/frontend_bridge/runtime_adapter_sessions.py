@@ -90,7 +90,11 @@ class RuntimeSessionCommandMixin:
         if requested_mode is not None and requested_mode != self.session_record.current_mode:
             self.session_record = self.session_manager.set_mode(self.session_record.session_id, requested_mode)
         self._restore_session_mode_context()
-        self._emit_session_event(command.request_id, session_event_type="session_switched")
+        self._emit_session_event(
+            command.request_id,
+            session_event_type="session_switched",
+            payload_metadata=_session_event_context(command),
+        )
 
     def new_session(self, command: FactoryFrontendCommand) -> None:
         self.mode = _session_mode(command.mode)
@@ -102,7 +106,11 @@ class RuntimeSessionCommandMixin:
                 requested_evolution_package_id,
             )
         self._restore_session_mode_context()
-        self._emit_session_event(command.request_id, session_event_type="session_started")
+        self._emit_session_event(
+            command.request_id,
+            session_event_type="session_started",
+            payload_metadata=_session_event_context(command),
+        )
 
     def delete_session(self, command: FactoryFrontendCommand) -> None:
         session_id = str(command.session_id or command.payload.get("session_id") or "").strip()
@@ -224,14 +232,20 @@ class RuntimeSessionCommandMixin:
             return
         self._resume_agent_package_interrupt(command)
 
-    def _emit_session_event(self, request_id: str | None, *, session_event_type: str = "session_switched") -> None:
+    def _emit_session_event(
+        self,
+        request_id: str | None,
+        *,
+        session_event_type: str = "session_switched",
+        payload_metadata: dict[str, object] | None = None,
+    ) -> None:
         self.emit(
             event(
                 session_event_type,
                 request_id=request_id,
                 session_id=self._session_id(),
                 mode=self.mode,
-                payload={"session": self._session_payload()},
+                payload={"session": self._session_payload(), **(payload_metadata or {})},
             )
         )
 
@@ -363,6 +377,8 @@ class RuntimeSessionCommandMixin:
         for item in sessions:
             if not isinstance(item, dict):
                 continue
+            if item.get("visible_in_agent_session_list") is False:
+                continue
             session_id = str(item.get("session_id") or "").strip()
             if session_id:
                 result[session_id] = item
@@ -490,6 +506,11 @@ def _turns_from_agent_session(record: dict[str, object]) -> list[dict[str, objec
     if not isinstance(turns, list):
         return []
     return [dict(turn) for turn in turns if isinstance(turn, dict)]
+
+
+def _session_event_context(command: FactoryFrontendCommand) -> dict[str, object]:
+    collaboration_id = str((command.payload or {}).get("collaboration_id") or "").strip()
+    return {"collaboration_id": collaboration_id} if collaboration_id else {}
 
 
 def _canonical_chat_records(records: list[Any], chat_sessions: dict[str, dict[str, Any]]) -> dict[str, Any]:

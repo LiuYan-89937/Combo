@@ -4,7 +4,6 @@
       <div class="section-heading">
         <div class="section-title-line">
           <div class="section-title">{{ t('collaboration.title') }}</div>
-          <n-tag size="small" :bordered="false" type="info">{{ t('collaboration.betaTag') }}</n-tag>
         </div>
         <n-button size="small" type="primary" :loading="store.saving" @click="createDefaultSession">
           {{ t('collaboration.new') }}
@@ -74,6 +73,15 @@
           <n-radio-button value="user_controlled">{{ t('collaboration.userApproval') }}</n-radio-button>
           <n-radio-button value="main_agent_delegated">{{ t('collaboration.agentApproval') }}</n-radio-button>
         </n-radio-group>
+        <div v-if="store.activeSession" class="main-agent-context">
+          <div class="context-heading">{{ t('collaboration.mainAgentContext') }}</div>
+          <dl class="context-detail-grid">
+            <template v-for="item in mainAgentContextRows" :key="item.label">
+              <dt>{{ item.label }}</dt>
+              <dd :title="item.value">{{ item.value }}</dd>
+            </template>
+          </dl>
+        </div>
       </div>
     </section>
 
@@ -100,6 +108,7 @@
           v-else-if="acceptanceWorkspaceContext"
           class="acceptance-workspace-explorer"
           :workspace-context="acceptanceWorkspaceContext"
+          fixed-scope="workdir"
           @select-file="handleAcceptanceFileSelect"
         />
         <n-empty v-else :description="t('collaboration.empty')" size="small" />
@@ -125,8 +134,14 @@
           :class="message.message_kind"
         >
           <div class="activity-head">
-            <strong>{{ messageSpeaker(message) }}</strong>
-            <n-tag size="tiny" :bordered="false">{{ message.message_kind }}</n-tag>
+            <div class="activity-identity">
+              <strong>{{ messageSpeaker(message) }}</strong>
+              <span v-if="message.task_id">{{ activityTaskLabel(message.task_id) }}</span>
+            </div>
+            <div class="activity-meta">
+              <time>{{ formatActivityTime(message.created_at) }}</time>
+              <n-tag size="tiny" :bordered="false">{{ message.message_kind }}</n-tag>
+            </div>
           </div>
           <div class="markdown-content sidebar-markdown activity-markdown" v-html="renderSidebarMarkdown(message.content)"></div>
         </article>
@@ -351,6 +366,7 @@ import { NButton, NEmpty, NIcon, NInput, NPopconfirm, NRadioButton, NRadioGroup,
 import { SYSTEM_CHAT_PACKAGE_ID, useCollaborationStore } from '@/stores/collaboration'
 import { useAgentStore } from '@/stores/agent'
 import { useRuntimeStore } from '@/stores/runtime'
+import { useModelPoolStore } from '@/stores/modelPool'
 import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
 import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
@@ -370,6 +386,7 @@ import type { WorkspaceEntry } from '@/types/protocol'
 const store = useCollaborationStore()
 const agentStore = useAgentStore()
 const runtimeStore = useRuntimeStore()
+const modelPoolStore = useModelPoolStore()
 const commands = useCommand()
 const router = useRouter()
 const { t } = useI18n()
@@ -397,8 +414,43 @@ const acceptanceWorkspaceContext = computed<WorkspaceRequestContext | null>(() =
     collaborationId,
   }
 })
+const mainAgentContextRows = computed(() => {
+  const session = store.activeSession
+  if (!session) return []
+  const configuredProfileId = String(session.execution_config?.model_profile_id || '').trim()
+  const profile = modelPoolStore.profile(configuredProfileId) || modelPoolStore.defaultProfile('main')
+  const reasoning = session.execution_config?.reasoning_intensity
+  const context = runtimeStore.contextWindow
+  const contextLimit = context?.contextWindowTokens ?? profile?.limits.max_input_tokens
+  const compressionThreshold = context?.compressionThresholdTokens
+    ?? profile?.limits.context_compression_threshold_tokens
+  const contextUsage = context?.tokenCount != null || contextLimit != null
+    ? `${formatContextTokens(context?.tokenCount)} / ${formatContextTokens(contextLimit)}`
+    : t('common.unknown')
+  return [
+    { label: t('collaboration.context.agent'), value: agentName(session.main_agent_package_id) },
+    {
+      label: t('collaboration.context.session'),
+      value: String(session.main_agent_package_session_id || session.main_factory_session_id || t('collaboration.context.notCreated')),
+    },
+    {
+      label: t('collaboration.context.model'),
+      value: profile?.display_name || profile?.served_model_name || configuredProfileId || t('chat.defaultMainModel'),
+    },
+    {
+      label: t('chat.reasoningIntensity'),
+      value: typeof reasoning === 'number' ? String(reasoning) : t('collaboration.context.followDefault'),
+    },
+    { label: t('collaboration.context.contextWindow'), value: contextUsage },
+    {
+      label: t('collaboration.context.compressionThreshold'),
+      value: formatContextTokens(compressionThreshold),
+    },
+    { label: t('collaboration.context.approval'), value: approvalModeLabel(session.approval_mode) },
+  ]
+})
 const acceptanceWorkspaceContextKey = computed(() => acceptanceWorkspaceContext.value?.collaborationId || '')
-const activityMessages = computed(() => store.messages.slice(-30))
+const activityMessages = computed(() => store.messages)
 const activityAgentOptions = computed(() => {
   const options = new Map<string, string>()
   options.set('__all__', t('collaboration.activityAllAgents'))
@@ -430,6 +482,7 @@ const canCompleteSession = computed(() => {
 
 onMounted(() => {
   void commands.listAgentPackageInstances()
+  void modelPoolStore.ensureLoaded()
   refreshTimer = window.setInterval(refreshActiveSession, 3000)
 })
 
@@ -480,8 +533,7 @@ async function loadSession(collaborationId: string) {
 function refreshActiveSession() {
   const collaborationId = store.activeSession?.collaboration_id
   if (!collaborationId || store.loading || store.saving) return
-  const hasActiveTask = store.tasks.some((task) => ['assigned', 'queued', 'accepted', 'planning', 'working'].includes(task.status))
-  if (!hasActiveTask) return
+  if (store.activeSession?.status === 'completed' && store.activeSession.statistics) return
   void store.loadSession(collaborationId)
 }
 
@@ -518,15 +570,20 @@ async function startTask(task: CollaborationTaskView) {
 async function openWorkerSession(task: CollaborationTaskView) {
   const packageId = String(task.assignee_package_id || '').trim()
   const sessionId = String(task.assignee_session_id || '').trim()
-  await openWorkerSessionByIds(packageId, sessionId)
+  await openWorkerSessionByIds(packageId, sessionId, task.task_id)
 }
 
-async function openWorkerSessionByIds(packageId: string, sessionId: string) {
+async function openWorkerSessionByIds(packageId: string, sessionId: string, taskId: string | null = null) {
   if (!packageId || !sessionId) return
-  agentStore.enterAgentChat(packageId, sessionId)
-  await router.push({ name: 'Factory' })
-  await commands.selectAgentPackage(packageId, 'run')
-  await commands.loadAgentPackageSession(packageId, sessionId)
+  await router.push({
+    name: 'Factory',
+    query: {
+      package_id: packageId,
+      session_id: sessionId,
+      collaboration_id: store.activeSession?.collaboration_id || undefined,
+      collaboration_task_id: taskId || undefined,
+    },
+  })
 }
 
 async function cancelTask(task: CollaborationTaskView) {
@@ -582,6 +639,11 @@ function taskSummary(task: CollaborationTaskView): string {
 
 function renderSidebarMarkdown(content: string | null | undefined): string {
   return renderMarkdown(String(content || ''), { surface: 'collaboration_sidebar' })
+}
+
+function formatContextTokens(value: number | null | undefined): string {
+  if (typeof value !== 'number') return '—'
+  return new Intl.NumberFormat().format(value)
 }
 
 function mainAgentActivityFilterValue(): string {
@@ -691,6 +753,18 @@ function messageSpeaker(message: CollaborationMessageView): string {
   return message.speaker_type
 }
 
+function activityTaskLabel(taskId: string): string {
+  const task = store.tasks.find(item => item.task_id === taskId)
+  return task ? taskSummary(task) : taskId
+}
+
+function formatActivityTime(value: string): string {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime())
+    ? value
+    : new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(date)
+}
+
 function taskStatusType(status: CollaborationTaskStatus): 'default' | 'success' | 'warning' | 'error' | 'info' {
   if (status === 'completed') return 'success'
   if (status === 'failed' || status === 'cancelled') return 'error'
@@ -753,6 +827,40 @@ function taskStatusType(status: CollaborationTaskStatus): 'default' | 'success' 
   display: flex;
   flex-direction: column;
   gap: var(--app-space-sm);
+}
+
+.main-agent-context {
+  padding: var(--app-space-md);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface-muted);
+}
+
+.context-heading {
+  margin-bottom: var(--app-space-sm);
+  color: var(--app-text-strong);
+  font-size: var(--app-font-sm);
+  font-weight: 600;
+}
+
+.context-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(72px, auto) minmax(0, 1fr);
+  gap: var(--app-space-xs) var(--app-space-sm);
+  margin: 0;
+  font-size: var(--app-font-xs);
+}
+
+.context-detail-grid dt {
+  color: var(--app-text-muted);
+}
+
+.context-detail-grid dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--app-text);
+  text-align: right;
+  overflow-wrap: anywhere;
 }
 
 .session-item {
@@ -850,6 +958,33 @@ function taskStatusType(status: CollaborationTaskStatus): 'default' | 'success' 
   gap: var(--app-space-sm);
   color: var(--app-text-secondary);
   font-size: var(--app-font-xs);
+}
+
+.activity-identity,
+.activity-meta {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--app-space-xs);
+}
+
+.activity-identity {
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.activity-identity span,
+.activity-meta time {
+  color: var(--app-text-muted);
+  font-size: 11px;
+}
+
+.activity-identity span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .activity-markdown {

@@ -187,6 +187,7 @@ class CollaborationOrchestrator:
             user_message=user_message,
             session=session,
         )
+        execution_config = session.get("execution_config") if isinstance(session.get("execution_config"), dict) else {}
         run = self.runtime.stream(
             package_id,
             user_input=prompt,
@@ -197,11 +198,21 @@ class CollaborationOrchestrator:
             user_config={
                 "collaboration_id": collaboration_id,
                 "runtime_tool_access": collaboration_runtime_tool_access(),
+                **(
+                    {"model_profile_overrides": {"main": execution_config["model_profile_id"]}}
+                    if execution_config.get("model_profile_id")
+                    else {}
+                ),
+                **(
+                    {"reasoning_intensity": execution_config["reasoning_intensity"]}
+                    if execution_config.get("reasoning_intensity") is not None
+                    else {}
+                ),
             },
             require_ready=True,
             session_kind="collaboration_main",
             collaboration_id=collaboration_id,
-            visible_in_agent_session_list=True,
+            visible_in_agent_session_list=False,
         )
         main_session_id = str((run.session or {}).get("session_id") or "").strip()
         if main_session_id and main_session_id != str(session.get("main_agent_package_session_id") or ""):
@@ -228,6 +239,7 @@ class CollaborationOrchestrator:
                     item,
                     package_id=package_id,
                     factory_session_id=factory_session_id,
+                    collaboration_id=collaboration_id,
                 )
             )
             output.accept(item)
@@ -429,7 +441,7 @@ class CollaborationOrchestrator:
             session_kind="collaboration_worker",
             collaboration_id=collaboration_id,
             collaboration_task_id=task_id,
-            visible_in_agent_session_list=True,
+            visible_in_agent_session_list=False,
         )
         assignee_session_id = str(worker_session.get("session_id") or task.get("assignee_session_id") or "").strip()
         if not assignee_session_id:
@@ -492,7 +504,7 @@ class CollaborationOrchestrator:
             session_kind="collaboration_worker",
             collaboration_id=collaboration_id,
             collaboration_task_id=task_id,
-            visible_in_agent_session_list=True,
+            visible_in_agent_session_list=False,
             workdir_root=worker_workdir,
         )
         assignee_session_id = str((run.session or {}).get("session_id") or assignee_session_id).strip()
@@ -919,7 +931,13 @@ class CollaborationOrchestrator:
             event_recorder.accept(item)
             if item.process_event:
                 self.runtime.emit_frontend_event(
-                    _worker_agent_frontend_event(item, package_id=package_id, session_id=assignee_session_id)
+                    _worker_agent_frontend_event(
+                        item,
+                        package_id=package_id,
+                        session_id=assignee_session_id,
+                        collaboration_id=collaboration_id,
+                        collaboration_task_id=task_id,
+                    )
                 )
             _upsert_tool_activity(tool_activities, item)
             if item.event_type in RUN_TERMINAL_EVENT_TYPES:
@@ -1042,12 +1060,14 @@ def _main_agent_frontend_event(
     *,
     package_id: str,
     factory_session_id: str | None,
+    collaboration_id: str,
 ) -> FactoryFrontendEvent:
     payload = item.payload if isinstance(item.payload, dict) else {}
     updates: dict[str, Any] = {
         "payload": {
             **payload,
             "package_id": package_id,
+            "collaboration_id": collaboration_id,
         }
     }
     if package_id == SYSTEM_CHAT_PACKAGE_ID:
@@ -1062,6 +1082,8 @@ def _worker_agent_frontend_event(
     *,
     package_id: str,
     session_id: str | None,
+    collaboration_id: str,
+    collaboration_task_id: str,
 ) -> FactoryFrontendEvent:
     payload = item.payload if isinstance(item.payload, dict) else {}
     return item.model_copy(
@@ -1070,6 +1092,8 @@ def _worker_agent_frontend_event(
             "payload": {
                 **payload,
                 "package_id": package_id,
+                "collaboration_id": collaboration_id,
+                "collaboration_task_id": collaboration_task_id,
             },
         }
     )
@@ -1281,10 +1305,18 @@ def _worker_prompt(*, session: dict[str, Any], task: dict[str, Any], shared_mate
     delivery_paths = "\n".join(f"- {path}" for path in delivery_standard.expected_output_paths)
     visible_context = task.get("visible_context") if isinstance(task.get("visible_context"), dict) else {}
     retry_context = visible_context.get("retry") if isinstance(visible_context.get("retry"), dict) else None
+    recovery_context = visible_context.get("recovery") if isinstance(visible_context.get("recovery"), dict) else None
     retry_guidance = (
         "这是一次全新会话中的任务重跑。请针对上次失败原因修正执行方式，不要假设旧会话、旧 checkpoint 或旧工作区仍然存在。\n"
         f"重试上下文：{retry_context}"
         if retry_context is not None
+        else ""
+    )
+    recovery_guidance = (
+        "这是后端重启后的续跑。先检查当前会话与工作区中已经持久化的进度，再从未完成步骤继续；"
+        "不要假设中断瞬间正在执行的工具已经成功，也不要重复具有外部副作用的操作，除非能够确认其尚未完成。\n"
+        f"恢复上下文：{recovery_context}"
+        if recovery_context is not None
         else ""
     )
     return "\n\n".join(
@@ -1304,6 +1336,7 @@ def _worker_prompt(*, session: dict[str, Any], task: dict[str, Any], shared_mate
             f"验收标准：{delivery_standard.model_dump(mode='json', exclude_none=True)}",
             f"可见上下文：{visible_context}",
             retry_guidance,
+            recovery_guidance,
             materials,
             "交付要求：给出可由主 Agent 验收的完整结果。你在工作区中新建或修改的普通文件会被系统收集到协作共享工作区作为任务交付物。",
         ]

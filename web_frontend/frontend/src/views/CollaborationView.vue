@@ -43,6 +43,33 @@
         </n-scrollbar>
       </section>
 
+      <section
+        v-if="collaborationStatistics && store.activeSession?.status === 'completed'"
+        class="collaboration-statistics"
+        aria-label="collaboration statistics"
+      >
+        <div class="statistic-item">
+          <span>{{ t('collaboration.stats.totalTokens') }}</span>
+          <strong>{{ formatCount(collaborationStatistics.model_usage.totals.total_tokens) }}</strong>
+        </div>
+        <div class="statistic-item">
+          <span>{{ t('collaboration.stats.cacheHit') }}</span>
+          <strong>{{ formatPercent(collaborationStatistics.model_usage.totals.cache_hit_ratio) }}</strong>
+        </div>
+        <div class="statistic-item">
+          <span>{{ t('collaboration.stats.wallDuration') }}</span>
+          <strong>{{ formatDuration(collaborationStatistics.wall_duration_ms) }}</strong>
+        </div>
+        <div class="statistic-item">
+          <span>{{ t('collaboration.stats.taskDuration') }}</span>
+          <strong>{{ formatDuration(collaborationStatistics.cumulative_task_duration_ms) }}</strong>
+        </div>
+        <div class="statistic-item">
+          <span>{{ t('collaboration.stats.tasks') }}</span>
+          <strong>{{ collaborationStatistics.task_count }}</strong>
+        </div>
+      </section>
+
       <ToolApprovalPanel
         v-if="hasApprovalRequests"
         class="approval-section"
@@ -59,7 +86,14 @@
           :disabled="inputDisabled"
           :is-running="isMainAgentRunning"
           attachments-enabled
+          model-selector-enabled
+          :model-options="modelOptions"
+          :selected-model-profile-id="selectedModelProfileId"
+          :reasoning-control-enabled="reasoningControlEnabled"
+          :reasoning-intensity="reasoningIntensity"
           :reference-scope="referenceScope"
+          @update:selected-model-profile-id="updateModelProfile"
+          @update:reasoning-intensity="updateReasoningIntensity"
           @send="sendMessage"
           @cancel="cancelRequest"
         />
@@ -76,6 +110,7 @@ import {
   NScrollbar,
 } from 'naive-ui'
 import { useCollaborationStore } from '@/stores/collaboration'
+import { useModelPoolStore } from '@/stores/modelPool'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useUiStore } from '@/stores/ui'
 import { useI18n } from '@/composables/useI18n'
@@ -90,16 +125,32 @@ import { useContextReferenceStore } from '@/stores/contextReferences'
 import { messageContextReference } from '@/utils/contextReferences'
 import TipPanel from '@/components/chat/TipPanel.vue'
 import type { TipMessageContext } from '@/stores/tips'
+import { runtimeMainModelOptions } from '@/utils/modelProfileOptions'
 
 const store = useCollaborationStore()
 const runtimeStore = useRuntimeStore()
+const modelPoolStore = useModelPoolStore()
 const uiStore = useUiStore()
 const { t } = useI18n()
 const scrollbarRef = ref()
 const inputRef = ref()
 const referenceStore = useContextReferenceStore()
 const referenceScope = computed(() => `collaboration:${store.activeSession?.collaboration_id || 'new'}`)
+const selectedModelProfileId = computed(() => store.activeSession?.execution_config?.model_profile_id || '')
+const reasoningIntensity = computed(() => store.activeSession?.execution_config?.reasoning_intensity ?? null)
+const selectedModelProfile = computed(() => (
+  modelPoolStore.profile(selectedModelProfileId.value) || modelPoolStore.defaultProfile('main')
+))
+const reasoningControlEnabled = computed(() => selectedModelProfile.value?.capabilities.reasoning_supported === true)
+const modelOptions = computed(() => {
+  return runtimeMainModelOptions(
+    modelPoolStore.profiles,
+    modelPoolStore.defaults.main,
+    t('chat.defaultMainModel'),
+  )
+})
 const tipScopeId = computed(() => store.activeSession?.collaboration_id || '')
+const collaborationStatistics = computed(() => store.activeSession?.statistics || null)
 const {
   activeStreamContentKey,
   cancelMainAgentRequest,
@@ -139,7 +190,28 @@ onMounted(() => {
     enterActiveMainAgentContext()
     nextTick(() => inputRef.value?.focus())
   })
+  void modelPoolStore.ensureLoaded()
 })
+
+function updateModelProfile(value: string) {
+  const nextProfile = modelPoolStore.profile(value) || modelPoolStore.defaultProfile('main')
+  void store.updateSession({
+    execution_config: {
+      ...(store.activeSession?.execution_config || {}),
+      model_profile_id: value || null,
+      ...(nextProfile?.capabilities.reasoning_supported === true ? {} : { reasoning_intensity: null }),
+    },
+  })
+}
+
+function updateReasoningIntensity(value: number | null) {
+  void store.updateSession({
+    execution_config: {
+      ...(store.activeSession?.execution_config || {}),
+      reasoning_intensity: value,
+    },
+  })
+}
 
 async function sendMessage(message: string, attachments: RuntimeAttachmentInput[]) {
   if (!await sendMainAgentMessage(message, attachments)) return
@@ -194,6 +266,25 @@ function followBottomIfNeeded() {
   })
 }
 
+function formatCount(value: number): string {
+  return new Intl.NumberFormat().format(Number(value || 0))
+}
+
+function formatPercent(value: number | null): string {
+  return value == null ? '—' : `${(value * 100).toFixed(1)}%`
+}
+
+function formatDuration(value: number | null): string {
+  if (value == null) return '—'
+  const totalSeconds = Math.max(0, Math.round(value / 1000))
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  if (hours > 0) return `${hours}h ${minutes}m`
+  if (minutes > 0) return `${minutes}m ${seconds}s`
+  return `${seconds}s`
+}
+
 watch(
   () => runtimeStore.transcript.length,
   followBottomIfNeeded,
@@ -242,6 +333,41 @@ watch(
   border: 1px solid color-mix(in srgb, var(--app-primary) 24%, var(--app-border));
   border-radius: 10px;
   background: color-mix(in srgb, var(--app-primary) 7%, var(--app-surface));
+}
+
+.collaboration-statistics {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--app-space-sm);
+  margin: var(--app-space-sm) var(--app-space-md);
+  padding: var(--app-space-sm) var(--app-space-md);
+  border: 1px solid var(--app-divider);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface-muted);
+}
+
+.statistic-item {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.statistic-item span {
+  color: var(--app-text-muted);
+  font-size: var(--app-font-xs);
+}
+
+.statistic-item strong {
+  color: var(--app-text-strong);
+  font-size: var(--app-font-sm);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 900px) {
+  .collaboration-statistics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .runtime-status-dot {

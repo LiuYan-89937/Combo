@@ -8,7 +8,7 @@ import type {
   ToolActivity,
   TranscriptItem,
 } from '@/types/protocol'
-import { conversationScopeForMode } from './scopes'
+import { agentPackageConversationScope, conversationScopeForMode } from './scopes'
 
 export interface FactorySessionSnapshotView {
   restoredMode: FactoryMode | null
@@ -32,6 +32,7 @@ export interface AgentPackageSessionSnapshotView {
   processEvents: FactoryFrontendEvent[]
   tools: ToolActivity[]
   pendingInterrupt: FactoryFrontendEvent | null
+  scope: string
 }
 
 export function factorySessionSnapshotView(
@@ -90,6 +91,8 @@ export function agentPackageSessionSnapshotView(
     mode: 'agent_package',
     packageId: sessionPackageId,
     agentSessionId: session.session_id,
+    collaborationId: String(session?.collaboration_id || '').trim() || null,
+    collaborationTaskId: String(session?.collaboration_task_id || '').trim() || null,
     fallbackTimestamp: session.updated_at,
   })
   const processEvents = normalizedProcessEvents(session?.process_events)
@@ -104,6 +107,10 @@ export function agentPackageSessionSnapshotView(
     processEvents,
     tools: toolsFromTurns(restored.conversationTurns),
     pendingInterrupt: pendingInterruptFrom(processEvents, restored.activeTurn),
+    scope: agentPackageConversationScope(sessionPackageId, session.session_id, {
+      collaborationId: session?.collaboration_id,
+      collaborationTaskId: session?.collaboration_task_id,
+    }),
   }
 }
 
@@ -156,6 +163,8 @@ interface TurnRestoreContext {
   mode: FactoryMode | null
   packageId: string | null
   agentSessionId: string | null
+  collaborationId?: string | null
+  collaborationTaskId?: string | null
   fallbackTimestamp?: string | null
 }
 
@@ -208,6 +217,8 @@ function restoreTurnMessages(options: {
     mode: options.context.mode,
     package_id: options.context.packageId,
     agent_session_id: options.context.agentSessionId,
+    collaboration_id: options.context.collaborationId || null,
+    collaboration_task_id: options.context.collaborationTaskId || null,
   }
   const conversationTurn: ConversationTurn = {
     id: `${options.context.keyPrefix}-turn-${options.turnIndex}`,

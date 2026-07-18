@@ -9,6 +9,7 @@ import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
 import type { FactoryMode, RuntimeAttachmentInput, TranscriptAttachmentView } from '@/types/protocol'
 import { REASONING_INTENSITY_MAX } from '@/utils/reasoning'
+import { enabledChatProfiles, runtimeMainModelOptions as buildRuntimeMainModelOptions } from '@/utils/modelProfileOptions'
 
 const MAIN_MODEL_PROFILE_STORAGE_KEY = 'fastagentfactory.runtimeMainModelProfileId'
 const REASONING_INTENSITY_STORAGE_KEY = 'fastagentfactory.runtimeReasoningIntensity'
@@ -53,19 +54,11 @@ export function useFactoryConversation() {
     value: pkg.package_id,
   })))
   const runtimeMainModelOptions = computed(() => {
-    const defaultProfile = chatModelProfiles.value.find(
-      (profile) => profile.profile_id === defaultMainModelProfileId.value,
+    return buildRuntimeMainModelOptions(
+      chatModelProfiles.value,
+      defaultMainModelProfileId.value,
+      t('chat.defaultMainModel'),
     )
-    const defaultLabel = defaultProfile
-      ? `${t('chat.defaultMainModel')} · ${defaultProfile.display_name || defaultProfile.served_model_name}`
-      : t('chat.defaultMainModel')
-    return [
-      { label: defaultLabel, value: '' },
-      ...chatModelProfiles.value.map((profile) => ({
-        label: profile.display_name || profile.served_model_name || profile.profile_id,
-        value: profile.profile_id,
-      })),
-    ]
   })
   const inputPlaceholder = computed(() => (
     isAgentChatActive.value
@@ -113,9 +106,7 @@ export function useFactoryConversation() {
         modelPoolApi.profiles(),
         modelPoolApi.defaults(),
       ])
-      chatModelProfiles.value = response.profiles.filter((profile) => (
-        profile.kind === 'chat' && profile.enabled && profile.artifact?.enabled !== false
-      ))
+      chatModelProfiles.value = enabledChatProfiles(response.profiles)
       defaultMainModelProfileId.value = defaultResponse.defaults.main || ''
       if (
         selectedMainModelProfileId.value

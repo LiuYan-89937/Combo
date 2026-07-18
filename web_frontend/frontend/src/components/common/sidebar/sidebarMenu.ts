@@ -1,5 +1,5 @@
 import { h } from 'vue'
-import { NIcon, NTag } from 'naive-ui'
+import { NIcon } from 'naive-ui'
 import type { MenuOption } from 'naive-ui'
 import {
   BarChart,
@@ -41,7 +41,7 @@ export function sidebarMenuOptions(t: Translate): MenuOption[] {
       icon: renderIcon(Rocket),
     },
     {
-      label: renderCollaborationLabel(t),
+      label: t('route.collaboration'),
       key: '/collaboration',
       icon: renderIcon(People),
     },
@@ -90,11 +90,4 @@ export function sidebarMenuOptions(t: Translate): MenuOption[] {
 
 function renderIcon(icon: any) {
   return () => h(NIcon, null, { default: () => h(icon) })
-}
-
-function renderCollaborationLabel(t: Translate) {
-  return () => h('span', { class: 'sidebar-menu-label-with-tag' }, [
-    h('span', null, t('route.collaboration')),
-    h(NTag, { size: 'small', bordered: false, type: 'info' }, { default: () => t('collaboration.betaTag') }),
-  ])
 }

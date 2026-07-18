@@ -115,6 +115,7 @@ import { useUiStore } from '@/stores/ui'
 import { useI18n } from '@/composables/useI18n'
 import { useFactoryConversation } from '@/composables/factory/useFactoryConversation'
 import { useFactoryMessageProjection } from '@/composables/factory/useFactoryMessageProjection'
+import { useCommand } from '@/composables/useCommand'
 import MessageItem from '@/components/chat/MessageItem.vue'
 import MessageInput from '@/components/chat/MessageInput.vue'
 import ToolApprovalPanel from '@/components/chat/ToolApprovalPanel.vue'
@@ -131,6 +132,7 @@ import type { TipMessageContext } from '@/stores/tips'
 const runtimeStore = useRuntimeStore()
 const agentStore = useAgentStore()
 const uiStore = useUiStore()
+const commands = useCommand()
 const route = useRoute()
 const { t } = useI18n()
 const scrollbarRef = ref()
@@ -273,8 +275,8 @@ watch(
   followBottomIfNeeded,
 )
 
-onMounted(() => {
-  applyRouteMode()
+onMounted(async () => {
+  if (!await openRoutedAgentSession()) applyRouteMode()
   void loadRuntimeMainModelProfiles()
 
   // 聚焦输入框
@@ -283,7 +285,46 @@ onMounted(() => {
   })
 })
 
-watch(() => route.name, applyRouteMode)
+watch(
+  () => route.fullPath,
+  async () => {
+    if (!await openRoutedAgentSession()) applyRouteMode()
+  },
+)
+
+async function openRoutedAgentSession(): Promise<boolean> {
+  if (route.name !== 'Factory') return false
+  const packageId = routeQueryText(route.query.package_id)
+  const sessionId = routeQueryText(route.query.session_id)
+  if (!packageId || !sessionId) return false
+  const collaborationId = routeQueryText(route.query.collaboration_id)
+  const collaborationTaskId = routeQueryText(route.query.collaboration_task_id)
+  agentStore.enterAgentChat(packageId, sessionId)
+  if (collaborationId) {
+    runtimeStore.enterCollaborationConversation(
+      collaborationId,
+      packageId,
+      sessionId,
+      collaborationTaskId,
+    )
+  } else {
+    runtimeStore.expectAgentPackageSession(packageId, sessionId)
+  }
+  await commands.selectAgentPackage(packageId, 'run')
+  await commands.loadAgentPackageSession(
+    packageId,
+    sessionId,
+    collaborationId,
+    collaborationTaskId,
+  )
+  return true
+}
+
+function routeQueryText(value: unknown): string | null {
+  const raw = Array.isArray(value) ? value[0] : value
+  const text = String(raw || '').trim()
+  return text || null
+}
 </script>
 
 <style scoped>

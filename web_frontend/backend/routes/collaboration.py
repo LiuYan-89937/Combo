@@ -50,7 +50,7 @@ def create_collaboration_router(runtime_bridge: RuntimeBridge, service: Collabor
     @router.get("/sessions/{collaboration_id}")
     def get_session(collaboration_id: str):
         try:
-            return {"session": service.store.get_session(collaboration_id)}
+            return {"session": service.session_view(collaboration_id)}
         except Exception as exc:
             raise _http_error(exc) from exc
 

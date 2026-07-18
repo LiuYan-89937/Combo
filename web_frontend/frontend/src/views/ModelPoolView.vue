@@ -313,6 +313,83 @@
           </div>
         </div>
       </n-tab-pane>
+      <n-tab-pane name="usage" :tab="t('modelUsage.title')">
+        <div class="tab-content usage-report">
+          <div class="content-header">
+            <div>
+              <n-text strong class="section-title">{{ t('modelUsage.title') }}</n-text>
+              <div class="section-description">{{ t('modelUsage.description') }}</div>
+            </div>
+            <div class="usage-filters">
+              <n-select
+                v-model:value="usageGroupBy"
+                :options="usageGroupOptions"
+                size="small"
+                @update:value="refreshUsage"
+              />
+              <n-select
+                v-model:value="usageDays"
+                :options="usageDayOptions"
+                size="small"
+                @update:value="refreshUsage"
+              />
+            </div>
+          </div>
+          <div v-if="usageSummary" class="usage-summary-grid">
+            <article class="usage-summary-card">
+              <span>{{ t('modelUsage.calls') }}</span>
+              <strong>{{ formatInteger(usageSummary.totals.call_count) }}</strong>
+            </article>
+            <article class="usage-summary-card">
+              <span>{{ t('modelUsage.totalTokens') }}</span>
+              <strong>{{ formatInteger(usageSummary.totals.total_tokens) }}</strong>
+            </article>
+            <article class="usage-summary-card">
+              <span>{{ t('modelUsage.inputTokens') }}</span>
+              <strong>{{ formatInteger(usageSummary.totals.input_tokens) }}</strong>
+            </article>
+            <article class="usage-summary-card">
+              <span>{{ t('modelUsage.outputTokens') }}</span>
+              <strong>{{ formatInteger(usageSummary.totals.output_tokens) }}</strong>
+            </article>
+            <article class="usage-summary-card">
+              <span>{{ t('modelUsage.cacheHitRate') }}</span>
+              <strong>{{ formatUsageRatio(usageSummary.totals.cache_hit_ratio) }}</strong>
+            </article>
+          </div>
+          <div v-if="usageSummary?.groups.length" class="usage-table-wrap">
+            <table class="usage-table">
+              <thead>
+                <tr>
+                  <th>{{ usageGroupLabel }}</th>
+                  <th>{{ t('modelUsage.calls') }}</th>
+                  <th>{{ t('modelUsage.inputTokens') }}</th>
+                  <th>{{ t('modelUsage.outputTokens') }}</th>
+                  <th>{{ t('modelUsage.totalTokens') }}</th>
+                  <th>{{ t('modelUsage.cacheHitRate') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="group in usageSummary.groups" :key="String(group.key)">
+                  <td>
+                    <strong>{{ String(group.label || group.key || '—') }}</strong>
+                    <small v-if="usageGroupSubtitle(group)">{{ usageGroupSubtitle(group) }}</small>
+                  </td>
+                  <td>{{ formatInteger(usageGroupTotals(group).call_count) }}</td>
+                  <td>{{ formatInteger(usageGroupTotals(group).input_tokens) }}</td>
+                  <td>{{ formatInteger(usageGroupTotals(group).output_tokens) }}</td>
+                  <td>{{ formatInteger(usageGroupTotals(group).total_tokens) }}</td>
+                  <td>{{ formatUsageRatio(usageGroupTotals(group).cache_hit_ratio) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div v-else-if="!loading" class="empty-panel">
+            <n-text strong>{{ t('modelUsage.empty') }}</n-text>
+            <p>{{ t('modelUsage.emptyHint') }}</p>
+          </div>
+        </div>
+      </n-tab-pane>
       </n-tabs>
     </section>
 
@@ -527,6 +604,9 @@ import {
   type LlamaCppRuntimeConfiguration,
   type StableDiffusionCppRuntimeConfiguration,
   type RocmRuntimeInfo,
+  type ModelUsageGroupBy,
+  type ModelUsageSummary,
+  type ModelUsageTotals,
 } from '@/api/modelPool'
 
 const { t } = useI18n()
@@ -537,7 +617,7 @@ const { defaults, profiles } = storeToRefs(modelPoolStore)
 const loading = ref(false)
 const saving = ref(false)
 const runtimeRefreshing = ref(false)
-const activeTab = ref<'profiles' | 'artifacts'>('profiles')
+const activeTab = ref<'profiles' | 'artifacts' | 'usage'>('profiles')
 const artifacts = ref<LocalModelArtifact[]>([])
 const runtimes = ref<LocalModelRuntime[]>([])
 const rocm = ref<RocmRuntimeInfo | null>(null)
@@ -548,6 +628,9 @@ const artifactEditing = ref<LocalModelArtifact | null>(null)
 const profileEditing = ref<LocalModelProfile | null>(null)
 const memoryEstimate = ref<InferenceMemoryEstimate | null>(null)
 const memoryEstimateLoading = ref(false)
+const usageSummary = ref<ModelUsageSummary | null>(null)
+const usageGroupBy = ref<ModelUsageGroupBy>('model')
+const usageDays = ref(14)
 
 const artifactForm = reactive({
   display_name: '', kind: 'chat' as LocalModelKind, local_path: '', external_model_id: '',
@@ -626,6 +709,16 @@ const profileRemoteModel = computed(() => {
 const profileSupportsImage = computed(() => (
   profileRemoteModel.value?.capabilities.includes('multimodal') || false
 ))
+const usageGroupOptions = computed(() => [
+  { label: t('modelUsage.group.model'), value: 'model' },
+  { label: t('modelUsage.group.provider'), value: 'provider' },
+  { label: t('modelUsage.group.agent'), value: 'agent' },
+])
+const usageDayOptions = computed(() => [7, 14, 30].map(days => ({
+  label: t('modelUsage.days', { count: days }),
+  value: days,
+})))
+const usageGroupLabel = computed(() => t(`modelUsage.group.${usageGroupBy.value}`))
 
 async function refresh(): Promise<void> {
   loading.value = true
@@ -640,11 +733,42 @@ async function refresh(): Promise<void> {
     runtimes.value = runtimeData.runtimes
     rocm.value = runtimeData.rocm
     modelStorage.value = storageData
+    void refreshUsage()
   } catch (error) {
     message.error(errorText(error))
   } finally {
     loading.value = false
   }
+}
+
+async function refreshUsage(): Promise<void> {
+  try {
+    usageSummary.value = await modelPoolApi.usage({
+      groupBy: usageGroupBy.value,
+      days: usageDays.value,
+    })
+  } catch (error) {
+    message.error(errorText(error))
+  }
+}
+
+function usageGroupTotals(group: Record<string, unknown>): ModelUsageTotals {
+  return group.totals as ModelUsageTotals
+}
+
+function usageGroupSubtitle(group: Record<string, unknown>): string {
+  return [group.provider_display_name, group.model_name, group.agent_id]
+    .map(value => String(value || '').trim())
+    .filter((value, index, values) => value && values.indexOf(value) === index)
+    .join(' · ')
+}
+
+function formatInteger(value: number): string {
+  return new Intl.NumberFormat().format(Number(value || 0))
+}
+
+function formatUsageRatio(value: number | null): string {
+  return value == null ? '—' : `${(value * 100).toFixed(1)}%`
 }
 
 function openArtifact(item?: LocalModelArtifact): void {
@@ -1486,6 +1610,81 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
+.usage-filters {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(120px, auto);
+  gap: var(--app-space-sm);
+  min-width: min(100%, 300px);
+}
+
+.usage-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--app-space-sm);
+  margin-bottom: var(--app-space-lg);
+}
+
+.usage-summary-card {
+  min-width: 0;
+  padding: var(--app-space-md);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface-muted);
+}
+
+.usage-summary-card span,
+.usage-table small {
+  display: block;
+  color: var(--app-text-muted);
+  font-size: var(--app-font-xs);
+}
+
+.usage-summary-card strong {
+  display: block;
+  margin-top: 3px;
+  color: var(--app-text-strong);
+  font-size: var(--app-font-lg);
+  overflow-wrap: anywhere;
+}
+
+.usage-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+}
+
+.usage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--app-font-sm);
+}
+
+.usage-table th,
+.usage-table td {
+  padding: var(--app-space-sm) var(--app-space-md);
+  border-bottom: 1px solid var(--app-divider);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.usage-table th:first-child,
+.usage-table td:first-child {
+  min-width: 220px;
+  text-align: left;
+  white-space: normal;
+}
+
+.usage-table th {
+  color: var(--app-text-muted);
+  font-weight: 600;
+  background: var(--app-surface-muted);
+}
+
+.usage-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
 .empty-panel {
   min-height: 300px;
   display: flex;
@@ -1512,6 +1711,7 @@ onBeforeUnmount(() => {
   .overview-grid { grid-template-columns: 1fr 1fr; }
   .runtime-card { grid-column: 1 / -1; }
   .resource-grid { grid-template-columns: 1fr; }
+  .usage-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @container local-model (max-width: 620px) {
@@ -1539,6 +1739,7 @@ onBeforeUnmount(() => {
   .memory-limit-control { grid-template-columns: 1fr; }
   .memory-limit-control p { grid-column: auto; }
   .content-header { align-items: flex-start; }
+  .usage-filters { width: 100%; }
 }
 
 @container local-model (max-width: 420px) {
@@ -1552,6 +1753,8 @@ onBeforeUnmount(() => {
   .runtime-device { padding: var(--app-space-xs); }
   .runtime-metrics { display: grid; grid-template-columns: 1fr; }
   .model-panel { padding-inline: var(--app-space-sm); }
+  .usage-summary-grid,
+  .usage-filters { grid-template-columns: 1fr; }
   .resource-action-group > .n-button,
   .resource-action-group > .n-dropdown { flex: 1 1 calc(50% - var(--app-space-xs)); }
 }

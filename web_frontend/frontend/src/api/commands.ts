@@ -45,14 +45,29 @@ export function listSessionsCommand(): FactoryFrontendCommand {
   return createCommand('list_sessions')
 }
 
-export function switchSessionCommand(sessionId: string, mode?: FactoryMode | null): FactoryFrontendCommand {
-  return createCommand('switch_session', { session_id: sessionId, mode })
+export function switchSessionCommand(
+  sessionId: string,
+  mode?: FactoryMode | null,
+  collaborationId?: string | null,
+): FactoryFrontendCommand {
+  return createCommand('switch_session', {
+    session_id: sessionId,
+    mode,
+    payload: collaborationId ? { collaboration_id: collaborationId } : {},
+  })
 }
 
-export function newSessionCommand(mode?: FactoryMode | null, packageId?: string | null): FactoryFrontendCommand {
+export function newSessionCommand(
+  mode?: FactoryMode | null,
+  packageId?: string | null,
+  collaborationId?: string | null,
+): FactoryFrontendCommand {
   return createCommand('new_session', {
     mode,
-    payload: packageId ? { package_id: packageId } : {},
+    payload: {
+      ...(packageId ? { package_id: packageId } : {}),
+      ...(collaborationId ? { collaboration_id: collaborationId } : {}),
+    },
   })
 }
 

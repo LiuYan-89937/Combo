@@ -33,9 +33,14 @@ export function useCollaborationRuntime() {
   ))
   const mainAgentConversationScope = computed(() => {
     if (mainAgentPackageId.value === SYSTEM_CHAT_PACKAGE_ID) {
-      return conversationScopeForMode('chat', { session_id: mainFactorySessionId.value })
+      return conversationScopeForMode('chat', {
+        session_id: mainFactorySessionId.value,
+        collaboration_id: collaborationStore.activeSession?.collaboration_id,
+      })
     }
-    return agentPackageConversationScope(mainAgentPackageId.value, mainAgentPackageSessionId.value)
+    return agentPackageConversationScope(mainAgentPackageId.value, mainAgentPackageSessionId.value, {
+      collaborationId: collaborationStore.activeSession?.collaboration_id,
+    })
   })
   const mainAgentActiveRequestId = computed(() => {
     const remembered = lastMainAgentRequestId.value
@@ -61,23 +66,41 @@ export function useCollaborationRuntime() {
 
   function enterActiveMainAgentContext(): void {
     const packageId = mainAgentPackageId.value
+    const collaborationId = collaborationStore.activeSession?.collaboration_id
+    if (!collaborationId) return
     if (packageId === SYSTEM_CHAT_PACKAGE_ID) {
       agentStore.leaveAgentChat()
-      runtimeStore.enterFactoryConversation('chat')
+      runtimeStore.enterCollaborationConversation(
+        collaborationId,
+        SYSTEM_CHAT_PACKAGE_ID,
+        mainFactorySessionId.value,
+      )
       workspaceStore.setScope('package')
       if (mainFactorySessionId.value) {
-        commands.switchSession(mainFactorySessionId.value, 'chat')
+        commands.switchSession(
+          mainFactorySessionId.value,
+          'chat',
+          collaborationStore.activeSession?.collaboration_id,
+        )
       } else {
         runtimeStore.showEmptyFactoryConversation('chat')
-        commands.newSession('chat')
+        commands.newSession('chat', null, collaborationId)
       }
       return
     }
 
     agentStore.enterAgentChat(packageId, mainAgentPackageSessionId.value)
-    runtimeStore.currentMode = 'agent_package'
+    runtimeStore.enterCollaborationConversation(
+      collaborationId,
+      packageId,
+      mainAgentPackageSessionId.value,
+    )
     if (mainAgentPackageSessionId.value) {
-      commands.loadAgentPackageSession(packageId, mainAgentPackageSessionId.value)
+      commands.loadAgentPackageSession(
+        packageId,
+        mainAgentPackageSessionId.value,
+        collaborationStore.activeSession?.collaboration_id,
+      )
     } else {
       runtimeStore.showEmptyAgentPackageSession(packageId)
       commands.selectAgentPackage(packageId)
@@ -97,6 +120,12 @@ export function useCollaborationRuntime() {
     const visibleAttachments = attachmentViews(attachments)
     const packageId = mainAgentPackageId.value
     const collaborationRuntimeOptions = {
+      ...(collaborationStore.activeSession.execution_config?.model_profile_id
+        ? { mainModelProfileId: collaborationStore.activeSession.execution_config.model_profile_id }
+        : {}),
+      ...(typeof collaborationStore.activeSession.execution_config?.reasoning_intensity === 'number'
+        ? { reasoningIntensity: collaborationStore.activeSession.execution_config.reasoning_intensity }
+        : {}),
       userConfig: {
         collaboration_id: collaborationStore.activeSession.collaboration_id,
         runtime_tool_access: promptResponse.runtime_tool_access,
