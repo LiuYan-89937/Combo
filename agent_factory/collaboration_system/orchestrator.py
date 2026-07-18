@@ -212,7 +212,7 @@ class CollaborationOrchestrator:
             require_ready=True,
             session_kind="collaboration_main",
             collaboration_id=collaboration_id,
-            visible_in_agent_session_list=False,
+            visible_in_agent_session_list=True,
         )
         main_session_id = str((run.session or {}).get("session_id") or "").strip()
         if main_session_id and main_session_id != str(session.get("main_agent_package_session_id") or ""):
@@ -441,7 +441,7 @@ class CollaborationOrchestrator:
             session_kind="collaboration_worker",
             collaboration_id=collaboration_id,
             collaboration_task_id=task_id,
-            visible_in_agent_session_list=False,
+            visible_in_agent_session_list=True,
         )
         assignee_session_id = str(worker_session.get("session_id") or task.get("assignee_session_id") or "").strip()
         if not assignee_session_id:
@@ -504,7 +504,7 @@ class CollaborationOrchestrator:
             session_kind="collaboration_worker",
             collaboration_id=collaboration_id,
             collaboration_task_id=task_id,
-            visible_in_agent_session_list=False,
+            visible_in_agent_session_list=True,
             workdir_root=worker_workdir,
         )
         assignee_session_id = str((run.session or {}).get("session_id") or assignee_session_id).strip()

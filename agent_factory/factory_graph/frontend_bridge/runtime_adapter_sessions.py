@@ -552,7 +552,7 @@ def _factory_session_presentation_context(command: FactoryFrontendCommand) -> di
     return {
         "session_kind": COLLABORATION_MAIN_FACTORY_SESSION_KIND,
         "collaboration_id": collaboration_id,
-        "visible_in_factory_session_list": False,
+        "visible_in_factory_session_list": True,
     }
 
 
