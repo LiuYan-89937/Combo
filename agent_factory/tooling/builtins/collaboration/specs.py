@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+from agent_factory.collaboration_system.activity import (
+    MAX_INSPECT_ACTIVITY_LIMIT,
+    MAX_INSPECT_ACTIVITY_MAX_CHARS,
+    MIN_INSPECT_ACTIVITY_LIMIT,
+    MIN_INSPECT_ACTIVITY_MAX_CHARS,
+)
 from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolSpec
 
 
@@ -17,7 +23,8 @@ def get_collaboration_tool_specs() -> list[ToolSpec]:
                 "delivery_standard 由主 Agent 根据子 Agent 能力动态声明产物路径和语义验收标准；宿主只验证文件确由本轮产生且非空，内容是否达标由主 Agent 读取产物后决定。"
                 "share_files/ 是 worker 工作区中的只读上游材料目录，只接收系统复制的前置产物；不要要求 worker 把交付物写入 share_files/。"
                 "worker 交付物应写入当前工作区普通路径，宿主会自动收集为 artifact_refs。visible_context 只表示文本上下文，不授权文件读取。"
-                "inspect 是状态同步动作；只有运行中任务且没有 submitted/blocked/failed 时，inspect 会返回轻量 deferred，主 Agent 应等待状态变化而不是连续查看。"
+                "inspect 是状态同步动作；只有运行中任务且没有 submitted/blocked/failed 时，inspect 会返回各活跃任务近期的公开思考摘要与协作动态，"
+                "并以轻量 deferred 提醒主 Agent 等待状态变化而不是连续查看。"
                 "验收 worker 交付物时使用 read_task_artifacts 并传 task_id，由宿主解析权威 artifact_refs；"
                 "blocked 任务包含 pending_approval 时，主 Agent 必须根据任务目标、工具参数和风险调用 resolve_task_approval，"
                 "明确批准、拒绝或要求修改；宿主随后恢复原 worker。"
@@ -168,6 +175,18 @@ def _collaboration_input_schema() -> dict:
             "artifact_refs": artifact_array,
             "path": {"type": "string"},
             "max_chars": {"type": "integer", "minimum": 1, "maximum": 1000000},
+            "recent_activity_limit": {
+                "type": "integer",
+                "minimum": MIN_INSPECT_ACTIVITY_LIMIT,
+                "maximum": MAX_INSPECT_ACTIVITY_LIMIT,
+                "description": "inspect 返回的全部活跃任务近期动态总条数。",
+            },
+            "recent_activity_max_chars": {
+                "type": "integer",
+                "minimum": MIN_INSPECT_ACTIVITY_MAX_CHARS,
+                "maximum": MAX_INSPECT_ACTIVITY_MAX_CHARS,
+                "description": "inspect 返回的全部活跃任务近期动态总字符预算。",
+            },
             "content": {"type": "string"},
         },
         "required": ["action", "collaboration_id"],

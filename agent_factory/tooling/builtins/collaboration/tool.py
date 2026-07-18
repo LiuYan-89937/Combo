@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_factory.collaboration_system.store import CollaborationStore, resolve_collaboration_store_path
+from agent_factory.collaboration_system.activity import inspect_activity_policy, recent_task_activity
 from agent_factory.document_processing import SUPPORTED_FILE_EXTENSIONS, parse_file
 from agent_factory.tooling.envelope import runtime_wait_evidence, tool_envelope
 from agent_factory.tooling.spec import ToolRiskResult
@@ -37,7 +38,7 @@ def _run_action(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[st
     store = CollaborationStore(_store_path(resources))
     if action == "inspect":
         session = store.get_session(collaboration_id)
-        gate = _inspect_gate(session)
+        gate = _inspect_gate(session, arguments=arguments)
         if gate is not None:
             return gate
         return {
@@ -219,7 +220,7 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
     return ToolRiskResult(action="deny", risk_level="medium", reasons=[f"unsupported action: {action}"]).model_dump(mode="json")
 
 
-def _inspect_gate(session: dict[str, Any]) -> dict[str, Any] | None:
+def _inspect_gate(session: dict[str, Any], *, arguments: dict[str, Any]) -> dict[str, Any] | None:
     tasks = session.get("tasks") if isinstance(session.get("tasks"), list) else []
     if not tasks:
         return None
@@ -227,22 +228,40 @@ def _inspect_gate(session: dict[str, Any]) -> dict[str, Any] | None:
     if statuses & IMMEDIATE_ATTENTION_TASK_STATUSES:
         return None
     if statuses & ACTIVE_TASK_STATUSES:
+        active_tasks = [
+            task
+            for task in tasks
+            if str(task.get("status") or "").strip() in ACTIVE_TASK_STATUSES
+        ]
+        activity_by_task = recent_task_activity(
+            (
+                message
+                for message in session.get("messages") or []
+                if isinstance(message, dict)
+            ),
+            task_ids=(str(task.get("task_id") or "") for task in active_tasks),
+            policy=inspect_activity_policy(
+                limit=arguments.get("recent_activity_limit"),
+                max_chars=arguments.get("recent_activity_max_chars"),
+            ),
+        )
         active = [
             {
                 "task_id": task.get("task_id"),
                 "assignee_package_id": task.get("assignee_package_id"),
                 "status": task.get("status"),
                 "updated_at": task.get("updated_at"),
+                "recent_activity": activity_by_task.get(str(task.get("task_id") or ""), []),
             }
-            for task in tasks
-            if str(task.get("status") or "").strip() in ACTIVE_TASK_STATUSES
+            for task in active_tasks
         ]
         return {
             "action": "inspect",
             "status": "deferred",
             "message": f"当前仍有 {len(active)} 个子任务在运行，协作状态变化后宿主会自动恢复主 Agent。",
             "response_guidance": (
-                "根据 active_tasks 向用户自然、简短地说明当前进展和下一步，不要逐字复述工具消息，"
+                "根据 active_tasks 及其 recent_activity 向用户自然、简短地说明当前进展、近期动态和下一步，"
+                "不要逐字复述工具消息，"
                 "不要再次调用 inspect；本轮回复后进入等待。"
             ),
             "active_tasks": active,
