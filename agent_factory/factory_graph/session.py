@@ -27,6 +27,9 @@ from agent_factory.runtime_kernel.persistence import (
 
 FactorySessionMode = Literal["chat", "create_agent", "evolve_agent"]
 FactoryCheckpointerBackend = Literal["sqlite", "memory"]
+FactorySessionKind = Literal["normal", "collaboration_main"]
+NORMAL_FACTORY_SESSION_KIND: FactorySessionKind = "normal"
+COLLABORATION_MAIN_FACTORY_SESSION_KIND: FactorySessionKind = "collaboration_main"
 
 DEFAULT_SESSION_ROOT = ".agentfactory/sessions"
 DEFAULT_CHECKPOINT_PATH = ".agentfactory/checkpoints/factory.sqlite"
@@ -59,6 +62,9 @@ class FactorySessionRecord(BaseModel):
     updated_at: str
     first_user_input: str | None = None
     display_title: str | None = None
+    session_kind: FactorySessionKind = NORMAL_FACTORY_SESSION_KIND
+    collaboration_id: str | None = None
+    visible_in_factory_session_list: bool = True
     current_mode: FactorySessionMode | None = None
     chat_agent_package_session_id: str | None = None
     create_agent_session_id: str | None = None
@@ -116,12 +122,22 @@ class FactorySessionManager:
     def from_env(cls) -> "FactorySessionManager":
         return cls(FactorySessionConfig.from_env())
 
-    def create(self, *, mode: FactorySessionMode | None = None) -> FactorySessionRecord:
+    def create(
+        self,
+        *,
+        mode: FactorySessionMode | None = None,
+        session_kind: FactorySessionKind = NORMAL_FACTORY_SESSION_KIND,
+        collaboration_id: str | None = None,
+        visible_in_factory_session_list: bool = True,
+    ) -> FactorySessionRecord:
         now = _now()
         record = FactorySessionRecord(
             session_id=uuid.uuid4().hex,
             created_at=now,
             updated_at=now,
+            session_kind=session_kind,
+            collaboration_id=_normalized_optional_text(collaboration_id),
+            visible_in_factory_session_list=visible_in_factory_session_list,
             current_mode=mode,
         )
         self.save(record)
@@ -140,8 +156,13 @@ class FactorySessionManager:
             encoding="utf-8",
         )
 
-    def latest(self, *, mode: FactorySessionMode | None = None) -> FactorySessionRecord | None:
-        records = self.list_sessions()
+    def latest(
+        self,
+        *,
+        mode: FactorySessionMode | None = None,
+        include_internal: bool = False,
+    ) -> FactorySessionRecord | None:
+        records = self.list_sessions(include_internal=include_internal)
         if mode is not None:
             records = [record for record in records if _record_matches_mode(record, mode)]
         if not records:
@@ -157,11 +178,29 @@ class FactorySessionManager:
                 return record
         return None
 
-    def list_sessions(self) -> list[FactorySessionRecord]:
+    def latest_for_collaboration(
+        self,
+        collaboration_id: str,
+        *,
+        mode: FactorySessionMode | None = None,
+    ) -> FactorySessionRecord | None:
+        normalized_collaboration_id = _normalized_optional_text(collaboration_id)
+        if not normalized_collaboration_id:
+            return None
+        for record in self.list_sessions(include_internal=True):
+            if record.collaboration_id != normalized_collaboration_id:
+                continue
+            if mode is None or _record_matches_mode(record, mode):
+                return record
+        return None
+
+    def list_sessions(self, *, include_internal: bool = False) -> list[FactorySessionRecord]:
         records: list[FactorySessionRecord] = []
         for path in self.config.root.glob("*.json"):
             try:
-                records.append(_normalized_record(FactorySessionRecord.model_validate_json(path.read_text(encoding="utf-8"))))
+                record = _normalized_record(FactorySessionRecord.model_validate_json(path.read_text(encoding="utf-8")))
+                if include_internal or record.visible_in_factory_session_list:
+                    records.append(record)
             except Exception:
                 continue
         return sorted(records, key=lambda item: item.updated_at, reverse=True)
@@ -181,6 +220,21 @@ class FactorySessionManager:
         record = self.load(session_id)
         record.current_mode = "evolve_agent"
         record.evolve_agent_package_id = package_id.strip() or None
+        self.save(record)
+        return record
+
+    def update_presentation_context(
+        self,
+        session_id: str,
+        *,
+        session_kind: FactorySessionKind,
+        collaboration_id: str | None,
+        visible_in_factory_session_list: bool,
+    ) -> FactorySessionRecord:
+        record = self.load(session_id)
+        record.session_kind = session_kind
+        record.collaboration_id = _normalized_optional_text(collaboration_id)
+        record.visible_in_factory_session_list = visible_in_factory_session_list
         self.save(record)
         return record
 
@@ -534,6 +588,11 @@ def _safe_turn_index(value: Any, *, fallback: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return fallback
+
+
+def _normalized_optional_text(value: str | None) -> str | None:
+    normalized = str(value or "").strip()
+    return normalized or None
 
 
 def _remember_record_title(record: FactorySessionRecord, user_input: str | None) -> None:

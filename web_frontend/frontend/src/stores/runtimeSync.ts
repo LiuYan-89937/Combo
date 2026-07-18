@@ -15,6 +15,10 @@ import { useSchedulerStore } from './scheduler'
 import { useSessionStore } from './session'
 import { useWorkspaceStore } from './workspace'
 import { SYSTEM_CHAT_PACKAGE_ID, normalizeResourcePackageId } from '@/utils/resourceScope'
+import {
+  isStandaloneAgentSession,
+  isStandaloneFactorySession,
+} from '@/utils/sessionPresentation'
 
 export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
   const runtimeStore = useRuntimeStore()
@@ -49,8 +53,12 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
   ) {
     const sessionStore = useSessionStore()
     sessionStore.setSessions(runtimeStore.sessions as any)
-    if (runtimeStore.activeFactorySessionId || event.event_type === 'session_deleted') {
-      sessionStore.setCurrentSession(runtimeStore.activeFactorySessionId)
+    const activeFactorySessionId = runtimeStore.activeFactorySessionId
+    const activeFactorySession = runtimeStore.sessions.find((session: any) => (
+      session.session_id === activeFactorySessionId && isStandaloneFactorySession(session)
+    ))
+    if (activeFactorySession || event.event_type === 'session_deleted') {
+      sessionStore.setCurrentSession(activeFactorySession ? activeFactorySessionId : null)
     }
     const sessionPayload = event.payload?.session
     const evolutionPackageId = sessionPayload && typeof sessionPayload === 'object'
@@ -89,23 +97,31 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
     if (
       event.event_type === 'agent_package_session_loaded' &&
       event.payload?.session &&
-      event.payload.session.visible_in_agent_session_list !== false
+      isStandaloneAgentSession(event.payload.session)
     ) {
       agentStore.mergeRecentSessions([sessionWithPackage(event.payload.session, event.payload.package_id)])
     }
     if (event.event_type === 'agent_package_session_deleted' && event.payload?.session_id) {
       agentStore.removeSession(String(event.payload.session_id))
     }
-    if (hasRunAgentSession && event.payload?.agent_session?.visible_in_agent_session_list !== false) {
+    if (hasRunAgentSession && isStandaloneAgentSession(event.payload?.agent_session || {})) {
       agentStore.mergeRecentSessions([sessionWithPackage(event.payload.agent_session, event.payload.package_id)])
     }
-    if (event.event_type === 'agent_package_session_loaded' && event.payload?.session?.session_id) {
+    if (
+      event.event_type === 'agent_package_session_loaded'
+      && event.payload?.session?.session_id
+      && isStandaloneAgentSession(event.payload.session)
+    ) {
       const loadedSessionId = String(event.payload.session.session_id)
       if (runtimeStore.activeAgentSessionId === loadedSessionId) {
         agentStore.setActiveAgentSession(loadedSessionId)
       }
     }
-    if (hasRunAgentSession && runtimeStore.activeAgentSessionId) {
+    if (
+      hasRunAgentSession
+      && runtimeStore.activeAgentSessionId
+      && isStandaloneAgentSession(event.payload?.agent_session || {})
+    ) {
       agentStore.setActiveAgentSession(runtimeStore.activeAgentSessionId)
     }
   }

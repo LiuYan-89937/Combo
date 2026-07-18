@@ -68,6 +68,7 @@ import {
   agentPackageConversationScope,
   agentPackageScopeInfoFromEvent,
   conversationScopeForMode,
+  isCollaborationConversationScope,
   isMoreSpecificConversationScope,
   scopeFromEventPayload,
   scopeFromMessageMetadata,
@@ -100,6 +101,10 @@ import {
   normalizeLocale,
   translate,
 } from '@/i18n'
+import {
+  isStandaloneAgentSession,
+  isStandaloneFactorySession,
+} from '@/utils/sessionPresentation'
 
 // 事件去重集合
 const processedEventIds = new Set<string>()
@@ -158,6 +163,10 @@ export const useRuntimeStore = defineStore('runtime', {
   }),
 
   getters: {
+    isCollaborationConversationActive: (state): boolean => {
+      return isCollaborationConversationScope(state.activeConversationScope)
+    },
+
     // 输入只因需要专门 UI 处理的中断锁定；运行中不再作为跨会话输入锁。
     isInputLocked: (state): boolean => {
       return state.runStatus === 'interrupted' && !isUserInputInterrupt(state.pendingInterrupt)
@@ -298,10 +307,12 @@ export const useRuntimeStore = defineStore('runtime', {
         this._upsertFactorySession(payload?.session)
         this._restoreSessionSnapshot(payload)
       } else if (type === 'sessions_listed') {
-        this.sessions = payload?.sessions || []
+        this.sessions = (payload?.sessions || []).filter(isStandaloneFactorySession)
       } else if (type === 'session_deleted') {
         const deletedSessionId = String(payload?.session_id || '')
-        this.sessions = payload?.sessions || this.sessions.filter((session: any) => session.session_id !== deletedSessionId)
+        this.sessions = payload?.sessions
+          ? payload.sessions.filter(isStandaloneFactorySession)
+          : this.sessions.filter((session: any) => session.session_id !== deletedSessionId)
         this._deleteConversationScopesForSession(deletedSessionId)
         if (deletedSessionId && this.activeFactorySessionId === deletedSessionId) {
           this.activeFactorySessionId = null
@@ -319,7 +330,9 @@ export const useRuntimeStore = defineStore('runtime', {
         if (!this.ownsAgentPackageSelection(event)) return
         this.currentMode = event.mode || this.currentMode
         this.selectedAgentPackage = payload?.package || null
-        this.agentSessions = payload?.sessions || this.agentSessions
+        this.agentSessions = payload?.sessions
+          ? payload.sessions.filter(isStandaloneAgentSession)
+          : this.agentSessions
         if (payload?.purpose === 'evolution' && payload?.package?.package_id) {
           this._upsertFactorySession(payload?.session)
           this._restoreSessionSnapshot(payload)
@@ -331,12 +344,14 @@ export const useRuntimeStore = defineStore('runtime', {
           this.selectedAgentPackage = null
         }
       } else if (type === 'agent_package_sessions_listed') {
-        this.agentSessions = payload?.sessions || []
+        this.agentSessions = (payload?.sessions || []).filter(isStandaloneAgentSession)
       } else if (type === 'agent_package_session_loaded') {
         this._restoreAgentPackageSession(payload?.session, payload?.package_id)
       } else if (type === 'agent_package_session_deleted') {
         const deletedSessionId = String(payload?.session_id || '')
-        this.agentSessions = payload?.sessions || this.agentSessions.filter((session: any) => session.session_id !== deletedSessionId)
+        this.agentSessions = payload?.sessions
+          ? payload.sessions.filter(isStandaloneAgentSession)
+          : this.agentSessions.filter((session: any) => session.session_id !== deletedSessionId)
         this._deleteConversationScopesForSession(deletedSessionId)
         if (deletedSessionId && this.activeAgentSessionId === deletedSessionId) {
           this.activeAgentSessionId = null
@@ -685,6 +700,7 @@ export const useRuntimeStore = defineStore('runtime', {
 
     _syncAgentSessionFromRunEvent(event: FactoryFrontendEvent) {
       if (!event.payload?.agent_session?.session_id) return
+      this.activeFactorySessionId = null
       this.activeAgentSessionId = event.payload.agent_session.session_id
       this._upsertAgentSession(event.payload.agent_session)
       if (event.mode !== 'agent_package' || !event.payload?.package_id) return
@@ -1003,12 +1019,11 @@ export const useRuntimeStore = defineStore('runtime', {
       payload: Record<string, any> | undefined,
       activate: boolean,
     ) {
-      if (activate) {
-        this.currentMode = snapshot.restoredMode
-        this.activeFactorySessionId = String(
-          payload?.session_id || payload?.session?.session_id || '',
-        ).trim() || null
-      }
+      this.activeFactorySessionId = String(
+        payload?.session_id || payload?.session?.session_id || '',
+      ).trim() || null
+      this.activeAgentSessionId = null
+      if (activate) this.currentMode = snapshot.restoredMode
       if (!payload?.force_restore && this._hasLiveConversationState() && this._hasVisibleConversationContent()) {
         return
       }
@@ -1034,6 +1049,7 @@ export const useRuntimeStore = defineStore('runtime', {
       scope: string,
       activate: boolean,
     ) {
+      this.activeFactorySessionId = null
       this.activeAgentSessionId = String(session.session_id)
       if (activate) this.currentMode = 'agent_package'
       if (this._hasLiveConversationState() && this._hasVisibleConversationContent()) {
@@ -1073,12 +1089,20 @@ export const useRuntimeStore = defineStore('runtime', {
       })
     },
 
-    showEmptyAgentPackageSession(_packageId: string | null = null) {
-      this._switchConversationScope(agentPackageConversationScope(_packageId, null))
+    showEmptyAgentPackageSession(
+      packageId: string | null = null,
+      collaborationId: string | null = null,
+      collaborationTaskId: string | null = null,
+    ) {
+      this._switchConversationScope(agentPackageConversationScope(packageId, null, {
+        collaborationId,
+        collaborationTaskId,
+      }))
       if (this._hasLiveConversationState()) {
         this.currentMode = 'agent_package'
         return
       }
+      this.activeFactorySessionId = null
       this.activeAgentSessionId = null
       this.currentMode = 'agent_package'
       this.currentPlan = null
@@ -1097,14 +1121,19 @@ export const useRuntimeStore = defineStore('runtime', {
 
     enterFactoryConversation(mode: 'chat' | 'create_agent' | 'evolve_agent', packageId: string | null = null) {
       if (mode !== 'evolve_agent') this._clearAgentPackageSelectionIntent()
-      this.currentMode = mode
+      const sessionId = isCollaborationConversationScope(this.activeConversationScope)
+        ? null
+        : this.activeFactorySessionId
       const scope = conversationScopeForMode(mode, {
         package_id: packageId,
-        session_id: this.activeFactorySessionId,
+        session_id: sessionId,
       })
       if (scope) {
         this._switchConversationScope(scope)
       }
+      this.currentMode = mode
+      this.activeFactorySessionId = sessionId
+      this.activeAgentSessionId = null
     },
 
     enterCollaborationConversation(
@@ -1115,21 +1144,23 @@ export const useRuntimeStore = defineStore('runtime', {
     ) {
       if (packageId === 'factory_chat') {
         this._clearAgentPackageSelectionIntent()
-        this.currentMode = 'chat'
-        this.activeFactorySessionId = sessionId
         const scope = conversationScopeForMode('chat', {
           session_id: sessionId,
           collaboration_id: collaborationId,
         })
         if (scope) this._switchConversationScope(scope)
+        this.currentMode = 'chat'
+        this.activeFactorySessionId = sessionId
+        this.activeAgentSessionId = null
         return
       }
-      this.currentMode = 'agent_package'
-      this.activeAgentSessionId = sessionId
       this._switchConversationScope(agentPackageConversationScope(packageId, sessionId, {
         collaborationId,
         collaborationTaskId,
       }))
+      this.currentMode = 'agent_package'
+      this.activeFactorySessionId = null
+      this.activeAgentSessionId = sessionId
     },
 
     expectFactorySession(
@@ -1138,8 +1169,6 @@ export const useRuntimeStore = defineStore('runtime', {
       collaborationId: string | null = null,
     ) {
       if (mode !== 'evolve_agent') this._clearAgentPackageSelectionIntent()
-      this.currentMode = mode
-      this.activeFactorySessionId = sessionId
       const session = this.sessions.find((item: any) => String(item?.session_id || '') === sessionId)
       const packageId = mode === 'evolve_agent'
         ? String(session?.evolve_agent_package_id || this.selectedAgentPackage?.package_id || '').trim() || null
@@ -1150,6 +1179,9 @@ export const useRuntimeStore = defineStore('runtime', {
         collaboration_id: collaborationId,
       })
       if (scope) this._switchConversationScope(scope)
+      this.currentMode = mode
+      this.activeFactorySessionId = sessionId
+      this.activeAgentSessionId = null
     },
 
     expectAgentPackageSession(
@@ -1159,27 +1191,32 @@ export const useRuntimeStore = defineStore('runtime', {
       collaborationTaskId: string | null = null,
     ) {
       this.expectAgentPackageSelection(packageId, 'run')
-      this.currentMode = 'agent_package'
       this._switchConversationScope(agentPackageConversationScope(packageId, sessionId, {
         collaborationId,
         collaborationTaskId,
       }))
+      this.currentMode = 'agent_package'
+      this.activeFactorySessionId = null
       this.activeAgentSessionId = sessionId
     },
 
-    showEmptyFactoryConversation(mode: 'chat' | 'create_agent' | 'evolve_agent', packageId: string | null = null) {
+    showEmptyFactoryConversation(
+      mode: 'chat' | 'create_agent' | 'evolve_agent',
+      packageId: string | null = null,
+      collaborationId: string | null = null,
+    ) {
       if (mode !== 'evolve_agent') this._clearAgentPackageSelectionIntent()
-      this.currentMode = mode
-      if (mode !== 'evolve_agent') {
-        this.activeFactorySessionId = null
-      }
       const scope = conversationScopeForMode(mode, {
         package_id: packageId,
         session_id: null,
+        collaboration_id: collaborationId,
       })
       if (scope) {
         this._switchConversationScope(scope)
       }
+      this.currentMode = mode
+      this.activeFactorySessionId = null
+      this.activeAgentSessionId = null
     },
 
     expectAgentPackageSelection(packageId: string, purpose: 'run' | 'evolution') {
@@ -1211,7 +1248,7 @@ export const useRuntimeStore = defineStore('runtime', {
 
     _upsertAgentSession(session: any) {
       if (!session?.session_id) return
-      if (session.visible_in_agent_session_list === false) return
+      if (!isStandaloneAgentSession(session)) return
       const index = this.agentSessions.findIndex((item) => item.session_id === session.session_id)
       if (index >= 0) {
         this.agentSessions[index] = { ...this.agentSessions[index], ...session }
@@ -1222,37 +1259,13 @@ export const useRuntimeStore = defineStore('runtime', {
 
     _upsertFactorySession(session: any) {
       if (!session?.session_id) return
+      if (!isStandaloneFactorySession(session)) return
       const index = this.sessions.findIndex((item) => item.session_id === session.session_id)
       if (index >= 0) {
         this.sessions[index] = { ...this.sessions[index], ...session }
       } else {
         this.sessions.unshift(session)
       }
-    },
-
-    _clearSessionScopedState() {
-      this._saveActiveConversationScope()
-      this.activeRequestId = null
-      this.runStatus = 'idle'
-      this.pendingInterrupt = null
-      this.createAgentPublishReady = null
-      this.currentRunId = null
-      this.nodes = {}
-      this.stages = {}
-      this.modelStreams = {}
-      this.tools = []
-      this.currentPlan = null
-      this.contextActivity = { status: 'idle' }
-      this.contextWindow = null
-      this.memoryActivity = { status: 'idle' }
-      this.transcript = []
-      this.conversationTurns = []
-      this.timeline = []
-      this.workspaceEntries = []
-      this.workspaceFile = null
-      this.extensionTestResult = null
-      this.toolPermissions = null
-      this.activeConversationScope = null
     },
 
     _switchConversationScope(scope: string) {
@@ -1326,6 +1339,7 @@ export const useRuntimeStore = defineStore('runtime', {
       this.contextWindow = restored.contextWindow
       this.memoryActivity = restored.memoryActivity
       this.modelStreams = restored.modelStreams
+      this.activeFactorySessionId = restored.activeFactorySessionId
       this.activeAgentSessionId = restored.activeAgentSessionId
     },
 
@@ -1372,6 +1386,7 @@ export const useRuntimeStore = defineStore('runtime', {
     _promoteAgentPackageScopeFromEvent(event: FactoryFrontendEvent) {
       const scopeInfo = agentPackageScopeInfoFromEvent(event)
       if (!scopeInfo) return
+      this.activeFactorySessionId = null
       this.activeAgentSessionId = scopeInfo.sessionId
       this._renameActiveConversationScope(scopeInfo.scope)
       if (event.request_id && this.activeRequests[event.request_id]) {
@@ -1400,6 +1415,7 @@ export const useRuntimeStore = defineStore('runtime', {
         ...(request.payload || {}),
         session_id: sessionId,
       }
+      this.activeAgentSessionId = null
       return this.activeConversationScope === nextScope
     },
 
@@ -1470,6 +1486,7 @@ export const useRuntimeStore = defineStore('runtime', {
       this.transcript = []
       this.conversationTurns = []
       this.timeline = []
+      this.activeFactorySessionId = null
       this.activeAgentSessionId = null
     },
 

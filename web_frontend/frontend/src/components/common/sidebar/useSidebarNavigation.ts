@@ -37,7 +37,9 @@ export function useSidebarNavigation() {
   }
 
   function enterFactoryMode(mode: 'chat' | 'create_agent') {
-    const needsSessionRestore = runtimeStore.currentMode !== mode || Boolean(agentStore.activeChatPackageId)
+    const needsSessionRestore = runtimeStore.currentMode !== mode
+      || Boolean(agentStore.activeChatPackageId)
+      || runtimeStore.isCollaborationConversationActive
     agentStore.leaveAgentChat()
     runtimeStore.enterFactoryConversation(mode)
     if (needsSessionRestore) {

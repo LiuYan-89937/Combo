@@ -7,6 +7,7 @@ from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontend
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import session_payload
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import SYSTEM_CHAT_PACKAGE_ID
 from agent_factory.factory_graph.session import (
+    COLLABORATION_MAIN_FACTORY_SESSION_KIND,
     record_has_any_source,
     record_has_mode_source,
     without_mode_source,
@@ -22,10 +23,16 @@ class RuntimeSessionCommandMixin:
     def start_session(self, command: FactoryFrontendCommand) -> None:
         requested_mode = _session_mode(command.mode)
         requested_evolution_package_id = _command_evolution_package_id(command, requested_mode)
+        presentation_context = _factory_session_presentation_context(command)
         if command.session_id:
             previous_record = self.session_record
             previous_mode = self.mode
             self.session_record = self.session_manager.load(command.session_id)
+            if presentation_context is not None:
+                self.session_record = self.session_manager.update_presentation_context(
+                    self.session_record.session_id,
+                    **presentation_context,
+                )
             self.mode = requested_mode or self.session_record.current_mode
             if not self._session_source_available(self.session_record, self.mode):
                 self.session_record = previous_record
@@ -41,8 +48,15 @@ class RuntimeSessionCommandMixin:
                 )
             session_event_type = "session_switched"
         elif command.resume_latest:
-            existing = self._latest_session_for_start(requested_mode, requested_evolution_package_id)
-            self.session_record = existing or self.session_manager.create(mode=requested_mode)
+            existing = self._latest_session_for_start(
+                requested_mode,
+                requested_evolution_package_id,
+                collaboration_id=(presentation_context or {}).get("collaboration_id"),
+            )
+            self.session_record = existing or self.session_manager.create(
+                mode=requested_mode,
+                **(presentation_context or {}),
+            )
             self.mode = requested_mode or self.session_record.current_mode
             if requested_evolution_package_id:
                 self.session_record = self.session_manager.set_evolution_package(
@@ -51,7 +65,10 @@ class RuntimeSessionCommandMixin:
                 )
             session_event_type = "session_switched" if existing else "session_started"
         else:
-            self.session_record = self.session_manager.create(mode=requested_mode)
+            self.session_record = self.session_manager.create(
+                mode=requested_mode,
+                **(presentation_context or {}),
+            )
             self.mode = requested_mode
             if requested_evolution_package_id:
                 self.session_record = self.session_manager.set_evolution_package(
@@ -81,6 +98,12 @@ class RuntimeSessionCommandMixin:
         previous_record = self.session_record
         previous_mode = self.mode
         self.session_record = self.session_manager.load(command.session_id)
+        presentation_context = _factory_session_presentation_context(command)
+        if presentation_context is not None:
+            self.session_record = self.session_manager.update_presentation_context(
+                self.session_record.session_id,
+                **presentation_context,
+            )
         self.mode = requested_mode or self.session_record.current_mode
         if not self._session_source_available(self.session_record, self.mode):
             self.session_record = previous_record
@@ -98,7 +121,10 @@ class RuntimeSessionCommandMixin:
 
     def new_session(self, command: FactoryFrontendCommand) -> None:
         self.mode = _session_mode(command.mode)
-        self.session_record = self.session_manager.create(mode=self.mode)
+        self.session_record = self.session_manager.create(
+            mode=self.mode,
+            **(_factory_session_presentation_context(command) or {}),
+        )
         requested_evolution_package_id = _command_evolution_package_id(command, self.mode)
         if requested_evolution_package_id:
             self.session_record = self.session_manager.set_evolution_package(
@@ -289,7 +315,14 @@ class RuntimeSessionCommandMixin:
         self,
         requested_mode: str | None,
         requested_evolution_package_id: str | None,
+        *,
+        collaboration_id: str | None = None,
     ):
+        if collaboration_id:
+            return self.session_manager.latest_for_collaboration(
+                collaboration_id,
+                mode=requested_mode,
+            )
         if requested_evolution_package_id:
             return self.session_manager.latest_evolution_for_package(requested_evolution_package_id)
         if requested_mode == "chat":
@@ -510,6 +543,17 @@ def _turns_from_agent_session(record: dict[str, object]) -> list[dict[str, objec
 def _session_event_context(command: FactoryFrontendCommand) -> dict[str, object]:
     collaboration_id = str((command.payload or {}).get("collaboration_id") or "").strip()
     return {"collaboration_id": collaboration_id} if collaboration_id else {}
+
+
+def _factory_session_presentation_context(command: FactoryFrontendCommand) -> dict[str, object] | None:
+    collaboration_id = str((command.payload or {}).get("collaboration_id") or "").strip()
+    if not collaboration_id:
+        return None
+    return {
+        "session_kind": COLLABORATION_MAIN_FACTORY_SESSION_KIND,
+        "collaboration_id": collaboration_id,
+        "visible_in_factory_session_list": False,
+    }
 
 
 def _canonical_chat_records(records: list[Any], chat_sessions: dict[str, dict[str, Any]]) -> dict[str, Any]:

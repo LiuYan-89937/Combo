@@ -5,12 +5,16 @@
 
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { isStandaloneFactorySession } from '@/utils/sessionPresentation'
 
 export interface SessionView {
   session_id: string
   display_title: string | null
   first_user_input: string | null
   current_mode: string | null
+  session_kind?: string | null
+  collaboration_id?: string | null
+  visible_in_factory_session_list?: boolean | null
   chat_agent_package_session_id?: string | null
   create_agent_session_id?: string | null
   evolve_agent_package_id?: string | null
@@ -28,7 +32,13 @@ export const useSessionStore = defineStore('session', () => {
   const currentSessionId = ref<string | null>(null)
 
   function setSessions(newSessions: SessionView[]): void {
-    sessions.value = newSessions
+    sessions.value = newSessions.filter(isStandaloneFactorySession)
+    if (
+      currentSessionId.value
+      && !sessions.value.some((session) => session.session_id === currentSessionId.value)
+    ) {
+      currentSessionId.value = null
+    }
   }
 
   function setCurrentSession(sessionId: string | null): void {
@@ -36,6 +46,7 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   function addSession(session: SessionView): void {
+    if (!isStandaloneFactorySession(session)) return
     const existingIndex = sessions.value.findIndex((s) => s.session_id === session.session_id)
     if (existingIndex !== -1) {
       sessions.value[existingIndex] = session

@@ -5,6 +5,7 @@
 
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { isStandaloneAgentSession } from '@/utils/sessionPresentation'
 
 export interface AgentPackageToolView {
   kind?: string
@@ -214,7 +215,13 @@ export const useAgentStore = defineStore('agent', () => {
   }
 
   function setSessions(sessions: AgentSessionView[]): void {
-    agentSessions.value = sessions
+    agentSessions.value = sessions.filter(isStandaloneAgentSession)
+    if (
+      selectedSessionId.value
+      && !agentSessions.value.some((session) => session.session_id === selectedSessionId.value)
+    ) {
+      selectedSessionId.value = null
+    }
   }
 
   function setRecentSessions(sessions: AgentRecentSessionView[]): void {
@@ -282,7 +289,7 @@ export const useAgentStore = defineStore('agent', () => {
   function normalizeRecentSessions(sessions: AgentRecentSessionView[]): AgentRecentSessionView[] {
     const byKey = new Map<string, AgentRecentSessionView>()
     sessions
-      .filter((session) => session.package_id && session.session_id)
+      .filter((session) => session.package_id && session.session_id && isStandaloneAgentSession(session))
       .forEach((session) => {
         byKey.set(`${session.package_id}:${session.session_id}`, session)
       })
