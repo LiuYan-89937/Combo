@@ -96,7 +96,7 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
     if (event.event_type === 'agent_package_session_deleted' && event.payload?.session_id) {
       agentStore.removeSession(String(event.payload.session_id))
     }
-    if (hasRunAgentSession && event.payload?.agent_session) {
+    if (hasRunAgentSession && event.payload?.agent_session?.visible_in_agent_session_list !== false) {
       agentStore.mergeRecentSessions([sessionWithPackage(event.payload.agent_session, event.payload.package_id)])
     }
     if (event.event_type === 'agent_package_session_loaded' && event.payload?.session?.session_id) {

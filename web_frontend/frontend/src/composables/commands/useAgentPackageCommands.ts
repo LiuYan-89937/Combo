@@ -98,8 +98,18 @@ export function useAgentPackageCommands() {
     return transport.applyEventRequest(agentPackagesApi.shutdown(packageId))
   }
 
-  const loadAgentPackageSession = (packageId: string, sessionId: string) => {
-    runtimeStore.expectAgentPackageSession(packageId, sessionId)
+  const loadAgentPackageSession = (
+    packageId: string,
+    sessionId: string,
+    collaborationId?: string | null,
+    collaborationTaskId?: string | null,
+  ) => {
+    runtimeStore.expectAgentPackageSession(
+      packageId,
+      sessionId,
+      collaborationId || null,
+      collaborationTaskId || null,
+    )
     return transport.applyEventRequest(agentPackagesApi.session(packageId, sessionId))
   }
 

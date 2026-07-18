@@ -16,15 +16,19 @@ export function useRuntimeCommands() {
     transport.sendRuntimeCommand(commands.listSessionsCommand())
   }
 
-  const switchSession = (sessionId: string, mode?: FactoryMode | null) => {
+  const switchSession = (sessionId: string, mode?: FactoryMode | null, collaborationId?: string | null) => {
     if (mode === 'chat' || mode === 'create_agent' || mode === 'evolve_agent') {
-      runtimeStore.expectFactorySession(sessionId, mode)
+      runtimeStore.expectFactorySession(sessionId, mode, collaborationId || null)
     }
-    transport.sendRuntimeCommand(commands.switchSessionCommand(sessionId, mode))
+    transport.sendRuntimeCommand(commands.switchSessionCommand(sessionId, mode, collaborationId))
   }
 
-  const newSession = (mode?: FactoryMode | null, packageId?: string | null) => {
-    transport.sendRuntimeCommand(commands.newSessionCommand(mode, packageId))
+  const newSession = (
+    mode?: FactoryMode | null,
+    packageId?: string | null,
+    collaborationId?: string | null,
+  ) => {
+    transport.sendRuntimeCommand(commands.newSessionCommand(mode, packageId, collaborationId))
   }
 
   const deleteSession = (sessionId: string, mode?: FactoryMode | null) => {

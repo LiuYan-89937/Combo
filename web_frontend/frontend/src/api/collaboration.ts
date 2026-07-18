@@ -82,6 +82,14 @@ export interface CollaborationSessionView {
   main_agent_package_session_id?: string | null
   main_factory_session_id?: string | null
   approval_mode: CollaborationApprovalMode
+  execution_config?: {
+    model_profile_id?: string | null
+    reasoning_intensity?: number | null
+  }
+  round_index?: number
+  started_at?: string | null
+  completed_at?: string | null
+  statistics?: CollaborationStatisticsView
   status: CollaborationSessionStatus
   runtime_status?: CollaborationRuntimeStatus | null
   runtime_status_payload?: Record<string, any>
@@ -97,6 +105,30 @@ export interface CollaborationSessionView {
   manufacturing_requests?: CollaborationManufacturingRequestView[]
 }
 
+export interface CollaborationStatisticsView {
+  round_index: number
+  wall_duration_ms: number | null
+  cumulative_task_duration_ms: number
+  task_count: number
+  task_status_counts: Record<string, number>
+  retry_count: number
+  model_usage: {
+    totals: {
+      call_count: number
+      input_tokens: number
+      output_tokens: number
+      total_tokens: number
+      reasoning_tokens: number
+      cache_hit_tokens: number
+      cache_miss_tokens: number
+      cache_hit_ratio: number | null
+    }
+    by_agent: Array<Record<string, any>>
+    by_model: Array<Record<string, any>>
+    by_task: Array<Record<string, any>>
+  }
+}
+
 export const collaborationApi = {
   agents: () => requestJson<{ agents: CollaborationAgentView[] }>('/api/collaboration/agents'),
   sessions: () => requestJson<{ sessions: CollaborationSessionView[] }>('/api/collaboration/sessions'),
@@ -110,7 +142,7 @@ export const collaborationApi = {
   }),
   session: (collaborationId: string) =>
     requestJson<{ session: CollaborationSessionView }>(`/api/collaboration/sessions/${encodeURIComponent(collaborationId)}`),
-  updateSession: (collaborationId: string, payload: Partial<Pick<CollaborationSessionView, 'title' | 'main_agent_package_id' | 'main_agent_package_session_id' | 'main_factory_session_id' | 'approval_mode' | 'status'>>) =>
+  updateSession: (collaborationId: string, payload: Partial<Pick<CollaborationSessionView, 'title' | 'main_agent_package_id' | 'main_agent_package_session_id' | 'main_factory_session_id' | 'approval_mode' | 'execution_config' | 'status'>>) =>
     requestJson<{ session: CollaborationSessionView }>(`/api/collaboration/sessions/${encodeURIComponent(collaborationId)}`, {
       method: 'PATCH',
       body: JSON.stringify(payload),

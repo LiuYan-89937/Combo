@@ -6,10 +6,21 @@ export interface AgentPackageScopeInfo {
   scope: string
 }
 
+export interface CollaborationScopeIdentity {
+  collaborationId?: string | null
+  collaborationTaskId?: string | null
+}
+
 export function agentPackageConversationScope(
   packageId: string | null,
   sessionId: string | null,
+  identity: CollaborationScopeIdentity = {},
 ): string {
+  const collaborationId = cleanText(identity.collaborationId)
+  if (collaborationId) {
+    const taskId = cleanText(identity.collaborationTaskId) || 'main'
+    return `collaboration:${collaborationId}:${taskId}:${packageId || 'unknown'}:${sessionId || 'new'}`
+  }
   return `agent_package:${packageId || 'unknown'}:${sessionId || 'new'}`
 }
 
@@ -17,7 +28,13 @@ export function conversationScopeForMode(
   mode: string | null,
   payload: Record<string, any> = {},
 ): string | null {
-  if (mode === 'chat') return factoryConversationScope('chat', factorySessionIdFromPayload(payload))
+  if (mode === 'chat') {
+    const collaborationId = collaborationIdFromPayload(payload)
+    if (collaborationId) {
+      return `collaboration:${collaborationId}:main:factory_chat:${factorySessionIdFromPayload(payload) || 'new'}`
+    }
+    return factoryConversationScope('chat', factorySessionIdFromPayload(payload))
+  }
   if (mode === 'create_agent') return factoryConversationScope('create_agent', factorySessionIdFromPayload(payload))
   if (mode === 'evolve_agent') {
     const session = payload?.session && typeof payload.session === 'object' ? payload.session : {}
@@ -55,7 +72,10 @@ export function scopeFromEventPayload(event: FactoryFrontendEvent): string | nul
     const packageId = String(event.payload?.package_id || agentSession.package_id || '').trim()
     const sessionId = String(event.payload?.session_id || agentSession.session_id || loadedSession.session_id || '').trim()
     if (packageId) {
-      return agentPackageConversationScope(packageId, sessionId || null)
+      return agentPackageConversationScope(packageId, sessionId || null, {
+        collaborationId: collaborationIdFromPayload({ ...(event.payload || {}), agent_session: agentSession, session: loadedSession }),
+        collaborationTaskId: collaborationTaskIdFromPayload({ ...(event.payload || {}), agent_session: agentSession, session: loadedSession }),
+      })
     }
   }
   return conversationScopeForMode(event.mode, {
@@ -78,7 +98,10 @@ export function agentPackageScopeInfoFromEvent(event: FactoryFrontendEvent): Age
   return {
     packageId,
     sessionId,
-    scope: agentPackageConversationScope(packageId, sessionId),
+    scope: agentPackageConversationScope(packageId, sessionId, {
+      collaborationId: collaborationIdFromPayload({ ...(event.payload || {}), agent_session: agentSession, session: loadedSession }),
+      collaborationTaskId: collaborationTaskIdFromPayload({ ...(event.payload || {}), agent_session: agentSession, session: loadedSession }),
+    }),
   }
 }
 
@@ -92,6 +115,10 @@ export function scopeFromMessageMetadata(
     return agentPackageConversationScope(
       metadata.package_id ? String(metadata.package_id) : null,
       metadata.agent_session_id ? String(metadata.agent_session_id) : null,
+      {
+        collaborationId: metadata.collaboration_id,
+        collaborationTaskId: metadata.collaboration_task_id,
+      },
     )
   }
   return conversationScopeForMode(mode, {
@@ -107,6 +134,23 @@ function factoryConversationScope(mode: string, sessionId: string | null): strin
 function factorySessionIdFromPayload(payload: Record<string, any>): string | null {
   const session = payload?.session && typeof payload.session === 'object' ? payload.session : {}
   const value = payload?.session_id || payload?.factory_session_id || payload?.frontend_session_id || session.session_id
+  const text = String(value || '').trim()
+  return text || null
+}
+
+function collaborationIdFromPayload(payload: Record<string, any>): string | null {
+  const session = payload?.session && typeof payload.session === 'object' ? payload.session : {}
+  const agentSession = payload?.agent_session && typeof payload.agent_session === 'object' ? payload.agent_session : {}
+  return cleanText(payload?.collaboration_id || agentSession.collaboration_id || session.collaboration_id)
+}
+
+function collaborationTaskIdFromPayload(payload: Record<string, any>): string | null {
+  const session = payload?.session && typeof payload.session === 'object' ? payload.session : {}
+  const agentSession = payload?.agent_session && typeof payload.agent_session === 'object' ? payload.agent_session : {}
+  return cleanText(payload?.collaboration_task_id || agentSession.collaboration_task_id || session.collaboration_task_id)
+}
+
+function cleanText(value: unknown): string | null {
   const text = String(value || '').trim()
   return text || null
 }

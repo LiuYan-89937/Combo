@@ -35,6 +35,9 @@ TASK_STATUSES = {
     "failed",
     "cancelled",
 }
+TERMINAL_TASK_STATUSES = {"completed", "failed", "cancelled"}
+TASK_EXECUTION_STARTED_STATUSES = {"accepted", "planning", "working", "blocked", "submitted", "completed"}
+TASK_EXECUTION_FINISHED_STATUSES = {"submitted", "completed", "failed", "cancelled"}
 READY_TO_START_STATUSES = {"assigned", "queued"}
 READY_TO_START_STATUS_PLACEHOLDERS = ", ".join("?" for _ in READY_TO_START_STATUSES)
 RETRYABLE_TASK_STATUSES = {"failed", "revision_requested", "cancelled"}
@@ -90,6 +93,80 @@ class CollaborationStore:
             or self.list_pending_task_approval_decisions(str(session.get("collaboration_id") or ""))
         ]
 
+    def reopen_session(self, collaboration_id: str) -> dict[str, Any]:
+        now = utc_now_text()
+        with self._connect() as conn:
+            row = conn.execute(
+                "select status from collaboration_sessions where collaboration_id = ?",
+                (collaboration_id,),
+            ).fetchone()
+            if row is None:
+                raise CollaborationStoreError(f"collaboration session not found: {collaboration_id}")
+            previous_status = str(row["status"] or "")
+            if previous_status not in {"completed", "failed", "cancelled"}:
+                return self.get_session(collaboration_id)
+            conn.execute(
+                """
+                update collaboration_sessions
+                set status = ?, round_index = round_index + 1,
+                    started_at = coalesce(started_at, ?), completed_at = null, updated_at = ?
+                where collaboration_id = ?
+                """,
+                ("running", now, now, collaboration_id),
+            )
+            self._insert_message_conn(
+                conn,
+                collaboration_id=collaboration_id,
+                speaker_type="system",
+                speaker_package_id=None,
+                message_kind="session_reopened",
+                content=f"协作会话已从 {previous_status} 重新打开，开始新的执行轮次。",
+                task_id=None,
+                event_ref=f"session-reopened:{collaboration_id}:{now}",
+                created_at=now,
+            )
+        return self.get_session(collaboration_id)
+
+    def repair_terminal_sessions_with_open_work(self) -> list[str]:
+        now = utc_now_text()
+        repaired: list[str] = []
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                select distinct session.collaboration_id, session.status
+                from collaboration_sessions as session
+                join collaboration_tasks as task
+                  on task.collaboration_id = session.collaboration_id
+                where session.status in ('completed', 'failed', 'cancelled')
+                  and task.status not in ('completed', 'failed', 'cancelled')
+                """
+            ).fetchall()
+            for row in rows:
+                collaboration_id = str(row["collaboration_id"])
+                previous_status = str(row["status"])
+                conn.execute(
+                    """
+                    update collaboration_sessions
+                    set status = 'running', round_index = round_index + 1,
+                        started_at = coalesce(started_at, ?), completed_at = null, updated_at = ?
+                    where collaboration_id = ?
+                    """,
+                    (now, now, collaboration_id),
+                )
+                self._insert_message_conn(
+                    conn,
+                    collaboration_id=collaboration_id,
+                    speaker_type="system",
+                    speaker_package_id=None,
+                    message_kind="session_recovered",
+                    content=f"检测到 {previous_status} 会话仍有未完成任务，已恢复为 running。",
+                    task_id=None,
+                    event_ref=f"repair-terminal-session:{collaboration_id}:{now}",
+                    created_at=now,
+                )
+                repaired.append(collaboration_id)
+        return repaired
+
     def recover_interrupted_tasks(self) -> dict[str, Any]:
         now = utc_now_text()
         recovered: list[dict[str, str]] = []
@@ -99,7 +176,7 @@ class CollaborationStore:
             placeholders = ", ".join("?" for _ in statuses)
             rows = conn.execute(
                 f"""
-                select task_id, collaboration_id, assignee_package_id, status
+                select task_id, collaboration_id, assignee_package_id, status, visible_context_json
                 from collaboration_tasks
                 where status in ({placeholders})
                 """,
@@ -109,14 +186,22 @@ class CollaborationStore:
                 collaboration_id = str(row["collaboration_id"])
                 task_id = str(row["task_id"])
                 previous_status = str(row["status"])
+                visible_context = json_loads(row["visible_context_json"], {})
+                visible_context["recovery"] = {
+                    "reason": "backend_restart",
+                    "previous_status": previous_status,
+                    "recovered_at": now,
+                }
                 conn.execute(
                     """
                     update collaboration_tasks
-                    set status = ?, result_summary = ?, result_payload_json = ?, updated_at = ?
+                    set status = ?, visible_context_json = ?, result_summary = ?,
+                        result_payload_json = ?, updated_at = ?
                     where collaboration_id = ? and task_id = ?
                     """,
                     (
                         "queued",
+                        json_dumps(visible_context),
                         "后端服务重启后恢复为待调度。",
                         json_dumps({"runtime_status": "recovered_after_backend_restart", "previous_status": previous_status}),
                         now,
@@ -136,6 +221,10 @@ class CollaborationStore:
                     created_at=now,
                 )
                 self._mark_session_running_conn(conn, collaboration_id, now)
+                conn.execute(
+                    "update collaboration_sessions set status = ?, updated_at = ? where collaboration_id = ?",
+                    ("running", now, collaboration_id),
+                )
                 recovered.append(
                     {
                         "collaboration_id": collaboration_id,
@@ -204,10 +293,11 @@ class CollaborationStore:
                 """
                 insert into collaboration_sessions (
                   collaboration_id, title, main_agent_package_id, approval_mode,
-                  status, created_at, updated_at
-                ) values (?, ?, ?, ?, ?, ?, ?)
+                  status, execution_config_json, round_index, started_at,
+                  completed_at, created_at, updated_at
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (collaboration_id, clean_title, clean_main, clean_mode, "draft", now, now),
+                (collaboration_id, clean_title, clean_main, clean_mode, "draft", "{}", 1, None, None, now, now),
             )
             conn.execute(
                 """
@@ -298,16 +388,30 @@ class CollaborationStore:
             if "approval_mode" in payload
             else existing["approval_mode"]
         )
+        execution_config = (
+            validate_execution_config(payload.get("execution_config"))
+            if "execution_config" in payload
+            else dict(existing.get("execution_config") or {})
+        )
         status = str(payload.get("status") if "status" in payload else existing["status"]).strip()
         if status not in SESSION_STATUSES:
             raise CollaborationStoreError(f"unsupported collaboration session status: {status}")
         now = utc_now_text()
+        started_at = existing.get("started_at")
+        if status == "running" and not started_at:
+            started_at = now
+        completed_at = existing.get("completed_at")
+        if status in TERMINAL_SESSION_STATUSES and not completed_at:
+            completed_at = now
+        elif status == "running":
+            completed_at = None
         with self._connect() as conn:
             conn.execute(
                 """
                 update collaboration_sessions
                 set title = ?, main_agent_package_id = ?, main_agent_package_session_id = ?,
-                    main_factory_session_id = ?, approval_mode = ?, status = ?, updated_at = ?
+                    main_factory_session_id = ?, approval_mode = ?, execution_config_json = ?,
+                    status = ?, started_at = ?, completed_at = ?, updated_at = ?
                 where collaboration_id = ?
                 """,
                 (
@@ -316,7 +420,10 @@ class CollaborationStore:
                     main_agent_package_session_id,
                     main_factory_session_id,
                     approval_mode,
+                    json_dumps(execution_config),
                     status,
+                    started_at,
+                    completed_at,
                     now,
                     collaboration_id,
                 ),
@@ -346,10 +453,10 @@ class CollaborationStore:
             conn.execute(
                 """
                 update collaboration_sessions
-                set status = ?, updated_at = ?
+                set status = ?, completed_at = ?, updated_at = ?
                 where collaboration_id = ?
                 """,
-                ("completed", now, collaboration_id),
+                ("completed", now, now, collaboration_id),
             )
             self._insert_message_conn(
                 conn,
@@ -668,6 +775,10 @@ class CollaborationStore:
 
     def create_task(self, collaboration_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         session = self.get_session(collaboration_id)
+        if str(session.get("status") or "") in {"completed", "failed", "cancelled"}:
+            raise CollaborationStoreError(
+                "cannot create a task in a terminal collaboration session; reopen the session first"
+            )
         task_text = str(payload.get("task_text") or "").strip()
         if not task_text:
             raise CollaborationStoreError("task_text must not be empty")
@@ -1204,6 +1315,14 @@ class CollaborationStore:
                 artifact_refs=artifact_refs,
             )
             now = utc_now_text()
+            started_at = current.get("started_at")
+            if not started_at and status in TASK_EXECUTION_STARTED_STATUSES:
+                started_at = now
+            completed_at = current.get("completed_at")
+            if status in TASK_EXECUTION_FINISHED_STATUSES and not completed_at:
+                completed_at = now
+            elif status in ACTIVE_WORKER_TASK_STATUSES:
+                completed_at = None
             if status in WORKER_LEASE_HOLDING_TASK_STATUSES:
                 if not self._worker_lease_owned_conn(
                     conn,
@@ -1220,7 +1339,8 @@ class CollaborationStore:
                 set task_text = ?, status = ?, assignee_session_id = ?, depends_on_json = ?,
                     delivery_standard_json = ?, visible_context_json = ?, input_artifacts_json = ?,
                     result_summary = ?, result_payload_json = ?,
-                    artifact_refs_json = ?, review_notes = ?, updated_at = ?
+                    artifact_refs_json = ?, review_notes = ?, started_at = ?,
+                    completed_at = ?, updated_at = ?
                 where collaboration_id = ? and task_id = ?
                 """,
                 (
@@ -1239,6 +1359,8 @@ class CollaborationStore:
                     json_dumps(result_payload),
                     json_dumps(artifact_refs),
                     str(payload.get("review_notes") if "review_notes" in payload else current["review_notes"]),
+                    started_at,
+                    completed_at,
                     now,
                     collaboration_id,
                     task_id,
@@ -1761,6 +1883,8 @@ class CollaborationStore:
                 "text not null default ''",
             )
             self._ensure_column(conn, "collaboration_tasks", "depends_on_json", "text not null default '[]'")
+            self._ensure_column(conn, "collaboration_tasks", "started_at", "text")
+            self._ensure_column(conn, "collaboration_tasks", "completed_at", "text")
 
     def _ensure_collaboration_sessions_schema(self, conn: sqlite3.Connection) -> None:
         target_columns = [
@@ -1771,6 +1895,10 @@ class CollaborationStore:
             "main_factory_session_id",
             "approval_mode",
             "status",
+            "execution_config_json",
+            "round_index",
+            "started_at",
+            "completed_at",
             "created_at",
             "updated_at",
         ]
@@ -1786,6 +1914,10 @@ class CollaborationStore:
                   main_factory_session_id text,
                   approval_mode text not null,
                   status text not null,
+                  execution_config_json text not null default '{}',
+                  round_index integer not null default 1,
+                  started_at text,
+                  completed_at text,
                   created_at text not null,
                   updated_at text not null
                 )
@@ -1806,6 +1938,10 @@ class CollaborationStore:
               main_factory_session_id text,
               approval_mode text not null,
               status text not null,
+              execution_config_json text not null default '{}',
+              round_index integer not null default 1,
+              started_at text,
+              completed_at text,
               created_at text not null,
               updated_at text not null
             )
@@ -1822,17 +1958,23 @@ class CollaborationStore:
             if "main_factory_session_id" in legacy
             else "null"
         )
+        execution_config_expr = "execution_config_json" if "execution_config_json" in legacy else "'{}'"
+        round_index_expr = "round_index" if "round_index" in legacy else "1"
+        started_at_expr = "started_at" if "started_at" in legacy else "null"
+        completed_at_expr = "completed_at" if "completed_at" in legacy else "null"
         conn.execute(
             f"""
             insert into collaboration_sessions (
               collaboration_id, title, main_agent_package_id,
               main_agent_package_session_id, main_factory_session_id,
-              approval_mode, status, created_at, updated_at
+              approval_mode, status, execution_config_json, round_index,
+              started_at, completed_at, created_at, updated_at
             )
             select
               collaboration_id, title, main_agent_package_id,
               {package_session_expr}, {factory_session_expr},
-              approval_mode, status, created_at, updated_at
+              approval_mode, status, {execution_config_expr}, {round_index_expr},
+              {started_at_expr}, {completed_at_expr}, created_at, updated_at
             from collaboration_sessions_legacy
             """
         )
@@ -1853,6 +1995,7 @@ class CollaborationStore:
 
     def _session_view(self, row: sqlite3.Row) -> dict[str, Any]:
         data = dict(row)
+        data["execution_config"] = json_loads(data.pop("execution_config_json", "{}"), {})
         data["acceptance_workspace"] = {
             "resource_mode": "collaboration",
             "collaboration_id": data["collaboration_id"],
@@ -1991,10 +2134,11 @@ class CollaborationStore:
                     when status in ('completed', 'failed', 'cancelled') then status
                     else 'running'
                 end,
+                started_at = coalesce(started_at, ?),
                 updated_at = ?
             where collaboration_id = ?
             """,
-            (updated_at, collaboration_id),
+            (updated_at, updated_at, collaboration_id),
         )
 
     def _session_root(self, collaboration_id: str) -> Path:
@@ -2678,6 +2822,31 @@ def validate_approval_mode(value: str) -> str:
     if mode not in APPROVAL_MODES:
         raise CollaborationStoreError(f"unsupported collaboration approval mode: {mode}")
     return mode
+
+
+def validate_execution_config(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise CollaborationStoreError("execution_config must be an object")
+    allowed = {"model_profile_id", "reasoning_intensity"}
+    unsupported = sorted(str(key) for key in value if key not in allowed)
+    if unsupported:
+        raise CollaborationStoreError(
+            "unsupported collaboration execution config fields: " + ", ".join(unsupported)
+        )
+    result: dict[str, Any] = {}
+    if "model_profile_id" in value:
+        profile_id = normalize_optional_text(value.get("model_profile_id"))
+        if profile_id:
+            result["model_profile_id"] = profile_id
+    if "reasoning_intensity" in value:
+        intensity = value.get("reasoning_intensity")
+        if intensity is not None:
+            if isinstance(intensity, bool) or not isinstance(intensity, int) or not 0 <= intensity <= 4:
+                raise CollaborationStoreError("reasoning_intensity must be an integer from 0 to 4 or null")
+            result["reasoning_intensity"] = intensity
+    return result
 
 
 def _main_agent_approval_message(action: str, reason: str, revision_guidance: str) -> str:

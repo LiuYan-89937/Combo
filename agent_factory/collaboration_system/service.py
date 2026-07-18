@@ -15,7 +15,12 @@ from agent_factory.create_agent.runtime import CreateAgentRuntime
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.collaboration_system.orchestrator import CollaborationOrchestrator
 from agent_factory.collaboration_runtime_policy import collaboration_runtime_tool_access
-from agent_factory.collaboration_system.store import CollaborationStore, SYSTEM_CHAT_PACKAGE_ID
+from agent_factory.collaboration_system.store import (
+    CollaborationStore,
+    SYSTEM_CHAT_PACKAGE_ID,
+    TASK_STATUSES,
+    TERMINAL_TASK_STATUSES,
+)
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent
 from agent_factory.factory_graph.frontend_bridge.runtime_events import RUN_TERMINAL_EVENT_TYPES, runtime_stream_status
 from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import AgentPackageRuntimeManager
@@ -28,6 +33,7 @@ from agent_factory.factory_graph.session import (
     record_has_any_source,
     without_mode_source,
 )
+from agent_factory.model_pool.usage import ModelUsageStore
 
 
 RuntimeFactory = Callable[[], AgentPackageRuntimeManager]
@@ -120,6 +126,12 @@ class CollaborationService:
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
             return
+        repaired_sessions = self.store.repair_terminal_sessions_with_open_work()
+        if repaired_sessions:
+            self.logger.info(
+                "Repaired %s terminal collaboration session(s) with open work",
+                len(repaired_sessions),
+            )
         recovery = self.store.recover_interrupted_tasks()
         recovered_count = int(recovery.get("recovered_count") or 0)
         if recovered_count:
@@ -141,6 +153,11 @@ class CollaborationService:
             daemon=True,
         )
         self._thread.start()
+        threading.Thread(
+            target=self.dispatch_delegated_sessions,
+            name="collaboration-initial-dispatch",
+            daemon=True,
+        ).start()
         for collaboration_id in self.store.list_pending_main_agent_event_collaboration_ids():
             self._schedule_main_agent_event_drain(collaboration_id)
 
@@ -163,13 +180,35 @@ class CollaborationService:
     ) -> str:
         from agent_factory.collaboration_system.prompting import build_main_agent_collaboration_prompt
 
+        session = self.store.get_session(collaboration_id)
+        if str(session.get("status") or "") in {"completed", "failed", "cancelled"}:
+            session = self.store.reopen_session(collaboration_id)
         return build_main_agent_collaboration_prompt(
             user_message=user_message,
-            session=self.store.get_session(collaboration_id),
+            session=session,
         )
 
     def main_agent_runtime_tool_access(self) -> dict[str, list[str]]:
         return collaboration_runtime_tool_access()
+
+    def session_view(self, collaboration_id: str) -> dict[str, Any]:
+        session = self.store.get_session(collaboration_id)
+        task_by_session_id = {
+            str(task.get("assignee_session_id") or "").strip(): str(task.get("task_id") or "").strip()
+            for task in session.get("tasks") or []
+            if isinstance(task, dict) and str(task.get("assignee_session_id") or "").strip()
+        }
+        main_session_id = str(session.get("main_agent_package_session_id") or "").strip()
+        if main_session_id:
+            task_by_session_id.setdefault(main_session_id, "")
+        session["statistics"] = _collaboration_statistics(
+            session,
+            ModelUsageStore().collaboration_summary(
+                collaboration_id,
+                task_by_session_id=task_by_session_id,
+            ),
+        )
+        return session
 
     def create_task(self, collaboration_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         session = self.store.create_task(collaboration_id, payload)
@@ -182,6 +221,8 @@ class CollaborationService:
         return session
 
     def update_task(self, collaboration_id: str, task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if payload.get("status") in (TASK_STATUSES - TERMINAL_TASK_STATUSES):
+            self._reopen_terminal_session(collaboration_id)
         session = self._update_task(collaboration_id, task_id, payload)
         self._cancel_cancelled_task_requests(session)
         if session.get("approval_mode") == "main_agent_delegated":
@@ -194,6 +235,7 @@ class CollaborationService:
         task_id: str,
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        self._reopen_terminal_session(collaboration_id)
         replacement = self.store.retry_task(collaboration_id, task_id, payload)
         self.cleanup_retried_task_sessions()
         session = replacement["session"]
@@ -204,6 +246,11 @@ class CollaborationService:
         if session.get("approval_mode") == "main_agent_delegated":
             self.dispatch_soon(collaboration_id)
         return replacement
+
+    def _reopen_terminal_session(self, collaboration_id: str) -> None:
+        session = self.store.get_session(collaboration_id)
+        if str(session.get("status") or "") in {"completed", "failed", "cancelled"}:
+            self.store.reopen_session(collaboration_id)
 
     def cleanup_retried_task_sessions(self) -> int:
         cleaned = 0
@@ -269,7 +316,8 @@ class CollaborationService:
         return session
 
     def complete_session(self, collaboration_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-        return self.store.complete_session(collaboration_id, payload)
+        self.store.complete_session(collaboration_id, payload)
+        return self.session_view(collaboration_id)
 
     def delete_session(self, collaboration_id: str) -> dict[str, Any]:
         session = self.store.get_session(collaboration_id)
@@ -361,6 +409,15 @@ class CollaborationService:
         )
 
     def dispatch_ready(self, collaboration_id: str, *, limit: int | None = None) -> dict[str, Any]:
+        session = self.store.get_session(collaboration_id)
+        if str(session.get("status") or "") in {"completed", "failed", "cancelled"}:
+            return {
+                "collaboration_id": collaboration_id,
+                "started_count": 0,
+                "results": [],
+                "session": session,
+                "message": "协作会话已经结束；重新发送消息后会开启新的执行轮次。",
+            }
         if not self._claim_session(collaboration_id):
             return {
                 "collaboration_id": collaboration_id,
@@ -1207,6 +1264,62 @@ def _positive_int(value: Any, *, name: str) -> int:
     if str(parsed) != str(value).strip() or parsed <= 0:
         raise ValueError(f"{name} must be a positive integer")
     return parsed
+
+
+def _collaboration_statistics(session: dict[str, Any], usage: dict[str, Any]) -> dict[str, Any]:
+    now = datetime.now(UTC)
+    started_at = _optional_utc_datetime(
+        str(session.get("started_at") or session.get("created_at") or "")
+    )
+    completed_at = _optional_utc_datetime(
+        str(
+            session.get("completed_at")
+            or (session.get("updated_at") if session.get("status") in {"completed", "failed", "cancelled"} else "")
+            or ""
+        )
+    )
+    wall_end = completed_at or now
+    wall_duration_ms = (
+        max(0, int((wall_end - started_at).total_seconds() * 1000))
+        if started_at is not None
+        else None
+    )
+    task_duration_ms = 0
+    status_counts: dict[str, int] = {}
+    retry_count = 0
+    for task in session.get("tasks") or []:
+        if not isinstance(task, dict):
+            continue
+        status = str(task.get("status") or "unknown")
+        status_counts[status] = status_counts.get(status, 0) + 1
+        visible_context = task.get("visible_context") if isinstance(task.get("visible_context"), dict) else {}
+        if isinstance(visible_context.get("retry"), dict):
+            retry_count += 1
+        task_started = _optional_utc_datetime(str(task.get("started_at") or task.get("created_at") or ""))
+        task_completed = _optional_utc_datetime(
+            str(
+                task.get("completed_at")
+                or (task.get("updated_at") if status in TERMINAL_TASK_STATUSES else "")
+                or ""
+            )
+        )
+        if task_started is not None:
+            task_duration_ms += max(0, int(((task_completed or now) - task_started).total_seconds() * 1000))
+    return {
+        "round_index": int(session.get("round_index") or 1),
+        "wall_duration_ms": wall_duration_ms,
+        "cumulative_task_duration_ms": task_duration_ms,
+        "task_count": sum(status_counts.values()),
+        "task_status_counts": status_counts,
+        "retry_count": retry_count,
+        "model_usage": usage,
+    }
+
+
+def _optional_utc_datetime(value: str) -> datetime | None:
+    if not str(value or "").strip():
+        return None
+    return _parse_utc_datetime(value)
 
 
 def _parse_utc_datetime(value: str) -> datetime:

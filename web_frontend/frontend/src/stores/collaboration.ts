@@ -175,6 +175,7 @@ export const useCollaborationStore = defineStore('collaboration', () => {
     main_agent_package_session_id?: string | null
     main_factory_session_id?: string | null
     approval_mode?: CollaborationApprovalMode
+    execution_config?: CollaborationSessionView['execution_config']
     status?: CollaborationSessionView['status']
   }): Promise<CollaborationSessionView | null> {
     if (!activeSession.value) return null
@@ -182,9 +183,8 @@ export const useCollaborationStore = defineStore('collaboration', () => {
     error.value = null
     try {
       const response = await collaborationApi.updateSession(activeSession.value.collaboration_id, payload)
-      upsertSession(response.session)
-      setActiveSession(response.session)
-      return response.session
+      replaceActive(response.session)
+      return activeSession.value
     } catch (exc) {
       error.value = errorMessage(exc)
       return null
@@ -358,14 +358,28 @@ export const useCollaborationStore = defineStore('collaboration', () => {
   }
 
   function replaceActive(session: CollaborationSessionView): void {
-    upsertSession(session)
-    setActiveSession(session)
+    const current = activeSession.value?.collaboration_id === session.collaboration_id
+      ? activeSession.value
+      : null
+    const merged = {
+      ...(current || {}),
+      ...session,
+      statistics: session.statistics || current?.statistics,
+    } as CollaborationSessionView
+    upsertSession(merged)
+    setActiveSession(merged)
   }
 
   function applySessionSnapshot(session: CollaborationSessionView): void {
-    upsertSession(session)
+    const existing = sessions.value.find(item => item.collaboration_id === session.collaboration_id)
+    const merged = {
+      ...(existing || {}),
+      ...session,
+      statistics: session.statistics || existing?.statistics,
+    } as CollaborationSessionView
+    upsertSession(merged)
     if (activeSession.value?.collaboration_id === session.collaboration_id) {
-      activeSession.value = session
+      activeSession.value = merged
     }
   }
 

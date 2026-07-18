@@ -3,10 +3,11 @@
     <div class="explorer-header">
       <div class="header-title">
         <n-text strong>{{ t('workspace.explorer') }}</n-text>
-        <n-text depth="3" class="header-subtitle">{{ workspaceStore.currentScope }}</n-text>
+        <n-text depth="3" class="header-subtitle">{{ effectiveScope }}</n-text>
       </div>
       <n-space :size="6">
         <n-select
+          v-if="!fixedScope"
           v-model:value="workspaceStore.currentScope"
           :options="scopeOptions"
           size="small"
@@ -125,6 +126,7 @@ const emit = defineEmits<{
 const props = defineProps<{
   packageId?: string | null
   workspaceContext?: WorkspaceRequestContext | null
+  fixedScope?: WorkspaceScope | null
 }>()
 
 const workspaceStore = useWorkspaceStore()
@@ -140,6 +142,7 @@ const rootLoading = computed(() => loadingPaths.value.has('') && !entriesByPath.
 const requestContext = computed<WorkspaceRequestContext | string | undefined>(() => (
   props.workspaceContext || props.packageId || undefined
 ))
+const effectiveScope = computed<WorkspaceScope>(() => props.fixedScope || workspaceStore.currentScope)
 
 const scopeOptions = computed(() => [
   { label: t('workspace.scope.package'), value: 'package' },
@@ -160,7 +163,7 @@ function appendRows(path: string, depth: number, rows: TreeRow[]) {
   for (const entry of entries) {
     const expanded = isExpanded(entry.path)
     rows.push({
-      key: `${workspaceStore.currentScope}:${entry.path}`,
+      key: `${effectiveScope.value}:${entry.path}`,
       entry,
       depth,
       expanded,
@@ -185,7 +188,7 @@ async function loadDirectory(path: string) {
   loadingPaths.value = nextLoading
   try {
     const event = await commands.refreshWorkspace(
-      workspaceStore.currentScope,
+      effectiveScope.value,
       path,
       requestContext.value,
     )
@@ -237,7 +240,7 @@ function handleEntryClick(entry: WorkspaceEntry) {
 }
 
 async function addFileReference(entry: WorkspaceEntry) {
-  const event = await workspaceApi.file(workspaceStore.currentScope, entry.path, requestContext.value, 1_000_000)
+  const event = await workspaceApi.file(effectiveScope.value, entry.path, requestContext.value, 1_000_000)
   const reference = workspaceFileContextReference(workspaceFileView(event.payload || {}))
   if (!reference) {
     message.warning(t('references.unsupportedFile'))
@@ -251,7 +254,7 @@ async function addFileReference(entry: WorkspaceEntry) {
 }
 
 async function deleteFile(entry: WorkspaceEntry) {
-  await workspaceApi.deleteFile(workspaceStore.currentScope, entry.path, requestContext.value)
+  await workspaceApi.deleteFile(effectiveScope.value, entry.path, requestContext.value)
   const parentPath = entry.path.includes('/') ? entry.path.slice(0, entry.path.lastIndexOf('/')) : ''
   entriesByPath.value = {
     ...entriesByPath.value,
@@ -322,7 +325,7 @@ watch(
 )
 
 function ensureVisibleScope() {
-  if (!visibleScopes.value.has(workspaceStore.currentScope)) {
+  if (!props.fixedScope && !visibleScopes.value.has(workspaceStore.currentScope)) {
     workspaceStore.setScope('workdir')
   }
 }
