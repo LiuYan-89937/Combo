@@ -38,6 +38,21 @@ export interface ModelContextExtensionCapability {
   max_context_tokens: number
 }
 
+export interface LocalModelArtifactWritePayload {
+  artifact_id?: string
+  display_name: string
+  kind: LocalModelKind
+  source: 'local_storage' | 'external_endpoint'
+  local_path: string | null
+  external_model_id: string | null
+  model_format: string
+  revision: string
+  checksum: string
+  native_context_tokens: number | null
+  context_extension: ModelContextExtensionCapability | null
+  enabled: boolean
+}
+
 export interface LocalModelDirectory {
   relative_path: string
   absolute_path: string
@@ -340,12 +355,12 @@ export const modelPoolApi = {
       },
     ),
   artifacts: () => requestJson<{ artifacts: LocalModelArtifact[] }>('/api/model-pool/artifacts'),
-  saveArtifact: (payload: Record<string, unknown>) =>
+  saveArtifact: (payload: LocalModelArtifactWritePayload) =>
     requestJson<{ artifact: LocalModelArtifact }>('/api/model-pool/artifacts', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-  patchArtifact: (artifactId: string, payload: Record<string, unknown>) =>
+  patchArtifact: (artifactId: string, payload: LocalModelArtifactWritePayload) =>
     requestJson<{ artifact: LocalModelArtifact }>(`/api/model-pool/artifacts/${encodeURIComponent(artifactId)}`, {
       method: 'PATCH',
       body: JSON.stringify(payload),

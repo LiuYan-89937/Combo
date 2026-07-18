@@ -517,6 +517,7 @@ import {
 import {
   modelPoolApi,
   type LocalModelArtifact,
+  type LocalModelArtifactWritePayload,
   type LocalModelDefaultRole,
   type LocalModelStorage,
   type LocalModelKind,
@@ -664,19 +665,24 @@ function openArtifact(item?: LocalModelArtifact): void {
 async function saveArtifact(): Promise<void> {
   saving.value = true
   try {
-    const payload = {
-      ...artifactForm,
+    const payload: LocalModelArtifactWritePayload = {
+      display_name: artifactForm.display_name,
+      kind: artifactForm.kind,
       source: externalInference.value ? 'external_endpoint' : 'local_storage',
       local_path: externalInference.value ? null : artifactForm.local_path,
+      external_model_id: externalInference.value ? artifactForm.external_model_id : null,
       model_format: externalInference.value
         ? selectedRemoteModel.value?.format || 'external'
         : artifactForm.kind === 'chat' ? 'llama_cpp' : artifactForm.kind === 'embedding' ? 'transformers' : 'stable_diffusion_cpp',
+      revision: artifactForm.revision,
+      checksum: artifactForm.checksum,
       native_context_tokens: artifactForm.kind === 'chat' ? artifactForm.native_context_tokens : null,
       context_extension: artifactForm.kind === 'chat' && artifactForm.supports_yarn
         ? { method: 'yarn', max_context_tokens: artifactForm.yarn_max_context_tokens }
         : null,
-      artifact_id: artifactEditing.value?.artifact_id,
+      enabled: artifactForm.enabled,
     }
+    if (artifactEditing.value) payload.artifact_id = artifactEditing.value.artifact_id
     if (artifactEditing.value) await modelPoolApi.patchArtifact(artifactEditing.value.artifact_id, payload)
     else await modelPoolApi.saveArtifact(payload)
     artifactModalOpen.value = false
