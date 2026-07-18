@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Iterable
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-import sqlite3
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
@@ -11,10 +10,12 @@ from uuid import uuid4
 from agent_factory.model_pool.config import default_model_usage_store_path, resolve_model_pool_store_path
 from agent_factory.model_pool.schema import ModelPoolProfile
 from agent_factory.model_pool.store import ModelPoolStore
+from agent_factory.sqlite_runtime import connect_sqlite, initialize_sqlite_store
 
 
 ModelUsageGroupBy = Literal["model", "provider", "agent"]
 LEGACY_MODEL_POOL_USAGE_MIGRATION = "legacy_model_pool_usage.v1"
+SQLITE_BUSY_TIMEOUT_MS = 10000
 
 
 class ModelUsageStore:
@@ -33,8 +34,16 @@ class ModelUsageStore:
         self.model_pool_path = resolve_model_pool_store_path(model_pool_path)
         if setup:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            self._ensure_schema()
-            self._migrate_legacy_usage()
+            initialize_sqlite_store(
+                self.path,
+                self._initialize,
+                timeout_ms=SQLITE_BUSY_TIMEOUT_MS,
+                wal=True,
+            )
+
+    def _initialize(self) -> None:
+        self._ensure_schema()
+        self._migrate_legacy_usage()
 
     def record_frontend_event(self, event_payload: dict[str, Any]) -> bool:
         record = usage_record_from_frontend_event(event_payload, model_pool_path=self.model_pool_path)
@@ -93,8 +102,7 @@ class ModelUsageStore:
 
     @contextmanager
     def _connect(self):
-        conn = sqlite3.connect(self.path)
-        conn.row_factory = sqlite3.Row
+        conn = connect_sqlite(self.path, timeout_ms=SQLITE_BUSY_TIMEOUT_MS)
         try:
             yield conn
             conn.commit()

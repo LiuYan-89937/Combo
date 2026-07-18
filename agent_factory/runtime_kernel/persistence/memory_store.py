@@ -15,8 +15,11 @@ from uuid import uuid4
 from langgraph.store.base import BaseStore, GetOp, IndexConfig, Item, ListNamespacesOp, PutOp, SearchItem, SearchOp
 from pydantic import BaseModel, ConfigDict, Field
 
+from agent_factory.sqlite_runtime import connect_sqlite, initialize_sqlite_store
+
 
 LangGraphStoreBackend = Literal["sqlite", "memory", "postgres", "redis", "mongodb"]
+SQLITE_BUSY_TIMEOUT_MS = 10000
 
 
 class MemoryRecord(BaseModel):
@@ -236,7 +239,12 @@ class SqliteBaseStore(BaseStore):
         self.index = index
         self._semantic_diagnostics: list[dict[str, Any]] = []
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._init_schema()
+        initialize_sqlite_store(
+            self.path,
+            self._init_schema,
+            timeout_ms=SQLITE_BUSY_TIMEOUT_MS,
+            wal=True,
+        )
 
     def batch(self, ops) -> list[Any]:
         results: list[Any] = []
@@ -445,9 +453,7 @@ class SqliteBaseStore(BaseStore):
             conn.close()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return connect_sqlite(self.path, timeout_ms=SQLITE_BUSY_TIMEOUT_MS)
 
     def _record_semantic_diagnostic(
         self,

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+from contextlib import closing
 from dataclasses import dataclass
 import os
 from pathlib import Path
 from pathlib import PurePosixPath
 import re
 import shutil
-import sqlite3
 import subprocess
 import threading
 from typing import Any
@@ -26,6 +26,7 @@ from agent_factory.model_pool import (
     ModelPoolStore,
     resolve_model_pool_store_path,
 )
+from agent_factory.sqlite_runtime import connect_sqlite
 from agent_factory.paths import factory_artifact_path, project_root
 from agent_factory.runtime_attachments import ATTACHMENT_INPUT_DIR
 from agent_factory.environment_system import (
@@ -714,9 +715,16 @@ def _refresh_sqlite_snapshot(source: Path, target: Path) -> None:
     temporary_path = target_path.with_suffix(target_path.suffix + ".tmp")
     temporary_path.unlink(missing_ok=True)
     try:
-        with sqlite3.connect(f"{source_path.as_uri()}?mode=ro", uri=True) as source_conn:
-            with sqlite3.connect(temporary_path) as target_conn:
+        with closing(
+            connect_sqlite(
+                f"{source_path.as_uri()}?mode=ro",
+                uri=True,
+                query_only=True,
+            )
+        ) as source_conn:
+            with closing(connect_sqlite(temporary_path)) as target_conn:
                 source_conn.backup(target_conn)
+                target_conn.commit()
         temporary_path.replace(target_path)
     except Exception as exc:
         temporary_path.unlink(missing_ok=True)

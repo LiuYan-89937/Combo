@@ -6,14 +6,23 @@ import sqlite3
 from pathlib import Path
 
 from agent_factory.paths import factory_artifact_path
+from agent_factory.sqlite_runtime import connect_sqlite, initialize_sqlite_store
 from agent_factory.tip_system.schema import TipMessage, TipRecord, utc_now_text
+
+
+SQLITE_BUSY_TIMEOUT_MS = 10000
 
 
 class TipStore:
     def __init__(self, path: str | Path | None = None) -> None:
         self.path = Path(path) if path is not None else factory_artifact_path("tips", "factory.sqlite")
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._ensure_schema()
+        initialize_sqlite_store(
+            self.path,
+            self._ensure_schema,
+            timeout_ms=SQLITE_BUSY_TIMEOUT_MS,
+            wal=True,
+        )
 
     def create(self, tip: TipRecord) -> TipRecord:
         with self._connect() as conn:
@@ -147,9 +156,11 @@ class TipStore:
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.path)
-        conn.row_factory = sqlite3.Row
-        conn.execute("pragma foreign_keys = on")
+        conn = connect_sqlite(
+            self.path,
+            timeout_ms=SQLITE_BUSY_TIMEOUT_MS,
+            foreign_keys=True,
+        )
         try:
             yield conn
             conn.commit()

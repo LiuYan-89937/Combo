@@ -15,11 +15,13 @@ from jsonschema import Draft202012Validator
 
 from agent_factory.paths import factory_artifact_path
 from agent_factory.runtime_contracts.schema import ResourceDescriptor
+from agent_factory.sqlite_runtime import connect_sqlite, initialize_sqlite_store
 
 
 RESOURCE_MASTER_KEY_ENV = "AGENTFACTORY_RESOURCE_MASTER_KEY"
 RESOURCE_STORE_PATH_ENV = "AGENTFACTORY_RESOURCE_STORE_PATH"
 RESOURCE_STORE_READ_ONLY_ENV = "AGENTFACTORY_RESOURCE_STORE_READ_ONLY"
+SQLITE_BUSY_TIMEOUT_MS = 10000
 
 
 class ResourceStoreError(RuntimeError):
@@ -33,7 +35,12 @@ class ResourceStore:
         self.read_only = os.getenv(RESOURCE_STORE_READ_ONLY_ENV, "0") == "1"
         if not self.read_only:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            self._ensure_schema()
+            initialize_sqlite_store(
+                self.path,
+                self._ensure_schema,
+                timeout_ms=SQLITE_BUSY_TIMEOUT_MS,
+                wal=True,
+            )
 
     @property
     def key_available(self) -> bool:
@@ -162,10 +169,14 @@ class ResourceStore:
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
         if self.read_only:
-            conn = sqlite3.connect(f"{self.path.as_uri()}?mode=ro", uri=True)
+            conn = connect_sqlite(
+                f"{self.path.as_uri()}?mode=ro",
+                timeout_ms=SQLITE_BUSY_TIMEOUT_MS,
+                uri=True,
+                query_only=True,
+            )
         else:
-            conn = sqlite3.connect(self.path)
-        conn.row_factory = sqlite3.Row
+            conn = connect_sqlite(self.path, timeout_ms=SQLITE_BUSY_TIMEOUT_MS)
         try:
             yield conn
             if not self.read_only:
