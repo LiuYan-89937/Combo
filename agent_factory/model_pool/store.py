@@ -14,6 +14,7 @@ from agent_factory.model_pool.schema import (
     ModelPoolProfile,
     utc_now_text,
 )
+from agent_factory.sqlite_runtime import connect_sqlite, initialize_sqlite_store
 
 
 class ModelPoolStoreError(RuntimeError):
@@ -27,6 +28,7 @@ _DEFAULT_PROFILE_ROLES: tuple[ModelPoolDefaultRole, ...] = (
     "embedding",
     "image_generation",
 )
+SQLITE_BUSY_TIMEOUT_MS = 10000
 
 
 class ModelPoolStore:
@@ -44,7 +46,12 @@ class ModelPoolStore:
                 raise ModelPoolStoreError(f"local model registry is not initialized: {self.path}")
         elif setup:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            self._ensure_schema()
+            initialize_sqlite_store(
+                self.path,
+                self._ensure_schema,
+                timeout_ms=SQLITE_BUSY_TIMEOUT_MS,
+                wal=True,
+            )
         elif not self.path.is_file():
             raise ModelPoolStoreError(f"local model registry is not initialized: {self.path}")
 
@@ -449,13 +456,19 @@ class ModelPoolStore:
         if write and self.read_only:
             raise ModelPoolStoreError("local model registry is read-only")
         conn = (
-            sqlite3.connect(f"{self.path.as_uri()}?mode=ro", uri=True)
+            connect_sqlite(
+                f"{self.path.as_uri()}?mode=ro",
+                timeout_ms=SQLITE_BUSY_TIMEOUT_MS,
+                uri=True,
+                query_only=True,
+            )
             if self.read_only
-            else sqlite3.connect(self.path)
+            else connect_sqlite(
+                self.path,
+                timeout_ms=SQLITE_BUSY_TIMEOUT_MS,
+                query_only=not write,
+            )
         )
-        conn.row_factory = sqlite3.Row
-        if not write:
-            conn.execute("pragma query_only = on")
         try:
             yield conn
             if write:

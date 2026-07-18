@@ -14,7 +14,7 @@ from agent_factory.knowledge_system.schema import (
     KnowledgeSourceManifest,
     now_iso,
 )
-from agent_factory.sqlite_runtime import sqlite_session
+from agent_factory.sqlite_runtime import initialize_sqlite_store, sqlite_session
 
 
 SQLITE_BUSY_TIMEOUT_MS = 10000
@@ -24,7 +24,12 @@ class KnowledgeCatalog:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._init_schema()
+        initialize_sqlite_store(
+            self.path,
+            self._init_schema,
+            timeout_ms=SQLITE_BUSY_TIMEOUT_MS,
+            wal=True,
+        )
 
     def upsert_source(self, manifest: KnowledgeSourceManifest) -> None:
         manifest = manifest.model_copy(update={"updated_at": now_iso()})

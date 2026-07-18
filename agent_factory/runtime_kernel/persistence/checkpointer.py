@@ -3,8 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 import importlib
 from pathlib import Path
-import sqlite3
 from typing import Any, Literal
+
+from agent_factory.sqlite_runtime import sqlite_session
 
 
 LangGraphCheckpointerBackend = Literal["sqlite", "memory"]
@@ -111,8 +112,7 @@ def migrate_legacy_instance_checkpoints(checkpoint_path: Path) -> int:
         if callable(setup):
             setup()
     migrated = 0
-    with sqlite3.connect(target, timeout=30) as conn:
-        conn.execute("pragma busy_timeout = 30000")
+    with sqlite_session(target, timeout_ms=30000) as conn:
         for index, source in enumerate(sources):
             alias = f"legacy_{index}"
             conn.execute(f"attach database ? as {alias}", (str(source),))

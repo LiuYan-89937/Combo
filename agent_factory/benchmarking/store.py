@@ -7,6 +7,10 @@ from pathlib import Path
 
 from agent_factory.benchmarking.schema import BenchmarkRun, utc_now_text
 from agent_factory.paths import factory_artifact_path
+from agent_factory.sqlite_runtime import connect_sqlite, initialize_sqlite_store
+
+
+SQLITE_BUSY_TIMEOUT_MS = 10000
 
 
 class BenchmarkStore:
@@ -15,7 +19,12 @@ class BenchmarkStore:
             "benchmark", "benchmark.sqlite"
         )
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._ensure_schema()
+        initialize_sqlite_store(
+            self.path,
+            self._ensure_schema,
+            timeout_ms=SQLITE_BUSY_TIMEOUT_MS,
+            wal=True,
+        )
 
     def save(self, run: BenchmarkRun) -> BenchmarkRun:
         updated = run.model_copy(update={"updated_at": utc_now_text()}, deep=True)
@@ -92,8 +101,7 @@ class BenchmarkStore:
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.path)
-        conn.row_factory = sqlite3.Row
+        conn = connect_sqlite(self.path, timeout_ms=SQLITE_BUSY_TIMEOUT_MS)
         try:
             yield conn
             conn.commit()

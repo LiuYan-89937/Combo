@@ -7,6 +7,7 @@ import json
 import math
 import os
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ AGENT_REGISTRY_DB_ENV = "AGENTFACTORY_AGENT_REGISTRY_DB"
 DEFAULT_LIMIT = 5
 MAX_LIMIT = 10
 SQLITE_BUSY_TIMEOUT_MS = 10000
+_REFRESH_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,28 +59,38 @@ class AgentRegistryService:
         )
 
     def refresh_index(self) -> dict[str, Any]:
+        with _REFRESH_LOCK:
+            return self._refresh_index()
+
+    def _refresh_index(self) -> dict[str, Any]:
         documents = _scan_package_documents(self._package_roots())
         embedding_model = _embedding_model_or_none()
         embedding_available = embedding_model is not None
         indexed = 0
         package_ids = {document.package_id for document in documents}
         with self._connect() as conn:
-            existing = {
-                str(row["package_id"]): str(row["fingerprint"] or "")
-                for row in conn.execute("select package_id, fingerprint from agent_search_documents").fetchall()
-            }
-            for document in documents:
-                embedding = None
-                if embedding_model is not None:
-                    row = conn.execute(
-                        "select embedding_json from agent_search_documents where package_id = ?",
-                        (document.package_id,),
-                    ).fetchone()
-                    existing_embedding = _json_loads(row["embedding_json"], None) if row else None
-                    if existing.get(document.package_id) != document.fingerprint or not existing_embedding:
-                        embedding = _embed_document(embedding_model, document.document_text)
-                    else:
-                        embedding = existing_embedding
+            existing_rows = conn.execute(
+                "select package_id, fingerprint, embedding_json from agent_search_documents"
+            ).fetchall()
+        existing = {
+            str(row["package_id"]): (
+                str(row["fingerprint"] or ""),
+                _embedding_from_json(row["embedding_json"]),
+            )
+            for row in existing_rows
+        }
+        indexed_documents: list[tuple[AgentIndexDocument, list[float] | None]] = []
+        for document in documents:
+            embedding = None
+            if embedding_model is not None:
+                cached_fingerprint, existing_embedding = existing.get(document.package_id, ("", None))
+                if cached_fingerprint != document.fingerprint or not existing_embedding:
+                    embedding = _embed_document(embedding_model, document.document_text)
+                else:
+                    embedding = existing_embedding
+            indexed_documents.append((document, embedding))
+        with self._connect() as conn:
+            for document, embedding in indexed_documents:
                 self._upsert_document(conn, document, embedding)
                 indexed += 1
             if package_ids:
@@ -419,10 +431,10 @@ def _score_candidate(
     embedding_score = 0.0
     has_candidate_embedding = False
     if query_embedding is not None:
-        embedding = _json_loads(row["embedding_json"], None)
-        if isinstance(embedding, list) and embedding:
+        embedding = _embedding_from_json(row["embedding_json"])
+        if embedding:
             has_candidate_embedding = True
-            embedding_score = max(0.0, _cosine_similarity(query_embedding, [float(item) for item in embedding]))
+            embedding_score = max(0.0, _cosine_similarity(query_embedding, embedding))
     text_score, reasons = _keyword_score(query, row["document_text"], row["agent_name"], row["description"])
     score = embedding_score if has_candidate_embedding else text_score
     agent_card = _json_loads(row["agent_card_json"], {})
@@ -569,6 +581,16 @@ def _json_loads(value: Any, default: Any) -> Any:
         return json.loads(str(value or ""))
     except json.JSONDecodeError:
         return default
+
+
+def _embedding_from_json(value: Any) -> list[float] | None:
+    embedding = _json_loads(value, None)
+    if not isinstance(embedding, list) or not embedding:
+        return None
+    try:
+        return [float(item) for item in embedding]
+    except (TypeError, ValueError):
+        return None
 
 
 def _optional_int(value: Any) -> int | None:

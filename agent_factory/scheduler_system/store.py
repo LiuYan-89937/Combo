@@ -7,6 +7,10 @@ from pathlib import Path
 from typing import Any
 
 from agent_factory.scheduler_system.schema import SchedulerJob, SchedulerLease, SchedulerRun, utc_after, utc_now
+from agent_factory.sqlite_runtime import connect_sqlite, initialize_sqlite_store
+
+
+SQLITE_BUSY_TIMEOUT_MS = 10000
 
 
 class SchedulerStoreError(RuntimeError):
@@ -17,7 +21,12 @@ class SQLiteSchedulerStore:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._ensure_schema()
+        initialize_sqlite_store(
+            self.path,
+            self._ensure_schema,
+            timeout_ms=SQLITE_BUSY_TIMEOUT_MS,
+            wal=True,
+        )
 
     def create_job(self, job: SchedulerJob) -> SchedulerJob:
         now = utc_now().isoformat()
@@ -227,8 +236,7 @@ class SQLiteSchedulerStore:
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.path)
-        conn.row_factory = sqlite3.Row
+        conn = connect_sqlite(self.path, timeout_ms=SQLITE_BUSY_TIMEOUT_MS)
         try:
             yield conn
             conn.commit()
