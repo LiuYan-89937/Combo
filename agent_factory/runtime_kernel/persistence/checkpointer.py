@@ -1,16 +1,27 @@
 from __future__ import annotations
 
+import atexit
+from contextlib import closing
 from dataclasses import dataclass
 import importlib
 from pathlib import Path
+import sqlite3
+import threading
 from typing import Any, Literal
 
-from agent_factory.sqlite_runtime import sqlite_session
+from agent_factory.sqlite_runtime import connect_sqlite, sqlite_session
 
 
 LangGraphCheckpointerBackend = Literal["sqlite", "memory"]
 
-_CHECKPOINTER_CONTEXTS: list[object] = []
+@dataclass(frozen=True, slots=True)
+class _SharedSQLiteCheckpointer:
+    saver: Any
+    connection: sqlite3.Connection
+
+
+_CHECKPOINTER_REGISTRY_LOCK = threading.RLock()
+_SQLITE_CHECKPOINTERS: dict[Path, _SharedSQLiteCheckpointer] = {}
 _PERSISTENT_CHECKPOINTER_IDS: set[int] = set()
 
 
@@ -50,14 +61,24 @@ class LangGraphCheckpointerFactory:
                 "is not installed. Install the SQLite checkpointer package or select memory "
                 "for a non-persistent debug run."
             ) from exc
-        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-        saver = _enter_checkpointer_context(sqlite_saver.from_conn_string(str(checkpoint_path)))
-        _PERSISTENT_CHECKPOINTER_IDS.add(id(saver))
+        resolved_path = checkpoint_path.expanduser().resolve()
+        resolved_path.parent.mkdir(parents=True, exist_ok=True)
+        with _CHECKPOINTER_REGISTRY_LOCK:
+            shared = _SQLITE_CHECKPOINTERS.get(resolved_path)
+            if shared is None:
+                connection = connect_sqlite(
+                    resolved_path,
+                    check_same_thread=False,
+                )
+                saver = sqlite_saver(connection)
+                shared = _SharedSQLiteCheckpointer(saver=saver, connection=connection)
+                _SQLITE_CHECKPOINTERS[resolved_path] = shared
+                _PERSISTENT_CHECKPOINTER_IDS.add(id(saver))
         return LangGraphCheckpointerHandle(
-            saver=saver,
+            saver=shared.saver,
             backend="sqlite",
             persistent=True,
-            path=checkpoint_path,
+            path=resolved_path,
         )
 
 
@@ -84,7 +105,8 @@ def delete_sqlite_checkpoint_thread(checkpoint_path: Path, thread_id: str) -> bo
     if not path.is_file():
         return False
     sqlite_saver = importlib.import_module("langgraph.checkpoint.sqlite").SqliteSaver
-    with sqlite_saver.from_conn_string(str(path)) as saver:
+    with closing(connect_sqlite(path, check_same_thread=False)) as connection:
+        saver = sqlite_saver(connection)
         return delete_checkpoint_thread(saver, normalized_thread_id)
 
 
@@ -107,7 +129,8 @@ def migrate_legacy_instance_checkpoints(checkpoint_path: Path) -> int:
         return 0
     sqlite_saver = importlib.import_module("langgraph.checkpoint.sqlite").SqliteSaver
     target.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite_saver.from_conn_string(str(target)) as saver:
+    with closing(connect_sqlite(target, check_same_thread=False)) as connection:
+        saver = sqlite_saver(connection)
         setup = getattr(saver, "setup", None)
         if callable(setup):
             setup()
@@ -140,8 +163,13 @@ def migrate_legacy_instance_checkpoints(checkpoint_path: Path) -> int:
     return migrated
 
 
-def _enter_checkpointer_context(checkpointer: Any) -> Any:
-    if hasattr(checkpointer, "__enter__"):
-        _CHECKPOINTER_CONTEXTS.append(checkpointer)
-        return checkpointer.__enter__()
-    return checkpointer
+def close_shared_sqlite_checkpointers() -> None:
+    with _CHECKPOINTER_REGISTRY_LOCK:
+        shared_checkpointers = list(_SQLITE_CHECKPOINTERS.values())
+        _SQLITE_CHECKPOINTERS.clear()
+        _PERSISTENT_CHECKPOINTER_IDS.clear()
+    for shared in shared_checkpointers:
+        shared.connection.close()
+
+
+atexit.register(close_shared_sqlite_checkpointers)
