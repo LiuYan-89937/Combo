@@ -112,8 +112,12 @@ def _message_kind(item: FactoryFrontendEvent) -> str:
         return "tool"
     if item.event_type == "tool_approval_requested":
         return "approval"
-    if item.event_type.startswith("message_"):
-        return "worker_output"
+    if item.event_type == "message_part_completed":
+        part_type = str(item.payload.get("part_type") or "")
+        if part_type == "reasoning":
+            return "reasoning_summary"
+        if part_type == "text":
+            return "stage_output"
     if item.event_type == "plan_updated":
         return "plan"
     return "progress"
