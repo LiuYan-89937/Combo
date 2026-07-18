@@ -4,7 +4,7 @@
     "id": "portfolio_risk_guard",
     "name": "A 股持仓风险管家",
     "description": "读取用户提供的 A 股持仓，计算集中度、波动率、回撤、相关性和明确指定的压力情景。",
-    "version": "0.1.0"
+    "version": "0.1.1"
   },
   "runtime": {
     "pattern_id": "plan_and_execute",
@@ -58,7 +58,7 @@
         "target": {"node_id": "executor", "impl": "cognitive.answer"},
         "payload": {
           "prompt_id": "executor_prompt",
-          "template": "你是 A 股持仓风险分析执行器。严格执行 runtime_plan 当前步骤。进入第一个实质分析步骤时，先用 skill(action='load', name='a-share-portfolio-risk-analysis', current_system='portfolio_risk_guard', reason='执行 A 股持仓风险分析流程') 加载完整流程。持仓文件先用 read 读取，再把结构化 holdings 传给 analyze_a_share_portfolio；不要把文件路径冒充工具输入。工具只接受全部使用 weight 或全部使用 shares 的持仓。用户要求依据内部风险规范时必须先查询 knowledge，并引用命中来源；用户没有提供阈值时只报告原始指标，禁止擅自贴高风险或低风险标签。压力测试只使用用户明确给出的 stress_scenarios。可用 write 保存风险报告，scheduler 仅用于用户明确要求的后续复查提醒。不接券商、不执行交易、不承诺收益。",
+          "template": "你是 A 股持仓风险分析执行器。严格执行 runtime_plan 当前步骤。进入第一个实质分析步骤时，先用 skill(action='load', name='a-share-portfolio-risk-analysis', current_system='portfolio_risk_guard', reason='执行 A 股持仓风险分析流程') 加载完整流程。协作任务提供共享材料路径或持仓文件时，先用 ls/glob 确认路径，再用 read 读取正文，然后把结构化 holdings 传给 analyze_a_share_portfolio；不要把文件路径冒充工具输入。工具只接受全部使用 weight 或全部使用 shares 的持仓。需要补充公开事件背景或交叉核验时使用系统提供的网页搜索 MCP，并与结构化行情数据分开标注。用户要求依据内部风险规范时必须先查询 knowledge，并引用命中来源；用户没有提供阈值时只报告原始指标，禁止擅自贴高风险或低风险标签。压力测试只使用用户明确给出的 stress_scenarios。使用文件工具读取、编辑和保存 Workspace 交付物，scheduler 仅用于用户明确要求的后续复查提醒，不得作为即时命令执行或文件读取工具。不接券商、不执行交易、不承诺收益。",
           "variables": []
         }
       },
@@ -67,7 +67,7 @@
         "binding_type": "tool_access",
         "target": {"node_id": "executor", "impl": "cognitive.answer"},
         "payload": {
-          "allowed_tool_ids": ["runtime_plan", "glob", "ls", "read", "write", "skill", "knowledge", "scheduler", "analyze_a_share_portfolio"],
+          "allowed_tool_ids": ["runtime_plan", "read", "write", "edit", "multi_edit", "glob", "grep", "ls", "bash", "bash_status", "bash_stop", "skill", "knowledge", "scheduler", "skillhub", "analyze_a_share_portfolio"],
           "approval_policy": "allow_all"
         }
       },
@@ -98,7 +98,7 @@
         "binding_id": "casual_react_tool_access",
         "binding_type": "tool_access",
         "target": {"node_id": "casual_react", "impl": "cognitive.answer"},
-        "payload": {"allowed_tool_ids": ["glob", "ls", "read", "skill", "knowledge", "scheduler", "analyze_a_share_portfolio"], "approval_policy": "allow_all"}
+        "payload": {"allowed_tool_ids": ["read", "write", "edit", "multi_edit", "glob", "grep", "ls", "bash", "bash_status", "bash_stop", "skill", "knowledge", "scheduler", "skillhub", "analyze_a_share_portfolio"], "approval_policy": "allow_all"}
       },
       {
         "binding_id": "casual_react_model_operation",
@@ -127,7 +127,7 @@
         "binding_id": "final_answer_tool_access",
         "binding_type": "tool_access",
         "target": {"node_id": "final_answer", "impl": "cognitive.answer"},
-        "payload": {"allowed_tool_ids": ["glob", "ls", "read", "write", "skill", "knowledge", "scheduler", "analyze_a_share_portfolio"], "approval_policy": "allow_all"}
+        "payload": {"allowed_tool_ids": ["read", "write", "edit", "multi_edit", "glob", "grep", "ls", "bash", "bash_status", "bash_stop", "skill", "knowledge", "scheduler", "skillhub", "analyze_a_share_portfolio"], "approval_policy": "allow_all"}
       },
       {
         "binding_id": "final_answer_model_operation",

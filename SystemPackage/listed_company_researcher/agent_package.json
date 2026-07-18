@@ -5,7 +5,7 @@
     "id": "listed_company_researcher",
     "name": "A 股上市公司研究员",
     "description": "围绕单家 A 股上市公司执行行情、财务、趋势和用户挂载资料的证据化深度研究。",
-    "version": "0.1.0"
+    "version": "0.1.1"
   },
   "runtime": {
     "system_package": true,

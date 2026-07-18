@@ -5,7 +5,7 @@
     "id": "portfolio_risk_guard",
     "name": "A 股持仓风险管家",
     "description": "读取用户提供的 A 股持仓，计算集中度、波动率、回撤、相关性和明确指定的压力情景。",
-    "version": "0.1.0"
+    "version": "0.1.1"
   },
   "runtime": {
     "system_package": true,
