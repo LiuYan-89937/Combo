@@ -38,10 +38,10 @@
         </main>
 
         <!-- 右侧边栏 -->
-        <AppRightSidebar v-if="!uiStore.rightSidebarCollapsed" />
+        <AppRightSidebar v-if="uiStore.rightSidebarAvailable && !uiStore.rightSidebarCollapsed" />
 
         <n-button
-          v-if="uiStore.rightSidebarCollapsed"
+          v-if="uiStore.rightSidebarAvailable && uiStore.rightSidebarCollapsed"
           class="sidebar-restore right"
           size="small"
           :title="t('layout.expandRightSidebar')"
@@ -75,6 +75,8 @@
 </template>
 
 <script setup lang="ts">
+import { watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { NButton, NIcon } from 'naive-ui'
 import { ChevronBack, ChevronForward } from '@/components/icons'
 import { useUiStore } from '@/stores/ui'
@@ -91,7 +93,14 @@ import SchedulerActivityDrawer from '@/components/scheduler/SchedulerActivityDra
 import EventStreamManager from '@/components/common/EventStreamManager.vue'
 
 const uiStore = useUiStore()
+const route = useRoute()
 const { t } = useI18n()
+
+watch(
+  () => route.meta.rightSidebarAvailable,
+  (available) => uiStore.setRightSidebarAvailable(available !== false),
+  { immediate: true },
+)
 </script>
 
 <style scoped>

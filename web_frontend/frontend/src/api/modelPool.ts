@@ -322,13 +322,31 @@ export interface ModelUsageTotals {
   estimated_cost: number | null
 }
 
+export interface ModelUsageGroup {
+  key: string
+  label: string
+  provider: string
+  provider_display_name: string
+  model_name: string
+  model_profile_id: string
+  agent_id: string
+  agent_label: string
+  totals: ModelUsageTotals
+}
+
+export interface ModelUsageSeries {
+  key: string
+  label: string
+  points: Array<{ bucket: string } & ModelUsageTotals>
+}
+
 export interface ModelUsageSummary {
   group_by: ModelUsageGroupBy
   since: string
   until: string
   totals: ModelUsageTotals
-  groups: Array<Record<string, unknown>>
-  series: Array<Record<string, unknown>>
+  groups: ModelUsageGroup[]
+  series: ModelUsageSeries[]
 }
 
 export const modelPoolApi = {

@@ -313,81 +313,63 @@
           </div>
         </div>
       </n-tab-pane>
-      <n-tab-pane name="usage" :tab="t('modelUsage.title')">
+      <n-tab-pane name="usage" :tab="t('modelPool.usage')">
         <div class="tab-content usage-report">
           <div class="content-header">
-            <div>
-              <n-text strong class="section-title">{{ t('modelUsage.title') }}</n-text>
-              <div class="section-description">{{ t('modelUsage.description') }}</div>
-            </div>
-            <div class="usage-filters">
-              <n-select
-                v-model:value="usageGroupBy"
-                :options="usageGroupOptions"
-                size="small"
-                @update:value="refreshUsage"
-              />
+            <n-space align="center" wrap>
+              <n-radio-group v-model:value="usageGroupBy" class="soft-segmented-control" @update:value="refreshUsage">
+                <n-radio-button value="model">{{ t('modelPool.usageByModel') }}</n-radio-button>
+                <n-radio-button value="provider">{{ t('modelPool.usageByProvider') }}</n-radio-button>
+                <n-radio-button value="agent">{{ t('modelPool.usageByAgent') }}</n-radio-button>
+              </n-radio-group>
+              <n-radio-group v-model:value="usageChartType" class="soft-segmented-control">
+                <n-radio-button value="line">{{ t('modelPool.usageLineChart') }}</n-radio-button>
+                <n-radio-button value="bar">{{ t('modelPool.usageBarChart') }}</n-radio-button>
+              </n-radio-group>
               <n-select
                 v-model:value="usageDays"
+                class="usage-range-select"
                 :options="usageDayOptions"
-                size="small"
                 @update:value="refreshUsage"
               />
+            </n-space>
+            <n-button :loading="usageLoading" @click="refreshUsage">
+              <template #icon><n-icon><Refresh /></n-icon></template>
+              {{ t('common.refresh') }}
+            </n-button>
+          </div>
+
+          <div class="usage-overview">
+            <div class="usage-metric">
+              <span>{{ t('modelPool.usageCalls') }}</span>
+              <strong>{{ formatNumber(usageSummary?.totals.call_count || 0) }}</strong>
+            </div>
+            <div class="usage-metric">
+              <span>{{ t('modelPool.usageTotalTokens') }}</span>
+              <strong>{{ formatUsageTokens(usageSummary?.totals.total_tokens || 0) }}</strong>
+            </div>
+            <div class="usage-metric">
+              <span>{{ t('modelPool.usageCacheHit') }}</span>
+              <strong>{{ formatUsagePercent(usageSummary?.totals.cache_hit_ratio) }}</strong>
+            </div>
+            <div class="usage-metric">
+              <span>{{ t('modelPool.usageCost') }}</span>
+              <strong>{{ formatCost(usageSummary?.totals.estimated_cost) }}</strong>
             </div>
           </div>
-          <div v-if="usageSummary" class="usage-summary-grid">
-            <article class="usage-summary-card">
-              <span>{{ t('modelUsage.calls') }}</span>
-              <strong>{{ formatInteger(usageSummary.totals.call_count) }}</strong>
-            </article>
-            <article class="usage-summary-card">
-              <span>{{ t('modelUsage.totalTokens') }}</span>
-              <strong>{{ formatInteger(usageSummary.totals.total_tokens) }}</strong>
-            </article>
-            <article class="usage-summary-card">
-              <span>{{ t('modelUsage.inputTokens') }}</span>
-              <strong>{{ formatInteger(usageSummary.totals.input_tokens) }}</strong>
-            </article>
-            <article class="usage-summary-card">
-              <span>{{ t('modelUsage.outputTokens') }}</span>
-              <strong>{{ formatInteger(usageSummary.totals.output_tokens) }}</strong>
-            </article>
-            <article class="usage-summary-card">
-              <span>{{ t('modelUsage.cacheHitRate') }}</span>
-              <strong>{{ formatUsageRatio(usageSummary.totals.cache_hit_ratio) }}</strong>
-            </article>
+
+          <div class="usage-chart-panel">
+            <v-chart v-if="usageSummary?.series.length" class="usage-chart" :option="usageChartOptions" autoresize />
+            <n-empty v-else class="manager-empty" :description="t('modelPool.noUsage')" />
           </div>
-          <div v-if="usageSummary?.groups.length" class="usage-table-wrap">
-            <table class="usage-table">
-              <thead>
-                <tr>
-                  <th>{{ usageGroupLabel }}</th>
-                  <th>{{ t('modelUsage.calls') }}</th>
-                  <th>{{ t('modelUsage.inputTokens') }}</th>
-                  <th>{{ t('modelUsage.outputTokens') }}</th>
-                  <th>{{ t('modelUsage.totalTokens') }}</th>
-                  <th>{{ t('modelUsage.cacheHitRate') }}</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="group in usageSummary.groups" :key="String(group.key)">
-                  <td>
-                    <strong>{{ String(group.label || group.key || '—') }}</strong>
-                    <small v-if="usageGroupSubtitle(group)">{{ usageGroupSubtitle(group) }}</small>
-                  </td>
-                  <td>{{ formatInteger(usageGroupTotals(group).call_count) }}</td>
-                  <td>{{ formatInteger(usageGroupTotals(group).input_tokens) }}</td>
-                  <td>{{ formatInteger(usageGroupTotals(group).output_tokens) }}</td>
-                  <td>{{ formatInteger(usageGroupTotals(group).total_tokens) }}</td>
-                  <td>{{ formatUsageRatio(usageGroupTotals(group).cache_hit_ratio) }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <div v-else-if="!loading" class="empty-panel">
-            <n-text strong>{{ t('modelUsage.empty') }}</n-text>
-            <p>{{ t('modelUsage.emptyHint') }}</p>
-          </div>
+
+          <n-data-table
+            :columns="usageColumns"
+            :data="usageSummary?.groups || []"
+            :loading="usageLoading"
+            :row-key="(row) => row.key"
+            size="small"
+          />
         </div>
       </n-tab-pane>
       </n-tabs>
@@ -579,7 +561,12 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { useDialog, useMessage } from 'naive-ui'
+import { use } from 'echarts/core'
+import { BarChart, LineChart } from 'echarts/charts'
+import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
+import VChart from 'vue-echarts'
+import { useDialog, useMessage, type DataTableColumns } from 'naive-ui'
 import { storeToRefs } from 'pinia'
 import { useI18n } from '@/composables/useI18n'
 import { useModelPoolStore } from '@/stores/modelPool'
@@ -604,10 +591,12 @@ import {
   type LlamaCppRuntimeConfiguration,
   type StableDiffusionCppRuntimeConfiguration,
   type RocmRuntimeInfo,
+  type ModelUsageGroup,
   type ModelUsageGroupBy,
   type ModelUsageSummary,
-  type ModelUsageTotals,
 } from '@/api/modelPool'
+
+use([BarChart, CanvasRenderer, GridComponent, LegendComponent, LineChart, TooltipComponent])
 
 const { t } = useI18n()
 const dialog = useDialog()
@@ -628,8 +617,10 @@ const artifactEditing = ref<LocalModelArtifact | null>(null)
 const profileEditing = ref<LocalModelProfile | null>(null)
 const memoryEstimate = ref<InferenceMemoryEstimate | null>(null)
 const memoryEstimateLoading = ref(false)
+const usageLoading = ref(false)
 const usageSummary = ref<ModelUsageSummary | null>(null)
 const usageGroupBy = ref<ModelUsageGroupBy>('model')
+const usageChartType = ref<'line' | 'bar'>('line')
 const usageDays = ref(14)
 
 const artifactForm = reactive({
@@ -709,16 +700,58 @@ const profileRemoteModel = computed(() => {
 const profileSupportsImage = computed(() => (
   profileRemoteModel.value?.capabilities.includes('multimodal') || false
 ))
-const usageGroupOptions = computed(() => [
-  { label: t('modelUsage.group.model'), value: 'model' },
-  { label: t('modelUsage.group.provider'), value: 'provider' },
-  { label: t('modelUsage.group.agent'), value: 'agent' },
+const usageDayOptions = computed(() => [
+  { label: t('modelPool.usageLast7Days'), value: 7 },
+  { label: t('modelPool.usageLast14Days'), value: 14 },
+  { label: t('modelPool.usageLast30Days'), value: 30 },
+  { label: t('modelPool.usageLast90Days'), value: 90 },
 ])
-const usageDayOptions = computed(() => [7, 14, 30].map(days => ({
-  label: t('modelUsage.days', { count: days }),
-  value: days,
-})))
-const usageGroupLabel = computed(() => t(`modelUsage.group.${usageGroupBy.value}`))
+const usageColumns = computed<DataTableColumns<ModelUsageGroup>>(() => [
+  { title: t('modelPool.usageName'), key: 'label', minWidth: 180, ellipsis: { tooltip: true } },
+  { title: t('modelPool.usageCalls'), key: 'call_count', width: 96, render: row => formatNumber(row.totals.call_count) },
+  { title: t('modelPool.usageInput'), key: 'input_tokens', width: 120, render: row => formatUsageTokens(row.totals.input_tokens) },
+  { title: t('modelPool.usageOutput'), key: 'output_tokens', width: 120, render: row => formatUsageTokens(row.totals.output_tokens) },
+  { title: t('modelPool.usageTotalTokens'), key: 'total_tokens', width: 120, render: row => formatUsageTokens(row.totals.total_tokens) },
+  { title: t('modelPool.usageReasoning'), key: 'reasoning_tokens', width: 120, render: row => formatUsageTokens(row.totals.reasoning_tokens) },
+  { title: t('modelPool.usageCacheHit'), key: 'cache_hit_ratio', width: 110, render: row => formatUsagePercent(row.totals.cache_hit_ratio) },
+  { title: t('modelPool.usageCost'), key: 'estimated_cost', width: 110, render: row => formatCost(row.totals.estimated_cost) },
+])
+const usageChartOptions = computed(() => {
+  const summary = usageSummary.value
+  const chartType = usageChartType.value
+  const buckets = Array.from(
+    new Set((summary?.series || []).flatMap(item => item.points.map(point => point.bucket))),
+  ).sort()
+  return {
+    tooltip: { trigger: 'axis', valueFormatter: (value: number) => formatUsageTokens(value) },
+    legend: { top: 0, type: 'scroll' },
+    grid: { left: 18, right: 42, top: 48, bottom: 32, containLabel: true },
+    xAxis: {
+      type: 'category',
+      boundaryGap: chartType === 'bar',
+      data: buckets,
+      axisLabel: { hideOverlap: true, margin: 12 },
+    },
+    yAxis: {
+      type: 'value',
+      axisLabel: { formatter: (value: number) => formatUsageTokens(value) },
+      splitLine: { lineStyle: { color: 'rgba(0, 0, 0, 0.08)' } },
+    },
+    series: (summary?.series || []).map(item => {
+      const pointsByBucket = new Map(item.points.map(point => [point.bucket, point]))
+      return {
+        name: item.label,
+        type: chartType,
+        smooth: chartType === 'line',
+        symbol: chartType === 'line' ? 'circle' : undefined,
+        symbolSize: chartType === 'line' ? 6 : undefined,
+        barMaxWidth: chartType === 'bar' ? 28 : undefined,
+        barCategoryGap: chartType === 'bar' ? '32%' : undefined,
+        data: buckets.map(bucket => pointsByBucket.get(bucket)?.total_tokens || 0),
+      }
+    }),
+  }
+})
 
 async function refresh(): Promise<void> {
   loading.value = true
@@ -742,6 +775,7 @@ async function refresh(): Promise<void> {
 }
 
 async function refreshUsage(): Promise<void> {
+  usageLoading.value = true
   try {
     usageSummary.value = await modelPoolApi.usage({
       groupBy: usageGroupBy.value,
@@ -749,26 +783,9 @@ async function refreshUsage(): Promise<void> {
     })
   } catch (error) {
     message.error(errorText(error))
+  } finally {
+    usageLoading.value = false
   }
-}
-
-function usageGroupTotals(group: Record<string, unknown>): ModelUsageTotals {
-  return group.totals as ModelUsageTotals
-}
-
-function usageGroupSubtitle(group: Record<string, unknown>): string {
-  return [group.provider_display_name, group.model_name, group.agent_id]
-    .map(value => String(value || '').trim())
-    .filter((value, index, values) => value && values.indexOf(value) === index)
-    .join(' · ')
-}
-
-function formatInteger(value: number): string {
-  return new Intl.NumberFormat().format(Number(value || 0))
-}
-
-function formatUsageRatio(value: number | null): string {
-  return value == null ? '—' : `${(value * 100).toFixed(1)}%`
 }
 
 function openArtifact(item?: LocalModelArtifact): void {
@@ -1281,6 +1298,28 @@ function formatPercent(value?: number | null): string {
   return typeof value === 'number' ? `${Math.round(value)}%` : '—'
 }
 
+function formatUsageTokens(value?: number | null): string {
+  const numeric = Number(value || 0)
+  if (numeric >= 1_000_000_000) return `${Math.round(numeric / 100_000_000) / 10}B`
+  if (numeric >= 1_000_000) return `${Math.round(numeric / 100_000) / 10}M`
+  if (numeric >= 1_000) return `${Math.round(numeric / 1_000)}K`
+  return String(numeric)
+}
+
+function formatNumber(value?: number | null): string {
+  return new Intl.NumberFormat('zh-CN').format(Number(value || 0))
+}
+
+function formatUsagePercent(value?: number | null): string {
+  if (value === null || value === undefined) return '—'
+  return `${Math.round(Number(value) * 1_000) / 10}%`
+}
+
+function formatCost(value?: number | null): string {
+  if (value === null || value === undefined) return '—'
+  return `¥${new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 4 }).format(Number(value || 0))}`
+}
+
 function formatScalingFactor(value?: number | null): string {
   return typeof value === 'number' ? value.toFixed(3).replace(/0+$/, '').replace(/\.$/, '') : '—'
 }
@@ -1610,79 +1649,56 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-.usage-filters {
+.usage-report {
   display: grid;
-  grid-template-columns: minmax(140px, 1fr) minmax(120px, auto);
-  gap: var(--app-space-sm);
-  min-width: min(100%, 300px);
+  gap: var(--app-space-md);
 }
 
-.usage-summary-grid {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: var(--app-space-sm);
-  margin-bottom: var(--app-space-lg);
+.usage-range-select {
+  width: 132px;
 }
 
-.usage-summary-card {
-  min-width: 0;
-  padding: var(--app-space-md);
+.usage-overview {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.usage-metric {
+  display: flex;
+  min-height: 72px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px 14px;
   border: 1px solid var(--app-border);
-  border-radius: var(--app-radius-md);
-  background: var(--app-surface-muted);
+  border-radius: 8px;
+  background: var(--app-panel);
 }
 
-.usage-summary-card span,
-.usage-table small {
-  display: block;
+.usage-metric span {
   color: var(--app-text-muted);
-  font-size: var(--app-font-xs);
+  font-size: 12px;
 }
 
-.usage-summary-card strong {
-  display: block;
-  margin-top: 3px;
-  color: var(--app-text-strong);
-  font-size: var(--app-font-lg);
-  overflow-wrap: anywhere;
+.usage-metric strong {
+  color: var(--app-text);
+  font-size: 22px;
+  font-weight: 650;
+  line-height: 1.1;
 }
 
-.usage-table-wrap {
-  max-width: 100%;
-  overflow-x: auto;
+.usage-chart-panel {
+  min-height: 320px;
+  padding: 12px;
   border: 1px solid var(--app-border);
-  border-radius: var(--app-radius-md);
+  border-radius: 8px;
+  background: var(--app-panel);
 }
 
-.usage-table {
+.usage-chart {
   width: 100%;
-  border-collapse: collapse;
-  font-size: var(--app-font-sm);
-}
-
-.usage-table th,
-.usage-table td {
-  padding: var(--app-space-sm) var(--app-space-md);
-  border-bottom: 1px solid var(--app-divider);
-  text-align: right;
-  white-space: nowrap;
-}
-
-.usage-table th:first-child,
-.usage-table td:first-child {
-  min-width: 220px;
-  text-align: left;
-  white-space: normal;
-}
-
-.usage-table th {
-  color: var(--app-text-muted);
-  font-weight: 600;
-  background: var(--app-surface-muted);
-}
-
-.usage-table tbody tr:last-child td {
-  border-bottom: 0;
+  height: 320px;
 }
 
 .empty-panel {
@@ -1711,7 +1727,7 @@ onBeforeUnmount(() => {
   .overview-grid { grid-template-columns: 1fr 1fr; }
   .runtime-card { grid-column: 1 / -1; }
   .resource-grid { grid-template-columns: 1fr; }
-  .usage-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .usage-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @container local-model (max-width: 620px) {
@@ -1739,7 +1755,7 @@ onBeforeUnmount(() => {
   .memory-limit-control { grid-template-columns: 1fr; }
   .memory-limit-control p { grid-column: auto; }
   .content-header { align-items: flex-start; }
-  .usage-filters { width: 100%; }
+  .usage-report .content-header { align-items: stretch; flex-direction: column; }
 }
 
 @container local-model (max-width: 420px) {
@@ -1753,8 +1769,7 @@ onBeforeUnmount(() => {
   .runtime-device { padding: var(--app-space-xs); }
   .runtime-metrics { display: grid; grid-template-columns: 1fr; }
   .model-panel { padding-inline: var(--app-space-sm); }
-  .usage-summary-grid,
-  .usage-filters { grid-template-columns: 1fr; }
+  .usage-overview { grid-template-columns: 1fr; }
   .resource-action-group > .n-button,
   .resource-action-group > .n-dropdown { flex: 1 1 calc(50% - var(--app-space-xs)); }
 }

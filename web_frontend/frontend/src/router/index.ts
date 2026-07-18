@@ -71,6 +71,7 @@ const routes: RouteRecordRaw[] = [
     path: '/benchmarks',
     name: 'Benchmarks',
     component: () => import('@/views/BenchmarkView.vue'),
+    meta: { rightSidebarAvailable: false },
   },
 ]
 
