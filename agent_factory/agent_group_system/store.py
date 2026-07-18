@@ -19,6 +19,7 @@ from typing import Any, Iterator
 from uuid import uuid4
 
 from agent_factory.paths import factory_artifact_path, resolve_project_path
+from agent_factory.sqlite_runtime import connect_sqlite, initialize_sqlite_store
 
 # ===== 常量 =====
 
@@ -56,18 +57,23 @@ class AgentGroupStore:
     def __init__(self, path: str | Path | None = None):
         self.path = resolve_agent_group_store_path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._ensure_schema()
+        initialize_sqlite_store(
+            self.path,
+            self._ensure_schema,
+            timeout_ms=SQLITE_BUSY_TIMEOUT_MS,
+            wal=True,
+        )
 
     # ===== 连接管理 =====
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
         """每次操作独立连接，自动提交/关闭"""
-        conn = sqlite3.connect(self.path, timeout=SQLITE_BUSY_TIMEOUT_MS / 1000)
-        conn.row_factory = sqlite3.Row
-        conn.execute(f"pragma busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
-        conn.execute("pragma journal_mode = wal")
-        conn.execute("pragma foreign_keys = on")
+        conn = connect_sqlite(
+            self.path,
+            timeout_ms=SQLITE_BUSY_TIMEOUT_MS,
+            foreign_keys=True,
+        )
         try:
             yield conn
             conn.commit()
