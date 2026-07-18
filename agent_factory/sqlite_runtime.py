@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 import sqlite3
 import threading
@@ -45,6 +46,28 @@ def connect_sqlite(
     if foreign_keys:
         conn.execute("pragma foreign_keys = on")
     return conn
+
+
+@contextmanager
+def sqlite_session(
+    path: str | Path,
+    *,
+    timeout_ms: int,
+    foreign_keys: bool = False,
+) -> Iterator[sqlite3.Connection]:
+    conn = connect_sqlite(
+        path,
+        timeout_ms=timeout_ms,
+        foreign_keys=foreign_keys,
+    )
+    try:
+        yield conn
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def _configure_wal(path: Path, *, timeout_ms: int) -> None:

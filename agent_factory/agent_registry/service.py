@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import json
@@ -11,7 +12,7 @@ from typing import Any
 
 from agent_factory.models.embedding_model import get_embedding_model
 from agent_factory.paths import factory_artifact_path, system_package_root as default_system_package_root
-from agent_factory.sqlite_runtime import connect_sqlite, initialize_sqlite_store
+from agent_factory.sqlite_runtime import initialize_sqlite_store, sqlite_session
 
 
 AGENT_REGISTRY_DB_ENV = "AGENTFACTORY_AGENT_REGISTRY_DB"
@@ -237,8 +238,8 @@ class AgentRegistryService:
                 """
             )
 
-    def _connect(self) -> sqlite3.Connection:
-        return connect_sqlite(self.db_path, timeout_ms=SQLITE_BUSY_TIMEOUT_MS)
+    def _connect(self) -> AbstractContextManager[sqlite3.Connection]:
+        return sqlite_session(self.db_path, timeout_ms=SQLITE_BUSY_TIMEOUT_MS)
 
 
 def search_agents(arguments: dict[str, Any]) -> dict[str, Any]:
