@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from agent_factory.collaboration_system.delivery import normalize_delivery_standard
 from agent_factory.paths import factory_artifact_path, resolve_project_path
+from agent_factory.sqlite_runtime import connect_sqlite, initialize_sqlite_store
 
 
 SYSTEM_CHAT_PACKAGE_ID = "factory_chat"
@@ -54,7 +55,12 @@ class CollaborationStore:
     def __init__(self, path: str | Path | None = None) -> None:
         self.path = resolve_collaboration_store_path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._ensure_schema()
+        initialize_sqlite_store(
+            self.path,
+            self._ensure_schema,
+            timeout_ms=SQLITE_BUSY_TIMEOUT_MS,
+            wal=True,
+        )
 
     def list_sessions(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
@@ -1878,11 +1884,11 @@ class CollaborationStore:
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.path, timeout=SQLITE_BUSY_TIMEOUT_MS / 1000)
-        conn.row_factory = sqlite3.Row
-        conn.execute(f"pragma busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
-        conn.execute("pragma journal_mode = wal")
-        conn.execute("pragma foreign_keys = on")
+        conn = connect_sqlite(
+            self.path,
+            timeout_ms=SQLITE_BUSY_TIMEOUT_MS,
+            foreign_keys=True,
+        )
         try:
             yield conn
             conn.commit()
