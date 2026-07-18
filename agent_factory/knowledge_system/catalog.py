@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
 from pathlib import Path
 import json
 import sqlite3
@@ -13,6 +14,10 @@ from agent_factory.knowledge_system.schema import (
     KnowledgeSourceManifest,
     now_iso,
 )
+from agent_factory.sqlite_runtime import sqlite_session
+
+
+SQLITE_BUSY_TIMEOUT_MS = 10000
 
 
 class KnowledgeCatalog:
@@ -308,10 +313,8 @@ class KnowledgeCatalog:
             )
             conn.commit()
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.path)
-        conn.row_factory = sqlite3.Row
-        return conn
+    def _connect(self) -> AbstractContextManager[sqlite3.Connection]:
+        return sqlite_session(self.path, timeout_ms=SQLITE_BUSY_TIMEOUT_MS)
 
 
 def _document_from_row(row: sqlite3.Row) -> KnowledgeDocument:
