@@ -26,9 +26,16 @@ export interface LocalModelArtifact {
   revision: string
   checksum: string
   license: string
+  native_context_tokens?: number | null
+  context_extension?: ModelContextExtensionCapability | null
   enabled: boolean
   created_at: string
   updated_at: string
+}
+
+export interface ModelContextExtensionCapability {
+  method: 'yarn'
+  max_context_tokens: number
 }
 
 export interface LocalModelDirectory {
@@ -63,6 +70,8 @@ export interface RemoteInferenceModel {
   checksum?: string
   runtime_configuration?: Record<string, unknown>
   context_length?: number | null
+  native_context_tokens?: number | null
+  context_extension?: ModelContextExtensionCapability | null
   parameter_count?: number | null
   size_bytes?: number | null
   embedding_dimensions?: number | null
@@ -78,6 +87,12 @@ export interface LlamaCppRuntimeConfiguration {
   cache_type_v: string
   flash_attention: boolean
   mmproj_path?: string | null
+  rope_scaling?: {
+    method: string
+    original_context_tokens: number
+    target_context_tokens: number
+    factor: number
+  } | null
 }
 
 export interface TransformersRuntimeConfiguration {
@@ -108,6 +123,10 @@ export interface InferenceMemoryEstimate {
   model_id: string
   context_tokens?: number | null
   total_context_tokens?: number | null
+  native_context_tokens?: number | null
+  max_context_tokens?: number | null
+  rope_scaling_method?: string | null
+  rope_scaling_factor?: number | null
   parallel_slots: number
   cache_type_k: string
   cache_type_v: string

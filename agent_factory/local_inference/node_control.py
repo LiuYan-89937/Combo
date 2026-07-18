@@ -13,6 +13,8 @@ from agent_factory.local_inference.implementation import (
 from agent_factory.model_pool.schema import (
     ExternalInferenceConfig,
     LlamaCppInferenceConfig,
+    LocalModelArtifact,
+    ModelContextExtensionCapability,
     ModelPoolCapabilities,
     ModelPoolLimits,
     ModelPoolProfile,
@@ -41,9 +43,15 @@ class InferenceNodeProfileConfiguration(BaseModel):
     inference: LlamaCppInferenceConfig | TransformersInferenceConfig | StableDiffusionCppInferenceConfig | None = None
     embedding_dimensions: int | None = None
     normalize_embeddings: bool = True
+    native_context_tokens: int | None = Field(default=None, ge=1)
+    context_extension: ModelContextExtensionCapability | None = None
 
     @classmethod
-    def from_profile(cls, profile: ModelPoolProfile) -> "InferenceNodeProfileConfiguration":
+    def from_profile(
+        cls,
+        profile: ModelPoolProfile,
+        artifact: LocalModelArtifact | None = None,
+    ) -> "InferenceNodeProfileConfiguration":
         inference = profile.inference
         remote_inference = (
             inference.remote_inference
@@ -56,6 +64,8 @@ class InferenceNodeProfileConfiguration(BaseModel):
             inference=remote_inference,
             embedding_dimensions=profile.embedding_dimensions,
             normalize_embeddings=profile.normalize_embeddings,
+            native_context_tokens=artifact.native_context_tokens if artifact is not None else None,
+            context_extension=artifact.context_extension if artifact is not None else None,
         )
 
 
@@ -138,12 +148,17 @@ class InferenceNodeClient:
         kind: RuntimeKind,
         model_id: str,
         profile: ModelPoolProfile | None = None,
+        artifact: LocalModelArtifact | None = None,
     ) -> dict[str, Any]:
         endpoint = load_inference_telemetry_endpoint()
         request = InferenceNodeAction(
             kind=kind,
             model_id=model_id,
-            profile=InferenceNodeProfileConfiguration.from_profile(profile) if profile else None,
+            profile=(
+                InferenceNodeProfileConfiguration.from_profile(profile, artifact)
+                if profile
+                else None
+            ),
         )
         async with create_private_async_http_client(endpoint) as client:
             response = await client.post(

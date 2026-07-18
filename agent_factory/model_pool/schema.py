@@ -28,6 +28,7 @@ LocalInferenceEngine = Literal[
     "external",
 ]
 ModelArtifactSource = Literal["local_storage", "external_endpoint"]
+ModelContextExtensionMethod = Literal["yarn"]
 
 _ID_RE = re.compile(r"^[a-z][a-z0-9_.-]{1,127}$")
 _TOOL_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -35,6 +36,13 @@ _TOOL_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 def utc_now_text() -> str:
     return datetime.now(UTC).isoformat()
+
+
+class ModelContextExtensionCapability(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    method: ModelContextExtensionMethod
+    max_context_tokens: int = Field(ge=1)
 
 
 class LocalModelArtifact(BaseModel):
@@ -50,6 +58,8 @@ class LocalModelArtifact(BaseModel):
     revision: str = ""
     checksum: str = ""
     license: str = ""
+    native_context_tokens: int | None = Field(default=None, ge=1)
+    context_extension: ModelContextExtensionCapability | None = None
     enabled: bool = True
     created_at: str = Field(default_factory=utc_now_text)
     updated_at: str = Field(default_factory=utc_now_text)
@@ -89,6 +99,13 @@ class LocalModelArtifact(BaseModel):
             raise ValueError("local storage artifacts require local_path")
         if self.source == "external_endpoint" and not self.external_model_id:
             raise ValueError("external endpoint artifacts require external_model_id")
+        if self.kind != "chat" and (self.native_context_tokens is not None or self.context_extension is not None):
+            raise ValueError("context capabilities are only valid for chat model artifacts")
+        if self.context_extension is not None:
+            if self.native_context_tokens is None:
+                raise ValueError("context extension requires native_context_tokens")
+            if self.context_extension.max_context_tokens <= self.native_context_tokens:
+                raise ValueError("extended context limit must exceed native context length")
         return self
 
     @field_validator("revision", "checksum", "license")

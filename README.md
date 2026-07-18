@@ -205,10 +205,11 @@ http://localhost:3000
 - 加载、卸载、重启模型。
 - 设置默认 `main`、`task`、`compression` 与 `embedding` Profile。
 - 配置 stable-diffusion.cpp 生图 Profile、默认尺寸、Steps、CFG、Diffusion Flash Attention、CPU 文本编码器和显存驻留策略。
-- 修改 Context、最大输出、压缩阈值、GPU Layers、KV Cache 类型、并发、Flash Attention 和图片输入能力。
-- 根据 GGUF 元数据、上下文、并发和 KV Cache 类型查看预计显存占用及余量。
+- 添加 Chat 模型时声明原生上下文，以及是否支持 YaRN 和最大扩展上下文。
+- 修改 Context、最大输出、压缩阈值、GPU Layers、KV Cache 类型、并发、Flash Attention 和图片输入能力；目标 Context 超过模型原生值时自动校验扩展上限并计算 YaRN 因子。
+- 根据 GGUF 元数据、上下文、YaRN 缩放、并发和 KV Cache 类型查看预计显存占用及余量。
 
-保存一个已经加载的 external Profile 后，本机后端会将配置透传到 RadeonCloud 并重启对应模型，新的 `--ctx-size`、KV Cache、Flash Attention 等参数会真正进入远端 llama-server 命令行。
+保存一个已经加载的 external Profile 后，本机后端会将配置透传到 RadeonCloud 并重启对应模型，新的 `--ctx-size`、KV Cache、Flash Attention 等参数会真正进入远端 llama-server 命令行。若每槽目标上下文超过模型原生上下文，远端会同时传入 `--rope-scaling yarn`、自动计算的 `--rope-scale` 和模型原生 `--yarn-orig-ctx`；未声明扩展能力或超过扩展上限时拒绝启动。
 
 ### 本地图片生成
 

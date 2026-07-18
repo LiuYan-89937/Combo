@@ -160,11 +160,13 @@ SSH_KEY=
 | `HF_ENDPOINT` | GGUF 下载源 | Hugging Face 国内镜像 |
 | `CHAT_MODEL_*` | Chat GGUF 版本、文件、大小和 SHA256 | 固定并校验 |
 | `CHAT_MMPROJ_*` | 视觉投影器版本、大小和 SHA256 | 固定并校验 |
+| `CHAT_NATIVE_CONTEXT_TOKENS` | Chat 模型原生上下文 | `262144` |
+| `CHAT_YARN_MAX_CONTEXT_TOKENS` | 模型声明支持的 YaRN 最大扩展上下文 | `1010000` |
 | `EMBEDDING_MODEL_ID` | Embedding 模型 | `BAAI/bge-m3` |
 | `IMAGE_*_URL/SHA256/SIZE_BYTES` | FLUX 四件套 ModelScope 国内直链与完整性信息 | 固定并校验 |
 | `IMAGE_RESIDENCY_POLICY` | Chat 与 Image 显存共存策略 | `coexist_if_fit` |
 | `IMAGE_EAGER_LOAD` | sd-server 启动时立即把图片模型参数加载到配置的计算后端 | `1` |
-| `CHAT_CONTEXT_SIZE` | llama-server Context | `256000` |
+| `CHAT_CONTEXT_SIZE` | 每并发槽位的目标上下文；超过原生值时自动计算 YaRN 因子 | `256000` |
 | `CHAT_CACHE_TYPE_K/V` | KV Cache 类型 | `q8_0` |
 | `CHAT_PARALLEL_SLOTS` | Chat 并发槽位 | `1` |
 | `CHAT_FLASH_ATTENTION` | Flash Attention | `1`，开启 |

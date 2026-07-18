@@ -302,6 +302,9 @@ async def _apply_runtime_intent(
 
 def _artifact_from_payload(payload: dict[str, Any], *, store: ModelPoolStore) -> LocalModelArtifact:
     data = dict(payload)
+    kind = str(data.get("kind") or "").strip().lower()
+    if kind == "chat" and data.get("native_context_tokens") is None:
+        raise ValueError("chat model artifacts require native_context_tokens")
     if str(data.get("source") or "local_storage") == "external_endpoint":
         data["source"] = "external_endpoint"
         data["local_path"] = None
@@ -317,7 +320,6 @@ def _artifact_from_payload(payload: dict[str, Any], *, store: ModelPoolStore) ->
     storage = ModelStorage()
     data["source"] = "local_storage"
     data["external_model_id"] = None
-    kind = str(data.get("kind") or "").strip().lower()
     if kind == "chat":
         data["model_format"] = "llama_cpp"
         data["local_path"] = str(storage.require_llama_model_file(str(data.get("local_path") or "")))

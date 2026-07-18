@@ -7,7 +7,7 @@ from typing import Any
 
 from agent_factory.local_inference.context_allocation import (
     LlamaContextAllocation,
-    resolve_llama_context_allocation,
+    resolve_llama_context_plan,
 )
 from agent_factory.local_inference.node_control import InferenceNodeProfileConfiguration
 from agent_factory.local_inference.rocm import RocmDeviceInfo
@@ -33,6 +33,10 @@ class InferenceMemoryEstimate:
     context_tokens: int | None
     total_context_tokens: int | None
     parallel_slots: int
+    native_context_tokens: int | None
+    max_context_tokens: int | None
+    rope_scaling_method: str | None
+    rope_scaling_factor: float | None
     cache_type_k: str
     cache_type_v: str
     model_allocation_bytes: int | None
@@ -80,11 +84,11 @@ def estimate_inference_memory(
         return _unavailable(profile.served_model_name, "memory estimation requires a llama.cpp chat profile")
     if device is None or device.total_memory_bytes <= 0:
         return _unavailable(profile.served_model_name, "ROCm VRAM telemetry is unavailable")
-    context_allocation = resolve_llama_context_allocation(requested.limits, requested_inference)
-    if context_allocation is None:
-        return _unavailable(profile.served_model_name, "context length is required for memory estimation")
-
     try:
+        context_plan = resolve_llama_context_plan(artifact, requested.limits, requested_inference)
+        if context_plan is None:
+            return _unavailable(profile.served_model_name, "context length is required for memory estimation")
+        context_allocation = context_plan.allocation
         metadata = _read_attention_metadata(artifact.resolved_path())
         requested_kv = _kv_cache_bytes(metadata, context_allocation, requested_inference)
         model_allocation = _model_allocation_bytes(artifact, profile)
@@ -94,6 +98,7 @@ def estimate_inference_memory(
             model_allocation=model_allocation,
             requested_kv=requested_kv,
             profile=profile,
+            artifact=artifact,
             runtime=runtime,
             metadata=metadata,
         )
@@ -112,6 +117,18 @@ def estimate_inference_memory(
         context_tokens=context_allocation.per_slot_tokens,
         total_context_tokens=context_allocation.server_context_tokens,
         parallel_slots=context_allocation.parallel_slots,
+        native_context_tokens=artifact.native_context_tokens,
+        max_context_tokens=(
+            artifact.context_extension.max_context_tokens
+            if artifact.context_extension is not None
+            else artifact.native_context_tokens
+        ),
+        rope_scaling_method=(
+            context_plan.rope_scaling.method if context_plan.rope_scaling is not None else None
+        ),
+        rope_scaling_factor=(
+            context_plan.rope_scaling.factor if context_plan.rope_scaling is not None else None
+        ),
         cache_type_k=requested_inference.cache_type_k,
         cache_type_v=requested_inference.cache_type_v,
         model_allocation_bytes=model_allocation,
@@ -230,6 +247,7 @@ def _projected_used_bytes(
     model_allocation: int,
     requested_kv: int,
     profile: ModelPoolProfile,
+    artifact: LocalModelArtifact,
     runtime: dict[str, Any] | None,
     metadata: _GgufAttentionMetadata,
 ) -> tuple[int | None, str]:
@@ -241,13 +259,13 @@ def _projected_used_bytes(
         and str(runtime.get("profile_id") or "") == profile.profile_id
     )
     current_inference = profile.inference
-    current_allocation = (
-        resolve_llama_context_allocation(profile.limits, current_inference)
+    current_plan = (
+        resolve_llama_context_plan(artifact, profile.limits, current_inference)
         if isinstance(current_inference, LlamaCppInferenceConfig)
         else None
     )
-    if runtime_ready and current_allocation is not None:
-        current_kv = _kv_cache_bytes(metadata, current_allocation, current_inference)
+    if runtime_ready and current_plan is not None:
+        current_kv = _kv_cache_bytes(metadata, current_plan.allocation, current_inference)
         return max(0, current_used - current_kv) + requested_kv, "live_runtime_adjusted"
     return current_used + model_allocation + requested_kv, "unloaded_conservative"
 
@@ -259,6 +277,10 @@ def _unavailable(model_id: str, error: str) -> InferenceMemoryEstimate:
         context_tokens=None,
         total_context_tokens=None,
         parallel_slots=1,
+        native_context_tokens=None,
+        max_context_tokens=None,
+        rope_scaling_method=None,
+        rope_scaling_factor=None,
         cache_type_k="",
         cache_type_v="",
         model_allocation_bytes=None,

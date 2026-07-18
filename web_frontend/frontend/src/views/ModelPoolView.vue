@@ -277,6 +277,12 @@
                 <n-tag size="small" :bordered="false">{{ kindLabel(artifact.kind) }}</n-tag>
                 <n-tag size="small" :bordered="false" type="info">{{ artifact.model_format }}</n-tag>
                 <n-tag v-if="artifact.revision" size="small" :bordered="false">{{ artifact.revision }}</n-tag>
+                <n-tag v-if="artifact.native_context_tokens" size="small" :bordered="false">
+                  {{ t('localModel.nativeContext') }} {{ formatTokens(artifact.native_context_tokens) }}
+                </n-tag>
+                <n-tag v-if="artifact.context_extension" size="small" :bordered="false" type="success">
+                  YaRN → {{ formatTokens(artifact.context_extension.max_context_tokens) }}
+                </n-tag>
               </div>
 
               <div class="path-block" :title="artifactLocation(artifact)">
@@ -357,6 +363,28 @@
         <div v-if="!externalInference" class="storage-hint">
           {{ t('localModel.modelscopeCache') }}：<code>{{ modelStorage?.modelscope_cache_path || '—' }}</code>
         </div>
+        <template v-if="artifactForm.kind === 'chat'">
+          <n-form-item
+            :label="t('localModel.nativeContext')"
+            :feedback="t('localModel.nativeContextHint')"
+          >
+            <n-input-number v-model:value="artifactForm.native_context_tokens" :min="1" clearable />
+          </n-form-item>
+          <n-checkbox v-model:checked="artifactForm.supports_yarn">
+            {{ t('localModel.supportsYarn') }}
+          </n-checkbox>
+          <n-form-item
+            v-if="artifactForm.supports_yarn"
+            :label="t('localModel.yarnMaxContext')"
+            :feedback="t('localModel.yarnMaxContextHint')"
+          >
+            <n-input-number
+              v-model:value="artifactForm.yarn_max_context_tokens"
+              :min="(artifactForm.native_context_tokens || 0) + 1"
+              clearable
+            />
+          </n-form-item>
+        </template>
         <n-checkbox v-model:checked="artifactForm.enabled">{{ t('common.enabled') }}</n-checkbox>
       </n-form>
       <template #action>
@@ -431,6 +459,14 @@
             <div><span>{{ t('localModel.perSlotContext') }}</span><strong>{{ formatTokens(memoryEstimate.context_tokens) }}</strong></div>
             <div><span>{{ t('localModel.estimatedParallelSlots') }}</span><strong>{{ memoryEstimate.parallel_slots }}</strong></div>
             <div><span>{{ t('localModel.totalContextBudget') }}</span><strong>{{ formatTokens(memoryEstimate.total_context_tokens) }}</strong></div>
+            <div><span>{{ t('localModel.nativeContext') }}</span><strong>{{ formatTokens(memoryEstimate.native_context_tokens) }}</strong></div>
+            <div>
+              <span>{{ t('localModel.ropeScaling') }}</span>
+              <strong v-if="memoryEstimate.rope_scaling_method">
+                {{ memoryEstimate.rope_scaling_method.toUpperCase() }} × {{ formatScalingFactor(memoryEstimate.rope_scaling_factor) }}
+              </strong>
+              <strong v-else>{{ t('localModel.nativeContextMode') }}</strong>
+            </div>
             <div><span>{{ t('localModel.projectedVram') }}</span><strong>{{ formatBytes(memoryEstimate.projected_used_bytes) }} / {{ formatBytes(memoryEstimate.total_memory_bytes) }}</strong></div>
             <div><span>{{ t('localModel.remainingVram') }}</span><strong>{{ formatBytes(memoryEstimate.remaining_memory_bytes) }}</strong></div>
           </div>
@@ -514,7 +550,8 @@ const memoryEstimateLoading = ref(false)
 
 const artifactForm = reactive({
   display_name: '', kind: 'chat' as LocalModelKind, local_path: '', external_model_id: '',
-  revision: '', checksum: '', enabled: true,
+  revision: '', checksum: '', native_context_tokens: null as number | null,
+  supports_yarn: false, yarn_max_context_tokens: null as number | null, enabled: true,
 })
 const profileForm = reactive({
   display_name: '', description: '', artifact_id: '', kind: 'chat' as LocalModelKind,
@@ -617,6 +654,9 @@ function openArtifact(item?: LocalModelArtifact): void {
   artifactForm.external_model_id = item?.external_model_id || ''
   artifactForm.revision = item?.revision || ''
   artifactForm.checksum = item?.checksum || ''
+  artifactForm.native_context_tokens = item?.native_context_tokens ?? null
+  artifactForm.supports_yarn = item?.context_extension?.method === 'yarn'
+  artifactForm.yarn_max_context_tokens = item?.context_extension?.max_context_tokens ?? null
   artifactForm.enabled = item?.enabled ?? true
   artifactModalOpen.value = true
 }
@@ -631,6 +671,10 @@ async function saveArtifact(): Promise<void> {
       model_format: externalInference.value
         ? selectedRemoteModel.value?.format || 'external'
         : artifactForm.kind === 'chat' ? 'llama_cpp' : artifactForm.kind === 'embedding' ? 'transformers' : 'stable_diffusion_cpp',
+      native_context_tokens: artifactForm.kind === 'chat' ? artifactForm.native_context_tokens : null,
+      context_extension: artifactForm.kind === 'chat' && artifactForm.supports_yarn
+        ? { method: 'yarn', max_context_tokens: artifactForm.yarn_max_context_tokens }
+        : null,
       artifact_id: artifactEditing.value?.artifact_id,
     }
     if (artifactEditing.value) await modelPoolApi.patchArtifact(artifactEditing.value.artifact_id, payload)
@@ -661,7 +705,11 @@ function openProfile(item?: LocalModelProfile): void {
   profileForm.cache_type_k = chatInference?.cache_type_k ?? 'f16'
   profileForm.cache_type_v = chatInference?.cache_type_v ?? 'f16'
   profileForm.flash_attention = chatInference?.flash_attention ?? true
-  profileForm.max_input_tokens = item?.limits.max_input_tokens ?? remoteModel?.context_length ?? null
+  profileForm.max_input_tokens = item?.limits.max_input_tokens
+    ?? artifact?.native_context_tokens
+    ?? remoteModel?.native_context_tokens
+    ?? remoteModel?.context_length
+    ?? null
   profileForm.max_output_tokens = item?.limits.max_output_tokens ?? null
   profileForm.context_compression_threshold_tokens = item?.limits.context_compression_threshold_tokens ?? null
   profileForm.embedding_dimensions = item?.embedding_dimensions
@@ -698,7 +746,10 @@ function syncProfileKind(artifactId: string): void {
   profileForm.cache_type_k = runtimeConfiguration?.cache_type_k ?? 'f16'
   profileForm.cache_type_v = runtimeConfiguration?.cache_type_v ?? 'f16'
   profileForm.flash_attention = runtimeConfiguration?.flash_attention ?? true
-  profileForm.max_input_tokens = remoteModel?.context_length ?? profileForm.max_input_tokens
+  profileForm.max_input_tokens = artifact.native_context_tokens
+    ?? remoteModel?.native_context_tokens
+    ?? remoteModel?.context_length
+    ?? profileForm.max_input_tokens
   profileForm.image_input = remoteModel?.capabilities.includes('multimodal') || false
   profileForm.embedding_dimensions = remoteModel?.embedding_dimensions ?? directory?.embedding_dimensions ?? null
   applyImageRuntimeConfiguration(
@@ -713,11 +764,17 @@ function syncRemoteModel(modelId: string): void {
   if (!model) return
   artifactForm.display_name = model.model_id
   artifactForm.kind = model.kind
+  artifactForm.native_context_tokens = model.native_context_tokens ?? model.context_length ?? null
+  artifactForm.supports_yarn = model.context_extension?.method === 'yarn'
+  artifactForm.yarn_max_context_tokens = model.context_extension?.max_context_tokens ?? null
 }
 
 function syncArtifactKind(): void {
   artifactForm.external_model_id = ''
   artifactForm.local_path = ''
+  artifactForm.native_context_tokens = null
+  artifactForm.supports_yarn = false
+  artifactForm.yarn_max_context_tokens = null
 }
 
 function directoryForArtifact(artifact: LocalModelArtifact) {
@@ -1092,6 +1149,10 @@ function memoryFitLabel(estimate?: InferenceMemoryEstimate | null): string {
 
 function formatPercent(value?: number | null): string {
   return typeof value === 'number' ? `${Math.round(value)}%` : '—'
+}
+
+function formatScalingFactor(value?: number | null): string {
+  return typeof value === 'number' ? value.toFixed(3).replace(/0+$/, '').replace(/\.$/, '') : '—'
 }
 
 function gpuUtilizationSourceLabel(source?: string): string {

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 import os
 from pathlib import Path
 import shutil
@@ -12,7 +13,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
-from agent_factory.local_inference.context_allocation import resolve_llama_context_allocation
+from agent_factory.local_inference.context_allocation import resolve_llama_context_plan
 from agent_factory.env import load_agentfactory_dotenv
 from agent_factory.local_inference.memory_budget import (
     estimate_inference_memory,
@@ -34,6 +35,7 @@ from agent_factory.local_inference.rocm import inspect_rocm_runtime
 from agent_factory.local_inference.runtime_manager import LocalInferenceRuntimeManager
 from agent_factory.model_pool.schema import (
     LlamaCppInferenceConfig,
+    LocalModelArtifact,
     ModelPoolProfile,
     StableDiffusionCppInferenceConfig,
     TransformersInferenceConfig,
@@ -123,7 +125,13 @@ def create_app() -> FastAPI:
                     "model_id": profile.served_model_name,
                     "kind": profile.kind,
                     "format": artifact.model_format,
-                    "context_length": profile.limits.max_input_tokens,
+                    "context_length": artifact.native_context_tokens,
+                    "native_context_tokens": artifact.native_context_tokens,
+                    "context_extension": (
+                        artifact.context_extension.model_dump(mode="json")
+                        if artifact.context_extension is not None
+                        else None
+                    ),
                     "parameter_count": None,
                     "size_bytes": size_bytes,
                     "embedding_dimensions": profile.embedding_dimensions,
@@ -133,7 +141,7 @@ def create_app() -> FastAPI:
                     "engine": profile.engine,
                     "revision": artifact.revision,
                     "checksum": artifact.checksum,
-                    "runtime_configuration": _runtime_configuration(profile),
+                    "runtime_configuration": _runtime_configuration(profile, artifact),
                 }
             if profile.kind == "chat":
                 model_payload["memory_estimate"] = estimate_inference_memory(
@@ -407,6 +415,21 @@ def _apply_profile_configuration(
             **profile.inference.model_dump(mode="json"),
             **inference.model_dump(mode="json", exclude_none=True),
         }
+    if profile.kind == "chat" and configuration.native_context_tokens is not None:
+        store = ModelPoolStore()
+        artifact = store.require_artifact(profile.artifact_id)
+        artifact_payload = artifact.model_dump(mode="json")
+        artifact_payload.update(
+            {
+                "native_context_tokens": configuration.native_context_tokens,
+                "context_extension": (
+                    configuration.context_extension.model_dump(mode="json")
+                    if configuration.context_extension is not None
+                    else None
+                ),
+            }
+        )
+        store.upsert_artifact(LocalModelArtifact.model_validate(artifact_payload))
     updated = ModelPoolProfile.model_validate(payload)
     return ModelPoolStore().upsert_profile(updated)
 
@@ -424,16 +447,25 @@ def _runtime_payload(
     }
 
 
-def _runtime_configuration(profile: ModelPoolProfile) -> dict[str, Any]:
+def _runtime_configuration(
+    profile: ModelPoolProfile,
+    artifact: LocalModelArtifact,
+) -> dict[str, Any]:
     configuration = profile.inference.model_dump(mode="json")
     mmproj_path = configuration.pop("mmproj_path", None)
     if mmproj_path is not None:
         configuration["multimodal_projector"] = bool(mmproj_path)
     if isinstance(profile.inference, LlamaCppInferenceConfig):
-        allocation = resolve_llama_context_allocation(profile.limits, profile.inference)
-        if allocation is not None:
-            configuration["per_slot_context_tokens"] = allocation.per_slot_tokens
-            configuration["server_context_tokens"] = allocation.server_context_tokens
+        try:
+            context_plan = resolve_llama_context_plan(artifact, profile.limits, profile.inference)
+        except ValueError as exc:
+            configuration["context_configuration_error"] = str(exc)
+            return configuration
+        if context_plan is not None:
+            configuration["per_slot_context_tokens"] = context_plan.allocation.per_slot_tokens
+            configuration["server_context_tokens"] = context_plan.allocation.server_context_tokens
+            if context_plan.rope_scaling is not None:
+                configuration["rope_scaling"] = asdict(context_plan.rope_scaling)
     return configuration
 
 

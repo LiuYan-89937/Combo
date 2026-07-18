@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import shutil
 
-from agent_factory.local_inference.context_allocation import resolve_llama_context_allocation
+from agent_factory.local_inference.context_allocation import resolve_llama_context_plan
 from agent_factory.local_inference.rocm import inspect_rocm_runtime
 from agent_factory.model_pool.schema import LlamaCppInferenceConfig
 from agent_factory.model_pool.store import ModelPoolStore
@@ -68,9 +68,21 @@ def main() -> None:
         if not mmproj_path.is_file():
             raise ValueError(f"llama.cpp multimodal projector does not exist: {mmproj_path}")
         command.extend(["--mmproj", str(mmproj_path)])
-    context_allocation = resolve_llama_context_allocation(profile.limits, profile.inference)
-    if context_allocation is not None:
-        command.extend(["--ctx-size", str(context_allocation.server_context_tokens)])
+    context_plan = resolve_llama_context_plan(artifact, profile.limits, profile.inference)
+    if context_plan is not None:
+        command.extend(["--ctx-size", str(context_plan.allocation.server_context_tokens)])
+        rope_scaling = context_plan.rope_scaling
+        if rope_scaling is not None:
+            command.extend(
+                [
+                    "--rope-scaling",
+                    rope_scaling.method,
+                    "--rope-scale",
+                    format(rope_scaling.factor, ".9g"),
+                    "--yarn-orig-ctx",
+                    str(rope_scaling.original_context_tokens),
+                ]
+            )
     os.execv(binary, command)
 
 

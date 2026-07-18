@@ -7,6 +7,7 @@ from agent_factory.model_pool.schema import (
     ExternalInferenceConfig,
     LlamaCppInferenceConfig,
     LocalModelArtifact,
+    ModelContextExtensionCapability,
     ModelPoolCapabilities,
     ModelPoolLimits,
     ModelPoolProfile,
@@ -23,6 +24,7 @@ def main() -> None:
         required_full = (
             "chat_profile_id",
             "chat_served_model_name",
+            "chat_native_context_tokens",
             "context_size",
             "max_output_tokens",
             "compression_threshold",
@@ -65,6 +67,14 @@ def main() -> None:
         flash_attention=args.flash_attention,
         mmproj_path=str(args.chat_mmproj_path) if args.chat_mmproj_path else None,
     )
+    chat_context_extension = (
+        ModelContextExtensionCapability(
+            method="yarn",
+            max_context_tokens=args.chat_yarn_max_context_tokens,
+        )
+        if args.chat_yarn_max_context_tokens is not None
+        else None
+    )
     embedding_inference = TransformersInferenceConfig(
         trust_remote_code=args.embedding_trust_remote_code,
     )
@@ -78,6 +88,8 @@ def main() -> None:
             model_format="llama_cpp",
             revision=args.chat_revision,
             checksum=args.chat_checksum,
+            native_context_tokens=args.chat_native_context_tokens,
+            context_extension=chat_context_extension,
         )
         embedding_artifact = LocalModelArtifact(
             artifact_id=args.embedding_artifact_id,
@@ -102,6 +114,8 @@ def main() -> None:
             model_format="llama_cpp",
             revision=args.chat_revision,
             checksum=args.chat_checksum,
+            native_context_tokens=args.chat_native_context_tokens,
+            context_extension=chat_context_extension,
         )
         embedding_artifact = LocalModelArtifact(
             artifact_id=args.embedding_artifact_id,
@@ -278,6 +292,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--chat-mmproj-path", type=Path)
     parser.add_argument("--chat-revision", default="")
     parser.add_argument("--chat-checksum", default="")
+    parser.add_argument("--chat-native-context-tokens", type=int)
+    parser.add_argument("--chat-yarn-max-context-tokens", type=int)
     parser.add_argument("--context-size", type=int)
     parser.add_argument("--max-output-tokens", type=int)
     parser.add_argument("--compression-threshold", type=int)
