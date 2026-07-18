@@ -891,7 +891,7 @@ class RuntimeAgentPackageCommandMixin:
                 request_id=command.request_id,
                 user_config=_runtime_user_config(command),
                 attachments=command.payload.get("attachments"),
-                visible_in_agent_session_list=False,
+                visible_in_agent_session_list=True,
             )
             self._consume_agent_package_stream(
                 package_id=SYSTEM_CHAT_PACKAGE_ID,
