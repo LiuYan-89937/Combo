@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from agent_factory.env import load_agentfactory_dotenv
+from agent_factory.runtime_kernel.persistence import close_shared_sqlite_checkpointers
 from agent_factory.collaboration_system import CollaborationService
 from agent_factory.agent_group_system import AgentGroupService
 from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import AgentPackageRuntimeManager
@@ -187,6 +188,7 @@ async def shutdown_event():
     agent_group_service.shutdown()
     runtime_bridge.remove_event_observer(_observe_agent_group_runtime_event)
     await runtime_bridge.stop()
+    close_shared_sqlite_checkpointers()
     event_loop_watchdog.stop()
 
 

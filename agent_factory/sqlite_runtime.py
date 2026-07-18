@@ -13,6 +13,20 @@ DEFAULT_SQLITE_BUSY_TIMEOUT_MS = 10000
 
 _INITIALIZATION_LOCK = threading.RLock()
 _INITIALIZED_DATABASES: dict[tuple[Path, str, str], tuple[int, int]] = {}
+_SQLITE_LIFECYCLE_LOCK = threading.RLock()
+
+
+class ManagedSQLiteConnection(sqlite3.Connection):
+    """SQLite connection whose native close is coordinated process-wide.
+
+    SQLite serializes parts of Unix file-descriptor reuse inside the native
+    library.  Concurrent connection creation and destruction across unrelated
+    stores can otherwise deadlock before SQLite's busy timeout is involved.
+    """
+
+    def close(self) -> None:
+        with _SQLITE_LIFECYCLE_LOCK:
+            super().close()
 
 
 def initialize_sqlite_store(
@@ -43,9 +57,17 @@ def connect_sqlite(
     foreign_keys: bool = False,
     uri: bool = False,
     query_only: bool = False,
+    check_same_thread: bool = True,
 ) -> sqlite3.Connection:
     database = str(path) if uri else Path(path)
-    conn = sqlite3.connect(database, timeout=timeout_ms / 1000, uri=uri)
+    with _SQLITE_LIFECYCLE_LOCK:
+        conn = sqlite3.connect(
+            database,
+            timeout=timeout_ms / 1000,
+            uri=uri,
+            check_same_thread=check_same_thread,
+            factory=ManagedSQLiteConnection,
+        )
     conn.row_factory = sqlite3.Row
     conn.execute(f"pragma busy_timeout = {timeout_ms}")
     if foreign_keys:
