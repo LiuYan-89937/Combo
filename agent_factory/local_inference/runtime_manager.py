@@ -310,6 +310,7 @@ class LocalInferenceRuntimeManager:
                     kind=profile.kind,
                     model_id=profile.served_model_name,
                     profile=profile,
+                    artifact=ModelPoolStore().require_artifact(profile.artifact_id),
                 )
                 ModelPoolStore().set_active_profile_id(profile.kind, profile.profile_id)
                 _apply_external_runtime(slot, remote, profile)
