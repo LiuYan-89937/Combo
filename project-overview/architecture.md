@@ -4,7 +4,7 @@ FastAgentFactory 后端可以分为四个层次：接入层、Factory 控制面�
 
 ## 架构展示图
 
-![FastAgentFactory 后端架构展示图](assets/backend-architecture-overview.png)
+![FastAgentFactory 后端架构展示图](assets/backend-architecture-overview.svg)
 
 该图用于项目介绍和整体认知；下方 Mermaid 图与源码链接用于工程维护和实现核对。
 
@@ -73,7 +73,7 @@ flowchart TB
 
 ### Factory 控制面
 
-[FactoryRuntimeAdapter](../../agent_factory/factory_graph/frontend_bridge/runtime_adapter.py) 是前端命令到后端运行时的统一适配入口。它通过 mixin 分派 session、AgentPackage、resource 和 scheduler 命令，并持有制造、进化与包运行管理器。
+[FactoryRuntimeAdapter](../agent_factory/factory_graph/frontend_bridge/runtime_adapter.py) 是前端命令到后端运行时的统一适配入口。它通过 mixin 分派 session、AgentPackage、resource 和 scheduler 命令，并持有制造、进化与包运行管理器。
 
 控制面的主要职责是：
 
@@ -86,7 +86,7 @@ flowchart TB
 
 ### AgentPackage 运行面
 
-[AgentPackageRuntimeManager](../../agent_factory/factory_graph/frontend_bridge/agent_package_runtime.py) 负责加载包、准备工作区、选择 host/container backend、维护实例生命周期，并建立运行时与前端之间的事件桥。
+[AgentPackageRuntimeManager](../agent_factory/factory_graph/frontend_bridge/agent_package_runtime.py) 负责加载包、准备工作区、选择 host/container backend、维护实例生命周期，并建立运行时与前端之间的事件桥。
 
 真正的 Agent 执行由 RuntimeKernel 完成：加载 Package 后，RuntimeBuildPlanner 根据 Contract 构建服务和资源，PatternCompiler 再把 Pattern 编译为 LangGraph。
 
@@ -138,7 +138,7 @@ flowchart LR
     GRAPH --> APP["CompiledKernelApp"]
 ```
 
-[PatternCompiler](../../agent_factory/runtime_kernel/patterns/compiler.py) 会：
+[PatternCompiler](../agent_factory/runtime_kernel/patterns/compiler.py) 会：
 
 1. 从 PatternRegistry 取得 Pattern 并校验节点、边和实现引用；
 2. 为每个 Pattern Node 筛选对应 Binding；
@@ -151,7 +151,7 @@ Pattern YAML 只定义拓扑和语义；模型实例、工具集合、知识库�
 
 ## 4. 节点执行管线
 
-每个节点不直接裸跑实现函数，而是经过 [node_runner.py](../../agent_factory/runtime_kernel/patterns/node_runner.py) 的统一管线：
+每个节点不直接裸跑实现函数，而是经过 [node_runner.py](../agent_factory/runtime_kernel/patterns/node_runner.py) 的统一管线：
 
 ```mermaid
 flowchart LR
@@ -242,7 +242,7 @@ session → resources → trace → state → artifact
 
 Binding 的 target 同时包含 `node_id` 与 `impl`。PatternCompiler 只把匹配 Binding 放进当前 `NodeExecutionContext`，因此同一个 `cognitive.answer` 实现可以在 planner、executor 和 final_answer 中拥有不同 Prompt、模型角色与工具权限。
 
-关键源码：[schema.py](../../agent_factory/runtime_contracts/schema.py)、[builder.py](../../agent_factory/runtime_contracts/builder.py)、[assembly/schema.py](../../agent_factory/assembly/schema.py)。
+关键源码：[schema.py](../agent_factory/runtime_contracts/schema.py)、[builder.py](../agent_factory/runtime_contracts/builder.py)、[assembly/schema.py](../agent_factory/assembly/schema.py)。
 
 ## 9. 两种 Agent Pattern
 
@@ -265,7 +265,7 @@ flowchart LR
 - 工具失败可让模型修正，审批中断则交给外层恢复；
 - 连续性主要来自消息、ToolObservation 和 Checkpoint。
 
-定义见 [react_agent.yaml](../../agent_factory/runtime_kernel/patterns/builtins/react_agent.yaml)。
+定义见 [react_agent.yaml](../agent_factory/runtime_kernel/patterns/builtins/react_agent.yaml)。
 
 ### `plan_and_execute`
 
@@ -299,7 +299,7 @@ flowchart TB
 | `casual_react` | 使用普通业务工具，不得修改计划 |
 | `final_answer` | 使用交付工具汇总结果，不得修改计划 |
 
-`runtime_plan` 是 RuntimeKernel 内部工具。它由 [tool_call.py](../../agent_factory/runtime_kernel/nodes/standard/tool_call.py) 与普通工具分流，再直接修改 `RuntimeState.plan`，不经过普通 ToolGateway。定义见 [plan_and_execute.yaml](../../agent_factory/runtime_kernel/patterns/builtins/plan_and_execute.yaml)。
+`runtime_plan` 是 RuntimeKernel 内部工具。它由 [tool_call.py](../agent_factory/runtime_kernel/nodes/standard/tool_call.py) 与普通工具分流，再直接修改 `RuntimeState.plan`，不经过普通 ToolGateway。定义见 [plan_and_execute.yaml](../agent_factory/runtime_kernel/patterns/builtins/plan_and_execute.yaml)。
 
 ## 10. 工具动态绑定与 ToolGateway
 
@@ -340,7 +340,7 @@ AIMessage 会记录 `origin_node_id`。`tool_exec` 在执行前按来源节点�
 
 ToolGateway 统一执行输入/输出 Schema、Resource 解析、风险评估、allow/ask/deny、审批 interrupt、entrypoint、结果投影/压缩/存储和 ToolObservation。Python、Builtin、MCP、SkillHub 与模型工具最终都进入受控 Registry；`runtime_plan` 是明确的内部例外。
 
-关键源码：[tooling/compiler.py](../../agent_factory/tooling/compiler.py)、[tooling/gateway.py](../../agent_factory/tooling/gateway.py)、[answer.py](../../agent_factory/runtime_kernel/nodes/standard/answer.py)。
+关键源码：[tooling/compiler.py](../agent_factory/tooling/compiler.py)、[tooling/gateway.py](../agent_factory/tooling/gateway.py)、[answer.py](../agent_factory/runtime_kernel/nodes/standard/answer.py)。
 
 ## 11. Agent 制造架构
 
@@ -370,7 +370,7 @@ flowchart TB
 
 制造验证覆盖 manifest、Assembly、Contract、Pattern 引用、模型 Binding、ToolSpec、Resource requirement、路径和发布完整性。静态验证不能证明外部 API、模型 Endpoint 或 MCP Server 在线。
 
-关键源码：[create_agent/runtime.py](../../agent_factory/create_agent/runtime.py)、[create_agent/workflow.py](../../agent_factory/create_agent/workflow.py)、[authoring_tool.py](../../agent_factory/create_agent/authoring_tool.py)。
+关键源码：[create_agent/runtime.py](../agent_factory/create_agent/runtime.py)、[create_agent/workflow.py](../agent_factory/create_agent/workflow.py)、[authoring_tool.py](../agent_factory/create_agent/authoring_tool.py)。
 
 ## 12. Agent 进化架构
 
@@ -396,7 +396,7 @@ flowchart TB
 
 Trace 只在该流程明确读取且通过相关性门控后成为进化证据，不是普通对话每轮自动注入的内容。
 
-关键源码：[evolution/runtime.py](../../agent_factory/evolution/runtime.py)、[trace_gate.py](../../agent_factory/evolution/trace_gate.py)、[target_gate.py](../../agent_factory/evolution/target_gate.py)。
+关键源码：[evolution/runtime.py](../agent_factory/evolution/runtime.py)、[trace_gate.py](../agent_factory/evolution/trace_gate.py)、[target_gate.py](../agent_factory/evolution/target_gate.py)。
 
 ## 13. 上下文、知识与运行数据边界
 
@@ -445,13 +445,13 @@ flowchart LR
 
 | 子系统 | 入口 |
 | --- | --- |
-| 前端桥接 | [factory_graph/frontend_bridge](../../agent_factory/factory_graph/frontend_bridge) |
-| Package Runtime | [agent_package_runtime.py](../../agent_factory/factory_graph/frontend_bridge/agent_package_runtime.py) |
-| RuntimeKernel | [runtime_kernel](../../agent_factory/runtime_kernel) |
-| Runtime Contracts | [runtime_contracts](../../agent_factory/runtime_contracts) |
-| Tooling | [tooling](../../agent_factory/tooling) |
-| 制造 | [create_agent](../../agent_factory/create_agent) |
-| 进化 | [evolution](../../agent_factory/evolution) |
-| 协作 | [collaboration_system](../../agent_factory/collaboration_system) |
-| Scheduler | [scheduler_system](../../agent_factory/scheduler_system) |
-| Model Pool | [model_pool](../../agent_factory/model_pool) |
+| 前端桥接 | [factory_graph/frontend_bridge](../agent_factory/factory_graph/frontend_bridge) |
+| Package Runtime | [agent_package_runtime.py](../agent_factory/factory_graph/frontend_bridge/agent_package_runtime.py) |
+| RuntimeKernel | [runtime_kernel](../agent_factory/runtime_kernel) |
+| Runtime Contracts | [runtime_contracts](../agent_factory/runtime_contracts) |
+| Tooling | [tooling](../agent_factory/tooling) |
+| 制造 | [create_agent](../agent_factory/create_agent) |
+| 进化 | [evolution](../agent_factory/evolution) |
+| 协作 | [collaboration_system](../agent_factory/collaboration_system) |
+| Scheduler | [scheduler_system](../agent_factory/scheduler_system) |
+| Model Pool | [model_pool](../agent_factory/model_pool) |
