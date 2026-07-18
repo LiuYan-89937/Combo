@@ -207,6 +207,7 @@ sync_sources() {
         --include '/agent_factory/warnings.py' \
         --include '/agent_factory/env.py' \
         --include '/agent_factory/paths.py' \
+        --include '/agent_factory/sqlite_runtime.py' \
         --include '/agent_factory/local_inference/' \
         --exclude '/agent_factory/local_inference/__init__.py' \
         --include '/agent_factory/local_inference/*.py' \
