@@ -7,10 +7,11 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ValidationError
 
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendCommand
+from agent_factory.sqlite_runtime import sqlite_lifecycle_available
 from web_frontend.backend.runtime_bridge import RuntimeBridge
 
 
@@ -19,10 +20,16 @@ def create_runtime_router(runtime_bridge: RuntimeBridge, logger: logging.Logger)
 
     @router.get("/health")
     async def health_check():
-        return {
-            "status": "ok",
-            "runtime_service_active": runtime_bridge.active,
+        sqlite_available = sqlite_lifecycle_available()
+        runtime_active = runtime_bridge.active
+        payload = {
+            "status": "ok" if sqlite_available and runtime_active else "unavailable",
+            "runtime_service_active": runtime_active,
+            "sqlite_lifecycle_available": sqlite_available,
         }
+        if payload["status"] != "ok":
+            return JSONResponse(status_code=503, content=payload)
+        return payload
 
     @router.get("/events")
     async def events_endpoint(request: Request):

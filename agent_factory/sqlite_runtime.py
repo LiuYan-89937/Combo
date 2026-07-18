@@ -29,6 +29,16 @@ class ManagedSQLiteConnection(sqlite3.Connection):
             super().close()
 
 
+def sqlite_lifecycle_available() -> bool:
+    """Report whether SQLite connection lifecycle coordination can progress."""
+
+    acquired = _SQLITE_LIFECYCLE_LOCK.acquire(blocking=False)
+    if not acquired:
+        return False
+    _SQLITE_LIFECYCLE_LOCK.release()
+    return True
+
+
 def initialize_sqlite_store(
     path: str | Path,
     initializer: SQLiteInitializer,
