@@ -36,9 +36,6 @@
       >
         <span class="recent-agent-item-heading">
           <span class="recent-agent-item-name">{{ agentSessionPackageLabel(session) }}</span>
-          <span v-if="collaborationSessionLabel(session)" class="recent-agent-session-tag">
-            {{ collaborationSessionLabel(session) }}
-          </span>
         </span>
         <span class="recent-agent-item-title">{{ agentSessionTitle(session) }}</span>
         <span class="recent-agent-item-time">{{ formatRecentTime(session.updated_at || session.created_at) }}</span>
@@ -88,6 +85,7 @@ function openMostRecentAgentSession() {
 
 function openRecentAgentSession(session: AgentRecentSessionView) {
   agentStore.enterAgentChat(session.package_id, session.session_id)
+  runtimeStore.expectAgentPackageSession(session.package_id, session.session_id)
   workspaceStore.setScope('workdir')
   uiStore.openRightSidebar('workspace')
   void router.push({ name: 'Factory' })
@@ -116,12 +114,6 @@ function agentSessionPackageLabel(session: AgentRecentSessionView): string {
 
 function agentSessionTitle(session: AgentRecentSessionView): string {
   return session.display_title || session.first_user_input || t('sessions.newSession')
-}
-
-function collaborationSessionLabel(session: AgentRecentSessionView): string {
-  if (session.session_kind === 'collaboration_main') return t('agentSessions.collaborationMain')
-  if (session.session_kind === 'collaboration_worker') return t('agentSessions.collaborationWorker')
-  return ''
 }
 
 function refreshRecentAgentSessions() {
@@ -289,22 +281,6 @@ watch(
   flex: 1 1 auto;
   font-size: 12px;
   font-weight: 600;
-}
-
-.recent-agent-session-tag {
-  flex: 0 0 auto;
-  width: fit-content;
-  max-width: 45%;
-  padding: 1px 6px;
-  border: 1px solid var(--app-border);
-  border-radius: var(--app-radius-pill);
-  background: var(--app-surface-muted);
-  color: var(--app-text-muted);
-  font-size: 10px;
-  line-height: 1.4;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .recent-agent-item-title {

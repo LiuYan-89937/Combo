@@ -83,7 +83,7 @@ export function useCollaborationRuntime() {
           collaborationStore.activeSession?.collaboration_id,
         )
       } else {
-        runtimeStore.showEmptyFactoryConversation('chat')
+        runtimeStore.showEmptyFactoryConversation('chat', null, collaborationId)
         commands.newSession('chat', null, collaborationId)
       }
       return
@@ -102,7 +102,7 @@ export function useCollaborationRuntime() {
         collaborationStore.activeSession?.collaboration_id,
       )
     } else {
-      runtimeStore.showEmptyAgentPackageSession(packageId)
+      runtimeStore.showEmptyAgentPackageSession(packageId, collaborationId)
       commands.selectAgentPackage(packageId)
     }
   }

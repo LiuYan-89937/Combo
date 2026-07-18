@@ -75,12 +75,9 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue'
-import { useRoute } from 'vue-router'
 import { NButton, NIcon } from 'naive-ui'
 import { ChevronBack, ChevronForward } from '@/components/icons'
 import { useUiStore } from '@/stores/ui'
-import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
 import AppHeader from '@/components/common/AppHeader.vue'
 import AppSidebar from '@/components/common/AppSidebar.vue'
@@ -94,20 +91,7 @@ import SchedulerActivityDrawer from '@/components/scheduler/SchedulerActivityDra
 import EventStreamManager from '@/components/common/EventStreamManager.vue'
 
 const uiStore = useUiStore()
-const route = useRoute()
-const { startSession } = useCommand()
 const { t } = useI18n()
-
-onMounted(() => {
-  const mode = route.name === 'Manufacturing'
-    ? 'create_agent'
-    : route.name === 'Evolution'
-      ? 'evolve_agent'
-      : route.name === 'Factory'
-        ? 'chat'
-        : null
-  startSession(true, mode)
-})
 </script>
 
 <style scoped>

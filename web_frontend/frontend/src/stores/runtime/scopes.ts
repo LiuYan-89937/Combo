@@ -11,6 +11,12 @@ export interface CollaborationScopeIdentity {
   collaborationTaskId?: string | null
 }
 
+const COLLABORATION_SCOPE_PREFIX = 'collaboration:'
+
+export function isCollaborationConversationScope(scope: string | null | undefined): boolean {
+  return Boolean(scope?.startsWith(COLLABORATION_SCOPE_PREFIX))
+}
+
 export function agentPackageConversationScope(
   packageId: string | null,
   sessionId: string | null,

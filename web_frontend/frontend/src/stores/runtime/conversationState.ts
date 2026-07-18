@@ -11,6 +11,7 @@ type ConversationScopeSource = Pick<
   | 'contextWindow'
   | 'memoryActivity'
   | 'modelStreams'
+  | 'activeFactorySessionId'
   | 'activeAgentSessionId'
   | 'activeRequestId'
   | 'runStatus'
@@ -50,6 +51,7 @@ export function buildConversationScopeState(source: ConversationScopeSource): Co
     modelStreams: Object.fromEntries(
       Object.entries(source.modelStreams).map(([key, stream]) => [key, { ...stream }]),
     ),
+    activeFactorySessionId: source.activeFactorySessionId,
     activeAgentSessionId: source.activeAgentSessionId,
     activeRequestId: source.activeRequestId,
     runStatus: source.runStatus,
@@ -99,6 +101,7 @@ export function normalizeConversationScopeState(saved: ConversationScopeState): 
         reasoningCompletedAt: stream.reasoningCompletedAt || null,
       }]),
     ),
+    activeFactorySessionId: saved.activeFactorySessionId ?? null,
     activeAgentSessionId: saved.activeAgentSessionId,
     activeRequestId: saved.activeRequestId ?? null,
     runStatus: saved.runStatus ?? 'idle',

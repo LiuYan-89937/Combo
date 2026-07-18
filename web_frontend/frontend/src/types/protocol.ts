@@ -214,6 +214,7 @@ export interface ConversationScopeState {
   contextWindow: ContextWindowView | null
   memoryActivity: RuntimeActivityView
   modelStreams: Record<string, ModelStream>
+  activeFactorySessionId: string | null
   activeAgentSessionId: string | null
   activeRequestId?: string | null
   runStatus?: RunStatus
