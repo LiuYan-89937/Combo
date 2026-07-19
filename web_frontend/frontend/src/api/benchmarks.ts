@@ -1,6 +1,8 @@
 import { requestJson, withQuery } from './http'
 
 export type BenchmarkRunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
+export type BenchmarkImplementationId = 'official' | 'amd'
+export type BenchmarkPromptCacheMode = 'legacy' | 'cold' | 'warm'
 
 export interface BenchmarkImplementation {
   label: string
@@ -19,6 +21,7 @@ export interface BenchmarkRunSpec {
   warmup_iterations: number
   measured_iterations: number
   telemetry_interval_ms: number
+  prompt_cache_mode: BenchmarkPromptCacheMode
   implementation: BenchmarkImplementation
   operator_analysis?: BenchmarkOperatorAnalysisSpec | null
 }
@@ -45,6 +48,11 @@ export interface BenchmarkSample {
   status: 'completed' | 'failed'
   started_at: string
   ttft_ms?: number | null
+  request_to_headers_ms?: number | null
+  first_event_ms?: number | null
+  model_compute_ttft_ms?: number | null
+  first_token_decode_ms?: number | null
+  outside_model_compute_ms?: number | null
   end_to_end_ms?: number | null
   prompt_tokens?: number | null
   completion_tokens?: number | null
@@ -155,7 +163,14 @@ export interface BenchmarkSummary {
   measured_samples: number
   successful_samples: number
   ttft_ms?: BenchmarkMetricStats | null
+  request_to_headers_ms?: BenchmarkMetricStats | null
+  first_event_ms?: BenchmarkMetricStats | null
+  model_compute_ttft_ms?: BenchmarkMetricStats | null
+  first_token_decode_ms?: BenchmarkMetricStats | null
+  outside_model_compute_ms?: BenchmarkMetricStats | null
   end_to_end_ms?: BenchmarkMetricStats | null
+  prompt_ms?: BenchmarkMetricStats | null
+  decode_ms?: BenchmarkMetricStats | null
   prompt_tokens_per_second?: BenchmarkMetricStats | null
   decode_tokens_per_second?: BenchmarkMetricStats | null
   peak_vram_bytes?: BenchmarkMetricStats | null
@@ -183,6 +198,44 @@ export interface BenchmarkRun {
   updated_at: string
 }
 
+export interface BenchmarkExperimentGroupSpec {
+  name: string
+  profile_id: string
+  prompt: string
+  repetitions: number
+  max_output_tokens: number
+  temperature: number
+  seed: number
+  warmup_iterations: number
+  measured_iterations: number
+  telemetry_interval_ms: number
+  prompt_cache_mode: BenchmarkPromptCacheMode
+  operator_analysis: BenchmarkOperatorAnalysisSpec
+}
+
+export interface BenchmarkExperimentRunRef {
+  run_id: string
+  repetition_index: number
+  implementation: BenchmarkImplementationId
+  kind: BenchmarkRunSpec['kind']
+}
+
+export interface BenchmarkExperimentGroup {
+  group_id: string
+  status: BenchmarkRunStatus
+  spec: BenchmarkExperimentGroupSpec
+  runs: BenchmarkExperimentRunRef[]
+  progress_completed: number
+  progress_total: number
+  initial_implementation?: BenchmarkImplementationId | null
+  active_implementation?: BenchmarkImplementationId | null
+  error: string
+  created_at: string
+  started_at: string
+  completed_at: string
+  updated_at: string
+}
+
 export const benchmarkApi = {
   list: (limit = 100) =>
     requestJson<{ runs: BenchmarkRun[] }>(withQuery('/api/benchmarks', { limit })),
@@ -199,6 +252,24 @@ export const benchmarkApi = {
     }),
   delete: (runId: string) =>
     requestJson<{ deleted: boolean }>(`/api/benchmarks/${encodeURIComponent(runId)}`, {
+      method: 'DELETE',
+    }),
+  listGroups: (limit = 100) =>
+    requestJson<{
+      groups: BenchmarkExperimentGroup[]
+      runs: Record<string, BenchmarkRun[]>
+    }>(withQuery('/api/benchmarks/groups', { limit })),
+  getGroup: (groupId: string) =>
+    requestJson<{ group: BenchmarkExperimentGroup; runs: BenchmarkRun[] }>(
+      `/api/benchmarks/groups/${encodeURIComponent(groupId)}`,
+    ),
+  startGroup: (spec: BenchmarkExperimentGroupSpec) =>
+    requestJson<{ group: BenchmarkExperimentGroup }>('/api/benchmarks/groups', {
+      method: 'POST',
+      body: JSON.stringify(spec),
+    }),
+  deleteGroup: (groupId: string) =>
+    requestJson<{ deleted: boolean }>(`/api/benchmarks/groups/${encodeURIComponent(groupId)}`, {
       method: 'DELETE',
     }),
 }

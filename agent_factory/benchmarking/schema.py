@@ -16,6 +16,9 @@ BenchmarkRunStatus = Literal[
 ]
 BenchmarkSampleStatus = Literal["completed", "failed"]
 BenchmarkRunKind = Literal["performance", "operator_analysis"]
+BenchmarkImplementationId = Literal["official", "amd"]
+BenchmarkExperimentGroupStatus = BenchmarkRunStatus
+BenchmarkPromptCacheMode = Literal["legacy", "cold", "warm"]
 
 
 def utc_now_text() -> str:
@@ -57,6 +60,7 @@ class BenchmarkRunSpec(BaseModel):
     warmup_iterations: int = Field(default=1, ge=0, le=10)
     measured_iterations: int = Field(default=3, ge=1, le=50)
     telemetry_interval_ms: int = Field(default=250, ge=100, le=2000)
+    prompt_cache_mode: BenchmarkPromptCacheMode = "legacy"
     implementation: BenchmarkImplementation = Field(default_factory=BenchmarkImplementation)
     operator_analysis: BenchmarkOperatorAnalysisSpec | None = None
 
@@ -85,6 +89,42 @@ class BenchmarkRunSpec(BaseModel):
         return self
 
 
+class BenchmarkExperimentGroupSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    profile_id: str
+    prompt: str
+    repetitions: int = Field(default=3, ge=1, le=20)
+    max_output_tokens: int = Field(default=256, ge=1, le=32768)
+    temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+    seed: int = Field(default=42, ge=0)
+    warmup_iterations: int = Field(default=1, ge=0, le=10)
+    measured_iterations: int = Field(default=3, ge=1, le=50)
+    telemetry_interval_ms: int = Field(default=250, ge=100, le=2000)
+    prompt_cache_mode: BenchmarkPromptCacheMode = "legacy"
+    operator_analysis: BenchmarkOperatorAnalysisSpec = Field(
+        default_factory=BenchmarkOperatorAnalysisSpec
+    )
+
+    @field_validator("name", "profile_id", "prompt")
+    @classmethod
+    def _required_text(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("value must not be empty")
+        return text
+
+
+class BenchmarkExperimentRunRef(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    repetition_index: int = Field(ge=0)
+    implementation: BenchmarkImplementationId
+    kind: BenchmarkRunKind
+
+
 class BenchmarkTelemetryPoint(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -104,6 +144,11 @@ class BenchmarkSample(BaseModel):
     status: BenchmarkSampleStatus = "completed"
     started_at: str = Field(default_factory=utc_now_text)
     ttft_ms: float | None = Field(default=None, ge=0)
+    request_to_headers_ms: float | None = Field(default=None, ge=0)
+    first_event_ms: float | None = Field(default=None, ge=0)
+    model_compute_ttft_ms: float | None = Field(default=None, ge=0)
+    first_token_decode_ms: float | None = Field(default=None, ge=0)
+    outside_model_compute_ms: float | None = Field(default=None, ge=0)
     end_to_end_ms: float | None = Field(default=None, ge=0)
     prompt_tokens: int | None = Field(default=None, ge=0)
     completion_tokens: int | None = Field(default=None, ge=0)
@@ -232,7 +277,14 @@ class BenchmarkSummary(BaseModel):
     measured_samples: int = Field(ge=0)
     successful_samples: int = Field(ge=0)
     ttft_ms: BenchmarkMetricStats | None = None
+    request_to_headers_ms: BenchmarkMetricStats | None = None
+    first_event_ms: BenchmarkMetricStats | None = None
+    model_compute_ttft_ms: BenchmarkMetricStats | None = None
+    first_token_decode_ms: BenchmarkMetricStats | None = None
+    outside_model_compute_ms: BenchmarkMetricStats | None = None
     end_to_end_ms: BenchmarkMetricStats | None = None
+    prompt_ms: BenchmarkMetricStats | None = None
+    decode_ms: BenchmarkMetricStats | None = None
     prompt_tokens_per_second: BenchmarkMetricStats | None = None
     decode_tokens_per_second: BenchmarkMetricStats | None = None
     peak_vram_bytes: BenchmarkMetricStats | None = None
@@ -255,6 +307,24 @@ class BenchmarkRun(BaseModel):
     samples: list[BenchmarkSample] = Field(default_factory=list)
     summary: BenchmarkSummary | None = None
     operator_analysis: BenchmarkOperatorAnalysisResult | None = None
+    error: str = ""
+    created_at: str = Field(default_factory=utc_now_text)
+    started_at: str = ""
+    completed_at: str = ""
+    updated_at: str = Field(default_factory=utc_now_text)
+
+
+class BenchmarkExperimentGroup(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    group_id: str
+    status: BenchmarkExperimentGroupStatus = "queued"
+    spec: BenchmarkExperimentGroupSpec
+    runs: list[BenchmarkExperimentRunRef] = Field(default_factory=list)
+    progress_completed: int = Field(default=0, ge=0)
+    progress_total: int = Field(default=0, ge=0)
+    initial_implementation: BenchmarkImplementationId | None = None
+    active_implementation: BenchmarkImplementationId | None = None
     error: str = ""
     created_at: str = Field(default_factory=utc_now_text)
     started_at: str = ""

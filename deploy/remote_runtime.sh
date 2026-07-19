@@ -502,7 +502,7 @@ build_llama_implementation() {
     else
         source_revision="${LLAMA_AMD_BASE_REVISION}"
         source_build_number="${LLAMA_AMD_BASE_BUILD_NUMBER}"
-        custom_kernels=false
+        custom_kernels=true
     fi
     log "Configuring ${implementation} llama.cpp with GGML_HIP=ON"
     cmake \
@@ -588,11 +588,12 @@ payload = {
     "kernel_catalog_path": sys.argv[10],
     "kernel_catalog_sha256": sys.argv[11],
     "custom_kernels": sys.argv[12].lower() == "true",
-    "optimization_status": "baseline" if implementation == "official" else "placeholder",
+    "optimization_status": "baseline" if implementation == "official" else "experimental",
     "build_options": {
         "GGML_HIP": True,
         "GGML_NATIVE": True,
         "CMAKE_BUILD_TYPE": "Release",
+        "FASTAGENTFACTORY_Q8_ACTIVATION_REUSE": implementation == "amd",
     },
     "built_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
 }

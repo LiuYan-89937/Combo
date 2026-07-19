@@ -17,3 +17,7 @@ YYYY-MM-DD-<operator>-<short-name>.md
 7. 已知限制、回退条件与是否适合合入 AMD 实现。
 
 原生 `official` 与自定义 `amd` 两套实现必须分别保留结果，不使用不同测试条件的数据计算提升比例。
+
+## 已验证优化
+
+- [2026-07-19 · RDNA3 Decode 算子优化](2026-07-19-q8-activation-reuse.md)：Q8_1 Kernel 调用减少 `42.74%`；Residual Add、RMSNorm 与权重缩放融合命中 `11,520` 次；AMD 整体实现的普通服务 Decode 吞吐提升 `5.64%`。

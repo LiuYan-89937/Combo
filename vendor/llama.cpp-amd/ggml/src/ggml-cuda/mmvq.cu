@@ -3,8 +3,162 @@
 #include "unary.cuh"
 #include "vecdotq.cuh"
 #include "fastagentfactory-operator-trace.h"
+#if defined(GGML_USE_HIP)
+#include "../ggml-hip/amd-kernels/q6-k-mmvq.cuh"
+#endif
 
 #include <cstdint>
+#include <array>
+#include <memory>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+
+struct ggml_cuda_mmvq_activation_cache_entry {
+    const ggml_tensor * source_root = nullptr;
+    const void * source_data = nullptr;
+    std::array<int64_t, 4> ne = {};
+    std::array<size_t, 4> nb = {};
+    int64_t padded_columns = 0;
+    int stream_number = 0;
+    std::unique_ptr<ggml_cuda_pool_alloc<char>> quantized;
+};
+
+struct ggml_cuda_mmvq_activation_cache {
+    std::vector<ggml_cuda_mmvq_activation_cache_entry> entries;
+    std::unordered_set<const ggml_tensor *> reusable_sources;
+    bool enabled = false;
+    ggml_tensor * const * graph_nodes = nullptr;
+    const ggml_tensor * graph_first_node = nullptr;
+    int graph_node_count = 0;
+};
+
+static const ggml_tensor * ggml_cuda_mmvq_source_root(const ggml_tensor * tensor) {
+    while (tensor->view_src != nullptr) {
+        tensor = tensor->view_src;
+    }
+    return tensor;
+}
+
+static void ggml_cuda_reset_mmvq_activation_cache(ggml_backend_cuda_context & ctx) {
+    if (ctx.mmvq_activation_cache == nullptr) {
+        return;
+    }
+    auto & entries = ctx.mmvq_activation_cache->entries;
+    for (auto iterator = entries.rbegin(); iterator != entries.rend(); ++iterator) {
+        iterator->quantized.reset();
+    }
+    entries.clear();
+}
+
+void ggml_cuda_prepare_mmvq_activation_cache(ggml_backend_cuda_context & ctx, const ggml_cgraph & graph) {
+    ggml_cuda_reset_mmvq_activation_cache(ctx);
+    if (ctx.mmvq_activation_cache == nullptr) {
+        ctx.mmvq_activation_cache = new ggml_cuda_mmvq_activation_cache();
+    }
+
+    auto & cache = *ctx.mmvq_activation_cache;
+    cache.enabled = true;
+    const ggml_tensor * graph_first_node = graph.n_nodes > 0 ? graph.nodes[0] : nullptr;
+    if (cache.graph_nodes == graph.nodes &&
+            cache.graph_first_node == graph_first_node &&
+            cache.graph_node_count == graph.n_nodes) {
+        return;
+    }
+
+    cache.graph_nodes = graph.nodes;
+    cache.graph_first_node = graph_first_node;
+    cache.graph_node_count = graph.n_nodes;
+    auto & reusable_sources = cache.reusable_sources;
+    reusable_sources.clear();
+    std::unordered_map<const ggml_tensor *, int> source_use_counts;
+    for (int index = 0; index < graph.n_nodes; ++index) {
+        const ggml_tensor * node = graph.nodes[index];
+        if ((node->op != GGML_OP_MUL_MAT && node->op != GGML_OP_MUL_MAT_ID) ||
+                node->src[1] == nullptr || node->src[1]->type != GGML_TYPE_F32) {
+            continue;
+        }
+        const ggml_tensor * source_root = ggml_cuda_mmvq_source_root(node->src[1]);
+        const int use_count = ++source_use_counts[source_root];
+        if (use_count == 2) {
+            reusable_sources.insert(source_root);
+        }
+    }
+}
+
+void ggml_cuda_disable_mmvq_activation_cache(ggml_backend_cuda_context & ctx) {
+    if (ctx.mmvq_activation_cache != nullptr) {
+        ctx.mmvq_activation_cache->enabled = false;
+    }
+}
+
+void ggml_cuda_release_mmvq_activation_cache(ggml_backend_cuda_context & ctx) {
+    ggml_cuda_reset_mmvq_activation_cache(ctx);
+    delete ctx.mmvq_activation_cache;
+    ctx.mmvq_activation_cache = nullptr;
+}
+
+static char * ggml_cuda_get_cached_q8_1_activation(
+        ggml_backend_cuda_context & ctx,
+        const ggml_tensor * source,
+        int64_t padded_columns,
+        cudaStream_t stream) {
+    if (ctx.mmvq_activation_cache == nullptr) {
+        ctx.mmvq_activation_cache = new ggml_cuda_mmvq_activation_cache();
+    }
+
+    if (!ctx.mmvq_activation_cache->enabled) {
+        return nullptr;
+    }
+
+    const ggml_tensor * source_root = ggml_cuda_mmvq_source_root(source);
+    if (ctx.mmvq_activation_cache->reusable_sources.count(source_root) == 0) {
+        return nullptr;
+    }
+    const std::array<int64_t, 4> ne = { source->ne[0], source->ne[1], source->ne[2], source->ne[3] };
+    const std::array<size_t, 4> nb = { source->nb[0], source->nb[1], source->nb[2], source->nb[3] };
+    auto & entries = ctx.mmvq_activation_cache->entries;
+    for (auto & entry : entries) {
+        if (entry.source_root == source_root &&
+                entry.source_data == source->data &&
+                entry.ne == ne &&
+                entry.nb == nb &&
+                entry.padded_columns == padded_columns &&
+                entry.stream_number == ctx.curr_stream_no) {
+            return entry.quantized->get();
+        }
+    }
+
+    const size_t quantized_size = source->ne[3] * source->ne[2] * source->ne[1] * padded_columns *
+        sizeof(block_q8_1) / QK8_1;
+    auto quantized = std::make_unique<ggml_cuda_pool_alloc<char>>(ctx.pool(), quantized_size);
+    char * quantized_data = quantized->get();
+    const int64_t element_size = ggml_type_size(source->type);
+    quantize_row_q8_1_cuda(
+        static_cast<const float *>(source->data),
+        nullptr,
+        quantized_data,
+        GGML_TYPE_F32,
+        source->ne[0],
+        source->nb[1] / element_size,
+        source->nb[2] / element_size,
+        source->nb[3] / element_size,
+        padded_columns,
+        source->ne[1],
+        source->ne[2],
+        source->ne[3],
+        stream);
+    entries.push_back({
+        source_root,
+        source->data,
+        ne,
+        nb,
+        padded_columns,
+        ctx.curr_stream_no,
+        std::move(quantized),
+    });
+    return quantized_data;
+}
 
 typedef float (*vec_dot_q_cuda_t)(const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs);
 
@@ -600,12 +754,26 @@ static __global__ void mul_mat_vec_q(
         for (int j = 0; j < ncols_dst; ++j) {
 #pragma unroll
             for (int i = 0; i < rows_per_cuda_block; ++i) {
-                tmp[j][i] += vec_dot_q_cuda(
-                    vx, &y[j*stride_col_y + kby], kbx_offset + i*stride_row_x + kbx, kqs);
-                if constexpr (has_fusion) {
-                    if (use_gate) {
-                        tmp_gate[j][i] += vec_dot_q_cuda(
-                            vgate, &y[j*stride_col_y + kby], kbx_offset + i*stride_row_x + kbx, kqs);
+#if defined(GGML_USE_HIP) && defined(RDNA3)
+                if constexpr (type == GGML_TYPE_Q6_K && ncols_dst == 1 && rows_per_cuda_block == 1) {
+                    tmp[j][i] += fastagentfactory::amd_kernels::vec_dot_q6_k_q8_1_rdna3(
+                        vx, &y[j*stride_col_y + kby], kbx_offset + i*stride_row_x + kbx, kqs);
+                    if constexpr (has_fusion) {
+                        if (use_gate) {
+                            tmp_gate[j][i] += fastagentfactory::amd_kernels::vec_dot_q6_k_q8_1_rdna3(
+                                vgate, &y[j*stride_col_y + kby], kbx_offset + i*stride_row_x + kbx, kqs);
+                        }
+                    }
+                } else
+#endif
+                {
+                    tmp[j][i] += vec_dot_q_cuda(
+                        vx, &y[j*stride_col_y + kby], kbx_offset + i*stride_row_x + kbx, kqs);
+                    if constexpr (has_fusion) {
+                        if (use_gate) {
+                            tmp_gate[j][i] += vec_dot_q_cuda(
+                                vgate, &y[j*stride_col_y + kby], kbx_offset + i*stride_row_x + kbx, kqs);
+                        }
                     }
                 }
             }
@@ -914,6 +1082,14 @@ static void mul_mat_vec_q_switch_ncols_dst(
         ggml_type_name(type), nrows_x, ncols_dst, ncols_x, has_ids, has_fusion,
         has_ids ? nchannels_x : 0, has_ids ? nchannels_dst : 0,
         selected_nwarps, selected_rows_per_block, static_cast<int>(table_id), selected_small_k);
+#if defined(GGML_USE_HIP)
+    if constexpr (type == GGML_TYPE_Q6_K) {
+        if (ncols_dst == 1 && GGML_CUDA_CC_IS_RDNA3(cc)) {
+            fastagentfactory::operator_trace::record_kernel_selection(
+                fastagentfactory::amd_kernels::q6_k_mmvq_kernel_id);
+        }
+    }
+#endif
 
     if (has_ids && ncols_dst > 1) {
         // Multi-token MUL_MAT_ID path - dedicated MoE kernel
@@ -1235,12 +1411,20 @@ void ggml_cuda_mul_mat_vec_q(
     }
 
     const int64_t ne10_padded = GGML_PAD(ne10, MATRIX_ROW_PADDING);
-    ggml_cuda_pool_alloc<char> src1_q8_1(ctx.pool(), ne13*ne12 * ne11*ne10_padded * sizeof(block_q8_1)/QK8_1);
-    {
+    ggml_cuda_pool_alloc<char> src1_q8_1;
+    char * src1_q8_1_data = nullptr;
+#if defined(GGML_USE_HIP)
+    if (GGML_CUDA_CC_IS_RDNA3(ggml_cuda_info().devices[ctx.device].cc)) {
+        src1_q8_1_data = ggml_cuda_get_cached_q8_1_activation(ctx, src1, ne10_padded, stream);
+    }
+#endif
+    if (src1_q8_1_data == nullptr) {
+        src1_q8_1.alloc(ctx.pool(), ne13*ne12 * ne11*ne10_padded * sizeof(block_q8_1)/QK8_1);
+        src1_q8_1_data = src1_q8_1.get();
         const int64_t s11 = src1->nb[1] / ts_src1;
         const int64_t s12 = src1->nb[2] / ts_src1;
         const int64_t s13 = src1->nb[3] / ts_src1;
-        quantize_row_q8_1_cuda(src1_d, nullptr, src1_q8_1.get(), src0->type, ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream);
+        quantize_row_q8_1_cuda(src1_d, nullptr, src1_q8_1_data, src0->type, ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream);
     }
 
     const int64_t s01 = src0->nb[1] / ts_src0;
@@ -1266,7 +1450,7 @@ void ggml_cuda_mul_mat_vec_q(
     const int64_t ids_stride = ids ? ids->nb[1] / ggml_type_size(ids->type) : 0;
 
     mul_mat_vec_q_switch_type(
-        src0->data, src0->type, src1_q8_1.get(), ids_d, fusion_local, dst_d, ne00,
+        src0->data, src0->type, src1_q8_1_data, ids_d, fusion_local, dst_d, ne00,
         ne01,              ncols_dst,     s01, stride_col_y,     stride_col_dst,
         ne02, nchannels_y, nchannels_dst, s02, stride_channel_y, stride_channel_dst,
         ne03,              ne3,           s03, s13,              s3,               ids_stride, stream);

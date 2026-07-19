@@ -2,6 +2,8 @@ from agent_factory.benchmarking.schema import (
     BenchmarkImplementation,
     BenchmarkRun,
     BenchmarkRunSpec,
+    BenchmarkExperimentGroup,
+    BenchmarkExperimentGroupSpec,
     BenchmarkSample,
     BenchmarkSummary,
 )
@@ -12,6 +14,8 @@ __all__ = [
     "BenchmarkImplementation",
     "BenchmarkRun",
     "BenchmarkRunSpec",
+    "BenchmarkExperimentGroup",
+    "BenchmarkExperimentGroupSpec",
     "BenchmarkSample",
     "BenchmarkService",
     "BenchmarkStore",

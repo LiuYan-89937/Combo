@@ -31,6 +31,17 @@ class FrontendWorkspaceTarget:
     def available(self) -> bool:
         return self.unavailable_reason is None
 
+    def unavailable_reason_for_scope(self, scope: str) -> str | None:
+        if self.unavailable_reason is not None:
+            return self.unavailable_reason
+        if (
+            self.resource_mode == "package"
+            and scope == "workdir"
+            and not str(self.context.get("package_session_id") or "").strip()
+        ):
+            return "package workdir is not available before the first conversation turn"
+        return None
+
 
 class FrontendWorkspaceService:
     def __init__(self, *, agent_package_runtime: Any, session_manager: Any | None = None) -> None:
@@ -52,8 +63,15 @@ class FrontendWorkspaceService:
         session_record: Any | None = None,
     ) -> dict[str, Any]:
         target = self._target(payload, session_record=session_record)
-        if not target.available:
-            return _empty_workspace_payload(target, scope=scope, path=relative_path, entries=[])
+        unavailable_reason = target.unavailable_reason_for_scope(scope)
+        if unavailable_reason is not None:
+            return _empty_workspace_payload(
+                target,
+                reason=unavailable_reason,
+                scope=scope,
+                path=relative_path,
+                entries=[],
+            )
         return list_workspace_entries_from_roots(
             context=target.context,
             roots=target.roots,
@@ -71,8 +89,9 @@ class FrontendWorkspaceService:
         session_record: Any | None = None,
     ) -> dict[str, Any]:
         target = self._target(payload, session_record=session_record)
-        if not target.available:
-            raise FileNotFoundError(target.unavailable_reason or "workspace is not available")
+        unavailable_reason = target.unavailable_reason_for_scope(scope)
+        if unavailable_reason is not None:
+            raise FileNotFoundError(unavailable_reason)
         return read_workspace_file_from_roots(
             context=target.context,
             roots=target.roots,
@@ -90,8 +109,9 @@ class FrontendWorkspaceService:
         session_record: Any | None = None,
     ) -> Path:
         target = self._target(payload, session_record=session_record)
-        if not target.available:
-            raise FileNotFoundError(target.unavailable_reason or "workspace is not available")
+        unavailable_reason = target.unavailable_reason_for_scope(scope)
+        if unavailable_reason is not None:
+            raise FileNotFoundError(unavailable_reason)
         return resolve_workspace_file_from_roots(
             roots=target.roots,
             scope=scope,
@@ -107,8 +127,9 @@ class FrontendWorkspaceService:
         session_record: Any | None = None,
     ) -> dict[str, Any]:
         target = self._target(payload, session_record=session_record)
-        if not target.available:
-            raise FileNotFoundError(target.unavailable_reason or "workspace is not available")
+        unavailable_reason = target.unavailable_reason_for_scope(scope)
+        if unavailable_reason is not None:
+            raise FileNotFoundError(unavailable_reason)
         return delete_workspace_file_from_roots(
             context=target.context,
             roots=target.roots,
@@ -303,11 +324,16 @@ def _factory_session_context(payload: dict[str, Any], record: Any | None) -> dic
     return {"factory_session_id": factory_session_id} if factory_session_id else {}
 
 
-def _empty_workspace_payload(target: FrontendWorkspaceTarget, **extra: Any) -> dict[str, Any]:
+def _empty_workspace_payload(
+    target: FrontendWorkspaceTarget,
+    *,
+    reason: str | None = None,
+    **extra: Any,
+) -> dict[str, Any]:
     return {
         **target.context,
         "available": False,
-        "reason": target.unavailable_reason,
+        "reason": reason or target.unavailable_reason,
         "roots": [],
         **extra,
     }

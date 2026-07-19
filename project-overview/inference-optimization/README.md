@@ -23,6 +23,10 @@
 - [Official llama.cpp 基线分析](reports/2026-07-18-official-baseline.md)
 - [优化说明索引](optimizations/README.md)
 
+## 当前成功优化
+
+- [RDNA3 Decode 算子优化：Q8_1 激活复用与 Residual RMSNorm 融合](optimizations/2026-07-19-q8-activation-reuse.md)：在相同模型与服务配置下，Official `84.0867 tok/s`，AMD `88.8320 tok/s`，Decode 提升 `5.64%`。
+
 ## 数据使用边界
 
 算子分析会关闭 HIP Graph replay，并在 `rocprofv3` 下执行，用于建立 Host Shape 与 GPU Kernel 的安全对应关系。因此其中的 Kernel 耗时适合判断热点和优化优先级，不应作为正常服务吞吐量。TTFT、Prompt tokens/s、Decode tokens/s 与端到端延迟必须使用普通性能测试单独验证。

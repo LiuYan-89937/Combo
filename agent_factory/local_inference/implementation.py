@@ -28,7 +28,7 @@ class LlamaImplementationBuild(BaseModel):
     kernel_catalog_path: str = ""
     kernel_catalog_sha256: str = ""
     custom_kernels: bool = False
-    optimization_status: Literal["baseline", "placeholder", "optimized"]
+    optimization_status: Literal["baseline", "placeholder", "experimental", "optimized"]
     build_options: dict[str, Any] = Field(default_factory=dict)
     built_at: str
 

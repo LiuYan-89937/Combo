@@ -61,6 +61,8 @@ file(GLOB   GGML_HEADERS_ROCM "../ggml-cuda/*.cuh")
 list(APPEND GGML_HEADERS_ROCM "../../include/ggml-cuda.h")
 
 file(GLOB   GGML_SOURCES_ROCM "../ggml-cuda/*.cu")
+file(GLOB   GGML_AMD_KERNEL_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/amd-kernels/*.hip")
+list(APPEND GGML_SOURCES_ROCM ${GGML_AMD_KERNEL_SOURCES})
 set(FASTAGENTFACTORY_OPERATOR_TRACE_DIR "${CMAKE_SOURCE_DIR}/../llama.cpp-common")
 set(FASTAGENTFACTORY_OPERATOR_TRACE_SOURCE
     "${FASTAGENTFACTORY_OPERATOR_TRACE_DIR}/fastagentfactory-operator-trace.cpp")

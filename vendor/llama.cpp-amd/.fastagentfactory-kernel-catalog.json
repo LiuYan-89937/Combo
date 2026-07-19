@@ -1,5 +1,40 @@
 {
   "schema_version": 1,
   "implementation": "amd",
-  "kernels": []
+  "kernels": [
+    {
+      "kernel_id": "amd.residual_rms_norm_f32",
+      "display_name": "AMD Residual RMSNorm",
+      "family": "normalization",
+      "descriptions": {
+        "zh-CN": "面向 AMD RDNA3 Wave32 的向量化 HIP Kernel；在寄存器中保留残差并融合残差加法、RMSNorm 与权重缩放。",
+        "en-US": "A vectorized HIP kernel for AMD RDNA3 Wave32 that retains residuals in registers and fuses residual addition, RMS normalization, and weight scaling."
+      },
+      "symbol_matchers": [
+        {
+          "target": "base_symbol",
+          "kind": "prefix",
+          "value": "amd_residual_rms_norm_f32_vector_kernel"
+        }
+      ],
+      "tags": ["amd", "hip", "rdna3", "wave32", "float4", "residual", "rms_norm", "fusion", "decode"]
+    },
+    {
+      "kernel_id": "amd.q6_k_q8_1_mmvq",
+      "display_name": "AMD Q6_K × Q8_1 MatVec",
+      "family": "matrix_multiplication",
+      "descriptions": {
+        "zh-CN": "面向 AMD RDNA3 的低 VGPR Q6_K × Q8_1 点积路径；保留 Official MMVQ 调度，使用两条 Lane 本地混合符号 v_dot4 完成点积与精确零点修正，并采用连续标度读取。",
+        "en-US": "A low-VGPR Q6_K by Q8_1 dot-product path for AMD RDNA3 that preserves the Official MMVQ schedule, uses two lane-local mixed-sign v_dot4 operations for the dot product and exact zero-point correction, and keeps scale loads contiguous."
+      },
+      "symbol_matchers": [
+        {
+          "target": "raw_symbol",
+          "kind": "prefix",
+          "value": "void mul_mat_vec_q<(ggml_type)14, 1,"
+        }
+      ],
+      "tags": ["amd", "hip", "rdna3", "wave32", "q6_k", "q8_1", "v_dot4", "low_vgpr", "decode"]
+    }
+  ]
 }

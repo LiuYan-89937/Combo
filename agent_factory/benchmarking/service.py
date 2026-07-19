@@ -11,11 +11,16 @@ from uuid import uuid4
 import httpx
 
 from agent_factory.benchmarking.schema import (
+    BenchmarkExperimentGroup,
+    BenchmarkExperimentGroupSpec,
+    BenchmarkExperimentRunRef,
     BenchmarkImplementation,
+    BenchmarkImplementationId,
     BenchmarkMetricStats,
     BenchmarkOperatorAnalysisResult,
     BenchmarkPromptCacheSummary,
     BenchmarkRun,
+    BenchmarkRunKind,
     BenchmarkRunSpec,
     BenchmarkSample,
     BenchmarkSummary,
@@ -24,6 +29,7 @@ from agent_factory.benchmarking.schema import (
 )
 from agent_factory.benchmarking.store import BenchmarkStore
 from agent_factory.local_inference.config import (
+    LocalInferenceEndpoint,
     load_inference_telemetry_endpoint,
     load_local_inference_endpoint,
 )
@@ -49,6 +55,7 @@ class BenchmarkService:
         self._store = store or BenchmarkStore()
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._active_run_id = ""
+        self._active_group_id = ""
         self._store.interrupt_incomplete()
 
     def list_runs(self, *, limit: int = 100) -> list[BenchmarkRun]:
@@ -57,7 +64,24 @@ class BenchmarkService:
     def require_run(self, run_id: str) -> BenchmarkRun:
         return self._store.require(run_id)
 
+    def list_groups(self, *, limit: int = 100) -> list[BenchmarkExperimentGroup]:
+        return self._store.list_groups(limit=limit)
+
+    def require_group(self, group_id: str) -> BenchmarkExperimentGroup:
+        return self._store.require_group(group_id)
+
+    def group_runs(self, group_id: str) -> list[BenchmarkRun]:
+        group = self._store.require_group(group_id)
+        return [self._store.require(item.run_id) for item in group.runs]
+
     async def start_run(self, spec: BenchmarkRunSpec) -> BenchmarkRun:
+        if self._active_group_id:
+            active_group = self._store.get_group(self._active_group_id)
+            if active_group is not None and active_group.status in {"queued", "running"}:
+                raise ValueError(
+                    f"benchmark experiment group is already active: {active_group.group_id}"
+                )
+            self._active_group_id = ""
         if self._active_run_id:
             active = self._store.get(self._active_run_id)
             if active is not None and active.status in {"queued", "running"}:
@@ -88,6 +112,47 @@ class BenchmarkService:
         self._tasks[run.run_id] = asyncio.create_task(self._execute(run.run_id))
         return run
 
+    async def start_group(
+        self,
+        spec: BenchmarkExperimentGroupSpec,
+    ) -> BenchmarkExperimentGroup:
+        self._require_idle()
+        profile = ModelPoolStore().require_profile(spec.profile_id)
+        if profile.kind != "chat" or not profile.enabled:
+            raise ValueError("benchmark requires an enabled chat profile")
+        if not self._runtime_manager.is_ready(profile.profile_id):
+            raise ValueError("benchmark requires the selected model to be loaded and ready")
+        implementation_status = await InferenceNodeClient().llama_implementation()
+        available = {build.implementation for build in implementation_status.builds}
+        missing = {"official", "amd"} - available
+        if missing:
+            raise ValueError(
+                "benchmark experiment group requires both llama.cpp implementations; "
+                f"missing: {', '.join(sorted(missing))}"
+            )
+        if implementation_status.active not in {"official", "amd"}:
+            raise ValueError("the inference node did not report an active llama.cpp implementation")
+        group = self._store.save_group(
+            BenchmarkExperimentGroup(
+                group_id=uuid4().hex,
+                spec=spec,
+                progress_total=spec.repetitions * 4,
+                initial_implementation=implementation_status.active,
+                active_implementation=implementation_status.active,
+            )
+        )
+        self._active_group_id = group.group_id
+        self._tasks[group.group_id] = asyncio.create_task(
+            self._execute_group(group.group_id)
+        )
+        return group
+
+    def delete_group(self, group_id: str) -> bool:
+        group = self._store.require_group(group_id)
+        if group.status in {"queued", "running"}:
+            raise ValueError("a running benchmark experiment group cannot be deleted")
+        return self._store.delete_group(group_id)
+
     async def cancel_run(self, run_id: str) -> BenchmarkRun:
         run = self._store.require(run_id)
         if run.spec.kind == "operator_analysis" and run.status in {"queued", "running"}:
@@ -116,6 +181,212 @@ class BenchmarkService:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
+    def _require_idle(self) -> None:
+        if self._active_group_id:
+            group = self._store.get_group(self._active_group_id)
+            if group is not None and group.status in {"queued", "running"}:
+                raise ValueError(f"benchmark experiment group is already active: {group.group_id}")
+            self._active_group_id = ""
+        if self._active_run_id:
+            run = self._store.get(self._active_run_id)
+            if run is not None and run.status in {"queued", "running"}:
+                raise ValueError(f"benchmark run is already active: {run.run_id}")
+            self._active_run_id = ""
+
+    async def _execute_group(self, group_id: str) -> None:
+        group = self._store.require_group(group_id)
+        restored_error: Exception | None = None
+        execution_succeeded = False
+        try:
+            group = self._store.save_group(
+                group.model_copy(
+                    update={"status": "running", "started_at": utc_now_text()},
+                    deep=True,
+                )
+            )
+            for repetition_index in range(group.spec.repetitions):
+                implementations = (
+                    ("official", "amd")
+                    if repetition_index % 2 == 0
+                    else ("amd", "official")
+                )
+                for implementation in implementations:
+                    await self._activate_group_implementation(
+                        group_id,
+                        implementation,
+                    )
+                    for kind in ("performance", "operator_analysis"):
+                        await self._execute_group_run(
+                            group_id,
+                            repetition_index=repetition_index,
+                            implementation=implementation,
+                            kind=kind,
+                        )
+            execution_succeeded = True
+        except asyncio.CancelledError:
+            current = self._store.require_group(group_id)
+            self._store.save_group(
+                current.model_copy(
+                    update={
+                        "status": "interrupted",
+                        "error": "benchmark process stopped before the experiment group completed",
+                        "completed_at": utc_now_text(),
+                    },
+                    deep=True,
+                )
+            )
+            raise
+        except Exception as exc:
+            current = self._store.require_group(group_id)
+            self._store.save_group(
+                current.model_copy(
+                    update={
+                        "status": "failed",
+                        "error": f"{type(exc).__name__}: {exc}",
+                        "completed_at": utc_now_text(),
+                    },
+                    deep=True,
+                )
+            )
+        finally:
+            current = self._store.require_group(group_id)
+            if (
+                current.initial_implementation is not None
+                and current.active_implementation != current.initial_implementation
+            ):
+                try:
+                    await self._activate_group_implementation(
+                        group_id,
+                        current.initial_implementation,
+                    )
+                except Exception as exc:
+                    restored_error = exc
+            if restored_error is not None:
+                current = self._store.require_group(group_id)
+                restoration_message = (
+                    "failed to restore the initial llama.cpp implementation: "
+                    f"{type(restored_error).__name__}: {restored_error}"
+                )
+                self._store.save_group(
+                    current.model_copy(
+                        update={
+                            "status": "failed",
+                            "error": "; ".join(
+                                part for part in (current.error, restoration_message) if part
+                            ),
+                            "completed_at": current.completed_at or utc_now_text(),
+                        },
+                        deep=True,
+                    )
+                )
+            elif execution_succeeded:
+                current = self._store.require_group(group_id)
+                self._store.save_group(
+                    current.model_copy(
+                        update={"status": "completed", "completed_at": utc_now_text()},
+                        deep=True,
+                    )
+                )
+            self._tasks.pop(group_id, None)
+            if self._active_group_id == group_id:
+                self._active_group_id = ""
+
+    async def _activate_group_implementation(
+        self,
+        group_id: str,
+        implementation: BenchmarkImplementationId,
+    ) -> None:
+        group = self._store.require_group(group_id)
+        if group.active_implementation == implementation:
+            return
+        await InferenceNodeClient().activate_llama_implementation(implementation)
+        current = self._store.require_group(group_id)
+        self._store.save_group(
+            current.model_copy(
+                update={"active_implementation": implementation},
+                deep=True,
+            )
+        )
+
+    async def _execute_group_run(
+        self,
+        group_id: str,
+        *,
+        repetition_index: int,
+        implementation: BenchmarkImplementationId,
+        kind: BenchmarkRunKind,
+    ) -> None:
+        group = self._store.require_group(group_id)
+        run_spec = await self._group_run_spec(
+            group.spec,
+            repetition_index=repetition_index,
+            implementation=implementation,
+            kind=kind,
+        )
+        run = self._store.save(
+            BenchmarkRun(
+                run_id=uuid4().hex,
+                spec=run_spec,
+                progress_total=(
+                    1
+                    if kind == "operator_analysis"
+                    else run_spec.warmup_iterations + run_spec.measured_iterations
+                ),
+            )
+        )
+        ref = BenchmarkExperimentRunRef(
+            run_id=run.run_id,
+            repetition_index=repetition_index,
+            implementation=implementation,
+            kind=kind,
+        )
+        self._store.save_group(
+            group.model_copy(update={"runs": [*group.runs, ref]}, deep=True)
+        )
+        await self._execute(run.run_id)
+        completed = self._store.require(run.run_id)
+        if completed.status != "completed":
+            raise RuntimeError(
+                f"{implementation} {kind} run failed: {completed.error or completed.status}"
+            )
+        current = self._store.require_group(group_id)
+        self._store.save_group(
+            current.model_copy(
+                update={"progress_completed": current.progress_completed + 1},
+                deep=True,
+            )
+        )
+
+    async def _group_run_spec(
+        self,
+        spec: BenchmarkExperimentGroupSpec,
+        *,
+        repetition_index: int,
+        implementation: BenchmarkImplementationId,
+        kind: BenchmarkRunKind,
+    ) -> BenchmarkRunSpec:
+        active = await _active_benchmark_implementation()
+        active_id = str(active.parameters.get("implementation") or "")
+        if active_id != implementation:
+            raise ValueError(
+                f"active implementation mismatch: expected {implementation}, got {active_id or 'unknown'}"
+            )
+        return BenchmarkRunSpec(
+            kind=kind,
+            name=f"{spec.name} · {repetition_index + 1} · {implementation}",
+            profile_id=spec.profile_id,
+            prompt=spec.prompt if kind == "performance" else "",
+            max_output_tokens=spec.max_output_tokens,
+            temperature=spec.temperature,
+            seed=spec.seed,
+            warmup_iterations=spec.warmup_iterations,
+            measured_iterations=spec.measured_iterations,
+            telemetry_interval_ms=spec.telemetry_interval_ms,
+            prompt_cache_mode=spec.prompt_cache_mode,
+            implementation=active,
+            operator_analysis=(spec.operator_analysis if kind == "operator_analysis" else None),
+        )
+
     async def _execute(self, run_id: str) -> None:
         run = self._store.require(run_id)
         try:
@@ -132,24 +403,32 @@ class BenchmarkService:
             if run.spec.kind == "operator_analysis":
                 await self._execute_operator_analysis(run)
                 return
-            for sample_index in range(run.progress_total):
-                current = self._store.require(run_id)
-                sample = await self._run_sample(
-                    current.spec,
-                    sample_index=sample_index,
-                    warmup=sample_index < current.spec.warmup_iterations,
-                )
-                run = self._store.save(
-                    current.model_copy(
-                        update={
-                            "samples": [*current.samples, sample],
-                            "progress_completed": sample_index + 1,
-                        },
-                        deep=True,
+            profile = ModelPoolStore().require_profile(run.spec.profile_id)
+            endpoint = load_local_inference_endpoint(
+                timeout_seconds=profile.limits.timeout_seconds or 600.0
+            )
+            async with create_private_async_http_client(endpoint) as client:
+                for sample_index in range(run.progress_total):
+                    current = self._store.require(run_id)
+                    sample = await self._run_sample(
+                        current.spec,
+                        client=client,
+                        endpoint=endpoint,
+                        served_model_name=profile.served_model_name,
+                        sample_index=sample_index,
+                        warmup=sample_index < current.spec.warmup_iterations,
                     )
-                )
-                if sample.status == "failed":
-                    raise RuntimeError(sample.error or "benchmark sample failed")
+                    run = self._store.save(
+                        current.model_copy(
+                            update={
+                                "samples": [*current.samples, sample],
+                                "progress_completed": sample_index + 1,
+                            },
+                            deep=True,
+                        )
+                    )
+                    if sample.status == "failed":
+                        raise RuntimeError(sample.error or "benchmark sample failed")
             summary = _summarize(run.samples)
             self._store.save(
                 run.model_copy(
@@ -224,9 +503,13 @@ class BenchmarkService:
         self,
         spec: BenchmarkRunSpec,
         *,
+        client: httpx.AsyncClient,
+        endpoint: LocalInferenceEndpoint,
+        served_model_name: str,
         sample_index: int,
         warmup: bool,
     ) -> BenchmarkSample:
+        started_at = utc_now_text()
         started_ns = time.perf_counter_ns()
         stop_telemetry = asyncio.Event()
         telemetry: list[BenchmarkTelemetryPoint] = []
@@ -239,60 +522,68 @@ class BenchmarkService:
             )
         )
         first_token_ns: int | None = None
+        response_headers_ns: int | None = None
+        first_event_ns: int | None = None
+        first_token_timings: dict[str, Any] = {}
         output_parts: list[str] = []
         timings: dict[str, Any] = {}
         usage: dict[str, Any] = {}
         finish_reason = ""
         try:
-            profile = ModelPoolStore().require_profile(spec.profile_id)
-            endpoint = load_local_inference_endpoint(
-                timeout_seconds=profile.limits.timeout_seconds or 600.0
-            )
             payload = {
-                "model": profile.served_model_name,
+                "model": served_model_name,
                 "messages": [{"role": "user", "content": spec.prompt}],
                 "stream": True,
                 "temperature": spec.temperature,
                 "max_tokens": spec.max_output_tokens,
                 "seed": spec.seed,
+                "cache_prompt": spec.prompt_cache_mode != "cold",
+                "timings_per_token": True,
             }
-            async with create_private_async_http_client(endpoint) as client:
-                async with client.stream(
-                    "POST",
-                    endpoint.endpoint("/chat/completions"),
-                    json=payload,
-                ) as response:
-                    response.raise_for_status()
-                    async for line in response.aiter_lines():
-                        data = _sse_payload(line)
-                        if data is None:
-                            continue
-                        if data == "[DONE]":
-                            break
-                        chunk = json.loads(data)
-                        if isinstance(chunk.get("timings"), dict):
-                            timings = dict(chunk["timings"])
-                        if isinstance(chunk.get("usage"), dict):
-                            usage = dict(chunk["usage"])
-                        choice = _first_choice(chunk)
-                        if choice is None:
-                            continue
-                        finish_reason = str(choice.get("finish_reason") or finish_reason)
-                        delta = choice.get("delta") if isinstance(choice.get("delta"), dict) else {}
-                        visible = _visible_delta(delta)
-                        if visible and first_token_ns is None:
-                            first_token_ns = time.perf_counter_ns()
-                        content = delta.get("content")
-                        if isinstance(content, str):
-                            output_parts.append(content)
+            async with client.stream(
+                "POST",
+                endpoint.endpoint("/chat/completions"),
+                json=payload,
+            ) as response:
+                response_headers_ns = time.perf_counter_ns()
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    data = _sse_payload(line)
+                    if data is None:
+                        continue
+                    if data == "[DONE]":
+                        break
+                    chunk = json.loads(data)
+                    if first_event_ns is None:
+                        first_event_ns = time.perf_counter_ns()
+                    if isinstance(chunk.get("timings"), dict):
+                        timings = dict(chunk["timings"])
+                    if isinstance(chunk.get("usage"), dict):
+                        usage = dict(chunk["usage"])
+                    choice = _first_choice(chunk)
+                    if choice is None:
+                        continue
+                    finish_reason = str(choice.get("finish_reason") or finish_reason)
+                    delta = choice.get("delta") if isinstance(choice.get("delta"), dict) else {}
+                    visible = _visible_delta(delta)
+                    if visible and first_token_ns is None:
+                        first_token_ns = time.perf_counter_ns()
+                        first_token_timings = dict(timings)
+                    content = delta.get("content")
+                    if isinstance(content, str):
+                        output_parts.append(content)
             completed_ns = time.perf_counter_ns()
             return _completed_sample(
                 sample_index=sample_index,
                 warmup=warmup,
+                started_at=started_at,
                 started_ns=started_ns,
+                response_headers_ns=response_headers_ns,
+                first_event_ns=first_event_ns,
                 first_token_ns=first_token_ns,
                 completed_ns=completed_ns,
                 timings=timings,
+                first_token_timings=first_token_timings,
                 usage=usage,
                 output_text="".join(output_parts),
                 finish_reason=finish_reason,
@@ -302,6 +593,7 @@ class BenchmarkService:
             return BenchmarkSample(
                 sample_index=sample_index,
                 warmup=warmup,
+                started_at=started_at,
                 status="failed",
                 end_to_end_ms=_elapsed_ms(started_ns, time.perf_counter_ns()),
                 telemetry=telemetry,
@@ -436,16 +728,28 @@ def _completed_sample(
     *,
     sample_index: int,
     warmup: bool,
+    started_at: str,
     started_ns: int,
+    response_headers_ns: int | None,
+    first_event_ns: int | None,
     first_token_ns: int | None,
     completed_ns: int,
     timings: dict[str, Any],
+    first_token_timings: dict[str, Any],
     usage: dict[str, Any],
     output_text: str,
     finish_reason: str,
     telemetry: list[BenchmarkTelemetryPoint],
 ) -> BenchmarkSample:
     prompt_tokens, cache_tokens = _prompt_token_counts(timings, usage)
+    ttft_ms = _elapsed_ms(started_ns, first_token_ns) if first_token_ns else None
+    first_prompt_ms = _optional_float(first_token_timings.get("prompt_ms"))
+    first_decode_ms = _optional_float(first_token_timings.get("predicted_ms"))
+    model_compute_ttft_ms = (
+        first_prompt_ms + first_decode_ms
+        if first_prompt_ms is not None and first_decode_ms is not None
+        else None
+    )
     gpu_usage = _values(telemetry, "gpu_utilization_percent")
     power = _values(telemetry, "power_watts")
     temperatures = _values(telemetry, "temperature_celsius")
@@ -453,7 +757,19 @@ def _completed_sample(
     return BenchmarkSample(
         sample_index=sample_index,
         warmup=warmup,
-        ttft_ms=_elapsed_ms(started_ns, first_token_ns) if first_token_ns else None,
+        started_at=started_at,
+        ttft_ms=ttft_ms,
+        request_to_headers_ms=(
+            _elapsed_ms(started_ns, response_headers_ns) if response_headers_ns else None
+        ),
+        first_event_ms=_elapsed_ms(started_ns, first_event_ns) if first_event_ns else None,
+        model_compute_ttft_ms=model_compute_ttft_ms,
+        first_token_decode_ms=first_decode_ms,
+        outside_model_compute_ms=(
+            max(0.0, ttft_ms - model_compute_ttft_ms)
+            if ttft_ms is not None and model_compute_ttft_ms is not None
+            else None
+        ),
         end_to_end_ms=_elapsed_ms(started_ns, completed_ns),
         prompt_tokens=prompt_tokens,
         completion_tokens=_optional_int(
@@ -483,7 +799,14 @@ def _summarize(samples: list[BenchmarkSample]) -> BenchmarkSummary:
         measured_samples=len(measured),
         successful_samples=len(successful),
         ttft_ms=_stats(successful, "ttft_ms"),
+        request_to_headers_ms=_stats(successful, "request_to_headers_ms"),
+        first_event_ms=_stats(successful, "first_event_ms"),
+        model_compute_ttft_ms=_stats(successful, "model_compute_ttft_ms"),
+        first_token_decode_ms=_stats(successful, "first_token_decode_ms"),
+        outside_model_compute_ms=_stats(successful, "outside_model_compute_ms"),
         end_to_end_ms=_stats(successful, "end_to_end_ms"),
+        prompt_ms=_stats(successful, "prompt_ms"),
+        decode_ms=_stats(successful, "decode_ms"),
         prompt_tokens_per_second=_stats(successful, "prompt_tokens_per_second"),
         decode_tokens_per_second=_stats(successful, "decode_tokens_per_second"),
         peak_vram_bytes=_stats(successful, "peak_vram_bytes"),

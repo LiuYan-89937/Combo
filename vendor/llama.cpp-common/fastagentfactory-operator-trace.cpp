@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <map>
 #include <mutex>
 #include <string>
 #include <utility>
@@ -32,6 +33,12 @@ struct DispatchRecord {
     std::size_t shared_memory_bytes = 0;
     bool stream_k = false;
     bool fallback = false;
+};
+
+struct KernelRecord {
+    std::size_t selected_count = 0;
+    std::size_t fallback_count = 0;
+    std::map<std::string, std::size_t> fallback_reasons;
 };
 
 void write_json_string(FILE * output, const std::string & value) {
@@ -81,6 +88,24 @@ public:
         records_.push_back(std::move(record));
     }
 
+    void record_kernel_selection(const std::string & kernel_id) {
+        if (!enabled()) {
+            return;
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        ++kernels_[kernel_id].selected_count;
+    }
+
+    void record_kernel_rejection(const std::string & kernel_id, const std::string & reason) {
+        if (!enabled()) {
+            return;
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        KernelRecord & record = kernels_[kernel_id];
+        ++record.fallback_count;
+        ++record.fallback_reasons[reason];
+    }
+
 private:
     void flush() noexcept {
         if (!enabled()) {
@@ -92,7 +117,29 @@ private:
             std::fprintf(stderr, "FastAgentFactory operator trace could not open %s\n", output_path_.c_str());
             return;
         }
-        std::fputs("{\n  \"schema_version\": 1,\n  \"kernels\": [],\n  \"dispatches\": [", output);
+        std::fputs("{\n  \"schema_version\": 1,\n  \"kernels\": [", output);
+        std::size_t kernel_index = 0;
+        for (const auto & [kernel_id, record] : kernels_) {
+            std::fputs(kernel_index++ == 0 ? "\n    {\n      \"kernel_id\": " : ",\n    {\n      \"kernel_id\": ", output);
+            write_json_string(output, kernel_id);
+            std::fprintf(
+                output,
+                ",\n      \"selected_count\": %zu,\n"
+                "      \"dispatch_count\": %zu,\n"
+                "      \"fallback_count\": %zu,\n"
+                "      \"fallback_reasons\": {",
+                record.selected_count,
+                record.selected_count,
+                record.fallback_count);
+            std::size_t reason_index = 0;
+            for (const auto & [reason, count] : record.fallback_reasons) {
+                std::fputs(reason_index++ == 0 ? "\n        " : ",\n        ", output);
+                write_json_string(output, reason);
+                std::fprintf(output, ": %zu", count);
+            }
+            std::fputs(record.fallback_reasons.empty() ? "}\n    }" : "\n      }\n    }", output);
+        }
+        std::fputs(kernels_.empty() ? "],\n  \"dispatches\": [" : "\n  ],\n  \"dispatches\": [", output);
         for (std::size_t index = 0; index < records_.size(); ++index) {
             const DispatchRecord & row = records_[index];
             std::fputs(index == 0 ? "\n    {\n" : ",\n    {\n", output);
@@ -147,6 +194,7 @@ private:
 
     std::string output_path_;
     std::mutex mutex_;
+    std::map<std::string, KernelRecord> kernels_;
     std::vector<DispatchRecord> records_;
 };
 
@@ -156,6 +204,28 @@ TraceStore & trace_store() {
 }
 
 } // namespace
+
+void record_kernel_selection(const char * kernel_id) {
+    if (kernel_id == nullptr || kernel_id[0] == '\0') {
+        return;
+    }
+    TraceStore & store = trace_store();
+    if (!store.enabled()) {
+        return;
+    }
+    store.record_kernel_selection(kernel_id);
+}
+
+void record_kernel_rejection(const char * kernel_id, const char * reason) {
+    if (kernel_id == nullptr || kernel_id[0] == '\0' || reason == nullptr || reason[0] == '\0') {
+        return;
+    }
+    TraceStore & store = trace_store();
+    if (!store.enabled()) {
+        return;
+    }
+    store.record_kernel_rejection(kernel_id, reason);
+}
 
 void record_mmvq(
         const char * weight_type,

@@ -1388,6 +1388,8 @@ struct ggml_cuda_stream_context {
     }
 };
 
+struct ggml_cuda_mmvq_activation_cache;
+
 struct ggml_backend_cuda_context {
     int device;
     std::string name;
@@ -1397,6 +1399,7 @@ struct ggml_backend_cuda_context {
     cublasHandle_t cublas_handles[GGML_CUDA_MAX_DEVICES] = {nullptr};
 
     int curr_stream_no = 0;
+    ggml_cuda_mmvq_activation_cache * mmvq_activation_cache = nullptr;
 
 #ifdef USE_CUDA_GRAPH
     // Map from first_node_ptr to cuda_graph - allows multiple graphs per context
@@ -1642,4 +1645,3 @@ static __inline__ void ggml_cuda_kernel_launch(Kernel kernel, const ggml_cuda_ke
     kernel<<<launch_params.block_nums, launch_params.block_dims, launch_params.shmem, launch_params.stream>>>(std::forward<Args>(args)... );
     CUDA_CHECK(cudaGetLastError());
 }
-

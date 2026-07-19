@@ -297,7 +297,7 @@ export interface LlamaImplementationBuild {
   kernel_catalog_path: string
   kernel_catalog_sha256: string
   custom_kernels: boolean
-  optimization_status: 'baseline' | 'placeholder' | 'optimized'
+  optimization_status: 'baseline' | 'placeholder' | 'experimental' | 'optimized'
   build_options: Record<string, unknown>
   built_at: string
 }

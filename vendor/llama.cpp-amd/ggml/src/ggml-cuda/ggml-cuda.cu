@@ -66,6 +66,10 @@
 #include "ggml-cuda/cumsum.cuh"
 #include "ggml-cuda/fill.cuh"
 #include "ggml.h"
+#if defined(GGML_USE_HIP)
+#include "../ggml-hip/amd-kernels/residual-rmsnorm.hpp"
+#include "fastagentfactory-operator-trace.h"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -634,6 +638,8 @@ static std::atomic<int> ggml_cuda_lock_counter;
 ggml_backend_cuda_context::~ggml_backend_cuda_context() {
     std::unique_lock<std::mutex> lock(ggml_cuda_lock);
     ggml_cuda_lock_cv.wait(lock, []{ return ggml_cuda_lock_counter.load(std::memory_order_relaxed) == 0; });
+
+    ggml_cuda_release_mmvq_activation_cache(*this);
 
     if (copy_event != nullptr) {
         CUDA_CHECK(cudaEventDestroy(copy_event));
@@ -2750,6 +2756,22 @@ static bool ggml_cuda_topk_moe_fusion(const struct ggml_cgraph * cgraph, int nod
     return true;
 }
 
+static bool ggml_cuda_tensors_overlap(const ggml_tensor * a, const ggml_tensor * b) {
+    const uintptr_t a_start = reinterpret_cast<uintptr_t>(a->data);
+    const uintptr_t a_end   = a_start + ggml_backend_buft_get_alloc_size(a->buffer->buft, a);
+    const uintptr_t b_start = reinterpret_cast<uintptr_t>(b->data);
+    const uintptr_t b_end   = b_start + ggml_backend_buft_get_alloc_size(b->buffer->buft, b);
+
+    return (b_start <= a_start && a_start < b_end) || (a_start <= b_start && b_start < a_end);
+}
+
+static bool ggml_cuda_tensors_exact_alias(const ggml_tensor * a, const ggml_tensor * b) {
+    return a->data == b->data &&
+        a->type == b->type &&
+        ggml_are_same_shape(a, b) &&
+        std::equal(a->nb, a->nb + GGML_MAX_DIMS, b->nb);
+}
+
 // returns whether the write (out) nodes overwrite the read nodes in operation
 static bool ggml_cuda_check_fusion_memory_ranges(const ggml_cgraph * cgraph,
                                                  const int           node_idx,
@@ -2757,20 +2779,6 @@ static bool ggml_cuda_check_fusion_memory_ranges(const ggml_cgraph * cgraph,
                                                  const int *         out_nodes,
                                                  const int           out_count,
                                                  const bool          is_topk_moe = false) {
-    auto nodes_overlap = [&](const ggml_tensor * a, const ggml_tensor * b) {
-        const int64_t a_start = (int64_t) a->data;
-        const int64_t a_end   = a_start + ggml_backend_buft_get_alloc_size(a->buffer->buft, a);
-
-        const int64_t b_start = (int64_t) b->data;
-        const int64_t b_end   = b_start + ggml_backend_buft_get_alloc_size(b->buffer->buft, b);
-
-        if ((b_start <= a_start && a_start < b_end) || (a_start <= b_start && b_start < a_end)) {
-            return true;
-        }
-
-        return false;
-    };
-
     bool is_ok = true;
     // exception for topk-moe, as each row is read entirely before writing
     if (ggml_nrows(cgraph->nodes[node_idx]) == 1 && is_topk_moe) {
@@ -2792,7 +2800,7 @@ static bool ggml_cuda_check_fusion_memory_ranges(const ggml_cgraph * cgraph,
                     continue;
                 }
 
-                if (nodes_overlap(dst, src)) {
+                if (ggml_cuda_tensors_overlap(dst, src)) {
                     bool found = false;
 
                     for (int k = node_idx; k < j; ++k) {
@@ -2813,6 +2821,149 @@ static bool ggml_cuda_check_fusion_memory_ranges(const ggml_cgraph * cgraph,
 
     return is_ok;
 }
+
+#if defined(GGML_USE_HIP)
+struct ggml_hip_residual_rms_norm_fusion {
+    ggml_tensor * add = nullptr;
+    ggml_tensor * rms_norm = nullptr;
+    ggml_tensor * scale = nullptr;
+    const ggml_tensor * norm_weight = nullptr;
+    float epsilon = 0.0f;
+};
+
+static bool ggml_hip_match_residual_rms_norm(
+        const ggml_cgraph * cgraph,
+        int node_idx,
+        ggml_hip_residual_rms_norm_fusion & fusion) {
+    if (node_idx + 2 >= cgraph->n_nodes ||
+            cgraph->nodes[node_idx]->op != GGML_OP_ADD ||
+            cgraph->nodes[node_idx + 1]->op != GGML_OP_RMS_NORM ||
+            cgraph->nodes[node_idx + 2]->op != GGML_OP_MUL) {
+        return false;
+    }
+
+    const auto reject = [](const char * reason) {
+        fastagentfactory::operator_trace::record_kernel_rejection(
+            fastagentfactory::amd_kernels::residual_rms_norm_kernel_id,
+            reason);
+        return false;
+    };
+
+    const int output_nodes[] = { node_idx, node_idx + 2 };
+    const ggml_op operations[] = { GGML_OP_ADD, GGML_OP_RMS_NORM, GGML_OP_MUL };
+    if (!ggml_can_fuse_subgraph(cgraph, node_idx, 3, operations, output_nodes, 2)) {
+        return reject("subgraph_not_fusible");
+    }
+
+    ggml_tensor * add = cgraph->nodes[node_idx];
+    ggml_tensor * rms_norm = cgraph->nodes[node_idx + 1];
+    ggml_tensor * scale = cgraph->nodes[node_idx + 2];
+    if (rms_norm->src[0] != add) {
+        return reject("rms_input_mismatch");
+    }
+
+    const ggml_tensor * norm_weight = nullptr;
+    if (scale->src[0] == rms_norm) {
+        norm_weight = scale->src[1];
+    } else if (scale->src[1] == rms_norm) {
+        norm_weight = scale->src[0];
+    } else {
+        return reject("scale_input_mismatch");
+    }
+
+    if (add->type != GGML_TYPE_F32 || rms_norm->type != GGML_TYPE_F32 ||
+            scale->type != GGML_TYPE_F32 || add->src[0]->type != GGML_TYPE_F32 ||
+            add->src[1]->type != GGML_TYPE_F32 || norm_weight->type != GGML_TYPE_F32) {
+        return reject("unsupported_type");
+    }
+    if (!ggml_are_same_shape(add->src[0], add->src[1]) ||
+            !ggml_are_same_shape(add, rms_norm) || !ggml_are_same_shape(add, scale)) {
+        return reject("incompatible_shape");
+    }
+    if (!ggml_is_contiguous(add->src[0]) || !ggml_is_contiguous(add->src[1]) ||
+            !ggml_is_contiguous(add) || !ggml_is_contiguous(scale) ||
+            !ggml_is_contiguous(norm_weight)) {
+        return reject("non_contiguous_layout");
+    }
+    if (ggml_nrows(norm_weight) != 1 || norm_weight->ne[0] != add->ne[0]) {
+        return reject("unsupported_weight_layout");
+    }
+
+    const int64_t rows = ggml_nrows(add);
+    if (add->ne[0] <= 0 || rows <= 0 ||
+            static_cast<uint64_t>(rows) > std::numeric_limits<uint32_t>::max()) {
+        return reject("unsupported_dimensions");
+    }
+
+    if (!fastagentfactory::amd_kernels::supports_residual_rms_norm_f32(
+            static_cast<const float *>(add->src[0]->data),
+            static_cast<const float *>(add->src[1]->data),
+            static_cast<const float *>(norm_weight->data),
+            static_cast<const float *>(add->data),
+            static_cast<const float *>(scale->data),
+            add->ne[0],
+            rows)) {
+        return reject("unsupported_vector_layout");
+    }
+    if (ggml_cuda_tensors_overlap(add, scale)) {
+        return reject("output_alias");
+    }
+
+    const auto has_unsafe_input_alias = [](const ggml_tensor * output, const ggml_tensor * input) {
+        return ggml_cuda_tensors_overlap(output, input) &&
+            !ggml_cuda_tensors_exact_alias(output, input);
+    };
+    if (has_unsafe_input_alias(add, add->src[0]) ||
+            has_unsafe_input_alias(add, add->src[1])) {
+        return reject("residual_output_partial_input_alias");
+    }
+    if (has_unsafe_input_alias(scale, add->src[0]) ||
+            has_unsafe_input_alias(scale, add->src[1])) {
+        return reject("normalized_output_partial_input_alias");
+    }
+    if (ggml_cuda_tensors_overlap(add, norm_weight) ||
+            ggml_cuda_tensors_overlap(scale, norm_weight)) {
+        return reject("norm_weight_output_alias");
+    }
+
+    float epsilon = 0.0f;
+    memcpy(&epsilon, rms_norm->op_params, sizeof(epsilon));
+    if (epsilon < 0.0f) {
+        return reject("invalid_epsilon");
+    }
+
+    fusion.add = add;
+    fusion.rms_norm = rms_norm;
+    fusion.scale = scale;
+    fusion.norm_weight = norm_weight;
+    fusion.epsilon = epsilon;
+    return true;
+}
+
+static int ggml_hip_try_fuse_residual_rms_norm(
+        ggml_backend_cuda_context * cuda_ctx,
+        ggml_cgraph * cgraph,
+        int node_idx) {
+    ggml_hip_residual_rms_norm_fusion fusion;
+    if (!ggml_hip_match_residual_rms_norm(cgraph, node_idx, fusion)) {
+        return 0;
+    }
+
+    CUDA_CHECK(fastagentfactory::amd_kernels::launch_residual_rms_norm_f32(
+        static_cast<const float *>(fusion.add->src[0]->data),
+        static_cast<const float *>(fusion.add->src[1]->data),
+        static_cast<const float *>(fusion.norm_weight->data),
+        static_cast<float *>(fusion.add->data),
+        static_cast<float *>(fusion.scale->data),
+        fusion.add->ne[0],
+        ggml_nrows(fusion.add),
+        fusion.epsilon,
+        cuda_ctx->stream()));
+    fastagentfactory::operator_trace::record_kernel_selection(
+        fastagentfactory::amd_kernels::residual_rms_norm_kernel_id);
+    return 2;
+}
+#endif
 
 
 static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
@@ -3044,6 +3195,13 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     }
 
     ggml_tensor * node = cgraph->nodes[i];
+
+#if defined(GGML_USE_HIP)
+    const int residual_rms_norm_nodes = ggml_hip_try_fuse_residual_rms_norm(cuda_ctx, cgraph, i);
+    if (residual_rms_norm_nodes > 0) {
+        return residual_rms_norm_nodes;
+    }
+#endif
 
     // gated_delta_net -> cpy: scatter recurrent-state snapshots into the cache
     if (node->op == GGML_OP_GATED_DELTA_NET) {
@@ -4029,6 +4187,21 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
         }
     }
 #endif // USE_CUDA_GRAPH
+
+#if defined(GGML_USE_HIP)
+    bool mmvq_activation_cache_supported =
+        GGML_CUDA_CC_IS_RDNA3(ggml_cuda_info().devices[cuda_ctx->device].cc);
+#ifdef USE_CUDA_GRAPH
+    mmvq_activation_cache_supported =
+        mmvq_activation_cache_supported &&
+        (!use_cuda_graph || cuda_ctx->cuda_graphs.size() <= 1);
+#endif
+    if (!mmvq_activation_cache_supported) {
+        ggml_cuda_disable_mmvq_activation_cache(*cuda_ctx);
+    } else if (!use_cuda_graph || cuda_graph_update_required) {
+        ggml_cuda_prepare_mmvq_activation_cache(*cuda_ctx, *cgraph);
+    }
+#endif
 
     if (use_cuda_graph && cuda_graph_update_required) {
         // Start CUDA graph capture

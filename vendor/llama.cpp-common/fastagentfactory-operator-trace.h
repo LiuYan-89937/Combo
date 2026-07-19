@@ -5,6 +5,9 @@
 
 namespace fastagentfactory::operator_trace {
 
+void record_kernel_selection(const char * kernel_id);
+void record_kernel_rejection(const char * kernel_id, const char * reason);
+
 void record_mmvq(
     const char * weight_type,
     int64_t m,

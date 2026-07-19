@@ -15,16 +15,16 @@
     </header>
 
     <main class="benchmark-content">
-      <section class="panel run-form-panel">
+      <n-tabs v-model:value="activePageTab" type="line" animated class="benchmark-tabs">
+        <n-tab-pane name="configuration" :tab="t('benchmark.configurationTab')">
+          <section class="panel run-form-panel">
         <div class="panel-heading">
           <div>
-            <h2>{{ t('benchmark.newRun') }}</h2>
-            <p>{{ t('benchmark.implementationHint') }}</p>
+            <h2>{{ t('benchmark.newExperimentGroup') }}</h2>
+            <p>{{ t('benchmark.experimentGroupHint') }}</p>
           </div>
-          <n-tag v-if="activeRun" type="info" :bordered="false">{{ statusLabel(activeRun.status) }}</n-tag>
-          <n-tag v-else-if="llamaStatus?.active_build" type="success" :bordered="false">
-            {{ llamaStatus.active_build.display_name }}
-          </n-tag>
+          <n-tag v-if="activeGroup" type="info" :bordered="false">{{ statusLabel(activeGroup.status) }}</n-tag>
+          <n-tag v-else type="success" :bordered="false">Official + AMD</n-tag>
         </div>
 
         <n-alert v-if="!readyChatProfiles.length" type="warning" :show-icon="true">
@@ -34,51 +34,11 @@
           {{ llamaStatus?.error || t('benchmark.implementationUnavailable') }}
         </n-alert>
 
-        <div class="benchmark-kind-selector implementation-selector">
-          <div class="selector-label">
-            <span>{{ t('benchmark.implementationSelector') }}</span>
-            <small>{{ t('benchmark.implementationSwitchHint') }}</small>
-          </div>
-          <n-radio-group
-            :value="selectedImplementation"
-            size="small"
-            class="benchmark-kind-control soft-segmented-control"
-            :disabled="Boolean(activeRun) || switchingImplementation"
-            @update:value="switchImplementation"
-          >
-            <n-radio-button
-              v-for="build in llamaStatus?.builds || []"
-              :key="build.implementation"
-              :value="build.implementation"
-            >
-              {{ build.implementation === 'official'
-                ? t('benchmark.officialImplementation')
-                : t('benchmark.amdImplementation') }}
-            </n-radio-button>
-          </n-radio-group>
-          <n-tag v-if="switchingImplementation" type="warning" :bordered="false">
-            {{ t('benchmark.switchingImplementation') }}
-          </n-tag>
-        </div>
-
-        <div class="benchmark-kind-selector">
-          <span>{{ t('benchmark.kind') }}</span>
-          <n-radio-group
-            v-model:value="form.kind"
-            size="small"
-            class="benchmark-kind-control soft-segmented-control"
-            :disabled="Boolean(activeRun)"
-          >
-            <n-radio-button value="performance">{{ t('benchmark.performanceKind') }}</n-radio-button>
-            <n-radio-button value="operator_analysis">{{ t('benchmark.operatorKind') }}</n-radio-button>
-          </n-radio-group>
-        </div>
-
-        <n-alert v-if="form.kind === 'operator_analysis'" type="warning" :show-icon="true">
+        <n-alert type="warning" :show-icon="true">
           {{ t('benchmark.operatorPauseWarning') }}
         </n-alert>
         <n-alert
-          v-if="form.kind === 'operator_analysis' && llamaStatus?.active_build && !llamaStatus.active_build.benchmark_binary_path"
+          v-if="llamaStatus?.builds?.some((build) => !build.benchmark_binary_path)"
           type="error"
           :show-icon="true"
           class="operator-warning"
@@ -89,7 +49,7 @@
         <div class="form-grid">
           <label class="field field-wide">
             <span>{{ t('benchmark.runName') }}</span>
-            <n-input v-model:value="form.name" :disabled="Boolean(activeRun)" />
+            <n-input v-model:value="form.name" :disabled="Boolean(activeGroup)" />
           </label>
           <label class="field field-wide">
             <span>{{ t('benchmark.profile') }}</span>
@@ -97,87 +57,184 @@
               class="profile-select"
               v-model:value="form.profile_id"
               :options="profileOptions"
-              :disabled="Boolean(activeRun)"
+              :disabled="Boolean(activeGroup)"
             />
           </label>
-          <label v-if="form.kind === 'performance'" class="field field-full">
+          <label class="field field-full">
             <span>{{ t('benchmark.prompt') }}</span>
             <n-input
               v-model:value="form.prompt"
               type="textarea"
               :autosize="{ minRows: 4, maxRows: 10 }"
               :placeholder="t('benchmark.promptPlaceholder')"
-              :disabled="Boolean(activeRun)"
+              :disabled="Boolean(activeGroup)"
             />
           </label>
-          <label v-if="form.kind === 'performance'" class="field">
+          <label class="field">
+            <span>{{ t('benchmark.experimentRepetitions') }}</span>
+            <n-input-number v-model:value="form.repetitions" :min="1" :max="20" :disabled="Boolean(activeGroup)" />
+          </label>
+          <label class="field">
             <span>{{ t('benchmark.maxOutputTokens') }}</span>
-            <n-input-number v-model:value="form.max_output_tokens" :min="1" :max="32768" :disabled="Boolean(activeRun)" />
+            <n-input-number v-model:value="form.max_output_tokens" :min="1" :max="32768" :disabled="Boolean(activeGroup)" />
           </label>
-          <label v-if="form.kind === 'performance'" class="field">
+          <label class="field">
             <span>{{ t('benchmark.temperature') }}</span>
-            <n-input-number v-model:value="form.temperature" :min="0" :max="2" :step="0.1" :disabled="Boolean(activeRun)" />
+            <n-input-number v-model:value="form.temperature" :min="0" :max="2" :step="0.1" :disabled="Boolean(activeGroup)" />
           </label>
-          <label v-if="form.kind === 'performance'" class="field">
+          <label class="field">
             <span>{{ t('benchmark.seed') }}</span>
-            <n-input-number v-model:value="form.seed" :min="0" :disabled="Boolean(activeRun)" />
+            <n-input-number v-model:value="form.seed" :min="0" :disabled="Boolean(activeGroup)" />
           </label>
-          <label v-if="form.kind === 'performance'" class="field">
+          <label class="field">
             <span>{{ t('benchmark.warmupIterations') }}</span>
-            <n-input-number v-model:value="form.warmup_iterations" :min="0" :max="10" :disabled="Boolean(activeRun)" />
+            <n-input-number v-model:value="form.warmup_iterations" :min="0" :max="10" :disabled="Boolean(activeGroup)" />
           </label>
-          <label v-if="form.kind === 'performance'" class="field">
+          <label class="field">
             <span>{{ t('benchmark.measuredIterations') }}</span>
-            <n-input-number v-model:value="form.measured_iterations" :min="1" :max="50" :disabled="Boolean(activeRun)" />
+            <n-input-number v-model:value="form.measured_iterations" :min="1" :max="50" :disabled="Boolean(activeGroup)" />
           </label>
-          <label v-if="form.kind === 'performance'" class="field">
+          <label class="field">
             <span>{{ t('benchmark.telemetryInterval') }}</span>
             <n-select
               v-model:value="form.telemetry_interval_ms"
               :options="telemetryIntervalOptions"
-              :disabled="Boolean(activeRun)"
+              :disabled="Boolean(activeGroup)"
             />
           </label>
-          <template v-else>
-            <label class="field">
-              <span>{{ t('benchmark.prefillTokens') }}</span>
-              <n-input-number v-model:value="operatorForm.prefill_tokens" :min="32" :max="32768" :disabled="Boolean(activeRun)" />
-            </label>
-            <label class="field">
-              <span>{{ t('benchmark.decodeTokens') }}</span>
-              <n-input-number v-model:value="operatorForm.decode_tokens" :min="1" :max="4096" :disabled="Boolean(activeRun)" />
-            </label>
-            <label class="field">
-              <span>{{ t('benchmark.operatorRepetitions') }}</span>
-              <n-input-number v-model:value="operatorForm.repetitions" :min="1" :max="20" :disabled="Boolean(activeRun)" />
-            </label>
-            <label class="field">
-              <span>{{ t('benchmark.topKernels') }}</span>
-              <n-input-number v-model:value="operatorForm.top_kernels" :min="5" :max="100" :disabled="Boolean(activeRun)" />
-            </label>
-          </template>
+          <label class="field">
+            <span>{{ t('benchmark.promptCacheMode') }}</span>
+            <n-select
+              v-model:value="form.prompt_cache_mode"
+              :options="promptCacheModeOptions"
+              :disabled="Boolean(activeGroup)"
+            />
+          </label>
+          <label class="field">
+            <span>{{ t('benchmark.prefillTokens') }}</span>
+            <n-input-number v-model:value="form.operator_analysis.prefill_tokens" :min="32" :max="32768" :disabled="Boolean(activeGroup)" />
+          </label>
+          <label class="field">
+            <span>{{ t('benchmark.decodeTokens') }}</span>
+            <n-input-number v-model:value="form.operator_analysis.decode_tokens" :min="1" :max="4096" :disabled="Boolean(activeGroup)" />
+          </label>
+          <label class="field">
+            <span>{{ t('benchmark.operatorRepetitions') }}</span>
+            <n-input-number v-model:value="form.operator_analysis.repetitions" :min="1" :max="20" :disabled="Boolean(activeGroup)" />
+          </label>
+          <label class="field">
+            <span>{{ t('benchmark.topKernels') }}</span>
+            <n-input-number v-model:value="form.operator_analysis.top_kernels" :min="5" :max="100" :disabled="Boolean(activeGroup)" />
+          </label>
         </div>
 
         <div class="form-actions">
           <n-button
-            v-if="!activeRun"
+            v-if="!activeGroup"
             type="primary"
             :loading="submitting"
             :disabled="!canStart"
-            @click="startRun"
+            @click="startGroup"
           >
             <template #icon><n-icon><Play /></n-icon></template>
             {{ t('benchmark.start') }}
           </n-button>
-          <n-button v-else-if="activeRun.spec.kind === 'performance'" type="error" secondary :loading="submitting" @click="cancelRun(activeRun)">
-            <template #icon><n-icon><Stop /></n-icon></template>
-            {{ t('benchmark.cancel') }}
-          </n-button>
-          <n-tag v-else type="warning" :bordered="false">{{ t('benchmark.operatorCannotCancel') }}</n-tag>
+          <n-tag v-else type="warning" :bordered="false">{{ t('benchmark.experimentRunning') }}</n-tag>
         </div>
-      </section>
+          </section>
+        </n-tab-pane>
 
-      <section v-if="selectedRun" class="panel current-run-panel">
+        <n-tab-pane name="results" :tab="t('benchmark.resultsTab')">
+          <div class="tab-stack">
+            <section class="panel history-panel">
+              <div class="section-heading history-heading"><h3>{{ t('benchmark.history') }}</h3></div>
+              <n-empty v-if="!groups.length" :description="t('benchmark.noHistory')" />
+              <div v-else class="history-list">
+                <div
+                  v-for="group in groups"
+                  :key="group.group_id"
+                  class="history-item"
+                  :class="{ 'is-selected': group.group_id === selectedGroup?.group_id }"
+                  role="button"
+                  tabindex="0"
+                  @click="selectGroup(group.group_id)"
+                  @keydown.enter="selectGroup(group.group_id)"
+                >
+                  <span class="history-main">
+                    <strong>{{ group.spec.name }}</strong>
+                    <small>{{ t('benchmark.groupRunCount', { completed: group.progress_completed, total: group.progress_total }) }}</small>
+                  </span>
+                  <span class="history-metrics">
+                    <span>Official + AMD</span>
+                    <span>{{ group.spec.repetitions }} ×</span>
+                  </span>
+                  <n-tag size="small" :bordered="false" :type="statusTagType(group.status)">{{ statusLabel(group.status) }}</n-tag>
+                  <span class="history-date">{{ formatDate(group.created_at) }}</span>
+                  <n-popconfirm
+                    v-if="!isActive(group)"
+                    :positive-text="t('common.delete')"
+                    :negative-text="t('common.cancel')"
+                    @positive-click="deleteGroup(group)"
+                  >
+                    <template #trigger>
+                      <n-button quaternary circle size="small" :title="t('benchmark.deleteRun')" @click.stop>
+                        <template #icon><n-icon><TrashOutline /></n-icon></template>
+                      </n-button>
+                    </template>
+                    {{ t('benchmark.deleteRun') }}?
+                  </n-popconfirm>
+                </div>
+              </div>
+            </section>
+
+            <section v-if="selectedGroup" class="panel group-summary-panel">
+              <div class="panel-heading run-heading">
+                <div>
+                  <div class="run-title-line">
+                    <h2>{{ selectedGroup.spec.name }}</h2>
+                    <n-tag :type="statusTagType(selectedGroup.status)" :bordered="false">
+                      {{ statusLabel(selectedGroup.status) }}
+                    </n-tag>
+                  </div>
+                  <p>{{ t('benchmark.experimentGroupSummary', { repetitions: selectedGroup.spec.repetitions }) }}</p>
+                </div>
+                <span class="run-time">{{ formatDate(selectedGroup.created_at) }}</span>
+              </div>
+              <div v-if="isActive(selectedGroup)" class="run-progress">
+                <div class="progress-copy">
+                  <span>{{ t('benchmark.currentExperimentGroup') }}</span>
+                  <strong>{{ t('benchmark.progress', { completed: selectedGroup.progress_completed, total: selectedGroup.progress_total }) }}</strong>
+                </div>
+                <n-progress type="line" status="info" processing :percentage="groupProgress(selectedGroup)" />
+              </div>
+              <n-alert v-if="selectedGroup.error" type="error" :show-icon="true" class="run-error">
+                {{ selectedGroup.error }}
+              </n-alert>
+              <n-alert type="info" :show-icon="true" class="measurement-source-alert">
+                {{ cacheModeDescription(selectedGroup.spec.prompt_cache_mode) }}
+              </n-alert>
+              <div class="group-average-grid">
+                <article v-for="implementation in implementationIds" :key="implementation" class="group-average-card">
+                  <div class="section-heading">
+                    <h3>{{ implementationLabel(implementation) }}</h3>
+                    <span>{{ t('benchmark.averageOfRuns', { count: completedPerformanceRuns(implementation).length }) }}</span>
+                  </div>
+                  <div class="metric-grid compact-metric-grid">
+                    <article v-for="metric in primaryMetrics.slice(0, 4)" :key="metric.key" class="metric-card">
+                      <span class="metric-label">{{ metric.label }}</span>
+                      <strong class="metric-value">{{ formatMetric(metric.key, groupMetricMean(implementation, metric.key)) }}</strong>
+                      <div class="metric-detail">± {{ formatMetric(metric.key, groupMetricStd(implementation, metric.key)) }}</div>
+                    </article>
+                  </div>
+                </article>
+              </div>
+              <label class="field group-run-selector">
+                <span>{{ t('benchmark.runDetail') }}</span>
+                <n-select v-model:value="selectedRunId" :options="selectedGroupRunOptions" />
+              </label>
+            </section>
+
+            <section v-if="selectedRun" class="panel current-run-panel">
         <div class="panel-heading run-heading">
           <div>
             <div class="run-title-line">
@@ -209,6 +266,9 @@
         </n-alert>
 
         <template v-if="selectedRun.summary">
+          <n-alert type="info" :show-icon="true" class="measurement-source-alert">
+            {{ t('benchmark.ttftSourceHint') }}
+          </n-alert>
           <div class="section-heading">
             <h3>{{ t('benchmark.summary') }}</h3>
             <span>{{ t('benchmark.measuredSamples', { successful: selectedRun.summary.successful_samples, total: selectedRun.summary.measured_samples }) }}</span>
@@ -257,44 +317,6 @@
             </div>
           </template>
 
-          <div class="comparison-heading">
-            <div class="section-heading">
-              <h3>{{ t('benchmark.comparison') }}</h3>
-            </div>
-            <n-select
-              v-model:value="baselineRunId"
-              clearable
-              :placeholder="t('benchmark.noBaseline')"
-              :options="baselineOptions"
-            />
-          </div>
-          <div v-if="baselineRun" class="comparison-table">
-            <div class="comparison-row comparison-header">
-              <span>{{ t('benchmark.summary') }}</span>
-              <span>{{ selectedRun.spec.name }}</span>
-              <span>{{ baselineRun.spec.name }}</span>
-              <span>{{ t('benchmark.delta') }}</span>
-            </div>
-            <div v-for="metric in primaryMetrics" :key="metric.key" class="comparison-row">
-              <span>{{ metric.label }}</span>
-              <strong>{{ formatMetric(metric.key, metricMean(selectedRun, metric.key)) }}</strong>
-              <span>{{ formatMetric(metric.key, metricMean(baselineRun, metric.key)) }}</span>
-              <span :class="deltaClass(metric, selectedRun, baselineRun)">
-                {{ formatDelta(metric, selectedRun, baselineRun) }}
-              </span>
-            </div>
-            <div
-              v-if="selectedRun.summary?.prompt_cache && baselineRun.summary?.prompt_cache"
-              class="comparison-row"
-            >
-              <span>{{ t('benchmark.cacheHitRate') }}</span>
-              <strong>{{ formatPercent(selectedRun.summary.prompt_cache.hit_rate_percent) }}</strong>
-              <span>{{ formatPercent(baselineRun.summary.prompt_cache.hit_rate_percent) }}</span>
-              <span :class="cacheDeltaClass(selectedRun, baselineRun)">
-                {{ formatCacheDelta(selectedRun, baselineRun) }}
-              </span>
-            </div>
-          </div>
         </template>
 
         <section v-if="selectedRun.operator_analysis" class="operator-results">
@@ -463,6 +485,12 @@
                   <th>#</th>
                   <th>{{ t('common.status') }}</th>
                   <th>{{ t('benchmark.ttft') }}</th>
+                  <th>{{ t('benchmark.modelComputeTtft') }}</th>
+                  <th>{{ t('benchmark.outsideModelCompute') }}</th>
+                  <th>{{ t('benchmark.requestToHeaders') }}</th>
+                  <th>{{ t('benchmark.firstEvent') }}</th>
+                  <th>{{ t('benchmark.firstTokenDecode') }}</th>
+                  <th>{{ t('benchmark.promptEval') }}</th>
                   <th>{{ t('benchmark.promptTps') }}</th>
                   <th>{{ t('benchmark.decodeTps') }}</th>
                   <th>{{ t('benchmark.endToEnd') }}</th>
@@ -482,6 +510,12 @@
                     </n-tag>
                   </td>
                   <td>{{ formatMetric('ttft_ms', sample.ttft_ms) }}</td>
+                  <td>{{ formatMetric('model_compute_ttft_ms', sample.model_compute_ttft_ms) }}</td>
+                  <td>{{ formatMetric('outside_model_compute_ms', sample.outside_model_compute_ms) }}</td>
+                  <td>{{ formatMetric('request_to_headers_ms', sample.request_to_headers_ms) }}</td>
+                  <td>{{ formatMetric('first_event_ms', sample.first_event_ms) }}</td>
+                  <td>{{ formatMetric('first_token_decode_ms', sample.first_token_decode_ms) }}</td>
+                  <td>{{ formatMetric('prompt_ms', sample.prompt_ms) }}</td>
                   <td>{{ formatMetric('prompt_tokens_per_second', sample.prompt_tokens_per_second) }}</td>
                   <td>{{ formatMetric('decode_tokens_per_second', sample.decode_tokens_per_second) }}</td>
                   <td>{{ formatMetric('end_to_end_ms', sample.end_to_end_ms) }}</td>
@@ -501,51 +535,16 @@
             <pre>{{ formatEnvironment(selectedRun.environment) }}</pre>
           </n-collapse-item>
         </n-collapse>
-      </section>
-
-      <section class="panel history-panel">
-        <div class="section-heading"><h3>{{ t('benchmark.history') }}</h3></div>
-        <n-empty v-if="!runs.length" :description="t('benchmark.noHistory')" />
-        <div v-else class="history-list">
-          <div
-            v-for="run in runs"
-            :key="run.run_id"
-            class="history-item"
-            :class="{ 'is-selected': run.run_id === selectedRun?.run_id }"
-            role="button"
-            tabindex="0"
-            @click="selectedRunId = run.run_id"
-            @keydown.enter="selectedRunId = run.run_id"
-          >
-            <span class="history-main">
-              <strong>{{ run.spec.name }}</strong>
-              <small>{{ run.spec.implementation.label || run.spec.profile_id }}</small>
-            </span>
-            <span class="history-metrics">
-              <template v-if="run.spec.kind === 'performance'">
-                <span>{{ formatMetric('ttft_ms', metricMean(run, 'ttft_ms')) }}</span>
-                <span>{{ formatMetric('decode_tokens_per_second', metricMean(run, 'decode_tokens_per_second')) }}</span>
-              </template>
-              <span v-else>{{ t('benchmark.operatorKind') }}</span>
-            </span>
-            <n-tag size="small" :bordered="false" :type="statusTagType(run.status)">{{ statusLabel(run.status) }}</n-tag>
-            <span class="history-date">{{ formatDate(run.created_at) }}</span>
-            <n-popconfirm
-              v-if="!isActive(run)"
-              :positive-text="t('common.delete')"
-              :negative-text="t('common.cancel')"
-              @positive-click="deleteRun(run)"
-            >
-              <template #trigger>
-                <n-button quaternary circle size="small" :title="t('benchmark.deleteRun')" @click.stop>
-                  <template #icon><n-icon><TrashOutline /></n-icon></template>
-                </n-button>
-              </template>
-              {{ t('benchmark.deleteRun') }}?
-            </n-popconfirm>
+            </section>
           </div>
-        </div>
-      </section>
+        </n-tab-pane>
+
+        <n-tab-pane name="comparison" :tab="t('benchmark.comparisonTab')">
+          <section class="panel comparison-panel">
+            <BenchmarkComparison :groups="groups" :runs-by-group="runsByGroup" />
+          </section>
+        </n-tab-pane>
+      </n-tabs>
     </main>
   </div>
 </template>
@@ -563,10 +562,10 @@ import {
   NInputNumber,
   NPopconfirm,
   NProgress,
-  NRadioButton,
-  NRadioGroup,
   NSelect,
+  NTabPane,
   NTag,
+  NTabs,
   NText,
   NTooltip,
   useMessage,
@@ -576,21 +575,22 @@ import {
   InformationCircleOutline,
   Play,
   Refresh,
-  Stop,
   TrashOutline,
 } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
+import BenchmarkComparison from '@/components/benchmark/BenchmarkComparison.vue'
 import { benchmarkApi } from '@/api/benchmarks'
 import type {
   BenchmarkMetricStats,
+  BenchmarkExperimentGroup,
+  BenchmarkExperimentGroupSpec,
+  BenchmarkImplementationId,
   BenchmarkRun,
-  BenchmarkRunSpec,
   BenchmarkRunStatus,
   BenchmarkSample,
 } from '@/api/benchmarks'
 import { modelPoolApi } from '@/api/modelPool'
 import type {
-  LlamaImplementationId,
   LlamaImplementationStatus,
   LocalModelProfile,
   LocalModelRuntime,
@@ -598,6 +598,13 @@ import type {
 
 type MetricKey =
   | 'ttft_ms'
+  | 'model_compute_ttft_ms'
+  | 'outside_model_compute_ms'
+  | 'request_to_headers_ms'
+  | 'first_event_ms'
+  | 'first_token_decode_ms'
+  | 'prompt_ms'
+  | 'decode_ms'
   | 'prompt_tokens_per_second'
   | 'decode_tokens_per_second'
   | 'end_to_end_ms'
@@ -617,36 +624,35 @@ const { locale, t } = useI18n()
 const message = useMessage()
 const loading = ref(false)
 const submitting = ref(false)
-const runs = ref<BenchmarkRun[]>([])
+const groups = ref<BenchmarkExperimentGroup[]>([])
+const runsByGroup = ref<Record<string, BenchmarkRun[]>>({})
 const profiles = ref<LocalModelProfile[]>([])
 const runtimes = ref<LocalModelRuntime[]>([])
 const llamaStatus = ref<LlamaImplementationStatus | null>(null)
-const selectedImplementation = ref<LlamaImplementationId | null>(null)
-const switchingImplementation = ref(false)
+const selectedGroupId = ref<string | null>(null)
 const selectedRunId = ref<string | null>(null)
-const baselineRunId = ref<string | null>(null)
+const activePageTab = ref<'configuration' | 'results' | 'comparison'>('configuration')
 let pollTimer: number | undefined
 let pollInProgress = false
 
-const form = reactive<BenchmarkRunSpec>({
-  kind: 'performance',
+const form = reactive<BenchmarkExperimentGroupSpec>({
   name: '',
   profile_id: '',
   prompt: '',
+  repetitions: 3,
   max_output_tokens: 256,
   temperature: 0,
   seed: 42,
   warmup_iterations: 1,
   measured_iterations: 3,
   telemetry_interval_ms: 250,
-  implementation: { label: '', revision: '', parameters: {} },
-  operator_analysis: null,
-})
-const operatorForm = reactive({
-  prefill_tokens: 512,
-  decode_tokens: 128,
-  repetitions: 3,
-  top_kernels: 20,
+  prompt_cache_mode: 'cold',
+  operator_analysis: {
+    prefill_tokens: 512,
+    decode_tokens: 128,
+    repetitions: 3,
+    top_kernels: 20,
+  },
 })
 
 const readyProfileIds = computed(() => new Set(
@@ -669,27 +675,50 @@ const telemetryIntervalOptions = [100, 250, 500, 1000].map((value) => ({
   label: t('benchmark.milliseconds', { value }),
   value,
 }))
-const activeRun = computed(() => runs.value.find((run) => isActive(run)) || null)
+const promptCacheModeOptions = computed(() => [
+  { label: t('benchmark.coldCacheMode'), value: 'cold' },
+  { label: t('benchmark.warmCacheMode'), value: 'warm' },
+])
+const activeGroup = computed(() => groups.value.find((group) => isActive(group)) || null)
+const selectedGroup = computed(() =>
+  groups.value.find((group) => group.group_id === selectedGroupId.value) || groups.value[0] || null,
+)
+const selectedGroupRuns = computed(() => selectedGroup.value
+  ? runsByGroup.value[selectedGroup.value.group_id] || []
+  : [])
 const selectedRun = computed(() =>
-  runs.value.find((run) => run.run_id === selectedRunId.value) || runs.value[0] || null,
+  selectedGroupRuns.value.find((run) => run.run_id === selectedRunId.value)
+    || selectedGroupRuns.value[0]
+    || null,
 )
-const baselineRun = computed(() =>
-  runs.value.find((run) => run.run_id === baselineRunId.value && run.status === 'completed') || null,
-)
-const baselineOptions = computed(() => runs.value
-  .filter((run) => run.status === 'completed' && run.run_id !== selectedRun.value?.run_id)
-  .map((run) => ({ label: `${run.spec.name} · ${formatDate(run.created_at)}`, value: run.run_id })))
+const implementationIds: BenchmarkImplementationId[] = ['official', 'amd']
+const selectedGroupRunOptions = computed(() => {
+  if (!selectedGroup.value) return []
+  const refs = new Map(selectedGroup.value.runs.map((item) => [item.run_id, item]))
+  return selectedGroupRuns.value.map((run) => {
+    const ref = refs.get(run.run_id)
+    return {
+      label: ref
+        ? `${t('benchmark.round', { value: ref.repetition_index + 1 })} · ${implementationLabel(ref.implementation)} · ${kindLabel(ref.kind)}`
+        : run.spec.name,
+      value: run.run_id,
+    }
+  })
+})
 const canStart = computed(() => Boolean(
-  !switchingImplementation.value
-  && form.name.trim()
+  form.name.trim()
   && form.profile_id
-  && (form.kind === 'operator_analysis' || form.prompt.trim())
+  && form.prompt.trim()
   && readyProfileIds.value.has(form.profile_id)
   && llamaStatus.value?.available
-  && (form.kind === 'performance' || Boolean(llamaStatus.value?.active_build?.benchmark_binary_path))
+  && llamaStatus.value.builds?.length === 2
+  && llamaStatus.value.builds.every((build) => Boolean(build.benchmark_binary_path))
 ))
 const primaryMetrics = computed<MetricDefinition[]>(() => [
   { key: 'ttft_ms', label: t('benchmark.ttft'), higherIsBetter: false },
+  { key: 'model_compute_ttft_ms', label: t('benchmark.modelComputeTtft'), higherIsBetter: false },
+  { key: 'outside_model_compute_ms', label: t('benchmark.outsideModelCompute'), higherIsBetter: false },
+  { key: 'prompt_ms', label: t('benchmark.promptEval'), higherIsBetter: false },
   { key: 'prompt_tokens_per_second', label: t('benchmark.promptTps'), higherIsBetter: true },
   { key: 'decode_tokens_per_second', label: t('benchmark.decodeTps'), higherIsBetter: true },
   { key: 'end_to_end_ms', label: t('benchmark.endToEnd'), higherIsBetter: false },
@@ -697,23 +726,27 @@ const primaryMetrics = computed<MetricDefinition[]>(() => [
   { key: 'average_gpu_utilization_percent', label: t('benchmark.averageGpu'), higherIsBetter: true },
 ])
 
+function cacheModeDescription(mode: BenchmarkExperimentGroupSpec['prompt_cache_mode']) {
+  if (mode === 'cold') return t('benchmark.coldCacheModeHint')
+  if (mode === 'warm') return t('benchmark.warmCacheModeHint')
+  return t('benchmark.legacyCacheModeHint')
+}
+
 async function refresh(showLoading = true) {
   if (showLoading) loading.value = true
   try {
-    const [runResult, profileResult, runtimeResult, llamaResult] = await Promise.all([
-      benchmarkApi.list(),
+    const [groupResult, profileResult, runtimeResult, llamaResult] = await Promise.all([
+      benchmarkApi.listGroups(),
       modelPoolApi.profiles(),
       modelPoolApi.runtimes(),
       modelPoolApi.llamaRuntime(),
     ])
-    runs.value = runResult.runs
+    groups.value = groupResult.groups
+    runsByGroup.value = groupResult.runs
     profiles.value = profileResult.profiles
     runtimes.value = runtimeResult.runtimes
     llamaStatus.value = llamaResult
-    if (!switchingImplementation.value) {
-      selectedImplementation.value = llamaResult.active || null
-    }
-    if (!selectedRunId.value && runs.value.length) selectedRunId.value = runs.value[0].run_id
+    if (!selectedGroupId.value && groups.value.length) selectGroup(groups.value[0].group_id)
     if (!form.profile_id && readyChatProfiles.value.length) form.profile_id = readyChatProfiles.value[0].profile_id
   } catch (error) {
     if (showLoading) message.error(errorMessage(error))
@@ -722,40 +755,19 @@ async function refresh(showLoading = true) {
   }
 }
 
-async function switchImplementation(value: string | number | boolean) {
-  if (value !== 'official' && value !== 'amd') return
-  if (value === llamaStatus.value?.active || switchingImplementation.value || activeRun.value) return
-  switchingImplementation.value = true
-  try {
-    const result = await modelPoolApi.activateLlamaImplementation(value)
-    llamaStatus.value = result.implementation
-    selectedImplementation.value = result.implementation.active || value
-    await refresh(false)
-    message.success(t('benchmark.implementationSwitched'))
-  } catch (error) {
-    message.error(errorMessage(error))
-    await refresh(false)
-  } finally {
-    switchingImplementation.value = false
-  }
-}
-
-async function startRun() {
+async function startGroup() {
   if (!canStart.value) return
   submitting.value = true
   try {
-    const result = await benchmarkApi.start({
+    const result = await benchmarkApi.startGroup({
       ...form,
       name: form.name.trim(),
-      prompt: form.kind === 'performance' ? form.prompt.trim() : '',
-      operator_analysis: form.kind === 'operator_analysis' ? { ...operatorForm } : null,
-      implementation: {
-        ...form.implementation,
-        label: form.implementation.label.trim(),
-        revision: form.implementation.revision.trim(),
-      },
+      prompt: form.prompt.trim(),
+      operator_analysis: { ...form.operator_analysis },
     })
-    selectedRunId.value = result.run.run_id
+    selectedGroupId.value = result.group.group_id
+    selectedRunId.value = null
+    activePageTab.value = 'results'
     await refresh(false)
   } catch (error) {
     message.error(errorMessage(error))
@@ -764,31 +776,65 @@ async function startRun() {
   }
 }
 
-async function cancelRun(run: BenchmarkRun) {
-  submitting.value = true
+async function deleteGroup(group: BenchmarkExperimentGroup) {
   try {
-    await benchmarkApi.cancel(run.run_id)
-    await refresh(false)
-  } catch (error) {
-    message.error(errorMessage(error))
-  } finally {
-    submitting.value = false
-  }
-}
-
-async function deleteRun(run: BenchmarkRun) {
-  try {
-    await benchmarkApi.delete(run.run_id)
-    if (selectedRunId.value === run.run_id) selectedRunId.value = null
-    if (baselineRunId.value === run.run_id) baselineRunId.value = null
+    await benchmarkApi.deleteGroup(group.group_id)
+    if (selectedGroupId.value === group.group_id) {
+      selectedGroupId.value = null
+      selectedRunId.value = null
+    }
     await refresh(false)
   } catch (error) {
     message.error(errorMessage(error))
   }
 }
 
-function isActive(run: BenchmarkRun) {
-  return run.status === 'queued' || run.status === 'running'
+function isActive(item: BenchmarkRun | BenchmarkExperimentGroup) {
+  return item.status === 'queued' || item.status === 'running'
+}
+
+function selectGroup(groupId: string) {
+  selectedGroupId.value = groupId
+  selectedRunId.value = runsByGroup.value[groupId]?.[0]?.run_id || null
+}
+
+function groupProgress(group: BenchmarkExperimentGroup) {
+  if (!group.progress_total) return 0
+  return Math.min(100, Math.round((group.progress_completed / group.progress_total) * 100))
+}
+
+function completedPerformanceRuns(implementation: BenchmarkImplementationId) {
+  if (!selectedGroup.value) return []
+  const runIds = new Set(selectedGroup.value.runs
+    .filter((item) => item.implementation === implementation && item.kind === 'performance')
+    .map((item) => item.run_id))
+  return selectedGroupRuns.value.filter((run) => runIds.has(run.run_id) && run.status === 'completed')
+}
+
+function groupMetricMean(implementation: BenchmarkImplementationId, key: MetricKey) {
+  const values = groupMetricValues(implementation, key)
+  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null
+}
+
+function groupMetricStd(implementation: BenchmarkImplementationId, key: MetricKey) {
+  const values = groupMetricValues(implementation, key)
+  if (!values.length) return null
+  const average = values.reduce((sum, value) => sum + value, 0) / values.length
+  return Math.sqrt(values.reduce((sum, value) => sum + (value - average) ** 2, 0) / values.length)
+}
+
+function groupMetricValues(implementation: BenchmarkImplementationId, key: MetricKey) {
+  return completedPerformanceRuns(implementation)
+    .map((run) => metricMean(run, key))
+    .filter((value): value is number => value !== null && Number.isFinite(value))
+}
+
+function implementationLabel(value: BenchmarkImplementationId) {
+  return value === 'official' ? t('benchmark.officialImplementation') : t('benchmark.amdImplementation')
+}
+
+function kindLabel(value: BenchmarkRun['spec']['kind']) {
+  return value === 'performance' ? t('benchmark.performanceKind') : t('benchmark.operatorKind')
 }
 
 function runProgress(run: BenchmarkRun) {
@@ -908,47 +954,6 @@ function sampleCacheHitRate(run: BenchmarkRun, sample: BenchmarkSample) {
   return Math.min(100, Math.max(0, sample.cache_tokens / sample.prompt_tokens * 100))
 }
 
-function metricDelta(metric: MetricDefinition, current: BenchmarkRun, baseline: BenchmarkRun) {
-  const currentValue = metricMean(current, metric.key)
-  const baselineValue = metricMean(baseline, metric.key)
-  if (currentValue === null || baselineValue === null || baselineValue === 0) return null
-  const raw = ((currentValue - baselineValue) / baselineValue) * 100
-  return metric.higherIsBetter ? raw : -raw
-}
-
-function formatDelta(metric: MetricDefinition, current: BenchmarkRun, baseline: BenchmarkRun) {
-  const delta = metricDelta(metric, current, baseline)
-  if (delta === null) return '—'
-  return `${delta >= 0 ? '+' : ''}${delta.toFixed(1)}%`
-}
-
-function deltaClass(metric: MetricDefinition, current: BenchmarkRun, baseline: BenchmarkRun) {
-  const delta = metricDelta(metric, current, baseline)
-  if (delta === null || Math.abs(delta) < 0.05) return 'delta-neutral'
-  return delta > 0 ? 'delta-positive' : 'delta-negative'
-}
-
-function cacheHitRate(run: BenchmarkRun) {
-  return run.summary?.prompt_cache?.hit_rate_percent ?? null
-}
-
-function formatCacheDelta(current: BenchmarkRun, baseline: BenchmarkRun) {
-  const currentValue = cacheHitRate(current)
-  const baselineValue = cacheHitRate(baseline)
-  if (currentValue === null || baselineValue === null) return '—'
-  const delta = currentValue - baselineValue
-  return `${delta >= 0 ? '+' : ''}${delta.toFixed(1)} pp`
-}
-
-function cacheDeltaClass(current: BenchmarkRun, baseline: BenchmarkRun) {
-  const currentValue = cacheHitRate(current)
-  const baselineValue = cacheHitRate(baseline)
-  if (currentValue === null || baselineValue === null) return 'delta-neutral'
-  const delta = currentValue - baselineValue
-  if (Math.abs(delta) < 0.05) return 'delta-neutral'
-  return delta > 0 ? 'delta-positive' : 'delta-negative'
-}
-
 function statusLabel(status: BenchmarkRunStatus) {
   const labels: Record<BenchmarkRunStatus, string> = {
     queued: t('connection.connecting'),
@@ -986,7 +991,7 @@ function errorMessage(error: unknown) {
 onMounted(async () => {
   await refresh()
   pollTimer = window.setInterval(async () => {
-    if (!activeRun.value || pollInProgress) return
+    if (!activeGroup.value || pollInProgress) return
     pollInProgress = true
     try {
       await refresh(false)
@@ -1053,7 +1058,17 @@ onUnmounted(() => {
   gap: var(--app-space-lg);
 }
 
+.benchmark-tabs,
+.benchmark-tabs :deep(.n-tabs-pane-wrapper),
+.benchmark-tabs :deep(.n-tab-pane) { min-width: 0; }
+.tab-stack {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--app-space-lg);
+}
+
 .panel {
+  min-width: 0;
   background: var(--app-surface);
   border: 1px solid var(--app-divider);
   border-radius: var(--app-radius-lg);
@@ -1062,7 +1077,6 @@ onUnmounted(() => {
 
 .panel-heading,
 .section-heading,
-.comparison-heading,
 .progress-copy {
   display: flex;
   align-items: center;
@@ -1075,6 +1089,7 @@ onUnmounted(() => {
 .section-heading h3 { margin: 0; color: var(--app-text-strong); }
 .panel-heading p { margin: 5px 0 0; color: var(--app-text-muted); }
 .section-heading { margin: var(--app-space-xl) 0 var(--app-space-md); }
+.history-heading { margin-top: 0; }
 .section-heading span,
 .run-time { color: var(--app-text-muted); font-size: 12px; }
 
@@ -1125,6 +1140,23 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 .form-actions { margin-top: var(--app-space-lg); display: flex; justify-content: flex-end; }
+.group-average-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--app-space-md);
+  margin-top: var(--app-space-lg);
+}
+.group-average-card {
+  min-width: 0;
+  padding: var(--app-space-md);
+  border: 1px solid var(--app-divider);
+  border-radius: var(--app-radius-lg);
+  background: var(--app-surface-subtle);
+}
+.compact-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+.compact-metric-grid .metric-card { padding: var(--app-space-md); }
+.compact-metric-grid .metric-value { font-size: 18px; }
+.group-run-selector { margin-top: var(--app-space-lg); }
 
 .run-progress {
   padding: var(--app-space-md);
@@ -1154,24 +1186,13 @@ onUnmounted(() => {
 .metric-value { display: block; margin-top: 8px; font-size: 24px; color: var(--app-text-strong); }
 .metric-detail { margin-top: 10px; display: flex; flex-wrap: wrap; gap: var(--app-space-xs) var(--app-space-md); color: var(--app-text-muted); font-size: 11px; }
 
-.comparison-heading { margin-top: var(--app-space-lg); align-items: end; }
-.comparison-heading .n-select { width: min(420px, 50%); }
-.comparison-table { border: 1px solid var(--app-divider); border-radius: var(--app-radius-md); overflow-x: auto; }
-.comparison-row {
-  display: grid;
-  grid-template-columns: 1.3fr repeat(3, 1fr);
-  gap: var(--app-space-md);
-  padding: 11px var(--app-space-md);
-  border-top: 1px solid var(--app-divider);
-  align-items: center;
+.sample-table-wrap {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--app-divider);
+  border-radius: var(--app-radius-md);
 }
-.comparison-row:first-child { border-top: 0; }
-.comparison-header { background: var(--app-surface-muted); color: var(--app-text-muted); font-size: 12px; }
-.delta-positive { color: var(--app-success); font-weight: 700; }
-.delta-negative { color: var(--app-error); font-weight: 700; }
-.delta-neutral { color: var(--app-text-muted); }
-
-.sample-table-wrap { overflow-x: auto; border: 1px solid var(--app-divider); border-radius: var(--app-radius-md); }
 .sample-table { width: 100%; border-collapse: collapse; white-space: nowrap; }
 .sample-table th,
 .sample-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--app-divider); }
@@ -1180,6 +1201,8 @@ onUnmounted(() => {
 
 .operator-phase { margin-top: var(--app-space-xl); }
 .operator-table-wrap {
+  width: 100%;
+  max-width: 100%;
   overflow-x: auto;
   border: 1px solid var(--app-divider);
   border-radius: var(--app-radius-md);
@@ -1266,6 +1289,7 @@ onUnmounted(() => {
   .field, .field-wide { grid-column: span 1; }
   .field-full { grid-column: 1 / -1; }
   .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .group-average-grid { grid-template-columns: 1fr; }
   .history-item { grid-template-columns: minmax(0, 1fr) auto auto; }
   .history-main { grid-column: 1; }
   .history-metrics { grid-column: 1 / -1; grid-row: 2; flex-wrap: wrap; }
@@ -1282,10 +1306,8 @@ onUnmounted(() => {
   .progress-copy { align-items: flex-start; flex-wrap: wrap; }
   .benchmark-kind-selector { align-items: stretch; flex-direction: column; }
   .form-grid, .metric-grid { grid-template-columns: 1fr; }
+  .compact-metric-grid { grid-template-columns: 1fr !important; }
   .field, .field-wide, .field-full { grid-column: 1; }
-  .comparison-heading { align-items: stretch; flex-direction: column; }
-  .comparison-heading .n-select { width: 100%; }
-  .comparison-row { min-width: 620px; grid-template-columns: 1.2fr repeat(3, 1fr); font-size: 12px; }
   .sample-table th,
   .sample-table td { padding: 8px 10px; }
   .history-item { grid-template-columns: minmax(0, 1fr) auto; gap: var(--app-space-sm); }
