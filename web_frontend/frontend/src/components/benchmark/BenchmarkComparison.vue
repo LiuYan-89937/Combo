@@ -211,6 +211,7 @@ function deviation(values: Array<number | null | undefined>): number | null {
 function performanceValues(series: SeriesIdentity, key: PerformanceMetricKey) {
   const runs = groupRuns(series.group, series.implementation, 'performance')
   if (key === 'prompt_cache_hit_rate') {
+    if (series.group.spec.prompt_cache_mode === 'cold') return []
     return runs.map((run) => run.summary?.prompt_cache?.hit_rate_percent)
   }
   return runs.map((run) => run.summary?.[key]?.mean)

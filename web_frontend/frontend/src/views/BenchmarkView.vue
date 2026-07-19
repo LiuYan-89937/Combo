@@ -287,7 +287,11 @@
           <template v-if="selectedRun.summary.prompt_cache">
             <div class="section-heading cache-heading">
               <h3>{{ t('benchmark.promptCache') }}</h3>
-              <span>{{ t('benchmark.weightedHitRateHint') }}</span>
+              <span>
+                {{ selectedRun.spec.prompt_cache_mode === 'cold'
+                  ? t('benchmark.cacheDisabled')
+                  : t('benchmark.weightedHitRateHint') }}
+              </span>
             </div>
             <n-alert
               v-if="selectedRun.summary.prompt_cache.metric_version === 'legacy'"
@@ -300,7 +304,11 @@
             <div class="metric-grid cache-metric-grid">
               <article class="metric-card">
                 <span class="metric-label">{{ t('benchmark.cacheHitRate') }}</span>
-                <strong class="metric-value">{{ formatPercent(selectedRun.summary.prompt_cache.hit_rate_percent) }}</strong>
+                <strong class="metric-value">
+                  {{ selectedRun.spec.prompt_cache_mode === 'cold'
+                    ? t('benchmark.cacheDisabled')
+                    : formatPercent(selectedRun.summary.prompt_cache.hit_rate_percent) }}
+                </strong>
               </article>
               <article class="metric-card">
                 <span class="metric-label">{{ t('benchmark.cachedTokens') }}</span>
@@ -521,7 +529,11 @@
                   <td>{{ formatMetric('end_to_end_ms', sample.end_to_end_ms) }}</td>
                   <td>{{ formatTokenCount(sample.cache_tokens) }}</td>
                   <td>{{ formatTokenCount(sampleProcessedPromptTokens(selectedRun, sample)) }}</td>
-                  <td>{{ formatPercent(sampleCacheHitRate(selectedRun, sample)) }}</td>
+                  <td>
+                    {{ selectedRun.spec.prompt_cache_mode === 'cold'
+                      ? t('benchmark.cacheDisabled')
+                      : formatPercent(sampleCacheHitRate(selectedRun, sample)) }}
+                  </td>
                   <td>{{ formatMetric('peak_vram_bytes', sample.peak_vram_bytes) }}</td>
                   <td>{{ formatMetric('peak_gpu_utilization_percent', sample.peak_gpu_utilization_percent) }}</td>
                 </tr>
