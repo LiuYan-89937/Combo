@@ -10,6 +10,7 @@ import {
   Layers,
   Library,
   People,
+  PersonCircleOutline,
   Rocket,
   Time,
 } from '@/components/icons'
@@ -27,7 +28,7 @@ export function sidebarMenuOptions(t: Translate): MenuOption[] {
     {
       label: t('route.agentSessions'),
       key: 'agent-sessions',
-      icon: renderIcon(Chatbubbles),
+      icon: renderIcon(PersonCircleOutline),
     },
     {
       label: t('route.manufacturing'),

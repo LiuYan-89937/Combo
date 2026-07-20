@@ -1,14 +1,5 @@
 <template>
   <section class="recent-agent-section">
-    <n-select
-      class="recent-agent-package-switch"
-      :value="agentStore.activeChatPackageId"
-      :options="agentPackageOptions"
-      :placeholder="t('sidebar.switchAgent')"
-      size="small"
-      filterable
-      @update:value="switchAgentPackage"
-    />
     <div class="recent-agent-header">
       <button
         class="recent-agent-main"
@@ -68,7 +59,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { NIcon, NSelect } from 'naive-ui'
+import { NIcon } from 'naive-ui'
 import { Add, CaretDown, CaretUp } from '@/components/icons'
 import { useAgentSessionNavigation } from '@/composables/agent/useAgentSessionNavigation'
 import { useCommand } from '@/composables/useCommand'
@@ -80,15 +71,11 @@ import { formatTime } from '@/utils/format'
 const agentStore = useAgentStore()
 const runtimeStore = useRuntimeStore()
 const commands = useCommand()
-const { openAgentSession, openPackageAgentChat, startNewAgentSession } = useAgentSessionNavigation()
+const { openAgentSession, startNewAgentSession } = useAgentSessionNavigation()
 const { locale, t } = useI18n()
 const recentAgentExpanded = ref(false)
 
 const recentAgentSessions = computed(() => agentStore.recentAgentSessions)
-const agentPackageOptions = computed(() => agentStore.agentPackages.map((pkg) => ({
-  label: pkg.agent_name || pkg.name || pkg.package_id,
-  value: pkg.package_id,
-})))
 const mostRecentAgentSession = computed(() => agentStore.preferredRecentSession())
 const newSessionPackageId = computed(() => (
   agentStore.activeChatPackageId
@@ -115,11 +102,6 @@ function openRecentAgentSession(session: AgentRecentSessionView) {
 function createNewAgentSession() {
   if (!newSessionPackageId.value) return
   void startNewAgentSession(newSessionPackageId.value)
-}
-
-function switchAgentPackage(packageId: string) {
-  if (!packageId || packageId === agentStore.activeChatPackageId) return
-  void openPackageAgentChat(packageId)
 }
 
 function isActiveRecentSession(session: AgentRecentSessionView): boolean {
@@ -176,10 +158,6 @@ watch(
   padding: var(--app-space-md);
   border-top: 1px solid var(--app-divider);
   background: var(--app-surface);
-}
-
-.recent-agent-package-switch {
-  margin-bottom: var(--app-space-sm);
 }
 
 .recent-agent-header {
