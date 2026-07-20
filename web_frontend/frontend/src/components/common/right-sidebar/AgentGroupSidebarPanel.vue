@@ -82,7 +82,11 @@
       </div>
       <div class="workspace-info">版本: {{ store.activeGroup.current_workspace_revision }}</div>
       <FilePreview v-if="runtimeStore.workspaceFile" :file="runtimeStore.workspaceFile" @close="closePreview" />
-      <WorkspaceExplorer v-else :workspace-context="workspaceContext" @select-file="previewFile" />
+      <WorkspaceExplorer
+        v-show="!runtimeStore.workspaceFile"
+        :workspace-context="workspaceContext"
+        @select-file="previewFile"
+      />
     </section>
 
     <!-- 创建群聊对话框 -->

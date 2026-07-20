@@ -182,6 +182,7 @@ def _invariant_system_prompt_text() -> str:
             "声明 Python 或系统包依赖时，必须填写 install_timeout_seconds；根据依赖体积、平台和网络状况估算，不要假定固定时长。"
             "运行时资源只在 contracts/resources.json 声明 descriptor。先根据 task_analysis.resource_requirements 判断账户、凭据、API Key、邮箱、数据库连接、固定端点、默认收件人等部署配置，禁止把这些字段编进 tool input_schema 或源码。"
             "Package Tool 消费 Resource 时，在同一次 upsert_package_tool 中传 resource_descriptors，并让 tool_spec.resources selector 与 descriptor.resource_id 对齐、descriptor.used_by 包含 tool id、tool_source 只从 resources 读取。"
+            "Package Tool 生成的用户交付文件必须通过 tool_spec.resources 声明 workspace_root，并写入当前会话 workspace_root；不要把交付产物放进独立包级目录。"
             "不属于 Package Tool 的独立资源才使用 upsert_resources；需要用户填写时调用 create_agent_control(action='ask_user', resource_requests=[{resource_id, description, secret}])。秘密值由前端安全写入资源存储，不会回传给模型。"
             "调用 create_agent_probe_tool(action='call') 时，必须填写 timeout_seconds，且应覆盖依赖初始化与目标工具实际执行的总时长。"
         ),
