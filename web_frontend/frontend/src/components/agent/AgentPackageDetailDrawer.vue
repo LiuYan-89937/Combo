@@ -103,6 +103,60 @@
 
         <section class="detail-section">
           <div class="section-header">
+            <div class="section-label">{{ t('agentDetail.memoryPolicy') }}</div>
+            <n-tag
+              size="small"
+              :bordered="false"
+              :type="agentPackage.memory_contract?.enabled ? 'success' : 'default'"
+            >
+              {{ agentPackage.memory_contract?.enabled ? t('agentDetail.enabled') : t('agentDetail.disabled') }}
+            </n-tag>
+          </div>
+          <n-empty
+            v-if="!agentPackage.memory_contract?.available"
+            :description="agentPackage.memory_contract?.error || t('agentDetail.memoryUnavailable')"
+            size="small"
+          />
+          <div v-else class="memory-policy-panel">
+            <div class="context-config-row">
+              <div class="context-config-main">
+                <div class="context-config-heading">
+                  <div class="item-title">{{ t('agentDetail.memoryWriteInterval') }}</div>
+                  <div class="context-window-meta">
+                    <span>{{ t('agentDetail.memoryCurrentInterval', { turns: agentPackage.memory_contract?.write_interval_turns ?? t('common.unset') }) }}</span>
+                    <span>{{ t('agentDetail.memoryWriteStatus', { status: agentPackage.memory_contract?.write_enabled ? t('agentDetail.enabled') : t('agentDetail.disabled') }) }}</span>
+                    <span>{{ t('agentDetail.memoryInjectionStatus', { status: agentPackage.memory_contract?.injection_enabled ? t('agentDetail.enabled') : t('agentDetail.disabled') }) }}</span>
+                  </div>
+                </div>
+              </div>
+              <div class="memory-config-control">
+                <n-input-number
+                  v-model:value="memoryWriteIntervalDraft"
+                  :min="1"
+                  :max="1000"
+                  :precision="0"
+                  :show-button="true"
+                />
+                <span>{{ t('agentDetail.memoryTurnsUnit') }}</span>
+              </div>
+            </div>
+            <div class="context-window-help">{{ t('agentDetail.memoryPolicyHint') }}</div>
+            <div v-if="memoryConfigError" class="resource-error">{{ memoryConfigError }}</div>
+            <n-button
+              size="small"
+              type="primary"
+              class="context-save-button"
+              :loading="memoryConfigSaving"
+              :disabled="!memoryConfigDirty"
+              @click="saveMemoryConfig"
+            >
+              {{ t('common.save') }}
+            </n-button>
+          </div>
+        </section>
+
+        <section class="detail-section">
+          <div class="section-header">
             <div class="section-label">{{ t('agentDetail.contextPolicy') }}</div>
             <n-tag size="small" :bordered="false">
               {{ agentPackage.context_contract?.version || t('common.unknown') }}
@@ -499,6 +553,9 @@ type EditableToolKind = 'model_tool' | 'package_tool'
 const toolDescriptionDrafts = ref<Record<string, string>>({})
 const toolDescriptionErrors = ref<Record<string, string>>({})
 const toolDescriptionSavingKey = ref('')
+const memoryWriteIntervalDraft = ref<number | null>(null)
+const memoryConfigSaving = ref(false)
+const memoryConfigError = ref('')
 const contextDrafts = ref<{ window: number | null; compression: number | null }>({
   window: null,
   compression: null,
@@ -514,6 +571,16 @@ const contextConfigDirty = computed(() => {
     contextConfigSavePayload().compression_threshold_tokens !== (contract?.compression_threshold_tokens_custom ?? null)
   )
 })
+const memoryConfigDirty = computed(() => {
+  const contract = props.agentPackage?.memory_contract
+  const writeIntervalTurns = memoryWriteIntervalDraft.value
+  return contract?.available === true
+    && Number.isInteger(writeIntervalTurns)
+    && writeIntervalTurns !== null
+    && writeIntervalTurns >= 1
+    && writeIntervalTurns <= 1000
+    && writeIntervalTurns !== contract.write_interval_turns
+})
 
 watch(
   () => props.agentPackage?.context_contract,
@@ -526,6 +593,15 @@ watch(
       window: contract?.context_window_tokens_custom ? 'custom' : 'env',
       compression: contract?.compression_threshold_tokens_custom ? 'custom' : 'env',
     }
+  },
+  { immediate: true },
+)
+
+watch(
+  () => props.agentPackage?.memory_contract,
+  (contract) => {
+    memoryWriteIntervalDraft.value = contract?.write_interval_turns ?? null
+    memoryConfigError.value = ''
   },
   { immediate: true },
 )
@@ -661,6 +737,22 @@ async function saveToolDescription(toolKind: EditableToolKind, toolId: string): 
   }
 }
 
+async function saveMemoryConfig(): Promise<void> {
+  const packageId = props.agentPackage?.package_id
+  const writeIntervalTurns = memoryWriteIntervalDraft.value
+  if (!packageId || writeIntervalTurns === null || !memoryConfigDirty.value) return
+  memoryConfigSaving.value = true
+  memoryConfigError.value = ''
+  try {
+    const response = await agentPackagesApi.updateMemoryConfig(packageId, writeIntervalTurns)
+    emit('packageUpdated', response.package as AgentPackageView)
+  } catch (error) {
+    memoryConfigError.value = errorMessage(error)
+  } finally {
+    memoryConfigSaving.value = false
+  }
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
@@ -759,6 +851,28 @@ function packageStatusLabel(status: string | null | undefined): string {
   color: var(--app-text-muted);
   font-size: var(--app-font-xs);
   line-height: 1.45;
+}
+
+.memory-policy-panel {
+  display: grid;
+  gap: var(--app-space-md);
+}
+
+.memory-config-control {
+  display: flex;
+  align-items: center;
+  gap: var(--app-space-sm);
+  min-width: 156px;
+}
+
+.memory-config-control .n-input-number {
+  width: 112px;
+}
+
+.memory-config-control span {
+  color: var(--app-text-muted);
+  font-size: var(--app-font-xs);
+  white-space: nowrap;
 }
 
 .resource-item { align-items: flex-start; background: var(--app-surface); }

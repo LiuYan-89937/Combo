@@ -149,6 +149,20 @@ def create_agent_package_router(runtime_bridge: RuntimeBridge, logger: logging.L
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"package": summary}
 
+    @router.patch("/{package_id}/memory-config")
+    def update_agent_package_memory_config(package_id: str, payload: dict[str, Any]):
+        try:
+            write_interval_turns = _validated_memory_write_interval(payload)
+            summary = AgentPackageRuntimeManager().update_memory_config(
+                package_id,
+                write_interval_turns=write_interval_turns,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"package": summary}
+
     @router.get("/{package_id}/resources")
     def get_agent_package_resources(package_id: str):
         try:
@@ -236,6 +250,17 @@ def _validated_context_config_payload(payload: dict[str, Any]) -> dict[str, int 
             raise ValueError(f"{key} must be greater than or equal to {minimum}")
         result[key] = value
     return result
+
+
+def _validated_memory_write_interval(payload: dict[str, Any]) -> int:
+    if "write_interval_turns" not in payload:
+        raise ValueError("write_interval_turns is required")
+    value = payload["write_interval_turns"]
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("write_interval_turns must be an integer")
+    if value < 1 or value > 1000:
+        raise ValueError("write_interval_turns must be between 1 and 1000")
+    return value
 
 
 def unlink_file(path: Path) -> None:
