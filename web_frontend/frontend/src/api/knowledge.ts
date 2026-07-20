@@ -1,17 +1,8 @@
 import type { KnowledgeSourceInput, WorkspaceContextInput } from './resourceTypes'
-import { requestEvent, requestFormEvent, requestJson, withQuery } from './http'
+import { requestEvent, requestFormEvent, withQuery } from './http'
 import { packageResourceContextPayload } from './resourceContext'
 
-export interface KnowledgeCapabilities {
-  accepted_extensions: string[]
-  file_accept: string
-  ocr_supported: boolean
-  ocr_message: string
-  parser_backends: string[]
-}
-
 export const knowledgeApi = {
-  capabilities: () => requestJson<KnowledgeCapabilities>('/api/knowledge/capabilities'),
   sources: (context?: WorkspaceContextInput) =>
     requestEvent(withQuery('/api/knowledge/sources', packageResourceContextPayload(context))),
   addSource: (source: KnowledgeSourceInput, context?: WorkspaceContextInput) => {
@@ -34,6 +25,8 @@ export const knowledgeApi = {
   },
   documents: (sourceId: string, context?: WorkspaceContextInput) =>
     requestEvent(withQuery('/api/knowledge/documents', { source_id: sourceId, ...packageResourceContextPayload(context) })),
+  document: (documentId: string, context?: WorkspaceContextInput) =>
+    requestEvent(withQuery('/api/knowledge/document', { document_id: documentId, ...packageResourceContextPayload(context) })),
   search: (query: string, sourceId?: string, context?: WorkspaceContextInput) =>
     requestEvent(withQuery('/api/knowledge/search', { query, source_id: sourceId, ...packageResourceContextPayload(context) })),
   removeSource: (sourceId: string, context?: WorkspaceContextInput) =>

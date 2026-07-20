@@ -12,6 +12,7 @@ import shutil
 from typing import Any
 
 from agent_factory.document_processing import parse_file, parse_url
+from agent_factory.file_capabilities import accepted_attachment_extensions
 from agent_factory.file_utils import file_sha256
 
 
@@ -251,6 +252,7 @@ def _copy_prepared_local_attachment(
     policy: AttachmentImportPolicy,
 ) -> _ImportedLocalAttachment:
     safe_name = _safe_filename(prepared.source.name)
+    _validate_attachment_filename(safe_name)
     storage_root.mkdir(parents=True, exist_ok=True)
     target = _unique_storage_path(storage_root, safe_name)
     try:
@@ -406,6 +408,7 @@ def _write_runtime_attachment(
     source_url: str | None = None,
 ) -> _ImportedLocalAttachment:
     safe_name = _safe_filename(display_name)
+    _validate_attachment_filename(safe_name)
     storage_root.mkdir(parents=True, exist_ok=True)
     target = _unique_storage_path(storage_root, safe_name)
     try:
@@ -771,6 +774,16 @@ def _ensure_suffix(value: str, suffix: str) -> str:
     if Path(name).suffix:
         return name
     return f"{name}{suffix}"
+
+
+def _validate_attachment_filename(filename: str) -> None:
+    suffix = Path(filename).suffix.lower()
+    if suffix not in accepted_attachment_extensions():
+        raise AttachmentImportError(
+            f"unsupported attachment file type: {suffix or 'no_extension'}",
+            path=filename,
+            code="unsupported_attachment_type",
+        )
 
 
 def _resolve_source(raw_path: str, *, base_dir: Path | None) -> Path:

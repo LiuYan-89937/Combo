@@ -5,7 +5,7 @@ import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
 import { useResourceContext } from '@/composables/useResourceContext'
 import { useKnowledgeStore } from '@/stores/knowledge'
-import type { KnowledgeSourceView } from '@/types/protocol'
+import type { KnowledgeDocumentView, KnowledgeSourceView } from '@/types/protocol'
 
 export function useKnowledgeManager() {
   const knowledgeStore = useKnowledgeStore()
@@ -17,6 +17,8 @@ export function useKnowledgeManager() {
   const showCreateModal = ref(false)
   const documentsDrawerOpen = ref(false)
   const documentsTitle = ref('')
+  const selectedDocument = ref<KnowledgeDocumentView | null>(null)
+  const documentLoading = ref(false)
   const selectedSourceIds = ref<Set<string>>(new Set())
   const busyAction = ref<'create' | 'delete' | 'reindex' | null>(null)
   const busySourceId = ref<string | null>(null)
@@ -88,8 +90,22 @@ export function useKnowledgeManager() {
     if (!sourceId) return
     knowledgeStore.selectSource(sourceId)
     documentsTitle.value = source.name || t('knowledge.sourceFallback')
+    selectedDocument.value = null
+    knowledgeStore.setCurrentDocument(null)
     documentsDrawerOpen.value = true
     await commands.listKnowledgeDocuments(sourceId, resourceContext.workspaceContext.value)
+  }
+
+  async function openDocument(document: KnowledgeDocumentView) {
+    if (!document.documentId || documentLoading.value) return
+    selectedDocument.value = document
+    knowledgeStore.setCurrentDocument(null)
+    documentLoading.value = true
+    try {
+      await commands.readKnowledgeDocument(document.documentId, resourceContext.workspaceContext.value)
+    } finally {
+      documentLoading.value = false
+    }
   }
 
   function setSourceSelected(sourceId: string, checked: boolean) {
@@ -142,6 +158,8 @@ export function useKnowledgeManager() {
     selectedSourceIds.value = new Set()
     documentsDrawerOpen.value = false
     documentsTitle.value = ''
+    selectedDocument.value = null
+    documentLoading.value = false
     knowledgeStore.reset()
   }
 
@@ -165,6 +183,7 @@ export function useKnowledgeManager() {
     confirmDeleteSources,
     documentsDrawerOpen,
     documentsTitle,
+    documentLoading,
     getSourceActions,
     getSourceColor,
     getSourceIcon,
@@ -173,10 +192,12 @@ export function useKnowledgeManager() {
     handleCreate,
     handleReindex,
     handleSelectSource,
+    openDocument,
     knowledgeStore,
     resourceContext,
     selectedCount,
     selectedSourceIds,
+    selectedDocument,
     selectedSources,
     setSourceSelected,
     showCreateModal,

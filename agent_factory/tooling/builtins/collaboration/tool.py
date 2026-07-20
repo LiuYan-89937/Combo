@@ -7,7 +7,7 @@ from typing import Any
 
 from agent_factory.collaboration_system.store import CollaborationStore, resolve_collaboration_store_path
 from agent_factory.collaboration_system.activity import inspect_activity_policy, recent_task_activity
-from agent_factory.document_processing import SUPPORTED_FILE_EXTENSIONS, parse_file
+from agent_factory.document_processing import accepted_file_extensions, parse_file
 from agent_factory.tooling.envelope import runtime_wait_evidence, tool_envelope
 from agent_factory.tooling.spec import ToolRiskResult
 
@@ -523,7 +523,7 @@ def _shared_artifact_text(path: Path, root: Path, *, max_chars: int) -> str:
 
 def _shared_artifact_content(path: Path, root: Path, *, max_chars: int) -> tuple[str, bool]:
     suffix = path.suffix.lower()
-    if suffix in SUPPORTED_FILE_EXTENSIONS:
+    if suffix in accepted_file_extensions():
         try:
             parsed = parse_file(path, root=root)
             text = "\n\n".join(str(document.content or "").strip() for document in parsed.documents).strip()

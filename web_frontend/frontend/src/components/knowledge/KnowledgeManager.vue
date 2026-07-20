@@ -128,7 +128,7 @@
       @submit="handleCreate"
     />
 
-    <n-drawer v-model:show="documentsDrawerOpen" :width="520" placement="right">
+    <n-drawer v-model:show="documentsDrawerOpen" width="min(880px, 100vw)" placement="right">
       <n-drawer-content :title="t('knowledge.documentsTitle')" closable>
         <div class="documents-panel">
           <div class="documents-title">{{ documentsTitle }}</div>
@@ -137,24 +137,36 @@
             :description="t('knowledge.noDocuments')"
             size="small"
           />
-          <n-list v-else>
-            <n-list-item
-              v-for="document in knowledgeStore.documents"
-              :key="document.documentId || document.payload?.document_id || document.title"
-            >
-              <div class="document-item">
-                <div class="document-title">
+          <div v-else class="documents-layout">
+            <div class="document-list" role="list">
+              <button
+                v-for="document in knowledgeStore.documents"
+                :key="document.documentId || document.payload?.document_id || document.title"
+                type="button"
+                class="document-item"
+                :class="{ active: selectedDocument?.documentId === document.documentId }"
+                :disabled="documentLoading"
+                @click="openDocument(document)"
+              >
+                <span class="document-title">
                   {{ document.title || document.name || t('knowledge.document') }}
-                </div>
-                <div class="document-meta">
+                </span>
+                <span class="document-meta">
                   {{ document.documentType || document.kind || 'document' }}
-                </div>
-                <div v-if="document.uri" class="document-uri">
-                  {{ document.uri }}
-                </div>
-              </div>
-            </n-list-item>
-          </n-list>
+                </span>
+              </button>
+            </div>
+            <div class="document-preview">
+              <n-empty
+                v-if="!selectedDocument"
+                :description="t('knowledge.selectDocumentToPreview')"
+                size="small"
+              />
+              <n-spin v-else-if="documentLoading" size="small" />
+              <FilePreviewContent v-else-if="knowledgePreviewFile" :file="knowledgePreviewFile" />
+              <n-empty v-else :description="t('knowledge.documentPreviewUnavailable')" size="small" />
+            </div>
+          </div>
         </div>
       </n-drawer-content>
     </n-drawer>
@@ -162,6 +174,7 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import {
   NButton,
   NCard,
@@ -172,19 +185,19 @@ import {
   NDropdown,
   NEmpty,
   NIcon,
-  NList,
-  NListItem,
   NProgress,
   NScrollbar,
   NSpace,
+  NSpin,
   NTag,
   NText,
 } from 'naive-ui'
 import { Add, Document, Library, Settings, EllipsisHorizontal } from '@/components/icons'
 import { useKnowledgeManager } from '@/composables/knowledge/useKnowledgeManager'
 import KnowledgeSourceFormModal from './KnowledgeSourceFormModal.vue'
+import FilePreviewContent from '@/components/workspace/FilePreviewContent.vue'
 import { useI18n } from '@/composables/useI18n'
-import type { KnowledgeSourceView } from '@/types/protocol'
+import type { KnowledgeSourceView, WorkspaceFileView } from '@/types/protocol'
 import type { KnowledgeIngestionProgress } from '@/stores/knowledge'
 
 const { t } = useI18n()
@@ -195,6 +208,7 @@ const {
   confirmDeleteSources,
   documentsDrawerOpen,
   documentsTitle,
+  documentLoading,
   getSourceActions,
   getSourceColor,
   getSourceIcon,
@@ -204,15 +218,37 @@ const {
   handleReindex,
   handleSelectSource,
   knowledgeStore,
+  openDocument,
   resourceContext,
   selectedCount,
   selectedSourceIds,
+  selectedDocument,
   selectedSources,
   setSourceSelected,
   showCreateModal,
   sourceIdOf,
   sourceKey,
 } = useKnowledgeManager()
+
+const knowledgePreviewFile = computed<WorkspaceFileView | null>(() => {
+  const content = String(knowledgeStore.currentDocument?.content || '')
+  if (!selectedDocument.value || !content) return null
+  return {
+    name: selectedDocument.value.title || selectedDocument.value.name || t('knowledge.document'),
+    kind: 'text',
+    mimeType: 'text/plain',
+    encoding: 'utf-8',
+    content,
+    contentBase64: '',
+    sizeBytes: new TextEncoder().encode(content).byteLength,
+    truncated: knowledgeStore.currentDocument?.truncated === true,
+    payload: {
+      preview_mode: 'extracted_text',
+      document_id: selectedDocument.value.documentId,
+      document_type: selectedDocument.value.documentType,
+    },
+  }
+})
 
 function sourceDisplayName(source: KnowledgeSourceView): string {
   return source.name || t('knowledge.sourceFallback')
@@ -420,6 +456,8 @@ function ingestionProgressStatus(source: KnowledgeSourceView): 'default' | 'succ
   display: flex;
   flex-direction: column;
   gap: var(--app-space-md);
+  height: 100%;
+  min-height: 0;
 }
 
 .documents-title {
@@ -427,10 +465,46 @@ function ingestionProgressStatus(source: KnowledgeSourceView): 'default' | 'succ
   font-weight: 600;
 }
 
+.documents-layout {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-lg);
+}
+
+.document-list {
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--app-space-sm);
+  border-right: 1px solid var(--app-divider);
+  background: var(--app-surface-muted);
+}
+
 .document-item {
+  width: 100%;
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: var(--app-space-xs);
+  padding: var(--app-space-sm) var(--app-space-md);
+  border: 0;
+  border-radius: var(--app-radius-md);
+  background: transparent;
+  color: var(--app-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.document-item:hover,
+.document-item.active {
+  background: var(--app-surface);
+}
+
+.document-item.active {
+  box-shadow: var(--app-shadow-sm);
 }
 
 .document-title {
@@ -438,13 +512,26 @@ function ingestionProgressStatus(source: KnowledgeSourceView): 'default' | 'succ
   font-weight: 500;
 }
 
-.document-meta,
-.document-uri {
+.document-meta {
   font-size: var(--app-font-sm);
   color: var(--app-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.document-preview {
+  min-width: 0;
+  min-height: 420px;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  overflow: hidden;
+  background: var(--app-surface);
+}
+
+.document-preview > :deep(*) {
+  width: 100%;
 }
 
 .manager-empty {
@@ -466,6 +553,15 @@ function ingestionProgressStatus(source: KnowledgeSourceView): 'default' | 'succ
   .source-grid {
     grid-template-columns: 1fr;
     gap: var(--app-space-md);
+  }
+  .documents-layout {
+    grid-template-columns: 1fr;
+    overflow: visible;
+  }
+  .document-list {
+    max-height: 220px;
+    border-right: 0;
+    border-bottom: 1px solid var(--app-divider);
   }
 }
 </style>

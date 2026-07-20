@@ -2,7 +2,7 @@
   <div class="session-panel">
     <div class="sidebar-header">
       <n-text strong>{{ panelTitle }}</n-text>
-      <n-button size="small" @click="handleNewSession">
+      <n-button size="small" :disabled="runtimeStore.hasActiveRun" @click="handleNewSession">
         <template #icon>
           <n-icon><Add /></n-icon>
         </template>
@@ -86,6 +86,7 @@ import { useSessionStore } from '@/stores/session'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useAgentStore } from '@/stores/agent'
 import { useCommand } from '@/composables/useCommand'
+import { useConversationSessionNavigation } from '@/composables/useConversationSessionNavigation'
 import type { SessionView } from '@/stores/session'
 
 const props = withDefaults(
@@ -101,6 +102,7 @@ const sessionStore = useSessionStore()
 const runtimeStore = useRuntimeStore()
 const agentStore = useAgentStore()
 const commands = useCommand()
+const { startNewConversationSession } = useConversationSessionNavigation()
 const { locale, t } = useI18n()
 const searchQuery = ref('')
 const dialog = useDialog()
@@ -126,10 +128,7 @@ const filteredSessions = computed(() => {
 })
 
 function handleNewSession() {
-  commands.newSession(
-    activeSessionMode.value,
-    activeSessionMode.value === 'evolve_agent' ? agentStore.selectedPackageId : null,
-  )
+  void startNewConversationSession()
 }
 
 function handleSelectSession(session: SessionView) {

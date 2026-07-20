@@ -1,5 +1,5 @@
 <template>
-  <div class="message-input-container">
+  <div class="message-input-container" @dragover.prevent @drop.prevent="handleFileDrop">
     <div v-if="contextReferences.length > 0" class="attachments-preview context-references-preview">
       <div
         v-for="(reference, index) in contextReferences"
@@ -63,7 +63,7 @@
         <n-button
           v-if="attachmentsEnabled"
           text
-          @click="showAttachmentPicker = true"
+          @click="openAttachmentPicker"
           :disabled="disabled || remainingAttachmentSlots <= 0"
         >
           <template #icon>
@@ -71,6 +71,14 @@
           </template>
           {{ t('attachments.add') }}
         </n-button>
+        <input
+          ref="attachmentFileInputRef"
+          class="native-file-input"
+          type="file"
+          multiple
+          :accept="fileCapabilities?.attachment_accept || ''"
+          @change="handleAttachmentFileInput"
+        />
 
         <n-select
           v-if="modelSelectorEnabled"
@@ -176,22 +184,15 @@
     </div>
 
     <!-- 附件选择器 -->
-    <AttachmentPickerModal
-      v-if="attachmentsEnabled"
-      v-model:show="showAttachmentPicker"
-      :current-count="attachments.length + contextReferences.length"
-      :max-count="maxAttachments"
-      @attach="handleAttach"
-    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, onMounted } from 'vue'
 import { NInput, NButton, NIcon, NText, NPopover, NRadioButton, NRadioGroup, NSelect, useMessage } from 'naive-ui'
 import { AttachOutline, BulbOutline, CaretDown, Document, Link, Text, Close, CodeSlash, Send, Stop, ImageOutline } from '@/components/icons'
-import AttachmentPickerModal from './AttachmentPickerModal.vue'
 import { useI18n } from '@/composables/useI18n'
+import { useFileCapabilities } from '@/composables/useFileCapabilities'
 import { MAX_RUNTIME_ATTACHMENTS, extensionFromMimeType, pastedImageFiles, runtimeFileAttachmentFromFile } from '@/utils/attachments'
 import type { RuntimeAttachmentInput } from '@/types/protocol'
 import { useContextReferenceStore } from '@/stores/contextReferences'
@@ -199,6 +200,12 @@ import { useContextReferenceStore } from '@/stores/contextReferences'
 const { t } = useI18n()
 const messageApi = useMessage()
 const referenceStore = useContextReferenceStore()
+const {
+  capabilities: fileCapabilities,
+  attachmentExtensions,
+  error: fileCapabilitiesError,
+  load: loadFileCapabilities,
+} = useFileCapabilities()
 
 const props = withDefaults(
   defineProps<{
@@ -240,11 +247,11 @@ const emit = defineEmits<{
 }>()
 
 const inputRef = ref()
+const attachmentFileInputRef = ref<HTMLInputElement | null>(null)
 const inputText = ref('')
 const attachments = ref<RuntimeAttachmentInput[]>([])
 const normalizedReferenceScope = computed(() => String(props.referenceScope || '').trim() || 'global')
 const contextReferences = computed(() => referenceStore.references(normalizedReferenceScope.value))
-const showAttachmentPicker = ref(false)
 const placeholder = computed(() => props.placeholder || t('chat.inputPlaceholder'))
 const reasoningOptions = computed(() => [
   { label: t('chat.reasoningDefault'), value: -1 },
@@ -321,9 +328,45 @@ function handleReasoningSelect(value: string | number) {
   emit('update:reasoningIntensity', intensity < 0 ? null : intensity)
 }
 
-function handleAttach(attachment: RuntimeAttachmentInput | RuntimeAttachmentInput[]) {
-  if (!props.attachmentsEnabled) return
-  appendAttachments(Array.isArray(attachment) ? attachment : [attachment])
+function openAttachmentPicker() {
+  if (!fileCapabilities.value) {
+    messageApi.warning(fileCapabilitiesError.value || t('attachments.capabilitiesUnavailable'))
+    void loadFileCapabilities()
+    return
+  }
+  attachmentFileInputRef.value?.click()
+}
+
+async function handleAttachmentFileInput(event: Event) {
+  const input = event.target as HTMLInputElement
+  await appendFiles(Array.from(input.files || []))
+  input.value = ''
+}
+
+async function handleFileDrop(event: DragEvent) {
+  if (!props.attachmentsEnabled || props.disabled) return
+  await appendFiles(Array.from(event.dataTransfer?.files || []))
+}
+
+async function appendFiles(files: File[]) {
+  if (files.length === 0) return
+  const accepted: File[] = []
+  const rejected: string[] = []
+  for (const file of files) {
+    if (isAcceptedAttachmentFile(file)) accepted.push(file)
+    else rejected.push(file.name)
+  }
+  if (rejected.length) {
+    messageApi.warning(t('attachments.unsupportedFiles', { names: rejected.join(', ') }))
+  }
+  const selected = accepted.slice(0, remainingAttachmentSlots.value)
+  if (selected.length < accepted.length) showAttachmentLimitPartial(selected.length)
+  appendAttachments(await Promise.all(selected.map((file) => runtimeFileAttachmentFromFile(file))))
+}
+
+function isAcceptedAttachmentFile(file: File): boolean {
+  const suffix = file.name.includes('.') ? `.${file.name.split('.').pop()?.toLowerCase()}` : ''
+  return Boolean(suffix && attachmentExtensions.value.has(suffix))
 }
 
 function appendAttachments(nextAttachments: RuntimeAttachmentInput[]) {
@@ -402,10 +445,13 @@ watch(
   (enabled) => {
     if (!enabled) {
       attachments.value = []
-      showAttachmentPicker.value = false
     }
   }
 )
+
+onMounted(() => {
+  void loadFileCapabilities()
+})
 
 // 暴露方法
 defineExpose({
@@ -429,6 +475,10 @@ defineExpose({
 .message-input-container:focus-within {
   border-color: var(--app-border-focus);
   box-shadow: 0 0 0 3px var(--app-focus-shadow);
+}
+
+.native-file-input {
+  display: none;
 }
 
 .attachments-preview {

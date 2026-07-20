@@ -17,6 +17,10 @@ export function useKnowledgeCommands() {
     return transport.applyEventRequest(knowledgeApi.documents(sourceId, context))
   }
 
+  const readKnowledgeDocument = (documentId: string, context?: WorkspaceContextInput) => {
+    return transport.applyEventRequest(knowledgeApi.document(documentId, context))
+  }
+
   const searchKnowledge = (query: string, sourceId?: string, context?: WorkspaceContextInput) => {
     return transport.applyEventRequest(knowledgeApi.search(query, sourceId, context))
   }
@@ -33,6 +37,7 @@ export function useKnowledgeCommands() {
     refreshKnowledge,
     addKnowledgeSource,
     listKnowledgeDocuments,
+    readKnowledgeDocument,
     searchKnowledge,
     removeKnowledgeSource,
     reindexKnowledgeSource,
