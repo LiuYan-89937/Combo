@@ -125,6 +125,37 @@ function updateKnowledgeSources(state: ResourceMutationState, event: FactoryFron
     return
   }
 
+  if (event.event_type.startsWith('knowledge_ingestion_') || event.event_type === 'knowledge_source_ready') {
+    const sourceId = String(event.payload?.source_id || '').trim()
+    if (!sourceId) return
+    const index = state.knowledgeSources.findIndex((source) => String(source.payload?.source_id || '') === sourceId)
+    if (index < 0) return
+    const current = state.knowledgeSources[index]
+    const counts = event.payload?.counts && typeof event.payload.counts === 'object'
+      ? event.payload.counts
+      : {}
+    const status = event.event_type === 'knowledge_source_ready' || event.event_type === 'knowledge_ingestion_completed'
+      ? 'ready'
+      : event.event_type === 'knowledge_ingestion_failed'
+        ? 'failed'
+        : event.event_type === 'knowledge_ingestion_queued'
+          ? 'registered'
+          : 'indexing'
+    state.knowledgeSources[index] = {
+      ...current,
+      status,
+      documentCount: counts.documents_loaded ?? current.documentCount,
+      updatedAt: event.timestamp,
+      payload: {
+        ...current.payload,
+        source_id: sourceId,
+        status,
+        counts,
+      },
+    }
+    return
+  }
+
   const source = event.payload?.source || event.payload?.preview || null
   const sourceId = event.payload?.source_id || source?.source_id
   if (!sourceId && !source?.display_name) return

@@ -5,7 +5,11 @@ import { packageResourceContextPayload } from './resourceContext'
 export const knowledgeApi = {
   sources: (context?: WorkspaceContextInput) =>
     requestEvent(withQuery('/api/knowledge/sources', packageResourceContextPayload(context))),
-  addSource: (source: KnowledgeSourceInput, context?: WorkspaceContextInput) => {
+  addSource: (
+    source: KnowledgeSourceInput,
+    context?: WorkspaceContextInput,
+    onUploadProgress?: (percent: number) => void,
+  ) => {
     const resourceContext = packageResourceContextPayload(context)
     if (source.files?.length) {
       const formData = new FormData()
@@ -16,7 +20,7 @@ export const knowledgeApi = {
       files.forEach((item) => {
         formData.append('files', item.file, item.relativePath || item.file.name)
       })
-      return requestFormEvent('/api/knowledge/sources/upload', formData)
+      return requestFormEvent('/api/knowledge/sources/upload', formData, onUploadProgress)
     }
     return requestEvent('/api/knowledge/sources', {
       method: 'POST',

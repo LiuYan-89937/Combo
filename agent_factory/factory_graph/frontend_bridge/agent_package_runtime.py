@@ -12,7 +12,7 @@ import threading
 from typing import Any, Iterator
 from uuid import uuid4
 
-from agent_factory.knowledge_system import KnowledgeRuntime
+from agent_factory.knowledge_system import KnowledgeIngestionWorker, KnowledgeRuntime
 from agent_factory.knowledge_system.factory import build_knowledge_runtime
 from agent_factory.knowledge_system.schema import KnowledgeContractConfig
 from agent_factory.agent_registry import refresh_agent_registry_index
@@ -101,6 +101,16 @@ class AgentPackageStreamRun:
     events: Iterator[tuple[str, Any]]
 
 
+@dataclass(slots=True)
+class KnowledgeRuntimeHandle:
+    runtime: KnowledgeRuntime
+    worker: KnowledgeIngestionWorker
+    package_fingerprint: str
+
+    def close(self) -> None:
+        self.worker.shutdown()
+
+
 class AgentPackageRuntimeManager:
     def __init__(
         self,
@@ -135,6 +145,7 @@ class AgentPackageRuntimeManager:
         )
         self._containers: dict[str, AgentRuntimeContainerHandle] = {}
         self._system_handles: dict[str, SystemPackageRuntimeHandle] = {}
+        self._knowledge_handles: dict[str, KnowledgeRuntimeHandle] = {}
         self._runtime_handle_lock = threading.RLock()
         self._package_initialization_locks: dict[str, threading.Lock] = {}
         self._instance_status_overrides: dict[str, dict[str, Any]] = {}
@@ -567,6 +578,7 @@ class AgentPackageRuntimeManager:
     def delete_package(self, package_id: str) -> dict[str, Any]:
         self._close_package_containers(package_id)
         self._close_package_system_handles(package_id)
+        self._close_knowledge_runtime(package_id)
         result = self.repository.delete_user_package(package_id)
         self._environment_preparation_errors.pop(package_id, None)
         result["deleted_resource_count"] = self.resource_store.delete_package(package_id)
@@ -844,7 +856,12 @@ class AgentPackageRuntimeManager:
         result = self.extensions.system_manage(resource_mode, action, payload)
         return result.payload
 
-    def knowledge_runtime_for_package(self, package_id: str) -> KnowledgeRuntime:
+    def knowledge_runtime_for_package(
+        self,
+        package_id: str,
+        *,
+        background: bool = False,
+    ) -> KnowledgeRuntime:
         package = self.load_package(package_id)
         contract = package.contracts.get("knowledge") if isinstance(package.contracts, dict) else None
         config_payload = contract.get("config", {}) if isinstance(contract, dict) else {}
@@ -860,14 +877,63 @@ class AgentPackageRuntimeManager:
             },
             deep=True,
         )
-        return build_knowledge_runtime(
-            config=config,
-            owner_type="agent",
-            owner_id=package.assembly_spec.agent.id,
-        )
+        if not background:
+            return build_knowledge_runtime(
+                config=config,
+                owner_type="agent",
+                owner_id=package.assembly_spec.agent.id,
+            )
+        package_fingerprint = _runtime_fingerprint(package_id, package)
+        with self._package_initialization_lock(package_id):
+            with self._runtime_handle_lock:
+                existing = self._knowledge_handles.get(package_id)
+                if existing is not None and existing.package_fingerprint == package_fingerprint:
+                    return existing.runtime
+                stale = self._knowledge_handles.pop(package_id, None)
+            if stale is not None:
+                stale.close()
+            runtime = build_knowledge_runtime(
+                config=config,
+                owner_type="agent",
+                owner_id=package.assembly_spec.agent.id,
+                event_sink=self._knowledge_event_sink(package_id),
+            )
+            worker = KnowledgeIngestionWorker(runtime)
+            worker.start()
+            with self._runtime_handle_lock:
+                self._knowledge_handles[package_id] = KnowledgeRuntimeHandle(
+                    runtime=runtime,
+                    worker=worker,
+                    package_fingerprint=package_fingerprint,
+                )
+            return runtime
+
+    def _knowledge_event_sink(self, package_id: str) -> Callable[[dict[str, Any]], None]:
+        def emit_knowledge(payload: dict[str, Any]) -> None:
+            event_type = str(payload.get("event_type") or "").strip()
+            if not event_type:
+                return
+            self.emit_frontend_event(
+                event(
+                    event_type,
+                    request_id=None,
+                    mode="chat" if package_id == SYSTEM_CHAT_PACKAGE_ID else "agent_package",
+                    graph_id="knowledge_ingestion",
+                    producer_type="knowledge_runtime",
+                    payload={"package_id": package_id, **payload},
+                )
+            )
+
+        return emit_knowledge
+
+    def _close_knowledge_runtime(self, package_id: str) -> None:
+        with self._runtime_handle_lock:
+            handle = self._knowledge_handles.pop(package_id, None)
+        if handle is not None:
+            handle.close()
 
     def knowledge_manage(self, package_id: str, action: str, payload: dict[str, Any]) -> dict[str, Any]:
-        runtime = self.knowledge_runtime_for_package(package_id)
+        runtime = self.knowledge_runtime_for_package(package_id, background=True)
         if action == "list_sources":
             return {"sources": [source.model_dump(mode="json") for source in runtime.list_sources()]}
         if action == "list_documents":
@@ -904,8 +970,7 @@ class AgentPackageRuntimeManager:
         if action == "confirm_source":
             source = _normalized_source_payload(payload.get("source") if isinstance(payload.get("source"), dict) else payload)
             job = runtime.confirm_source(source)
-            completed = runtime.run_job(job.job_id)
-            return {"job": completed.model_dump(mode="json"), "sources": [item.model_dump(mode="json") for item in runtime.list_sources()]}
+            return {"job": job.model_dump(mode="json"), "sources": [item.model_dump(mode="json") for item in runtime.list_sources()]}
         if action == "remove_source":
             source_id = str(payload.get("source_id") or "")
             return {
@@ -916,10 +981,9 @@ class AgentPackageRuntimeManager:
         if action == "reindex":
             source_id = str(payload.get("source_id") or "")
             job = runtime.reindex_source(source_id)
-            completed = runtime.run_job(job.job_id)
             return {
                 "source_id": source_id,
-                "job": completed.model_dump(mode="json"),
+                "job": job.model_dump(mode="json"),
                 "sources": [item.model_dump(mode="json") for item in runtime.list_sources()],
             }
         raise ValueError(f"unsupported knowledge action: {action}")
@@ -1211,6 +1275,8 @@ class AgentPackageRuntimeManager:
         ]
 
     def close_all(self) -> None:
+        for package_id in list(self._knowledge_handles):
+            self._close_knowledge_runtime(package_id)
         for runtime_key in list(self._containers):
             self._close_container(runtime_key)
         for runtime_key in list(self._system_handles):
