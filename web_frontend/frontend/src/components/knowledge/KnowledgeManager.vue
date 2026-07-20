@@ -257,6 +257,8 @@ function sourceDisplayName(source: KnowledgeSourceView): string {
 function sourceStatusLabel(status: string): string {
   const labels: Record<string, string> = {
     ready: t('agents.statusReady'),
+    registered: t('knowledge.ingestionQueued'),
+    uploading: t('knowledge.uploading'),
     indexing: t('knowledge.updating'),
     failed: t('run.failed'),
   }
@@ -275,8 +277,22 @@ function ingestionMessage(source: KnowledgeSourceView): string {
   if (ingestion.status === 'failed') return t('knowledge.ingestionFailed')
   if (ingestion.status === 'queued') return t('knowledge.ingestionQueued')
   return ingestion.phase
-    ? t('knowledge.ingestionPhase', { phase: ingestion.phase })
+    ? t('knowledge.ingestionPhase', { phase: ingestionPhaseLabel(ingestion.phase) })
     : t('knowledge.ingestionRunning')
+}
+
+function ingestionPhaseLabel(phase: string): string {
+  const labels: Record<string, string> = {
+    upload: t('knowledge.phaseUpload'),
+    discover: t('knowledge.phaseDiscover'),
+    load: t('knowledge.phaseLoad'),
+    normalize: t('knowledge.phaseNormalize'),
+    chunk: t('knowledge.phaseChunk'),
+    embed: t('knowledge.phaseEmbed'),
+    index: t('knowledge.phaseIndex'),
+    finalize: t('knowledge.phaseFinalize'),
+  }
+  return labels[phase] || phase
 }
 
 function ingestionProgressStatus(source: KnowledgeSourceView): 'default' | 'success' | 'error' | 'warning' {

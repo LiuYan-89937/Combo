@@ -71,6 +71,56 @@ export const useKnowledgeStore = defineStore('knowledge', () => {
     currentDocument.value = doc
   }
 
+  function addPendingSource(sourceId: string, displayName: string, mode: string): void {
+    const source: KnowledgeSourceView = {
+      name: displayName,
+      status: 'uploading',
+      documentCount: null,
+      mode,
+      updatedAt: new Date().toISOString(),
+      payload: {
+        source_id: sourceId,
+        display_name: displayName,
+        mount_mode: mode,
+        status: 'uploading',
+        local_pending: true,
+      },
+    }
+    sources.value = [source, ...sources.value.filter((item) => item.payload?.source_id !== sourceId)]
+    ingestionBySource.value = {
+      ...ingestionBySource.value,
+      [sourceId]: {
+        sourceId,
+        jobId: null,
+        status: 'running',
+        phase: 'upload',
+        percent: 5,
+        message: '',
+        error: null,
+        counts: {},
+      },
+    }
+  }
+
+  function removePendingSource(sourceId: string): void {
+    sources.value = sources.value.filter((source) => source.payload?.source_id !== sourceId)
+    const nextIngestion = { ...ingestionBySource.value }
+    delete nextIngestion[sourceId]
+    ingestionBySource.value = nextIngestion
+  }
+
+  function updatePendingSourceProgress(sourceId: string, percent: number): void {
+    const current = ingestionBySource.value[sourceId]
+    if (!current) return
+    ingestionBySource.value = {
+      ...ingestionBySource.value,
+      [sourceId]: {
+        ...current,
+        percent: Math.max(0, Math.min(100, Math.round(percent))),
+      },
+    }
+  }
+
   function applyIngestionEvent(event: FactoryFrontendEvent): void {
     const sourceId = String(event.payload?.source_id || '').trim()
     if (!sourceId) return
@@ -130,6 +180,9 @@ export const useKnowledgeStore = defineStore('knowledge', () => {
     setDocuments,
     setSearchResults,
     setCurrentDocument,
+    addPendingSource,
+    removePendingSource,
+    updatePendingSourceProgress,
     applyIngestionEvent,
     reset,
   }

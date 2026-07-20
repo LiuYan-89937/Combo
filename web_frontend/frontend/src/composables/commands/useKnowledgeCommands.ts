@@ -9,8 +9,12 @@ export function useKnowledgeCommands() {
     return transport.applyEventRequest(knowledgeApi.sources(context))
   }
 
-  const addKnowledgeSource = (source: KnowledgeSourceInput, context?: WorkspaceContextInput) => {
-    return transport.applyEventRequest(knowledgeApi.addSource(source, context))
+  const addKnowledgeSource = (
+    source: KnowledgeSourceInput,
+    context?: WorkspaceContextInput,
+    onUploadProgress?: (percent: number) => void,
+  ) => {
+    return transport.applyEventRequest(knowledgeApi.addSource(source, context, onUploadProgress))
   }
 
   const listKnowledgeDocuments = (sourceId: string, context?: WorkspaceContextInput) => {

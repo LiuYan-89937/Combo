@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agent_factory.knowledge_system.catalog import KnowledgeCatalog
+from agent_factory.knowledge_system.events import KnowledgeEventSink
 from agent_factory.knowledge_system.runtime import KnowledgeIngestionWorker, KnowledgeRuntime
 from agent_factory.knowledge_system.schema import KnowledgeContractConfig
 from agent_factory.knowledge_system.store_index import build_knowledge_store_index
@@ -22,6 +23,7 @@ def build_knowledge_runtime(
     config: KnowledgeContractConfig,
     owner_type: str,
     owner_id: str,
+    event_sink: KnowledgeEventSink | None = None,
 ) -> KnowledgeRuntimeAssembly:
     store_handle = LangGraphStoreFactory().build(
         LangGraphStoreConfig(
@@ -45,6 +47,8 @@ def build_knowledge_runtime(
         owner_id=owner_id,
         catalog=KnowledgeCatalog(config.catalog_path),
         store=store_handle.store,
+        semantic_index_enabled=store_handle.semantic_index_enabled,
+        event_sink=event_sink,
     )
     return KnowledgeRuntimeAssembly(
         runtime=runtime,

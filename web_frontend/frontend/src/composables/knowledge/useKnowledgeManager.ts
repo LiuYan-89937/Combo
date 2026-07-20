@@ -56,14 +56,19 @@ export function useKnowledgeManager() {
 
   async function handleCreate(sourceData: any) {
     if (busyAction.value) return
-    busyAction.value = 'create'
-    try {
-      const event = await commands.addKnowledgeSource(sourceData, resourceContext.workspaceContext.value)
-      if (event) {
-        showCreateModal.value = false
-      }
-    } finally {
-      busyAction.value = null
+    const pendingSourceId = `pending_${crypto.randomUUID().split('-').join('')}`
+    const displayName = String(sourceData?.display_name || '').trim() || t('knowledge.sourceFallback')
+    const mountMode = String(sourceData?.mount_mode || 'index_only')
+    knowledgeStore.addPendingSource(pendingSourceId, displayName, mountMode)
+    showCreateModal.value = false
+    const event = await commands.addKnowledgeSource(
+      sourceData,
+      resourceContext.workspaceContext.value,
+      (percent) => knowledgeStore.updatePendingSourceProgress(pendingSourceId, percent),
+    )
+    knowledgeStore.removePendingSource(pendingSourceId)
+    if (event) {
+      void commands.refreshKnowledge(resourceContext.workspaceContext.value)
     }
   }
 

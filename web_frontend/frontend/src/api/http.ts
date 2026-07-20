@@ -26,18 +26,34 @@ export async function requestEvent(url: string, init: RequestInit = {}): Promise
   return response.event
 }
 
-export async function requestFormEvent(url: string, formData: FormData, init: RequestInit = {}): Promise<FactoryFrontendEvent> {
-  const response = await fetch(url, {
-    ...init,
-    method: init.method || 'POST',
-    body: formData,
+export function requestFormEvent(
+  url: string,
+  formData: FormData,
+  onUploadProgress?: (percent: number) => void,
+): Promise<FactoryFrontendEvent> {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest()
+    request.open('POST', url)
+    request.upload.addEventListener('progress', (event) => {
+      if (!event.lengthComputable || event.total <= 0) return
+      onUploadProgress?.(Math.round((event.loaded / event.total) * 100))
+    })
+    request.addEventListener('load', () => {
+      if (request.status < 200 || request.status >= 300) {
+        reject(new Error(request.responseText || `HTTP ${request.status}`))
+        return
+      }
+      try {
+        const data = JSON.parse(request.responseText) as EventResponse
+        resolve(data.event)
+      } catch (error) {
+        reject(error)
+      }
+    })
+    request.addEventListener('error', () => reject(new Error('Knowledge upload request failed')))
+    request.addEventListener('abort', () => reject(new Error('Knowledge upload request was cancelled')))
+    request.send(formData)
   })
-  if (!response.ok) {
-    const text = await response.text()
-    throw new Error(text || `HTTP ${response.status}`)
-  }
-  const data = (await response.json()) as EventResponse
-  return data.event
 }
 
 export async function requestBlob(url: string, init: RequestInit = {}): Promise<BlobResponse> {
