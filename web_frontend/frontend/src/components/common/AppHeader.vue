@@ -30,7 +30,31 @@
     </div>
 
     <div class="header-center" :style="headerCenterStyle">
-      <n-breadcrumb>
+      <div v-if="isAgentConversation" class="agent-conversation-context">
+        <span class="agent-conversation-route">
+          <n-icon size="15"><PersonCircleOutline /></n-icon>
+          <span>{{ currentRouteName }}</span>
+        </span>
+        <span class="agent-context-divider" aria-hidden="true"></span>
+        <n-dropdown
+          trigger="click"
+          placement="bottom"
+          :options="agentPackageOptions"
+          @select="switchAgentPackage"
+        >
+          <n-button
+            text
+            size="small"
+            class="agent-switch-trigger"
+            :title="t('sidebar.switchAgent')"
+            :aria-label="t('sidebar.switchAgent')"
+          >
+            <span class="agent-switch-label">{{ activeAgentName }}</span>
+            <n-icon size="12"><CaretDown /></n-icon>
+          </n-button>
+        </n-dropdown>
+      </div>
+      <n-breadcrumb v-else>
         <n-breadcrumb-item>{{ currentRouteName }}</n-breadcrumb-item>
       </n-breadcrumb>
     </div>
@@ -95,11 +119,13 @@
 <script setup lang="ts">
 import { computed, watchEffect } from 'vue'
 import { useRoute } from 'vue-router'
-import { NBadge, NButton, NIcon, NTag, NBreadcrumb, NBreadcrumbItem } from 'naive-ui'
-import { Bug, Settings, Time } from '@/components/icons'
+import { NBadge, NButton, NDropdown, NIcon, NTag, NBreadcrumb, NBreadcrumbItem } from 'naive-ui'
+import { Bug, CaretDown, PersonCircleOutline, Settings, Time } from '@/components/icons'
 import appIcon from '@/assets/fast-agent-factory-icon.png'
 import { routeTitleKey } from '@/i18n'
+import { useAgentSessionNavigation } from '@/composables/agent/useAgentSessionNavigation'
 import { useI18n } from '@/composables/useI18n'
+import { useAgentStore } from '@/stores/agent'
 import { useUiStore } from '@/stores/ui'
 import { useRuntimeStore } from '@/stores/runtime'
 
@@ -107,8 +133,33 @@ const route = useRoute()
 const { t } = useI18n()
 const uiStore = useUiStore()
 const runtimeStore = useRuntimeStore()
+const agentStore = useAgentStore()
+const { openPackageAgentChat } = useAgentSessionNavigation()
 const schedulerUnreadCount = computed(() => runtimeStore.schedulerRunNotices.filter((notice) => notice.unread).length)
 const schedulerRunning = computed(() => runtimeStore.schedulerRunNotices.some((notice) => ['scheduled', 'pending', 'running'].includes(notice.status)))
+
+const isAgentConversation = computed(() => (
+  route.name === 'Factory'
+  && runtimeStore.currentMode === 'agent_package'
+  && Boolean(agentStore.activeChatPackageId)
+))
+
+const activeAgentName = computed(() => {
+  const pkg = agentStore.activeChatPackage
+  return pkg?.agent_name || pkg?.name || pkg?.package_id || agentStore.activeChatPackageId || ''
+})
+
+const agentPackageOptions = computed(() => agentStore.agentPackages.map((pkg) => ({
+  label: pkg.agent_name || pkg.name || pkg.package_id,
+  key: pkg.package_id,
+  disabled: pkg.package_id === agentStore.activeChatPackageId,
+})))
+
+function switchAgentPackage(packageId: string | number) {
+  const normalizedPackageId = String(packageId || '').trim()
+  if (!normalizedPackageId || normalizedPackageId === agentStore.activeChatPackageId) return
+  void openPackageAgentChat(normalizedPackageId)
+}
 
 const headerCenterStyle = computed(() => ({
   left: `${uiStore.leftSidebarCollapsed ? 0 : uiStore.leftSidebarWidth}px`,
@@ -231,6 +282,51 @@ watchEffect(() => {
 
 .header-center :deep(.n-breadcrumb) {
   pointer-events: auto;
+}
+
+.agent-conversation-context {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: min(440px, calc(100% - var(--app-space-lg) * 2));
+  gap: var(--app-space-sm);
+  color: var(--app-text-secondary);
+  pointer-events: auto;
+}
+
+.agent-conversation-route {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 5px;
+  font-size: var(--app-font-sm);
+  white-space: nowrap;
+}
+
+.agent-context-divider {
+  width: 1px;
+  height: 14px;
+  flex-shrink: 0;
+  background: var(--app-divider);
+}
+
+.agent-switch-trigger {
+  min-width: 0;
+  max-width: 260px;
+  padding: 3px 5px;
+  border-radius: var(--app-radius-sm);
+  color: var(--app-text);
+  font-weight: 500;
+}
+
+.agent-switch-trigger:hover {
+  background: var(--app-surface-muted);
+}
+
+.agent-switch-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .brand {
