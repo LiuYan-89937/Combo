@@ -1,4 +1,5 @@
 from agent_factory.knowledge_system.catalog import KnowledgeCatalog
+from agent_factory.knowledge_system.factory import KnowledgeRuntimeAssembly, build_knowledge_runtime
 from agent_factory.knowledge_system.runtime import KnowledgeIngestionWorker, KnowledgeRuntime
 from agent_factory.knowledge_system.schema import (
     KnowledgeChunk,
@@ -21,6 +22,8 @@ __all__ = [
     "KnowledgeIngestionWorker",
     "KnowledgeResult",
     "KnowledgeRuntime",
+    "KnowledgeRuntimeAssembly",
     "KnowledgeSourceManifest",
     "KnowledgeSourcePreview",
+    "build_knowledge_runtime",
 ]

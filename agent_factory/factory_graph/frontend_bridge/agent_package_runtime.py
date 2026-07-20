@@ -12,8 +12,7 @@ import threading
 from typing import Any, Iterator
 from uuid import uuid4
 
-from agent_factory.knowledge_system import KnowledgeIngestionWorker, KnowledgeRuntime
-from agent_factory.knowledge_system.factory import build_knowledge_runtime
+from agent_factory.knowledge_system import KnowledgeIngestionWorker, KnowledgeRuntime, build_knowledge_runtime
 from agent_factory.knowledge_system.schema import KnowledgeContractConfig
 from agent_factory.agent_registry import refresh_agent_registry_index
 from agent_factory.collaboration_system.store import CollaborationStore, SYSTEM_CHAT_PACKAGE_ID
@@ -882,7 +881,7 @@ class AgentPackageRuntimeManager:
                 config=config,
                 owner_type="agent",
                 owner_id=package.assembly_spec.agent.id,
-            )
+            ).runtime
         package_fingerprint = _runtime_fingerprint(package_id, package)
         with self._package_initialization_lock(package_id):
             with self._runtime_handle_lock:
@@ -892,13 +891,14 @@ class AgentPackageRuntimeManager:
                 stale = self._knowledge_handles.pop(package_id, None)
             if stale is not None:
                 stale.close()
-            runtime = build_knowledge_runtime(
+            assembly = build_knowledge_runtime(
                 config=config,
                 owner_type="agent",
                 owner_id=package.assembly_spec.agent.id,
                 event_sink=self._knowledge_event_sink(package_id),
             )
-            worker = KnowledgeIngestionWorker(runtime)
+            runtime = assembly.runtime
+            worker = assembly.ingestion_worker
             worker.start()
             with self._runtime_handle_lock:
                 self._knowledge_handles[package_id] = KnowledgeRuntimeHandle(

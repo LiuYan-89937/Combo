@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from agent_factory.knowledge_system.catalog import KnowledgeCatalog
 from agent_factory.knowledge_system.events import KnowledgeEventSink
-from agent_factory.knowledge_system.runtime import KnowledgeRuntime
+from agent_factory.knowledge_system.runtime import KnowledgeIngestionWorker, KnowledgeRuntime
 from agent_factory.knowledge_system.schema import KnowledgeContractConfig
 from agent_factory.knowledge_system.store_index import build_knowledge_store_index
-from agent_factory.runtime_kernel.persistence import LangGraphStoreConfig, LangGraphStoreFactory
+from agent_factory.runtime_kernel.persistence import LangGraphStoreConfig, LangGraphStoreFactory, LangGraphStoreHandle
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeRuntimeAssembly:
+    runtime: KnowledgeRuntime
+    ingestion_worker: KnowledgeIngestionWorker
+    store_handle: LangGraphStoreHandle
 
 
 def build_knowledge_runtime(
@@ -16,8 +24,7 @@ def build_knowledge_runtime(
     owner_type: str,
     owner_id: str,
     event_sink: KnowledgeEventSink | None = None,
-) -> KnowledgeRuntime:
-    index = build_knowledge_store_index(config)
+) -> KnowledgeRuntimeAssembly:
     store_handle = LangGraphStoreFactory().build(
         LangGraphStoreConfig(
             backend=config.rag_store.backend,
@@ -31,10 +38,10 @@ def build_knowledge_runtime(
             collection_name=config.rag_store.collection_name,
             setup=config.rag_store.setup,
             provider_options=config.rag_store.provider_options,
-            index=index,
+            index=build_knowledge_store_index(config),
         )
     )
-    return KnowledgeRuntime(
+    runtime = KnowledgeRuntime(
         config=config,
         owner_type=owner_type,
         owner_id=owner_id,
@@ -42,4 +49,9 @@ def build_knowledge_runtime(
         store=store_handle.store,
         semantic_index_enabled=store_handle.semantic_index_enabled,
         event_sink=event_sink,
+    )
+    return KnowledgeRuntimeAssembly(
+        runtime=runtime,
+        ingestion_worker=KnowledgeIngestionWorker(runtime),
+        store_handle=store_handle,
     )

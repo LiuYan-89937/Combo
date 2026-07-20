@@ -9,8 +9,7 @@ from langgraph.errors import GraphInterrupt
 from agent_factory.artifact_system import ArtifactStore, ReportStore
 from agent_factory.context_system.runtime import ContextSystemRuntime
 from agent_factory.context_system.sources import default_context_sources
-from agent_factory.knowledge_system import KnowledgeIngestionWorker
-from agent_factory.knowledge_system.factory import build_knowledge_runtime
+from agent_factory.knowledge_system import build_knowledge_runtime
 from agent_factory.memory_system import default_agent_runtime
 from agent_factory.memory_system.background import MemoryBackgroundWorker
 from agent_factory.memory_system.store_index import build_memory_store_index
@@ -349,18 +348,18 @@ class KnowledgeContractBuilder:
                 ),
             }
         )
-        runtime = build_knowledge_runtime(
+        assembly = build_knowledge_runtime(
             config=config,
             owner_type="agent",
             owner_id=context.package.assembly_spec.agent.id,
         )
         return RuntimeContribution(
-            services={"knowledge_runtime": runtime},
+            services={"knowledge_runtime": assembly.runtime},
             system_wrappers=[KNOWLEDGE_GUIDANCE_SYSTEM_WRAPPER_ID],
             tool_runtime_resources={
-                "knowledge_runtime": runtime,
+                "knowledge_runtime": assembly.runtime,
             },
-            background_workers=[KnowledgeIngestionWorker(runtime)],
+            background_workers=[assembly.ingestion_worker],
         )
 
 
