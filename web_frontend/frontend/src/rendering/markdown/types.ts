@@ -3,6 +3,7 @@ export type MarkdownRenderSurface = 'chat_message' | 'reasoning' | 'workspace_pr
 export interface MarkdownRenderOptions {
   streaming?: boolean
   surface?: MarkdownRenderSurface
+  resolveImageUrl?: (source: string) => string | null
 }
 
 export interface MarkdownRenderResult {

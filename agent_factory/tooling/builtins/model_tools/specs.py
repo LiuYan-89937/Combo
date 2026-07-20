@@ -13,6 +13,11 @@ def get_model_tool_specs(runtime_tools: Mapping[str, Any] | None) -> list[ToolSp
     specs: list[ToolSpec] = []
     for tool_id, runtime_tool in sorted((runtime_tools or {}).items()):
         capability = str(runtime_tool.get("capability") or "")
+        if capability not in {"image_input", "image_output", "image_edit", "audio_input", "audio_output"}:
+            raise ValueError(f"unsupported local model tool capability: {capability}")
+        tool_resources = {"model_tool": f"{MODEL_TOOL_RUNTIME_RESOURCE}.{tool_id}"}
+        if capability in {"image_output", "image_edit"}:
+            tool_resources["workspace_root"] = "workspace_root"
         specs.append(
             ToolSpec(
                 id=tool_id,
@@ -23,7 +28,7 @@ def get_model_tool_specs(runtime_tools: Mapping[str, Any] | None) -> list[ToolSp
                 entrypoint="agent_factory.tooling.builtins.model_tools.model_tool:run",
                 input_schema=_input_schema(capability),
                 output_schema=_output_schema(capability),
-                resources={"model_tool": f"{MODEL_TOOL_RUNTIME_RESOURCE}.{tool_id}"},
+                resources=tool_resources,
                 risk_level="low",
                 concurrent=True,
                 permission_scope="model",

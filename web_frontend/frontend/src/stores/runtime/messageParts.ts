@@ -101,6 +101,59 @@ export function toolResultPart(tool: ToolActivity): ChatMessagePart | null {
   }
 }
 
+export function toolArtifactParts(tool: ToolActivity): ChatMessagePart[] {
+  if (!['completed', 'observed'].includes(tool.status)) return []
+  return artifactRecords(toolOutputValue(tool)).map((artifact, index) => ({
+    id: `${tool.activityKey}:artifact:${index}`,
+    type: 'artifact',
+    name: artifactName(artifact),
+    path: optionalText(artifact.relative_path || artifact.path),
+    mimeType: optionalText(artifact.mime_type || artifact.mimeType),
+    sizeBytes: optionalNumber(artifact.size_bytes ?? artifact.sizeBytes),
+    status: 'completed',
+    createdAt: tool.createdAt,
+    updatedAt: tool.timestamp,
+  }))
+}
+
+function toolOutputValue(tool: ToolActivity): unknown {
+  return tool.payload?.output || tool.payload?.result || tool.payload?.observation || tool.payload?.content
+}
+
+function artifactRecords(value: unknown): Record<string, any>[] {
+  let current = value
+  for (let depth = 0; depth < 3; depth += 1) {
+    if (!current || typeof current !== 'object' || Array.isArray(current)) return []
+    const record = current as Record<string, any>
+    const artifacts = Array.isArray(record.artifacts)
+      ? record.artifacts
+      : Array.isArray(record.assets)
+        ? record.assets
+        : null
+    if (artifacts) {
+      return artifacts.filter((item): item is Record<string, any> => Boolean(item && typeof item === 'object'))
+    }
+    current = record.output
+  }
+  return []
+}
+
+function artifactName(artifact: Record<string, any>): string {
+  const explicit = optionalText(artifact.name)
+  if (explicit) return explicit
+  const path = optionalText(artifact.relative_path || artifact.path) || 'artifact'
+  return path.replace(/\\/g, '/').split('/').pop() || 'artifact'
+}
+
+function optionalText(value: unknown): string | null {
+  const text = typeof value === 'string' ? value.trim() : ''
+  return text || null
+}
+
+function optionalNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
 export function messageText(message: TranscriptItem): string {
   return message.parts
     .filter((part): part is Extract<ChatMessagePart, { type: 'text' }> => part.type === 'text')

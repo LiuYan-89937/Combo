@@ -37,7 +37,7 @@ Guides confirmed resource facts and runtime resource descriptors for produced ag
 ## Capability Write Guidance
 - `contracts/resources.json` is the only published package resource surface; it declares resource descriptors and never stores user values.
 - Use .factory/resources.json only as confirmed manufacturing facts; do not expose it as a produced-agent runtime tool.
-- Write produced-agent resource descriptors with create_agent_authoring(action="upsert_resources", resources={}, resource_descriptors=[...]) instead of generic filesystem write.
+- Write produced-agent resource descriptors with create_agent_authoring(action="upsert_resources", resource_descriptors=[...]) instead of generic filesystem write. This action never accepts deployment values or placeholder credentials.
 - When a Resource is consumed by a Package Tool, supply the descriptor through that tool's `upsert_package_tool` call so ToolSpec selectors, descriptor `used_by`, source, dependencies, and exposure are validated as one capability increment. Use `upsert_resources` for descriptors not owned by a Package Tool increment.
 - Stable deployment configuration is not ordinary Tool input. Accounts, credentials, API keys, mailboxes, database connections, fixed endpoints, and default delivery destinations belong here; preserve known enum, range, and length constraints in `value_schema`.
 - Before asking, check capability inventory and existing confirmed facts.

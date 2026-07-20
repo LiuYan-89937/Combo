@@ -40,6 +40,7 @@
                 :streaming="isMessageStreaming(item.message.streamId)"
                 quoteable
                 :tip-context="tipContextFor(item.message)"
+                :workspace-context="messageWorkspaceContext"
                 @quote="addMessageReference"
               />
             </template>
@@ -58,6 +59,7 @@
               :key="message.id"
               :message="message"
               thinking
+              :workspace-context="messageWorkspaceContext"
             />
           </div>
         </n-scrollbar>
@@ -128,6 +130,7 @@ import { useContextReferenceStore } from '@/stores/contextReferences'
 import { messageContextReference } from '@/utils/contextReferences'
 import TipPanel from '@/components/chat/TipPanel.vue'
 import type { TipMessageContext } from '@/stores/tips'
+import { useResourceContext } from '@/composables/useResourceContext'
 
 const runtimeStore = useRuntimeStore()
 const agentStore = useAgentStore()
@@ -139,6 +142,8 @@ const { t } = useI18n()
 const scrollbarRef = ref()
 const inputRef = ref()
 const referenceStore = useContextReferenceStore()
+const resourceContext = useResourceContext()
+const messageWorkspaceContext = computed(() => resourceContext.workspaceContext.value)
 const referenceScope = computed(() => [
   'factory',
   runtimeStore.currentMode,

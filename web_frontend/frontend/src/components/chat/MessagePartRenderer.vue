@@ -25,6 +25,17 @@
       {{ part.text }}
     </div>
 
+    <a
+      v-else-if="part.type === 'attachment' && attachmentImageUrl"
+      class="message-image-card"
+      :href="attachmentImageUrl"
+      target="_blank"
+      rel="noopener noreferrer"
+    >
+      <img :src="attachmentImageUrl" :alt="part.attachment.name" />
+      <span>{{ part.attachment.name }}</span>
+    </a>
+
     <div v-else-if="part.type === 'attachment'" class="message-attachment-chip" :title="part.attachment.name">
       <n-icon size="15" class="message-attachment-icon">
         <Document v-if="part.attachment.kind === 'file'" />
@@ -61,6 +72,17 @@
       <div v-else class="tool-empty">{{ t('tool.noPayload') }}</div>
     </details>
 
+    <a
+      v-else-if="part.type === 'artifact' && artifactImageUrl"
+      class="message-image-card"
+      :href="artifactImageUrl"
+      target="_blank"
+      rel="noopener noreferrer"
+    >
+      <img :src="artifactImageUrl" :alt="part.name" />
+      <span>{{ part.name }}</span>
+    </a>
+
     <div v-else-if="part.type === 'artifact'" class="artifact-part">
       <strong>{{ part.name }}</strong>
       <span v-if="part.mimeType">{{ part.mimeType }}</span>
@@ -83,12 +105,15 @@ import { Document, Link, Text } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
 import type { ChatMessagePart, TranscriptAttachmentView } from '@/types/protocol'
+import type { WorkspaceRequestContext } from '@/api/resourceTypes'
+import { isImageResource, workspaceResourceUrl } from '@/utils/workspaceResources'
 
 const props = defineProps<{
   part: ChatMessagePart
   streaming?: boolean
   highlightMentions?: boolean
   mentionNames?: string[]
+  workspaceContext?: WorkspaceRequestContext | null
 }>()
 
 const { t } = useI18n()
@@ -98,14 +123,33 @@ const { renderMarkdown } = useMarkdownRenderer(rootRef)
 const isStreaming = computed(() => props.streaming || props.part.status === 'streaming')
 const renderedText = computed(() => (
   props.part.type === 'text'
-    ? renderMarkdown(markdownWithMentions(props.part.text), { streaming: isStreaming.value, surface: 'chat_message' })
+    ? renderMarkdown(markdownWithMentions(props.part.text), {
+        streaming: isStreaming.value,
+        surface: 'chat_message',
+        resolveImageUrl: resolveMessageImageUrl,
+      })
     : ''
 ))
 const renderedReasoning = computed(() => (
   props.part.type === 'reasoning'
-    ? renderMarkdown(props.part.text, { streaming: isStreaming.value, surface: 'reasoning' })
+    ? renderMarkdown(props.part.text, {
+        streaming: isStreaming.value,
+        surface: 'reasoning',
+        resolveImageUrl: resolveMessageImageUrl,
+      })
     : ''
 ))
+const attachmentImageUrl = computed(() => {
+  if (props.part.type !== 'attachment') return ''
+  const attachment = props.part.attachment
+  if (!attachment.path || !isImageResource(attachment.name, attachment.mime_type)) return ''
+  return resolveMessageImageUrl(attachment.path) || ''
+})
+const artifactImageUrl = computed(() => {
+  if (props.part.type !== 'artifact' || !props.part.path) return ''
+  if (!isImageResource(props.part.path, props.part.mimeType)) return ''
+  return resolveMessageImageUrl(props.part.path) || ''
+})
 const toolName = computed(() => (
   props.part.type === 'tool_call' || props.part.type === 'tool_result'
     ? props.part.toolName || 'tool'
@@ -147,6 +191,10 @@ function attachmentKindLabel(attachment: TranscriptAttachmentView): string {
   if (attachment.kind === 'text') return t('attachments.text')
   if (attachment.source_kind === 'workspace_file') return t('attachments.workspaceFile')
   return t('attachments.localFile')
+}
+
+function resolveMessageImageUrl(source: string): string | null {
+  return workspaceResourceUrl(source, props.workspaceContext)
 }
 
 function valueString(value: unknown): string {
@@ -265,6 +313,31 @@ details[open] > summary .summary-chevron {
   background: var(--app-surface-muted);
   color: var(--app-text);
   font-size: 12px;
+}
+
+.message-image-card {
+  display: inline-grid;
+  gap: var(--app-space-xs);
+  max-width: min(600px, 100%);
+  color: var(--app-text-muted);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.message-image-card img {
+  display: block;
+  max-width: 100%;
+  max-height: 400px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-lg);
+  box-shadow: var(--app-shadow-sm);
+  object-fit: contain;
+}
+
+.message-image-card span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .message-attachment-icon {

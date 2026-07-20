@@ -138,6 +138,8 @@ def _attachment_part(*, part_id: str, attachment: dict[str, Any], timestamp: str
             "name": attachment.get("name") or attachment.get("display_name") or attachment.get("attachment_id") or "",
             **({"source_kind": attachment.get("source_kind")} if attachment.get("source_kind") else {}),
             **({"mime_type": attachment.get("mime_type")} if attachment.get("mime_type") else {}),
+            **({"path": attachment.get("path") or attachment.get("runtime_path")} if attachment.get("path") or attachment.get("runtime_path") else {}),
+            **({"size_bytes": attachment.get("size_bytes")} if attachment.get("size_bytes") is not None else {}),
         },
         "status": "completed",
         "createdAt": timestamp,
@@ -164,20 +166,66 @@ def _tool_parts(*, turn_id: str, updated_at: str, activity: dict[str, Any]) -> l
         }
     ]
     if status in {"completed", "failed", "observed"}:
+        output = payload.get("output") or payload.get("result") or payload.get("observation") or payload.get("content")
         parts.append(
             {
                 "id": f"turn-{turn_id}-tool-{activity_key}:result",
                 "type": "tool_result",
                 "toolName": tool_name,
                 "callId": str(call_id) if call_id else None,
-                "output": payload.get("output") or payload.get("result") or payload.get("observation") or payload.get("content"),
+                "output": output,
                 "error": payload.get("error"),
                 "status": "failed" if status == "failed" else "completed",
                 "createdAt": activity.get("createdAt") or updated_at,
                 "updatedAt": activity.get("timestamp") or updated_at,
             }
         )
+        if status != "failed":
+            parts.extend(
+                _artifact_parts(
+                    activity_key=activity_key,
+                    output=output,
+                    timestamp=activity.get("timestamp") or updated_at,
+                )
+            )
     return parts
+
+
+def _artifact_parts(*, activity_key: str, output: Any, timestamp: str) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": f"tool-{activity_key}:artifact:{index}",
+            "type": "artifact",
+            "name": _artifact_name(record),
+            "path": record.get("relative_path") or record.get("path"),
+            "mimeType": record.get("mime_type") or record.get("mimeType"),
+            "sizeBytes": record.get("size_bytes") or record.get("sizeBytes"),
+            "status": "completed",
+            "createdAt": timestamp,
+            "updatedAt": timestamp,
+        }
+        for index, record in enumerate(_artifact_records(output))
+    ]
+
+
+def _artifact_records(value: Any) -> list[dict[str, Any]]:
+    current = value
+    for _depth in range(3):
+        if not isinstance(current, dict):
+            return []
+        records = current.get("artifacts") if isinstance(current.get("artifacts"), list) else current.get("assets")
+        if isinstance(records, list):
+            return [dict(item) for item in records if isinstance(item, dict)]
+        current = current.get("output")
+    return []
+
+
+def _artifact_name(record: dict[str, Any]) -> str:
+    explicit = str(record.get("name") or "").strip()
+    if explicit:
+        return explicit
+    path = str(record.get("relative_path") or record.get("path") or "artifact").replace("\\", "/")
+    return path.rsplit("/", 1)[-1] or "artifact"
 
 
 def _tool_part_status(status: str) -> str:

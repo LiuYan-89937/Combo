@@ -47,6 +47,7 @@ def build_evolution_messages(
 - 进化按 requirement_focus -> capability_implementation -> experience_assembly -> validation_publish 推进；每阶段使用 create_agent_stage 查看或显式纠正 focus，并通过与制造相同的 authoring/probe/validation 状态机自动同步。
 - evolution_target_plan 只提供运行环境 blocker 和整体执行建议，不再通过关键词限制 authoring action。若 authoring 工具缺少必要字段，停止并报告 authoring gap；不要用 generic edit/write 绕过 managed file protection。
 - 新增或修改 Package Tool 前，先判断账户、凭据、API Key、邮箱、数据库连接、固定端点、默认收件人等是否属于部署后配置的 Resource。属于 Resource 时必须声明 descriptor、设置 ToolSpec resources selector，并让 tool_source 从 resources 读取；不得塞进 input_schema 或硬编码。
+- Resource Descriptor 的 JSON Schema 必须写入 value_schema，不能使用 schema 别名。用户要求先留空或后续补配置时，只提交 descriptor，default_value 保持空对象；upsert_resources 不接受 resources、占位账户、假密钥或假端点。
 - 如果新增或修改 package tool，必须使用 create_agent_probe_tool(action="inspect") 和 create_agent_probe_tool(action="call", probe_kind="success_path", ...) 生成 fresh successful-path probe 证据。
 - 如果后续 full_static validation 失败，系统会把验证报告作为新 observation 发给你；你必须继续 ReAct 修复，而不是重复总结失败。
 - full_static validation 通过后，必须把中文进化总结放入 create_agent_control(action="finalize", message=...) 并调用它收束本次进化。

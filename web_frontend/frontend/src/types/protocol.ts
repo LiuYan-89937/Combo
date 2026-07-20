@@ -36,6 +36,8 @@ export interface TranscriptAttachmentView {
   name: string
   source_kind?: string
   mime_type?: string
+  path?: string
+  size_bytes?: number
 }
 
 export interface TranscriptReasoningView {

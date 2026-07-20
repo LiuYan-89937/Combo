@@ -148,14 +148,14 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                 },
                 "expose_to_nodes": {"type": "array", "items": {"type": "string"}},
                 "seed": {"type": "object", "additionalProperties": True},
-                "resources": {"type": "object", "additionalProperties": True},
                 "resource_descriptors": {
                     "type": "array",
                     "description": (
                         "Deployment-time Resource Descriptors consumed by this capability. For upsert_package_tool, "
-                        "descriptors are validated and written as one coherent increment with ToolSpec resource selectors."
+                        "descriptors are validated and written as one coherent increment with ToolSpec resource selectors. "
+                        "Runtime values and placeholder credentials are never accepted here."
                     ),
-                    "items": {"type": "object", "additionalProperties": True},
+                    "items": _resource_descriptor_authoring_schema(),
                 },
                 "knowledge_path": {
                     "type": "string",
@@ -337,7 +337,7 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                 {"if": {"properties": {"action": {"const": "remove_package_tool"}}}, "then": {"required": ["tool_id"]}},
                 {"if": {"properties": {"action": {"const": "remove_knowledge_file"}}}, "then": {"required": ["knowledge_path"]}},
                 {"if": {"properties": {"action": {"const": "upsert_scheduler_seed"}}}, "then": {"required": ["seed"]}},
-                {"if": {"properties": {"action": {"const": "upsert_resources"}}}, "then": {"required": ["resources", "resource_descriptors"]}},
+                {"if": {"properties": {"action": {"const": "upsert_resources"}}}, "then": {"required": ["resource_descriptors"]}},
                 {
                     "if": {"properties": {"action": {"const": "upsert_knowledge_file"}}},
                     "then": {
@@ -435,6 +435,28 @@ def _tool_spec_authoring_schema() -> dict[str, Any]:
             "risk_level",
             "concurrent",
         ],
+        "additionalProperties": False,
+    }
+
+
+def _resource_descriptor_authoring_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "description": (
+            "Deployment-time resource contract. value_schema is JSON Schema for values collected after publication; "
+            "do not use a schema alias and do not include real or placeholder credentials."
+        ),
+        "properties": {
+            "resource_id": {"type": "string", "minLength": 1},
+            "description": {"type": "string"},
+            "required": {"type": "boolean"},
+            "value_schema": {"type": "object", "additionalProperties": True},
+            "default_value": {},
+            "secret_fields": {"type": "array", "items": {"type": "string", "minLength": 1}},
+            "used_by": {"type": "array", "items": {"type": "string", "minLength": 1}},
+            "sandbox_access_expectation": {"type": "string"},
+        },
+        "required": ["resource_id", "description", "value_schema", "secret_fields", "used_by"],
         "additionalProperties": False,
     }
 
@@ -1010,11 +1032,12 @@ def _upsert_scheduler_seed(workspace: CreateAgentWorkspace, arguments: dict[str,
 
 
 def _upsert_resources(workspace: CreateAgentWorkspace, arguments: dict[str, Any]) -> dict[str, Any]:
-    values = _required_dict(arguments, "resources")
     descriptors = [
         ResourceDescriptor.model_validate(item).model_dump(mode="json")
         for item in (arguments.get("resource_descriptors") if isinstance(arguments.get("resource_descriptors"), list) else [])
     ]
+    if not descriptors:
+        raise ValueError("resource_descriptors must contain at least one deployment-time descriptor")
     contract_path = workspace.root / "contracts" / "resources.json"
     contract = _read_json(contract_path)
     config = contract.setdefault("config", {})
@@ -1022,8 +1045,6 @@ def _upsert_resources(workspace: CreateAgentWorkspace, arguments: dict[str, Any]
     for descriptor in descriptors:
         _upsert_by_key(descriptor_list, descriptor, key="resource_id")
     contract_payload = ResourcesContract.model_validate(contract).model_dump(mode="json")
-    if values:
-        raise ValueError("runtime resource values must be configured after publication, not written into the package")
     _write_json(contract_path, contract_payload)
     return _result("upsert_resources", ["contracts/resources.json"], "Upserted package resource descriptors.")
 

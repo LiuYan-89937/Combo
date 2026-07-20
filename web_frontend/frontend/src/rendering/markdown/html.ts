@@ -9,6 +9,7 @@ import rehypeHighlight from 'rehype-highlight'
 import rehypeSanitize from 'rehype-sanitize'
 import rehypeStringify from 'rehype-stringify'
 import { rehypeMermaid } from './plugins/rehypeMermaid'
+import { rehypeImageSources } from './plugins/rehypeImageSources'
 import { markdownSanitizeSchema } from './sanitize'
 import { prepareMarkdownSource } from './source'
 import type { MarkdownRenderOptions, MarkdownRenderResult } from './types'
@@ -20,6 +21,7 @@ const processor = unified()
   .use(remarkGfm)
   .use(remarkMath)
   .use(remarkRehype, { allowDangerousHtml: false })
+  .use(rehypeImageSources)
   .use(rehypeMermaid)
   .use(rehypeKatex)
   .use(rehypeHighlight, { detect: false })
@@ -29,7 +31,10 @@ const processor = unified()
 export function renderMarkdownDocument(content: string, options: MarkdownRenderOptions = {}): MarkdownRenderResult {
   const source = prepareMarkdownSource(content, options)
   try {
-    const html = String(processor.processSync(source))
+    const html = String(processor.processSync({
+      value: source,
+      data: { resolveImageUrl: options.resolveImageUrl },
+    }))
     return {
       source,
       html: sanitizeMarkdownHtml(html),
