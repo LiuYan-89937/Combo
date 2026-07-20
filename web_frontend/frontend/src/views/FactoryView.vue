@@ -100,11 +100,11 @@
           @send="handleSend"
           @cancel="handleCancel"
         >
-          <template v-if="agentStore.activeChatPackageId" #auxiliary-action>
+          <template #auxiliary-action>
             <n-button
               text
               :disabled="runtimeStore.hasActiveRun"
-              @click="createNewAgentSession"
+              @click="createNewConversationSession"
             >
               <template #icon>
                 <n-icon><Add /></n-icon>
@@ -144,7 +144,7 @@ import { messageContextReference } from '@/utils/contextReferences'
 import TipPanel from '@/components/chat/TipPanel.vue'
 import type { TipMessageContext } from '@/stores/tips'
 import { useResourceContext } from '@/composables/useResourceContext'
-import { useAgentSessionNavigation } from '@/composables/agent/useAgentSessionNavigation'
+import { useConversationSessionNavigation } from '@/composables/useConversationSessionNavigation'
 
 const runtimeStore = useRuntimeStore()
 const agentStore = useAgentStore()
@@ -157,7 +157,7 @@ const scrollbarRef = ref()
 const inputRef = ref()
 const referenceStore = useContextReferenceStore()
 const resourceContext = useResourceContext()
-const { startNewAgentSession } = useAgentSessionNavigation()
+const { startNewConversationSession } = useConversationSessionNavigation()
 const messageWorkspaceContext = computed(() => resourceContext.workspaceContext.value)
 const referenceScope = computed(() => [
   'factory',
@@ -223,12 +223,6 @@ function handleSend(message: string, attachments: RuntimeAttachmentInput[]) {
 
 function handleCancel() {
   cancelRequest()
-}
-
-function createNewAgentSession() {
-  const packageId = agentStore.activeChatPackageId
-  if (!packageId || runtimeStore.hasActiveRun) return
-  void startNewAgentSession(packageId)
 }
 
 function addMessageReference(message: TranscriptItem) {

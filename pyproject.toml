@@ -19,6 +19,9 @@ dependencies = [
     "langgraph-checkpoint-redis>=0.0.10,<1",
     "langgraph-checkpoint-sqlite==2.0.11",
     "langgraph-store-mongodb>=0.1,<1",
+    "ebooklib>=0.19",
+    "markitdown[docx,outlook,pptx,xls,xlsx]>=0.1.6,<0.2",
+    "odfpy>=1.4,<2",
     "apscheduler>=3.11,<4",
     "jsonschema>=4.23",
     "mcp>=1.0",
@@ -27,6 +30,7 @@ dependencies = [
     "pydantic>=2.8",
     "pypdf>=4.0",
     "ruamel.yaml>=0.18",
+    "striprtf>=0.0.29,<1",
 ]
 
 [build-system]

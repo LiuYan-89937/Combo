@@ -60,7 +60,7 @@ def create_knowledge_router(runtime_bridge: RuntimeBridge) -> APIRouter:
                 detail={
                     "message": "One or more files cannot be processed by the configured knowledge parsers.",
                     "unsupported_files": unsupported_files,
-                    "accepted_extensions": list(capabilities.accepted_extensions),
+                    "accepted_extensions": list(capabilities.knowledge_extensions),
                 },
             )
         resolved_package_id = package_id or str(source_payload.get("package_id") or "").strip() or SYSTEM_CHAT_PACKAGE_ID

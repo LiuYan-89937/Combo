@@ -14,7 +14,7 @@ from agent_factory.document_processing import (
     DOCX_EXTENSIONS,
     PDF_EXTENSIONS,
     TEXT_EXTENSIONS,
-    SUPPORTED_FILE_EXTENSIONS,
+    accepted_file_extensions,
     html_to_text,
     parse_file,
 )
@@ -216,7 +216,7 @@ def load_file(path: Path, *, root: Path, source_type: SourceType, limits: Knowle
 
 
 def _supported_suffix(suffix: str) -> bool:
-    return suffix in SUPPORTED_FILE_EXTENSIONS
+    return suffix in accepted_file_extensions()
 
 
 def sha256_text(value: str) -> str:

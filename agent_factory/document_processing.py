@@ -1,123 +1,39 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from email import policy as email_policy
+from email.parser import BytesParser
 import html
 import importlib
-import importlib.util
 import re
 from pathlib import Path
+import shutil
+import subprocess
+from tempfile import TemporaryDirectory
 from typing import Any
 from urllib.parse import urlparse
 
-
-TEXT_EXTENSIONS = {
-    ".md",
-    ".markdown",
-    ".txt",
-    ".rst",
-    ".json",
-    ".yaml",
-    ".yml",
-    ".toml",
-    ".csv",
-    ".tsv",
-    ".py",
-    ".ts",
-    ".tsx",
-    ".js",
-    ".jsx",
-    ".java",
-    ".go",
-    ".rs",
-    ".sql",
-    ".html",
-    ".htm",
-    ".xml",
-    ".log",
-}
-PDF_EXTENSIONS = {".pdf"}
-DOCX_EXTENSIONS = {".docx"}
-OFFICE_EXTENSIONS = {
-    ".doc",
-    *DOCX_EXTENSIONS,
-    ".ppt",
-    ".pptx",
-    ".xls",
-    ".xlsx",
-    ".rtf",
-    ".odt",
-    ".ods",
-    ".odp",
-    ".epub",
-}
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp", ".heic"}
-EMAIL_EXTENSIONS = {".eml", ".msg"}
-SUPPORTED_FILE_EXTENSIONS = (
-    TEXT_EXTENSIONS
-    | PDF_EXTENSIONS
-    | OFFICE_EXTENSIONS
-    | IMAGE_EXTENSIONS
-    | EMAIL_EXTENSIONS
+from agent_factory.file_capabilities import (
+    DOCX_EXTENSIONS,
+    EBOOK_EXTENSIONS,
+    EMAIL_EXTENSIONS,
+    IMAGE_EXTENSIONS,
+    LEGACY_PRESENTATION_EXTENSIONS,
+    LEGACY_WORD_EXTENSIONS,
+    MARKITDOWN_EXTENSIONS,
+    OFFICE_EXTENSIONS,
+    OPEN_DOCUMENT_EXTENSIONS,
+    PDF_EXTENSIONS,
+    RICH_TEXT_EXTENSIONS,
+    SUPPORTED_FILE_EXTENSIONS,
+    TEXT_EXTENSIONS,
+    accepted_knowledge_extensions,
+    file_processing_capabilities,
 )
 
 
-@dataclass(frozen=True, slots=True)
-class DocumentProcessingCapabilities:
-    accepted_extensions: tuple[str, ...]
-    ocr_supported: bool
-    ocr_message: str
-    parser_backends: tuple[str, ...]
-
-    def to_public_dict(self) -> dict[str, Any]:
-        return {
-            "accepted_extensions": list(self.accepted_extensions),
-            "file_accept": ",".join(self.accepted_extensions),
-            "ocr_supported": self.ocr_supported,
-            "ocr_message": self.ocr_message,
-            "parser_backends": list(self.parser_backends),
-        }
-
-
-def document_processing_capabilities() -> DocumentProcessingCapabilities:
-    """Return file capabilities that this process can reliably execute.
-
-    The parser pipeline contains optional integrations, but an extension is
-    advertised only when its required backend is importable. OCR is kept
-    explicit because merely accepting an image does not prove that an OCR
-    engine and its language data are installed.
-    """
-
-    extensions = set(TEXT_EXTENSIONS)
-    backends = ["internal_text"]
-    if _module_available("bs4"):
-        backends.append("beautifulsoup4")
-    else:
-        extensions.difference_update({".html", ".htm"})
-    langchain_available = _module_available("langchain_community.document_loaders")
-    if langchain_available and _module_available("pypdf"):
-        extensions.update(PDF_EXTENSIONS)
-        backends.append("pypdf")
-    if langchain_available and _module_available("docx2txt"):
-        extensions.update(DOCX_EXTENSIONS)
-        backends.append("docx2txt")
-
-    return DocumentProcessingCapabilities(
-        accepted_extensions=tuple(sorted(extensions)),
-        ocr_supported=False,
-        ocr_message="No explicit OCR engine is configured; image files are not accepted for knowledge ingestion.",
-        parser_backends=tuple(backends),
-    )
-
-
-def accepted_file_extensions() -> frozenset[str]:
-    return frozenset(document_processing_capabilities().accepted_extensions)
-
-
-def _module_available(module_name: str) -> bool:
-    try:
-        return importlib.util.find_spec(module_name) is not None
-    except (ImportError, ModuleNotFoundError, AttributeError, ValueError):
-        return False
+document_processing_capabilities = file_processing_capabilities
+accepted_file_extensions = accepted_knowledge_extensions
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,8 +61,13 @@ def parse_file(path: Path, *, root: Path | None = None, metadata: dict[str, Any]
     for parser in (
         _parse_with_docling,
         _parse_with_unstructured,
+        _parse_with_email,
+        _parse_with_rtf,
+        _parse_with_epub,
+        _parse_with_open_document,
         _parse_with_markitdown,
         _parse_with_langchain,
+        _parse_with_libreoffice,
         _parse_with_text_fallback,
     ):
         result = parser(path=path, suffix=suffix, root=resolved_root, metadata=base_metadata)
@@ -274,7 +195,7 @@ def _parse_with_markitdown(
     root: Path,
     metadata: dict[str, Any],
 ) -> ParseResult:
-    if suffix in TEXT_EXTENSIONS and suffix not in {".html", ".htm"}:
+    if suffix not in MARKITDOWN_EXTENSIONS:
         return ParseResult(documents=[], warnings=[])
     try:
         markitdown_cls = importlib.import_module("markitdown").MarkItDown
@@ -292,6 +213,136 @@ def _parse_with_markitdown(
         content=content,
         loader="markitdown",
         metadata=metadata,
+    )
+
+
+def _parse_with_email(
+    *, path: Path, suffix: str, root: Path, metadata: dict[str, Any]
+) -> ParseResult:
+    if suffix != ".eml":
+        return ParseResult(documents=[], warnings=[])
+    try:
+        message = BytesParser(policy=email_policy.default).parsebytes(path.read_bytes())
+        headers = [
+            f"{name}: {message.get(name)}"
+            for name in ("Subject", "From", "To", "Cc", "Date")
+            if message.get(name)
+        ]
+        bodies: list[str] = []
+        for part in message.walk() if message.is_multipart() else [message]:
+            if part.get_content_disposition() == "attachment":
+                continue
+            content_type = part.get_content_type()
+            if content_type not in {"text/plain", "text/html"}:
+                continue
+            value = part.get_content()
+            text = html_to_text(value) if content_type == "text/html" else str(value).strip()
+            if text:
+                bodies.append(text)
+        content = "\n".join(headers + ([""] if headers and bodies else []) + bodies)
+    except Exception as exc:
+        return ParseResult(documents=[], warnings=[f"email_failed: {type(exc).__name__}: {exc}"])
+    return _single_document_result(
+        path=path, root=root, suffix=suffix, content=content, loader="email", metadata=metadata
+    )
+
+
+def _parse_with_rtf(
+    *, path: Path, suffix: str, root: Path, metadata: dict[str, Any]
+) -> ParseResult:
+    if suffix not in RICH_TEXT_EXTENSIONS:
+        return ParseResult(documents=[], warnings=[])
+    try:
+        rtf_to_text = importlib.import_module("striprtf.striprtf").rtf_to_text
+        content = rtf_to_text(path.read_text(encoding="utf-8", errors="ignore"))
+    except (ImportError, ModuleNotFoundError):
+        return ParseResult(documents=[], warnings=["striprtf_not_installed"])
+    except Exception as exc:
+        return ParseResult(documents=[], warnings=[f"striprtf_failed: {type(exc).__name__}: {exc}"])
+    return _single_document_result(
+        path=path, root=root, suffix=suffix, content=content, loader="striprtf", metadata=metadata
+    )
+
+
+def _parse_with_epub(
+    *, path: Path, suffix: str, root: Path, metadata: dict[str, Any]
+) -> ParseResult:
+    if suffix not in EBOOK_EXTENSIONS:
+        return ParseResult(documents=[], warnings=[])
+    try:
+        ebooklib = importlib.import_module("ebooklib")
+        epub = importlib.import_module("ebooklib.epub")
+        book = epub.read_epub(str(path))
+        content = "\n\n".join(
+            html_to_text(item.get_content().decode("utf-8", errors="ignore"))
+            for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT)
+        )
+    except (ImportError, ModuleNotFoundError):
+        return ParseResult(documents=[], warnings=["ebooklib_not_installed"])
+    except Exception as exc:
+        return ParseResult(documents=[], warnings=[f"ebooklib_failed: {type(exc).__name__}: {exc}"])
+    return _single_document_result(
+        path=path, root=root, suffix=suffix, content=content, loader="ebooklib", metadata=metadata
+    )
+
+
+def _parse_with_open_document(
+    *, path: Path, suffix: str, root: Path, metadata: dict[str, Any]
+) -> ParseResult:
+    if suffix not in OPEN_DOCUMENT_EXTENSIONS:
+        return ParseResult(documents=[], warnings=[])
+    try:
+        load = importlib.import_module("odf.opendocument").load
+        text_module = importlib.import_module("odf.text")
+        teletype = importlib.import_module("odf.teletype")
+        document = load(str(path))
+        elements = [
+            *document.getElementsByType(text_module.H),
+            *document.getElementsByType(text_module.P),
+        ]
+        content = "\n".join(filter(None, (teletype.extractText(item).strip() for item in elements)))
+    except (ImportError, ModuleNotFoundError):
+        return ParseResult(documents=[], warnings=["odfpy_not_installed"])
+    except Exception as exc:
+        return ParseResult(documents=[], warnings=[f"odfpy_failed: {type(exc).__name__}: {exc}"])
+    return _single_document_result(
+        path=path, root=root, suffix=suffix, content=content, loader="odfpy", metadata=metadata
+    )
+
+
+def _parse_with_libreoffice(
+    *, path: Path, suffix: str, root: Path, metadata: dict[str, Any]
+) -> ParseResult:
+    target_extension = "docx" if suffix in LEGACY_WORD_EXTENSIONS else "pptx" if suffix in LEGACY_PRESENTATION_EXTENSIONS else ""
+    executable = shutil.which("soffice")
+    if not target_extension or not executable:
+        return ParseResult(documents=[], warnings=[])
+    try:
+        with TemporaryDirectory(prefix="agentfactory-office-") as directory:
+            subprocess.run(
+                [executable, "--headless", "--convert-to", target_extension, "--outdir", directory, str(path)],
+                check=True,
+                capture_output=True,
+                timeout=60,
+            )
+            converted = Path(directory) / f"{path.stem}.{target_extension}"
+            if not converted.is_file():
+                return ParseResult(documents=[], warnings=["libreoffice_conversion_returned_no_file"])
+            result = parse_file(converted, root=converted.parent, metadata={**metadata, "converted_from": suffix})
+    except Exception as exc:
+        return ParseResult(documents=[], warnings=[f"libreoffice_failed: {type(exc).__name__}: {exc}"])
+    return ParseResult(
+        documents=[
+            ParsedDocument(
+                title=path.name,
+                uri=str(path),
+                document_type=suffix.removeprefix("."),
+                content=document.content,
+                metadata={**document.metadata, "file_name": path.name, "relative_path": path.name},
+            )
+            for document in result.documents
+        ],
+        warnings=result.warnings,
     )
 
 

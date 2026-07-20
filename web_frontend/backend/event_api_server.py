@@ -37,6 +37,7 @@ from web_frontend.backend.routes.benchmarks import create_benchmark_router
 from web_frontend.backend.routes.collaboration import create_collaboration_router
 from web_frontend.backend.routes.create_agent import create_create_agent_router
 from web_frontend.backend.routes.extensions import create_extensions_router
+from web_frontend.backend.routes.files import create_file_router
 from web_frontend.backend.routes.knowledge import create_knowledge_router
 from web_frontend.backend.routes.memory import create_memory_router
 from web_frontend.backend.routes.model_pool import create_model_pool_router
@@ -151,6 +152,7 @@ app.include_router(create_collaboration_router(runtime_bridge, collaboration_ser
 app.include_router(create_agent_group_router(runtime_bridge, agent_group_service))
 app.include_router(create_create_agent_router())
 app.include_router(create_workspace_router(runtime_bridge))
+app.include_router(create_file_router())
 app.include_router(create_knowledge_router(runtime_bridge))
 app.include_router(create_memory_router(runtime_bridge))
 app.include_router(create_extensions_router(runtime_bridge))

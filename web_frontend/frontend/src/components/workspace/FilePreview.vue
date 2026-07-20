@@ -38,64 +38,23 @@
       </div>
     </div>
 
-    <div class="preview-content" :class="`preview-${previewKind}`" :data-reference-label="file.path || file.name">
-      <div
-        v-if="previewKind === 'markdown' || previewKind === 'code'"
-        ref="markdownPreviewRef"
-        class="markdown-preview markdown-content"
-        v-html="renderedMarkdown"
-      ></div>
-
-      <img
-        v-else-if="previewKind === 'image' && previewSource"
-        class="image-preview"
-        :src="previewSource"
-        :alt="file.name"
-      />
-
-      <iframe
-        v-else-if="previewKind === 'pdf' && previewSource"
-        class="pdf-preview"
-        :src="previewSource"
-        :title="file.name"
-      ></iframe>
-
-      <div v-else-if="previewKind === 'text'" class="text-preview">
-        <pre><code>{{ file.content }}</code></pre>
-      </div>
-
-      <div v-else class="binary-preview">
-        <n-empty :description="t('workspace.previewUnsupported')">
-          <template #icon>
-            <n-icon size="48"><DocumentOutline /></n-icon>
-          </template>
-          <template #extra>
-            <n-button @click="handleDownload">{{ t('workspace.downloadFile') }}</n-button>
-          </template>
-        </n-empty>
-      </div>
-
-      <n-alert v-if="previewTruncated" type="warning" class="truncate-alert">
-        {{ t('workspace.truncated') }}
-      </n-alert>
-    </div>
+    <FilePreviewContent :file="file" :source-url="rawFileUrl" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { NAlert, NButton, NEmpty, NIcon, NPopconfirm, NText } from 'naive-ui'
-import { AddCircleOutline, Close, DocumentOutline, Download, TrashOutline } from '@/components/icons'
+import { computed } from 'vue'
+import { NButton, NIcon, NPopconfirm, NText } from 'naive-ui'
+import { AddCircleOutline, Close, Download, TrashOutline } from '@/components/icons'
 import { workspaceApi } from '@/api/workspace'
 import { useI18n } from '@/composables/useI18n'
-import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
 import type { WorkspaceRequestContext, WorkspaceScope } from '@/api/resourceTypes'
 import type { WorkspaceFileView } from '@/types/protocol'
 import { useContextReferenceStore } from '@/stores/contextReferences'
 import { workspaceFileContextReference } from '@/utils/contextReferences'
 import { useMessage } from 'naive-ui'
-
-type PreviewKind = 'text' | 'markdown' | 'code' | 'image' | 'pdf' | 'unsupported'
+import FilePreviewContent from './FilePreviewContent.vue'
+import { fileExtension, filePreviewKind } from '@/utils/filePreview'
 
 const props = defineProps<{
   file: WorkspaceFileView
@@ -109,19 +68,8 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const message = useMessage()
 const referenceStore = useContextReferenceStore()
-const markdownPreviewRef = ref<HTMLElement | null>(null)
-const { renderMarkdown } = useMarkdownRenderer(markdownPreviewRef)
-
-const extension = computed(() => props.file.name.split('.').pop()?.toLowerCase() || '')
-const mimeType = computed(() => String(props.file.mimeType || '').toLowerCase())
-const previewKind = computed<PreviewKind>(() => {
-  if (isMarkdownFile()) return 'markdown'
-  if (isCodeFile()) return 'code'
-  if (isImageFile()) return 'image'
-  if (isPdfFile()) return 'pdf'
-  if (props.file.kind === 'text') return 'text'
-  return 'unsupported'
-})
+const extension = computed(() => fileExtension(props.file))
+const previewKind = computed(() => filePreviewKind(props.file))
 const previewLabel = computed(() => {
   if (previewKind.value === 'markdown') return 'Markdown'
   if (previewKind.value === 'code') return extension.value.toUpperCase()
@@ -131,12 +79,6 @@ const previewLabel = computed(() => {
   if (previewKind.value === 'text') return t('workspace.preview.text')
   return t('workspace.preview.binary')
 })
-const renderedMarkdown = computed(() => renderMarkdown(
-  previewKind.value === 'code'
-    ? `\`\`\`${extension.value}\n${props.file.content || ''}\n\`\`\``
-    : props.file.content || '',
-  { surface: 'workspace_preview' },
-))
 const packageId = computed(() => {
   const payload = props.file.payload || {}
   return String(payload.package_id || payload.packageId || '').trim() || null
@@ -158,41 +100,6 @@ const rawFileUrl = computed(() => {
   const scope = (props.file.scope || 'workdir') as WorkspaceScope
   return workspaceApi.rawUrl(scope, props.file.path, workspaceContext.value)
 })
-const dataUrl = computed(() => {
-  if (props.file.contentBase64) {
-    return `data:${props.file.mimeType || 'application/octet-stream'};base64,${props.file.contentBase64}`
-  }
-  if (extension.value === 'svg' && props.file.content) {
-    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(props.file.content)}`
-  }
-  return ''
-})
-const previewSource = computed(() => rawFileUrl.value || dataUrl.value)
-const previewTruncated = computed(() => {
-  if (!props.file.truncated) return false
-  if (rawFileUrl.value && ['image', 'pdf'].includes(previewKind.value)) return false
-  return true
-})
-
-function isMarkdownFile(): boolean {
-  return props.file.kind === 'text' && ['md', 'markdown', 'mdx'].includes(extension.value)
-}
-
-function isCodeFile(): boolean {
-  return props.file.kind === 'text' && [
-    'c', 'cc', 'cpp', 'css', 'go', 'h', 'hpp', 'html', 'java', 'js', 'jsx', 'json',
-    'kt', 'php', 'py', 'rb', 'rs', 'sh', 'sql', 'swift', 'ts', 'tsx', 'vue', 'xml',
-    'yaml', 'yml',
-  ].includes(extension.value)
-}
-
-function isImageFile(): boolean {
-  return mimeType.value.startsWith('image/') || ['svg', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'].includes(extension.value)
-}
-
-function isPdfFile(): boolean {
-  return mimeType.value === 'application/pdf' || extension.value === 'pdf'
-}
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -322,56 +229,4 @@ function handleClose() {
   }
 }
 
-.preview-content {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  padding: 16px;
-  color: var(--app-text);
-}
-
-.preview-pdf {
-  padding: 0;
-}
-
-.text-preview pre {
-  margin: 0;
-  color: var(--app-text);
-  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', monospace;
-  font-size: 13px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.markdown-preview {
-  max-width: 860px;
-  margin: 0 auto;
-}
-
-.image-preview {
-  display: block;
-  max-width: 100%;
-  max-height: 100%;
-  margin: 0 auto;
-  object-fit: contain;
-}
-
-.pdf-preview {
-  width: 100%;
-  height: 100%;
-  border: 0;
-  background: var(--app-surface);
-}
-
-.binary-preview {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-}
-
-.truncate-alert {
-  margin-top: 12px;
-}
 </style>

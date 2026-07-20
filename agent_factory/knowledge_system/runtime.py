@@ -355,12 +355,23 @@ class KnowledgeRuntime:
             chunk = self.catalog.get_chunk(chunk_id)
             if chunk is None:
                 raise ValueError(f"knowledge chunk not found: {chunk_id}")
-            return {"content": chunk.content[:limit], "chunk": chunk.model_dump(mode="json", exclude={"content"})}
+            return {
+                "content": chunk.content[:limit],
+                "content_length": len(chunk.content),
+                "truncated": len(chunk.content) > limit,
+                "chunk": chunk.model_dump(mode="json", exclude={"content"}),
+            }
         if not document_id:
             raise ValueError("read requires document_id or chunk_id")
         chunks = self.catalog.chunks_for_document(document_id)
         content = "\n\n".join(chunk.content for chunk in chunks)
-        return {"content": content[:limit], "document_id": document_id, "chunk_count": len(chunks)}
+        return {
+            "content": content[:limit],
+            "content_length": len(content),
+            "truncated": len(content) > limit,
+            "document_id": document_id,
+            "chunk_count": len(chunks),
+        }
 
     def reindex_source(self, source_id: str) -> KnowledgeIngestionJob:
         manifest = self._require_source(source_id)

@@ -24,9 +24,15 @@
             {{ capabilitiesError }}
           </n-alert>
           <n-alert v-else type="info" :title="t('knowledge.supportedFormats')">
-            <div>{{ acceptedFormatsLabel }}</div>
-            <div class="upload-hint">
-              {{ capabilities?.ocr_supported ? t('knowledge.ocrAvailable') : t('knowledge.ocrUnavailable') }}
+            <div class="format-groups">
+              <n-tag
+                v-for="group in knowledgeFormatGroups"
+                :key="group.group_id"
+                size="small"
+                :bordered="false"
+              >
+                {{ formatGroupLabel(group.group_id) }}
+              </n-tag>
             </div>
           </n-alert>
           <n-alert v-if="rejectedFileNames.length" type="warning" :title="t('knowledge.unsupportedFilesRejected')">
@@ -144,12 +150,15 @@ import {
   NRadioGroup,
   NSelect,
   NSpace,
+  NTag,
   NText,
 } from 'naive-ui'
 import type { FormInst, FormRules } from 'naive-ui'
 import type { KnowledgeSourceInput, KnowledgeUploadFile } from '@/api/resourceTypes'
-import { knowledgeApi, type KnowledgeCapabilities } from '@/api/knowledge'
+import type { FileFormatGroupCapabilities } from '@/api/files'
 import { useI18n } from '@/composables/useI18n'
+import { useFileCapabilities } from '@/composables/useFileCapabilities'
+import type { I18nKey } from '@/i18n'
 
 type SourceKind = 'folder' | 'file' | 'url' | 'note'
 type SplitterKind = 'recursive' | 'markdown' | 'code' | 'json'
@@ -188,12 +197,16 @@ const submitting = computed(() => props.submitting === true)
 
 const formRef = ref<FormInst | null>(null)
 const { t } = useI18n()
+const {
+  capabilities,
+  knowledgeExtensions: acceptedExtensions,
+  error: capabilitiesError,
+  load: loadFileCapabilities,
+} = useFileCapabilities()
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const folderInputRef = ref<HTMLInputElement | null>(null)
 const selectedFiles = ref<KnowledgeUploadFile[]>([])
 const rejectedFileNames = ref<string[]>([])
-const capabilities = ref<KnowledgeCapabilities | null>(null)
-const capabilitiesError = ref('')
 const formData = ref({
   kind: 'folder' as SourceKind,
   display_name: '',
@@ -222,11 +235,9 @@ const splitterOptions = computed(() => [
 ])
 
 const usesUpload = computed(() => formData.value.kind === 'folder' || formData.value.kind === 'file')
-const acceptedExtensions = computed(() => new Set(capabilities.value?.accepted_extensions || []))
-const fileAccept = computed(() => capabilities.value?.file_accept || '')
-const acceptedFormatsLabel = computed(() => (
-  capabilities.value?.accepted_extensions.map((extension) => extension.toUpperCase()).join(' · ')
-  || t('knowledge.loadingCapabilities')
+const fileAccept = computed(() => capabilities.value?.knowledge_accept || '')
+const knowledgeFormatGroups = computed(() => (
+  capabilities.value?.format_groups.filter((group) => group.knowledge_extensions.length > 0) || []
 ))
 const uploadTitle = computed(() => (formData.value.kind === 'folder' ? t('knowledge.dropFolder') : t('knowledge.dropFile')))
 const canSubmit = computed(() => {
@@ -377,13 +388,22 @@ watch(show, (visible) => {
   if (!visible) resetForm()
 })
 
-onMounted(async () => {
-  try {
-    capabilities.value = await knowledgeApi.capabilities()
-  } catch (error) {
-    capabilitiesError.value = error instanceof Error ? error.message : String(error)
-  }
+onMounted(() => {
+  void loadFileCapabilities()
 })
+
+const FORMAT_GROUP_LABELS: Record<string, I18nKey> = {
+  documents: 'files.group.documents',
+  spreadsheets: 'files.group.spreadsheets',
+  presentations: 'files.group.presentations',
+  text_code: 'files.group.textCode',
+  email_ebook: 'files.group.emailEbook',
+  images: 'files.group.images',
+}
+
+function formatGroupLabel(groupId: FileFormatGroupCapabilities['group_id']): string {
+  return t(FORMAT_GROUP_LABELS[groupId] || 'files.group.other')
+}
 
 function buildSourceInput(): KnowledgeSourceInput {
   const base: KnowledgeSourceInput = {
@@ -449,6 +469,12 @@ function isValidUrl(value: string): boolean {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.format-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--app-space-xs);
 }
 
 .upload-zone {
