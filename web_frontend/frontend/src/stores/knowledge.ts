@@ -9,7 +9,19 @@ import type {
   KnowledgeSourceView,
   KnowledgeDocumentView,
   KnowledgeSearchResultView,
+  FactoryFrontendEvent,
 } from '@/types/protocol'
+
+export interface KnowledgeIngestionProgress {
+  sourceId: string
+  jobId: string | null
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
+  phase: string | null
+  percent: number
+  message: string
+  error: string | null
+  counts: Record<string, number>
+}
 
 export const useKnowledgeStore = defineStore('knowledge', () => {
   const sources = ref<KnowledgeSourceView[]>([])
@@ -17,6 +29,7 @@ export const useKnowledgeStore = defineStore('knowledge', () => {
   const documents = ref<KnowledgeDocumentView[]>([])
   const searchResults = ref<KnowledgeSearchResultView[]>([])
   const currentDocument = ref<any | null>(null)
+  const ingestionBySource = ref<Record<string, KnowledgeIngestionProgress>>({})
 
   function setSources(newSources: KnowledgeSourceView[]): void {
     let nextSelectedSourceId = selectedSourceId.value
@@ -31,6 +44,10 @@ export const useKnowledgeStore = defineStore('knowledge', () => {
       nextCurrentDocument = null
     }
     sources.value = newSources
+    const sourceIds = new Set(newSources.map((source) => String(source.payload?.source_id || '')).filter(Boolean))
+    ingestionBySource.value = Object.fromEntries(
+      Object.entries(ingestionBySource.value).filter(([sourceId]) => sourceIds.has(sourceId)),
+    )
     selectedSourceId.value = nextSelectedSourceId
     documents.value = nextDocuments
     currentDocument.value = nextCurrentDocument
@@ -54,12 +71,51 @@ export const useKnowledgeStore = defineStore('knowledge', () => {
     currentDocument.value = doc
   }
 
+  function applyIngestionEvent(event: FactoryFrontendEvent): void {
+    const sourceId = String(event.payload?.source_id || '').trim()
+    if (!sourceId) return
+    const progress = event.payload?.progress && typeof event.payload.progress === 'object'
+      ? event.payload.progress
+      : {}
+    const current = Number(progress.current || 0)
+    const total = Number(progress.total || 0)
+    const explicitPercent = Number(progress.percent)
+    const previous = ingestionBySource.value[sourceId]
+    const status = ingestionStatus(event.event_type)
+    const percent = status === 'completed'
+      ? 100
+      : Number.isFinite(explicitPercent)
+        ? explicitPercent
+        : total > 0
+          ? (current / total) * 100
+          : previous?.percent || 0
+    const rawError = event.payload?.error
+    ingestionBySource.value = {
+      ...ingestionBySource.value,
+      [sourceId]: {
+        sourceId,
+        jobId: String(event.payload?.job_id || '').trim() || previous?.jobId || null,
+        status,
+        phase: String(event.payload?.phase || '').trim() || previous?.phase || null,
+        percent: Math.max(0, Math.min(100, Math.round(percent))),
+        message: String(event.payload?.message || previous?.message || ''),
+        error: status === 'failed'
+          ? String(rawError?.message || rawError || event.payload?.message || '') || null
+          : null,
+        counts: event.payload?.counts && typeof event.payload.counts === 'object'
+          ? event.payload.counts
+          : previous?.counts || {},
+      },
+    }
+  }
+
   function reset(): void {
     sources.value = []
     selectedSourceId.value = null
     documents.value = []
     searchResults.value = []
     currentDocument.value = null
+    ingestionBySource.value = {}
   }
 
   return {
@@ -68,11 +124,21 @@ export const useKnowledgeStore = defineStore('knowledge', () => {
     documents,
     searchResults,
     currentDocument,
+    ingestionBySource,
     setSources,
     selectSource,
     setDocuments,
     setSearchResults,
     setCurrentDocument,
+    applyIngestionEvent,
     reset,
   }
 })
+
+function ingestionStatus(eventType: string): KnowledgeIngestionProgress['status'] {
+  if (eventType === 'knowledge_ingestion_completed') return 'completed'
+  if (eventType === 'knowledge_ingestion_failed') return 'failed'
+  if (eventType === 'knowledge_ingestion_cancelled') return 'cancelled'
+  if (eventType === 'knowledge_ingestion_queued') return 'queued'
+  return 'running'
+}

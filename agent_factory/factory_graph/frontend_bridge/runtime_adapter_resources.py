@@ -95,10 +95,13 @@ class RuntimeResourceCommandMixin:
             "update_tool_permissions",
             "set_tool_permission",
             "reset_tool_permission",
+            "skillhub_install",
         }:
             event_type = "extension_config_updated"
         elif action == "test_mcp":
             event_type = "extension_config_tested"
+        elif action in {"skillhub_status", "skillhub_search"}:
+            event_type = "extension_skillhub_result"
         self._emit_resource_event(command, event_type, result)
 
     def _emit_resource_event(

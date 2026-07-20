@@ -27,6 +27,7 @@ export function useExtensionsManager() {
   const editingMcp = ref<ExtensionItemView | null>(null)
   const editingSkill = ref<ExtensionItemView | null>(null)
   const busyKey = ref<string | null>(null)
+  const skillHubQuery = ref('')
 
   const extensionContext = computed(() => resourceContext.workspaceContext.value)
   const activePackageLabel = computed(() => t('resource.currentConfigTarget', { label: resourceContext.label.value }))
@@ -44,6 +45,13 @@ export function useExtensionsManager() {
     extensionStore.toolPermissions?.policy || defaultToolPermissionPolicy()
   ))
   const toolPermissionTools = computed(() => extensionStore.toolPermissions?.tools || [])
+  const skillHubItems = computed(() => (
+    Array.isArray(extensionStore.skillHubResult?.items) ? extensionStore.skillHubResult.items : []
+  ))
+  const skillHubCliAvailable = computed(() => extensionStore.skillHubResult?.cli_available === true)
+  const skillHubStatusMessage = computed(() => String(
+    extensionStore.skillHubResult?.message || t('extensions.skillHubStatusUnknown'),
+  ))
   const permissionModeOptions = computed(() => [
     { label: t('permissions.mode.strict'), value: 'strict' },
     { label: t('permissions.mode.allowBelowHigh'), value: 'allow_below_high' },
@@ -71,7 +79,32 @@ export function useExtensionsManager() {
     editingSkill.value = null
     showMcpModal.value = false
     showSkillModal.value = false
-    return commands.refreshExtensions(extensionContext.value)
+    const refresh = commands.refreshExtensions(extensionContext.value)
+    void commands.skillHubStatus(extensionContext.value)
+    return refresh
+  }
+
+  async function handleSkillHubSearch(): Promise<void> {
+    const query = skillHubQuery.value.trim()
+    if (!query || busyKey.value) return
+    busyKey.value = 'skillhub:search'
+    try {
+      await commands.searchSkillHub(query, extensionContext.value)
+    } finally {
+      busyKey.value = null
+    }
+  }
+
+  async function handleSkillHubInstall(item: any): Promise<void> {
+    const skill = String(item?.install_name || item?.skill || item?.name || '').trim()
+    if (!skill || busyKey.value) return
+    busyKey.value = `skillhub:install:${skill}`
+    try {
+      const event = await commands.installSkillHubSkill(skill, extensionContext.value)
+      if (event) await commands.refreshExtensions(extensionContext.value)
+    } finally {
+      busyKey.value = null
+    }
   }
 
   function openAddMcp(): void {
@@ -296,6 +329,8 @@ export function useExtensionsManager() {
     handleMcpAction,
     handleSaveMcp,
     handleSaveSkill,
+    handleSkillHubInstall,
+    handleSkillHubSearch,
     handleSkillAction,
     handleTestMcp,
     handleToggleMcp,
@@ -316,6 +351,10 @@ export function useExtensionsManager() {
     showMcpModal,
     showSkillModal,
     skillActions,
+    skillHubCliAvailable,
+    skillHubItems,
+    skillHubQuery,
+    skillHubStatusMessage,
     toolApprovalValue,
     toolPermissionPolicy,
     toolPermissionTools,

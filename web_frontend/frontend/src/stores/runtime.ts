@@ -467,7 +467,7 @@ export const useRuntimeStore = defineStore('runtime', {
       }
 
       // Extensions
-      else if (type === 'extension_configs_listed' || type === 'extension_config_updated' || type === 'extension_config_tested') {
+      else if (type === 'extension_configs_listed' || type === 'extension_config_updated' || type === 'extension_config_tested' || type === 'extension_skillhub_result') {
         this._handleExtensionsEvent(event)
       }
 

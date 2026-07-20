@@ -47,6 +47,18 @@ export const extensionsApi = {
     requestEvent(withQuery(`/api/extensions/skills/${encodeURIComponent(skillId)}`, packageResourceContextPayload(context)), {
       method: 'DELETE',
     }),
+  skillHubStatus: (context?: WorkspaceContextInput) =>
+    requestEvent(withQuery('/api/extensions/skills/skillhub/status', packageResourceContextPayload(context))),
+  searchSkillHub: (query: string, context?: WorkspaceContextInput) =>
+    requestEvent('/api/extensions/skills/skillhub/search', {
+      method: 'POST',
+      body: JSON.stringify({ query, ...packageResourceContextPayload(context) }),
+    }),
+  installSkillHubSkill: (skill: string, context?: WorkspaceContextInput) =>
+    requestEvent('/api/extensions/skills/skillhub/install', {
+      method: 'POST',
+      body: JSON.stringify({ skill, ...packageResourceContextPayload(context) }),
+    }),
   updateToolPermissions: (policy: ToolPermissionPolicyView, context?: WorkspaceContextInput) =>
     requestEvent('/api/extensions/tool-permissions', {
       method: 'PUT',

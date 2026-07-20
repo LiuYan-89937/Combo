@@ -20,6 +20,18 @@
 
       <n-form-item v-if="usesUpload" :label="t('knowledge.fileContent')">
         <div class="upload-field">
+          <n-alert v-if="capabilitiesError" type="error" :title="t('knowledge.capabilitiesUnavailable')">
+            {{ capabilitiesError }}
+          </n-alert>
+          <n-alert v-else type="info" :title="t('knowledge.supportedFormats')">
+            <div>{{ acceptedFormatsLabel }}</div>
+            <div class="upload-hint">
+              {{ capabilities?.ocr_supported ? t('knowledge.ocrAvailable') : t('knowledge.ocrUnavailable') }}
+            </div>
+          </n-alert>
+          <n-alert v-if="rejectedFileNames.length" type="warning" :title="t('knowledge.unsupportedFilesRejected')">
+            {{ rejectedFileNames.join(', ') }}
+          </n-alert>
           <div
             class="upload-zone"
             @dragover.prevent
@@ -30,8 +42,8 @@
               {{ t('knowledge.uploadHint') }}
             </n-text>
             <n-space>
-              <n-button @click="openFilePicker">{{ t('knowledge.selectFile') }}</n-button>
-              <n-button @click="openFolderPicker">{{ t('knowledge.selectFolder') }}</n-button>
+              <n-button :disabled="!capabilities" @click="openFilePicker">{{ t('knowledge.selectFile') }}</n-button>
+              <n-button :disabled="!capabilities" @click="openFolderPicker">{{ t('knowledge.selectFolder') }}</n-button>
             </n-space>
           </div>
           <input
@@ -39,6 +51,7 @@
             class="native-input"
             type="file"
             multiple
+            :accept="fileAccept"
             @change="handleFileInput"
           />
           <input
@@ -46,6 +59,7 @@
             class="native-input"
             type="file"
             multiple
+            :accept="fileAccept"
             webkitdirectory
             directory
             @change="handleFileInput"
@@ -116,8 +130,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import {
+  NAlert,
   NButton,
   NCollapseTransition,
   NForm,
@@ -133,6 +148,7 @@ import {
 } from 'naive-ui'
 import type { FormInst, FormRules } from 'naive-ui'
 import type { KnowledgeSourceInput, KnowledgeUploadFile } from '@/api/resourceTypes'
+import { knowledgeApi, type KnowledgeCapabilities } from '@/api/knowledge'
 import { useI18n } from '@/composables/useI18n'
 
 type SourceKind = 'folder' | 'file' | 'url' | 'note'
@@ -175,6 +191,9 @@ const { t } = useI18n()
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const folderInputRef = ref<HTMLInputElement | null>(null)
 const selectedFiles = ref<KnowledgeUploadFile[]>([])
+const rejectedFileNames = ref<string[]>([])
+const capabilities = ref<KnowledgeCapabilities | null>(null)
+const capabilitiesError = ref('')
 const formData = ref({
   kind: 'folder' as SourceKind,
   display_name: '',
@@ -203,6 +222,12 @@ const splitterOptions = computed(() => [
 ])
 
 const usesUpload = computed(() => formData.value.kind === 'folder' || formData.value.kind === 'file')
+const acceptedExtensions = computed(() => new Set(capabilities.value?.accepted_extensions || []))
+const fileAccept = computed(() => capabilities.value?.file_accept || '')
+const acceptedFormatsLabel = computed(() => (
+  capabilities.value?.accepted_extensions.map((extension) => extension.toUpperCase()).join(' · ')
+  || t('knowledge.loadingCapabilities')
+))
 const uploadTitle = computed(() => (formData.value.kind === 'folder' ? t('knowledge.dropFolder') : t('knowledge.dropFile')))
 const canSubmit = computed(() => {
   if (!formData.value.display_name.trim()) return false
@@ -238,6 +263,7 @@ const rules = computed<FormRules>(() => ({
 
 function handleKindChange() {
   selectedFiles.value = []
+  rejectedFileNames.value = []
   formData.value.uri = ''
   formData.value.content = ''
 }
@@ -271,12 +297,23 @@ async function handleDrop(event: DragEvent) {
 
 function addFiles(files: KnowledgeUploadFile[]) {
   const next = new Map(selectedFiles.value.map((item) => [item.relativePath, item]))
+  const rejected: string[] = []
   files.forEach((item) => {
-    if (item.file.size >= 0 && item.relativePath) {
+    if (!isAcceptedFile(item.file)) {
+      rejected.push(item.relativePath || item.file.name)
+    } else if (item.file.size >= 0 && item.relativePath) {
       next.set(item.relativePath, item)
     }
   })
   selectedFiles.value = Array.from(next.values())
+  rejectedFileNames.value = rejected
+}
+
+function isAcceptedFile(file: File): boolean {
+  const name = file.name.toLowerCase()
+  const dotIndex = name.lastIndexOf('.')
+  if (dotIndex < 0) return false
+  return acceptedExtensions.value.has(name.slice(dotIndex))
 }
 
 async function filesFromDataTransferItems(items: DataTransferItem[]): Promise<KnowledgeUploadFile[]> {
@@ -340,6 +377,14 @@ watch(show, (visible) => {
   if (!visible) resetForm()
 })
 
+onMounted(async () => {
+  try {
+    capabilities.value = await knowledgeApi.capabilities()
+  } catch (error) {
+    capabilitiesError.value = error instanceof Error ? error.message : String(error)
+  }
+})
+
 function buildSourceInput(): KnowledgeSourceInput {
   const base: KnowledgeSourceInput = {
     kind: formData.value.kind,
@@ -384,6 +429,7 @@ function resetForm() {
     chunkOverlap: 120,
   }
   selectedFiles.value = []
+  rejectedFileNames.value = []
 }
 
 function isValidUrl(value: string): boolean {

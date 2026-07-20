@@ -3,11 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from hashlib import sha256
 import json
+from collections.abc import Mapping
 from typing import Any, Iterable
 
 from langchain_core.messages import ToolMessage
 
-from agent_factory.runtime_kernel.state import RuntimeState, ToolLoopGovernanceState, ToolLoopMetrics
+from agent_factory.runtime_kernel.state import RuntimeState, ToolLoopGovernanceState, ToolLoopMetrics, ToolState
 from agent_factory.tooling.langgraph_node import tool_observation_message
 from agent_factory.tooling.spec import ToolLoopPolicyConfig
 
@@ -110,10 +111,13 @@ def exhausted_tool_ids(state: RuntimeState) -> set[str]:
     }
 
 
-def tool_governance_prompt(state: RuntimeState) -> str:
+def tool_governance_prompt(state: Any) -> str:
+    tool_state = _tool_state_from_model_state(state)
+    if tool_state is None:
+        return ""
     exhausted = [
         (tool_id, metrics)
-        for tool_id, metrics in state.tools.loop_governance.tools.items()
+        for tool_id, metrics in tool_state.loop_governance.tools.items()
         if metrics.exhausted
     ]
     if not exhausted:
@@ -130,6 +134,17 @@ def tool_governance_prompt(state: RuntimeState) -> str:
         ),
     ]
     return "\n".join(lines)
+
+
+def _tool_state_from_model_state(state: Any) -> ToolState | None:
+    value = state.get("tools") if isinstance(state, Mapping) else getattr(state, "tools", None)
+    if value is None:
+        return None
+    if isinstance(value, ToolState):
+        return value
+    if isinstance(value, Mapping):
+        return ToolState.model_validate(value)
+    raise TypeError(f"runtime tool state must be ToolState or mapping, got {type(value).__name__}")
 
 
 def _tool_policies(tools: Iterable[Any]) -> dict[str, ToolLoopPolicyConfig]:

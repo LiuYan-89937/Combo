@@ -5,6 +5,7 @@ import { useCommand } from '@/composables/useCommand'
 import { useAgentStore } from '@/stores/agent'
 import { useRuntimeStore } from '@/stores/runtime'
 import { sidebarMenuOptions } from './sidebarMenu'
+import { useAgentSessionNavigation } from '@/composables/agent/useAgentSessionNavigation'
 
 export function useSidebarNavigation() {
   const router = useRouter()
@@ -13,11 +14,20 @@ export function useSidebarNavigation() {
   const runtimeStore = useRuntimeStore()
   const commands = useCommand()
   const { t } = useI18n()
+  const { openMostRecentAgentSession } = useAgentSessionNavigation()
 
-  const activeKey = computed(() => route.path)
+  const activeKey = computed(() => (
+    route.path === '/factory' && agentStore.activeChatPackageId ? 'agent-sessions' : route.path
+  ))
   const menuOptions = computed(() => sidebarMenuOptions(t))
 
   function handleMenuSelect(key: string) {
+    if (key === 'agent-sessions') {
+      void openMostRecentAgentSession().then((opened) => {
+        if (!opened) void router.push({ name: 'Agents' })
+      })
+      return
+    }
     if (!key.startsWith('/')) return
     if (key === '/factory') {
       enterFactoryMode('chat')

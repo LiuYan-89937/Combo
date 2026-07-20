@@ -37,6 +37,7 @@ from agent_factory.tooling.providers import (
     MCPServersConfig,
 )
 from agent_factory.tooling.skills import parse_skill_directory
+from agent_factory.tooling.skillhub.service import SkillHubService
 
 
 TOOL_PERMISSIONS_FILENAME = "tool_permissions.json"
@@ -240,6 +241,23 @@ def _manage_extension_root(
                 **summary(),
             },
             changed=True,
+        )
+    if action in {"skillhub_status", "skillhub_search", "skillhub_install"}:
+        skillhub_action = action.removeprefix("skillhub_")
+        result = SkillHubService(extension_root=extension_root).run(
+            {
+                "action": skillhub_action,
+                "query": payload.get("query"),
+                "skill": payload.get("skill"),
+            }
+        )
+        changed = skillhub_action == "install"
+        return ExtensionManageResult(
+            {
+                "skillhub": result,
+                **summary(),
+            },
+            changed=changed,
         )
     if action == "set_skill_enabled":
         skill_id = _required_config_id(payload, "skill_id")

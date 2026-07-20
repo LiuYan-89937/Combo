@@ -152,6 +152,9 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
 
   if (event.event_type.startsWith('knowledge_') && resourceEventMatchesCurrentContext(event)) {
     const knowledgeStore = useKnowledgeStore()
+    if (event.event_type.startsWith('knowledge_ingestion_')) {
+      knowledgeStore.applyIngestionEvent(event)
+    }
     if (
       event.event_type === 'knowledge_sources_listed' ||
       event.event_type === 'knowledge_source_registered' ||
@@ -195,13 +198,17 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
   if (
     event.event_type === 'extension_configs_listed' ||
     event.event_type === 'extension_config_updated' ||
-    event.event_type === 'extension_config_tested'
+    event.event_type === 'extension_config_tested' ||
+    event.event_type === 'extension_skillhub_result'
   ) {
     if (!resourceEventMatchesCurrentContext(event)) return
     const extensionStore = useExtensionStore()
     extensionStore.setItems(runtimeStore.extensionItems)
     extensionStore.setTestResult(runtimeStore.extensionTestResult)
     extensionStore.setToolPermissions(runtimeStore.toolPermissions)
+    if (event.payload?.skillhub) {
+      extensionStore.setSkillHubResult(event.payload.skillhub)
+    }
   }
 }
 
@@ -248,6 +255,8 @@ function resourceEventPackageId(event: FactoryFrontendEvent): string | null {
     payload.package_id ||
       nested.package_id ||
       execution.package_id ||
+      payload.owner_id ||
+      nested.owner_id ||
       null
   )
 }

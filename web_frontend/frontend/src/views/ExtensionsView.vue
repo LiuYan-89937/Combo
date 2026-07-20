@@ -107,6 +107,54 @@
 
       <n-tab-pane name="skills" :tab="t('extensions.skillExtensions')">
         <div class="tab-content">
+          <section class="skillhub-panel">
+            <div class="skillhub-heading">
+              <div>
+                <n-text strong>{{ t('extensions.skillHubTitle') }}</n-text>
+                <div class="item-description">{{ t('extensions.skillHubDescription') }}</div>
+              </div>
+              <n-tag :type="skillHubCliAvailable ? 'success' : 'error'" :bordered="false">
+                {{ skillHubStatusMessage }}
+              </n-tag>
+            </div>
+            <div class="skillhub-search">
+              <n-input
+                v-model:value="skillHubQuery"
+                :placeholder="t('extensions.skillHubSearchPlaceholder')"
+                :disabled="!skillHubCliAvailable"
+                clearable
+                @keyup.enter="handleSkillHubSearch"
+              />
+              <n-button
+                type="primary"
+                :disabled="!skillHubCliAvailable || !skillHubQuery.trim()"
+                :loading="busyKey === 'skillhub:search'"
+                @click="handleSkillHubSearch"
+              >
+                {{ t('extensions.searchSkillHub') }}
+              </n-button>
+            </div>
+            <div v-if="skillHubItems.length" class="skillhub-results">
+              <div v-for="item in skillHubItems" :key="item.install_name || item.name" class="skillhub-result">
+                <div class="skillhub-result-content">
+                  <div class="skillhub-result-title">
+                    <n-text strong>{{ item.name }}</n-text>
+                    <n-tag v-if="item.version" size="small" :bordered="false">{{ item.version }}</n-tag>
+                  </div>
+                  <div class="item-description">{{ item.summary || t('common.noDescription') }}</div>
+                </div>
+                <n-button
+                  size="small"
+                  :loading="busyKey === `skillhub:install:${item.install_name || item.name}`"
+                  :disabled="Boolean(busyKey)"
+                  @click="handleSkillHubInstall(item)"
+                >
+                  {{ t('extensions.installSkill') }}
+                </n-button>
+              </div>
+            </div>
+          </section>
+
           <div class="content-header">
             <n-text>{{ t('extensions.skillExtensions') }}</n-text>
             <n-button type="primary" @click="openAddSkill">
@@ -281,6 +329,7 @@ import {
   NDropdown,
   NEmpty,
   NIcon,
+  NInput,
   NList,
   NListItem,
   NRadioButton,
@@ -315,6 +364,8 @@ const {
   handleResetToolPermission,
   handleSaveMcp,
   handleSaveSkill,
+  handleSkillHubInstall,
+  handleSkillHubSearch,
   handleSkillAction,
   handleTestMcp,
   handleToolApprovalChange,
@@ -333,6 +384,10 @@ const {
   showMcpModal,
   showSkillModal,
   skillActions,
+  skillHubCliAvailable,
+  skillHubItems,
+  skillHubQuery,
+  skillHubStatusMessage,
   toolApprovalValue,
   toolPermissionPolicy,
   toolPermissionTools,
@@ -398,6 +453,61 @@ const {
   gap: var(--app-space-lg);
   margin-bottom: var(--app-space-xl);
   flex-wrap: wrap;
+}
+
+.skillhub-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-space-md);
+  padding: var(--app-space-lg);
+  margin-bottom: var(--app-space-xl);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-lg);
+  background: var(--app-surface-muted);
+}
+
+.skillhub-heading,
+.skillhub-search,
+.skillhub-result,
+.skillhub-result-title {
+  display: flex;
+  align-items: center;
+  gap: var(--app-space-md);
+}
+
+.skillhub-heading,
+.skillhub-result {
+  justify-content: space-between;
+}
+
+.skillhub-heading > :first-child,
+.skillhub-result-content {
+  min-width: 0;
+}
+
+.skillhub-search :deep(.n-input) {
+  flex: 1;
+}
+
+.skillhub-results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-space-sm);
+}
+
+.skillhub-result {
+  padding: var(--app-space-md);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface);
+}
+
+.skillhub-result-content {
+  flex: 1;
+}
+
+.skillhub-result-title {
+  margin-bottom: var(--app-space-xs);
 }
 
 .extension-list {

@@ -67,6 +67,24 @@
             </div>
           </div>
 
+          <div v-if="ingestionOf(source)" class="ingestion-progress">
+            <div class="ingestion-progress-header">
+              <n-text depth="3">{{ ingestionMessage(source) }}</n-text>
+              <n-text depth="3">{{ ingestionOf(source)?.percent }}%</n-text>
+            </div>
+            <n-progress
+              type="line"
+              :percentage="ingestionOf(source)?.percent || 0"
+              :status="ingestionProgressStatus(source)"
+              :show-indicator="false"
+              :height="6"
+              border-radius="3"
+            />
+            <n-text v-if="ingestionOf(source)?.error" type="error" class="ingestion-error">
+              {{ ingestionOf(source)?.error }}
+            </n-text>
+          </div>
+
           <div class="source-actions">
             <n-button
               size="small"
@@ -156,6 +174,7 @@ import {
   NIcon,
   NList,
   NListItem,
+  NProgress,
   NScrollbar,
   NSpace,
   NTag,
@@ -166,6 +185,7 @@ import { useKnowledgeManager } from '@/composables/knowledge/useKnowledgeManager
 import KnowledgeSourceFormModal from './KnowledgeSourceFormModal.vue'
 import { useI18n } from '@/composables/useI18n'
 import type { KnowledgeSourceView } from '@/types/protocol'
+import type { KnowledgeIngestionProgress } from '@/stores/knowledge'
 
 const { t } = useI18n()
 
@@ -205,6 +225,30 @@ function sourceStatusLabel(status: string): string {
     failed: t('run.failed'),
   }
   return labels[status] || status || t('common.unknown')
+}
+
+function ingestionOf(source: KnowledgeSourceView): KnowledgeIngestionProgress | null {
+  const sourceId = sourceIdOf(source)
+  return sourceId ? knowledgeStore.ingestionBySource[sourceId] || null : null
+}
+
+function ingestionMessage(source: KnowledgeSourceView): string {
+  const ingestion = ingestionOf(source)
+  if (!ingestion) return ''
+  if (ingestion.status === 'completed') return t('knowledge.ingestionCompleted')
+  if (ingestion.status === 'failed') return t('knowledge.ingestionFailed')
+  if (ingestion.status === 'queued') return t('knowledge.ingestionQueued')
+  return ingestion.phase
+    ? t('knowledge.ingestionPhase', { phase: ingestion.phase })
+    : t('knowledge.ingestionRunning')
+}
+
+function ingestionProgressStatus(source: KnowledgeSourceView): 'default' | 'success' | 'error' | 'warning' {
+  const status = ingestionOf(source)?.status
+  if (status === 'completed') return 'success'
+  if (status === 'failed') return 'error'
+  if (status === 'cancelled') return 'warning'
+  return 'default'
 }
 </script>
 
@@ -351,6 +395,25 @@ function sourceStatusLabel(status: string): string {
   gap: var(--app-space-sm);
   margin-top: var(--app-space-md);
   flex-wrap: wrap;
+}
+
+.ingestion-progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-space-xs);
+  margin-top: var(--app-space-sm);
+}
+
+.ingestion-progress-header {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--app-space-sm);
+  font-size: var(--app-font-xs);
+}
+
+.ingestion-error {
+  font-size: var(--app-font-xs);
+  overflow-wrap: anywhere;
 }
 
 .documents-panel {

@@ -121,6 +121,52 @@ def create_extensions_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         )
         return {"event": event}
 
+    @router.get("/skills/skillhub/status")
+    async def skillhub_status(package_id: str | None = None, resource_mode: str | None = None):
+        event = await resource_command(
+            runtime_bridge,
+            "extensions_manage",
+            {
+                "action": "skillhub_status",
+                **optional_package(package_id),
+                **optional_resource_mode(resource_mode),
+            },
+            {"extension_skillhub_result"},
+        )
+        return {"event": event}
+
+    @router.post("/skills/skillhub/search")
+    async def skillhub_search(payload: dict[str, Any]):
+        event = await resource_command(
+            runtime_bridge,
+            "extensions_manage",
+            {
+                "action": "skillhub_search",
+                "query": payload.get("query"),
+                **optional_package(payload.get("package_id")),
+                **optional_resource_mode(payload.get("resource_mode")),
+            },
+            {"extension_skillhub_result"},
+            timeout_seconds=90.0,
+        )
+        return {"event": event}
+
+    @router.post("/skills/skillhub/install")
+    async def skillhub_install(payload: dict[str, Any]):
+        event = await resource_command(
+            runtime_bridge,
+            "extensions_manage",
+            {
+                "action": "skillhub_install",
+                "skill": payload.get("skill"),
+                **optional_package(payload.get("package_id")),
+                **optional_resource_mode(payload.get("resource_mode")),
+            },
+            {"extension_config_updated"},
+            timeout_seconds=240.0,
+        )
+        return {"event": event}
+
     @router.put("/tool-permissions")
     async def update_tool_permissions(payload: dict[str, Any]):
         event = await resource_command(

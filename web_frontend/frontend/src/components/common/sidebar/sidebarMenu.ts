@@ -26,6 +26,11 @@ export function sidebarMenuOptions(t: Translate): MenuOption[] {
       icon: renderIcon(ChatbubbleEllipses),
     },
     {
+      label: t('route.agentSessions'),
+      key: 'agent-sessions',
+      icon: renderIcon(Chatbubbles),
+    },
+    {
       label: t('route.manufacturing'),
       key: '/manufacturing',
       icon: renderIcon(Build),

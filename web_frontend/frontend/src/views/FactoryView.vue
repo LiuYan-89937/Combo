@@ -106,7 +106,7 @@
 
 <script setup lang="ts">
 import { computed, ref, onMounted, watch, nextTick } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { NScrollbar, NEmpty, NIcon, NText, NSelect } from 'naive-ui'
 import { ChatbubbleEllipses } from '@/components/icons'
 import { useRuntimeStore } from '@/stores/runtime'
@@ -134,6 +134,7 @@ const agentStore = useAgentStore()
 const uiStore = useUiStore()
 const commands = useCommand()
 const route = useRoute()
+const router = useRouter()
 const { t } = useI18n()
 const scrollbarRef = ref()
 const inputRef = ref()
@@ -292,11 +293,44 @@ watch(
   },
 )
 
+watch(
+  () => `${agentStore.activeChatPackageId || ''}:${runtimeStore.activeAgentSessionId || ''}`,
+  () => {
+    const packageId = agentStore.activeChatPackageId
+    const sessionId = runtimeStore.activeAgentSessionId
+    if (route.name !== 'Factory' || !packageId || !sessionId) return
+    if (
+      routeQueryText(route.query.package_id) === packageId
+      && routeQueryText(route.query.session_id) === sessionId
+    ) return
+    void router.replace({ name: 'Factory', query: { package_id: packageId, session_id: sessionId } })
+  },
+)
+
 async function openRoutedAgentSession(): Promise<boolean> {
   if (route.name !== 'Factory') return false
   const packageId = routeQueryText(route.query.package_id)
   const sessionId = routeQueryText(route.query.session_id)
-  if (!packageId || !sessionId) return false
+  if (!packageId) return false
+  if (!sessionId && routeQueryText(route.query.new) === '1') {
+    if (
+      agentStore.activeChatPackageId === packageId
+      && agentStore.selectedSessionId === null
+      && runtimeStore.activeAgentSessionId === null
+      && runtimeStore.currentMode === 'agent_package'
+    ) return true
+    agentStore.enterAgentChat(packageId, null)
+    runtimeStore.showEmptyAgentPackageSession(packageId)
+    await commands.selectAgentPackage(packageId, 'run')
+    return true
+  }
+  if (!sessionId) return false
+  if (
+    agentStore.activeChatPackageId === packageId
+    && agentStore.selectedSessionId === sessionId
+    && runtimeStore.activeAgentSessionId === sessionId
+    && runtimeStore.currentMode === 'agent_package'
+  ) return true
   const collaborationId = routeQueryText(route.query.collaboration_id)
   const collaborationTaskId = routeQueryText(route.query.collaboration_task_id)
   agentStore.enterAgentChat(packageId, sessionId)

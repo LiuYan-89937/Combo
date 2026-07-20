@@ -88,26 +88,20 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
 import { NButton, NEmpty, NIcon, NInput, NList, NListItem, NScrollbar, NTag, NText, useDialog } from 'naive-ui'
 import { ChatbubbleEllipses, Refresh, Search, TrashOutline } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import { useAgentStore } from '@/stores/agent'
-import { useRuntimeStore } from '@/stores/runtime'
-import { useUiStore } from '@/stores/ui'
-import { useWorkspaceStore } from '@/stores/workspace'
 import { useCommand } from '@/composables/useCommand'
+import { useAgentSessionNavigation } from '@/composables/agent/useAgentSessionNavigation'
 
 const props = defineProps<{
   packageId: string
 }>()
 
 const agentStore = useAgentStore()
-const runtimeStore = useRuntimeStore()
-const uiStore = useUiStore()
-const workspaceStore = useWorkspaceStore()
 const commands = useCommand()
-const router = useRouter()
+const { openAgentSession, startNewAgentSession } = useAgentSessionNavigation()
 const { locale, t } = useI18n()
 const searchQuery = ref('')
 const dialog = useDialog()
@@ -134,25 +128,13 @@ function refreshSessions() {
   commands.listAgentPackageSessions(props.packageId)
 }
 
-function enterSession(sessionId: string | null): void {
-  agentStore.enterAgentChat(props.packageId, sessionId)
-  if (sessionId) {
-    runtimeStore.expectAgentPackageSession(props.packageId, sessionId)
-  } else {
-    runtimeStore.showEmptyAgentPackageSession(props.packageId)
-  }
-  workspaceStore.setScope('workdir')
-  uiStore.openRightSidebar('workspace')
-  void router.push({ name: 'Factory' })
-}
-
 function enterNewSession() {
-  enterSession(null)
+  void startNewAgentSession(props.packageId)
 }
 
 function enterExistingSession(sessionId: string) {
-  enterSession(sessionId)
-  commands.loadAgentPackageSession(props.packageId, sessionId)
+  const session = agentStore.agentSessions.find((item) => item.session_id === sessionId)
+  if (session) void openAgentSession({ ...session })
 }
 
 function confirmDeleteSession(session: { session_id: string; display_title: string | null; first_user_input: string | null }) {
@@ -192,7 +174,6 @@ onMounted(() => {
 watch(
   () => props.packageId,
   () => {
-    agentStore.selectSession(null)
     refreshSessions()
   }
 )

@@ -1,8 +1,17 @@
 import type { KnowledgeSourceInput, WorkspaceContextInput } from './resourceTypes'
-import { requestEvent, requestFormEvent, withQuery } from './http'
+import { requestEvent, requestFormEvent, requestJson, withQuery } from './http'
 import { packageResourceContextPayload } from './resourceContext'
 
+export interface KnowledgeCapabilities {
+  accepted_extensions: string[]
+  file_accept: string
+  ocr_supported: boolean
+  ocr_message: string
+  parser_backends: string[]
+}
+
 export const knowledgeApi = {
+  capabilities: () => requestJson<KnowledgeCapabilities>('/api/knowledge/capabilities'),
   sources: (context?: WorkspaceContextInput) =>
     requestEvent(withQuery('/api/knowledge/sources', packageResourceContextPayload(context))),
   addSource: (source: KnowledgeSourceInput, context?: WorkspaceContextInput) => {
