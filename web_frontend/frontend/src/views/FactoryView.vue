@@ -99,7 +99,20 @@
           @update:reasoning-intensity="setReasoningIntensity"
           @send="handleSend"
           @cancel="handleCancel"
-        />
+        >
+          <template v-if="agentStore.activeChatPackageId" #auxiliary-action>
+            <n-button
+              text
+              :disabled="runtimeStore.hasActiveRun"
+              @click="createNewAgentSession"
+            >
+              <template #icon>
+                <n-icon><Add /></n-icon>
+              </template>
+              {{ t('agentSessions.newChat') }}
+            </n-button>
+          </template>
+        </MessageInput>
       </div>
     </div>
     <TipPanel v-if="tipScopeId" :scope-type="tipScopeType" :scope-id="tipScopeId" />
@@ -109,8 +122,8 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NScrollbar, NEmpty, NIcon, NText, NSelect } from 'naive-ui'
-import { ChatbubbleEllipses } from '@/components/icons'
+import { NButton, NScrollbar, NEmpty, NIcon, NText, NSelect } from 'naive-ui'
+import { Add, ChatbubbleEllipses } from '@/components/icons'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useAgentStore } from '@/stores/agent'
 import { useUiStore } from '@/stores/ui'
@@ -131,6 +144,7 @@ import { messageContextReference } from '@/utils/contextReferences'
 import TipPanel from '@/components/chat/TipPanel.vue'
 import type { TipMessageContext } from '@/stores/tips'
 import { useResourceContext } from '@/composables/useResourceContext'
+import { useAgentSessionNavigation } from '@/composables/agent/useAgentSessionNavigation'
 
 const runtimeStore = useRuntimeStore()
 const agentStore = useAgentStore()
@@ -143,6 +157,7 @@ const scrollbarRef = ref()
 const inputRef = ref()
 const referenceStore = useContextReferenceStore()
 const resourceContext = useResourceContext()
+const { startNewAgentSession } = useAgentSessionNavigation()
 const messageWorkspaceContext = computed(() => resourceContext.workspaceContext.value)
 const referenceScope = computed(() => [
   'factory',
@@ -207,6 +222,12 @@ function handleSend(message: string, attachments: RuntimeAttachmentInput[]) {
 
 function handleCancel() {
   cancelRequest()
+}
+
+function createNewAgentSession() {
+  const packageId = agentStore.activeChatPackageId
+  if (!packageId || runtimeStore.hasActiveRun) return
+  void startNewAgentSession(packageId)
 }
 
 function addMessageReference(message: TranscriptItem) {

@@ -95,26 +95,29 @@
               <template #icon>
                 <n-icon><BulbOutline /></n-icon>
               </template>
-              <span>{{ t('chat.reasoningLabel') }}</span>
-              <n-text depth="3" class="reasoning-value">{{ reasoningLabel }}</n-text>
+              <span>{{ t('chat.reasoningLabel') }} · {{ reasoningLabel }}</span>
+              <n-icon size="12" class="reasoning-caret"><CaretDown /></n-icon>
             </n-button>
           </template>
           <div class="reasoning-popover">
             <div class="reasoning-popover-header">
               <span>{{ t('chat.reasoningIntensity') }}</span>
-              <n-button text size="tiny" @click="emit('update:reasoningIntensity', null)">
-                {{ t('chat.reasoningDefault') }}
-              </n-button>
             </div>
-            <n-slider
-              :value="reasoningSliderValue"
-              :min="REASONING_SLIDER_DEFAULT"
-              :max="REASONING_SLIDER_MAX"
-              :step="1"
-              :marks="reasoningMarks"
+            <n-radio-group
+              :value="reasoningSelectionValue"
+              size="small"
+              class="reasoning-options soft-segmented-control"
               :disabled="disabled"
-              @update:value="handleReasoningSliderChange"
-            />
+              @update:value="handleReasoningSelect"
+            >
+              <n-radio-button
+                v-for="option in reasoningOptions"
+                :key="option.value"
+                :value="option.value"
+              >
+                {{ option.label }}
+              </n-radio-button>
+            </n-radio-group>
           </div>
         </n-popover>
 
@@ -130,16 +133,7 @@
           {{ t('attachments.textMode') }}
         </n-button>
 
-        <n-popover trigger="hover" placement="top">
-          <template #trigger>
-            <n-button text :disabled="disabled">
-              <template #icon>
-                <n-icon><CodeSlash /></n-icon>
-              </template>
-            </n-button>
-          </template>
-          {{ t('attachments.markdownHint') }}
-        </n-popover>
+        <slot name="auxiliary-action"></slot>
       </div>
 
       <div class="right-actions">
@@ -194,12 +188,11 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from 'vue'
-import { NInput, NButton, NIcon, NText, NPopover, NSelect, NSlider, useMessage } from 'naive-ui'
-import { AttachOutline, BulbOutline, Document, Link, Text, Close, CodeSlash, Send, Stop, ImageOutline } from '@/components/icons'
+import { NInput, NButton, NIcon, NText, NPopover, NRadioButton, NRadioGroup, NSelect, useMessage } from 'naive-ui'
+import { AttachOutline, BulbOutline, CaretDown, Document, Link, Text, Close, CodeSlash, Send, Stop, ImageOutline } from '@/components/icons'
 import AttachmentPickerModal from './AttachmentPickerModal.vue'
 import { useI18n } from '@/composables/useI18n'
 import { MAX_RUNTIME_ATTACHMENTS, extensionFromMimeType, pastedImageFiles, runtimeFileAttachmentFromFile } from '@/utils/attachments'
-import { REASONING_SLIDER_DEFAULT, REASONING_SLIDER_MAX } from '@/utils/reasoning'
 import type { RuntimeAttachmentInput } from '@/types/protocol'
 import { useContextReferenceStore } from '@/stores/contextReferences'
 
@@ -253,17 +246,19 @@ const normalizedReferenceScope = computed(() => String(props.referenceScope || '
 const contextReferences = computed(() => referenceStore.references(normalizedReferenceScope.value))
 const showAttachmentPicker = ref(false)
 const placeholder = computed(() => props.placeholder || t('chat.inputPlaceholder'))
-const reasoningSliderValue = computed(() => props.reasoningIntensity === null ? REASONING_SLIDER_DEFAULT : props.reasoningIntensity + 1)
-const reasoningLabels = computed(() => [
-  t('chat.reasoningDefault'),
-  t('chat.reasoningOff'),
-  t('chat.reasoningLow'),
-  t('chat.reasoningMedium'),
-  t('chat.reasoningHigh'),
-  t('chat.reasoningMaximum'),
+const reasoningOptions = computed(() => [
+  { label: t('chat.reasoningDefault'), value: -1 },
+  { label: t('chat.reasoningOff'), value: 0 },
+  { label: t('chat.reasoningLow'), value: 1 },
+  { label: t('chat.reasoningMedium'), value: 2 },
+  { label: t('chat.reasoningHigh'), value: 3 },
+  { label: t('chat.reasoningMaximum'), value: 4 },
 ])
-const reasoningLabel = computed(() => reasoningLabels.value[reasoningSliderValue.value] || reasoningLabels.value[0])
-const reasoningMarks = computed(() => Object.fromEntries(reasoningLabels.value.map((label, index) => [index, label])))
+const reasoningSelectionValue = computed(() => props.reasoningIntensity ?? -1)
+const reasoningLabel = computed(() => (
+  reasoningOptions.value.find((option) => option.value === reasoningSelectionValue.value)?.label
+  || reasoningOptions.value[0].label
+))
 const maxAttachments = MAX_RUNTIME_ATTACHMENTS
 const remainingAttachmentSlots = computed(() => Math.max(0, maxAttachments - attachments.value.length - contextReferences.value.length))
 
@@ -321,9 +316,9 @@ function handleModelSelect(value: string) {
   emit('update:selectedModelProfileId', value || '')
 }
 
-function handleReasoningSliderChange(value: number | [number, number]) {
-  const sliderValue = Array.isArray(value) ? value[0] : value
-  emit('update:reasoningIntensity', sliderValue === REASONING_SLIDER_DEFAULT ? null : sliderValue - 1)
+function handleReasoningSelect(value: string | number) {
+  const intensity = Number(value)
+  emit('update:reasoningIntensity', intensity < 0 ? null : intensity)
 }
 
 function handleAttach(attachment: RuntimeAttachmentInput | RuntimeAttachmentInput[]) {
@@ -529,13 +524,14 @@ defineExpose({
   white-space: nowrap;
 }
 
-.reasoning-value {
-  font-size: var(--app-font-sm);
+.reasoning-caret {
+  color: var(--app-text-muted);
 }
 
 .reasoning-popover {
-  width: 280px;
-  padding: var(--app-space-xs) var(--app-space-sm) var(--app-space-md);
+  width: max-content;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: var(--app-space-xs);
 }
 
 .reasoning-popover-header {
@@ -543,9 +539,19 @@ defineExpose({
   align-items: center;
   justify-content: space-between;
   gap: var(--app-space-sm);
-  margin-bottom: var(--app-space-lg);
+  margin-bottom: var(--app-space-sm);
   color: var(--app-text-secondary);
   font-size: var(--app-font-sm);
+}
+
+.reasoning-options {
+  display: flex;
+  width: 100%;
+}
+
+.reasoning-options :deep(.n-radio-button) {
+  flex: 1;
+  text-align: center;
 }
 
 .character-count {
