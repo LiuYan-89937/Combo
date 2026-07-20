@@ -13,8 +13,8 @@ Guide changes to an already published AgentPackage. Evolution is not manufacturi
 
 ## Required Flow
 1. Restate the user evolution goal in one concrete sentence.
-2. Identify the target surface before editing: package tool, pattern assembly, prompt, dependency contract, runtime resource, knowledge, scheduler, state, or validation repair.
-3. Read only the files needed for that target surface.
+2. Inspect the shared authoring stage and load its suggested evolution Skill.
+3. Use the structured evolution task analysis to identify affected and preserved systems before reading files.
 4. Choose one write strategy before editing:
    - `create_agent_authoring` for managed package surfaces.
    - generic `edit` or `write` only for unmanaged capability content.
@@ -36,7 +36,7 @@ Guide changes to an already published AgentPackage. Evolution is not manufacturi
 ## Anti-Patterns
 - Do not alternate between `reset_contract`, `upsert_package_tool`, and generic edits hoping validation will improve.
 - Do not reset a contract unless validator evidence identifies that contract as malformed and no more specific authoring action applies.
-- Do not call `create_agent_stage`; it is a manufacturing-only focus tool and published packages do not have manufacturing task analysis.
+- Do not bypass `create_agent_stage`; evolution uses the same authoring stage machine with evolution-specific task analysis and Skill guidance.
 - Do not read broad schema resources or project source code to discover package structure when current package files and validator evidence are enough.
 - Do not add hardcoded local paths, user-specific files, API keys, Docker socket paths, or one-off test fixtures.
 - Do not treat stale probe records as proof after changing package code.

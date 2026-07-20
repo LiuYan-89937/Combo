@@ -6,7 +6,6 @@ from agent_factory.tooling.builtins.registry import (
     get_builtin_tool_ids,
     get_builtin_tool_specs,
     get_read_only_system_tool_ids,
-    get_runtime_context_builtin_tool_ids,
 )
 
 __all__ = [
@@ -15,5 +14,4 @@ __all__ = [
     "get_builtin_tool_ids",
     "get_builtin_tool_specs",
     "get_read_only_system_tool_ids",
-    "get_runtime_context_builtin_tool_ids",
 ]

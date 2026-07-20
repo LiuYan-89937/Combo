@@ -115,7 +115,7 @@ def _messages_with_system(state: CreateAgentAssistState, tools: list[BaseTool]) 
                 f"Workspace: {workspace.root}",
                 f"Package manifest: {workspace.package_manifest_path()}",
                 f"Package manifest exists: {workspace.package_manifest_path().exists()}",
-                f"Read-only assist tools: {', '.join(tool.name for tool in tools) if tools else 'none'}",
+                f"Available assist tools: {', '.join(tool.name for tool in tools) if tools else 'none'}",
             ]
             if item
         )

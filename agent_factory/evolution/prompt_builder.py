@@ -7,7 +7,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool
 
 from agent_factory.create_agent.capability_inventory import render_static_capability_inventory
-from agent_factory.create_agent.prompt_builder import CreateAgentPromptPayload
+from agent_factory.create_agent.prompt_builder import CreateAgentPromptPayload, build_authoring_stage_context
 from agent_factory.models.message_layout import system_messages_first
 
 
@@ -19,6 +19,7 @@ def build_evolution_messages(
     error_pack: dict[str, Any],
     trace_gate: dict[str, Any] | None = None,
     target_plan: dict[str, Any] | None = None,
+    task_analysis: dict[str, Any] | None = None,
     package_summary: dict[str, Any],
     tools: list[Any],
 ) -> list[BaseMessage]:
@@ -35,19 +36,20 @@ def build_evolution_messages(
 - 如果 trace 报错与用户目标无关且不会阻塞本轮验证，不要围绕 trace 报错展开调查或把它作为主要修改方向。
 - 如果用户目标和 trace 报错都需要处理，先说明二者关系，再优先完成用户目标，并修复会阻塞发布的 trace 问题。
 - 只能修改当前已发布 package 目录内的文件：{package_path}
-- 不要创建新的 agent，不要走 create-agent 制造流程，不要生成 evolution workspace。
+- 不要创建新的 agent 或重新 scaffold；在当前 package 上复用制造期相同的任务分析、阶段状态、authoring、probe 和 validation 骨架。
 - 不要读取完整 trace。若系统提供了错误摘要，只能以此作为 trace 证据；若未提供，不要因为缺少 trace 阻塞进化。
 - 不要暴露或引用 create-agent 制造工具、制造 workspace、制造 trace。
 - 修改必须是结构性修复：优先修 prompt、contracts、tool 实现、依赖声明、附件处理、上下文策略等真实 package surface。
 - 不做短中长期计划；一次进化就奔着可发布结果。
 - 如果证据不足，做最小必要的 package 检查后给出保守修改，不要凭空硬编码特例。
-- 在第一次修改任何文件前，必须先调用 skill(action="load", name="00-agent-evolution", current_system="agent_evolution", reason=...) 读取进化专用流程。
-- 进化顺序必须是：定向定位修改面 -> 选择唯一 authoring/write 策略 -> 一次性修改相关 surface -> probe/validate -> 根据新证据修复或收束。不要在 dependencies、assembly、tool source 之间来回试错。
-- 系统会提供 evolution_target_plan。它是本轮进化的执行边界：只能优先读取 required_first_reads，只能围绕 target_files 修改，只能调用 allowed_authoring_actions 中的 create_agent_authoring action。
-- 如果 evolution_target_plan.write_strategy 无法表达用户目标，或者 authoring 工具缺少必要字段，停止并报告 authoring gap；不要用 generic edit/write 绕过 managed file protection。
+- 在第一次修改任何文件前，先调用 skill(action="load", name="00-agent-evolution", current_system="agent_evolution", reason=...) 读取进化控制流程，再调用 create_agent_stage(action="inspect")；随后用 active_focus.suggested_skills 加载当前阶段专属进化 Skill。
+- 系统提供的 evolution task analysis 是本轮结构化差异契约。affected_systems/capability_changes 决定修改面，preserved_systems 必须保持，resource_requirements 必须落入 Resource Descriptor 而不是工具参数或源码。
+- 进化按 requirement_focus -> capability_implementation -> experience_assembly -> validation_publish 推进；每阶段使用 create_agent_stage 查看或显式纠正 focus，并通过与制造相同的 authoring/probe/validation 状态机自动同步。
+- evolution_target_plan 只提供运行环境 blocker 和整体执行建议，不再通过关键词限制 authoring action。若 authoring 工具缺少必要字段，停止并报告 authoring gap；不要用 generic edit/write 绕过 managed file protection。
+- 新增或修改 Package Tool 前，先判断账户、凭据、API Key、邮箱、数据库连接、固定端点、默认收件人等是否属于部署后配置的 Resource。属于 Resource 时必须声明 descriptor、设置 ToolSpec resources selector，并让 tool_source 从 resources 读取；不得塞进 input_schema 或硬编码。
 - 如果新增或修改 package tool，必须使用 create_agent_probe_tool(action="inspect") 和 create_agent_probe_tool(action="call", probe_kind="success_path", ...) 生成 fresh successful-path probe 证据。
 - 如果后续 full_static validation 失败，系统会把验证报告作为新 observation 发给你；你必须继续 ReAct 修复，而不是重复总结失败。
-- full_static validation 通过后，必须把中文进化总结放入 create_agent_control(action="finalize", message=...) 并调用它收束本次进化；不要调用 create_agent_stage，它是制造期工具，进化模式不可用。
+- full_static validation 通过后，必须把中文进化总结放入 create_agent_control(action="finalize", message=...) 并调用它收束本次进化。
 - finalize 工具调用完成后不要再生成额外总结或继续调用工具；运行时会使用 finalize 的 message 作为唯一终态摘要。
 
 可用工具：{tool_names}
@@ -59,6 +61,7 @@ def build_evolution_messages(
         "package_summary": package_summary,
         "trace_gate": trace_gate or {},
         "evolution_target_plan": target_plan or {},
+        "evolution_task_analysis": task_analysis or {},
         **(
             {"failed_trace_error_pack": error_pack}
             if error_pack
@@ -92,10 +95,14 @@ def build_evolution_prompt(
             trace_gate=context.get("trace_gate") if isinstance(context.get("trace_gate"), dict) else {},
             package_summary=context.get("package_summary") if isinstance(context.get("package_summary"), dict) else {},
             target_plan=context.get("target_plan") if isinstance(context.get("target_plan"), dict) else {},
+            task_analysis=context.get("task_analysis") if isinstance(context.get("task_analysis"), dict) else {},
             tools=tools,
         ),
         *list(state.get("messages") or []),
     ])
+    stage_context = build_authoring_stage_context(state)
+    if stage_context:
+        messages = system_messages_first([messages[0], SystemMessage(content=stage_context), *messages[1:]])
     stable = {
         "tool_names": sorted(str(getattr(tool, "name", "")) for tool in tools),
         "capability_inventory": render_static_capability_inventory(capability_inventory or {}),

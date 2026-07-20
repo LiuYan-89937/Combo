@@ -38,7 +38,6 @@ IMPLEMENTED_BUILTIN_TOOL_IDS = {
 }
 
 ALWAYS_AVAILABLE_SYSTEM_TOOL_IDS = {"tool_output"}
-RUNTIME_CONTEXT_BUILTIN_TOOL_IDS = {"collaboration", "agent_list", "agent_manufacture", "agent_search"}
 READ_ONLY_SYSTEM_TOOL_IDS = {
     "read",
     "glob",
@@ -83,10 +82,6 @@ def get_builtin_protected_tool_ids() -> list[str]:
 
 def get_always_available_system_tool_ids() -> set[str]:
     return set(ALWAYS_AVAILABLE_SYSTEM_TOOL_IDS)
-
-
-def get_runtime_context_builtin_tool_ids() -> set[str]:
-    return set(RUNTIME_CONTEXT_BUILTIN_TOOL_IDS)
 
 
 def get_read_only_system_tool_ids() -> set[str]:

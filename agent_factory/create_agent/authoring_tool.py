@@ -41,6 +41,7 @@ from agent_factory.tooling.package_tool_spec import (
     validate_package_tool_source,
 )
 from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolRiskResult, ToolSpec
+from agent_factory.tooling.runtime_resources import PACKAGE_TOOL_SYSTEM_RESOURCE_IDS
 
 
 CREATE_AGENT_AUTHORING_TOOL_ID = "create_agent_authoring"
@@ -148,7 +149,14 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                 "expose_to_nodes": {"type": "array", "items": {"type": "string"}},
                 "seed": {"type": "object", "additionalProperties": True},
                 "resources": {"type": "object", "additionalProperties": True},
-                "resource_descriptors": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
+                "resource_descriptors": {
+                    "type": "array",
+                    "description": (
+                        "Deployment-time Resource Descriptors consumed by this capability. For upsert_package_tool, "
+                        "descriptors are validated and written as one coherent increment with ToolSpec resource selectors."
+                    ),
+                    "items": {"type": "object", "additionalProperties": True},
+                },
                 "knowledge_path": {
                     "type": "string",
                     "description": "Package-relative target under knowledge/ for confirmed retrievable reference material.",
@@ -467,7 +475,6 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     action = str(arguments.get("action") or "").strip()
     if action not in CREATE_AGENT_AUTHORING_ACTIONS:
         raise ValueError(f"unsupported create-agent authoring action: {action}")
-    _assert_evolution_action_allowed(action, resources)
     if action == "set_identity":
         result = _set_identity(workspace, arguments)
     elif action == "configure_model_bindings":
@@ -496,24 +503,6 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         result = _upsert_state(workspace, arguments)
     sync_authoring_stage(workspace, action)
     return tool_envelope(result, evidence={"authoring": result}, summary=result["summary"])
-
-
-def _assert_evolution_action_allowed(action: str, resources: dict[str, Any]) -> None:
-    target_plan = resources.get("evolution_target_plan")
-    if not isinstance(target_plan, dict):
-        return
-    allowed = {
-        str(item).strip()
-        for item in (target_plan.get("allowed_authoring_actions") if isinstance(target_plan.get("allowed_authoring_actions"), list) else [])
-        if str(item).strip()
-    }
-    if not allowed or action in allowed:
-        return
-    surface = str(target_plan.get("surface") or "unknown")
-    raise PermissionError(
-        f"create_agent_authoring action {action!r} is outside the evolution target surface {surface!r}; "
-        f"allowed actions: {', '.join(sorted(allowed))}"
-    )
 
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -634,6 +623,24 @@ def _upsert_package_tool(workspace: CreateAgentWorkspace, arguments: dict[str, A
     if not source.strip():
         raise ValueError("tool_source is required")
     source_tree = validate_package_tool_source(source)
+    resources_contract_path = workspace.root / "contracts" / "resources.json"
+    resources_contract = ResourcesContract.model_validate(_read_json(resources_contract_path))
+    supplied_descriptors = [
+        ResourceDescriptor.model_validate(item)
+        for item in (arguments.get("resource_descriptors") if isinstance(arguments.get("resource_descriptors"), list) else [])
+    ]
+    descriptor_by_id = {
+        descriptor.resource_id: descriptor
+        for descriptor in [*resources_contract.config.resource_descriptors, *supplied_descriptors]
+    }
+    _validate_package_tool_resource_contract(tool_id=tool_id, spec=spec, descriptors=descriptor_by_id)
+    resources_contract_payload = resources_contract.model_copy(
+        update={
+            "config": resources_contract.config.model_copy(
+                update={"resource_descriptors": list(descriptor_by_id.values())}
+            )
+        }
+    ).model_dump(mode="json")
     python_requirements = _string_list(arguments.get("python_requirements"))
     system_packages = _string_list(arguments.get("system_packages"))
     npm_requirements = _string_list(arguments.get("npm_requirements"))
@@ -689,6 +696,8 @@ def _upsert_package_tool(workspace: CreateAgentWorkspace, arguments: dict[str, A
     _write_json(tools_contract_path, tools_contract_payload)
     _write_json(dependencies_path, dependencies_payload)
     _write_json(assembly_path, assembly_payload)
+    if supplied_descriptors:
+        _write_json(resources_contract_path, resources_contract_payload)
     changed = [
         package_tool_manifest_path(tool_id),
         package_tool_source_path(tool_id),
@@ -696,8 +705,38 @@ def _upsert_package_tool(workspace: CreateAgentWorkspace, arguments: dict[str, A
         "contracts/tools.json",
         "contracts/dependencies.json",
         "assembly_spec.json",
+        *(["contracts/resources.json"] if supplied_descriptors else []),
     ]
     return _result("upsert_package_tool", changed, f"Upserted package tool {tool_id}.")
+
+
+def _validate_package_tool_resource_contract(
+    *,
+    tool_id: str,
+    spec: ToolSpec,
+    descriptors: dict[str, ResourceDescriptor],
+) -> None:
+    package_resource_ids = {
+        selector.split(".", 1)[0]
+        for selector in spec.resources.values()
+        if selector.split(".", 1)[0] not in PACKAGE_TOOL_SYSTEM_RESOURCE_IDS
+    }
+    undeclared = sorted(package_resource_ids - set(descriptors))
+    if undeclared:
+        raise ValueError(
+            "package tool resource selectors require matching Resource Descriptors before any files are written: "
+            + ", ".join(undeclared)
+        )
+    missing_usage = sorted(
+        resource_id
+        for resource_id in package_resource_ids
+        if tool_id not in descriptors[resource_id].used_by
+    )
+    if missing_usage:
+        raise ValueError(
+            f"Resource Descriptors consumed by package tool {tool_id!r} must include that tool id in used_by: "
+            + ", ".join(missing_usage)
+        )
 
 
 def _required_tool_spec_payload(arguments: dict[str, Any]) -> dict[str, Any]:

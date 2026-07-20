@@ -17,7 +17,7 @@ def build_create_agent_control_tool_spec() -> ToolSpec:
     return ToolSpec(
         id=CREATE_AGENT_CONTROL_TOOL_ID,
         description=(
-            "Control the create-agent manufacturing loop. Use this instead of editing "
+            "Control the create-agent authoring loop for manufacturing or evolution. Use this instead of editing "
             ".factory/action.json directly when asking the user, continuing, or finalizing. "
             "Whenever the response needs a user choice, confirmation, authorization, or missing information, "
             "call action='ask_user' in that same response; plain assistant text does not count as asking the user."

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from langchain_core.messages import HumanMessage, SystemMessage
+from pydantic import BaseModel
 
 from agent_factory.create_agent.models import CreateAgentTaskAnalysis
 from agent_factory.models import get_main_model, get_task_model
@@ -12,6 +13,7 @@ from agent_factory.runtime_kernel.patterns.registry import PatternRegistry
 
 
 SUPPORTED_CREATE_AGENT_PATTERNS = ("react_agent", "plan_and_execute")
+AnalysisT = TypeVar("AnalysisT", bound=BaseModel)
 
 
 def analyze_create_agent_task(*, user_input: str, model: Any | None = None) -> CreateAgentTaskAnalysis:
@@ -19,38 +21,13 @@ def analyze_create_agent_task(*, user_input: str, model: Any | None = None) -> C
     classifier = model or get_task_model() or get_main_model()
     if classifier is None:
         raise RuntimeError("create-agent task analysis requires a configured task or main model")
-    structured = classifier.with_structured_output(
-        CreateAgentTaskAnalysis,
-        method="json_mode",
-        include_raw=True,
-    ).with_config(
-        tags=["nostream"]
-    )
     messages = _task_analysis_messages(user_input=user_input, candidates=candidates)
-    max_attempts = 3
-    last_error: Exception | None = None
-    for attempt in range(1, max_attempts + 1):
-        result = structured.invoke(messages)
-        try:
-            analysis = _parse_task_analysis_result(result)
-            break
-        except Exception as exc:
-            last_error = exc
-            if attempt >= max_attempts:
-                raise RuntimeError(f"create-agent task analysis failed schema validation: {exc}") from exc
-            messages = [
-                *messages,
-                HumanMessage(
-                    content=_task_analysis_repair_prompt(
-                        result=result,
-                        error=exc,
-                        attempt=attempt,
-                        max_attempts=max_attempts,
-                    )
-                ),
-            ]
-    else:
-        raise RuntimeError(f"create-agent task analysis failed schema validation: {last_error}")
+    analysis = invoke_structured_task_analysis(
+        classifier=classifier,
+        schema=CreateAgentTaskAnalysis,
+        messages=messages,
+        analysis_name="create-agent task analysis",
+    )
     if analysis.selected_pattern_id not in SUPPORTED_CREATE_AGENT_PATTERNS:
         raise ValueError(f"unsupported selected_pattern_id from task analysis: {analysis.selected_pattern_id}")
     selection_reason = analysis.selection_reason or analysis.reasoning
@@ -60,6 +37,55 @@ def analyze_create_agent_task(*, user_input: str, model: Any | None = None) -> C
             "available_patterns": [item["pattern_id"] for item in candidates],
         }
     )
+
+
+def invoke_structured_task_analysis(
+    *,
+    classifier: Any,
+    schema: type[AnalysisT],
+    messages: list[Any],
+    analysis_name: str,
+) -> AnalysisT:
+    structured = classifier.with_structured_output(schema, method="json_mode", include_raw=True).with_config(tags=["nostream"])
+    schema_text = json.dumps(schema.model_json_schema(), ensure_ascii=False, sort_keys=True)
+    max_attempts = 3
+    last_error: Exception | None = None
+    active_messages = list(messages)
+    for attempt in range(1, max_attempts + 1):
+        result = structured.invoke(active_messages)
+        try:
+            return _parse_structured_result(result, schema)
+        except Exception as exc:
+            last_error = exc
+            if attempt >= max_attempts:
+                raise RuntimeError(f"{analysis_name} failed schema validation: {exc}") from exc
+            active_messages.append(
+                HumanMessage(
+                    content=(
+                        f"The previous {analysis_name} JSON failed schema validation. Rewrite the full answer as JSON only. "
+                        "Do not explain the error and obey list/object field types exactly.\n"
+                        f"Validation error from attempt {attempt}/{max_attempts}: {type(exc).__name__}: {exc}\n\n"
+                        f"Previous raw output:\n{_raw_result_text(result)}\n\nJSON schema:\n{schema_text}"
+                    )
+                )
+            )
+    raise RuntimeError(f"{analysis_name} failed schema validation: {last_error}")
+
+
+def _parse_structured_result(result: Any, schema: type[AnalysisT]) -> AnalysisT:
+    if isinstance(result, schema):
+        return result
+    if isinstance(result, dict) and {"raw", "parsed", "parsing_error"}.intersection(result):
+        parsing_error = result.get("parsing_error")
+        if parsing_error is not None:
+            raise parsing_error
+        parsed = result.get("parsed")
+        if parsed is None:
+            raise ValueError("structured task analysis returned no parsed payload")
+        if isinstance(parsed, schema):
+            return parsed
+        return schema.model_validate(parsed)
+    return schema.model_validate(result)
 
 
 def _task_analysis_messages(*, user_input: str, candidates: list[dict[str, Any]]) -> list[Any]:
@@ -99,8 +125,14 @@ def _task_analysis_messages(*, user_input: str, candidates: list[dict[str, Any]]
                 "requirement, and add task/compression requirements only when the produced agent needs "
                 "a distinct role. Requirements describe capabilities, not provider names or secrets. "
                 "When the produced agent needs local image or audio understanding, infer model_tool_requirements "
-                "with stable snake_case tool ids and the image_input, image_output, image_edit, or audio_input capability. The competition "
-                "runtime does not expose cloud image or audio generation models. "
+                "with stable snake_case tool ids and the image_input, image_output, image_edit, or audio_input capability. "
+                "Do not assume unconfigured cloud image or audio generation services exist. "
+                "Infer resource_requirements before deciding how any package tool is authored. A resource is stable "
+                "deployment configuration supplied after publication, such as an account, credential, API key, mailbox, "
+                "database connection, fixed service endpoint, or default delivery destination. It is not a per-call business "
+                "argument. For each required resource, define a stable resource_id, JSON value_schema including enum/range/length "
+                "constraints when known, secret_fields, intended used_by tool ids, and sandbox_access_expectation. Never place "
+                "resource values in model requirements, tool inputs, manufacturing notes, or generated source. "
                 "When reusable SkillHub skills may reduce custom package-tool authoring, note intended SkillHub search queries "
                 "in manufacturing_notes. Each query must contain 1 to 3 short keywords, not a full requirement sentence "
                 "or a pile of mixed synonyms. Also state the capability gap each query is meant to evaluate and whether the "
@@ -129,39 +161,6 @@ def _task_analysis_messages(*, user_input: str, candidates: list[dict[str, Any]]
             )
         ),
     ]
-
-
-def _parse_task_analysis_result(result: Any) -> CreateAgentTaskAnalysis:
-    if isinstance(result, CreateAgentTaskAnalysis):
-        return result
-    if isinstance(result, dict) and {"raw", "parsed", "parsing_error"}.intersection(result):
-        parsing_error = result.get("parsing_error")
-        if parsing_error is not None:
-            raise parsing_error
-        parsed = result.get("parsed")
-        if parsed is None:
-            raise ValueError("structured task analysis returned no parsed payload")
-        if isinstance(parsed, CreateAgentTaskAnalysis):
-            return parsed
-        return CreateAgentTaskAnalysis.model_validate(parsed)
-    return CreateAgentTaskAnalysis.model_validate(result)
-
-
-def _task_analysis_repair_prompt(
-    *,
-    result: Any,
-    error: Exception,
-    attempt: int,
-    max_attempts: int,
-) -> str:
-    return (
-        "The previous CreateAgentTaskAnalysis JSON failed Pydantic schema validation.\n"
-        "Rewrite the full answer as JSON only. Do not explain the error.\n"
-        "Do not preserve invalid object shapes. Obey list/object field types exactly.\n"
-        f"Validation error from attempt {attempt}/{max_attempts}:\n{type(error).__name__}: {error}\n\n"
-        f"Previous raw output:\n{_raw_result_text(result)}\n\n"
-        f"CreateAgentTaskAnalysis JSON schema:\n{_task_analysis_schema_prompt()}"
-    )
 
 
 def _raw_result_text(result: Any) -> str:

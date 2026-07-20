@@ -34,7 +34,8 @@ Guides adding executable package tools and their ToolSpec declarations.
 1. Inspect current focus and latest validation evidence with create_agent_stage(action="inspect") when the next action is unclear.
 2. Read the current target package files before editing. Preserve unrelated valid scaffold content.
 3. If the requested capability does not affect this focus, leave these files as-is and move to the next useful focus yourself.
-4. When a package tool capability is ready, pass the package tool business fields, tool source, dependency list, and exposure targets to create_agent_authoring(action="upsert_package_tool"), then call create_agent_validate with the appropriate scope.
+4. Before authoring, classify stable accounts, credentials, endpoints, mailboxes, database connections, and default destinations as Resources rather than Tool inputs.
+5. When a package tool capability is ready, pass the package tool business fields, tool source, dependency list, exposure targets, and any Resource Descriptors to create_agent_authoring(action="upsert_package_tool"), then call create_agent_validate with the appropriate scope.
 5. When validation fails, repair only validator-indicated target files and paths; do not start a broad schema audit.
 
 ## Capability Write Guidance
@@ -42,6 +43,8 @@ Guides adding executable package tools and their ToolSpec declarations.
 - Remove stale package tools through create_agent_authoring(action="remove_package_tool", tool_id=...); do not manually delete tool directories or manifest index entries.
 - ToolSpec payloads must be objects, not string references.
 - For `create_agent_authoring(action="upsert_package_tool")`, `tool_spec` contains only business-controlled fields: `id`, `description`, `input_schema`, `output_schema`, `resources`, `risk_level`, `concurrent`, and optional `output_compression`.
+- If the tool needs deployment-time configuration, include `resource_descriptors` in the same upsert call. Every non-system ToolSpec resource selector must resolve to a current or supplied descriptor, and each descriptor `used_by` must include this tool id.
+- Preserve known JSON Schema constraints such as `enum`, `minimum`, `maximum`, and `minLength` in each descriptor `value_schema`; tool source reads the configured values from `resources`, never from ordinary arguments or source constants.
 - Do not provide `entrypoint`, `risk_evaluator`, `permission_scope`, or `permission_tags` in `tool_spec`; create_agent_authoring generates those system-controlled fields.
 - Generated package tools are written to `tools/<tool_id>/tool.py`; create_agent_authoring generates `entrypoint=python:tools/<tool_id>/tool.py:run`, and `tool_source` must define a top-level synchronous `run(arguments, resources)` function. Do not use `main`, `tool:main`, or `python-import` entrypoints for generated package tools.
 - `input_schema` only describes the runtime call arguments. Never put `output_schema`, `resources`, `risk_level`, `concurrent`, or `output_compression` inside `input_schema`.
