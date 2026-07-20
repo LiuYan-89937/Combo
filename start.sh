@@ -30,7 +30,7 @@ BACKEND_HEALTH_URL="http://127.0.0.1:8000/health"
 BACKEND_STARTUP_TIMEOUT_SECONDS="${AGENTFACTORY_WEB_BACKEND_STARTUP_TIMEOUT_SECONDS:-180}"
 BACKEND_HEALTH_FAILURE_LIMIT="${AGENTFACTORY_WEB_BACKEND_HEALTH_FAILURE_LIMIT:-5}"
 SERVICE_HEALTH_INTERVAL_SECONDS="${AGENTFACTORY_WEB_SERVICE_HEALTH_INTERVAL_SECONDS:-2}"
-PROCESS_STOP_GRACE_SECONDS="${AGENTFACTORY_WEB_PROCESS_STOP_GRACE_SECONDS:-3}"
+PROCESS_STOP_GRACE_SECONDS="${AGENTFACTORY_WEB_PROCESS_STOP_GRACE_SECONDS:-15}"
 RUNTIME_LOG_DIR="${PROJECT_ROOT}/.agentfactory/logs"
 BACKEND_LOG_PATH="${RUNTIME_LOG_DIR}/web-backend.log"
 FRONTEND_LOG_PATH="${RUNTIME_LOG_DIR}/web-frontend.log"
@@ -66,7 +66,7 @@ stop_process_tree() {
 
 cleanup() {
     local exit_code=$?
-    trap - EXIT INT TERM
+    trap - EXIT HUP INT TERM
     if [[ -n "${FRONTEND_PID}" ]] && kill -0 "${FRONTEND_PID}" >/dev/null 2>&1; then
         echo ""
         echo "Stopping frontend service..."
@@ -79,9 +79,10 @@ cleanup() {
         stop_process_tree "${BACKEND_PID}"
         wait "${BACKEND_PID}" 2>/dev/null || true
     fi
+    web_stop_managed_runtime_containers
     exit "${exit_code}"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT HUP INT TERM
 
 wait_for_backend_ready() {
     local deadline=$((SECONDS + BACKEND_STARTUP_TIMEOUT_SECONDS))
@@ -135,6 +136,7 @@ supervise_services() {
 }
 
 echo ""
+web_stop_managed_runtime_containers
 echo "Starting backend web runtime service on port 8000..."
 mkdir -p "${RUNTIME_LOG_DIR}"
 "${PYTHON_BIN}" web_frontend/backend/event_api_server.py > >(tee -a "${BACKEND_LOG_PATH}") 2>&1 &
