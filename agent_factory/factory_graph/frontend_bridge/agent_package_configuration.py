@@ -7,7 +7,7 @@ from tempfile import NamedTemporaryFile
 from typing import Any, Literal
 
 from agent_factory.assembly.schema import AgentAssemblySpec
-from agent_factory.runtime_contracts import ModelContract
+from agent_factory.runtime_contracts import MemoryContract, ModelContract
 from agent_factory.tooling.spec import ToolSpec
 
 
@@ -36,6 +36,22 @@ class AgentPackageConfigurationEditor:
             self._update_package_tool_description(package_root, normalized_id, normalized_description)
             return
         raise ValueError(f"unsupported tool kind: {tool_kind}")
+
+    def update_memory_write_interval(self, package_root: Path, write_interval_turns: int) -> None:
+        contract_path = package_root / "contracts" / "memory.json"
+        document = _read_json_document(contract_path)
+        config = document.get("config")
+        if not isinstance(config, dict):
+            raise ValueError("memory contract config must be an object")
+        memory_system = config.get("memory_system")
+        if not isinstance(memory_system, dict):
+            raise ValueError("memory contract must declare memory_system")
+        background = memory_system.get("background")
+        if not isinstance(background, dict):
+            raise ValueError("memory contract must declare background configuration")
+        background["write_interval_turns"] = write_interval_turns
+        validated = MemoryContract.model_validate(document).model_dump(mode="json", exclude_none=True)
+        _write_documents_atomically({contract_path: validated})
 
     def _update_model_tool_description(self, package_root: Path, tool_id: str, description: str) -> None:
         contract_path = package_root / "contracts" / "model.json"

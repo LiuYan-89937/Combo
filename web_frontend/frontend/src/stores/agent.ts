@@ -87,6 +87,16 @@ export interface AgentPackageContextContractView {
   error?: string | null
 }
 
+export interface AgentPackageMemoryContractView {
+  available: boolean
+  version: string
+  enabled: boolean
+  write_enabled: boolean
+  injection_enabled: boolean
+  write_interval_turns?: number | null
+  error?: string | null
+}
+
 export interface AgentPackageView {
   package_id: string
   package_path?: string
@@ -104,6 +114,7 @@ export interface AgentPackageView {
   sandbox?: Record<string, any>
   model_contract?: AgentPackageModelContractView
   context_contract?: AgentPackageContextContractView
+  memory_contract?: AgentPackageMemoryContractView
   resources?: { key_available: boolean; resources: Array<{ resource_id: string; configured: boolean }>; migration?: { status: string } }
   environment?: { status?: string; image?: string; image_digest?: string; platform?: Record<string, string>; verified_at?: string; error?: string }
   extensions?: Record<string, any>

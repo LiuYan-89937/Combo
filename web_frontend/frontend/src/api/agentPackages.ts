@@ -74,6 +74,14 @@ export const agentPackagesApi = {
         body: JSON.stringify({ description }),
       },
     ),
+  updateMemoryConfig: (packageId: string, writeIntervalTurns: number) =>
+    requestJson<AgentPackageConfigurationResponse>(
+      `/api/agent-packages/${encodeURIComponent(packageId)}/memory-config`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ write_interval_turns: writeIntervalTurns }),
+      },
+    ),
   resources: (packageId: string) =>
     requestJson<AgentPackageResourcesResponse>(`/api/agent-packages/${encodeURIComponent(packageId)}/resources`),
   putResource: (packageId: string, resourceId: string, value: unknown) =>

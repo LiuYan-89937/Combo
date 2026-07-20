@@ -17,7 +17,7 @@ from agent_factory.knowledge_system import KnowledgeRuntime, build_knowledge_run
 from agent_factory.knowledge_system.schema import KnowledgeContractConfig
 from agent_factory.agent_registry import refresh_agent_registry_index
 from agent_factory.collaboration_system.store import CollaborationStore, SYSTEM_CHAT_PACKAGE_ID
-from agent_factory.runtime_contracts import ContextContract, LoadedAgentPackage
+from agent_factory.runtime_contracts import ContextContract, LoadedAgentPackage, MemoryContract
 from agent_factory.context_system.schema import (
     DEFAULT_COMPRESSION_TRIGGER_TOKEN_THRESHOLD,
     MODEL_COMPRESSION_TRIGGER_TOKENS_ENV,
@@ -533,6 +533,21 @@ class AgentPackageRuntimeManager:
             tool_kind=tool_kind,
             tool_id=tool_id,
             description=description,
+        )
+        return self.package_summary(package_id)
+
+    def update_memory_config(
+        self,
+        package_id: str,
+        *,
+        write_interval_turns: int,
+    ) -> dict[str, Any]:
+        package_dir = self.repository.package_dir(package_id)
+        if not (package_dir / "agent_package.json").is_file():
+            raise FileNotFoundError(f"agent package not found: {package_id}")
+        AgentPackageConfigurationEditor().update_memory_write_interval(
+            package_dir,
+            write_interval_turns,
         )
         return self.package_summary(package_id)
 
@@ -1145,6 +1160,7 @@ class AgentPackageRuntimeManager:
                 "session_count": len(sessions),
                 "model_contract": _model_contract_summary(package),
                 "context_contract": _context_contract_summary(manifest_path.parent),
+                "memory_contract": _memory_contract_summary(manifest_path.parent),
                 "resources": self.resource_status(package_id),
                 "environment": _environment_summary(
                     manifest_path.parent,
@@ -1163,6 +1179,7 @@ class AgentPackageRuntimeManager:
                 "error": f"{type(exc).__name__}: {exc}",
                 "model_contract": {"version": "", "bindings": {}, "tool_bindings": {}},
                 "context_contract": _context_contract_summary(manifest_path.parent),
+                "memory_contract": _memory_contract_summary(manifest_path.parent),
                 "extensions": _extensions_summary(package_id),
                 "tools": [],
                 "mcp_servers": [],
@@ -1886,6 +1903,40 @@ def _context_contract_summary(package_root: Path) -> dict[str, Any]:
         "compression_threshold_tokens": effective_threshold,
         "compression_threshold_tokens_source": "package" if isinstance(custom_threshold, int) and custom_threshold > 0 else "env",
         "compression_threshold_tokens_custom": custom_threshold if isinstance(custom_threshold, int) and custom_threshold > 0 else None,
+    }
+
+
+def _memory_contract_summary(package_root: Path) -> dict[str, Any]:
+    contract_path = package_root / "contracts" / "memory.json"
+    if not contract_path.is_file():
+        return {
+            "available": False,
+            "version": "",
+            "enabled": False,
+            "write_enabled": False,
+            "injection_enabled": False,
+            "write_interval_turns": None,
+        }
+    try:
+        contract = MemoryContract.model_validate(_read_json_object(contract_path))
+    except Exception as exc:
+        return {
+            "available": False,
+            "version": "",
+            "enabled": False,
+            "write_enabled": False,
+            "injection_enabled": False,
+            "write_interval_turns": None,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    memory_system = contract.config.memory_system
+    return {
+        "available": True,
+        "version": contract.version,
+        "enabled": contract.enabled and memory_system.enabled,
+        "write_enabled": memory_system.write_enabled,
+        "injection_enabled": memory_system.injection_enabled,
+        "write_interval_turns": memory_system.background.write_interval_turns,
     }
 
 
