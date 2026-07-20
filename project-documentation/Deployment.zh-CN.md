@@ -1,3 +1,5 @@
+[English](Deployment.md) | [简体中文](Deployment.zh-CN.md)
+
 # FastAgentFactory 部署与验收指南
 
 本文档说明 FastAgentFactory 的完整部署、复现和运行验收流程。系统支持两种推理节点拓扑：
@@ -7,7 +9,7 @@
 
 两种拓扑复用同一套模型 Profile、推理控制、Benchmark 和部署脚本。
 
-项目入口和功能说明见 [README](../README.md)。
+项目入口和功能说明见 [中文 README](../README.zh-CN.md)。
 
 ## 1. 部署结果
 

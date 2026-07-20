@@ -1,3 +1,5 @@
+[English](ProjectOverview.md) | [简体中文](ProjectOverview.zh-CN.md)
+
 # FastAgentFactory 项目说明
 
 ## 项目定位
@@ -32,7 +34,7 @@ Factory 可以从自然语言需求制造新的 AgentPackage，也可以基于�
 
 ![FastAgentFactory Agent 系统架构](assets/diagrams/fastagentfactory-agent-architecture.png)
 
-完整分层、组件职责和隔离边界见 [Agent 架构说明](AgentArchitecture.md)。
+完整分层、组件职责和隔离边界见 [Agent 架构说明](AgentArchitecture.zh-CN.md)。
 
 ## 核心能力
 
@@ -88,7 +90,7 @@ Factory 可以从自然语言需求制造新的 AgentPackage，也可以基于�
 - `DEPLOY_TARGET=local`：Web、Agent Runtime 和 AMD 推理节点位于同一台 Linux/ROCm 主机，服务通过回环地址直连。
 - `DEPLOY_TARGET=ssh`：Web 和 Agent Runtime 位于控制端，AMD 推理节点位于另一台主机，通过 SSH 隧道访问回环服务。
 
-两种拓扑复用同一控制节点、模型 Profile 和 Benchmark，不维护功能降级的本机分支。详细步骤见 [部署与验收指南](Deployment.md)。
+两种拓扑复用同一控制节点、模型 Profile 和 Benchmark，不维护功能降级的本机分支。详细步骤见 [部署与验收指南](Deployment.zh-CN.md)。
 
 ## AMD Radeon GPU 推理优化
 
@@ -104,7 +106,7 @@ Factory 可以从自然语言需求制造新的 AgentPackage，也可以基于�
 
 在已归档的同条件五轮测试中，AMD 实现的正常服务 Decode 吞吐由 Official 的 `84.0867 tok/s` 提升至 `88.8320 tok/s`，综合提升 `5.64%`。该数值只代表归档测试环境，不承诺在其他模型、Shape、ROCm 版本或 GPU 上获得相同收益。
 
-详细实现、对照路径和证据边界见 [推理优化说明](performance/ROCmOptimizations.md)。
+详细实现、对照路径和适用边界见 [推理优化说明](performance/ROCmOptimizations.zh-CN.md)。
 
 ## 稳定性与响应性能
 
@@ -116,6 +118,6 @@ Factory 可以从自然语言需求制造新的 AgentPackage，也可以基于�
 
 ## 开源组件、模型和数据说明
 
-第三方代码、模型权重和外部数据源使用不同许可证或服务条款，不能由项目代码许可证统一覆盖。完整清单和使用边界见 [README 第三方组件与许可证](../README.md#第三方组件与许可证)。
+第三方代码、模型权重和外部数据源使用不同许可证或服务条款，不能由项目代码许可证统一覆盖。完整清单和使用边界见 [README 第三方组件与许可证](../README.zh-CN.md#第三方组件与许可证)。
 
 本项目不随仓库分发训练数据集。市场数据由运行时工具按请求访问第三方公开接口，用户需自行确认数据提供方的授权、频率限制和使用条款。

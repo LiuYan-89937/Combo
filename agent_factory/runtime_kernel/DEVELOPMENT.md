@@ -1,135 +1,75 @@
+[English](DEVELOPMENT.md) | [简体中文](DEVELOPMENT.zh-CN.md)
+
 # Runtime Kernel Development
 
-本文档只讨论 `RuntimeKernel` 本身的开发，不讨论工厂 RuntimeKernel 阶段的实现细节，也不讨论具体 Agent 的业务配置内容。
+This document describes development boundaries for `RuntimeKernel`. It does not define Factory authoring-stage behavior or package-specific business configuration.
 
----
+## 1. Positioning
 
-## 1. 定位
+`RuntimeKernel` is the unified execution platform for contract-assembled agents. It defines how agents run on LangGraph, how standard capabilities are attached, how graph patterns are compiled, and how execution state is persisted, resumed, observed, and tested.
 
-`RuntimeKernel` 是整个系统的统一运行平台层。
+```text
+RuntimeKernel = LangGraph-based execution platform for contract-assembled agents
+```
 
-它的职责不是定义某个具体 Agent 做什么，而是定义：
+## 2. Development Goals
 
-- Agent 在 LangGraph 上如何运行
-- 运行时有哪些标准能力模块
-- 这些模块如何被挂接
-- 图结构如何被编译
-- 运行状态如何被保存、恢复、观测、测试
+RuntimeKernel provides:
 
-一句话：
+1. one runtime state model;
+2. one standard node catalog;
+3. one Graph Pattern DSL compiler;
+4. one capability-binding interface;
+5. execution control, interruption, and recovery;
+6. trace, metrics, and debugging interfaces;
+7. checkpoint and persistence integration;
+8. a stable harness boundary.
 
-`RuntimeKernel = LangGraph-based execution platform for contract-assembled agents`
+## 3. Non-goals
 
----
+RuntimeKernel does not:
 
-## 2. 开发目标
+- generate package-specific business behavior;
+- generate business tool code;
+- author knowledge content;
+- define internal Factory authoring prompts;
+- execute arbitrary user-provided LangGraph source directly.
 
-`RuntimeKernel` 开发的目标有 8 个：
+## 4. Layering
 
-1. 提供统一的运行时状态模型
-2. 提供统一的标准节点目录
-3. 提供统一的 Graph Pattern DSL 编译机制
-4. 提供统一的能力挂载接口
-5. 提供统一的执行控制、中断、恢复机制
-6. 提供统一的 trace、metrics、debug 观测接口
-7. 提供统一的 checkpoint / persistence 机制
-8. 提供统一的 harness 接入口
+### Layer 0: LangGraph and LangChain Infrastructure
 
----
-
-## 3. 非目标
-
-`RuntimeKernel` 当前阶段不负责：
-
-- 生成具体 Agent 的业务逻辑
-- 生成业务工具代码
-- 编写知识库内容
-- 定义工厂 RuntimeKernel 阶段的内部提示词
-- 让用户自由提交任意 LangGraph 代码直接运行
-
----
-
-## 4. 总体分层
-
-建议把 `RuntimeKernel` 按以下 4 层来开发：
-
-### Layer 0: LangGraph / LangChain Infrastructure
-
-基础设施层，包括：
-
-- LangGraph `StateGraph`
-- LangGraph checkpoint
-- LangChain messages
-- LangChain tool protocol
-- LangChain model abstraction
-
-这一层不做业务封装，只作为底层依赖。
+This layer contains `StateGraph`, checkpoints, messages, tool protocols, and model abstractions. RuntimeKernel treats them as dependencies and does not duplicate them.
 
 ### Layer 1: Runtime Kernel Core
-
-核心平台层，包括：
 
 - Runtime State System
 - Standard Node Catalog
 - Graph Pattern Compiler
 - Execution Controller
-- Context Engine
-- Tool Orchestrator
-- Memory Engine
-- Knowledge Engine
-- Interrupt / Approval Manager
+- Context, Tool, Memory, and Knowledge systems
+- Interrupt and Approval Manager
 - Checkpoint Manager
 - Observability Manager
 - Harness Bridge
 
 ### Layer 2: Capability Adapters
 
-接入层，包括：
-
-- model adapter
-- tool adapter
-- memory adapter
-- knowledge adapter
-- context adapter
-- harness adapter
-
-作用是把不同实现统一接入 Kernel。
+Adapters connect model, tool, memory, knowledge, context, and harness implementations to stable kernel contracts.
 
 ### Layer 3: Agent Assembly Instance
 
-实例层，由后续的 Agent Assembly Spec 驱动。
+An Agent Assembly Spec selects and configures capabilities for one package. This layer consumes RuntimeKernel interfaces but does not belong to the kernel core.
 
-这层不属于 Kernel 本身的开发范围，但 Kernel 需要为它预留清晰接口。
-
----
-
-## 5. Runtime Kernel 的核心对象
+## 5. Core Objects
 
 ### 5.1 RuntimeState
 
-`RuntimeState` 是统一运行状态模型，不能按具体 Agent 各自定义。
+`RuntimeState` is shared by all agent types and includes conversation, context, tool, memory, execution, and observability state. It must be serializable, checkpoint-compatible, versioned, migratable, and stable enough for harness assertions.
 
-建议至少划分为以下区块：
+### 5.2 Standard Nodes
 
-- Conversation State
-- Context State
-- Tool State
-- Memory State
-- Execution State
-- Observability State
-
-要求：
-
-- 必须可序列化
-- 必须支持 checkpoint 持久化
-- 必须支持 schema version 演进
-- 必须支持 harness 稳定断言
-
-### 5.2 Standard Node
-
-Kernel 提供受控标准节点目录，Graph Pattern DSL 只能引用标准节点或受控扩展节点。
-
-建议的第一批标准节点：
+Graph patterns reference a controlled catalog of standard or registered extension nodes. Core nodes include:
 
 - `ingress`
 - `answer`
@@ -137,296 +77,128 @@ Kernel 提供受控标准节点目录，Graph Pattern DSL 只能引用标准节�
 - `commit`
 - `finalize`
 
-记忆不再通过专用业务节点实现。会话内记忆统一使用 LangGraph `messages` channel + checkpointer，跨会话记忆统一使用 LangGraph `BaseStore`。
+Conversation memory uses the LangGraph `messages` channel and checkpointer. Cross-session memory uses the configured store rather than package-specific graph nodes.
 
 ### 5.3 Graph Pattern DSL
 
-Kernel 不直接接受任意图代码，而是接受受控 DSL。
+RuntimeKernel accepts a controlled DSL instead of arbitrary graph code. The DSL declares nodes, edges, subgraphs, interrupt points, routing, and termination rules. It must be validatable, compilable, versioned, and testable.
 
-这个 DSL 用于描述：
+### 5.4 Capability Bindings
 
-- 主图结构
-- 节点集合
-- 边关系
-- subGraph 挂载
-- interrupt 点
-- 终止规则
+Prompt, tool, memory, knowledge, context, and harness bindings follow a common lifecycle and compilation boundary. Bindings describe attachment; they do not bypass runtime ownership.
 
-要求：
-
-- 可校验
-- 可编译
-- 可版本化
-- 可被 harness 测试
-
-### 5.4 Capability Binding
-
-Kernel 需要统一的能力挂接对象，至少包括：
-
-- prompt binding
-- tool binding
-- memory binding
-- knowledge binding
-- context binding
-- harness binding
-
-每种 binding 都应该有统一生命周期和统一编译接口。
-
----
-
-## 6. Runtime Kernel 的核心子系统
+## 6. Core Subsystems
 
 ### 6.1 State Schema System
 
-职责：
-
-- 定义 `RuntimeState`
-- 管理 schema version
-- 支持 migration
-- 支持序列化与恢复
+Defines RuntimeState, schema versions, migrations, serialization, and recovery.
 
 ### 6.2 Graph Pattern Compiler
 
-职责：
-
-- 读取 Graph Pattern DSL
-- 校验 DSL 合法性
-- 选择标准节点实现
-- 注入 subGraph
-- 生成 LangGraph app
+Validates the DSL, resolves registered nodes, attaches subgraphs, and compiles the LangGraph application.
 
 ### 6.3 Execution Controller
 
-职责：
-
-- 控制执行循环
-- 控制 route 决策
-- 控制最大迭代次数
-- 控制超时
-- 处理中断与继续
+Controls execution loops, routing, iteration limits, timeouts, interruption, continuation, and finalization.
 
 ### 6.4 Context Engine
 
-职责：
-
-- 收集上下文源
-- 控制上下文拼装顺序
-- 控制可见性
-- 控制预算
-- 控制压缩
+Collects context sources, applies visibility and ordering, enforces token budgets, and triggers compression using the effective runtime context limit.
 
 ### 6.5 Tool Orchestrator
 
-职责：
-
-- 工具注册
-- 工具选择
-- 工具审批
-- 工具执行
-- 工具观察结果标准化
-- 工具失败与重试处理
+Registers and exposes tools, applies approval policy, delegates execution to the unified gateway, normalizes observations, and handles retryable failures.
 
 ### 6.6 Memory Engine
 
-职责：
-
-- 短期记忆
-- 长期记忆
-- 摘要记忆
-- 写入策略
-- 召回策略
-- 脱敏与清理
+Coordinates conversation persistence, cross-session extraction, write policy, scoped retrieval, redaction, and deletion.
 
 ### 6.7 Knowledge Engine
 
-职责：
+Coordinates ingestion, indexing, retrieval, opening, citation, and package/session ownership.
 
-- 知识源装载
-- 索引与检索
-- 证据组织
-- citation 输出
-- freshness 管理
+### 6.8 Interrupt and Approval Manager
 
-### 6.8 Interrupt / Approval Manager
-
-职责：
-
-- clarification pause
-- human approval
-- interrupt payload
-- resume token / resume command
+Represents approval requests as resumable runtime state and prevents tools from executing outside their declared policy.
 
 ### 6.9 Checkpoint Manager
 
-职责：
-
-- 存储运行中状态
-- 存储中断状态
-- 从 checkpoint 恢复
-- 支持 harness 对恢复流程做断言
+Owns checkpoint configuration, thread identity, persistence backend integration, deletion, and recovery.
 
 ### 6.10 Observability Manager
 
-职责：
-
-- trace
-- span
-- metrics
-- structured events
-- debug snapshot
+Emits structured trace events, model usage, tool activity, state transitions, errors, and performance metrics without injecting observability payloads into model context unnecessarily.
 
 ### 6.11 Harness Bridge
 
-职责：
+Exposes deterministic setup, input, state inspection, trace inspection, and cleanup boundaries for runtime validation.
 
-- 让 harness 通过统一入口驱动 Kernel
-- 注入 fixture
-- 验证 graph path / tool call / context 行为
+## 7. Role of the Graph Pattern DSL
 
----
+The DSL is an assembly contract, not a second programming language. It selects registered runtime behavior and topology while keeping implementation in typed kernel modules. Validation rejects unknown nodes, invalid routes, unsupported interrupts, and incompatible capability requirements before execution.
 
-## 7. Graph Pattern DSL 在 Kernel 中的地位
+## 8. Engineering Sequence
 
-当前已确定：
+The mature construction path is dependency-ordered:
 
-`Graph Pattern = 受控 DSL`
+1. state schemas and persistence boundaries;
+2. standard nodes and registry;
+3. DSL schema, validation, and compiler;
+4. context, tool, memory, knowledge, and approval systems;
+5. execution control, interruption, and recovery;
+6. observability and harness integration.
 
-这意味着：
+This order describes dependencies, not separate product editions. Every stage targets the same final runtime architecture.
 
-- Kernel 固定底层运行语义
-- Pattern 负责描述主图结构
-- Pattern 不直接等于运行时代码
-- Pattern 由 Kernel 解释和编译
+## 9. Acceptance Criteria
 
-Kernel 对 Pattern 的支持必须包括：
+### RuntimeState
 
-- Pattern Schema
-- Pattern Validator
-- Pattern Compiler
-- Pattern Registry
-- Pattern Harness
+- serializes and restores without package-specific schema forks;
+- supports explicit version migration;
+- preserves ownership boundaries.
 
-当前阶段先定义规范，不做用户扩展管理。
+### Graph Pattern DSL
 
----
+- rejects invalid nodes, edges, and routes;
+- compiles supported patterns deterministically;
+- remains versioned and inspectable.
 
-## 8. 开发顺序
+### Compiler
 
-`RuntimeKernel` 建议按下面顺序开发：
+- resolves only registered implementations;
+- produces a runnable graph with the declared interrupts and termination rules;
+- does not inject undeclared package behavior.
 
-### Phase A: Foundation
+### Capability Systems
 
-1. 定义 `RuntimeState`
-2. 定义 Standard Node Catalog
-3. 定义 Graph Pattern DSL v0
-4. 定义 Graph Pattern Validator
+- attach through stable bindings;
+- share one lifecycle and error model;
+- preserve context and persistence boundaries.
 
-### Phase B: Compilation
+### Observability
 
-5. 实现 Graph Pattern Compiler
-6. 实现 Standard Node Runtime Interface
-7. 实现 SubGraph Runtime Interface
+- records model, tool, state, and error events;
+- distinguishes runtime evidence from model-visible context;
+- supports session and task inspection.
 
-### Phase C: Core Capability Systems
+### Harness
 
-8. 实现 Context Engine
-9. 实现 Tool Orchestrator
-10. 实现 Memory Engine
-11. 实现 Knowledge Engine
+- can create isolated runtime inputs;
+- can inspect final state and trace;
+- can clean up without leaking sessions, files, or database handles.
 
-### Phase D: Runtime Control
+## 10. Explicit Exclusions
 
-12. 实现 Execution Controller
-13. 实现 Interrupt / Approval Manager
-14. 实现 Checkpoint Manager
+RuntimeKernel does not maintain per-package runtime branches, silently widen filesystem access, treat package assets as automatically injected knowledge, or allow extensions to replace gateway policy.
 
-### Phase E: Quality And Operations
+## 11. Extension Guidance
 
-15. 实现 Observability Manager
-16. 实现 Harness Bridge
-17. 完成 Kernel 级别测试基线
+New capabilities should begin with a typed contract and lifecycle owner, reuse existing gateway and persistence abstractions, and register through an explicit catalog. Avoid rule-based fixes in prompts or routers when the missing concept belongs in the runtime model.
 
----
+## 12. Related Documentation
 
-## 9. 开发阶段的验收标准
-
-### RuntimeState 验收
-
-- 状态结构稳定
-- 可序列化
-- 可 checkpoint
-- 可恢复
-
-### Graph Pattern DSL 验收
-
-- 可表达主图结构
-- 可表达 interrupt 点
-- 可表达 subGraph 挂载
-- 可被 validator 校验
-
-### Compiler 验收
-
-- 同一份 DSL 编译结果稳定
-- 非法 Pattern 会报明确错误
-- 可输出 LangGraph app
-
-### Capability System 验收
-
-- tools / memory / context / knowledge 都有统一挂载方式
-- 不同 Agent 不需要改 Kernel 内核语义
-
-### Observability 验收
-
-- 能看到 graph path
-- 能看到 route 决策
-- 能看到 tool lifecycle
-- 能看到 interrupt / resume
-
-### Harness 验收
-
-- 可对 graph path 做断言
-- 可对 tool 调用做断言
-- 可对 context 传递做断言
-- 可对 checkpoint / resume 做断言
-
----
-
-## 10. 当前明确不做的事
-
-当前 `RuntimeKernel` 文档阶段明确不做：
-
-- 用户扩展 Pattern 的管理系统
-- 用户自定义节点类型的开放注册
-- 任意运行时代码生成
-- 与工厂 RuntimeKernel 阶段的字段级映射细节
-
-这些内容在 Kernel 核心结构稳定后再继续设计。
-
----
-
-## 11. 下一步建议
-
-按照当前讨论结果，Kernel 开发的下一份正式文档建议从这里开始：
-
-1. `RuntimeState v0`
-2. `Standard Node Catalog v0`
-3. `Graph Pattern DSL v0`
-
-优先级建议：
-
-`Graph Pattern DSL v0` 与 `Standard Node Catalog v0` 可以并行定义，随后再落 `RuntimeState v0` 的最终结构。
-
----
-
-## 12. 已落成文档
-
-当前已经落成的 Kernel 规范文档：
-
-- `RUNTIME_STATE_V0.md`
-- `STANDARD_NODE_CATALOG_V0.md`
-- `GRAPH_PATTERN_DSL_V0.md`
-- `CAPABILITY_BINDING_V0.md`
-- `EXECUTION_CONTROLLER_V0.md`
-- `CHECKPOINT_MODEL_V0.md`
-- `OBSERVABILITY_V0.md`
-- `HARNESS_BRIDGE_V0.md`
+- [Project specification](../../project-documentation/ProjectOverview.md)
+- [Agent architecture](../../project-documentation/AgentArchitecture.md)
+- [Core capabilities](../../project-documentation/CoreCapabilities.md)
+- [Deployment and acceptance](../../project-documentation/Deployment.md)

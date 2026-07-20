@@ -1,26 +1,28 @@
-# FastAgentFactory 演示视频
+[English](DEMO_VIDEO.md) | [简体中文](DEMO_VIDEO.zh-CN.md)
 
-> 视频文件或公开链接将在最终发布前补充到这里。
+# FastAgentFactory Demo Video
 
-## 视频入口
+> The final public video URL will be added before submission.
 
-- 在线视频：`待补充`
-- 备用下载地址：`待补充`
-- 建议时长：3–5 分钟
+## Video
 
-## 推荐演示流程
+- Public video: `To be added`
+- Backup download: `To be added`
+- Recommended duration: 3–5 minutes
 
-1. 展示 AMD Radeon GPU、ROCm 和活动 llama.cpp 实现。
-2. 从 Web UI 创建或选择一个 AgentPackage。
-3. 提交一个需要任务规划、工具调用和文件交付的真实任务。
-4. 展示主 Agent 拆分任务并调度多个子 Agent。
-5. 展示工具调用、工作区文件、知识检索和协作动态。
-6. 打开最终报告或图片产物。
-7. 展示 Official/AMD 成对 Benchmark、Decode TPS、QPS 和算子命中证据。
+## Recommended Demonstration Flow
 
-## 录制检查
+1. Show the AMD Radeon GPU, ROCm version, and active llama.cpp implementation.
+2. Open the FastAgentFactory Web interface and select or manufacture an AgentPackage.
+3. Submit a realistic task that requires planning, tool calls, and a file deliverable.
+4. Show the main agent decomposing the task and coordinating specialized sub-agents.
+5. Show tool calls, isolated workspaces, knowledge retrieval, and collaboration activity.
+6. Open the final report or image artifact and demonstrate controlled email delivery.
+7. Show the Official/AMD paired benchmark, Decode throughput, QPS, and operator hit view.
 
-- 画面中不要出现 SSH 私钥、邮箱授权码、API Key 或 Resource 明文。
-- 命令行和 GUI 使用同一套已提交代码与配置模板。
-- 性能结果保留模型、GPU、ROCm、上下文和采样参数。
-- 对失败、重试或外部数据异常保持真实展示，不剪辑成无法复现的能力。
+## Recording Checklist
+
+- Do not expose SSH keys, email authorization codes, API keys, or plaintext resources.
+- Use the same committed source and configuration templates shown in the repository.
+- Keep the GPU, model, ROCm, context, and sampling configuration visible for performance results.
+- Present failures, retries, or external-data limitations honestly and reproducibly.

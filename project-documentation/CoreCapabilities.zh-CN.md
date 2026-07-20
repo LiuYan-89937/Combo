@@ -1,3 +1,5 @@
+[English](CoreCapabilities.md) | [简体中文](CoreCapabilities.zh-CN.md)
+
 # 核心能力介绍
 
 FastAgentFactory 的核心能力由多个可组合后端子系统构成。能力是否对某个 Agent 可用，需要同时满足 Package Contract、Assembly Binding、运行时环境和权限策略，不能只根据代码仓库中“存在某个模块”判断。

@@ -1,3 +1,5 @@
+[English](ROCmOptimizations.md) | [简体中文](ROCmOptimizations.zh-CN.md)
+
 # AMD RDNA3 推理优化改动说明
 
 ## 结论
@@ -236,8 +238,6 @@ AMD 实现保留 Official 的量化解码、点积、累加、Stream-K 和边界
 
 在关闭 HIP Graph replay 的 4,096 Token rocprof 归因中，两侧均执行 1,920 次 MMQ Kernel。Official 总耗时为 1,124.289 ms，AMD 为 730.378 ms，下降 35.04%。`amd.mmq_rdna3` 的 Host 计数为 `selected=1,920`、`dispatch=1,920`、`fallback=0`，说明性能变化确实来自 MMQ Tile 配置，而不是跳过计算或其他服务环节。
 
-原始数据见 `data/2026-07-20-rdna3-mmq-service-comparison.json`。
-
 ### 正常服务吞吐
 
 每种模式独立加载相同 256K、单槽位服务，预热一次后计量五次，每次固定生成 128 Token：
@@ -280,15 +280,6 @@ MTP 的收益来自一次 Target Forward 接受多个 Token，从而摊薄自回
 | AMD | 4 | 0.6351 | 81.29 tok/s | 5.125 s |
 
 单 Slot 在 2 路附近已基本饱和；继续增加并发主要增加排队延迟。这里的聚合输出 TPS 包含每个请求的 790 Token Prefill 和完整请求周期，因此低于只计算 Decode 阶段的 llama.cpp `predicted_per_second`，两者不能互相替代。
-
-## 数据
-
-- [最终 AMD 算子分析](../data/2026-07-19-amd-q8-activation-reuse-operator-analysis-6ae1c6a1.json)
-- [Official/AMD 普通服务成对对比](../data/2026-07-19-q8-activation-reuse-service-comparison.json)
-- [Official 算子基线](../data/2026-07-18-official-operator-analysis-f9a42bd7.json)
-- [Native Q6_K MMVQ 增量对比](../data/2026-07-20-amd-native-q6-mmvq-service-comparison.json)
-- [Q8_0 MMVQ Wave32/Wave64 动态分派实验](../data/2026-07-20-q8-mmvq-wave-selection.json)
-- [MTP 开关与并发 QPS 对照](../data/2026-07-20-mtp-qps-comparison.json)
 
 ## 适用边界
 

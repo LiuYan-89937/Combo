@@ -1,3 +1,5 @@
+[English](ApplicationScenarios.md) | [简体中文](ApplicationScenarios.zh-CN.md)
+
 # 应用场景
 
 FastAgentFactory 的核心应用场景是完全本地化的个人智能助手。它不是单一聊天机器人，而是把长期对话、跨会话记忆、本地知识、工具调用、多 Agent 协作，以及 Agent 的设计、生成、运行、治理和演进统一到 AgentPackage 的工程平台。
