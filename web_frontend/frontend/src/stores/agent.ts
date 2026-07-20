@@ -146,6 +146,13 @@ export interface AgentRecentSessionView extends AgentSessionView {
   agent_name?: string | null
 }
 
+const LAST_AGENT_SESSION_STORAGE_KEY = 'fastagentfactory.lastAgentSession'
+
+interface LastAgentSessionSelection {
+  packageId: string
+  sessionId: string | null
+}
+
 export const useAgentStore = defineStore('agent', () => {
   const agentPackages = ref<AgentPackageView[]>([])
   const packageInstances = ref<Record<string, AgentPackageInstanceView>>({})
@@ -154,6 +161,7 @@ export const useAgentStore = defineStore('agent', () => {
   const recentAgentSessions = ref<AgentRecentSessionView[]>([])
   const selectedSessionId = ref<string | null>(null)
   const activeChatPackageId = ref<string | null>(null)
+  const lastAgentSession = ref<LastAgentSessionSelection | null>(loadLastAgentSession())
 
   const selectedPackage = computed(() => {
     if (!selectedPackageId.value) return null
@@ -237,6 +245,7 @@ export const useAgentStore = defineStore('agent', () => {
 
   function setRecentSessions(sessions: AgentRecentSessionView[]): void {
     recentAgentSessions.value = normalizeRecentSessions(sessions)
+    validateLastAgentSession()
   }
 
   function mergeRecentSessions(sessions: AgentRecentSessionView[]): void {
@@ -248,6 +257,7 @@ export const useAgentStore = defineStore('agent', () => {
 
   function selectSession(sessionId: string | null): void {
     selectedSessionId.value = sessionId
+    if (activeChatPackageId.value) rememberAgentSession(activeChatPackageId.value, sessionId)
   }
 
   function removeSession(sessionId: string): void {
@@ -256,12 +266,17 @@ export const useAgentStore = defineStore('agent', () => {
     if (selectedSessionId.value === sessionId) {
       selectedSessionId.value = null
     }
+    if (lastAgentSession.value?.sessionId === sessionId) {
+      const fallback = recentAgentSessions.value[0]
+      rememberAgentSession(fallback?.package_id || '', fallback?.session_id || null)
+    }
   }
 
   function enterAgentChat(packageId: string, sessionId: string | null = null): void {
     activeChatPackageId.value = packageId
     selectedPackageId.value = packageId
     selectedSessionId.value = sessionId
+    rememberAgentSession(packageId, sessionId)
   }
 
   function leaveAgentChat(): void {
@@ -271,6 +286,7 @@ export const useAgentStore = defineStore('agent', () => {
 
   function setActiveAgentSession(sessionId: string | null): void {
     selectedSessionId.value = sessionId
+    if (activeChatPackageId.value) rememberAgentSession(activeChatPackageId.value, sessionId)
   }
 
   function addPackage(pkg: AgentPackageView): void {
@@ -293,6 +309,9 @@ export const useAgentStore = defineStore('agent', () => {
     if (activeChatPackageId.value === packageId) {
       activeChatPackageId.value = null
       selectedSessionId.value = null
+    }
+    if (lastAgentSession.value?.packageId === packageId) {
+      rememberAgentSession('', null)
     }
     recentAgentSessions.value = recentAgentSessions.value.filter((session) => session.package_id !== packageId)
   }
@@ -318,6 +337,40 @@ export const useAgentStore = defineStore('agent', () => {
     recentAgentSessions.value = recentAgentSessions.value.filter((session) => packageIds.has(session.package_id))
   }
 
+  function preferredRecentSession(): AgentRecentSessionView | null {
+    const persisted = lastAgentSession.value
+    if (persisted?.sessionId) {
+      const match = recentAgentSessions.value.find((session) => (
+        session.package_id === persisted.packageId && session.session_id === persisted.sessionId
+      ))
+      if (match) return match
+    }
+    return recentAgentSessions.value[0] || null
+  }
+
+  function validateLastAgentSession(): void {
+    if (!lastAgentSession.value?.sessionId) return
+    const exists = recentAgentSessions.value.some((session) => (
+      session.package_id === lastAgentSession.value?.packageId
+      && session.session_id === lastAgentSession.value?.sessionId
+    ))
+    if (!exists) {
+      const fallback = recentAgentSessions.value[0]
+      rememberAgentSession(fallback?.package_id || '', fallback?.session_id || null)
+    }
+  }
+
+  function rememberAgentSession(packageId: string, sessionId: string | null): void {
+    const normalizedPackageId = String(packageId || '').trim()
+    if (!normalizedPackageId) {
+      lastAgentSession.value = null
+      localStorage.removeItem(LAST_AGENT_SESSION_STORAGE_KEY)
+      return
+    }
+    lastAgentSession.value = { packageId: normalizedPackageId, sessionId }
+    localStorage.setItem(LAST_AGENT_SESSION_STORAGE_KEY, JSON.stringify(lastAgentSession.value))
+  }
+
   return {
     agentPackages,
     packageInstances,
@@ -326,6 +379,7 @@ export const useAgentStore = defineStore('agent', () => {
     recentAgentSessions,
     selectedSessionId,
     activeChatPackageId,
+    lastAgentSession,
     selectedPackage,
     selectedSession,
     activeChatPackage,
@@ -343,7 +397,21 @@ export const useAgentStore = defineStore('agent', () => {
     enterAgentChat,
     leaveAgentChat,
     setActiveAgentSession,
+    preferredRecentSession,
     addPackage,
     removePackage,
   }
 })
+
+function loadLastAgentSession(): LastAgentSessionSelection | null {
+  try {
+    const payload = JSON.parse(localStorage.getItem(LAST_AGENT_SESSION_STORAGE_KEY) || 'null')
+    const packageId = String(payload?.packageId || '').trim()
+    if (!packageId) return null
+    const sessionId = String(payload?.sessionId || '').trim() || null
+    return { packageId, sessionId }
+  } catch {
+    localStorage.removeItem(LAST_AGENT_SESSION_STORAGE_KEY)
+    return null
+  }
+}

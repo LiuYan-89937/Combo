@@ -1,14 +1,27 @@
-import type { KnowledgeSourceInput } from './resourceTypes'
-import { requestEvent, requestFormEvent, withQuery } from './http'
+import type { KnowledgeSourceInput, WorkspaceContextInput } from './resourceTypes'
+import { requestEvent, requestFormEvent, requestJson, withQuery } from './http'
+import { packageResourceContextPayload } from './resourceContext'
+
+export interface KnowledgeCapabilities {
+  accepted_extensions: string[]
+  file_accept: string
+  ocr_supported: boolean
+  ocr_message: string
+  parser_backends: string[]
+}
 
 export const knowledgeApi = {
-  sources: (packageId?: string) => requestEvent(withQuery('/api/knowledge/sources', { package_id: packageId })),
-  addSource: (source: KnowledgeSourceInput, packageId?: string) => {
+  capabilities: () => requestJson<KnowledgeCapabilities>('/api/knowledge/capabilities'),
+  sources: (context?: WorkspaceContextInput) =>
+    requestEvent(withQuery('/api/knowledge/sources', packageResourceContextPayload(context))),
+  addSource: (source: KnowledgeSourceInput, context?: WorkspaceContextInput) => {
+    const resourceContext = packageResourceContextPayload(context)
     if (source.files?.length) {
       const formData = new FormData()
       const { files, ...sourcePayload } = source
       formData.append('source', JSON.stringify(sourcePayload))
-      if (packageId) formData.append('package_id', packageId)
+      if (resourceContext.package_id) formData.append('package_id', resourceContext.package_id)
+      if (resourceContext.resource_mode) formData.append('resource_mode', resourceContext.resource_mode)
       files.forEach((item) => {
         formData.append('files', item.file, item.relativePath || item.file.name)
       })
@@ -16,19 +29,19 @@ export const knowledgeApi = {
     }
     return requestEvent('/api/knowledge/sources', {
       method: 'POST',
-      body: JSON.stringify({ source, package_id: packageId }),
+      body: JSON.stringify({ source, ...resourceContext }),
     })
   },
-  documents: (sourceId: string, packageId?: string) =>
-    requestEvent(withQuery('/api/knowledge/documents', { source_id: sourceId, package_id: packageId })),
-  search: (query: string, sourceId?: string, packageId?: string) =>
-    requestEvent(withQuery('/api/knowledge/search', { query, source_id: sourceId, package_id: packageId })),
-  removeSource: (sourceId: string, packageId?: string) =>
-    requestEvent(withQuery(`/api/knowledge/sources/${encodeURIComponent(sourceId)}`, { package_id: packageId }), {
+  documents: (sourceId: string, context?: WorkspaceContextInput) =>
+    requestEvent(withQuery('/api/knowledge/documents', { source_id: sourceId, ...packageResourceContextPayload(context) })),
+  search: (query: string, sourceId?: string, context?: WorkspaceContextInput) =>
+    requestEvent(withQuery('/api/knowledge/search', { query, source_id: sourceId, ...packageResourceContextPayload(context) })),
+  removeSource: (sourceId: string, context?: WorkspaceContextInput) =>
+    requestEvent(withQuery(`/api/knowledge/sources/${encodeURIComponent(sourceId)}`, packageResourceContextPayload(context)), {
       method: 'DELETE',
     }),
-  reindexSource: (sourceId: string, packageId?: string) =>
-    requestEvent(withQuery(`/api/knowledge/sources/${encodeURIComponent(sourceId)}/reindex`, { package_id: packageId }), {
+  reindexSource: (sourceId: string, context?: WorkspaceContextInput) =>
+    requestEvent(withQuery(`/api/knowledge/sources/${encodeURIComponent(sourceId)}/reindex`, packageResourceContextPayload(context)), {
       method: 'POST',
     }),
 }

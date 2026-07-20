@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
+from agent_factory.document_processing import accepted_file_extensions, document_processing_capabilities
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import SYSTEM_CHAT_PACKAGE_ID
 from agent_factory.knowledge_system.identifiers import new_source_id
 from agent_factory.paths import factory_artifact_path
@@ -16,6 +17,10 @@ from web_frontend.backend.routes.utils import optional_package, resource_command
 
 def create_knowledge_router(runtime_bridge: RuntimeBridge) -> APIRouter:
     router = APIRouter(prefix="/api/knowledge")
+
+    @router.get("/capabilities")
+    async def get_knowledge_capabilities():
+        return document_processing_capabilities().to_public_dict()
 
     @router.get("/sources")
     async def list_knowledge_sources(package_id: str | None = None):
@@ -45,6 +50,17 @@ def create_knowledge_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         files: list[UploadFile] = File(...),
     ):
         source_payload = _source_payload_from_form(source)
+        unsupported_files = _unsupported_upload_files(files)
+        if unsupported_files:
+            capabilities = document_processing_capabilities()
+            raise HTTPException(
+                status_code=415,
+                detail={
+                    "message": "One or more files cannot be processed by the configured knowledge parsers.",
+                    "unsupported_files": unsupported_files,
+                    "accepted_extensions": list(capabilities.accepted_extensions),
+                },
+            )
         resolved_package_id = package_id or str(source_payload.get("package_id") or "").strip() or SYSTEM_CHAT_PACKAGE_ID
         display_name = str(source_payload.get("display_name") or "uploaded_source").strip()
         source_id = new_source_id()
@@ -192,3 +208,12 @@ def _safe_path_part(value: str) -> str:
         return ""
     cleaned = "".join("_" if char in {"/", "\\"} or not char.isprintable() else char for char in text).strip()
     return cleaned if cleaned not in {"", ".", ".."} else ""
+
+
+def _unsupported_upload_files(files: list[UploadFile]) -> list[str]:
+    accepted = accepted_file_extensions()
+    return [
+        str(upload.filename or "uploaded_file")
+        for upload in files
+        if PurePosixPath(str(upload.filename or "uploaded_file").replace("\\", "/")).suffix.lower() not in accepted
+    ]

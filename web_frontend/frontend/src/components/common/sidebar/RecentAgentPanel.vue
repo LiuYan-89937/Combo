@@ -7,10 +7,19 @@
         :disabled="!mostRecentAgentSession"
         @click="openMostRecentAgentSession"
       >
-        <span class="recent-agent-kicker">{{ t('sidebar.recent') }}</span>
+        <span class="recent-agent-kicker">{{ t('sidebar.agentSessions') }}</span>
         <span class="recent-agent-title">
           {{ mostRecentAgentLabel }}
         </span>
+      </button>
+      <button
+        class="recent-agent-toggle"
+        type="button"
+        :disabled="!newSessionPackageId"
+        :title="t('agentSessions.newChat')"
+        @click="createNewAgentSession"
+      >
+        <n-icon size="15"><Add /></n-icon>
       </button>
       <button
         class="recent-agent-toggle"
@@ -50,28 +59,31 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
 import { NIcon } from 'naive-ui'
-import { CaretDown, CaretUp } from '@/components/icons'
+import { Add, CaretDown, CaretUp } from '@/components/icons'
+import { useAgentSessionNavigation } from '@/composables/agent/useAgentSessionNavigation'
 import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
 import { useAgentStore, type AgentRecentSessionView } from '@/stores/agent'
 import { useRuntimeStore } from '@/stores/runtime'
-import { useUiStore } from '@/stores/ui'
-import { useWorkspaceStore } from '@/stores/workspace'
 import { formatTime } from '@/utils/format'
 
-const router = useRouter()
-const uiStore = useUiStore()
 const agentStore = useAgentStore()
 const runtimeStore = useRuntimeStore()
-const workspaceStore = useWorkspaceStore()
 const commands = useCommand()
+const { openAgentSession, startNewAgentSession } = useAgentSessionNavigation()
 const { locale, t } = useI18n()
 const recentAgentExpanded = ref(false)
 
 const recentAgentSessions = computed(() => agentStore.recentAgentSessions)
-const mostRecentAgentSession = computed(() => recentAgentSessions.value[0] || null)
+const mostRecentAgentSession = computed(() => agentStore.preferredRecentSession())
+const newSessionPackageId = computed(() => (
+  agentStore.activeChatPackageId
+  || mostRecentAgentSession.value?.package_id
+  || agentStore.lastAgentSession?.packageId
+  || agentStore.selectedPackageId
+  || null
+))
 const mostRecentAgentLabel = computed(() => (
   mostRecentAgentSession.value
     ? agentSessionPackageLabel(mostRecentAgentSession.value)
@@ -84,14 +96,12 @@ function openMostRecentAgentSession() {
 }
 
 function openRecentAgentSession(session: AgentRecentSessionView) {
-  agentStore.enterAgentChat(session.package_id, session.session_id)
-  runtimeStore.expectAgentPackageSession(session.package_id, session.session_id)
-  workspaceStore.setScope('workdir')
-  uiStore.openRightSidebar('workspace')
-  void router.push({ name: 'Factory' })
-  void commands.selectAgentPackage(session.package_id, 'run').then(() => {
-    void commands.loadAgentPackageSession(session.package_id, session.session_id)
-  })
+  void openAgentSession(session)
+}
+
+function createNewAgentSession() {
+  if (!newSessionPackageId.value) return
+  void startNewAgentSession(newSessionPackageId.value)
 }
 
 function isActiveRecentSession(session: AgentRecentSessionView): boolean {
@@ -152,7 +162,7 @@ watch(
 
 .recent-agent-header {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 32px;
+  grid-template-columns: minmax(0, 1fr) 32px 32px;
   gap: 6px;
   align-items: stretch;
 }

@@ -6,7 +6,8 @@
     :closable="!submitting"
     :mask-closable="!submitting"
     :close-on-esc="!submitting"
-    style="width: 640px"
+    style="width: min(560px, calc(100vw - 32px)); max-height: min(760px, calc(100vh - 48px))"
+    content-style="min-height: 0; overflow-y: auto"
   >
     <n-form ref="formRef" :model="formData" :rules="rules">
       <n-form-item :label="t('knowledge.kind')" path="kind">
@@ -19,18 +20,30 @@
 
       <n-form-item v-if="usesUpload" :label="t('knowledge.fileContent')">
         <div class="upload-field">
+          <n-alert v-if="capabilitiesError" type="error" :title="t('knowledge.capabilitiesUnavailable')">
+            {{ capabilitiesError }}
+          </n-alert>
+          <n-alert v-else type="info" :title="t('knowledge.supportedFormats')">
+            <div>{{ acceptedFormatsLabel }}</div>
+            <div class="upload-hint">
+              {{ capabilities?.ocr_supported ? t('knowledge.ocrAvailable') : t('knowledge.ocrUnavailable') }}
+            </div>
+          </n-alert>
+          <n-alert v-if="rejectedFileNames.length" type="warning" :title="t('knowledge.unsupportedFilesRejected')">
+            {{ rejectedFileNames.join(', ') }}
+          </n-alert>
           <div
             class="upload-zone"
             @dragover.prevent
             @drop.prevent="handleDrop"
           >
-            <n-text class="upload-title">{{ uploadTitle }}</n-text>
+            <n-text>{{ uploadTitle }}</n-text>
             <n-text depth="3" class="upload-hint">
               {{ t('knowledge.uploadHint') }}
             </n-text>
             <n-space>
-              <n-button @click="openFilePicker">{{ t('knowledge.selectFile') }}</n-button>
-              <n-button @click="openFolderPicker">{{ t('knowledge.selectFolder') }}</n-button>
+              <n-button :disabled="!capabilities" @click="openFilePicker">{{ t('knowledge.selectFile') }}</n-button>
+              <n-button :disabled="!capabilities" @click="openFolderPicker">{{ t('knowledge.selectFolder') }}</n-button>
             </n-space>
           </div>
           <input
@@ -38,6 +51,7 @@
             class="native-input"
             type="file"
             multiple
+            :accept="fileAccept"
             @change="handleFileInput"
           />
           <input
@@ -45,22 +59,24 @@
             class="native-input"
             type="file"
             multiple
+            :accept="fileAccept"
             webkitdirectory
             directory
             @change="handleFileInput"
           />
           <div v-if="selectedFiles.length" class="selected-files">
-            <div class="selected-files-header">
-              <n-text>{{ t('knowledge.filesSelected', { count: selectedFiles.length }) }}</n-text>
+            <n-text depth="3">{{ t('knowledge.filesSelected', { count: selectedFiles.length }) }}</n-text>
+            <div
+              v-for="item in selectedFiles.slice(0, 8)"
+              :key="item.relativePath"
+              class="selected-file"
+              :title="item.relativePath"
+            >
+              {{ item.relativePath }}
             </div>
-            <div class="selected-files-list">
-              <div v-for="item in selectedFiles.slice(0, 8)" :key="item.relativePath" class="selected-file">
-                {{ item.relativePath }}
-              </div>
-              <n-text v-if="selectedFiles.length > 8" depth="3" class="upload-hint">
-                {{ t('knowledge.moreFiles', { count: selectedFiles.length - 8 }) }}
-              </n-text>
-            </div>
+            <n-text v-if="selectedFiles.length > 8" depth="3" class="upload-hint">
+              {{ t('knowledge.moreFiles', { count: selectedFiles.length - 8 }) }}
+            </n-text>
           </div>
         </div>
       </n-form-item>
@@ -114,8 +130,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import {
+  NAlert,
   NButton,
   NCollapseTransition,
   NForm,
@@ -131,6 +148,7 @@ import {
 } from 'naive-ui'
 import type { FormInst, FormRules } from 'naive-ui'
 import type { KnowledgeSourceInput, KnowledgeUploadFile } from '@/api/resourceTypes'
+import { knowledgeApi, type KnowledgeCapabilities } from '@/api/knowledge'
 import { useI18n } from '@/composables/useI18n'
 
 type SourceKind = 'folder' | 'file' | 'url' | 'note'
@@ -166,13 +184,16 @@ const show = computed({
   get: () => props.show,
   set: (value) => emit('update:show', value),
 })
-const submitting = computed(() => Boolean(props.submitting))
+const submitting = computed(() => props.submitting === true)
 
 const formRef = ref<FormInst | null>(null)
 const { t } = useI18n()
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const folderInputRef = ref<HTMLInputElement | null>(null)
 const selectedFiles = ref<KnowledgeUploadFile[]>([])
+const rejectedFileNames = ref<string[]>([])
+const capabilities = ref<KnowledgeCapabilities | null>(null)
+const capabilitiesError = ref('')
 const formData = ref({
   kind: 'folder' as SourceKind,
   display_name: '',
@@ -201,6 +222,12 @@ const splitterOptions = computed(() => [
 ])
 
 const usesUpload = computed(() => formData.value.kind === 'folder' || formData.value.kind === 'file')
+const acceptedExtensions = computed(() => new Set(capabilities.value?.accepted_extensions || []))
+const fileAccept = computed(() => capabilities.value?.file_accept || '')
+const acceptedFormatsLabel = computed(() => (
+  capabilities.value?.accepted_extensions.map((extension) => extension.toUpperCase()).join(' · ')
+  || t('knowledge.loadingCapabilities')
+))
 const uploadTitle = computed(() => (formData.value.kind === 'folder' ? t('knowledge.dropFolder') : t('knowledge.dropFile')))
 const canSubmit = computed(() => {
   if (!formData.value.display_name.trim()) return false
@@ -236,6 +263,7 @@ const rules = computed<FormRules>(() => ({
 
 function handleKindChange() {
   selectedFiles.value = []
+  rejectedFileNames.value = []
   formData.value.uri = ''
   formData.value.content = ''
 }
@@ -269,12 +297,23 @@ async function handleDrop(event: DragEvent) {
 
 function addFiles(files: KnowledgeUploadFile[]) {
   const next = new Map(selectedFiles.value.map((item) => [item.relativePath, item]))
+  const rejected: string[] = []
   files.forEach((item) => {
-    if (item.file.size >= 0 && item.relativePath) {
+    if (!isAcceptedFile(item.file)) {
+      rejected.push(item.relativePath || item.file.name)
+    } else if (item.file.size >= 0 && item.relativePath) {
       next.set(item.relativePath, item)
     }
   })
   selectedFiles.value = Array.from(next.values())
+  rejectedFileNames.value = rejected
+}
+
+function isAcceptedFile(file: File): boolean {
+  const name = file.name.toLowerCase()
+  const dotIndex = name.lastIndexOf('.')
+  if (dotIndex < 0) return false
+  return acceptedExtensions.value.has(name.slice(dotIndex))
 }
 
 async function filesFromDataTransferItems(items: DataTransferItem[]): Promise<KnowledgeUploadFile[]> {
@@ -334,6 +373,18 @@ function handleSubmit() {
   })
 }
 
+watch(show, (visible) => {
+  if (!visible) resetForm()
+})
+
+onMounted(async () => {
+  try {
+    capabilities.value = await knowledgeApi.capabilities()
+  } catch (error) {
+    capabilitiesError.value = error instanceof Error ? error.message : String(error)
+  }
+})
+
 function buildSourceInput(): KnowledgeSourceInput {
   const base: KnowledgeSourceInput = {
     kind: formData.value.kind,
@@ -378,14 +429,8 @@ function resetForm() {
     chunkOverlap: 120,
   }
   selectedFiles.value = []
+  rejectedFileNames.value = []
 }
-
-watch(
-  () => props.show,
-  (visible, previous) => {
-    if (!visible && previous) resetForm()
-  },
-)
 
 function isValidUrl(value: string): boolean {
   try {
@@ -401,25 +446,24 @@ function isValidUrl(value: string): boolean {
 .upload-field {
   width: 100%;
   min-width: 0;
-  display: grid;
-  gap: var(--app-space-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .upload-zone {
-  width: 100%;
-  min-height: 156px;
   box-sizing: border-box;
-  padding: var(--app-space-lg);
+  width: 100%;
+  min-height: 112px;
   border: 1px dashed var(--app-border-hover);
-  border-radius: var(--app-radius-lg);
+  border-radius: var(--app-radius-md);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: var(--app-space-sm);
+  gap: 10px;
   background: var(--app-surface-muted);
-  text-align: center;
-  transition: border-color var(--app-transition-base), background-color var(--app-transition-base);
+  transition: border-color 0.15s ease, background-color 0.15s ease;
 }
 
 .upload-zone:hover {
@@ -427,14 +471,8 @@ function isValidUrl(value: string): boolean {
   background: var(--app-surface-hover);
 }
 
-.upload-title {
-  font-weight: 600;
-}
-
 .upload-hint {
-  max-width: 480px;
   font-size: 12px;
-  line-height: 1.55;
 }
 
 .native-input {
@@ -442,31 +480,21 @@ function isValidUrl(value: string): boolean {
 }
 
 .selected-files {
+  box-sizing: border-box;
   width: 100%;
   min-width: 0;
-  box-sizing: border-box;
-  overflow: hidden;
+  padding: 10px 12px;
   border: 1px solid var(--app-border);
   border-radius: var(--app-radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   background: var(--app-surface-muted);
-}
-
-.selected-files-header {
-  padding: var(--app-space-sm) var(--app-space-md);
-  border-bottom: 1px solid var(--app-border);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.selected-files-list {
-  max-height: 152px;
-  overflow: auto;
-  padding: var(--app-space-xs) var(--app-space-md);
+  max-height: 132px;
+  overflow-y: auto;
 }
 
 .selected-file {
-  min-width: 0;
-  padding: 4px 0;
   font-size: 12px;
   color: var(--app-text-secondary);
   overflow: hidden;
@@ -475,7 +503,7 @@ function isValidUrl(value: string): boolean {
 }
 
 .rag-options {
-  padding: 12px;
+  padding: 10px 12px 0;
   border: 1px solid var(--app-border);
   border-radius: var(--app-radius-md);
   margin-bottom: 12px;
@@ -486,5 +514,11 @@ function isValidUrl(value: string): boolean {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+}
+
+@media (max-width: 560px) {
+  .chunk-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 </style>

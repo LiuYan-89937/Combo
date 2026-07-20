@@ -173,6 +173,7 @@ import { useRuntimeStore } from '@/stores/runtime'
 import { useUiStore } from '@/stores/ui'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useCommand } from '@/composables/useCommand'
+import { useAgentSessionNavigation } from '@/composables/agent/useAgentSessionNavigation'
 import type { AgentPackageView } from '@/stores/agent'
 import {
   formatPackageDate,
@@ -191,6 +192,7 @@ const runtimeStore = useRuntimeStore()
 const uiStore = useUiStore()
 const workspaceStore = useWorkspaceStore()
 const commands = useCommand()
+const { openPackageAgentChat } = useAgentSessionNavigation()
 const router = useRouter()
 const dialog = useDialog()
 const { locale, t } = useI18n()
@@ -251,10 +253,7 @@ function handleRun(pkg: AgentPackageView) {
     })
     return
   }
-  void enterPackageContext(pkg, 'run')
-  agentStore.enterAgentChat(pkg.package_id)
-  runtimeStore.showEmptyAgentPackageSession(pkg.package_id)
-  void router.push({ name: 'Factory' })
+  void openPackageAgentChat(pkg.package_id)
 }
 
 async function handleInitializeInstance(pkg: AgentPackageView) {

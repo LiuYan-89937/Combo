@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import html
 import importlib
+import importlib.util
 import re
 from pathlib import Path
 from typing import Any
@@ -58,6 +59,65 @@ SUPPORTED_FILE_EXTENSIONS = (
     | IMAGE_EXTENSIONS
     | EMAIL_EXTENSIONS
 )
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentProcessingCapabilities:
+    accepted_extensions: tuple[str, ...]
+    ocr_supported: bool
+    ocr_message: str
+    parser_backends: tuple[str, ...]
+
+    def to_public_dict(self) -> dict[str, Any]:
+        return {
+            "accepted_extensions": list(self.accepted_extensions),
+            "file_accept": ",".join(self.accepted_extensions),
+            "ocr_supported": self.ocr_supported,
+            "ocr_message": self.ocr_message,
+            "parser_backends": list(self.parser_backends),
+        }
+
+
+def document_processing_capabilities() -> DocumentProcessingCapabilities:
+    """Return file capabilities that this process can reliably execute.
+
+    The parser pipeline contains optional integrations, but an extension is
+    advertised only when its required backend is importable. OCR is kept
+    explicit because merely accepting an image does not prove that an OCR
+    engine and its language data are installed.
+    """
+
+    extensions = set(TEXT_EXTENSIONS)
+    backends = ["internal_text"]
+    if _module_available("bs4"):
+        backends.append("beautifulsoup4")
+    else:
+        extensions.difference_update({".html", ".htm"})
+    langchain_available = _module_available("langchain_community.document_loaders")
+    if langchain_available and _module_available("pypdf"):
+        extensions.update(PDF_EXTENSIONS)
+        backends.append("pypdf")
+    if langchain_available and _module_available("docx2txt"):
+        extensions.update(DOCX_EXTENSIONS)
+        backends.append("docx2txt")
+
+    return DocumentProcessingCapabilities(
+        accepted_extensions=tuple(sorted(extensions)),
+        ocr_supported=False,
+        ocr_message="No explicit OCR engine is configured; image files are not accepted for knowledge ingestion.",
+        parser_backends=tuple(backends),
+    )
+
+
+def accepted_file_extensions() -> frozenset[str]:
+    return frozenset(document_processing_capabilities().accepted_extensions)
+
+
+def _module_available(module_name: str) -> bool:
+    try:
+        return importlib.util.find_spec(module_name) is not None
+    except (ImportError, ModuleNotFoundError, AttributeError, ValueError):
+        return False
 
 
 @dataclass(frozen=True, slots=True)

@@ -11,6 +11,7 @@ export const useExtensionStore = defineStore('extension', () => {
   const items = ref<ExtensionItemView[]>([])
   const testResult = ref<any | null>(null)
   const toolPermissions = ref<ToolPermissionsView | null>(null)
+  const skillHubResult = ref<any | null>(null)
 
   const mcpItems = computed(() => {
     return items.value.filter((item) => item.kind === 'mcp')
@@ -32,21 +33,28 @@ export const useExtensionStore = defineStore('extension', () => {
     toolPermissions.value = value
   }
 
+  function setSkillHubResult(value: any | null): void {
+    skillHubResult.value = value
+  }
+
   function reset(): void {
     items.value = []
     testResult.value = null
     toolPermissions.value = null
+    skillHubResult.value = null
   }
 
   return {
     items,
     testResult,
     toolPermissions,
+    skillHubResult,
     mcpItems,
     skillItems,
     setItems,
     setTestResult,
     setToolPermissions,
+    setSkillHubResult,
     reset,
   }
 })

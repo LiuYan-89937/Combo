@@ -38,6 +38,18 @@ export function useExtensionCommands() {
     return transport.applyEventRequest(extensionsApi.removeSkill(skillId, context))
   }
 
+  const skillHubStatus = (context?: WorkspaceContextInput) => {
+    return transport.applyEventRequest(extensionsApi.skillHubStatus(context))
+  }
+
+  const searchSkillHub = (query: string, context?: WorkspaceContextInput) => {
+    return transport.applyEventRequest(extensionsApi.searchSkillHub(query, context))
+  }
+
+  const installSkillHubSkill = (skill: string, context?: WorkspaceContextInput) => {
+    return transport.applyEventRequest(extensionsApi.installSkillHubSkill(skill, context))
+  }
+
   const updateToolPermissions = (policy: ToolPermissionPolicyView, context?: WorkspaceContextInput) => {
     return transport.applyEventRequest(extensionsApi.updateToolPermissions(policy, context))
   }
@@ -59,6 +71,9 @@ export function useExtensionCommands() {
     saveSkill,
     setSkillEnabled,
     removeSkill,
+    skillHubStatus,
+    searchSkillHub,
+    installSkillHubSkill,
     updateToolPermissions,
     setToolPermission,
     resetToolPermission,
