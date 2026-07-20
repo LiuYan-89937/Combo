@@ -5,7 +5,7 @@ from typing import Any
 from fastapi import APIRouter
 
 from web_frontend.backend.runtime_bridge import RuntimeBridge
-from web_frontend.backend.routes.utils import optional_package, resource_command
+from web_frontend.backend.routes.utils import optional_package, optional_resource_mode, resource_command
 
 
 def create_extensions_router(runtime_bridge: RuntimeBridge) -> APIRouter:
@@ -214,8 +214,3 @@ def create_extensions_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         return {"event": event}
 
     return router
-
-
-def optional_resource_mode(value: Any) -> dict[str, str]:
-    resource_mode = str(value or "").strip()
-    return {"resource_mode": resource_mode} if resource_mode else {}

@@ -22,9 +22,6 @@ import {
 
 export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
   const runtimeStore = useRuntimeStore()
-  if (Array.isArray(event.payload?.recent_agent_sessions)) {
-    useAgentStore().setRecentSessions(event.payload.recent_agent_sessions as any)
-  }
   if (event.event_type === 'agent_package_selected' && !runtimeStore.ownsAgentPackageSelection(event)) {
     return
   }
@@ -68,6 +65,9 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
       const agentStore = useAgentStore()
       agentStore.leaveAgentChat()
       agentStore.selectPackage(evolutionPackageId)
+    }
+    if (event.event_type === 'session_deleted') {
+      useAgentStore().removeRecentSessionsForPackage(SYSTEM_CHAT_PACKAGE_ID)
     }
   }
 
@@ -214,13 +214,11 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
 
 function resourceEventMatchesCurrentContext(event: FactoryFrontendEvent): boolean {
   const eventMode = resourceEventMode(event)
-  if (eventMode) {
-    return (
-      eventMode === currentResourceMode() &&
-      resourceEventPackageId(event) === currentResourcePackageId()
-    )
+  const currentMode = currentResourceMode()
+  if (eventMode || currentMode) {
+    return eventMode === currentMode && resourceEventPackageId(event) === currentResourcePackageId()
   }
-  return resourceEventPackageId(event) === currentPackageResourceId()
+  return resourceEventPackageId(event) === currentResourcePackageId()
 }
 
 function currentResourceMode(): string | null {
@@ -241,18 +239,6 @@ function currentResourcePackageId(): string | null {
   return normalizeResourcePackageId(SYSTEM_CHAT_PACKAGE_ID)
 }
 
-function currentPackageResourceId(): string | null {
-  const runtimeStore = useRuntimeStore()
-  const agentStore = useAgentStore()
-  if (agentStore.activeChatPackageId) {
-    return normalizeResourcePackageId(agentStore.activeChatPackageId)
-  }
-  if (runtimeStore.currentMode === 'evolve_agent' && agentStore.selectedPackageId) {
-    return normalizeResourcePackageId(agentStore.selectedPackageId)
-  }
-  return normalizeResourcePackageId(SYSTEM_CHAT_PACKAGE_ID)
-}
-
 function resourceEventMode(event: FactoryFrontendEvent): string | null {
   const payload = event.payload || {}
   const nested = payload.payload && typeof payload.payload === 'object' ? payload.payload : {}
@@ -260,6 +246,8 @@ function resourceEventMode(event: FactoryFrontendEvent): string | null {
 }
 
 function resourceEventPackageId(event: FactoryFrontendEvent): string | null {
+  const mode = resourceEventMode(event)
+  if (mode) return normalizeResourcePackageId(mode)
   const payload = event.payload || {}
   const nested = payload.payload && typeof payload.payload === 'object' ? payload.payload : {}
   const execution = nested.execution && typeof nested.execution === 'object' ? nested.execution : {}

@@ -18,9 +18,8 @@ export function useKnowledgeManager() {
   const documentsDrawerOpen = ref(false)
   const documentsTitle = ref('')
   const selectedSourceIds = ref<Set<string>>(new Set())
-  const busyAction = ref<'delete' | 'reindex' | null>(null)
+  const busyAction = ref<'create' | 'delete' | 'reindex' | null>(null)
   const busySourceId = ref<string | null>(null)
-  const creatingSource = ref(false)
 
   const selectedSources = computed(() => {
     return knowledgeStore.sources.filter((source) => {
@@ -43,9 +42,9 @@ export function useKnowledgeManager() {
     busyAction.value = 'reindex'
     busySourceId.value = sourceId
     try {
-      const event = await commands.reindexKnowledgeSource(sourceId, resourceContext.packageIdForApi.value)
+      const event = await commands.reindexKnowledgeSource(sourceId, resourceContext.workspaceContext.value)
       if (event) {
-        commands.refreshKnowledge(resourceContext.packageIdForApi.value)
+        void commands.refreshKnowledge(resourceContext.workspaceContext.value)
       }
     } finally {
       busyAction.value = null
@@ -54,15 +53,15 @@ export function useKnowledgeManager() {
   }
 
   async function handleCreate(sourceData: any) {
-    if (creatingSource.value) return
-    creatingSource.value = true
+    if (busyAction.value) return
+    busyAction.value = 'create'
     try {
-      const event = await commands.addKnowledgeSource(sourceData, resourceContext.packageIdForApi.value)
+      const event = await commands.addKnowledgeSource(sourceData, resourceContext.workspaceContext.value)
       if (event) {
         showCreateModal.value = false
       }
     } finally {
-      creatingSource.value = false
+      busyAction.value = null
     }
   }
 
@@ -90,7 +89,7 @@ export function useKnowledgeManager() {
     knowledgeStore.selectSource(sourceId)
     documentsTitle.value = source.name || t('knowledge.sourceFallback')
     documentsDrawerOpen.value = true
-    await commands.listKnowledgeDocuments(sourceId, resourceContext.packageIdForApi.value)
+    await commands.listKnowledgeDocuments(sourceId, resourceContext.workspaceContext.value)
   }
 
   function setSourceSelected(sourceId: string, checked: boolean) {
@@ -125,14 +124,14 @@ export function useKnowledgeManager() {
       for (const source of sources) {
         const sourceId = sourceIdOf(source)
         if (!sourceId) continue
-        const event = await commands.removeKnowledgeSource(sourceId, resourceContext.packageIdForApi.value)
+        const event = await commands.removeKnowledgeSource(sourceId, resourceContext.workspaceContext.value)
         if (event) {
           deleted += 1
           setSourceSelected(sourceId, false)
         }
       }
       if (deleted > 0) {
-        commands.refreshKnowledge(resourceContext.packageIdForApi.value)
+        void commands.refreshKnowledge(resourceContext.workspaceContext.value)
       }
     } finally {
       busyAction.value = null
@@ -147,23 +146,22 @@ export function useKnowledgeManager() {
   }
 
   watch(
-    () => resourceContext.packageId.value,
+    () => resourceContext.workspaceContextKey.value,
     () => {
       resetCurrentKnowledgeView()
-      void commands.refreshKnowledge(resourceContext.packageIdForApi.value)
+      void commands.refreshKnowledge(resourceContext.workspaceContext.value)
     },
   )
 
   onMounted(() => {
     commands.listAgentPackages()
     resetCurrentKnowledgeView()
-    void commands.refreshKnowledge(resourceContext.packageIdForApi.value)
+    void commands.refreshKnowledge(resourceContext.workspaceContext.value)
   })
 
   return {
     busyAction,
     busySourceId,
-    creatingSource,
     confirmDeleteSources,
     documentsDrawerOpen,
     documentsTitle,

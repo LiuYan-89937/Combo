@@ -66,7 +66,15 @@ class RuntimeResourceCommandMixin:
         if event_type is None:
             self._emit_error(command, f"unsupported knowledge action: {action}")
             return
-        self._emit_resource_event(command, event_type, {"package_id": package_id, **result})
+        self._emit_resource_event(
+            command,
+            event_type,
+            {
+                "package_id": package_id,
+                **_optional_resource_mode(command.payload),
+                **result,
+            },
+        )
 
     def extensions_manage(self, command: FactoryFrontendCommand) -> None:
         resource_mode = str(command.payload.get("resource_mode") or "").strip()
@@ -116,3 +124,8 @@ class RuntimeResourceCommandMixin:
 def _package_id_from_payload(payload: dict[str, Any]) -> str:
     package_id = str(payload.get("package_id") or "").strip()
     return package_id or SYSTEM_CHAT_PACKAGE_ID
+
+
+def _optional_resource_mode(payload: dict[str, Any]) -> dict[str, str]:
+    resource_mode = str(payload.get("resource_mode") or "").strip()
+    return {"resource_mode": resource_mode} if resource_mode else {}

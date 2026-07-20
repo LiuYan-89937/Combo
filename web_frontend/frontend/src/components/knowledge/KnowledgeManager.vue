@@ -124,7 +124,7 @@
     <!-- 创建知识源弹窗 -->
     <KnowledgeSourceFormModal
       v-model:show="showCreateModal"
-      :submitting="creatingSource"
+      :submitting="busyAction === 'create'"
       @submit="handleCreate"
     />
 
@@ -192,7 +192,6 @@ const { t } = useI18n()
 const {
   busyAction,
   busySourceId,
-  creatingSource,
   confirmDeleteSources,
   documentsDrawerOpen,
   documentsTitle,

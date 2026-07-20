@@ -272,6 +272,10 @@ export const useAgentStore = defineStore('agent', () => {
     }
   }
 
+  function removeRecentSessionsForPackage(packageId: string): void {
+    recentAgentSessions.value = recentAgentSessions.value.filter((session) => session.package_id !== packageId)
+  }
+
   function enterAgentChat(packageId: string, sessionId: string | null = null): void {
     activeChatPackageId.value = packageId
     selectedPackageId.value = packageId
@@ -394,6 +398,7 @@ export const useAgentStore = defineStore('agent', () => {
     mergeRecentSessions,
     selectSession,
     removeSession,
+    removeRecentSessionsForPackage,
     enterAgentChat,
     leaveAgentChat,
     setActiveAgentSession,

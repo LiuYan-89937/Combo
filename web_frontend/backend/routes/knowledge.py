@@ -12,7 +12,7 @@ from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import SY
 from agent_factory.knowledge_system.identifiers import new_source_id
 from agent_factory.paths import factory_artifact_path
 from web_frontend.backend.runtime_bridge import RuntimeBridge
-from web_frontend.backend.routes.utils import optional_package, resource_command
+from web_frontend.backend.routes.utils import optional_package, optional_resource_mode, resource_command
 
 
 def create_knowledge_router(runtime_bridge: RuntimeBridge) -> APIRouter:
@@ -23,11 +23,11 @@ def create_knowledge_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         return document_processing_capabilities().to_public_dict()
 
     @router.get("/sources")
-    async def list_knowledge_sources(package_id: str | None = None):
+    async def list_knowledge_sources(package_id: str | None = None, resource_mode: str | None = None):
         event = await resource_command(
             runtime_bridge,
             "knowledge_manage",
-            {"action": "list_sources", **optional_package(package_id)},
+            {"action": "list_sources", **optional_package(package_id), **optional_resource_mode(resource_mode)},
             {"knowledge_sources_listed"},
         )
         return {"event": event}
@@ -47,6 +47,7 @@ def create_knowledge_router(runtime_bridge: RuntimeBridge) -> APIRouter:
     async def upload_knowledge_source(
         source: str = Form(...),
         package_id: str | None = Form(default=None),
+        resource_mode: str | None = Form(default=None),
         files: list[UploadFile] = File(...),
     ):
         source_payload = _source_payload_from_form(source)
@@ -107,6 +108,7 @@ def create_knowledge_router(runtime_bridge: RuntimeBridge) -> APIRouter:
                 "action": "confirm_source",
                 "source": source_payload,
                 **optional_package(package_id),
+                **optional_resource_mode(resource_mode),
             },
             {"knowledge_source_registered"},
             timeout_seconds=120.0,
@@ -114,32 +116,32 @@ def create_knowledge_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         return {"event": event}
 
     @router.delete("/sources/{source_id}")
-    async def delete_knowledge_source(source_id: str, package_id: str | None = None):
+    async def delete_knowledge_source(source_id: str, package_id: str | None = None, resource_mode: str | None = None):
         event = await resource_command(
             runtime_bridge,
             "knowledge_manage",
-            {"action": "remove_source", "source_id": source_id, **optional_package(package_id)},
+            {"action": "remove_source", "source_id": source_id, **optional_package(package_id), **optional_resource_mode(resource_mode)},
             {"knowledge_source_removed"},
         )
         return {"event": event}
 
     @router.post("/sources/{source_id}/reindex")
-    async def reindex_knowledge_source(source_id: str, package_id: str | None = None):
+    async def reindex_knowledge_source(source_id: str, package_id: str | None = None, resource_mode: str | None = None):
         event = await resource_command(
             runtime_bridge,
             "knowledge_manage",
-            {"action": "reindex", "source_id": source_id, **optional_package(package_id)},
+            {"action": "reindex", "source_id": source_id, **optional_package(package_id), **optional_resource_mode(resource_mode)},
             {"knowledge_source_reindex_requested"},
             timeout_seconds=120.0,
         )
         return {"event": event}
 
     @router.get("/documents")
-    async def list_knowledge_documents(source_id: str, package_id: str | None = None):
+    async def list_knowledge_documents(source_id: str, package_id: str | None = None, resource_mode: str | None = None):
         event = await resource_command(
             runtime_bridge,
             "knowledge_manage",
-            {"action": "list_documents", "source_id": source_id, **optional_package(package_id)},
+            {"action": "list_documents", "source_id": source_id, **optional_package(package_id), **optional_resource_mode(resource_mode)},
             {"knowledge_documents_listed"},
         )
         return {"event": event}
@@ -149,19 +151,20 @@ def create_knowledge_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         query: str,
         source_id: str | None = None,
         package_id: str | None = None,
+        resource_mode: str | None = None,
     ):
-        payload = {"action": "search", "query": query, **optional_package(package_id)}
+        payload = {"action": "search", "query": query, **optional_package(package_id), **optional_resource_mode(resource_mode)}
         if source_id:
             payload["source_id"] = source_id
         event = await resource_command(runtime_bridge, "knowledge_manage", payload, {"knowledge_search_completed"})
         return {"event": event}
 
     @router.get("/document")
-    async def read_knowledge_document(document_id: str, package_id: str | None = None):
+    async def read_knowledge_document(document_id: str, package_id: str | None = None, resource_mode: str | None = None):
         event = await resource_command(
             runtime_bridge,
             "knowledge_manage",
-            {"action": "read", "document_id": document_id, **optional_package(package_id)},
+            {"action": "read", "document_id": document_id, **optional_package(package_id), **optional_resource_mode(resource_mode)},
             {"knowledge_document_read"},
         )
         return {"event": event}

@@ -50,3 +50,8 @@ def request_id() -> str:
 
 def optional_package(package_id: str | None) -> dict[str, str]:
     return {"package_id": package_id} if package_id else {}
+
+
+def optional_resource_mode(value: Any) -> dict[str, str]:
+    resource_mode = str(value or "").strip()
+    return {"resource_mode": resource_mode} if resource_mode else {}
