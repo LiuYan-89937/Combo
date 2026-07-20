@@ -23,6 +23,7 @@ from agent_factory.create_agent.models import (
     CreateAgentAction,
     CreateAgentPublishDecision,
     CreateAgentTaskAnalysis,
+    EvolutionTaskAnalysis,
     PackageToolProbeState,
     PackageKnowledgeSourceRegistry,
     PackageValidationReport,
@@ -148,21 +149,18 @@ class CreateAgentWorkspace:
     def write_knowledge_sources(self, registry: PackageKnowledgeSourceRegistry) -> None:
         self._write_json(self.knowledge_sources_path, registry.model_dump(mode="json"))
 
-    def read_task_analysis(self) -> CreateAgentTaskAnalysis:
-        analysis = _read_managed_model(
-            self.task_analysis_path,
-            CreateAgentTaskAnalysis,
-            missing=None,
-            owner_tool="create-agent task analysis",
-        )
-        if analysis is None:
+    def read_task_analysis(self) -> CreateAgentTaskAnalysis | EvolutionTaskAnalysis:
+        if not self.task_analysis_path.is_file():
             raise ValueError(
                 f"missing managed create-agent task analysis: {self.task_analysis_path}. "
                 "Start a new /create-agent manufacture run so task analysis can select a runtime pattern."
             )
-        return analysis
+        payload = _read_json_object(self.task_analysis_path)
+        if payload.get("version") == "evolution_task_analysis.v0":
+            return EvolutionTaskAnalysis.model_validate(payload)
+        return CreateAgentTaskAnalysis.model_validate(payload)
 
-    def write_task_analysis(self, analysis: CreateAgentTaskAnalysis) -> None:
+    def write_task_analysis(self, analysis: CreateAgentTaskAnalysis | EvolutionTaskAnalysis) -> None:
         self._write_json(self.task_analysis_path, analysis.model_dump(mode="json"))
 
     def read_action(self) -> CreateAgentAction:

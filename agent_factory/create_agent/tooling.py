@@ -271,7 +271,7 @@ class CreateAgentToolEnvironmentBuilder:
                 CREATE_AGENT_MODEL_POOL_TOOL_ID,
                 CREATE_AGENT_PROBE_TOOL_ID,
                 CREATE_AGENT_VALIDATE_TOOL_ID,
-                *([CREATE_AGENT_STAGE_TOOL_ID] if mode == "manufacture" else []),
+                CREATE_AGENT_STAGE_TOOL_ID,
             ]
             provider_result.system_tool_ids = sorted(
                 set(
@@ -287,7 +287,7 @@ class CreateAgentToolEnvironmentBuilder:
                 build_create_agent_authoring_tool_spec(),
                 build_create_agent_probe_tool_spec(),
                 build_create_agent_validate_tool_spec(),
-                *([build_create_agent_stage_tool_spec()] if mode == "manufacture" else []),
+                build_create_agent_stage_tool_spec(),
                 *skill_specs,
             ]
         else:
@@ -396,7 +396,7 @@ def _create_agent_skill_registry(
             registry.register(skill)
     if gateway_state is not None:
         registry.gateway_state = gateway_state
-    roots = [EVOLUTION_SKILLS_ROOT] if mode == "evolution" else [CREATE_AGENT_SKILLS_ROOT]
+    roots = [CREATE_AGENT_SKILLS_ROOT, EVOLUTION_SKILLS_ROOT] if mode == "evolution" else [CREATE_AGENT_SKILLS_ROOT]
     for root in roots:
         if root.is_dir():
             _register_skill_root(registry, root)

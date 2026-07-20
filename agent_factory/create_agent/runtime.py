@@ -189,27 +189,36 @@ class CreateAgentRuntime:
         yield from drain_events()
 
         intent_started_at = time.monotonic()
-        try:
-            intent = classify_create_agent_intent(
-                user_input=user_input,
-                workspace=workspace,
-                model=self.model,
-            )
-        except Exception as exc:
-            normalizer.runtime_event(
-                "node_failed",
-                node_id="create_agent_intent_analysis",
-                node_label="Intent Analysis",
-                node_kind="control",
-                severity="error",
-                message=str(exc),
-                payload={"status_key": "intent_analysis", "visible_to_user": True},
-            )
-            normalizer.emit_run_failed(exc)
-            yield from drain_events()
-            return
-
-        graph_kind = "manufacture" if intent.intent == "manufacture_agent" else "assist"
+        retained_graph_kind = self._session_graph_kind(session_id=session_id, workspace=workspace)
+        if retained_graph_kind is None:
+            try:
+                intent = classify_create_agent_intent(
+                    user_input=user_input,
+                    workspace=workspace,
+                    model=self.model,
+                )
+            except Exception as exc:
+                normalizer.runtime_event(
+                    "node_failed",
+                    node_id="create_agent_intent_analysis",
+                    node_label="Intent Analysis",
+                    node_kind="control",
+                    severity="error",
+                    message=str(exc),
+                    payload={"status_key": "intent_analysis", "visible_to_user": True},
+                )
+                normalizer.emit_run_failed(exc)
+                yield from drain_events()
+                return
+            graph_kind = "manufacture" if intent.intent == "manufacture_agent" else "assist"
+            intent_payload = intent.model_dump(mode="json")
+        else:
+            graph_kind = retained_graph_kind
+            intent_payload = {
+                "intent": "manufacture_agent" if graph_kind == "manufacture" else "workspace_assist",
+                "rationale": "The create-agent session retains its established workflow across turns.",
+                "confidence": 1.0,
+            }
         self._active_graph_by_session[session_id] = graph_kind
         normalizer.runtime_event(
             "node_completed",
@@ -220,15 +229,16 @@ class CreateAgentRuntime:
             payload={
                 "status_key": "intent_analysis",
                 "visible_to_user": True,
-                "intent": intent.intent,
+                "intent": intent_payload["intent"],
                 "graph_kind": graph_kind,
+                "retained_workflow": retained_graph_kind is not None,
                 "duration_ms": round((time.monotonic() - intent_started_at) * 1000),
             },
         )
         yield from drain_events()
 
         task_analysis = None
-        if graph_kind == "manufacture":
+        if graph_kind == "manufacture" and not workspace.task_analysis_path.is_file():
             normalizer.runtime_event(
                 "node_started",
                 node_id="create_agent_task_analysis",
@@ -269,6 +279,8 @@ class CreateAgentRuntime:
                 },
             )
             yield from drain_events()
+        elif graph_kind == "manufacture":
+            task_analysis = workspace.read_task_analysis()
         else:
             workspace.root.mkdir(parents=True, exist_ok=True)
 
@@ -283,7 +295,7 @@ class CreateAgentRuntime:
             runtime_main_model_profile_id=runtime_main_model_profile_id,
             runtime_reasoning_intensity=runtime_reasoning_intensity,
             intent={
-                **intent.model_dump(mode="json"),
+                **intent_payload,
                 **({"task_analysis": task_analysis.model_dump(mode="json")} if task_analysis is not None else {}),
             },
             emit_run_started=False,
@@ -291,6 +303,18 @@ class CreateAgentRuntime:
             run_span_id=normalizer.run_span_id,
             initial_event_sequence=normalizer.sequence,
         )
+
+    def _session_graph_kind(self, *, session_id: str, workspace: CreateAgentWorkspace) -> str | None:
+        active = self._active_graph_by_session.get(session_id)
+        if active in {"manufacture", "assist"}:
+            return active
+        if self._checkpoint_values(thread_id=f"{session_id}:manufacture"):
+            return "manufacture"
+        if workspace.task_analysis_path.is_file() or workspace.package_manifest_path().is_file():
+            return "manufacture"
+        if self._checkpoint_values(thread_id=f"{session_id}:assist"):
+            return "assist"
+        return None
 
     def _checkpoint_snapshot(self, *, session_id: str, graph_kind: str) -> dict[str, Any] | None:
         values = self._checkpoint_values(thread_id=f"{session_id}:{graph_kind}")
@@ -350,7 +374,7 @@ class CreateAgentRuntime:
         request_id: str | None,
     ) -> CreateAgentStreamRun:
         workspace = CreateAgentWorkspace.for_session(session_id)
-        graph_kind = self._active_graph_by_session.get(session_id, "manufacture")
+        graph_kind = self._session_graph_kind(session_id=session_id, workspace=workspace) or "manufacture"
         resolved_request_id = request_id or uuid4().hex
         return CreateAgentStreamRun(
             session_id=session_id,

@@ -8,6 +8,9 @@ from agent_factory.runtime_attachments import ATTACHMENT_INPUT_DIR
 
 
 RUNTIME_WORKSPACE_ROOT_SESSION_KEY = "runtime_workspace_root"
+PACKAGE_TOOL_SYSTEM_RESOURCE_IDS = frozenset(
+    {"artifacts_root", "package_root", "runtime_root", "workdir_root", "workspace_root"}
+)
 
 
 def runtime_resource_overrides_from_state(state: Any) -> dict[str, Any]:

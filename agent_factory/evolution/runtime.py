@@ -27,6 +27,7 @@ from agent_factory.create_agent.validation_state import package_fingerprint
 from agent_factory.create_agent.workflow import CreateAgentWorkflow
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.evolution.trace_gate import decide_trace_relevance
+from agent_factory.evolution.task_analysis import analyze_evolution_task
 from agent_factory.evolution.target_gate import decide_evolution_target
 from agent_factory.factory_graph.frontend_bridge.event_normalizer import RuntimeEventNormalizer
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent
@@ -292,9 +293,39 @@ class AgentEvolutionRuntime:
                     "reason": "no failed trace is available for this package; evolution will use the user goal and package state only",
                 }
             package_summary = _package_summary(package_id, package_path, package)
+            if resume_payload is None:
+                normalizer.runtime_event(
+                    "node_started",
+                    node_id="agent_evolution_task_analysis",
+                    node_label="Evolution Task Analysis",
+                    node_kind="control",
+                    payload={"package_id": package_id, "visible_to_user": True},
+                )
+                yield from drain_events()
+                task_analysis = analyze_evolution_task(
+                    user_input=context.user_input,
+                    package_summary=package_summary,
+                    trace_context=trace_context,
+                    model=self.model,
+                )
+                workspace.write_task_analysis(task_analysis)
+                workspace.write_system_state(initial_system_manufacturing_state(workflow_kind="evolution"))
+                normalizer.runtime_event(
+                    "node_completed",
+                    node_id="agent_evolution_task_analysis",
+                    node_label="Evolution Task Analysis",
+                    node_kind="control",
+                    payload={
+                        "package_id": package_id,
+                        "visible_to_user": True,
+                        "affected_systems": task_analysis.affected_systems,
+                    },
+                )
+                yield from drain_events()
+            else:
+                task_analysis = workspace.read_task_analysis()
             target_plan = decide_evolution_target(
-                user_goal=context.user_input,
-                package_summary=package_summary,
+                task_analysis=task_analysis.model_dump(mode="json"),
                 trace_context=trace_context,
                 error_pack=provided_error_pack,
             )
@@ -459,6 +490,7 @@ class AgentEvolutionRuntime:
                         "package_summary": package_summary,
                         "trace_gate": trace_context,
                         "target_plan": target_plan.to_context(),
+                        "task_analysis": task_analysis.model_dump(mode="json"),
                         **({"error_pack": provided_error_pack} if provided_error_pack else {}),
                     },
                     "iteration": 0,

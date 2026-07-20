@@ -128,10 +128,70 @@ class CreateAgentTaskAnalysis(BaseModel):
     selected_pattern_id: Literal["react_agent", "plan_and_execute"]
     model_requirements: list[ModelSelectionRequirement] = Field(default_factory=list)
     model_tool_requirements: list[ModelToolSelectionRequirement] = Field(default_factory=list)
+    resource_requirements: list["TaskResourceRequirement"] = Field(default_factory=list)
     reasoning: str = ""
     selection_reason: str = ""
     manufacturing_notes: list[str] = Field(default_factory=list)
     available_patterns: list[str] = Field(default_factory=list)
+    created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+
+
+class TaskResourceRequirement(BaseModel):
+    """A deployment-time resource inferred from a requested capability."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    resource_id: str = Field(min_length=1)
+    description: str = ""
+    required: bool = True
+    value_schema: dict[str, Any] = Field(default_factory=dict)
+    secret_fields: list[str] = Field(default_factory=list)
+    used_by: list[str] = Field(default_factory=list)
+    sandbox_access_expectation: str = ""
+
+    @field_validator("resource_id")
+    @classmethod
+    def _resource_id_is_clean(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("resource_id must not be empty")
+        return normalized
+
+
+EvolutionSystemId = Literal[
+    "package_identity_system",
+    "model_system",
+    "session_system",
+    "state_system",
+    "resources_system",
+    "context_system",
+    "memory_system",
+    "knowledge_system",
+    "tools_system",
+    "package_tool_system",
+    "skillhub_system",
+    "assembly_pattern_system",
+    "scheduler_system",
+    "validation_publish_system",
+    "runtime_infrastructure",
+]
+
+
+class EvolutionTaskAnalysis(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal["evolution_task_analysis.v0"] = "evolution_task_analysis.v0"
+    goal_summary: str = ""
+    selected_pattern_id: Literal["react_agent", "plan_and_execute"]
+    affected_systems: list[EvolutionSystemId] = Field(default_factory=list)
+    capability_changes: list[str] = Field(default_factory=list)
+    model_requirements: list[ModelSelectionRequirement] = Field(default_factory=list)
+    model_tool_requirements: list[ModelToolSelectionRequirement] = Field(default_factory=list)
+    resource_requirements: list[TaskResourceRequirement] = Field(default_factory=list)
+    tool_source_decisions: list[str] = Field(default_factory=list)
+    preserved_systems: list[EvolutionSystemId] = Field(default_factory=list)
+    validation_focuses: list[str] = Field(default_factory=list)
+    reasoning: str = ""
     created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
@@ -220,6 +280,7 @@ class SystemManufacturingState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     version: Literal["system_manufacturing_state.v0"] = "system_manufacturing_state.v0"
+    workflow_kind: Literal["manufacture", "evolution"] = "manufacture"
     stages: list[SystemStage] = Field(default_factory=list)
     active_focus_id: str = ""
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
@@ -520,14 +581,18 @@ class CreateAgentPublishDecision(BaseModel):
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
-def initial_system_manufacturing_state() -> SystemManufacturingState:
+def initial_system_manufacturing_state(
+    *,
+    workflow_kind: Literal["manufacture", "evolution"] = "manufacture",
+) -> SystemManufacturingState:
+    evolution = workflow_kind == "evolution"
     stages = [
         _stage(
             "requirement_focus",
             1,
             "Requirement focus",
             [RESOURCES_FILE, "agent_package.json", "assembly_spec.json", "contracts/resources.json"],
-            [],
+            ["01-evolution-requirement-focus"] if evolution else ["00-manufacturing-control", "01-package-identity-system", "05-resources-system"],
             "workspace_hygiene",
             "Clarify user intent, package identity, missing resources, secrets, schedules, and manufacturable capability boundaries.",
         ),
@@ -550,7 +615,21 @@ def initial_system_manufacturing_state() -> SystemManufacturingState:
                 "contracts/memory.json",
                 "assembly_spec.json",
             ],
-            [],
+            ["02-evolution-capability-implementation"] if evolution else [
+                "01-package-identity-system",
+                "02-model-system",
+                "03-session-system",
+                "04-state-system",
+                "05-resources-system",
+                "06-context-system",
+                "07-memory-system",
+                "08-knowledge-system",
+                "09-tools-system",
+                "10-package-tool-system",
+                "11-skillhub-system",
+                "14-scheduler-system",
+                "15-scheduler-seed-system",
+            ],
             "runtime_contract_build",
             "Implement one user-facing capability increment at a time. Baseline package and contracts are already scaffolded; do not audit them.",
         ),
@@ -559,7 +638,7 @@ def initial_system_manufacturing_state() -> SystemManufacturingState:
             3,
             "Experience assembly",
             ["assembly_spec.json"],
-            [],
+            ["03-evolution-experience-assembly"] if evolution else ["12-assembly-pattern-system"],
             "assembly_compile",
             "Bind implemented capabilities into runtime assembly and user-visible experience only after capability files exist.",
         ),
@@ -568,13 +647,17 @@ def initial_system_manufacturing_state() -> SystemManufacturingState:
             4,
             "Validation and publish",
             [],
-            [],
+            ["04-evolution-validation-publish"] if evolution else ["17-final-validation-repair"],
             "full_static",
             "Run full validation, repair from evidence, and finalize only when the package is ready.",
         ),
     ]
     started = stages[0].model_copy(update={"status": SystemStageStatus.in_progress})
-    return SystemManufacturingState(stages=[started, *stages[1:]], active_focus_id=started.system_id)
+    return SystemManufacturingState(
+        workflow_kind=workflow_kind,
+        stages=[started, *stages[1:]],
+        active_focus_id=started.system_id,
+    )
 
 
 def _stage(

@@ -18,7 +18,7 @@ def build_create_agent_stage_tool_spec() -> ToolSpec:
     return ToolSpec(
         id=CREATE_AGENT_STAGE_TOOL_ID,
         description=(
-            "Inspect and explicitly set the active create-agent manufacturing focus. "
+            "Inspect and explicitly set the active create-agent authoring focus for manufacturing or evolution. "
             "Use this instead of editing .factory/system_state.json directly."
         ),
         entrypoint="agent_factory.create_agent.stage_tool:run",
@@ -77,13 +77,13 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     state = context.read_state()
     action = str(arguments.get("action") or "").strip()
     if action == "inspect":
-        return tool_envelope(_output(action=action, message="Current create-agent manufacturing focus state.", state=state, workspace=workspace))
+        return tool_envelope(_output(action=action, message="Current create-agent authoring focus state.", state=state, workspace=workspace))
     if action == "set_focus":
         focus_id = _requested_focus_id(arguments)
         _reason(arguments)
         state = state.set_focus(focus_id)
         context.write_state(state)
-        return tool_envelope(_output(action=action, message=f"Active manufacturing focus set to: {focus_id}", state=state, workspace=workspace))
+        return tool_envelope(_output(action=action, message=f"Active authoring focus set to: {focus_id}", state=state, workspace=workspace))
     if action == "mark_waiting_user":
         stage = _active_stage(state)
         state = state.update_stage(stage.model_copy(update={"status": SystemStageStatus.blocked_waiting_user}))
@@ -179,14 +179,16 @@ def _output(*, action: str, message: str, state: SystemManufacturingState, works
         "latest_validation": _latest_validation_digest(workspace=workspace, state=state),
         "updated_at": datetime.now(UTC).isoformat(),
         "warnings": _stage_warnings(workspace=workspace, state=state),
-        "manufacturing_guidance": _manufacturing_guidance(active),
+        "manufacturing_guidance": _manufacturing_guidance(active, workflow_kind=state.workflow_kind),
     }
 
 
-def _manufacturing_guidance(active: Any) -> dict[str, Any]:
+def _manufacturing_guidance(active: Any, *, workflow_kind: str) -> dict[str, Any]:
     focus_id = active.system_id if active else ""
     guidance: dict[str, Any] = {
-        "baseline_package_is_scaffolded": True,
+        "workflow_kind": workflow_kind,
+        "baseline_package_is_scaffolded": workflow_kind == "manufacture",
+        "existing_package_is_baseline": workflow_kind == "evolution",
         "focus_files_are_advisory": True,
     }
     if focus_id == "capability_implementation":
@@ -202,12 +204,30 @@ def _manufacturing_guidance(active: Any) -> dict[str, Any]:
 
 def _task_analysis_digest(workspace: CreateAgentWorkspace) -> dict[str, Any]:
     task = workspace.read_task_analysis()
-    return {
+    payload = task.model_dump(mode="json")
+    digest = {
+        "version": payload.get("version", ""),
         "selected_pattern_id": task.selected_pattern_id,
-        "requires_dynamic_plan": task.requires_dynamic_plan,
-        "intent_summary": task.intent_summary,
-        "capability_goals": task.capability_goals[:8],
+        "resource_requirements": payload.get("resource_requirements", [])[:8],
     }
+    if payload.get("version") == "evolution_task_analysis.v0":
+        digest.update(
+            {
+                "goal_summary": payload.get("goal_summary", ""),
+                "affected_systems": payload.get("affected_systems", [])[:8],
+                "capability_changes": payload.get("capability_changes", [])[:8],
+                "preserved_systems": payload.get("preserved_systems", [])[:8],
+            }
+        )
+    else:
+        digest.update(
+            {
+                "requires_dynamic_plan": payload.get("requires_dynamic_plan", False),
+                "intent_summary": payload.get("intent_summary", ""),
+                "capability_goals": payload.get("capability_goals", [])[:8],
+            }
+        )
+    return digest
 
 
 def _latest_validation_digest(*, workspace: CreateAgentWorkspace, state: SystemManufacturingState) -> dict[str, Any] | None:

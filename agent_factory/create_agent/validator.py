@@ -30,6 +30,7 @@ from agent_factory.runtime_contracts.schema import (
     PACKAGE_INFRASTRUCTURE_CONTRACTS,
     REQUIRED_AGENT_PACKAGE_CONTRACTS,
     SchedulerSeedContract,
+    ResourcesContract,
     ToolsContract,
 )
 from agent_factory.runtime_kernel.kernel import RuntimeKernelFacade
@@ -43,6 +44,7 @@ from agent_factory.tooling.package_tool_spec import (
     package_tool_source_path,
 )
 from agent_factory.tooling.providers import PackageToolProvider, ToolProviderContext
+from agent_factory.tooling.runtime_resources import PACKAGE_TOOL_SYSTEM_RESOURCE_IDS
 from agent_factory.tooling.skills import SKILL_TOOL_ID
 from agent_factory.tooling.skills.schema import SkillGatewayState
 
@@ -126,6 +128,13 @@ class CreateAgentPackageValidator:
         )
         if knowledge_source_report is not None:
             return knowledge_source_report
+        resource_binding_report = _package_tool_resource_binding_report(
+            root,
+            scope=scope,
+            changed_files=changed,
+        )
+        if resource_binding_report is not None:
+            return resource_binding_report
         if scope in {"python_syntax", "full_static"}:
             syntax_report = _python_syntax(root, changed)
             if syntax_report is not None:
@@ -174,6 +183,65 @@ def _static_validation_compiler() -> AgentAssemblyCompiler:
             checkpointer_config=LangGraphCheckpointerConfig(backend="memory"),
             memory_store_config=LangGraphStoreConfig(backend="memory"),
         )
+    )
+
+
+def _package_tool_resource_binding_report(
+    root: Path,
+    *,
+    scope: ValidationScope,
+    changed_files: list[str],
+) -> PackageValidationReport | None:
+    contract = ResourcesContract.model_validate_json(
+        (root / "contracts" / "resources.json").read_text(encoding="utf-8")
+    )
+    descriptors = {item.resource_id: item for item in contract.config.resource_descriptors}
+    issues: list[PackageValidationIssue] = []
+    package_tools = PackageToolProvider().discover(ToolProviderContext(package_root=root)).tool_specs
+    for spec in package_tools:
+        package_resource_ids = {
+            selector.split(".", 1)[0]
+            for selector in spec.resources.values()
+            if selector.split(".", 1)[0] not in PACKAGE_TOOL_SYSTEM_RESOURCE_IDS
+        }
+        for resource_id in sorted(package_resource_ids):
+            descriptor = descriptors.get(resource_id)
+            if descriptor is None:
+                issues.append(
+                    PackageValidationIssue(
+                        where="package_tool.resource_descriptor",
+                        summary=f"package tool {spec.id} references undeclared resource {resource_id}",
+                        message="Every package-owned resource selector must resolve to a published Resource Descriptor.",
+                        path=f"tools/{spec.id}/manifest.json",
+                        expected=f"contracts/resources.json declares {resource_id} and names {spec.id} in used_by.",
+                        actual="resource descriptor is missing",
+                        repair_hint="Re-run create_agent_authoring(action='upsert_package_tool') with the matching resource_descriptors in the same coherent authoring call.",
+                        target_files=[f"tools/{spec.id}/manifest.json", "contracts/resources.json"],
+                        recommended_skill="10-package-tool-system",
+                    )
+                )
+            elif spec.id not in descriptor.used_by:
+                issues.append(
+                    PackageValidationIssue(
+                        where="package_tool.resource_usage",
+                        summary=f"resource {resource_id} does not declare package tool {spec.id} as a consumer",
+                        message="Resource Descriptor used_by must match ToolSpec resource selectors.",
+                        path="contracts/resources.json",
+                        expected=f"{resource_id}.used_by contains {spec.id}.",
+                        actual=", ".join(descriptor.used_by) or "empty",
+                        repair_hint="Re-run create_agent_authoring(action='upsert_package_tool') with an aligned descriptor and ToolSpec selector.",
+                        target_files=["contracts/resources.json", f"tools/{spec.id}/manifest.json"],
+                        recommended_skill="05-resources-system",
+                    )
+                )
+    if not issues:
+        return None
+    return PackageValidationReport(
+        package_root=str(root),
+        validation_scope=scope,  # type: ignore[arg-type]
+        changed_files=changed_files,
+        summary="Package Tool resource selectors and Resource Descriptors are inconsistent.",
+        issues=issues,
     )
 
 

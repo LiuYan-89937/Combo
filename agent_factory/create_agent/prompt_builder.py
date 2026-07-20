@@ -170,7 +170,7 @@ def _invariant_system_prompt_text() -> str:
             "模型池绑定只允许 create_agent_authoring(action='configure_model_bindings', bindings={main/task/compression...}, tool_bindings={...})；"
             "tool_bindings 与 bindings 是同级参数，绝不能塞进 bindings 内部。"
             "package tool 只允许 create_agent_authoring(action='upsert_package_tool', tool_spec=业务 ToolSpec 字段, tool_source=完整源码, "
-            "python_requirements=[...], install_timeout_seconds=<estimated positive seconds>, expose_to_nodes=[...])；"
+            "python_requirements=[...], install_timeout_seconds=<estimated positive seconds>, expose_to_nodes=[...], resource_descriptors=[...])；"
             "tool_spec 只允许包含 id、description、input_schema、output_schema、resources、risk_level、concurrent、output_compression；"
             "不要传 entrypoint、risk_evaluator、permission_scope 或 permission_tags，这些系统字段由 create_agent_authoring 统一生成。"
             "生成的 package tool 固定写入 tools/<tool_id>/tool.py，系统会生成 entrypoint=python:tools/<tool_id>/tool.py:run；"
@@ -180,7 +180,9 @@ def _invariant_system_prompt_text() -> str:
             "如果工具输出包含长列表、搜索候选、外部资源 id/slug/path、日志、报告或其他压缩后仍需保真的机器字段，给 tool_spec.output_compression.actions 写 action 级结构化 schema 和个性化 prompt；"
             "单链路工具把个性压缩当作唯一 action 配置；多 action 工具使用 output_compression.action_argument 和 actions 分别配置每个 action。没有 action 配置时直接走系统默认压缩。"
             "声明 Python 或系统包依赖时，必须填写 install_timeout_seconds；根据依赖体积、平台和网络状况估算，不要假定固定时长。"
-            "运行时资源只在 contracts/resources.json 声明 descriptor；需要用户填写时先用 create_agent_authoring(action='upsert_resources', resources={}, resource_descriptors=[...]) 写声明，再调用 create_agent_control(action='ask_user', resource_requests=[{resource_id, description, secret}])。秘密值由前端安全写入资源存储，不会回传给模型。"
+            "运行时资源只在 contracts/resources.json 声明 descriptor。先根据 task_analysis.resource_requirements 判断账户、凭据、API Key、邮箱、数据库连接、固定端点、默认收件人等部署配置，禁止把这些字段编进 tool input_schema 或源码。"
+            "Package Tool 消费 Resource 时，在同一次 upsert_package_tool 中传 resource_descriptors，并让 tool_spec.resources selector 与 descriptor.resource_id 对齐、descriptor.used_by 包含 tool id、tool_source 只从 resources 读取。"
+            "不属于 Package Tool 的独立资源才使用 upsert_resources；需要用户填写时调用 create_agent_control(action='ask_user', resource_requests=[{resource_id, description, secret}])。秘密值由前端安全写入资源存储，不会回传给模型。"
             "调用 create_agent_probe_tool(action='call') 时，必须填写 timeout_seconds，且应覆盖依赖初始化与目标工具实际执行的总时长。"
         ),
         (
@@ -282,11 +284,12 @@ def _dynamic_system_context_text(
     state: Mapping[str, Any],
 ) -> str:
     task_analysis = _task_analysis_context(state)
+    stage_context = build_authoring_stage_context(state)
     interaction_turn = _interaction_turn_context(state)
     attachments = format_attachments_for_model(state.get("runtime_attachments"))
     interrupt_answer = _interrupt_answer_context(state.get("interrupt_answer"))
     return "\n\n".join(
-        item for item in [task_analysis, interaction_turn, interrupt_answer, attachments] if item
+        item for item in [task_analysis, stage_context, interaction_turn, interrupt_answer, attachments] if item
     )
 
 
@@ -338,6 +341,7 @@ def _task_analysis_context(state: Mapping[str, Any]) -> str:
         "intent_summary": str(payload.get("intent_summary") or ""),
         "capability_goals": payload.get("capability_goals") if isinstance(payload.get("capability_goals"), list) else [],
         "manufacturing_notes": payload.get("manufacturing_notes") if isinstance(payload.get("manufacturing_notes"), list) else [],
+        "resource_requirements": payload.get("resource_requirements") if isinstance(payload.get("resource_requirements"), list) else [],
     }
     return (
         "Create-agent task analysis completed before scaffolding:\n"
@@ -350,6 +354,40 @@ def _task_analysis_context(state: Mapping[str, Any]) -> str:
             if selected_pattern_id == "plan_and_execute"
             else ""
         )
+    )
+
+
+def build_authoring_stage_context(state: Mapping[str, Any]) -> str:
+    workspace_path = str(state.get("workspace_path") or "").strip()
+    if not workspace_path:
+        return ""
+    path = Path(workspace_path) / ".factory" / "system_state.json"
+    if not path.is_file():
+        return ""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    active_focus_id = str(payload.get("active_focus_id") or "")
+    stages = payload.get("stages") if isinstance(payload.get("stages"), list) else []
+    active = next(
+        (item for item in stages if isinstance(item, dict) and item.get("system_id") == active_focus_id),
+        {},
+    )
+    return (
+        "Current authoring stage:\n"
+        + json.dumps(
+            {
+                "workflow_kind": payload.get("workflow_kind", "manufacture"),
+                "active_focus_id": active_focus_id,
+                "focus_summary": active.get("focus_summary", ""),
+                "suggested_skills": active.get("suggested_skills", []),
+                "validation_focus": active.get("validation_focus", ""),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        + "\nLoad the relevant suggested skill for this stage before making its first material change."
     )
 
 
