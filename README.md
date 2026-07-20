@@ -80,6 +80,8 @@ The detailed component model and isolation boundaries are documented in [Agent A
 
 Model profiles describe context size, YaRN capability, output limit, slot concurrency, KV cache types, Flash Attention, MTP, GPU layers, and VRAM estimates. Model files are downloaded at deployment time and are not stored in this repository.
 
+The default deployment activates FLUX together with Chat and Embedding, waits for all enabled runtimes to become ready, and configures image generation at 1024×1024 with eager loading enabled.
+
 ## Requirements
 
 ### Control Host

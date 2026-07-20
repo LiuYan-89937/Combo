@@ -59,7 +59,10 @@ def main() -> None:
         if image_profile.enabled:
             store.disable_other_profiles("image_generation", image_profile.profile_id)
             store.set_default_profile_id("image_generation", image_profile.profile_id)
-        store.set_active_profile_id("image_generation", None)
+        store.set_active_profile_id(
+            "image_generation",
+            image_profile.profile_id if image_profile.enabled else None,
+        )
         return
     chat_inference = LlamaCppInferenceConfig(
         gpu_layers=args.gpu_layers,
@@ -217,7 +220,10 @@ def main() -> None:
         store.set_default_profile_id("image_generation", image_profile.profile_id)
     store.set_active_profile_id("chat", chat_profile.profile_id)
     store.set_active_profile_id("embedding", embedding_profile.profile_id)
-    store.set_active_profile_id("image_generation", None)
+    store.set_active_profile_id(
+        "image_generation",
+        image_profile.profile_id if image_profile.enabled else None,
+    )
 
 
 def _upsert_image_profile(store: ModelPoolStore, args: argparse.Namespace) -> ModelPoolProfile:
@@ -356,8 +362,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--image-offload-to-cpu", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--image-max-vram-gib", type=float)
     parser.add_argument("--image-stream-layers", type=int)
-    parser.add_argument("--image-default-width", type=int, default=768)
-    parser.add_argument("--image-default-height", type=int, default=768)
+    parser.add_argument("--image-default-width", type=int, default=1024)
+    parser.add_argument("--image-default-height", type=int, default=1024)
     parser.add_argument("--image-default-steps", type=int, default=20)
     parser.add_argument("--image-default-cfg-scale", type=float, default=1.0)
     parser.add_argument("--image-residency-policy", choices=("coexist_if_fit", "exclusive"), default="coexist_if_fit")

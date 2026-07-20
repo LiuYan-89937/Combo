@@ -257,7 +257,7 @@ TAVILY_API_KEY=<your-tavily-api-key>
 
 FLUX.1-dev Q4_0 由远端 `sd-server` 提供 OpenAI-compatible Images API。Agent 沿用项目已有的 `image_output` 模型工具链，生成结果写入当前 Package Workspace 的 `images/`；模型上下文只接收路径和元数据，不注入 base64。
 
-图片 Profile 默认启用 eager load，`sd-server` 启动后会立即将模型参数加载到配置的计算后端。可通过部署配置中的 `IMAGE_EAGER_LOAD=0` 恢复首次生图时再加载的行为。
+图片 Profile 默认启用并设为 active；部署会拉起 `sd-server`，等待 FLUX 真正进入 `ready` 后才完成。默认生成尺寸为 1024×1024，并启用 eager load，使模型参数在服务启动时立即加载到配置的计算后端。可通过部署配置中的 `IMAGE_ENABLED=0` 禁用图片运行时，或用 `IMAGE_EAGER_LOAD=0` 改为首次生图时加载。
 
 Image Profile 默认允许在显存预算足够时与 Chat 同时驻留，模型配置页会展示实时显存预算和运行状态。FLUX.1-dev 受其 Non-Commercial License 约束，提交和演示前需确认使用范围。
 

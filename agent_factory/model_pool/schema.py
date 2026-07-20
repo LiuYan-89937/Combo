@@ -245,8 +245,8 @@ class StableDiffusionCppInferenceConfig(BaseModel):
     offload_to_cpu: bool = False
     max_vram_gib: float | None = Field(default=None, gt=0)
     stream_layers: int | None = Field(default=None, ge=1)
-    default_width: int = Field(default=768, ge=64, le=4096, multiple_of=64)
-    default_height: int = Field(default=768, ge=64, le=4096, multiple_of=64)
+    default_width: int = Field(default=1024, ge=64, le=4096, multiple_of=64)
+    default_height: int = Field(default=1024, ge=64, le=4096, multiple_of=64)
     default_steps: int = Field(default=20, ge=1, le=200)
     default_cfg_scale: float = Field(default=1.0, ge=0, le=30)
     default_sampler: str = "euler"

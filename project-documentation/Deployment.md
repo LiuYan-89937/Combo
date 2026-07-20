@@ -146,6 +146,8 @@ The workflow is idempotent and performs these stages:
 
 Validated model files are reused on later runs. Partial downloads resume instead of restarting.
 
+By default, the FLUX image profile is enabled and active. Deployment waits for Chat, Embedding, and FLUX to report `ready`; FLUX uses eager loading and a 1024×1024 default generation size. Set `IMAGE_ENABLED=0` only when the image runtime should remain disabled.
+
 Open `http://localhost:3000` after readiness completes.
 
 ## 6. Acceptance Checks

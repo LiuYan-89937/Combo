@@ -175,6 +175,8 @@ SSH 模式完全相同的进程与接口，Web 端通过回环端口直接访问
 | `IMAGE_*_URL/SHA256/SIZE_BYTES` | FLUX 四件套 ModelScope 国内直链与完整性信息 | 固定并校验 |
 | `IMAGE_RESIDENCY_POLICY` | Chat 与 Image 显存共存策略 | `coexist_if_fit` |
 | `IMAGE_EAGER_LOAD` | sd-server 启动时立即把图片模型参数加载到配置的计算后端 | `1` |
+| `IMAGE_ENABLED` | 部署后启用并自动加载 FLUX 图片运行时 | `1` |
+| `IMAGE_DEFAULT_WIDTH/HEIGHT` | 默认图片生成尺寸 | `1024 × 1024` |
 | `CHAT_CONTEXT_SIZE` | 每并发槽位的目标上下文；超过原生值时自动计算 YaRN 因子 | `256000` |
 | `CHAT_CACHE_TYPE_K/V` | KV Cache 类型 | `q8_0` |
 | `CHAT_PARALLEL_SLOTS` | Chat 并发槽位 | `1` |
@@ -225,16 +227,16 @@ Worker 租约以协作任务为唯一边界。同一个 AgentPackage 可以在�
 11. 下载并校验 FLUX.1-dev Q4_0、VAE、CLIP-L 与 T5XXL。
 12. 幂等同步 Chat、Embedding、Image Generation 的节点 Profile 与 Web external Profile，并清理不属于当前部署清单的旧模型与推理配置。
 13. 设置 `main`、`task`、`compression` 和 `embedding` 默认 Profile。
-14. 激活 `LLAMA_DEFAULT_IMPLEMENTATION`，启动推理节点并等待 Chat 与 Embedding 都进入 `ready`。
+14. 激活 `LLAMA_DEFAULT_IMPLEMENTATION`，启动推理节点并等待 Chat、Embedding 与已启用的 Image Generation 都进入 `ready`。
 15. 生成 `.env`；SSH 目标建立隧道，本机目标直连节点，随后启动前后端；传入 `--no-web` 时跳过 Web 启动。
 
 首次下载和编译时间取决于网络、磁盘和 Radeon GPU 主机 CPU。终端会直接显示 curl 与 ModelScope 下载进度。
 
 ### 5.1 FLUX.1-dev 与 13GB 显存
 
-部署使用 `stable-diffusion.cpp + FLUX.1-dev Q4_0`，四个文件总计约 16.3GB，其中 T5XXL FP16 常驻 CPU 内存。默认参数为单并发、768×768、20 Steps、CFG 1.0、Euler、Diffusion Flash Attention、CLIP/T5 CPU 和 VAE Tiling。
+部署使用 `stable-diffusion.cpp + FLUX.1-dev Q4_0`，四个文件总计约 16.3GB，其中 T5XXL FP16 常驻 CPU 内存。默认参数为单并发、1024×1024、20 Steps、CFG 1.0、Euler、Diffusion Flash Attention、CLIP/T5 CPU 和 VAE Tiling。
 
-Image Profile 在推理节点注册为 enabled，供控制节点识别；Web 端 external Profile 默认 disabled，因此首次启动不会占用显存。图片运行配置默认启用 `eager_load`，`sd-server` 启动后会立即将参数加载到配置的计算后端；默认 `coexist_if_fit` 允许 Chat 与 Image 在显存预算足够时同时驻留。模型工具复用 `main` 的 `image_output` 抽象，只把 `sd-server` 当作调用接口，图片产物由 ArtifactStore 保存到当前 Agent Workspace。
+Image Profile 在推理节点和 Web 端都默认启用并设为 active。部署会启动 `sd-server` 并等待 FLUX 进入 `ready`，因此完成后可以直接调用图片模型。图片运行配置默认启用 `eager_load`；默认 `coexist_if_fit` 允许 Chat 与 Image 在显存预算足够时同时驻留。模型工具复用 `main` 的 `image_output` 抽象，只把 `sd-server` 当作调用接口，图片产物由 ArtifactStore 保存到当前 Agent Workspace。
 
 FLUX.1-dev 使用 Non-Commercial License，不等同于 Apache/MIT。比赛演示和提交前应保留模型来源、revision、SHA256 与许可证说明。
 

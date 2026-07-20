@@ -653,7 +653,7 @@ const profileForm = reactive({
   vae_path: '', clip_l_path: '', t5xxl_path: '',
   diffusion_flash_attention: true, eager_load: true, clip_on_cpu: true, vae_tiling: true,
   offload_to_cpu: false, max_vram_gib: null as number | null, stream_layers: null as number | null,
-  default_width: 768, default_height: 768, default_steps: 20, default_cfg_scale: 1.0,
+  default_width: 1024, default_height: 1024, default_steps: 20, default_cfg_scale: 1.0,
   default_sampler: 'euler', residency_policy: 'coexist_if_fit' as 'coexist_if_fit' | 'exclusive',
 })
 
@@ -1263,8 +1263,8 @@ function applyImageRuntimeConfiguration(
   profileForm.offload_to_cpu = inference?.offload_to_cpu ?? false
   profileForm.max_vram_gib = inference?.max_vram_gib ?? null
   profileForm.stream_layers = inference?.stream_layers ?? null
-  profileForm.default_width = inference?.default_width ?? 768
-  profileForm.default_height = inference?.default_height ?? 768
+  profileForm.default_width = inference?.default_width ?? 1024
+  profileForm.default_height = inference?.default_height ?? 1024
   profileForm.default_steps = inference?.default_steps ?? 20
   profileForm.default_cfg_scale = inference?.default_cfg_scale ?? 1.0
   profileForm.default_sampler = inference?.default_sampler ?? 'euler'

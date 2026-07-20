@@ -827,14 +827,14 @@ image_profile_arguments() {
         --image-t5xxl-path "${IMAGE_T5XXL_PATH}"
         --image-revision "${STABLE_DIFFUSION_CPP_REVISION:-}"
         --image-checksum "${IMAGE_MODEL_SHA256}"
-        --image-enabled
+        "$(boolean_flag "${IMAGE_ENABLED:-1}" image-enabled)"
         "$(boolean_flag "${IMAGE_DIFFUSION_FLASH_ATTENTION:-1}" image-diffusion-flash-attention)"
         "$(boolean_flag "${IMAGE_EAGER_LOAD:-1}" image-eager-load)"
         "$(boolean_flag "${IMAGE_CLIP_ON_CPU:-1}" image-clip-on-cpu)"
         "$(boolean_flag "${IMAGE_VAE_TILING:-1}" image-vae-tiling)"
         "$(boolean_flag "${IMAGE_OFFLOAD_TO_CPU:-0}" image-offload-to-cpu)"
-        --image-default-width "${IMAGE_DEFAULT_WIDTH:-768}"
-        --image-default-height "${IMAGE_DEFAULT_HEIGHT:-768}"
+        --image-default-width "${IMAGE_DEFAULT_WIDTH:-1024}"
+        --image-default-height "${IMAGE_DEFAULT_HEIGHT:-1024}"
         --image-default-steps "${IMAGE_DEFAULT_STEPS:-20}"
         --image-default-cfg-scale "${IMAGE_DEFAULT_CFG_SCALE:-1.0}"
         --image-residency-policy "${IMAGE_RESIDENCY_POLICY:-coexist_if_fit}"
@@ -969,24 +969,28 @@ wait_ready() {
     done
     curl --fail --silent --max-time 3 "${health_url}" >/dev/null \
         || fail "Inference control endpoint did not become healthy"
-    log "Control endpoint is healthy; waiting for Chat and Embedding profiles"
+    log "Control endpoint is healthy; waiting for enabled inference profiles"
     for attempt in {1..900}; do
         if curl --fail --silent --max-time 5 "${runtime_url}" \
-            | "${PYTHON_BIN}" -c '
+            | IMAGE_ENABLED="${IMAGE_ENABLED:-1}" "${PYTHON_BIN}" -c '
 import json
+import os
 import sys
 
 payload = json.load(sys.stdin)
 states = {item.get("kind"): item.get("phase") for item in payload.get("runtimes", [])}
-raise SystemExit(0 if states.get("chat") == states.get("embedding") == "ready" else 1)
+required = ["chat", "embedding"]
+if os.environ.get("IMAGE_ENABLED", "1") == "1":
+    required.append("image_generation")
+raise SystemExit(0 if all(states.get(kind) == "ready" for kind in required) else 1)
 '; then
-            log "Chat and Embedding runtimes are ready"
+            log "All enabled inference profiles are ready"
             return
         fi
         sleep 1
     done
     tail -n 120 "${LOG_FILE}" 2>/dev/null || true
-    fail "Model loading did not finish within 900 seconds"
+    fail "Chat, embedding, or image model loading did not finish within 900 seconds"
 }
 
 status() {

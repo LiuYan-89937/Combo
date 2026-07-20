@@ -370,13 +370,13 @@ configure_local_profiles() {
         --image-vae-path "${REMOTE_MODEL_ROOT}/image/flux1-dev-q4_0/${IMAGE_VAE_FILENAME}" \
         --image-clip-l-path "${REMOTE_MODEL_ROOT}/image/flux1-dev-q4_0/${IMAGE_CLIP_L_FILENAME}" \
         --image-t5xxl-path "${REMOTE_MODEL_ROOT}/image/flux1-dev-q4_0/${IMAGE_T5XXL_FILENAME}" \
-        "$(boolean_argument "${IMAGE_ENABLED:-0}" image-enabled)" \
+        "$(boolean_argument "${IMAGE_ENABLED:-1}" image-enabled)" \
         "$(boolean_argument "${IMAGE_DIFFUSION_FLASH_ATTENTION:-1}" image-diffusion-flash-attention)" \
         "$(boolean_argument "${IMAGE_EAGER_LOAD:-1}" image-eager-load)" \
         "$(boolean_argument "${IMAGE_CLIP_ON_CPU:-1}" image-clip-on-cpu)" \
         "$(boolean_argument "${IMAGE_VAE_TILING:-1}" image-vae-tiling)" \
-        --image-default-width "${IMAGE_DEFAULT_WIDTH:-768}" \
-        --image-default-height "${IMAGE_DEFAULT_HEIGHT:-768}" \
+        --image-default-width "${IMAGE_DEFAULT_WIDTH:-1024}" \
+        --image-default-height "${IMAGE_DEFAULT_HEIGHT:-1024}" \
         --image-default-steps "${IMAGE_DEFAULT_STEPS:-20}" \
         --image-default-cfg-scale "${IMAGE_DEFAULT_CFG_SCALE:-1.0}" \
         --image-residency-policy "${IMAGE_RESIDENCY_POLICY:-exclusive}" \
