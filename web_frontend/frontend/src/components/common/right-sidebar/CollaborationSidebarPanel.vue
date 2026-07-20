@@ -100,18 +100,19 @@
           <span>{{ t('workspace.readingFile') }}</span>
         </div>
         <FilePreview
-          v-else-if="runtimeStore.workspaceFile"
+          v-if="runtimeStore.workspaceFile"
           :file="runtimeStore.workspaceFile"
           @close="closeAcceptanceFilePreview"
         />
         <WorkspaceExplorer
-          v-else-if="acceptanceWorkspaceContext"
+          v-if="acceptanceWorkspaceContext"
+          v-show="!acceptancePreviewLoading && !runtimeStore.workspaceFile"
           class="acceptance-workspace-explorer"
           :workspace-context="acceptanceWorkspaceContext"
           fixed-scope="workdir"
           @select-file="handleAcceptanceFileSelect"
         />
-        <n-empty v-else :description="t('collaboration.empty')" size="small" />
+        <n-empty v-if="!acceptanceWorkspaceContext" :description="t('collaboration.empty')" size="small" />
       </div>
     </section>
 

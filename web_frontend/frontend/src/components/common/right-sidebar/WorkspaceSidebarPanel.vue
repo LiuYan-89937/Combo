@@ -1,16 +1,6 @@
 <template>
   <div class="workspace-sidebar-content">
-    <div v-if="previewLoading && !runtimeStore.workspaceFile" class="workspace-loading">
-      <n-spin size="small" />
-      <n-text depth="3">{{ t('workspace.readingFile') }}</n-text>
-    </div>
-    <FilePreview
-      v-else-if="runtimeStore.workspaceFile"
-      :file="runtimeStore.workspaceFile"
-      @close="closeWorkspacePreview"
-      @deleted="closeWorkspacePreview"
-    />
-    <div v-else class="workspace-browser">
+    <div v-show="!previewLoading && !runtimeStore.workspaceFile" class="workspace-browser">
       <div class="context-bar">
         <n-text depth="3">{{ t('workspace.context', { label: workspaceContextLabel }) }}</n-text>
       </div>
@@ -20,6 +10,16 @@
         @select-file="handleWorkspaceFileSelect"
       />
     </div>
+    <div v-if="previewLoading && !runtimeStore.workspaceFile" class="workspace-loading">
+      <n-spin size="small" />
+      <n-text depth="3">{{ t('workspace.readingFile') }}</n-text>
+    </div>
+    <FilePreview
+      v-if="runtimeStore.workspaceFile"
+      :file="runtimeStore.workspaceFile"
+      @close="closeWorkspacePreview"
+      @deleted="closeWorkspacePreview"
+    />
   </div>
 </template>
 

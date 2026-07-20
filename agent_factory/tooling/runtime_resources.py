@@ -33,7 +33,9 @@ def runtime_resource_overrides_from_state(state: Any) -> dict[str, Any]:
     return {
         "filesystem": dict(workspace_boundary),
         "process_runtime": dict(workspace_boundary),
+        "artifacts_root": root,
         "workdir_root": root,
+        "workspace_root": root,
     }
 
 
