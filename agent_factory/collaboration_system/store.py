@@ -1326,7 +1326,6 @@ class CollaborationStore:
             if status in WORKER_LEASE_HOLDING_TASK_STATUSES:
                 if not self._worker_lease_owned_conn(
                     conn,
-                    package_id=str(current["assignee_package_id"]),
                     collaboration_id=collaboration_id,
                     task_id=task_id,
                 ):
@@ -1369,7 +1368,6 @@ class CollaborationStore:
             if current["status"] == "blocked" and status not in WORKER_LEASE_HOLDING_TASK_STATUSES:
                 self._release_worker_lease_conn(
                     conn,
-                    package_id=str(current["assignee_package_id"]),
                     collaboration_id=collaboration_id,
                     task_id=task_id,
                 )
@@ -1842,16 +1840,7 @@ class CollaborationStore:
                 on collaboration_main_agent_event_archive(collaboration_id, archived_at)
                 """
             )
-            conn.execute(
-                """
-                create table if not exists collaboration_worker_leases (
-                  assignee_package_id text primary key,
-                  collaboration_id text not null,
-                  task_id text not null unique,
-                  acquired_at text not null
-                )
-                """
-            )
+            self._ensure_worker_leases_schema(conn)
             conn.execute(
                 """
                 create table if not exists collaboration_task_retry_cleanups (
@@ -1885,6 +1874,61 @@ class CollaborationStore:
             self._ensure_column(conn, "collaboration_tasks", "depends_on_json", "text not null default '[]'")
             self._ensure_column(conn, "collaboration_tasks", "started_at", "text")
             self._ensure_column(conn, "collaboration_tasks", "completed_at", "text")
+
+    @staticmethod
+    def _ensure_worker_leases_schema(conn: sqlite3.Connection) -> None:
+        table_name = "collaboration_worker_leases"
+        columns = conn.execute(f"pragma table_info({table_name})").fetchall()
+        if not columns:
+            CollaborationStore._create_worker_leases_table(conn)
+            return
+        primary_keys = [
+            str(row["name"])
+            for row in sorted(columns, key=lambda item: int(item["pk"]))
+            if int(row["pk"]) > 0
+        ]
+        if primary_keys == ["task_id"]:
+            CollaborationStore._create_worker_leases_indexes(conn)
+            return
+        legacy_name = f"{table_name}_legacy"
+        conn.execute(f"drop table if exists {legacy_name}")
+        conn.execute(f"alter table {table_name} rename to {legacy_name}")
+        CollaborationStore._create_worker_leases_table(conn)
+        conn.execute(
+            f"""
+            insert or ignore into {table_name} (
+              task_id, collaboration_id, assignee_package_id, acquired_at
+            )
+            select task_id, collaboration_id, assignee_package_id, acquired_at
+            from {legacy_name}
+            where task_id is not null and trim(task_id) != ''
+            """
+        )
+        conn.execute(f"drop table {legacy_name}")
+        CollaborationStore._create_worker_leases_indexes(conn)
+
+    @staticmethod
+    def _create_worker_leases_table(conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            create table collaboration_worker_leases (
+              task_id text primary key,
+              collaboration_id text not null,
+              assignee_package_id text not null,
+              acquired_at text not null
+            )
+            """
+        )
+        CollaborationStore._create_worker_leases_indexes(conn)
+
+    @staticmethod
+    def _create_worker_leases_indexes(conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            create index if not exists idx_collaboration_worker_leases_package
+            on collaboration_worker_leases(assignee_package_id, acquired_at)
+            """
+        )
 
     def _ensure_collaboration_sessions_schema(self, conn: sqlite3.Connection) -> None:
         target_columns = [
@@ -2263,22 +2307,20 @@ class CollaborationStore:
     def _worker_lease_owned_conn(
         conn: sqlite3.Connection,
         *,
-        package_id: str,
         collaboration_id: str,
         task_id: str,
     ) -> bool:
         lease = conn.execute(
             """
-            select collaboration_id, task_id
+            select collaboration_id
             from collaboration_worker_leases
-            where assignee_package_id = ?
+            where task_id = ?
             """,
-            (package_id,),
+            (task_id,),
         ).fetchone()
         return bool(
             lease is not None
             and str(lease["collaboration_id"]) == collaboration_id
-            and str(lease["task_id"]) == task_id
         )
 
     @staticmethod
@@ -2293,14 +2335,13 @@ class CollaborationStore:
         conn.execute(
             """
             insert or ignore into collaboration_worker_leases (
-              assignee_package_id, collaboration_id, task_id, acquired_at
+              task_id, collaboration_id, assignee_package_id, acquired_at
             ) values (?, ?, ?, ?)
             """,
-            (package_id, collaboration_id, task_id, acquired_at),
+            (task_id, collaboration_id, package_id, acquired_at),
         )
         return CollaborationStore._worker_lease_owned_conn(
             conn,
-            package_id=package_id,
             collaboration_id=collaboration_id,
             task_id=task_id,
         )
@@ -2309,16 +2350,15 @@ class CollaborationStore:
     def _release_worker_lease_conn(
         conn: sqlite3.Connection,
         *,
-        package_id: str,
         collaboration_id: str,
         task_id: str,
     ) -> bool:
         deleted = conn.execute(
             """
             delete from collaboration_worker_leases
-            where assignee_package_id = ? and collaboration_id = ? and task_id = ?
+            where collaboration_id = ? and task_id = ?
             """,
-            (package_id, collaboration_id, task_id),
+            (collaboration_id, task_id),
         )
         return deleted.rowcount == 1
 
@@ -2359,7 +2399,6 @@ class CollaborationStore:
                 return False
             return self._release_worker_lease_conn(
                 conn,
-                package_id=str(row["assignee_package_id"]),
                 collaboration_id=collaboration_id,
                 task_id=task_id,
             )
@@ -2424,7 +2463,6 @@ class CollaborationStore:
                     )
                     self._release_worker_lease_conn(
                         conn,
-                        package_id=package_id,
                         collaboration_id=collaboration_id,
                         task_id=task_id,
                     )
@@ -2450,7 +2488,6 @@ class CollaborationStore:
                 if claimed.rowcount != 1:
                     self._release_worker_lease_conn(
                         conn,
-                        package_id=package_id,
                         collaboration_id=collaboration_id,
                         task_id=task_id,
                     )

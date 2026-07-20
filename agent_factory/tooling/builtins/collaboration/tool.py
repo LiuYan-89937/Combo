@@ -19,15 +19,17 @@ IMMEDIATE_ATTENTION_TASK_STATUSES = {"submitted", "blocked", "failed"}
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     output = _run_action(arguments, resources)
+    summary = str(output.get("message") or "")
     evidence = (
         runtime_wait_evidence(
             status="waiting_for_workers",
             reason="collaboration workers are still running",
+            message=summary,
         )
         if output.get("status") == "deferred"
         else None
     )
-    return tool_envelope(output, evidence=evidence, summary=str(output.get("message") or ""))
+    return tool_envelope(output, evidence=evidence, summary=summary)
 
 
 def _run_action(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
