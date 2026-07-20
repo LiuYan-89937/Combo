@@ -19,13 +19,19 @@ class ImageGenerationService:
         self.artifact_store = artifact_store
         self.adapter = adapter_for_image_provider(settings)
 
-    def generate(self, request: ImageGenerationRequest) -> list[GeneratedAsset]:
+    def generate(
+        self,
+        request: ImageGenerationRequest,
+        *,
+        artifact_store: ArtifactStore | None = None,
+    ) -> list[GeneratedAsset]:
+        target_store = artifact_store or self.artifact_store
         assets: list[GeneratedAsset] = []
         for index, source in enumerate(self.adapter.generate(request), start=1):
             mime_type = source.mime_type or "image/png"
             suffix = mimetypes.guess_extension(mime_type) or ".png"
             relative_path = f"images/{uuid4().hex}_{index}{suffix}"
-            record = self.artifact_store.write_bytes(
+            record = target_store.write_bytes(
                 kind="artifact",
                 relative_path=relative_path,
                 content=source.data,

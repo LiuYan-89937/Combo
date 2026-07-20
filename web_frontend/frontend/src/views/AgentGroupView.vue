@@ -15,6 +15,7 @@
             :streaming="message.status === 'streaming'"
             quoteable
             :tip-context="tipContextFor(message)"
+            :workspace-context="messageWorkspaceContext"
             @quote="quoteMessage"
           />
         </div>
@@ -124,6 +125,10 @@ const mentionQuery = ref('')
 const quotedMessage = ref<TranscriptItem | null>(null)
 const referenceStore = useContextReferenceStore()
 const referenceScope = computed(() => `agent-group:${store.activeGroup?.group_id || 'new'}`)
+const messageWorkspaceContext = computed(() => ({
+  resourceMode: 'agent_group' as const,
+  groupId: store.activeGroup?.group_id || null,
+}))
 const tipScopeId = computed(() => store.activeGroup?.group_id || '')
 
 const activeRunKey = computed(() => store.activeRuns.map(run => `${run.group_run_id}:${run.status}`).join('|'))

@@ -6,6 +6,7 @@ import type {
   TranscriptItem,
 } from '@/types/protocol'
 import {
+  toolArtifactParts,
   toolCallPart,
   toolResultPart,
   upsertPart,
@@ -105,6 +106,7 @@ export function upsertToolMessagePart(
   const parts = [
     toolCallPart(activity),
     ...(resultPart ? [resultPart] : []),
+    ...toolArtifactParts(activity),
   ]
   const status = activity.status === 'failed'
     ? 'failed'

@@ -70,6 +70,7 @@
             :streaming="streaming"
             :highlight-mentions="isGroupUserMessage"
             :mention-names="mentionNames"
+            :workspace-context="workspaceContext"
           />
         </template>
 
@@ -104,6 +105,7 @@ import { ReturnUpBackOutline } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import MessagePartRenderer from './MessagePartRenderer.vue'
 import type { TranscriptItem } from '@/types/protocol'
+import type { WorkspaceRequestContext } from '@/api/resourceTypes'
 import { useTipStore, type TipMessageContext } from '@/stores/tips'
 import TipingIcon from './TipingIcon.vue'
 import { useTipMarkerLayout } from '@/composables/chat/useTipMarkerLayout'
@@ -117,12 +119,14 @@ const props = withDefaults(
     thinking?: boolean
     quoteable?: boolean
     tipContext?: TipContextConfig | null
+    workspaceContext?: WorkspaceRequestContext | null
   }>(),
   {
     streaming: false,
     thinking: false,
     quoteable: false,
     tipContext: null,
+    workspaceContext: null,
   }
 )
 

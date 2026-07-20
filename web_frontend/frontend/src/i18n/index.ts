@@ -244,6 +244,7 @@ const zhCN = {
   'sidebar.agentSessions': '子 Agent 会话',
   'sidebar.noRecentAgent': '暂无 Agent 会话',
   'sidebar.noRecentAgentSessions': '暂无最近 Agent 会话',
+  'sidebar.switchAgent': '快捷切换子 Agent',
 
   'right.workspace': '工作区',
   'right.sessions': '会话',
@@ -1252,6 +1253,7 @@ const enUS: Record<MessageKey, string> = {
   'sidebar.agentSessions': 'Sub-agent sessions',
   'sidebar.noRecentAgent': 'No Agent session',
   'sidebar.noRecentAgentSessions': 'No recent Agent sessions',
+  'sidebar.switchAgent': 'Switch sub-agent',
 
   'right.workspace': 'Workspace',
   'right.sessions': 'Sessions',

@@ -29,6 +29,7 @@
                 :streaming="isMessageStreaming(item.message.streamId)"
                 quoteable
                 :tip-context="tipContextFor(item.message)"
+                :workspace-context="messageWorkspaceContext"
                 @quote="addMessageReference"
               />
             </template>
@@ -38,6 +39,7 @@
               :key="message.id"
               :message="message"
               thinking
+              :workspace-context="messageWorkspaceContext"
             />
           </div>
         </n-scrollbar>
@@ -136,6 +138,10 @@ const scrollbarRef = ref()
 const inputRef = ref()
 const referenceStore = useContextReferenceStore()
 const referenceScope = computed(() => `collaboration:${store.activeSession?.collaboration_id || 'new'}`)
+const messageWorkspaceContext = computed(() => ({
+  resourceMode: 'collaboration' as const,
+  collaborationId: store.activeSession?.collaboration_id || null,
+}))
 const selectedModelProfileId = computed(() => store.activeSession?.execution_config?.model_profile_id || '')
 const reasoningIntensity = computed(() => store.activeSession?.execution_config?.reasoning_intensity ?? null)
 const selectedModelProfile = computed(() => (

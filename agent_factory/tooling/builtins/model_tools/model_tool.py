@@ -8,6 +8,7 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage
 
+from agent_factory.artifact_system import ArtifactStore
 from agent_factory.models.image_generation import ImageGenerationRequest
 from agent_factory.tooling.envelope import tool_envelope
 
@@ -18,7 +19,12 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("model_tool runtime resource is missing")
     capability = str(runtime_tool.get("capability") or "")
     if capability in {"image_output", "image_edit"}:
-        return _run_image_generation(arguments, runtime_tool, capability=capability)
+        return _run_image_generation(
+            arguments,
+            runtime_tool,
+            capability=capability,
+            workspace_root=resources.get("workspace_root"),
+        )
     if capability not in {"image_input", "audio_input"}:
         raise ValueError(f"unsupported local model tool capability: {capability}")
     model = runtime_tool.get("model")
@@ -54,6 +60,7 @@ def _run_image_generation(
     runtime_tool: dict[str, Any],
     *,
     capability: str,
+    workspace_root: Any,
 ) -> dict[str, Any]:
     service = runtime_tool.get("image_generation_service")
     if service is None or not hasattr(service, "generate"):
@@ -69,7 +76,13 @@ def _run_image_generation(
         negative_prompt=_optional_text(arguments.get("negative_prompt")),
         provider_options=dict(arguments.get("provider_options") or {}),
     )
-    assets = service.generate(request)
+    root = str(workspace_root or "").strip()
+    if not root:
+        raise ValueError("model_tool image generation requires the current session workspace_root")
+    assets = service.generate(
+        request,
+        artifact_store=ArtifactStore(root=root, allowed_kinds=("artifact",)),
+    )
     output = {
         "capability": capability,
         "profile_id": str(runtime_tool.get("profile_id") or ""),
