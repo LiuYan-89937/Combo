@@ -236,6 +236,12 @@ web_check_env_configuration() {
         fi
     done
 
+    if [[ -n "$(web_env_file_value "${env_file}" "TAVILY_API_KEY")" ]]; then
+        echo "Tavily is configured for the built-in web search MCP"
+    else
+        web_warn "TAVILY_API_KEY is empty; built-in web search will use SearXNG, then DuckDuckGo if needed"
+    fi
+
     if (( ${#missing[@]} == 0 )); then
         echo ".env looks configured"
         return 0

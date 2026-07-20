@@ -1,10 +1,11 @@
 # FastAgentFactory 部署与验收指南
 
-本文档是 `AMD-Hackson` 分支的正式部署说明，面向比赛交付、复现和现场验收。部署形态固定为：
+本文档说明 FastAgentFactory 的完整部署、复现和运行验收流程。系统支持两种推理节点拓扑：
 
-- 本机运行 FastAgentFactory Web、Agent 工作流和 Docker Agent Runtime。
-- RadeonCloud 运行 AMD ROCm 推理节点、llama.cpp Chat 和 PyTorch HIP Embedding。
-- 本机通过 SSH 隧道访问远端三个回环端口。
+- `DEPLOY_TARGET=local`：FastAgentFactory Web、Agent Runtime 与 AMD ROCm 推理节点位于同一台 Linux 主机。
+- `DEPLOY_TARGET=ssh`：Web 与 Agent Runtime 位于控制端，AMD ROCm 推理节点位于独立主机，通过 SSH 隧道访问远端回环端口。
+
+两种拓扑复用同一套模型 Profile、推理控制、Benchmark 和部署脚本。
 
 项目入口和功能说明见 [README](../README.md)。
 
@@ -33,7 +34,7 @@
 | 远端 | 模型文件 | `/root/models` |
 | 远端 | 推理状态与日志 | `/root/.fastagentfactory` |
 
-远端路径均可在 `deploy/deploy.env` 修改。若 RadeonCloud 提供持久卷，应优先改到持久卷挂载点。
+推理节点路径均可在 `deploy/deploy.env` 修改。若运行环境提供持久卷，应优先改到持久卷挂载点。
 
 ## 2. 部署前检查
 
@@ -57,24 +58,14 @@ docker info
 - Python 3.11+
 - Node.js 18+
 - Docker Engine 或 Docker Desktop 已启动
-- SSH 私钥或 ssh-agent 可以登录 RadeonCloud
+- SSH 模式下，私钥或 ssh-agent 可以登录 AMD 推理主机
 - 本机端口 `3000`、`8000`、`18002`、`18003`、`18004` 未被占用
 
 Docker 仅用于本机 AgentPackage、MCP 和子 Agent 隔离，不承载远端模型推理。
 
-### 2.2 RadeonCloud 要求
+### 2.2 AMD ROCm 推理节点要求
 
-推荐工作空间：
-
-| 设置 | 推荐值 |
-| --- | --- |
-| Image | `amd-oneclick-base:rocm7.2.1-py3.12-v20260416` |
-| Deploy Type | Notebook（Jupyter / OpenCode） |
-| GitHub Repo URL | 留空 |
-| Notebook Path | 留空 |
-| SSH Access | 开启 |
-
-SSH 登录必须使用平台 Profile 中配置的 Public Key。平台提供的 Host 或 NodePort 变化后，需要同步修改本机部署配置。
+推理节点必须提供 Linux、AMD GPU、可用的 ROCm 驱动与用户态组件、`/dev/kfd` 访问权限，以及与 ROCm 版本兼容的 PyTorch HIP。SSH 模式还需要 sshd 和 Public Key 登录；主机或端口变化后，需要同步修改控制端部署配置。
 
 在本机先验证：
 
@@ -92,14 +83,14 @@ ssh <SSH_USER>@<SSH_HOST> -p <SSH_PORT>
 - llama.cpp Git 工作树和 ROCm 构建产物；
 - Python 环境、日志、模型池与 Benchmark 数据。
 
-部署前应通过 RadeonCloud 控制台或 `df -h` 确认模型目录所在文件系统空间充足。
+部署前应通过主机管理界面或 `df -h` 确认模型目录所在文件系统空间充足。
 
 ## 3. 获取代码
 
 在本机执行：
 
 ```bash
-git clone -b AMD-Hackson https://github.com/LiuYan-89937/FastAgentFactory.git
+git clone https://github.com/LiuYan-89937/FastAgentFactory.git
 cd FastAgentFactory
 git status
 git log -1 --oneline
@@ -108,11 +99,10 @@ git log -1 --oneline
 已有工作树执行：
 
 ```bash
-git switch AMD-Hackson
-git pull --ff-only origin AMD-Hackson
+git pull --ff-only
 ```
 
-部署脚本会从本机同步当前工作树到 RadeonCloud，不需要在服务器上手动 Clone 项目。
+部署脚本会从控制端同步当前工作树到推理节点，不需要在推理主机上手动 Clone 项目。
 
 ## 4. 选择推理节点并配置部署参数
 
@@ -126,8 +116,8 @@ GPU 位于另一台机器时使用默认 SSH 目标：
 
 ```dotenv
 DEPLOY_TARGET=ssh
-SSH_HOST=<RadeonCloud-IP>
-SSH_PORT=<RadeonCloud-SSH-Port>
+SSH_HOST=<AMD-Inference-Host>
+SSH_PORT=<SSH-Port>
 SSH_USER=root
 SSH_KEY=
 ```
@@ -208,7 +198,7 @@ Worker 租约以协作任务为唯一边界。同一个 AgentPackage 可以在�
 
 多个 worker 几乎同时提交、阻塞、失败或取消时，每条协作事件仍会独立写入审计表；服务在 `AGENTFACTORY_COLLABORATION_EVENT_COALESCE_WINDOW_SECONDS` 指定的短窗口后，将当时待处理的事件批量领取并只恢复一次主 Agent。批次中的每条事件独立累计 attempts，并在同一事务中统一完成或失败。`AGENTFACTORY_COLLABORATION_EVENT_BATCH_LIMIT` 用于限制一次恢复输入的事件数量，超过限制的事件会进入后续批次。
 
-部署脚本先探查并复用现有 ROCm 与 PyTorch HIP。比赛镜像的 PyTorch 位于 `/opt/venv`，脚本会校验 Python ABI、HIP 和 GPU 可用性，再通过 `.pth` 接入项目隔离 venv，不重新下载或替换镜像 Torch。只有预装运行时不可用时才安装后备 wheel。GPU 驱动和 `/dev/kfd` 必须由 RadeonCloud 提供；使用其他 ROCm 版本时，应覆盖预装 Python 路径，或同时覆盖 `PYTORCH_INDEX_URL` 和 `PYTORCH_PACKAGES`。
+部署脚本先探查并复用现有 ROCm 与 PyTorch HIP。若推理主机在 `/opt/venv` 提供预装 PyTorch，脚本会校验 Python ABI、HIP 和 GPU 可用性，再通过 `.pth` 接入项目隔离 venv，不重新下载或替换预装 Torch。只有预装运行时不可用时才安装后备 wheel。GPU 驱动和 `/dev/kfd` 必须由推理节点宿主环境提供；使用其他 ROCm 版本时，应覆盖预装 Python 路径，或同时覆盖 `PYTORCH_INDEX_URL` 和 `PYTORCH_PACKAGES`。
 
 ## 5. 首次一键部署
 
@@ -351,7 +341,7 @@ http://127.0.0.1:3000
 
 ```bash
 git status
-git pull --ff-only origin AMD-Hackson
+git pull --ff-only
 ```
 
 普通 FastAgentFactory 代码更新：
@@ -372,7 +362,7 @@ git pull --ff-only origin AMD-Hackson
 
 ## 9. llama.cpp 算子开发与部署
 
-两套源码都属于 FastAgentFactory 黑客松分支。官方目录保持原样，自定义算子只进入 AMD 目录：
+仓库保留同一 llama.cpp revision 的 Official 与 AMD 两套源码。官方目录保持原样，自定义算子只进入 AMD 目录：
 
 ```bash
 cd vendor/llama.cpp-amd
@@ -421,7 +411,7 @@ Benchmark 页面中的“算子分析”使用活动构建的 `llama-bench`，�
 
 Benchmark 页面提供 Official/AMD 实现切换器。切换由远端控制节点在 Chat 维护锁内完成：卸载当前模型、原子替换活动 `llama-server`、用同一 Profile 重新加载，并在失败时回滚原实现。两套实现不会同时驻留显存。rocprof 结果只从 Kernel stats 数据域计算总耗时，调度/API 汇总域不参与 Top Kernel 排名；原始模板符号按 Kernel 家族聚合后在前端展开查看。
 
-## 10. 更换或重建 RadeonCloud 实例
+## 10. 更换或重建 SSH 推理节点
 
 新实例创建后：
 
@@ -443,7 +433,7 @@ ssh -vvv <SSH_USER>@<SSH_HOST> -p <SSH_PORT>
 
 检查：
 
-- RadeonCloud SSH Access 是否开启；
+- 推理主机是否允许 SSH Key 登录；
 - 实例内 sshd 是否运行；
 - 平台 Host/Port 是否已更新；
 - Profile Public Key 与本机私钥是否匹配。
@@ -497,7 +487,7 @@ SSH 已连接但远端转发目标未监听：
 - GPU Layers；
 - Flash Attention。
 
-保存已加载 Profile 会将配置透传到 RadeonCloud 并重启相应模型。
+保存已加载 Profile 会将配置透传到推理节点并重启相应模型。
 
 ### 11.6 Docker 不可用
 
@@ -509,7 +499,7 @@ SSH 已连接但远端转发目标未监听：
 
 远端模型服务不依赖 Docker，但 AgentPackage、MCP 和子 Agent 隔离运行依赖本机 Docker。
 
-## 12. 比赛提交证据
+## 12. 部署与性能证据
 
 部署验收时建议保存：
 
@@ -541,4 +531,4 @@ python3 -m compileall -q agent_factory web_frontend/backend deploy
 git diff --check
 ```
 
-这些检查验证语法和文件一致性，不替代 RadeonCloud 真机部署验收。
+这些检查验证语法和文件一致性，不替代 AMD ROCm 真机部署验收。

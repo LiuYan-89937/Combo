@@ -107,6 +107,12 @@ Context Contract 配置检索、候选数量、最低分、总条数、总 token
 
 Memory System 负责记忆提取、分段、排名、命名空间、存储、后台写入和注入。Memory Contract 决定是否开启、检索范围和装配预算。跨会话记忆应只返回与当前请求相关的候选内容。
 
+记忆写入频率由 `background.write_interval_turns` 控制，单位是完成的用户轮次。默认值为 `3`，表示第 3、6、9 个用户轮次完成后，将最近最多 3 个用户轮次组成一个片段，异步执行长期记忆提取与去重写入。失败的运行不会触发写入。
+
+- Factory 默认配置可通过 `.env` 的 `AGENTFACTORY_MEMORY_WRITE_INTERVAL_TURNS` 调整。
+- AgentPackage 在 `contracts/memory.json` 中显式声明 `background.write_interval_turns` 时，以包 Contract 为准。
+- `write_enabled` 控制是否写入，`injection_enabled` 控制后续会话是否检索并注入相关记忆，两者是独立开关。
+
 ## 7. Knowledge / RAG
 
 - Knowledge Contract 定义根目录、catalog、RAG store 和摄取设置；

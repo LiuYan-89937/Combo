@@ -1,21 +1,37 @@
 # FastAgentFactory
 
-FastAgentFactory 是面向私有 AI Agent 开发与本地部署的工作台。项目将 Agent 制造、运行、知识库、RAG、工具调用、多轮记忆、权限审批、运行 Trace 与性能 Benchmark 集成在同一套 Web 界面中。
+FastAgentFactory 是一套完全本地化、可制造、可进化的个人智能助手平台。它把日常对话、跨会话记忆、本地知识库、文档处理、网页检索、定时任务、邮件、图片生成和多 Agent 协作统一到可审计的 AgentPackage 运行体系中，并提供从自然语言需求到 Agent 制造、发布、运行和持续进化的完整生命周期。
 
-`AMD-Hackson` 分支用于 **2026 AMD AI DevMaster 黑客松赛道二**：
-
-- 本机运行 FastAgentFactory 前端、后端、Agent 工作流与 Docker 隔离运行时。
-- RadeonCloud 运行 llama.cpp ROCm Chat 推理、PyTorch ROCm Embedding 和 GPU 遥测。
-- 本机通过 SSH 隧道访问远端服务，不向公网暴露模型端口。
-- Chat 使用 GGUF；Embedding 使用 SentenceTransformers + PyTorch HIP。
-- llama.cpp 源码同时保留在本机，便于后续 AMD 算子、Kernel 和推理参数优化。
-
-![FastAgentFactory 闲聊工作台](readme-assets/images/chat.png)
+平台支持两种部署拓扑：AMD GPU 与 Web 运行在同一台 Linux/ROCm 主机时直接连接本地推理节点；GPU 位于独立主机时，通过 SSH 隧道访问只监听回环地址的推理服务。Chat 使用 GGUF 与 llama.cpp ROCm，Embedding 使用 SentenceTransformers 与 PyTorch HIP，AgentPackage、MCP 和子 Agent 使用 Docker 隔离运行。仓库同时保留 Official 与 AMD 两套 llama.cpp 源码，用于在一致模型和配置下开发、验证 AMD HIP Kernel。
 
 ## 文档导航
 
 - [部署与验收指南](docs/Deployment.md)：从 SSH 配置到双端启动、模型下载、验收、更新与实例迁移。
+- [应用场景](docs/ApplicationScenarios.md)：个人智能助手主场景与金融研究示例。
+- [Agent 架构](docs/AgentArchitecture.md)：运行层次、工具网关与隔离边界。
+- [核心能力](docs/CoreCapabilities.md)：模型、工具、记忆、知识、调度和交付能力。
 - README 当前页面：项目定位、系统架构、主要功能、日常使用和开发入口。
+
+## 应用场景：个人智能助手
+
+FastAgentFactory 将个人智能助手定义为一个长期运行、理解用户偏好、能够调用真实工具并完成交付的本地工作台，而不是只回答问题的聊天窗口。
+
+- **个人知识与事务助手**：检索本地资料，整理文档和附件，保存报告、图片及其他交付物，并通过跨会话记忆延续用户偏好和历史决策。
+- **办公自动化助手**：调用网页搜索、文件、日历、定时任务和邮件工具，完成资料收集、报告生成、周期提醒与受控发送。
+- **多 Agent 研究助手**：主 Agent 根据目标拆分任务，协调多个专业 Agent 并行取证，再进行语义验收与统一交付。
+- **可制造的专属助手**：用户可以用自然语言制造新的 AgentPackage，配置模型、工具、Skill、知识、Resource 和运行 Pattern，并根据 Trace 对其持续进化。
+
+### 金融研究示例
+
+仓库内置三个只面向 A 股的专业 Agent，用于展示个人智能助手在复杂行业任务中的组合能力：
+
+| Agent | 典型任务 | 可交付结果 |
+| --- | --- | --- |
+| A 股盘面雷达 | 汇总市场宽度、成交额、板块与领涨个股，按计划生成市场简报 | 盘面摘要、异常说明、保存的 Markdown 报告、经用户授权发送的邮件 |
+| A 股上市公司研究员 | 围绕单家公司整合行情、财务、趋势和用户资料进行证据化研究 | 数据来源与时间明确的公司研究报告 |
+| A 股持仓风险管家 | 读取个人模拟持仓，分析集中度、波动率、回撤、相关性和指定压力情景 | 组合风险报告、风险提示与情景分析 |
+
+三个 Agent 可以由主助手统一编排，例如同时研究市场、贵州茅台、宁德时代和中国平安，再对模拟持仓执行市场下跌 `5%` 与 `10%` 的压力评估，形成完整报告并发送到已配置邮箱。所有金融输出仅用于研究与系统能力演示，不构成投资建议。
 
 ## 系统架构
 
@@ -35,7 +51,7 @@ FastAgentFactory 是面向私有 AI Agent 开发与本地部署的工作台。�
 │   18004 -> remote 8004  Inference control + ROCm telemetry │
 └──────────────────────────────┬─────────────────────────────┘
                                │ SSH key only
-RadeonCloud                    ▼
+AMD ROCm inference host       ▼
 ┌────────────────────────────────────────────────────────────┐
 │ FastAgentFactory Inference Node :8004                      │
 │   ├─ llama-server ROCm :8003                               │
@@ -59,7 +75,7 @@ RadeonCloud                    ▼
 | Vision projector | 对应的 `mmproj-...-APEX-F16.gguf` | Hugging Face 国内镜像，断点续传并校验 SHA256 | 随 Chat Profile 加载 |
 | Embedding | `BAAI/bge-m3` | ModelScope | 1024 维、归一化、PyTorch HIP |
 
-Chat GGUF 约 23.5 GB，视觉投影器约 0.9 GB，另需 Embedding、llama.cpp 构建目录和运行状态空间。首次部署前请确认 RadeonCloud 持久盘容量充足。
+Chat GGUF 约 23.5 GB，视觉投影器约 0.9 GB，另需 Embedding、llama.cpp 构建目录和运行状态空间。首次部署前请确认推理节点磁盘容量充足。
 
 ## 环境要求
 
@@ -74,26 +90,18 @@ Chat GGUF 约 23.5 GB，视觉投影器约 0.9 GB，另需 Embedding、llama.cpp
 - Node.js 18+ 与 npm
 - Docker Engine 或 Docker Desktop
 
-Docker 用于 AgentPackage、MCP 和子 Agent 的隔离运行，不用于 RadeonCloud 模型推理。
+Docker 用于 AgentPackage、MCP 和子 Agent 的隔离运行，不用于 llama.cpp 或 PyTorch ROCm 模型推理。
 
-### RadeonCloud 推理节点
+### AMD ROCm 推理节点
 
-推荐工作空间：
-
-- Image：`amd-oneclick-base:rocm7.2.1-py3.12-v20260416`
-- Deploy Type：Notebook（Jupyter / OpenCode）
-- GitHub Repo URL：留空
-- Notebook Path：留空
-- SSH Access：开启
-
-一键脚本要求远端可以通过 SSH Key 登录，并具有 AMD GPU、ROCm 和 PyTorch HIP。脚本只会在缺失时安装 CMake、Ninja、curl、编译器等普通构建工具，**不会升级或重装 ROCm、GPU 驱动或 PyTorch**。
+推理节点需要 Linux、可用的 AMD GPU、ROCm 用户态组件、`/dev/kfd` 访问权限，以及与当前 ROCm 版本兼容的 PyTorch HIP。使用 SSH 拓扑时，节点还需要支持 SSH Key 登录。脚本只会在缺失时安装 CMake、Ninja、curl、编译器等普通构建工具，**不会升级或重装 GPU 驱动**。
 
 ## 一键部署
 
 ### 1. 获取项目
 
 ```bash
-git clone -b AMD-Hackson https://github.com/LiuYan-89937/FastAgentFactory.git
+git clone https://github.com/LiuYan-89937/FastAgentFactory.git
 cd FastAgentFactory
 ```
 
@@ -107,7 +115,7 @@ AMD GPU 在另一台机器时保留默认 SSH 模式并填写：
 
 ```dotenv
 DEPLOY_TARGET=ssh
-SSH_HOST=<RadeonCloud-IP>
+SSH_HOST=<AMD-Inference-Host>
 SSH_PORT=<SSH-Port>
 SSH_USER=root
 SSH_KEY=
@@ -118,7 +126,7 @@ SSH_KEY=
 先确认命令本身能登录：
 
 ```bash
-ssh root@<RadeonCloud-IP> -p <SSH-Port>
+ssh root@<AMD-Inference-Host> -p <SSH-Port>
 ```
 
 AMD GPU 就在当前 Linux 主机时使用：
@@ -148,7 +156,7 @@ SSH_KEY=
 1. 校验部署目标；SSH 模式验证 Key 登录，本机模式验证 Linux 推理主机。
 2. 验证仓库内置的官方与 AMD 两套 llama.cpp 源码，不在线拉取 llama.cpp，并分别构建 `llama-server` 与 `llama-bench`。
 3. 准备缺失的普通构建工具并验证远端国内下载源的 HTTPS CA 信任链；仅在证书链缺失或损坏时重建并按需重装 `ca-certificates`。
-4. 探查 RadeonCloud GPU、显存、磁盘、`/dev/kfd`、ROCm 用户态组件与 PyTorch HIP。
+4. 探查推理节点 GPU、显存、磁盘、`/dev/kfd`、ROCm 用户态组件与 PyTorch HIP。
 5. 仅在缺失时安装 ROCm 用户态构建组件和配置指定的 PyTorch HIP 包；云平台 GPU 驱动不会在工作空间内安装。
 6. 仅同步推理控制、模型池所需的最小 Python bundle，以及三套完整原生推理源码到推理节点；本机路径与仓库路径相同时直接复用，不自我复制。
 7. 独立构建 `official` 与 `amd` 两个 ROCm llama-server，并从本机完整 vendor 源码构建 HIPBLAS `sd-server`；远端不访问 GitHub。
@@ -213,6 +221,16 @@ http://localhost:3000
 
 ## 使用指南
 
+### 网页搜索 MCP
+
+内置 Web Search MCP 支持 Tavily、SearXNG 和 DuckDuckGo。推荐在本机 `.env` 配置 Tavily：
+
+```dotenv
+TAVILY_API_KEY=<your-tavily-api-key>
+```
+
+密钥只由本机 MCP 子进程继承，不写入 `SystemPackage` 或 AgentPackage。启动时会明确显示 Tavily 是否已配置；留空不会阻止平台启动，默认改用自动管理的 SearXNG，SearXNG 不可用时再选择 DuckDuckGo。该回退用于选择启动时可用的默认 Provider，不代表 Tavily 请求已经发出后发生网络或配额错误时会自动跨 Provider 重试。
+
 ### 模型配置
 
 进入“模型配置”页面可以：
@@ -226,7 +244,7 @@ http://localhost:3000
 - 修改 Context、最大输出、压缩阈值、GPU Layers、KV Cache 类型、并发、Flash Attention 和图片输入能力；目标 Context 超过模型原生值时自动校验扩展上限并计算 YaRN 因子。
 - 根据 GGUF 元数据、上下文、YaRN 缩放、并发和 KV Cache 类型查看预计显存占用及余量。
 
-保存一个已经加载的 external Profile 后，本机后端会将配置透传到 RadeonCloud 并重启对应模型，新的 `--ctx-size`、KV Cache、Flash Attention 等参数会真正进入远端 llama-server 命令行。若每槽目标上下文超过模型原生上下文，远端会同时传入 `--rope-scaling yarn`、自动计算的 `--rope-scale` 和模型原生 `--yarn-orig-ctx`；未声明扩展能力或超过扩展上限时拒绝启动。
+保存一个已经加载的 external Profile 后，Web 后端会将配置透传到推理节点并重启对应模型，新的 `--ctx-size`、KV Cache、Flash Attention 等参数会真正进入 llama-server 命令行。若每槽目标上下文超过模型原生上下文，推理节点会同时传入 `--rope-scaling yarn`、自动计算的 `--rope-scale` 和模型原生 `--yarn-orig-ctx`；未声明扩展能力或超过扩展上限时拒绝启动。
 
 ### 本地图片生成
 
@@ -235,8 +253,6 @@ FLUX.1-dev Q4_0 由远端 `sd-server` 提供 OpenAI-compatible Images API。Agen
 图片 Profile 默认启用 eager load，`sd-server` 启动后会立即将模型参数加载到配置的计算后端。可通过部署配置中的 `IMAGE_EAGER_LOAD=0` 恢复首次生图时再加载的行为。
 
 Image Profile 默认允许在显存预算足够时与 Chat 同时驻留，模型配置页会展示实时显存预算和运行状态。FLUX.1-dev 受其 Non-Commercial License 约束，提交和演示前需确认使用范围。
-
-![本地模型池](readme-assets/images/model-pool.png)
 
 ### 闲聊与 Tool Calling
 
@@ -260,8 +276,6 @@ Image Profile 默认允许在显存预算足够时与 Chat 同时驻留，模型
 在“Agent 制造”中描述目标、输入边界和交付标准。生成的 AgentPackage 保存模型 Profile 引用、工具权限、知识库和运行契约，不保存 GPU 绝对配置。
 
 发布后可以为 Agent 创建独立运行实例。每个实例拥有独立会话、工作区、知识库、长期记忆、工具审批和 Trace。
-
-![Agent 制造](readme-assets/images/agent-authoring.png)
 
 ### Benchmark
 
@@ -330,7 +344,7 @@ vendor/llama.cpp-common/     两套实现共享的 Host 分派追踪源码
 vendor/stable-diffusion.cpp/ 随仓库提交的图片推理源码与递归子模块
 ```
 
-### RadeonCloud
+### SSH 推理节点
 
 默认目录：
 
@@ -351,7 +365,7 @@ vendor/stable-diffusion.cpp/ 随仓库提交的图片推理源码与递归子模
 - `deploy/deploy.env`、`.env`、模型文件和运行状态均已排除 Git 提交；两套 llama.cpp 和 stable-diffusion.cpp 完整源码属于交付内容。
 - 远端 `8002`、`8003`、`8004` 只监听 `127.0.0.1`，不要直接暴露公网。
 - `AGENTFACTORY_RESOURCE_MASTER_KEY` 首次部署自动生成并写入本机 `.env`；丢失后旧的加密资源无法恢复。
-- 部署脚本先复用可用的 ROCm/PyTorch HIP 环境，仅在缺失且配置允许时安装用户态组件。GPU 驱动和 `/dev/kfd` 必须由 RadeonCloud 工作空间提供。
+- 部署脚本先复用可用的 ROCm/PyTorch HIP 环境，仅在缺失且配置允许时安装用户态组件。GPU 驱动和 `/dev/kfd` 必须由推理节点宿主环境提供。
 
 ## 排障
 
@@ -361,7 +375,7 @@ vendor/stable-diffusion.cpp/ 随仓库提交的图片推理源码与递归子模
 ssh -vvv root@<host> -p <port>
 ```
 
-确认 RadeonCloud 已开启 SSH Access、实例内 sshd 正在运行、平台端口已刷新，并且 Profile SSH Public Key 与本机私钥匹配。
+确认推理主机允许 SSH Key 登录、sshd 正在运行、主机和端口配置正确，并且服务端 Public Key 与本机私钥匹配。
 
 `channel ... open failed: connect failed: Connection refused` 通常表示 SSH 本身已连接，但远端 `8002/8003/8004` 尚未启动。执行：
 
@@ -407,7 +421,7 @@ GGUF 使用 `curl --continue-at -` 续传；完成后必须通过 SHA256 才会�
 
 ### 本机 Docker 不可用
 
-启动 Docker Desktop 或 Docker Engine后重新运行 `./start.sh`。模型推理仍在 RadeonCloud，但 MCP、AgentPackage 和子 Agent 的隔离运行依赖本机 Docker。
+启动 Docker Desktop 或 Docker Engine 后重新运行 `./start.sh`。模型推理节点不依赖 Docker，但 MCP、AgentPackage 和子 Agent 的隔离运行依赖 Web 主机上的 Docker。
 
 ## 静态检查
 

@@ -341,7 +341,7 @@ PY
 
 prepare_rocm_userspace() {
     [[ -e /dev/kfd ]] \
-        || fail "/dev/kfd is unavailable; select a RadeonCloud GPU workspace with ROCm device access"
+        || fail "/dev/kfd is unavailable; use an AMD GPU host with ROCm device access"
     if command_exists rocminfo \
         && command_exists rocprofv3 \
         && { command_exists hipcc || [[ -x /opt/rocm/llvm/bin/clang++ ]]; }; then
