@@ -15,15 +15,6 @@
       <button
         class="recent-agent-toggle"
         type="button"
-        :disabled="!newSessionPackageId"
-        :title="t('agentSessions.newChat')"
-        @click="createNewAgentSession"
-      >
-        <n-icon size="15"><Add /></n-icon>
-      </button>
-      <button
-        class="recent-agent-toggle"
-        type="button"
         :disabled="recentAgentSessions.length === 0"
         :aria-expanded="recentAgentExpanded"
         @click="recentAgentExpanded = !recentAgentExpanded"
@@ -60,7 +51,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { NIcon } from 'naive-ui'
-import { Add, CaretDown, CaretUp } from '@/components/icons'
+import { CaretDown, CaretUp } from '@/components/icons'
 import { useAgentSessionNavigation } from '@/composables/agent/useAgentSessionNavigation'
 import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
@@ -71,19 +62,12 @@ import { formatTime } from '@/utils/format'
 const agentStore = useAgentStore()
 const runtimeStore = useRuntimeStore()
 const commands = useCommand()
-const { openAgentSession, startNewAgentSession } = useAgentSessionNavigation()
+const { openAgentSession } = useAgentSessionNavigation()
 const { locale, t } = useI18n()
 const recentAgentExpanded = ref(false)
 
 const recentAgentSessions = computed(() => agentStore.recentAgentSessions)
 const mostRecentAgentSession = computed(() => agentStore.preferredRecentSession())
-const newSessionPackageId = computed(() => (
-  agentStore.activeChatPackageId
-  || mostRecentAgentSession.value?.package_id
-  || agentStore.lastAgentSession?.packageId
-  || agentStore.selectedPackageId
-  || null
-))
 const mostRecentAgentLabel = computed(() => (
   mostRecentAgentSession.value
     ? agentSessionPackageLabel(mostRecentAgentSession.value)
@@ -97,11 +81,6 @@ function openMostRecentAgentSession() {
 
 function openRecentAgentSession(session: AgentRecentSessionView) {
   void openAgentSession(session)
-}
-
-function createNewAgentSession() {
-  if (!newSessionPackageId.value) return
-  void startNewAgentSession(newSessionPackageId.value)
 }
 
 function isActiveRecentSession(session: AgentRecentSessionView): boolean {
@@ -162,7 +141,7 @@ watch(
 
 .recent-agent-header {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 32px 32px;
+  grid-template-columns: minmax(0, 1fr) 32px;
   gap: 6px;
   align-items: stretch;
 }
