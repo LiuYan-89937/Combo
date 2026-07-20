@@ -676,11 +676,16 @@ def _kernel_identity(
 
 
 def _base_symbol(raw_name: str) -> str:
-    match = re.match(
-        r"^(?:(?:void|int|float|double|bool)\s+)?(?P<symbol>[A-Za-z_][A-Za-z0-9_:]*)",
+    normalized_name = re.sub(
+        r"\(anonymous namespace\)::",
+        "",
         raw_name.strip(),
     )
-    symbol = match.group("symbol") if match else raw_name.strip()
+    match = re.match(
+        r"^(?:(?:void|int|float|double|bool)\s+)?(?P<symbol>[A-Za-z_][A-Za-z0-9_:]*)",
+        normalized_name,
+    )
+    symbol = match.group("symbol") if match else normalized_name
     return symbol.split("::")[-1]
 
 

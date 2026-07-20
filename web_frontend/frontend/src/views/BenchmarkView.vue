@@ -220,7 +220,7 @@
                     <span>{{ t('benchmark.averageOfRuns', { count: completedPerformanceRuns(implementation).length }) }}</span>
                   </div>
                   <div class="metric-grid compact-metric-grid">
-                    <article v-for="metric in primaryMetrics.slice(0, 4)" :key="metric.key" class="metric-card">
+                    <article v-for="metric in groupAverageMetrics" :key="metric.key" class="metric-card">
                       <span class="metric-label">{{ metric.label }}</span>
                       <strong class="metric-value">{{ formatMetric(metric.key, groupMetricMean(implementation, metric.key)) }}</strong>
                       <div class="metric-detail">± {{ formatMetric(metric.key, groupMetricStd(implementation, metric.key)) }}</div>
@@ -497,7 +497,6 @@
                   <th>{{ t('benchmark.outsideModelCompute') }}</th>
                   <th>{{ t('benchmark.requestToHeaders') }}</th>
                   <th>{{ t('benchmark.firstEvent') }}</th>
-                  <th>{{ t('benchmark.firstTokenDecode') }}</th>
                   <th>{{ t('benchmark.promptEval') }}</th>
                   <th>{{ t('benchmark.promptTps') }}</th>
                   <th>{{ t('benchmark.decodeTps') }}</th>
@@ -522,7 +521,6 @@
                   <td>{{ formatMetric('outside_model_compute_ms', sample.outside_model_compute_ms) }}</td>
                   <td>{{ formatMetric('request_to_headers_ms', sample.request_to_headers_ms) }}</td>
                   <td>{{ formatMetric('first_event_ms', sample.first_event_ms) }}</td>
-                  <td>{{ formatMetric('first_token_decode_ms', sample.first_token_decode_ms) }}</td>
                   <td>{{ formatMetric('prompt_ms', sample.prompt_ms) }}</td>
                   <td>{{ formatMetric('prompt_tokens_per_second', sample.prompt_tokens_per_second) }}</td>
                   <td>{{ formatMetric('decode_tokens_per_second', sample.decode_tokens_per_second) }}</td>
@@ -736,6 +734,12 @@ const primaryMetrics = computed<MetricDefinition[]>(() => [
   { key: 'end_to_end_ms', label: t('benchmark.endToEnd'), higherIsBetter: false },
   { key: 'peak_vram_bytes', label: t('benchmark.peakVram'), higherIsBetter: false },
   { key: 'average_gpu_utilization_percent', label: t('benchmark.averageGpu'), higherIsBetter: true },
+])
+const groupAverageMetrics = computed<MetricDefinition[]>(() => [
+  { key: 'decode_tokens_per_second', label: t('benchmark.decodeTps'), higherIsBetter: true },
+  { key: 'prompt_tokens_per_second', label: t('benchmark.promptTps'), higherIsBetter: true },
+  { key: 'prompt_ms', label: t('benchmark.promptEval'), higherIsBetter: false },
+  { key: 'decode_ms', label: t('benchmark.decodeEval'), higherIsBetter: false },
 ])
 
 function cacheModeDescription(mode: BenchmarkExperimentGroupSpec['prompt_cache_mode']) {

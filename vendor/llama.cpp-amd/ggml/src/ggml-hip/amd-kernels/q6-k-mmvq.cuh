@@ -56,6 +56,16 @@ __device__ __forceinline__ float vec_dot_q6_k_q8_1_rdna3(
     return __half2float(q6->d) * sum;
 }
 
+#elif defined(GGML_USE_HIP)
+
+__device__ __forceinline__ float vec_dot_q6_k_q8_1_rdna3(
+        const void * __restrict__,
+        const block_q8_1 * __restrict__,
+        int,
+        int) {
+    return 0.0f;
+}
+
 #endif
 
 } // namespace fastagentfactory::amd_kernels

@@ -99,13 +99,10 @@ import type {
 
 type Phase = 'prefill' | 'decode'
 type PerformanceMetricKey =
-  | 'ttft_ms'
-  | 'model_compute_ttft_ms'
-  | 'outside_model_compute_ms'
+  | 'decode_ms'
   | 'prompt_ms'
   | 'prompt_tokens_per_second'
   | 'decode_tokens_per_second'
-  | 'end_to_end_ms'
   | 'peak_vram_bytes'
   | 'average_gpu_utilization_percent'
   | 'prompt_cache_hit_rate'
@@ -154,16 +151,13 @@ const activeSeries = computed<SeriesIdentity[]>(() => {
 })
 
 const performanceMetrics = computed<PerformanceMetric[]>(() => [
-  { key: 'ttft_ms', label: t('benchmark.ttft'), higherIsBetter: false },
-  { key: 'model_compute_ttft_ms', label: t('benchmark.modelComputeTtft'), higherIsBetter: false },
-  { key: 'outside_model_compute_ms', label: t('benchmark.outsideModelCompute'), higherIsBetter: false },
-  { key: 'prompt_ms', label: t('benchmark.promptEval'), higherIsBetter: false },
-  { key: 'prompt_tokens_per_second', label: t('benchmark.promptTps'), higherIsBetter: true },
   { key: 'decode_tokens_per_second', label: t('benchmark.decodeTps'), higherIsBetter: true },
-  { key: 'end_to_end_ms', label: t('benchmark.endToEnd'), higherIsBetter: false },
+  { key: 'prompt_tokens_per_second', label: t('benchmark.promptTps'), higherIsBetter: true },
+  { key: 'prompt_ms', label: t('benchmark.promptEval'), higherIsBetter: false },
+  { key: 'decode_ms', label: t('benchmark.decodeEval'), higherIsBetter: false },
+  { key: 'prompt_cache_hit_rate', label: t('benchmark.cacheHitRate'), higherIsBetter: true },
   { key: 'peak_vram_bytes', label: t('benchmark.peakVram'), higherIsBetter: false },
   { key: 'average_gpu_utilization_percent', label: t('benchmark.averageGpu'), higherIsBetter: null },
-  { key: 'prompt_cache_hit_rate', label: t('benchmark.cacheHitRate'), higherIsBetter: true },
 ])
 
 watch(completedGroups, repairSelection, { immediate: true })

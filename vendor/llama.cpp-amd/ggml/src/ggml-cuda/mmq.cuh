@@ -5,6 +5,8 @@
 
 #include <climits>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 
 #define MMQ_DP4A_MAX_BATCH_SIZE 64 // Max. batch size to use for dp4a MMQ kernels when FP16 tensor cores are available.
 #define MMQ_ITER_K             256
@@ -1379,11 +1381,21 @@ void mul_mat_q_switch_J(ggml_backend_cuda_context & ctx, const mmq_args & args, 
     const int    id    = ggml_cuda_get_device();
     const int    cc    = ggml_cuda_info().devices[id].cc;
     const size_t smpbo = ggml_cuda_info().devices[id].smpbo;
+    const int    warp_size = ggml_cuda_info().devices[id].warp_size;
+
+    bool use_rdna3_variant = false;
+#if defined(GGML_USE_HIP)
+    if (GGML_CUDA_CC_IS_RDNA3(cc)) {
+        const char * mode = std::getenv("AGENTFACTORY_AMD_MMQ_MODE");
+        use_rdna3_variant = mode == nullptr || std::strcmp(mode, "official") != 0;
+    }
+#endif
 
     int J_best        = 0;
     int ntiles_J_best = INT_MAX;
 
-    for (int J = 8; J <= 128 && ntiles_J_best > 1; J += 8) {
+    const int maximum_tile_columns = use_rdna3_variant ? 2 * warp_size : 128;
+    for (int J = 8; J <= maximum_tile_columns && ntiles_J_best > 1; J += 8) {
         const ggml_cuda_mmq_config config = ggml_cuda_mmq_get_config(type, J, fallback, cc);
         if (config.type == GGML_TYPE_COUNT) {
             continue;
@@ -1399,6 +1411,10 @@ void mul_mat_q_switch_J(ggml_backend_cuda_context & ctx, const mmq_args & args, 
             J_best = J;
             ntiles_J_best = ntiles_x;
         }
+    }
+
+    if (use_rdna3_variant) {
+        fastagentfactory::operator_trace::record_kernel_selection("amd.mmq_rdna3");
     }
 
     switch (J_best) {

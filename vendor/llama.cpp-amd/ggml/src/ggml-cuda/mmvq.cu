@@ -4,7 +4,9 @@
 #include "vecdotq.cuh"
 #include "fastagentfactory-operator-trace.h"
 #if defined(GGML_USE_HIP)
+#include "../ggml-hip/amd-kernels/q6-k-mmvq-native.hpp"
 #include "../ggml-hip/amd-kernels/q6-k-mmvq.cuh"
+#include "../ggml-hip/amd-kernels/q8-0-mmvq-native.hpp"
 #endif
 
 #include <cstdint>
@@ -1083,7 +1085,53 @@ static void mul_mat_vec_q_switch_ncols_dst(
         has_ids ? nchannels_x : 0, has_ids ? nchannels_dst : 0,
         selected_nwarps, selected_rows_per_block, static_cast<int>(table_id), selected_small_k);
 #if defined(GGML_USE_HIP)
+    if constexpr (type == GGML_TYPE_Q8_0) {
+        fastagentfactory::amd_kernels::q8_0_mmvq_native_launch_config native_config;
+        native_config.quantized_weights = vx;
+        native_config.quantized_activation = vy;
+        native_config.output = dst;
+        native_config.output_rows = nrows_x;
+        native_config.input_columns = ncols_x;
+        native_config.weight_row_stride = stride_row_x;
+        const bool native_layout =
+            ncols_dst == 1 && !has_ids && !has_fusion &&
+            nchannels_x == 1 && nchannels_y == 1 && nchannels_dst == 1 &&
+            nsamples_x == 1 && nsamples_dst == 1;
+        const auto native_decision = native_layout && GGML_CUDA_CC_IS_RDNA3(cc)
+            ? fastagentfactory::amd_kernels::select_q8_0_mmvq_native_variant(native_config)
+            : fastagentfactory::amd_kernels::q8_0_mmvq_dispatch_decision{};
+        if (native_decision.uses_native_kernel()) {
+            const hipError_t launch_status =
+                native_decision.mode == fastagentfactory::amd_kernels::q8_0_mmvq_wave_mode::wave64
+                ? fastagentfactory::amd_kernels::launch_q8_0_mmvq_native_wave64(native_config, stream)
+                : fastagentfactory::amd_kernels::launch_q8_0_mmvq_native_wave32(native_config, stream);
+            CUDA_CHECK(launch_status);
+            fastagentfactory::operator_trace::record_kernel_selection(
+                native_decision.kernel_id);
+            return;
+        }
+    }
     if constexpr (type == GGML_TYPE_Q6_K) {
+        fastagentfactory::amd_kernels::q6_k_mmvq_native_launch_config native_config;
+        native_config.quantized_weights = vx;
+        native_config.quantized_activation = vy;
+        native_config.output = dst;
+        native_config.output_rows = nrows_x;
+        native_config.input_columns = ncols_x;
+        native_config.weight_row_stride = stride_row_x;
+        const bool native_layout =
+            ncols_dst == 1 && !has_ids && !has_fusion &&
+            nchannels_x == 1 && nchannels_y == 1 && nchannels_dst == 1 &&
+            nsamples_x == 1 && nsamples_dst == 1;
+        if (native_layout && GGML_CUDA_CC_IS_RDNA3(cc) &&
+                fastagentfactory::amd_kernels::supports_q6_k_mmvq_native_rdna3(native_config)) {
+            CUDA_CHECK(fastagentfactory::amd_kernels::launch_q6_k_mmvq_native_rdna3(
+                native_config,
+                stream));
+            fastagentfactory::operator_trace::record_kernel_selection(
+                fastagentfactory::amd_kernels::q6_k_mmvq_native_kernel_id);
+            return;
+        }
         if (ncols_dst == 1 && GGML_CUDA_CC_IS_RDNA3(cc)) {
             fastagentfactory::operator_trace::record_kernel_selection(
                 fastagentfactory::amd_kernels::q6_k_mmvq_kernel_id);

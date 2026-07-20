@@ -62,6 +62,16 @@ list(APPEND GGML_HEADERS_ROCM "../../include/ggml-cuda.h")
 
 file(GLOB   GGML_SOURCES_ROCM "../ggml-cuda/*.cu")
 file(GLOB   GGML_AMD_KERNEL_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/amd-kernels/*.hip")
+set(FASTAGENTFACTORY_Q8_MMVQ_WAVE32_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/amd-kernels/q8-0-mmvq-native-wave32.hip")
+set(FASTAGENTFACTORY_Q8_MMVQ_WAVE64_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/amd-kernels/q8-0-mmvq-native-wave64.hip")
+set_source_files_properties(
+    "${FASTAGENTFACTORY_Q8_MMVQ_WAVE32_SOURCE}"
+    PROPERTIES COMPILE_OPTIONS "-mno-wavefrontsize64")
+set_source_files_properties(
+    "${FASTAGENTFACTORY_Q8_MMVQ_WAVE64_SOURCE}"
+    PROPERTIES COMPILE_OPTIONS "-mwavefrontsize64")
 list(APPEND GGML_SOURCES_ROCM ${GGML_AMD_KERNEL_SOURCES})
 set(FASTAGENTFACTORY_OPERATOR_TRACE_DIR "${CMAKE_SOURCE_DIR}/../llama.cpp-common")
 set(FASTAGENTFACTORY_OPERATOR_TRACE_SOURCE

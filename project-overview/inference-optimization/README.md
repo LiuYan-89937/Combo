@@ -21,11 +21,11 @@
 
 - [原始算子分析数据](data/2026-07-18-official-operator-analysis-f9a42bd7.json)
 - [Official llama.cpp 基线分析](reports/2026-07-18-official-baseline.md)
-- [优化说明索引](optimizations/README.md)
+- [AMD RDNA3 推理优化改动说明](optimizations/README.md)
 
 ## 当前成功优化
 
-- [RDNA3 Decode 算子优化：Q8_1 激活复用与 Residual RMSNorm 融合](optimizations/2026-07-19-q8-activation-reuse.md)：在相同模型与服务配置下，Official `84.0867 tok/s`，AMD `88.8320 tok/s`，Decode 提升 `5.64%`。
+- [AMD RDNA3 推理优化改动说明](optimizations/README.md)：汇总 Q8_1 激活复用、Residual RMSNorm 融合、Native Q6_K MMVQ、Q8_0 Wave 选择与 RDNA3 MMQ Tile 优化及其验证结果。
 
 ## 数据使用边界
 
