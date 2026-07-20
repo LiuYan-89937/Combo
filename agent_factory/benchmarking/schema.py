@@ -15,7 +15,7 @@ BenchmarkRunStatus = Literal[
     "interrupted",
 ]
 BenchmarkSampleStatus = Literal["completed", "failed"]
-BenchmarkRunKind = Literal["performance", "operator_analysis"]
+BenchmarkRunKind = Literal["performance", "concurrency", "operator_analysis"]
 BenchmarkImplementationId = Literal["official", "amd"]
 BenchmarkExperimentGroupStatus = BenchmarkRunStatus
 BenchmarkPromptCacheMode = Literal["legacy", "cold", "warm"]
@@ -47,6 +47,14 @@ class BenchmarkOperatorAnalysisSpec(BaseModel):
     top_kernels: int = Field(default=20, ge=5, le=100)
 
 
+class BenchmarkConcurrencySpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    concurrent_requests: int = Field(default=1, ge=1, le=128)
+    requests_per_worker: int = Field(default=2, ge=1, le=100)
+    warmup_requests_per_worker: int = Field(default=1, ge=0, le=20)
+
+
 class BenchmarkRunSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -62,6 +70,7 @@ class BenchmarkRunSpec(BaseModel):
     telemetry_interval_ms: int = Field(default=250, ge=100, le=2000)
     prompt_cache_mode: BenchmarkPromptCacheMode = "legacy"
     implementation: BenchmarkImplementation = Field(default_factory=BenchmarkImplementation)
+    concurrency: BenchmarkConcurrencySpec | None = None
     operator_analysis: BenchmarkOperatorAnalysisSpec | None = None
 
     @field_validator("name", "profile_id")
@@ -84,8 +93,19 @@ class BenchmarkRunSpec(BaseModel):
                 raise ValueError("performance benchmark prompt must not be empty")
             if self.operator_analysis is not None:
                 raise ValueError("performance benchmark does not accept operator_analysis settings")
+            if self.concurrency is not None:
+                raise ValueError("performance benchmark does not accept concurrency settings")
+        elif self.kind == "concurrency":
+            if not self.prompt:
+                raise ValueError("concurrency benchmark prompt must not be empty")
+            if self.concurrency is None:
+                raise ValueError("concurrency benchmark settings are required")
+            if self.operator_analysis is not None:
+                raise ValueError("concurrency benchmark does not accept operator_analysis settings")
         elif self.operator_analysis is None:
             raise ValueError("operator analysis settings are required")
+        elif self.concurrency is not None:
+            raise ValueError("operator analysis does not accept concurrency settings")
         return self
 
 
@@ -103,6 +123,7 @@ class BenchmarkExperimentGroupSpec(BaseModel):
     measured_iterations: int = Field(default=3, ge=1, le=50)
     telemetry_interval_ms: int = Field(default=250, ge=100, le=2000)
     prompt_cache_mode: BenchmarkPromptCacheMode = "legacy"
+    concurrency: BenchmarkConcurrencySpec = Field(default_factory=BenchmarkConcurrencySpec)
     operator_analysis: BenchmarkOperatorAnalysisSpec = Field(
         default_factory=BenchmarkOperatorAnalysisSpec
     )
@@ -157,6 +178,9 @@ class BenchmarkSample(BaseModel):
     decode_ms: float | None = Field(default=None, ge=0)
     prompt_tokens_per_second: float | None = Field(default=None, ge=0)
     decode_tokens_per_second: float | None = Field(default=None, ge=0)
+    draft_tokens: int | None = Field(default=None, ge=0)
+    accepted_draft_tokens: int | None = Field(default=None, ge=0)
+    draft_acceptance_rate_percent: float | None = Field(default=None, ge=0, le=100)
     peak_vram_bytes: int | None = Field(default=None, ge=0)
     average_gpu_utilization_percent: float | None = None
     peak_gpu_utilization_percent: float | None = None
@@ -189,6 +213,29 @@ class BenchmarkPromptCacheSummary(BaseModel):
     cached_tokens: int = Field(ge=0)
     processed_tokens: int = Field(ge=0)
     hit_rate_percent: float = Field(ge=0, le=100)
+
+
+class BenchmarkSpeculativeDecodingSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    draft_tokens: int = Field(ge=0)
+    accepted_draft_tokens: int = Field(ge=0)
+    acceptance_rate_percent: float = Field(ge=0, le=100)
+
+
+class BenchmarkConcurrencyResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    concurrent_requests: int = Field(ge=1)
+    request_count: int = Field(ge=1)
+    successful_requests: int = Field(ge=0)
+    error_rate_percent: float = Field(ge=0, le=100)
+    elapsed_seconds: float = Field(gt=0)
+    requests_per_second: float = Field(ge=0)
+    input_tokens_per_second: float = Field(ge=0)
+    output_tokens_per_second: float = Field(ge=0)
+    request_latency_ms: BenchmarkMetricStats | None = None
+    ttft_ms: BenchmarkMetricStats | None = None
 
 
 class BenchmarkOperatorKernelStat(BaseModel):
@@ -293,6 +340,7 @@ class BenchmarkSummary(BaseModel):
     average_power_watts: BenchmarkMetricStats | None = None
     peak_power_watts: BenchmarkMetricStats | None = None
     prompt_cache: BenchmarkPromptCacheSummary | None = None
+    speculative_decoding: BenchmarkSpeculativeDecodingSummary | None = None
 
 
 class BenchmarkRun(BaseModel):
@@ -306,6 +354,7 @@ class BenchmarkRun(BaseModel):
     environment: dict[str, Any] = Field(default_factory=dict)
     samples: list[BenchmarkSample] = Field(default_factory=list)
     summary: BenchmarkSummary | None = None
+    concurrency: BenchmarkConcurrencyResult | None = None
     operator_analysis: BenchmarkOperatorAnalysisResult | None = None
     error: str = ""
     created_at: str = Field(default_factory=utc_now_text)

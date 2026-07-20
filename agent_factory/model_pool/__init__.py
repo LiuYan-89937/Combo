@@ -19,6 +19,8 @@ from agent_factory.model_pool.resolver import (
 from agent_factory.model_pool.schema import (
     ExternalInferenceConfig,
     LlamaCppInferenceConfig,
+    LlamaCppMtpConfig,
+    LlamaCppSpeculativeDecodingDisabledConfig,
     LocalModelArtifact,
     ModelBindingSource,
     ModelContextExtensionCapability,
@@ -50,6 +52,8 @@ __all__ = [
     "MODEL_ROOT_ENV",
     "ExternalInferenceConfig",
     "LlamaCppInferenceConfig",
+    "LlamaCppMtpConfig",
+    "LlamaCppSpeculativeDecodingDisabledConfig",
     "LocalModelArtifact",
     "ModelBindingSource",
     "ModelContextExtensionCapability",

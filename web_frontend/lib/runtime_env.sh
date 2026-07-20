@@ -73,8 +73,41 @@ web_start_inference_ssh_tunnel() {
         return
     fi
 
-    web_require_command "ssh" "Install the OpenSSH client first."
     web_require_command "curl" "Install curl first."
+
+    local connection_mode="${AGENTFACTORY_INFERENCE_CONNECTION_MODE:-}"
+    if [[ -z "${connection_mode}" ]]; then
+        if [[ -n "${AGENTFACTORY_INFERENCE_SSH_HOST:-}" ]]; then
+            connection_mode="ssh"
+        else
+            connection_mode="direct"
+        fi
+    fi
+    if [[ "${connection_mode}" != "direct" && "${connection_mode}" != "ssh" ]]; then
+        web_fail "AGENTFACTORY_INFERENCE_CONNECTION_MODE must be direct or ssh"
+    fi
+
+    local endpoint_names=(
+        AGENTFACTORY_LOCAL_INFERENCE_ENDPOINT
+        AGENTFACTORY_LOCAL_EMBEDDING_ENDPOINT
+        AGENTFACTORY_LOCAL_IMAGE_ENDPOINT
+        AGENTFACTORY_INFERENCE_TELEMETRY_ENDPOINT
+    )
+    local name
+    for name in "${endpoint_names[@]}"; do
+        if [[ -z "${!name:-}" ]]; then
+            web_fail "${name} is required when AGENTFACTORY_INFERENCE_RUNTIME_MODE=external"
+        fi
+    done
+    if [[ "${connection_mode}" == "direct" ]]; then
+        if web_check_inference_node; then
+            echo "Direct inference control endpoint is reachable"
+            return
+        fi
+        web_fail "Direct inference control endpoint validation failed"
+    fi
+
+    web_require_command "ssh" "Install the OpenSSH client first."
 
     local required_names=(
         AGENTFACTORY_INFERENCE_SSH_HOST
@@ -88,12 +121,7 @@ web_start_inference_ssh_tunnel() {
         AGENTFACTORY_INFERENCE_SSH_TELEMETRY_REMOTE_PORT
         AGENTFACTORY_INFERENCE_SSH_IMAGE_LOCAL_PORT
         AGENTFACTORY_INFERENCE_SSH_IMAGE_REMOTE_PORT
-        AGENTFACTORY_LOCAL_INFERENCE_ENDPOINT
-        AGENTFACTORY_LOCAL_EMBEDDING_ENDPOINT
-        AGENTFACTORY_LOCAL_IMAGE_ENDPOINT
-        AGENTFACTORY_INFERENCE_TELEMETRY_ENDPOINT
     )
-    local name
     for name in "${required_names[@]}"; do
         if [[ -z "${!name:-}" ]]; then
             web_fail "${name} is required when AGENTFACTORY_INFERENCE_RUNTIME_MODE=external"
@@ -154,7 +182,7 @@ web_start_inference_ssh_tunnel() {
             INFERENCE_SSH_TUNNEL_PID=""
             web_fail "SSH tunnel exited before the inference control endpoint became available"
         fi
-        if web_check_inference_ssh_tunnel; then
+        if web_check_inference_node; then
             echo "External inference control endpoint is reachable"
             return
         fi
@@ -165,7 +193,7 @@ web_start_inference_ssh_tunnel() {
     web_fail "SSH tunnel opened, but the inference control endpoint validation failed"
 }
 
-web_check_inference_ssh_tunnel() {
+web_check_inference_node() {
     local telemetry_endpoint="${AGENTFACTORY_INFERENCE_TELEMETRY_ENDPOINT%/}"
     curl --fail --silent --show-error --max-time 2 "${telemetry_endpoint}/health" >/dev/null 2>&1 \
         && curl --fail --silent --show-error --max-time 2 "${telemetry_endpoint}/models" >/dev/null 2>&1 \

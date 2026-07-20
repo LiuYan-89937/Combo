@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 import re
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -164,6 +164,34 @@ class ModelPoolLimits(BaseModel):
     context_compression_threshold_tokens: int | None = Field(default=None, ge=1000)
 
 
+class LlamaCppMtpConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    method: Literal["mtp"] = "mtp"
+    max_draft_tokens: int = Field(default=3, ge=1, le=32)
+    min_draft_tokens: int = Field(default=0, ge=0, le=32)
+    min_acceptance_probability: float = Field(default=0.0, ge=0.0, le=1.0)
+    backend_sampling: bool = True
+
+    @model_validator(mode="after")
+    def _draft_range(self) -> "LlamaCppMtpConfig":
+        if self.min_draft_tokens > self.max_draft_tokens:
+            raise ValueError("min_draft_tokens must not exceed max_draft_tokens")
+        return self
+
+
+class LlamaCppSpeculativeDecodingDisabledConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    method: Literal["disabled"] = "disabled"
+
+
+LlamaCppSpeculativeDecodingConfig = Annotated[
+    LlamaCppSpeculativeDecodingDisabledConfig | LlamaCppMtpConfig,
+    Field(discriminator="method"),
+]
+
+
 class LlamaCppInferenceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -173,6 +201,9 @@ class LlamaCppInferenceConfig(BaseModel):
     cache_type_v: str = "f16"
     flash_attention: bool = True
     mmproj_path: str | None = None
+    speculative_decoding: LlamaCppSpeculativeDecodingConfig = Field(
+        default_factory=LlamaCppSpeculativeDecodingDisabledConfig
+    )
 
     @field_validator("cache_type_k", "cache_type_v")
     @classmethod

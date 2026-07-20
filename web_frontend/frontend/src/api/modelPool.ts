@@ -102,6 +102,7 @@ export interface LlamaCppRuntimeConfiguration {
   cache_type_v: string
   flash_attention: boolean
   mmproj_path?: string | null
+  speculative_decoding: LlamaCppSpeculativeDecodingConfiguration
   rope_scaling?: {
     method: string
     original_context_tokens: number
@@ -109,6 +110,22 @@ export interface LlamaCppRuntimeConfiguration {
     factor: number
   } | null
 }
+
+export interface LlamaCppMtpConfiguration {
+  method: 'mtp'
+  max_draft_tokens: number
+  min_draft_tokens: number
+  min_acceptance_probability: number
+  backend_sampling: boolean
+}
+
+export interface LlamaCppSpeculativeDecodingDisabledConfiguration {
+  method: 'disabled'
+}
+
+export type LlamaCppSpeculativeDecodingConfiguration =
+  | LlamaCppSpeculativeDecodingDisabledConfiguration
+  | LlamaCppMtpConfiguration
 
 export interface TransformersRuntimeConfiguration {
   trust_remote_code: boolean
@@ -203,6 +220,7 @@ export interface LocalChatModelProfile extends LocalModelProfileBase {
     cache_type_v: string
     flash_attention: boolean
     mmproj_path?: string | null
+    speculative_decoding: LlamaCppSpeculativeDecodingConfiguration
   } | {
     external: true
     remote_inference?: LlamaCppRuntimeConfiguration | null

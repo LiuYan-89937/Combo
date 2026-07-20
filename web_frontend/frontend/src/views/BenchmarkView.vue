@@ -111,6 +111,18 @@
             />
           </label>
           <label class="field">
+            <span>{{ t('benchmark.concurrentRequests') }}</span>
+            <n-input-number v-model:value="form.concurrency.concurrent_requests" :min="1" :max="128" :disabled="Boolean(activeGroup)" />
+          </label>
+          <label class="field">
+            <span>{{ t('benchmark.requestsPerWorker') }}</span>
+            <n-input-number v-model:value="form.concurrency.requests_per_worker" :min="1" :max="100" :disabled="Boolean(activeGroup)" />
+          </label>
+          <label class="field">
+            <span>{{ t('benchmark.qpsWarmupRequests') }}</span>
+            <n-input-number v-model:value="form.concurrency.warmup_requests_per_worker" :min="0" :max="20" :disabled="Boolean(activeGroup)" />
+          </label>
+          <label class="field">
             <span>{{ t('benchmark.prefillTokens') }}</span>
             <n-input-number v-model:value="form.operator_analysis.prefill_tokens" :min="32" :max="32768" :disabled="Boolean(activeGroup)" />
           </label>
@@ -226,6 +238,10 @@
                       <div class="metric-detail">± {{ formatMetric(metric.key, groupMetricStd(implementation, metric.key)) }}</div>
                     </article>
                   </div>
+                  <div class="qps-average-row">
+                    <span>QPS <strong>{{ formatRate(groupConcurrencyMean(implementation, 'requests_per_second'), 'req/s') }}</strong></span>
+                    <span>{{ t('benchmark.aggregateOutputTps') }} <strong>{{ formatRate(groupConcurrencyMean(implementation, 'output_tokens_per_second'), 'tok/s') }}</strong></span>
+                  </div>
                 </article>
               </div>
               <label class="field group-run-selector">
@@ -325,7 +341,61 @@
             </div>
           </template>
 
+          <template v-if="selectedRun.summary.speculative_decoding">
+            <div class="section-heading cache-heading">
+              <h3>{{ t('benchmark.mtpMetrics') }}</h3>
+              <span>{{ t('benchmark.mtpMetricsHint') }}</span>
+            </div>
+            <div class="metric-grid cache-metric-grid">
+              <article class="metric-card">
+                <span class="metric-label">{{ t('benchmark.mtpDraftTokens') }}</span>
+                <strong class="metric-value">{{ formatTokenCount(selectedRun.summary.speculative_decoding.draft_tokens) }}</strong>
+              </article>
+              <article class="metric-card">
+                <span class="metric-label">{{ t('benchmark.mtpAcceptedTokens') }}</span>
+                <strong class="metric-value">{{ formatTokenCount(selectedRun.summary.speculative_decoding.accepted_draft_tokens) }}</strong>
+              </article>
+              <article class="metric-card">
+                <span class="metric-label">{{ t('benchmark.mtpAcceptanceRate') }}</span>
+                <strong class="metric-value">{{ formatPercent(selectedRun.summary.speculative_decoding.acceptance_rate_percent) }}</strong>
+              </article>
+            </div>
+          </template>
+
         </template>
+
+        <section v-if="selectedRun.concurrency" class="operator-results">
+          <div class="section-heading">
+            <h3>{{ t('benchmark.qpsResults') }}</h3>
+            <span>{{ t('benchmark.concurrentRequestCount', { value: selectedRun.concurrency.concurrent_requests }) }}</span>
+          </div>
+          <div class="metric-grid">
+            <article class="metric-card">
+              <span class="metric-label">QPS</span>
+              <strong class="metric-value">{{ formatRate(selectedRun.concurrency.requests_per_second, 'req/s') }}</strong>
+            </article>
+            <article class="metric-card">
+              <span class="metric-label">{{ t('benchmark.aggregateOutputTps') }}</span>
+              <strong class="metric-value">{{ formatRate(selectedRun.concurrency.output_tokens_per_second, 'tok/s') }}</strong>
+            </article>
+            <article class="metric-card">
+              <span class="metric-label">{{ t('benchmark.aggregateInputTps') }}</span>
+              <strong class="metric-value">{{ formatRate(selectedRun.concurrency.input_tokens_per_second, 'tok/s') }}</strong>
+            </article>
+            <article class="metric-card">
+              <span class="metric-label">{{ t('benchmark.errorRate') }}</span>
+              <strong class="metric-value">{{ formatPercent(selectedRun.concurrency.error_rate_percent) }}</strong>
+            </article>
+            <article class="metric-card">
+              <span class="metric-label">{{ t('benchmark.requestLatencyP95') }}</span>
+              <strong class="metric-value">{{ formatMilliseconds(selectedRun.concurrency.request_latency_ms?.p95) }}</strong>
+            </article>
+            <article class="metric-card">
+              <span class="metric-label">{{ t('benchmark.ttftP95') }}</span>
+              <strong class="metric-value">{{ formatMilliseconds(selectedRun.concurrency.ttft_ms?.p95) }}</strong>
+            </article>
+          </div>
+        </section>
 
         <section v-if="selectedRun.operator_analysis" class="operator-results">
           <div class="section-heading">
@@ -657,6 +727,11 @@ const form = reactive<BenchmarkExperimentGroupSpec>({
   measured_iterations: 3,
   telemetry_interval_ms: 250,
   prompt_cache_mode: 'cold',
+  concurrency: {
+    concurrent_requests: 1,
+    requests_per_worker: 2,
+    warmup_requests_per_worker: 1,
+  },
   operator_analysis: {
     prefill_tokens: 512,
     decode_tokens: 128,
@@ -780,6 +855,7 @@ async function startGroup() {
       name: form.name.trim(),
       prompt: form.prompt.trim(),
       operator_analysis: { ...form.operator_analysis },
+      concurrency: { ...form.concurrency },
     })
     selectedGroupId.value = result.group.group_id
     selectedRunId.value = null
@@ -827,6 +903,24 @@ function completedPerformanceRuns(implementation: BenchmarkImplementationId) {
   return selectedGroupRuns.value.filter((run) => runIds.has(run.run_id) && run.status === 'completed')
 }
 
+function completedConcurrencyRuns(implementation: BenchmarkImplementationId) {
+  if (!selectedGroup.value) return []
+  const runIds = new Set(selectedGroup.value.runs
+    .filter((item) => item.implementation === implementation && item.kind === 'concurrency')
+    .map((item) => item.run_id))
+  return selectedGroupRuns.value.filter((run) => runIds.has(run.run_id) && run.status === 'completed')
+}
+
+function groupConcurrencyMean(
+  implementation: BenchmarkImplementationId,
+  key: 'requests_per_second' | 'output_tokens_per_second',
+) {
+  const values = completedConcurrencyRuns(implementation)
+    .map((run) => run.concurrency?.[key])
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null
+}
+
 function groupMetricMean(implementation: BenchmarkImplementationId, key: MetricKey) {
   const values = groupMetricValues(implementation, key)
   return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null
@@ -850,7 +944,9 @@ function implementationLabel(value: BenchmarkImplementationId) {
 }
 
 function kindLabel(value: BenchmarkRun['spec']['kind']) {
-  return value === 'performance' ? t('benchmark.performanceKind') : t('benchmark.operatorKind')
+  if (value === 'performance') return t('benchmark.performanceKind')
+  if (value === 'concurrency') return t('benchmark.concurrencyKind')
+  return t('benchmark.operatorKind')
 }
 
 function runProgress(run: BenchmarkRun) {
@@ -888,6 +984,16 @@ function formatTokenCount(value: number | null | undefined) {
 function formatPercent(value: number | null | undefined) {
   if (value === null || value === undefined || !Number.isFinite(value)) return '—'
   return `${value.toFixed(1)}%`
+}
+
+function formatRate(value: number | null | undefined, unit: string) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—'
+  return `${value.toFixed(2)} ${unit}`
+}
+
+function formatMilliseconds(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—'
+  return `${value.toFixed(1)} ms`
 }
 
 function formatKernelTime(value: number) {
@@ -1156,6 +1262,15 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 .form-actions { margin-top: var(--app-space-lg); display: flex; justify-content: flex-end; }
+.qps-average-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--app-space-md);
+  margin-top: var(--app-space-md);
+  color: var(--app-text-muted);
+  font-size: 12px;
+}
+.qps-average-row strong { color: var(--app-text-strong); margin-left: 4px; }
 .group-average-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

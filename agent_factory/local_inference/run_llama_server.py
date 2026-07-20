@@ -63,6 +63,25 @@ def main() -> None:
         "--slots",
     ]
     command.extend(["--flash-attn", "on" if profile.inference.flash_attention else "off"])
+    speculative = profile.inference.speculative_decoding
+    if speculative.method == "mtp":
+        command.extend(
+            [
+                "--spec-type",
+                "draft-mtp",
+                "--spec-draft-n-max",
+                str(speculative.max_draft_tokens),
+                "--spec-draft-n-min",
+                str(speculative.min_draft_tokens),
+                "--spec-draft-p-min",
+                format(speculative.min_acceptance_probability, ".9g"),
+                (
+                    "--spec-draft-backend-sampling"
+                    if speculative.backend_sampling
+                    else "--no-spec-draft-backend-sampling"
+                ),
+            ]
+        )
     if profile.inference.mmproj_path:
         mmproj_path = Path(profile.inference.mmproj_path).expanduser().resolve()
         if not mmproj_path.is_file():

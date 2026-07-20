@@ -155,6 +155,7 @@
                   <div class="spec-item"><span>{{ t('localModel.parallelSlots') }}</span><strong>{{ chatRuntimeConfiguration(profile)?.parallel_slots ?? '—' }}</strong></div>
                   <div class="spec-item"><span>{{ t('localModel.totalContextBudget') }}</span><strong>{{ formatTokens(profileTotalContextTokens(profile)) }}</strong></div>
                   <div class="spec-item"><span>{{ t('localModel.kvCache') }}</span><strong>{{ chatRuntimeConfiguration(profile)?.cache_type_k || '—' }} / {{ chatRuntimeConfiguration(profile)?.cache_type_v || '—' }}</strong></div>
+                  <div class="spec-item"><span>MTP</span><strong>{{ chatRuntimeConfiguration(profile)?.speculative_decoding?.method === 'mtp' ? t('common.enabled') : t('common.disabled') }}</strong></div>
                 </template>
                 <template v-else-if="profile.kind === 'image_generation'">
                   <div class="spec-item"><span>默认尺寸</span><strong>{{ imageRuntimeConfiguration(profile)?.default_width }} × {{ imageRuntimeConfiguration(profile)?.default_height }}</strong></div>
@@ -493,6 +494,12 @@
           <n-form-item v-if="profileForm.kind === 'chat'" :label="t('localModel.contextCompressionThreshold')">
             <n-input-number v-model:value="profileForm.context_compression_threshold_tokens" :min="1000" clearable />
           </n-form-item>
+          <n-form-item v-if="profileForm.kind === 'chat' && profileForm.mtp_enabled" :label="t('localModel.mtpMaxDraftTokens')">
+            <n-input-number v-model:value="profileForm.mtp_max_draft_tokens" :min="1" :max="32" />
+          </n-form-item>
+          <n-form-item v-if="profileForm.kind === 'chat' && profileForm.mtp_enabled" :label="t('localModel.mtpMinAcceptanceProbability')">
+            <n-input-number v-model:value="profileForm.mtp_min_acceptance_probability" :min="0" :max="1" :step="0.05" />
+          </n-form-item>
           <n-form-item v-if="profileForm.kind === 'embedding'" :label="t('localModel.embeddingDimensions')">
             <n-input-number v-model:value="profileForm.embedding_dimensions" :min="1" />
           </n-form-item>
@@ -535,6 +542,8 @@
         <n-space vertical>
           <n-checkbox v-model:checked="profileForm.enabled">{{ t('localModel.loadWhenEnabled') }}</n-checkbox>
           <n-checkbox v-if="profileForm.kind === 'chat'" v-model:checked="profileForm.flash_attention">{{ t('localModel.flashAttention') }}</n-checkbox>
+          <n-checkbox v-if="profileForm.kind === 'chat'" v-model:checked="profileForm.mtp_enabled">{{ t('localModel.mtpEnabled') }}</n-checkbox>
+          <n-checkbox v-if="profileForm.kind === 'chat' && profileForm.mtp_enabled" v-model:checked="profileForm.mtp_backend_sampling">{{ t('localModel.mtpBackendSampling') }}</n-checkbox>
           <n-checkbox v-if="profileForm.kind === 'embedding'" v-model:checked="profileForm.trust_remote_code">{{ t('localModel.trustRemoteCode') }}</n-checkbox>
           <n-checkbox v-if="profileForm.kind === 'chat'" v-model:checked="profileForm.tool_calling">{{ t('modelPool.toolCalling') }}</n-checkbox>
           <n-checkbox
@@ -589,6 +598,7 @@ import {
   type LocalModelRuntime,
   type InferenceMemoryEstimate,
   type LlamaCppRuntimeConfiguration,
+  type LlamaCppMtpConfiguration,
   type StableDiffusionCppRuntimeConfiguration,
   type RocmRuntimeInfo,
   type ModelUsageGroup,
@@ -632,6 +642,8 @@ const profileForm = reactive({
   display_name: '', description: '', artifact_id: '', kind: 'chat' as LocalModelKind,
   served_model_name: '', gpu_layers: 99, parallel_slots: 1,
   cache_type_k: 'f16', cache_type_v: 'f16', flash_attention: true,
+  mtp_enabled: false, mtp_max_draft_tokens: 3, mtp_min_draft_tokens: 0,
+  mtp_min_acceptance_probability: 0, mtp_backend_sampling: true,
   max_input_tokens: null as number | null,
   max_output_tokens: null as number | null, context_compression_threshold_tokens: null as number | null,
   embedding_dimensions: null as number | null,
@@ -843,6 +855,7 @@ function openProfile(item?: LocalModelProfile): void {
   profileForm.kind = kind
   profileForm.served_model_name = item?.served_model_name || artifact?.external_model_id || artifact?.display_name || ''
   const chatInference = item?.kind === 'chat' ? chatRuntimeConfiguration(item, remoteModel) : null
+  const mtpInference = mtpRuntimeConfiguration(chatInference)
   const embeddingInference = item?.kind === 'embedding' ? item.inference : null
   const imageInference = kind === 'image_generation'
     ? item ? imageRuntimeConfiguration(item, remoteModel) : remoteImageRuntimeConfiguration(remoteModel)
@@ -852,6 +865,11 @@ function openProfile(item?: LocalModelProfile): void {
   profileForm.cache_type_k = chatInference?.cache_type_k ?? 'f16'
   profileForm.cache_type_v = chatInference?.cache_type_v ?? 'f16'
   profileForm.flash_attention = chatInference?.flash_attention ?? true
+  profileForm.mtp_enabled = Boolean(mtpInference)
+  profileForm.mtp_max_draft_tokens = mtpInference?.max_draft_tokens ?? 3
+  profileForm.mtp_min_draft_tokens = mtpInference?.min_draft_tokens ?? 0
+  profileForm.mtp_min_acceptance_probability = mtpInference?.min_acceptance_probability ?? 0
+  profileForm.mtp_backend_sampling = mtpInference?.backend_sampling ?? true
   profileForm.max_input_tokens = item?.limits.max_input_tokens
     ?? artifact?.native_context_tokens
     ?? remoteModel?.native_context_tokens
@@ -884,6 +902,7 @@ function syncProfileKind(artifactId: string): void {
   const directory = directoryForArtifact(artifact)
   const remoteModel = remoteModelForArtifact(artifact)
   const runtimeConfiguration = remoteChatRuntimeConfiguration(remoteModel)
+  const mtpInference = mtpRuntimeConfiguration(runtimeConfiguration)
   profileForm.kind = artifact.kind
   profileForm.display_name = artifact.display_name
   profileForm.description = ''
@@ -893,6 +912,11 @@ function syncProfileKind(artifactId: string): void {
   profileForm.cache_type_k = runtimeConfiguration?.cache_type_k ?? 'f16'
   profileForm.cache_type_v = runtimeConfiguration?.cache_type_v ?? 'f16'
   profileForm.flash_attention = runtimeConfiguration?.flash_attention ?? true
+  profileForm.mtp_enabled = Boolean(mtpInference)
+  profileForm.mtp_max_draft_tokens = mtpInference?.max_draft_tokens ?? 3
+  profileForm.mtp_min_draft_tokens = mtpInference?.min_draft_tokens ?? 0
+  profileForm.mtp_min_acceptance_probability = mtpInference?.min_acceptance_probability ?? 0
+  profileForm.mtp_backend_sampling = mtpInference?.backend_sampling ?? true
   profileForm.max_input_tokens = artifact.native_context_tokens
     ?? remoteModel?.native_context_tokens
     ?? remoteModel?.context_length
@@ -948,6 +972,15 @@ async function saveProfile(): Promise<void> {
   try {
     const isChat = profileForm.kind === 'chat'
     const isEmbedding = profileForm.kind === 'embedding'
+    const chatSpeculativeDecoding = profileForm.mtp_enabled
+      ? {
+          method: 'mtp' as const,
+          max_draft_tokens: profileForm.mtp_max_draft_tokens,
+          min_draft_tokens: profileForm.mtp_min_draft_tokens,
+          min_acceptance_probability: profileForm.mtp_min_acceptance_probability,
+          backend_sampling: profileForm.mtp_backend_sampling,
+        }
+      : { method: 'disabled' as const }
     const imageInference = {
       vae_path: profileForm.vae_path,
       clip_l_path: profileForm.clip_l_path,
@@ -1006,6 +1039,7 @@ async function saveProfile(): Promise<void> {
                   cache_type_k: profileForm.cache_type_k,
                   cache_type_v: profileForm.cache_type_v,
                   flash_attention: profileForm.flash_attention,
+                  speculative_decoding: chatSpeculativeDecoding,
                 }
               : isEmbedding ? { trust_remote_code: profileForm.trust_remote_code } : imageInference,
           }
@@ -1016,6 +1050,7 @@ async function saveProfile(): Promise<void> {
             cache_type_k: profileForm.cache_type_k,
             cache_type_v: profileForm.cache_type_v,
             flash_attention: profileForm.flash_attention,
+            speculative_decoding: chatSpeculativeDecoding,
           }
         : isEmbedding ? { trust_remote_code: profileForm.trust_remote_code } : imageInference,
       embedding_dimensions: isEmbedding ? profileForm.embedding_dimensions : null,
@@ -1263,7 +1298,17 @@ function remoteChatRuntimeConfiguration(remoteModel?: LocalModelStorage['remote_
     cache_type_k: typeof configuration.cache_type_k === 'string' ? configuration.cache_type_k : 'f16',
     cache_type_v: typeof configuration.cache_type_v === 'string' ? configuration.cache_type_v : 'f16',
     flash_attention: configuration.flash_attention !== false,
+    speculative_decoding: configuration.speculative_decoding && typeof configuration.speculative_decoding === 'object'
+      ? configuration.speculative_decoding as unknown as LlamaCppRuntimeConfiguration['speculative_decoding']
+      : { method: 'disabled' },
   }
+}
+
+function mtpRuntimeConfiguration(
+  configuration?: LlamaCppRuntimeConfiguration | null,
+): LlamaCppMtpConfiguration | null {
+  const speculative = configuration?.speculative_decoding
+  return speculative?.method === 'mtp' ? speculative : null
 }
 
 function profileTotalContextTokens(profile: LocalModelProfile): number | null {
@@ -1411,6 +1456,15 @@ async function refreshMemoryEstimate(): Promise<void> {
           cache_type_k: profileForm.cache_type_k,
           cache_type_v: profileForm.cache_type_v,
           flash_attention: profileForm.flash_attention,
+          speculative_decoding: profileForm.mtp_enabled
+            ? {
+                method: 'mtp',
+                max_draft_tokens: profileForm.mtp_max_draft_tokens,
+                min_draft_tokens: profileForm.mtp_min_draft_tokens,
+                min_acceptance_probability: profileForm.mtp_min_acceptance_probability,
+                backend_sampling: profileForm.mtp_backend_sampling,
+              }
+            : { method: 'disabled' },
         },
         embedding_dimensions: null,
         normalize_embeddings: true,
@@ -1446,6 +1500,11 @@ watch(
     profileForm.cache_type_v,
     profileForm.gpu_layers,
     profileForm.flash_attention,
+    profileForm.mtp_enabled,
+    profileForm.mtp_max_draft_tokens,
+    profileForm.mtp_min_draft_tokens,
+    profileForm.mtp_min_acceptance_probability,
+    profileForm.mtp_backend_sampling,
   ],
   scheduleMemoryEstimate,
 )

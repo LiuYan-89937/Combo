@@ -114,7 +114,7 @@ git pull --ff-only origin AMD-Hackson
 
 部署脚本会从本机同步当前工作树到 RadeonCloud，不需要在服务器上手动 Clone 项目。
 
-## 4. 配置 SSH 与部署参数
+## 4. 选择推理节点并配置部署参数
 
 创建私有配置：
 
@@ -122,9 +122,10 @@ git pull --ff-only origin AMD-Hackson
 cp deploy/deploy.env.example deploy/deploy.env
 ```
 
-首次部署只需要填写 SSH：
+GPU 位于另一台机器时使用默认 SSH 目标：
 
 ```dotenv
+DEPLOY_TARGET=ssh
 SSH_HOST=<RadeonCloud-IP>
 SSH_PORT=<RadeonCloud-SSH-Port>
 SSH_USER=root
@@ -137,10 +138,26 @@ SSH_KEY=
 - 填写：使用绝对路径或 `~/.ssh/...` 指定私钥；
 - 不允许填写密码，脚本只支持 Key 登录。
 
+GPU 位于当前 Linux 主机时使用本机目标：
+
+```dotenv
+DEPLOY_TARGET=local
+SSH_HOST=
+SSH_USER=
+SSH_KEY=
+```
+
+本机模式不建立 SSH 隧道。推理控制节点、Chat、Embedding 和 Image 服务仍使用与
+SSH 模式完全相同的进程与接口，Web 端通过回环端口直接访问，因此 Official/AMD
+切换、MTP、容量估算、QPS 与算子分析不分叉。请将所有 `REMOTE_*_ROOT`/`DIR`
+配置为当前用户可写的本机绝对路径；这些字段名为兼容既有配置保留，实际表示推理节点路径。
+本机必须是具有 `/dev/kfd` 和 AMD ROCm 驱动的 Linux 主机。
+
 ### 4.1 主要配置字段
 
 | 字段 | 含义 | 默认策略 |
 | --- | --- | --- |
+| `DEPLOY_TARGET` | 推理节点执行位置 | `ssh`；同机 AMD GPU 使用 `local` |
 | `REMOTE_PROJECT_ROOT` | 远端最小推理 bundle 目录 | `/root/FastAgentFactory` |
 | `REMOTE_STATE_ROOT` | venv、模型池、PID、日志 | `/root/.fastagentfactory` |
 | `REMOTE_MODEL_ROOT` | 模型根目录 | `/root/models` |
@@ -203,21 +220,21 @@ Worker 租约以协作任务为唯一边界。同一个 AgentPackage 可以在�
 
 脚本按照以下顺序运行：
 
-1. 检查本机 Git、Python、uv、Node、npm、Docker、SSH 与 rsync。
-2. 验证 SSH Key 登录和端口配置。
+1. 检查 Git、Python、uv、Node、npm、Docker 与 rsync；仅 SSH 目标检查 OpenSSH。
+2. 验证部署目标与端口；SSH 目标额外验证 Key 登录。
 3. 验证仓库自带的两套 llama.cpp、stable-diffusion.cpp 固定 revision 标记及递归子模块完整性。
 4. 上传远端控制脚本，准备缺失的普通编译工具，验证并按需修复系统 CA 信任链。
 5. 探查 GPU、显存、磁盘、ROCm 和 PyTorch HIP；仅在缺失时安装 ROCm 用户态组件和配置指定的 PyTorch HIP 包。
-6. 同步 FastAgentFactory 当前工作树到远端项目目录。
-7. 同步官方与 AMD 两套 llama.cpp，以及完整 stable-diffusion.cpp 源码；远端不访问 GitHub，直接为两套实现构建 ROCm `llama-server`、`llama-bench`，并构建 HIPBLAS `sd-server`。
+6. 将 FastAgentFactory 最小推理 bundle 放入推理节点目录；本机目录与当前仓库相同时直接复用。
+7. 准备官方与 AMD 两套 llama.cpp，以及完整 stable-diffusion.cpp 源码；节点不访问 GitHub，直接为两套实现构建 ROCm `llama-server`、`llama-bench`，并构建 HIPBLAS `sd-server`。
 8. 从国内镜像断点续传 Chat GGUF 和 mmproj。
 9. 校验模型文件大小和 SHA256；损坏的完整文件不会被复用。
 10. 从 ModelScope 下载或复用 `BAAI/bge-m3`。
 11. 下载并校验 FLUX.1-dev Q4_0、VAE、CLIP-L 与 T5XXL。
-12. 幂等同步 Chat、Embedding、Image Generation 的远端本地 Profile 与本机 external Profile，并清理不属于当前部署清单的旧模型与推理配置。
+12. 幂等同步 Chat、Embedding、Image Generation 的节点 Profile 与 Web external Profile，并清理不属于当前部署清单的旧模型与推理配置。
 13. 设置 `main`、`task`、`compression` 和 `embedding` 默认 Profile。
-14. 激活 `LLAMA_DEFAULT_IMPLEMENTATION`，启动远端推理节点并等待 Chat 与 Embedding 都进入 `ready`。
-15. 生成本机 `.env`；默认建立 SSH 隧道并启动本机前后端，传入 `--no-web` 时跳过此步骤。
+14. 激活 `LLAMA_DEFAULT_IMPLEMENTATION`，启动推理节点并等待 Chat 与 Embedding 都进入 `ready`。
+15. 生成 `.env`；SSH 目标建立隧道，本机目标直连节点，随后启动前后端；传入 `--no-web` 时跳过 Web 启动。
 
 首次下载和编译时间取决于网络、磁盘和 Radeon GPU 主机 CPU。终端会直接显示 curl 与 ModelScope 下载进度。
 
@@ -225,7 +242,7 @@ Worker 租约以协作任务为唯一边界。同一个 AgentPackage 可以在�
 
 部署使用 `stable-diffusion.cpp + FLUX.1-dev Q4_0`，四个文件总计约 16.3GB，其中 T5XXL FP16 常驻 CPU 内存。默认参数为单并发、768×768、20 Steps、CFG 1.0、Euler、Diffusion Flash Attention、CLIP/T5 CPU 和 VAE Tiling。
 
-Image Profile 在远端注册为 enabled，供控制节点识别；本机 external Profile 默认 disabled，因此首次启动不会占用显存。图片运行配置默认启用 `eager_load`，`sd-server` 启动后会立即将参数加载到配置的计算后端；默认 `coexist_if_fit` 允许 Chat 与 Image 在显存预算足够时同时驻留。模型工具复用 `main` 的 `image_output` 抽象，只把 `sd-server` 当作调用接口，图片产物由 ArtifactStore 保存到当前 Agent Workspace。
+Image Profile 在推理节点注册为 enabled，供控制节点识别；Web 端 external Profile 默认 disabled，因此首次启动不会占用显存。图片运行配置默认启用 `eager_load`，`sd-server` 启动后会立即将参数加载到配置的计算后端；默认 `coexist_if_fit` 允许 Chat 与 Image 在显存预算足够时同时驻留。模型工具复用 `main` 的 `image_output` 抽象，只把 `sd-server` 当作调用接口，图片产物由 ArtifactStore 保存到当前 Agent Workspace。
 
 FLUX.1-dev 使用 Non-Commercial License，不等同于 Apache/MIT。比赛演示和提交前应保留模型来源、revision、SHA256 与许可证说明。
 
@@ -307,14 +324,14 @@ http://127.0.0.1:3000
 
 | 命令 | 作用 |
 | --- | --- |
-| `./deploy.sh up` | 幂等部署并启动远端模型、本机 Web 和 SSH 隧道。 |
-| `./deploy.sh up --no-web` | 完成远端一键部署，不启动本机前后端。 |
-| `./deploy.sh bootstrap` | 部署并启动远端模型，不启动本机 Web。 |
-| `./start.sh` | 已部署环境中只启动本机 Web、Docker Runtime 和 SSH 隧道。 |
-| `./deploy.sh status` | 查看远端软件、ROCm 和模型运行状态。 |
-| `./deploy.sh logs` | 查看远端推理节点最近 200 行日志。 |
-| `./deploy.sh restart` | 重启远端推理节点并等待模型 ready。 |
-| `./deploy.sh down` | 停止远端推理节点、卸载模型并释放显存。 |
+| `./deploy.sh up` | 按 `DEPLOY_TARGET` 幂等部署推理节点并启动 Web；SSH 目标同时建立隧道。 |
+| `./deploy.sh up --no-web` | 完成推理节点一键部署，不启动前后端。 |
+| `./deploy.sh bootstrap` | 部署并启动推理节点，不启动 Web。 |
+| `./start.sh` | 已部署环境中只启动 Web、Docker Runtime，并按连接模式直连节点或建立 SSH 隧道。 |
+| `./deploy.sh status` | 查看推理节点软件、ROCm 和模型运行状态。 |
+| `./deploy.sh logs` | 查看推理节点最近 200 行日志。 |
+| `./deploy.sh restart` | 重启推理节点并等待模型 ready。 |
+| `./deploy.sh down` | 停止推理节点、卸载模型并释放显存。 |
 | `./deploy.sh models` | 续传/校验模型并刷新 Profile；运行中会自动重启。 |
 | `./deploy.sh sync` | 同步 FastAgentFactory 和本机 llama.cpp 到远端。 |
 | `./deploy.sh build-llama [official\|amd\|all]` | 独立增量构建指定实现；默认构建两套。 |
@@ -322,7 +339,7 @@ http://127.0.0.1:3000
 | `./deploy.sh list-llama-builds` | 查看构建清单、SHA256 和活动实现。 |
 | `./deploy.sh rollback-llama` | 恢复上一次活动实现。 |
 
-按 `Ctrl+C` 只会停止本机前后端和 SSH 隧道，远端模型继续运行。释放 Radeon GPU 显存必须执行：
+按 `Ctrl+C` 只会停止前后端和 SSH 隧道（若有），推理节点模型继续运行。释放 Radeon GPU 显存必须执行：
 
 ```bash
 ./deploy.sh down
@@ -397,6 +414,10 @@ Benchmark 页面中的“算子分析”使用活动构建的 `llama-bench`，�
 同一个 JSON 还保留 `kernels` 汇总区，供后续 AMD 自定义分派器记录 `selected_count`、`dispatch_count`、`fallback_count` 和回退原因。文件中的 `kernel_id` 必须存在于活动构建的 Kernel Catalog。该协议能区分“满足选择条件”和“真正命中 Kernel”，同时避免逐次磁盘写入污染性能数据。
 
 普通性能测试不会启用 profiler，避免 TTFT/TPS 被采样开销污染。算子分析会临时卸载 Chat runtime 以释放显存，结束或失败后都尝试恢复原 Profile；分析期间 Chat API 暂时不可用。原始 stdout、stderr 和 rocprof CSV 保存在远端 `.agentfactory/benchmark/operator-analysis/<run_id>/`，前端只展示结构化 Top Kernel 与图算子摘要。
+
+部署模板默认为当前 Qwen3.6 GGUF 开启 MTP 推测解码：`CHAT_MTP_ENABLED=1` 对应 llama.cpp 的 `--spec-type draft-mtp`，候选长度、最低候选概率和 Backend Sampling 分别由 `CHAT_MTP_MAX_DRAFT_TOKENS`、`CHAT_MTP_MIN_ACCEPTANCE_PROBABILITY` 与 `CHAT_MTP_BACKEND_SAMPLING` 控制。MTP 使用 GGUF 内保留的 NextN 层，不需要第二份 Draft Model。控制节点只有在所有 llama-server Slot 都报告 `speculative=true` 后才将模型标记为 Ready；若模型没有可用 NextN 层，加载会明确失败，不能静默退回普通 Decode。
+
+实验组的并发测试使用固定数量的闭环 Worker：每个 Worker 完成一个请求后再发起下一个请求。`并发请求数` 是同时施加的客户端压力，既可以等于 llama-server Slot 数测满载吞吐，也可以大于 Slot 数观察排队。QPS 按成功请求数除以实测窗口时长计算；聚合输入/输出 TPS 按所有成功请求 Token 总数除以同一窗口计算；同时记录错误率、TTFT P95 和请求延迟 P95。预热请求不进入这些汇总值。
 
 Benchmark 页面提供 Official/AMD 实现切换器。切换由远端控制节点在 Chat 维护锁内完成：卸载当前模型、原子替换活动 `llama-server`、用同一 Profile 重新加载，并在失败时回滚原实现。两套实现不会同时驻留显存。rocprof 结果只从 Kernel stats 数据域计算总耗时，调度/API 汇总域不参与 Top Kernel 排名；原始模板符号按 Kernel 家族聚合后在前端展开查看。
 

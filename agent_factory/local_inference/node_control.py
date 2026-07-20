@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_factory.local_inference.config import load_inference_telemetry_endpoint
@@ -199,7 +200,7 @@ class InferenceNodeClient:
                 endpoint.endpoint("/benchmarks/operator-analysis"),
                 json=request.model_dump(mode="json"),
             )
-            response.raise_for_status()
+            _raise_for_inference_node_error(response, operation="operator analysis")
             payload = response.json()
         result = payload.get("result") if isinstance(payload, dict) else None
         if not isinstance(result, dict):
@@ -222,3 +223,31 @@ class InferenceNodeClient:
         if not isinstance(payload, dict):
             raise ValueError("inference node response does not contain activation status")
         return payload
+
+
+def _raise_for_inference_node_error(
+    response: httpx.Response,
+    *,
+    operation: str,
+) -> None:
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        detail = _inference_node_error_detail(response)
+        suffix = f": {detail}" if detail else ""
+        raise RuntimeError(
+            f"inference node {operation} failed with HTTP {response.status_code}{suffix}"
+        ) from exc
+
+
+def _inference_node_error_detail(response: httpx.Response) -> str:
+    try:
+        payload = response.json()
+    except (ValueError, UnicodeDecodeError):
+        return response.text.strip()
+    if not isinstance(payload, dict):
+        return ""
+    error = payload.get("error")
+    if isinstance(error, dict):
+        return str(error.get("message") or error.get("detail") or "").strip()
+    return str(payload.get("detail") or payload.get("message") or "").strip()

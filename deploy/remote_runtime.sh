@@ -176,6 +176,16 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
+run_privileged() {
+    if [[ "$(id -u)" == "0" ]]; then
+        "$@"
+        return
+    fi
+    command_exists sudo \
+        || fail "System package installation requires root privileges or sudo"
+    sudo "$@"
+}
+
 probe_remote_tls_trust() {
     [[ -s "${REMOTE_CA_BUNDLE}" ]] || return 77
     curl \
@@ -221,15 +231,15 @@ prepare_ca_trust() {
 
     log "Repairing the remote system CA trust store"
     if command_exists update-ca-certificates; then
-        update-ca-certificates --fresh
+        run_privileged update-ca-certificates --fresh
     fi
     if ! probe_remote_tls_trust; then
         export DEBIAN_FRONTEND=noninteractive
-        apt-get -o Acquire::Retries=5 update
-        apt-get -o Acquire::Retries=5 install -y --reinstall --no-install-recommends ca-certificates
+        run_privileged apt-get -o Acquire::Retries=5 update
+        run_privileged apt-get -o Acquire::Retries=5 install -y --reinstall --no-install-recommends ca-certificates
         command_exists update-ca-certificates \
             || fail "ca-certificates was installed without update-ca-certificates"
-        update-ca-certificates --fresh
+        run_privileged update-ca-certificates --fresh
     fi
     probe_remote_tls_trust \
         || fail "Remote CA trust repair completed, but TLS verification still fails for ${REMOTE_CA_PROBE_URL}"
@@ -256,8 +266,8 @@ prepare_host() {
         command_exists apt-get || fail "Missing build commands and apt-get is unavailable: ${missing[*]}"
         log "Installing ordinary build tools only; ROCm, GPU drivers and PyTorch will not be changed"
         export DEBIAN_FRONTEND=noninteractive
-        apt-get -o Acquire::Retries=5 update
-        apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
+        run_privileged apt-get -o Acquire::Retries=5 update
+        run_privileged apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
             build-essential ca-certificates cmake curl ninja-build python3-pip python3-venv rsync
     fi
     prepare_ca_trust
@@ -347,7 +357,7 @@ prepare_rocm_userspace() {
     read -r -a packages <<< "${packages_text}"
     (( ${#packages[@]} > 0 )) || fail "ROCM_USERSPACE_PACKAGES must contain at least one package"
     log "Refreshing package metadata before ROCm user-space installation"
-    apt-get -o Acquire::Retries=5 update
+    run_privileged apt-get -o Acquire::Retries=5 update
     local package
     for package in "${packages[@]}"; do
         apt-cache show "${package}" >/dev/null 2>&1 \
@@ -355,7 +365,7 @@ prepare_rocm_userspace() {
     done
     log "Installing missing ROCm user-space inspection and HIP build packages"
     export DEBIAN_FRONTEND=noninteractive
-    apt-get -o Acquire::Retries=5 install -y --no-install-recommends "${packages[@]}"
+    run_privileged apt-get -o Acquire::Retries=5 install -y --no-install-recommends "${packages[@]}"
 }
 
 verify_rocm_runtime() {
@@ -869,6 +879,11 @@ configure_profiles() {
         --cache-type-k "${CHAT_CACHE_TYPE_K}" \
         --cache-type-v "${CHAT_CACHE_TYPE_V}" \
         "$(boolean_flag "${CHAT_FLASH_ATTENTION:-1}" flash-attention)" \
+        "$(boolean_flag "${CHAT_MTP_ENABLED:-0}" chat-mtp-enabled)" \
+        --chat-mtp-max-draft-tokens "${CHAT_MTP_MAX_DRAFT_TOKENS:-3}" \
+        --chat-mtp-min-draft-tokens "${CHAT_MTP_MIN_DRAFT_TOKENS:-0}" \
+        --chat-mtp-min-acceptance-probability "${CHAT_MTP_MIN_ACCEPTANCE_PROBABILITY:-0.0}" \
+        "$(boolean_flag "${CHAT_MTP_BACKEND_SAMPLING:-1}" chat-mtp-backend-sampling)" \
         "$(boolean_flag "${CHAT_REASONING_SUPPORTED:-1}" reasoning-supported)" \
         --embedding-profile-id "${EMBEDDING_PROFILE_ID}" \
         --embedding-served-model-name "${EMBEDDING_SERVED_MODEL_NAME}" \

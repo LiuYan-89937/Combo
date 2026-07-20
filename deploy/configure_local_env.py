@@ -12,13 +12,14 @@ _ASSIGNMENT = re.compile(r"^(?P<name>[A-Za-z_][A-Za-z0-9_]*)=")
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Configure FastAgentFactory for an SSH inference node"
+        description="Configure FastAgentFactory for a direct or SSH inference node"
     )
     parser.add_argument("--env-file", type=Path, required=True)
     parser.add_argument("--example-file", type=Path, required=True)
-    parser.add_argument("--ssh-host", required=True)
-    parser.add_argument("--ssh-port", required=True, type=int)
-    parser.add_argument("--ssh-user", required=True)
+    parser.add_argument("--connection-mode", choices=("direct", "ssh"), required=True)
+    parser.add_argument("--ssh-host", default="")
+    parser.add_argument("--ssh-port", type=int)
+    parser.add_argument("--ssh-user", default="")
     parser.add_argument("--ssh-key", default="")
     parser.add_argument("--chat-local-port", required=True, type=int)
     parser.add_argument("--chat-remote-port", required=True, type=int)
@@ -29,6 +30,10 @@ def main() -> None:
     parser.add_argument("--image-local-port", required=True, type=int)
     parser.add_argument("--image-remote-port", required=True, type=int)
     args = parser.parse_args()
+    if args.connection_mode == "ssh" and (
+        not args.ssh_host or args.ssh_port is None or not args.ssh_user
+    ):
+        parser.error("SSH connection mode requires --ssh-host, --ssh-port, and --ssh-user")
 
     source = args.env_file if args.env_file.is_file() else args.example_file
     lines = source.read_text(encoding="utf-8").splitlines()
@@ -36,14 +41,21 @@ def main() -> None:
     resource_key = existing.get("AGENTFACTORY_RESOURCE_MASTER_KEY") or secrets.token_urlsafe(48)
     updates = {
         "AGENTFACTORY_INFERENCE_RUNTIME_MODE": "external",
-        "AGENTFACTORY_LOCAL_INFERENCE_ENDPOINT": f"http://127.0.0.1:{args.chat_local_port}/v1",
-        "AGENTFACTORY_LOCAL_EMBEDDING_ENDPOINT": f"http://127.0.0.1:{args.embedding_local_port}",
-        "AGENTFACTORY_LOCAL_IMAGE_ENDPOINT": f"http://127.0.0.1:{args.image_local_port}/v1",
+        "AGENTFACTORY_INFERENCE_CONNECTION_MODE": args.connection_mode,
+        "AGENTFACTORY_LOCAL_INFERENCE_ENDPOINT": (
+            f"http://127.0.0.1:{_client_port(args.connection_mode, args.chat_local_port, args.chat_remote_port)}/v1"
+        ),
+        "AGENTFACTORY_LOCAL_EMBEDDING_ENDPOINT": (
+            f"http://127.0.0.1:{_client_port(args.connection_mode, args.embedding_local_port, args.embedding_remote_port)}"
+        ),
+        "AGENTFACTORY_LOCAL_IMAGE_ENDPOINT": (
+            f"http://127.0.0.1:{_client_port(args.connection_mode, args.image_local_port, args.image_remote_port)}/v1"
+        ),
         "AGENTFACTORY_INFERENCE_TELEMETRY_ENDPOINT": (
-            f"http://127.0.0.1:{args.telemetry_local_port}"
+            f"http://127.0.0.1:{_client_port(args.connection_mode, args.telemetry_local_port, args.telemetry_remote_port)}"
         ),
         "AGENTFACTORY_INFERENCE_SSH_HOST": args.ssh_host,
-        "AGENTFACTORY_INFERENCE_SSH_PORT": str(args.ssh_port),
+        "AGENTFACTORY_INFERENCE_SSH_PORT": str(args.ssh_port or ""),
         "AGENTFACTORY_INFERENCE_SSH_USER": args.ssh_user,
         "AGENTFACTORY_INFERENCE_SSH_KEY": args.ssh_key,
         "AGENTFACTORY_INFERENCE_SSH_CHAT_LOCAL_PORT": str(args.chat_local_port),
@@ -72,6 +84,10 @@ def main() -> None:
 
     args.env_file.write_text("\n".join(rendered).rstrip() + "\n", encoding="utf-8")
     args.env_file.chmod(0o600)
+
+
+def _client_port(connection_mode: str, tunnel_port: int, node_port: int) -> int:
+    return tunnel_port if connection_mode == "ssh" else node_port
 
 
 def _values(lines: list[str]) -> dict[str, str]:

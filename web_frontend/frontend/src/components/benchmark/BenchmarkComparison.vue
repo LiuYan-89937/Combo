@@ -45,6 +45,25 @@
       </section>
 
       <section class="comparison-section">
+        <h4>{{ t('benchmark.qpsResults') }}</h4>
+        <div class="comparison-chart-list">
+          <article v-for="metric in concurrencyMetrics" :key="metric.key" class="comparison-chart">
+            <div class="chart-heading">
+              <strong>{{ metric.label }}</strong>
+              <span>{{ t('benchmark.higherIsBetter') }}</span>
+            </div>
+            <div v-for="series in concurrencySeries(metric.key)" :key="series.key" class="bar-row">
+              <span class="series-name">{{ series.shortLabel }}</span>
+              <div class="bar-track">
+                <span class="bar-fill" :class="series.colorClass" :style="{ width: `${series.width}%` }" />
+              </div>
+              <strong>{{ formatConcurrencyMetric(metric.key, series.value, series.deviation) }}</strong>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="comparison-section">
         <h4>{{ t('benchmark.operatorAverage') }}</h4>
         <div class="comparison-chart-list">
           <article v-for="phase in phases" :key="phase" class="comparison-chart">
@@ -106,6 +125,7 @@ type PerformanceMetricKey =
   | 'peak_vram_bytes'
   | 'average_gpu_utilization_percent'
   | 'prompt_cache_hit_rate'
+type ConcurrencyMetricKey = 'requests_per_second' | 'output_tokens_per_second'
 
 interface PerformanceMetric {
   key: PerformanceMetricKey
@@ -158,6 +178,10 @@ const performanceMetrics = computed<PerformanceMetric[]>(() => [
   { key: 'prompt_cache_hit_rate', label: t('benchmark.cacheHitRate'), higherIsBetter: true },
   { key: 'peak_vram_bytes', label: t('benchmark.peakVram'), higherIsBetter: false },
   { key: 'average_gpu_utilization_percent', label: t('benchmark.averageGpu'), higherIsBetter: null },
+])
+const concurrencyMetrics = computed(() => [
+  { key: 'requests_per_second' as const, label: 'QPS' },
+  { key: 'output_tokens_per_second' as const, label: t('benchmark.aggregateOutputTps') },
 ])
 
 watch(completedGroups, repairSelection, { immediate: true })
@@ -214,6 +238,14 @@ function performanceValues(series: SeriesIdentity, key: PerformanceMetricKey) {
 function performanceSeries(key: PerformanceMetricKey) {
   return valueBars(activeSeries.value.map((series) => {
     const values = performanceValues(series, key)
+    return { series, value: mean(values), deviation: deviation(values) }
+  }))
+}
+
+function concurrencySeries(key: ConcurrencyMetricKey) {
+  return valueBars(activeSeries.value.map((series) => {
+    const values = groupRuns(series.group, series.implementation, 'concurrency')
+      .map((run) => run.concurrency?.[key])
     return { series, value: mean(values), deviation: deviation(values) }
   }))
 }
@@ -323,6 +355,14 @@ function formatWithDeviation(key: PerformanceMetricKey, value: number | null, sp
 function formatThroughputWithDeviation(value: number | null, spread: number | null) {
   if (value === null) return '—'
   return spread === null ? formatThroughput(value) : `${formatThroughput(value)} ± ${formatThroughput(spread)}`
+}
+
+function formatConcurrencyMetric(key: ConcurrencyMetricKey, value: number | null, spread: number | null) {
+  if (value === null) return '—'
+  const unit = key === 'requests_per_second' ? 'req/s' : 'tok/s'
+  return spread === null
+    ? `${value.toFixed(2)} ${unit}`
+    : `${value.toFixed(2)} ± ${spread.toFixed(2)} ${unit}`
 }
 
 function formatKernelWithDeviation(value: number | null, spread: number | null) {

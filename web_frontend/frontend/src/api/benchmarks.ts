@@ -11,7 +11,7 @@ export interface BenchmarkImplementation {
 }
 
 export interface BenchmarkRunSpec {
-  kind: 'performance' | 'operator_analysis'
+  kind: 'performance' | 'concurrency' | 'operator_analysis'
   name: string
   profile_id: string
   prompt: string
@@ -23,7 +23,14 @@ export interface BenchmarkRunSpec {
   telemetry_interval_ms: number
   prompt_cache_mode: BenchmarkPromptCacheMode
   implementation: BenchmarkImplementation
+  concurrency?: BenchmarkConcurrencySpec | null
   operator_analysis?: BenchmarkOperatorAnalysisSpec | null
+}
+
+export interface BenchmarkConcurrencySpec {
+  concurrent_requests: number
+  requests_per_worker: number
+  warmup_requests_per_worker: number
 }
 
 export interface BenchmarkOperatorAnalysisSpec {
@@ -61,6 +68,9 @@ export interface BenchmarkSample {
   decode_ms?: number | null
   prompt_tokens_per_second?: number | null
   decode_tokens_per_second?: number | null
+  draft_tokens?: number | null
+  accepted_draft_tokens?: number | null
+  draft_acceptance_rate_percent?: number | null
   peak_vram_bytes?: number | null
   average_gpu_utilization_percent?: number | null
   peak_gpu_utilization_percent?: number | null
@@ -89,6 +99,25 @@ export interface BenchmarkPromptCacheSummary {
   cached_tokens: number
   processed_tokens: number
   hit_rate_percent: number
+}
+
+export interface BenchmarkSpeculativeDecodingSummary {
+  draft_tokens: number
+  accepted_draft_tokens: number
+  acceptance_rate_percent: number
+}
+
+export interface BenchmarkConcurrencyResult {
+  concurrent_requests: number
+  request_count: number
+  successful_requests: number
+  error_rate_percent: number
+  elapsed_seconds: number
+  requests_per_second: number
+  input_tokens_per_second: number
+  output_tokens_per_second: number
+  request_latency_ms?: BenchmarkMetricStats | null
+  ttft_ms?: BenchmarkMetricStats | null
 }
 
 export interface BenchmarkOperatorKernelStat {
@@ -179,6 +208,7 @@ export interface BenchmarkSummary {
   average_power_watts?: BenchmarkMetricStats | null
   peak_power_watts?: BenchmarkMetricStats | null
   prompt_cache?: BenchmarkPromptCacheSummary | null
+  speculative_decoding?: BenchmarkSpeculativeDecodingSummary | null
 }
 
 export interface BenchmarkRun {
@@ -190,6 +220,7 @@ export interface BenchmarkRun {
   environment: Record<string, unknown>
   samples: BenchmarkSample[]
   summary?: BenchmarkSummary | null
+  concurrency?: BenchmarkConcurrencyResult | null
   operator_analysis?: BenchmarkOperatorAnalysisResult | null
   error: string
   created_at: string
@@ -210,6 +241,7 @@ export interface BenchmarkExperimentGroupSpec {
   measured_iterations: number
   telemetry_interval_ms: number
   prompt_cache_mode: BenchmarkPromptCacheMode
+  concurrency: BenchmarkConcurrencySpec
   operator_analysis: BenchmarkOperatorAnalysisSpec
 }
 

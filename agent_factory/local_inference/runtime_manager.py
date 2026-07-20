@@ -458,6 +458,8 @@ async def _runtime_is_ready(
     profile: ModelPoolProfile,
 ) -> bool:
     if profile.kind == "chat":
+        health_response = await client.get(endpoint.server_endpoint("/health"))
+        health_response.raise_for_status()
         response = await client.get(endpoint.endpoint("/models"))
         response.raise_for_status()
         payload = response.json()
@@ -497,6 +499,17 @@ async def _runtime_is_ready(
                 "llama-server per-slot context validation failed: "
                 f"configured={allocation.per_slot_tokens}, actual={slot_contexts}"
             )
+        if inference.speculative_decoding.method == "mtp":
+            speculative_slots = [
+                item.get("speculative") is True
+                for item in slots
+                if isinstance(item, dict)
+            ]
+            if len(speculative_slots) != allocation.parallel_slots or not all(speculative_slots):
+                raise ValueError(
+                    "llama-server MTP validation failed: the profile enables MTP but "
+                    f"slot speculative states are {speculative_slots}"
+                )
         return True
     if profile.kind == "image_generation":
         response = await client.get(endpoint.endpoint("/models"))

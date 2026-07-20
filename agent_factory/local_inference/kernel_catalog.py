@@ -12,7 +12,7 @@ from agent_factory.local_inference.implementation import LlamaImplementationId
 
 
 KernelSymbolTarget = Literal["raw_symbol", "base_symbol"]
-KernelSymbolMatchKind = Literal["exact", "prefix"]
+KernelSymbolMatchKind = Literal["exact", "prefix", "contains"]
 _KERNEL_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]{2,127}$")
 
 
@@ -95,18 +95,24 @@ class KernelCatalog(BaseModel):
     def resolve(self, *, raw_symbol: str, base_symbol: str) -> KernelDescriptor | None:
         candidates: list[tuple[int, int, KernelDescriptor]] = []
         values = {"raw_symbol": raw_symbol, "base_symbol": base_symbol}
+        match_rank: dict[KernelSymbolMatchKind, int] = {
+            "exact": 2,
+            "prefix": 1,
+            "contains": 0,
+        }
         for descriptor in self.kernels:
             for matcher in descriptor.symbol_matchers:
                 target = values[matcher.target]
-                matched = (
-                    target == matcher.value
-                    if matcher.kind == "exact"
-                    else target.startswith(matcher.value)
-                )
+                matchers = {
+                    "exact": target == matcher.value,
+                    "prefix": target.startswith(matcher.value),
+                    "contains": matcher.value in target,
+                }
+                matched = matchers[matcher.kind]
                 if matched:
                     candidates.append(
                         (
-                            1 if matcher.kind == "exact" else 0,
+                            match_rank[matcher.kind],
                             len(matcher.value),
                             descriptor,
                         )

@@ -14,6 +14,7 @@ from agent_factory.benchmarking.schema import (
     BenchmarkExperimentGroup,
     BenchmarkExperimentGroupSpec,
     BenchmarkExperimentRunRef,
+    BenchmarkConcurrencyResult,
     BenchmarkImplementation,
     BenchmarkImplementationId,
     BenchmarkMetricStats,
@@ -23,6 +24,7 @@ from agent_factory.benchmarking.schema import (
     BenchmarkRunKind,
     BenchmarkRunSpec,
     BenchmarkSample,
+    BenchmarkSpeculativeDecodingSummary,
     BenchmarkSummary,
     BenchmarkTelemetryPoint,
     utc_now_text,
@@ -99,7 +101,15 @@ class BenchmarkService:
         total = (
             1
             if spec.kind == "operator_analysis"
-            else spec.warmup_iterations + spec.measured_iterations
+            else (
+                spec.concurrency.concurrent_requests
+                * (
+                    spec.concurrency.warmup_requests_per_worker
+                    + spec.concurrency.requests_per_worker
+                )
+                if spec.kind == "concurrency" and spec.concurrency is not None
+                else spec.warmup_iterations + spec.measured_iterations
+            )
         )
         run = self._store.save(
             BenchmarkRun(
@@ -136,7 +146,7 @@ class BenchmarkService:
             BenchmarkExperimentGroup(
                 group_id=uuid4().hex,
                 spec=spec,
-                progress_total=spec.repetitions * 4,
+                progress_total=spec.repetitions * 6,
                 initial_implementation=implementation_status.active,
                 active_implementation=implementation_status.active,
             )
@@ -215,7 +225,7 @@ class BenchmarkService:
                         group_id,
                         implementation,
                     )
-                    for kind in ("performance", "operator_analysis"):
+                    for kind in ("performance", "concurrency", "operator_analysis"):
                         await self._execute_group_run(
                             group_id,
                             repetition_index=repetition_index,
@@ -330,7 +340,15 @@ class BenchmarkService:
                 progress_total=(
                     1
                     if kind == "operator_analysis"
-                    else run_spec.warmup_iterations + run_spec.measured_iterations
+                    else (
+                        run_spec.concurrency.concurrent_requests
+                        * (
+                            run_spec.concurrency.warmup_requests_per_worker
+                            + run_spec.concurrency.requests_per_worker
+                        )
+                        if kind == "concurrency" and run_spec.concurrency is not None
+                        else run_spec.warmup_iterations + run_spec.measured_iterations
+                    )
                 ),
             )
         )
@@ -375,7 +393,7 @@ class BenchmarkService:
             kind=kind,
             name=f"{spec.name} · {repetition_index + 1} · {implementation}",
             profile_id=spec.profile_id,
-            prompt=spec.prompt if kind == "performance" else "",
+            prompt=spec.prompt if kind in {"performance", "concurrency"} else "",
             max_output_tokens=spec.max_output_tokens,
             temperature=spec.temperature,
             seed=spec.seed,
@@ -384,6 +402,7 @@ class BenchmarkService:
             telemetry_interval_ms=spec.telemetry_interval_ms,
             prompt_cache_mode=spec.prompt_cache_mode,
             implementation=active,
+            concurrency=(spec.concurrency if kind == "concurrency" else None),
             operator_analysis=(spec.operator_analysis if kind == "operator_analysis" else None),
         )
 
@@ -402,6 +421,9 @@ class BenchmarkService:
             )
             if run.spec.kind == "operator_analysis":
                 await self._execute_operator_analysis(run)
+                return
+            if run.spec.kind == "concurrency":
+                await self._execute_concurrency(run)
                 return
             profile = ModelPoolStore().require_profile(run.spec.profile_id)
             endpoint = load_local_inference_endpoint(
@@ -470,6 +492,104 @@ class BenchmarkService:
             if self._active_run_id == run_id:
                 self._active_run_id = ""
 
+    async def _execute_concurrency(self, run: BenchmarkRun) -> None:
+        settings = run.spec.concurrency
+        if settings is None:
+            raise ValueError("concurrency benchmark settings are missing")
+        profile = ModelPoolStore().require_profile(run.spec.profile_id)
+        endpoint = load_local_inference_endpoint(
+            timeout_seconds=profile.limits.timeout_seconds or 600.0
+        )
+        samples: list[BenchmarkSample] = []
+        progress_lock = asyncio.Lock()
+        next_sample_index = 0
+
+        async with create_private_async_http_client(endpoint) as client:
+            async def execute_phase(*, requests_per_worker: int, warmup: bool) -> float:
+                nonlocal next_sample_index
+                start_gate = asyncio.Event()
+
+                async def worker() -> None:
+                    nonlocal next_sample_index
+                    await start_gate.wait()
+                    for _ in range(requests_per_worker):
+                        async with progress_lock:
+                            sample_index = next_sample_index
+                            next_sample_index += 1
+                        sample = await self._run_sample(
+                            run.spec,
+                            client=client,
+                            endpoint=endpoint,
+                            served_model_name=profile.served_model_name,
+                            sample_index=sample_index,
+                            warmup=warmup,
+                            telemetry_enabled=False,
+                        )
+                        async with progress_lock:
+                            samples.append(sample)
+                            current = self._store.require(run.run_id)
+                            self._store.save(
+                                current.model_copy(
+                                    update={
+                                        "samples": list(samples),
+                                        "progress_completed": len(samples),
+                                    },
+                                    deep=True,
+                                )
+                            )
+
+                workers = [
+                    asyncio.create_task(worker())
+                    for _ in range(settings.concurrent_requests)
+                ]
+                started_ns = time.perf_counter_ns()
+                start_gate.set()
+                await asyncio.gather(*workers)
+                return (time.perf_counter_ns() - started_ns) / 1_000_000_000
+
+            if settings.warmup_requests_per_worker:
+                await execute_phase(
+                    requests_per_worker=settings.warmup_requests_per_worker,
+                    warmup=True,
+                )
+            elapsed_seconds = await execute_phase(
+                requests_per_worker=settings.requests_per_worker,
+                warmup=False,
+            )
+
+        measured = [sample for sample in samples if not sample.warmup]
+        successful = [sample for sample in measured if sample.status == "completed"]
+        if not successful:
+            errors = "; ".join(sample.error for sample in measured if sample.error)
+            raise RuntimeError(errors or "all concurrency benchmark requests failed")
+        input_tokens = sum(sample.prompt_tokens or 0 for sample in successful)
+        output_tokens = sum(sample.completion_tokens or 0 for sample in successful)
+        concurrency_result = BenchmarkConcurrencyResult(
+            concurrent_requests=settings.concurrent_requests,
+            request_count=len(measured),
+            successful_requests=len(successful),
+            error_rate_percent=(len(measured) - len(successful)) / len(measured) * 100,
+            elapsed_seconds=elapsed_seconds,
+            requests_per_second=len(successful) / elapsed_seconds,
+            input_tokens_per_second=input_tokens / elapsed_seconds,
+            output_tokens_per_second=output_tokens / elapsed_seconds,
+            request_latency_ms=_stats(successful, "end_to_end_ms"),
+            ttft_ms=_stats(successful, "ttft_ms"),
+        )
+        current = self._store.require(run.run_id)
+        self._store.save(
+            current.model_copy(
+                update={
+                    "status": "completed",
+                    "samples": samples,
+                    "summary": _summarize(samples),
+                    "concurrency": concurrency_result,
+                    "completed_at": utc_now_text(),
+                },
+                deep=True,
+            )
+        )
+
     async def _execute_operator_analysis(self, run: BenchmarkRun) -> None:
         settings = run.spec.operator_analysis
         if settings is None:
@@ -508,18 +628,23 @@ class BenchmarkService:
         served_model_name: str,
         sample_index: int,
         warmup: bool,
+        telemetry_enabled: bool = True,
     ) -> BenchmarkSample:
         started_at = utc_now_text()
         started_ns = time.perf_counter_ns()
         stop_telemetry = asyncio.Event()
         telemetry: list[BenchmarkTelemetryPoint] = []
-        telemetry_task = asyncio.create_task(
-            self._sample_telemetry(
-                telemetry,
-                stop_telemetry,
-                started_ns=started_ns,
-                interval_seconds=spec.telemetry_interval_ms / 1000,
+        telemetry_task = (
+            asyncio.create_task(
+                self._sample_telemetry(
+                    telemetry,
+                    stop_telemetry,
+                    started_ns=started_ns,
+                    interval_seconds=spec.telemetry_interval_ms / 1000,
+                )
             )
+            if telemetry_enabled
+            else None
         )
         first_token_ns: int | None = None
         response_headers_ns: int | None = None
@@ -569,9 +694,10 @@ class BenchmarkService:
                     if visible and first_token_ns is None:
                         first_token_ns = time.perf_counter_ns()
                         first_token_timings = dict(timings)
-                    content = delta.get("content")
-                    if isinstance(content, str):
-                        output_parts.append(content)
+                    for key in ("reasoning_content", "content"):
+                        text = delta.get(key)
+                        if isinstance(text, str):
+                            output_parts.append(text)
             completed_ns = time.perf_counter_ns()
             return _completed_sample(
                 sample_index=sample_index,
@@ -601,7 +727,8 @@ class BenchmarkService:
             )
         finally:
             stop_telemetry.set()
-            await telemetry_task
+            if telemetry_task is not None:
+                await telemetry_task
 
     async def _sample_telemetry(
         self,
@@ -754,6 +881,8 @@ def _completed_sample(
     power = _values(telemetry, "power_watts")
     temperatures = _values(telemetry, "temperature_celsius")
     vram = [point.used_memory_bytes for point in telemetry if point.used_memory_bytes is not None]
+    draft_tokens = _optional_int(timings.get("draft_n"))
+    accepted_draft_tokens = _optional_int(timings.get("draft_n_accepted"))
     return BenchmarkSample(
         sample_index=sample_index,
         warmup=warmup,
@@ -780,6 +909,13 @@ def _completed_sample(
         decode_ms=_optional_float(timings.get("predicted_ms")),
         prompt_tokens_per_second=_optional_float(timings.get("prompt_per_second")),
         decode_tokens_per_second=_optional_float(timings.get("predicted_per_second")),
+        draft_tokens=draft_tokens,
+        accepted_draft_tokens=accepted_draft_tokens,
+        draft_acceptance_rate_percent=(
+            accepted_draft_tokens / draft_tokens * 100
+            if draft_tokens and accepted_draft_tokens is not None
+            else None
+        ),
         peak_vram_bytes=max(vram) if vram else None,
         average_gpu_utilization_percent=fmean(gpu_usage) if gpu_usage else None,
         peak_gpu_utilization_percent=max(gpu_usage) if gpu_usage else None,
@@ -817,6 +953,24 @@ def _summarize(samples: list[BenchmarkSample]) -> BenchmarkSummary:
         average_power_watts=_stats(successful, "average_power_watts"),
         peak_power_watts=_stats(successful, "peak_power_watts"),
         prompt_cache=_prompt_cache_summary(successful),
+        speculative_decoding=_speculative_decoding_summary(successful),
+    )
+
+
+def _speculative_decoding_summary(
+    samples: list[BenchmarkSample],
+) -> BenchmarkSpeculativeDecodingSummary | None:
+    reported = [sample for sample in samples if sample.draft_tokens is not None]
+    if not reported:
+        return None
+    draft_tokens = sum(sample.draft_tokens or 0 for sample in reported)
+    accepted_draft_tokens = sum(sample.accepted_draft_tokens or 0 for sample in reported)
+    return BenchmarkSpeculativeDecodingSummary(
+        draft_tokens=draft_tokens,
+        accepted_draft_tokens=accepted_draft_tokens,
+        acceptance_rate_percent=(
+            accepted_draft_tokens / draft_tokens * 100 if draft_tokens else 0
+        ),
     )
 
 

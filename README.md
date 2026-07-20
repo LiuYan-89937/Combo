@@ -97,15 +97,16 @@ git clone -b AMD-Hackson https://github.com/LiuYan-89937/FastAgentFactory.git
 cd FastAgentFactory
 ```
 
-### 2. 填写 SSH
+### 2. 选择推理节点位置
 
 ```bash
 cp deploy/deploy.env.example deploy/deploy.env
 ```
 
-至少填写：
+AMD GPU 在另一台机器时保留默认 SSH 模式并填写：
 
 ```dotenv
+DEPLOY_TARGET=ssh
 SSH_HOST=<RadeonCloud-IP>
 SSH_PORT=<SSH-Port>
 SSH_USER=root
@@ -120,6 +121,22 @@ SSH_KEY=
 ssh root@<RadeonCloud-IP> -p <SSH-Port>
 ```
 
+AMD GPU 就在当前 Linux 主机时使用：
+
+```dotenv
+DEPLOY_TARGET=local
+SSH_HOST=
+SSH_PORT=22
+SSH_USER=
+SSH_KEY=
+```
+
+并将 `REMOTE_PROJECT_ROOT`、`REMOTE_STATE_ROOT`、`REMOTE_MODEL_ROOT`、
+`REMOTE_LLAMA_SOURCE_ROOT`、`REMOTE_LLAMA_RUNTIME_ROOT` 和
+`REMOTE_STABLE_DIFFUSION_CPP_DIR` 设置为当前用户可写的本机绝对路径。字段名保留
+`REMOTE_` 是为了兼容既有配置，其含义统一为“推理节点路径”。本机模式要求 Linux、
+`/dev/kfd` 和可用的 AMD ROCm 驱动；缺失的普通构建工具和 ROCm 用户态组件会按配置安装。
+
 ### 3. 一键准备并启动
 
 ```bash
@@ -128,19 +145,19 @@ ssh root@<RadeonCloud-IP> -p <SSH-Port>
 
 首次执行会依次完成：
 
-1. 校验本机配置和 SSH Key 登录。
+1. 校验部署目标；SSH 模式验证 Key 登录，本机模式验证 Linux 推理主机。
 2. 验证仓库内置的官方与 AMD 两套 llama.cpp 源码，不在线拉取 llama.cpp，并分别构建 `llama-server` 与 `llama-bench`。
 3. 准备缺失的普通构建工具并验证远端国内下载源的 HTTPS CA 信任链；仅在证书链缺失或损坏时重建并按需重装 `ca-certificates`。
 4. 探查 RadeonCloud GPU、显存、磁盘、`/dev/kfd`、ROCm 用户态组件与 PyTorch HIP。
 5. 仅在缺失时安装 ROCm 用户态构建组件和配置指定的 PyTorch HIP 包；云平台 GPU 驱动不会在工作空间内安装。
-6. 仅同步推理控制、模型池所需的最小 Python bundle，以及三套完整原生推理源码到远端；Factory 前后端不上传。
+6. 仅同步推理控制、模型池所需的最小 Python bundle，以及三套完整原生推理源码到推理节点；本机路径与仓库路径相同时直接复用，不自我复制。
 7. 独立构建 `official` 与 `amd` 两个 ROCm llama-server，并从本机完整 vendor 源码构建 HIPBLAS `sd-server`；远端不访问 GitHub。
 8. 从国内镜像断点续传 Chat GGUF 和 mmproj，并校验官方 SHA256。
 9. 从 ModelScope 下载或复用 `BAAI/bge-m3`。
 10. 从 ModelScope 国内直链断点续传并校验 FLUX.1-dev Q4_0、VAE、CLIP-L 与 T5XXL。
-11. 幂等同步 Chat、Embedding、Image Generation 的远端本地 Profile 和本机 external Profile，并清理不属于当前部署清单的旧模型与推理配置。
-12. 激活配置指定的 llama.cpp 实现并启动远端推理节点，等待 Chat 与 Embedding 都进入 `ready`。
-13. 生成本机 `.env` 的 SSH 隧道配置与资源加密密钥。
+11. 幂等同步 Chat、Embedding、Image Generation 的推理节点 Profile 和 Web 端 external Profile，并清理不属于当前部署清单的旧模型与推理配置。
+12. 激活配置指定的 llama.cpp 实现并启动推理节点，等待 Chat 与 Embedding 都进入 `ready`。
+13. 生成本机 `.env` 的节点连接配置与资源加密密钥；SSH 模式使用隧道，本机模式直连回环端口。
 14. 准备本机 Python/前端依赖和 Docker Agent Runtime，启动前后端。
 
 模型下载支持续传。已校验文件会通过旁路校验标记直接复用，重复执行不会重新下载 20 GB 以上的 GGUF。
@@ -151,20 +168,20 @@ ssh root@<RadeonCloud-IP> -p <SSH-Port>
 http://localhost:3000
 ```
 
-`deploy.sh up` 在前台运行本机服务。按 `Ctrl+C` 会停止本机前后端和 SSH 隧道，但远端推理节点保持运行；需要释放远端显存时执行 `./deploy.sh down`。
+`deploy.sh up` 在前台运行 Web 服务。按 `Ctrl+C` 会停止前后端以及可能存在的 SSH 隧道，但推理节点保持运行；需要释放显存时执行 `./deploy.sh down`。
 
 ## 部署命令
 
 | 命令 | 作用 |
 | --- | --- |
-| `./deploy.sh up` | 完成幂等部署，然后启动本机 Web 和 SSH 隧道。 |
-| `./deploy.sh up --no-web` | 完成相同的远端部署，但不启动本机前后端。 |
-| `./deploy.sh bootstrap` | 准备本机与远端、下载模型并启动远端推理，但不启动本机 Web。 |
-| `./deploy.sh doctor` | 查看远端 GPU、显存、磁盘、ROCm、PyTorch HIP 和 llama.cpp。 |
-| `./deploy.sh status` | 查看远端推理节点、Chat、Embedding 和软件版本状态。 |
-| `./deploy.sh logs` | 查看远端推理节点最近 200 行日志。 |
-| `./deploy.sh restart` | 重启远端推理节点并等待两个模型 ready。 |
-| `./deploy.sh down` | 停止远端推理节点，同时卸载 Chat 与 Embedding、释放显存。 |
+| `./deploy.sh up` | 按 `DEPLOY_TARGET` 幂等部署推理节点，然后启动 Web；SSH 模式同时建立隧道。 |
+| `./deploy.sh up --no-web` | 完成相同的推理节点部署，但不启动前后端。 |
+| `./deploy.sh bootstrap` | 准备推理节点、下载模型并启动推理服务，不启动 Web。 |
+| `./deploy.sh doctor` | 查看推理节点 GPU、显存、磁盘、ROCm、PyTorch HIP 和 llama.cpp。 |
+| `./deploy.sh status` | 查看推理节点、Chat、Embedding 和软件版本状态。 |
+| `./deploy.sh logs` | 查看推理节点最近 200 行日志。 |
+| `./deploy.sh restart` | 重启推理节点并等待两个模型 ready。 |
+| `./deploy.sh down` | 停止推理节点，同时卸载 Chat 与 Embedding、释放显存。 |
 | `./deploy.sh models` | 续传/校验模型并更新远端 Profile；节点已运行时自动重启模型，不重装 ROCm。 |
 | `./deploy.sh sync` | 同步最小推理 bundle 与本机 llama.cpp 工作树到远端。 |
 | `./deploy.sh build-llama [official\|amd\|all]` | 独立增量构建指定 llama-server；省略参数时构建两者。 |
@@ -258,8 +275,12 @@ Image Profile 默认允许在显存预算足够时与 Chat 同时驻留，模型
 - Average / Peak GPU Usage
 - Power
 - Prompt KV 前缀复用 Token、实际计算 Token 与按 Token 总量加权的复用率
+- MTP 候选 Token、接受 Token 与接受率
+- 并发 QPS、聚合输入/输出 TPS、错误率及 TTFT/请求延迟 P95
 
-每次优化应使用相同 Prompt、输出上限、Context、并发和采样参数。Benchmark 会从远端自动记录活动 implementation、源码 revision、源码摘要和二进制 SHA256，不能手填实现身份。
+每个实验组会按轮交替执行 Official 与 AMD，每套实现依次运行单请求性能、闭环并发 QPS 和算子分析。QPS 是单位时间内成功完成的请求数；聚合输出 TPS 是所有成功请求生成 Token 数除以同一计量窗口时长，不等于单请求 Decode TPS。每次优化应使用相同 Prompt、输出上限、Context、并发和采样参数。Benchmark 会从远端自动记录活动 implementation、源码 revision、源码摘要和二进制 SHA256，不能手填实现身份。
+
+聊天推理 Profile 可开启 llama.cpp `draft-mtp`。部署默认对当前保留 NextN 层的 Qwen3.6 GGUF 启用 MTP，候选长度由 `CHAT_MTP_MAX_DRAFT_TOKENS` 配置。服务启动后会检查 `/slots` 的 `speculative` 状态；Benchmark 则从 llama.cpp 最终 `timings` 读取 `draft_n` 和 `draft_n_accepted`，因此页面显示的是实际候选与接受结果，而不是仅根据启动参数推断 MTP 已命中。
 
 页面还提供独立的“算子分析”。它不会与普通 TTFT/TPS 测试混跑，而是临时卸载 Chat 模型，使用同一 Profile 参数分别执行 `llama-bench` Prefill 与 Decode。该子进程通过 llama.cpp 原生的 `GGML_CUDA_DISABLE_GRAPHS=1` 关闭 HIP Graph replay，使每次 GPU Kernel 都重新经过 Host 分派点；实际服务和普通性能测试不受影响，仍保留 HIP Graph。算子分析通过 `GGML_SCHED_DEBUG=2` 记录 GGML 图算子/执行后端、通过 `rocprofv3` 汇总 HIP Kernel 调用次数与耗时占比。两套 llama.cpp 还会在 Host 分派点记录 MMVQ/MMQ 的权重量化、M/N/K Shape、MoE/融合状态和实际启动配置，其中 M 是输出行数、N 是同次分派的目标列/Token 数、K 是归约维度。分析器只在 Host 记录数与 rocprof Kernel 时间线事件数完全一致时按顺序配对并展示变体耗时，数量不一致时明确告警且不猜测。算子分析耗时只用于归因，真实吞吐必须以普通性能测试为准。分析产物保存在远端 `.agentfactory/benchmark/operator-analysis/`，完成后自动恢复 Chat 模型。
 
@@ -404,3 +425,50 @@ git diff --check
 cd web_frontend/frontend
 npm run type-check
 ```
+
+## 第三方组件与许可证
+
+本节区分项目源码、随仓库分发的第三方源码、运行时下载的模型权重以及外部数据服务。第三方组件继续受各自许可证和使用条款约束；以下内容是工程清单，不替代上游许可证正文或法律意见。
+
+### 随仓库分发的原生推理源码
+
+| 组件 | 上游 | 固定版本 | 许可证 | 仓库位置 |
+| --- | --- | --- | --- | --- |
+| llama.cpp Official | [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) | `f955e394bf94e01e5e36186d13c985727e5ef5b5` | MIT | `vendor/llama.cpp-official/` |
+| llama.cpp AMD derivative | 基于同一 llama.cpp revision | 同上 | MIT；项目修改不改变上游许可声明 | `vendor/llama.cpp-amd/` |
+| stable-diffusion.cpp | [leejet/stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) | `833369da848e8e2f960fe1896a825e3a08ef9733` | MIT | `vendor/stable-diffusion.cpp/` |
+| libwebm | stable-diffusion.cpp 子模块 | 随固定源码树 | BSD 3-Clause style | `vendor/stable-diffusion.cpp/thirdparty/libwebm/` |
+| libwebp | stable-diffusion.cpp 子模块 | 随固定源码树 | BSD-style | `vendor/stable-diffusion.cpp/thirdparty/libwebp/` |
+
+完整许可证正文保留在对应源码目录。分发二进制或修改后的源码时，必须同时保留相应版权和许可证文件。
+
+### 运行时模型
+
+模型由部署脚本下载，不作为本仓库源码的一部分。模型托管站点、量化工具和下载镜像不会改变上游模型许可证。
+
+| 用途 | 模型与来源 | 已核对许可证 | 重要边界 |
+| --- | --- | --- | --- |
+| Chat | [SC117/Qwen3.6-35B-A3B APEX GGUF](https://huggingface.co/SC117/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-APEX-GGUF) | Apache-2.0（以模型卡当前声明为准） | 属于第三方衍生、去审查和量化模型；部署前仍应核对其 Base Model、衍生过程和当前模型卡 |
+| Embedding | [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3) | MIT | 使用者应保留模型来源和引用信息 |
+| Image Generation | [black-forest-labs/FLUX.1-dev](https://huggingface.co/black-forest-labs/FLUX.1-dev) | FLUX.1-dev Non-Commercial License | 不是通用开源商用许可证；商业使用、再分发和衍生输出场景必须单独核验 |
+| FLUX GGUF | [city96/FLUX.1-dev-gguf](https://modelscope.cn/models/city96/FLUX.1-dev-gguf) | 量化文件不改变 FLUX.1-dev 上游许可 | ModelScope 仅作为当前下载源 |
+
+`CLIP-L`、`T5XXL` 和 VAE 文件来自 FLUX 推理栈的第三方镜像。镜像下载地址不能作为独立授权依据，应同时遵守原始模型和打包仓库声明。
+
+### Python 与 Web 依赖
+
+Python 直接依赖声明在 `pyproject.toml`，精确解析版本记录在 `uv.lock`；Web 直接依赖声明在 `web_frontend/frontend/package.json`。主要框架包括 LangChain、LangGraph、FastAPI、Pydantic、Vue、Vite、Naive UI、ECharts、Mermaid 和 Monaco Editor。
+
+这些依赖使用 MIT、Apache-2.0、BSD 等不同许可证。发布二进制、容器镜像或离线安装包前，应从锁文件生成完整 Software Bill of Materials 和第三方许可证归档，不能只依赖本节的主要组件摘要。
+
+### 外部数据和在线服务
+
+- 本仓库不分发用于训练模型的数据集。
+- Benchmark Prompt 与性能数据由项目测试流程生成，运行时记录不包含第三方训练语料。
+- A 股工具通过 Tencent Finance 公开接口及 AkShare 封装获取运行时市场数据。公开可访问不等于允许任意再分发；使用者需遵守数据提供方、AkShare 和交易所相关条款。
+- Tavily、SearXNG、DuckDuckGo 或其他网页检索提供方返回的网页内容仍归原作者或数据提供方所有。
+- 用户上传的知识库、附件和工作区文件由用户负责确认其处理与使用权限。
+
+### 项目自身许可证
+
+当前仓库根目录尚未声明统一的项目源码许可证。在项目所有者正式添加 `LICENSE` 前，不应推断项目自有代码采用 MIT、Apache-2.0 或其他开源许可证。第三方目录中存在的许可证只覆盖对应第三方代码。

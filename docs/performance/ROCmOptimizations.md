@@ -251,6 +251,36 @@ AMD 实现保留 Official 的量化解码、点积、累加、Stream-K 和边界
 
 四组共 20 次计量输出哈希全部为 `91bcfac1…f5c8135`。Profiler 只用于 Kernel 归因；表中最终收益来自启用正常 HIP Graph 与普通 HTTP 推理服务的计量。
 
+## MTP 推测解码与并发 QPS
+
+当前 Qwen3.6 GGUF 保留了 NextN/MTP 层。推理 Profile 开启后，llama-server 使用 `--spec-type draft-mtp`，每轮最多生成 3 个候选 Token，再由 Target Model 批量验证。服务只有在 `/slots` 返回 `speculative=true` 后才进入 Ready；普通性能测试从 llama.cpp 最终 `timings` 直接读取候选数与接受数，避免用启动参数冒充实际命中。
+
+同一 790 Token Prompt、128 输出 Token、冷 Prompt Cache、单 Slot、`temperature=0`、`seed=42` 下，每个状态预热一次并计量五次：
+
+| 实现 | MTP | Decode 平均 | 标准差 | 接受率 | 相对本实现关闭态 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Official | 关闭 | 84.4307 tok/s | 0.1212 | — | — |
+| Official | 开启 | 117.9770 tok/s | 0.2013 | 62.69% | +39.73% |
+| AMD | 关闭 | 88.0247 tok/s | 1.5001 | — | — |
+| AMD | 开启 | 117.0653 tok/s | 0.0125 | 60.00% | +32.99% |
+
+MTP 的收益来自一次 Target Forward 接受多个 Token，从而摊薄自回归 Decode 中的权重读取、MMVQ、MoE 路由、逐元素 Kernel 和启动开销；它不会让单次 MMVQ 少读权重，还会增加 MTP Head 的候选生成成本。当前 AMD MTP 比 Official MTP 低 `0.77%`，同时接受率低 2.69 个百分点，说明原来面向单 Token MMVQ 的 AMD 优势在多候选验证路径中被稀释。后续优化应分别归因 MTP Draft Head 和 Target 多 Token 验证路径，不能把非 MTP 的 MMVQ 收益直接外推。
+
+正确性补测对 `reasoning_content + content` 的完整 128 Token 输出计算 SHA256。AMD 的 MTP 开/关输出一致，Official MTP 与 AMD 也一致；Official 关闭 MTP 的输出不同，因此本轮不能宣称四条路径位级一致。所有路径都固定生成 128 Token，这一差异应作为不同批处理/浮点执行路径下的贪心分叉保留，而不能删除不利样本。
+
+并发测试采用闭环 Worker，每个 Worker 完成请求后再发送下一个请求。当前 Profile 只有一个 llama-server Slot，所以 2/4 路是排队压力测试，不代表 2/4 个模型实例并行：
+
+| 实现（MTP 开启） | 客户端并发 | QPS | 聚合输出 TPS | 平均请求延迟 |
+| --- | ---: | ---: | ---: | ---: |
+| Official | 1 | 0.5751 | 73.61 tok/s | 1.739 s |
+| Official | 2 | 0.6040 | 77.31 tok/s | 2.907 s |
+| Official | 4 | 0.6055 | 77.51 tok/s | 5.394 s |
+| AMD | 1 | 0.5946 | 76.11 tok/s | 1.682 s |
+| AMD | 2 | 0.6094 | 78.00 tok/s | 2.897 s |
+| AMD | 4 | 0.6351 | 81.29 tok/s | 5.125 s |
+
+单 Slot 在 2 路附近已基本饱和；继续增加并发主要增加排队延迟。这里的聚合输出 TPS 包含每个请求的 790 Token Prefill 和完整请求周期，因此低于只计算 Decode 阶段的 llama.cpp `predicted_per_second`，两者不能互相替代。
+
 ## 数据
 
 - [最终 AMD 算子分析](../data/2026-07-19-amd-q8-activation-reuse-operator-analysis-6ae1c6a1.json)
@@ -258,6 +288,7 @@ AMD 实现保留 Official 的量化解码、点积、累加、Stream-K 和边界
 - [Official 算子基线](../data/2026-07-18-official-operator-analysis-f9a42bd7.json)
 - [Native Q6_K MMVQ 增量对比](../data/2026-07-20-amd-native-q6-mmvq-service-comparison.json)
 - [Q8_0 MMVQ Wave32/Wave64 动态分派实验](../data/2026-07-20-q8-mmvq-wave-selection.json)
+- [MTP 开关与并发 QPS 对照](../data/2026-07-20-mtp-qps-comparison.json)
 
 ## 适用边界
 

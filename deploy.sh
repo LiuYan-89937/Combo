@@ -40,8 +40,13 @@ source "${CONFIG_EXAMPLE}"
 source "${CONFIG_FILE}"
 set +a
 
+DEPLOY_TARGET="${DEPLOY_TARGET:-ssh}"
+if [[ "${DEPLOY_TARGET}" != "local" && "${DEPLOY_TARGET}" != "ssh" ]]; then
+    fail "DEPLOY_TARGET must be local or ssh"
+fi
+
 required_config=(
-    SSH_HOST SSH_PORT SSH_USER REMOTE_PROJECT_ROOT REMOTE_STATE_ROOT REMOTE_MODEL_ROOT
+    REMOTE_PROJECT_ROOT REMOTE_STATE_ROOT REMOTE_MODEL_ROOT
     REMOTE_LLAMA_SOURCE_ROOT REMOTE_LLAMA_RUNTIME_ROOT
     LOCAL_LLAMA_OFFICIAL_DIR LOCAL_LLAMA_AMD_DIR LOCAL_STABLE_DIFFUSION_CPP_DIR
     LLAMA_OFFICIAL_REVISION LLAMA_OFFICIAL_BUILD_NUMBER
@@ -63,8 +68,13 @@ required_config=(
 for name in "${required_config[@]}"; do
     [[ -n "${!name:-}" ]] || fail "Missing deployment setting: ${name}"
 done
-[[ "${SSH_PORT}" =~ ^[0-9]+$ ]] || fail "SSH_PORT must be an integer"
-(( SSH_PORT >= 1 && SSH_PORT <= 65535 )) || fail "SSH_PORT must be between 1 and 65535"
+if [[ "${DEPLOY_TARGET}" == "ssh" ]]; then
+    for name in SSH_HOST SSH_PORT SSH_USER; do
+        [[ -n "${!name:-}" ]] || fail "Missing SSH deployment setting: ${name}"
+    done
+    [[ "${SSH_PORT}" =~ ^[0-9]+$ ]] || fail "SSH_PORT must be an integer"
+    (( SSH_PORT >= 1 && SSH_PORT <= 65535 )) || fail "SSH_PORT must be between 1 and 65535"
+fi
 for name in LLAMA_OFFICIAL_BUILD_NUMBER LLAMA_AMD_BASE_BUILD_NUMBER; do
     [[ "${!name}" =~ ^[0-9]+$ ]] || fail "${name} must be a non-negative integer"
 done
@@ -82,46 +92,51 @@ done
     && "${LOCAL_TELEMETRY_PORT}" != "${LOCAL_IMAGE_PORT}" ]] \
     || fail "Local inference ports must be different"
 
-require_command ssh "Install the OpenSSH client."
-require_command scp "Install the OpenSSH client."
+SSH_ARGS=()
+SCP_ARGS=()
+RSYNC_SSH=()
+SSH_TARGET=""
+if [[ "${DEPLOY_TARGET}" == "ssh" ]]; then
+    require_command ssh "Install the OpenSSH client."
+    require_command scp "Install the OpenSSH client."
+    SSH_ARGS=(
+        -o BatchMode=yes
+        -o ConnectTimeout=15
+        -o ServerAliveInterval=30
+        -o ServerAliveCountMax=3
+        -o StrictHostKeyChecking=accept-new
+        -p "${SSH_PORT}"
+    )
+    SCP_ARGS=(
+        -o BatchMode=yes
+        -o ConnectTimeout=15
+        -o ServerAliveInterval=30
+        -o ServerAliveCountMax=3
+        -o StrictHostKeyChecking=accept-new
+        -P "${SSH_PORT}"
+    )
+    RSYNC_SSH=(
+        ssh
+        -o BatchMode=yes
+        -o ConnectTimeout=15
+        -o ServerAliveInterval=30
+        -o ServerAliveCountMax=3
+        -o StrictHostKeyChecking=accept-new
+        -p "${SSH_PORT}"
+    )
 
-SSH_ARGS=(
-    -o BatchMode=yes
-    -o ConnectTimeout=15
-    -o ServerAliveInterval=30
-    -o ServerAliveCountMax=3
-    -o StrictHostKeyChecking=accept-new
-    -p "${SSH_PORT}"
-)
-SCP_ARGS=(
-    -o BatchMode=yes
-    -o ConnectTimeout=15
-    -o ServerAliveInterval=30
-    -o ServerAliveCountMax=3
-    -o StrictHostKeyChecking=accept-new
-    -P "${SSH_PORT}"
-)
-RSYNC_SSH=(
-    ssh
-    -o BatchMode=yes
-    -o ConnectTimeout=15
-    -o ServerAliveInterval=30
-    -o ServerAliveCountMax=3
-    -o StrictHostKeyChecking=accept-new
-    -p "${SSH_PORT}"
-)
-
-if [[ -n "${SSH_KEY:-}" ]]; then
-    if [[ "${SSH_KEY}" == "~/"* ]]; then
-        SSH_KEY="${HOME}/${SSH_KEY#\~/}"
+    if [[ -n "${SSH_KEY:-}" ]]; then
+        if [[ "${SSH_KEY}" == "~/"* ]]; then
+            SSH_KEY="${HOME}/${SSH_KEY#\~/}"
+        fi
+        [[ -r "${SSH_KEY}" ]] || fail "SSH private key is not readable: ${SSH_KEY}"
+        SSH_ARGS+=(-i "${SSH_KEY}")
+        SCP_ARGS+=(-i "${SSH_KEY}")
+        RSYNC_SSH+=(-i "${SSH_KEY}")
     fi
-    [[ -r "${SSH_KEY}" ]] || fail "SSH private key is not readable: ${SSH_KEY}"
-    SSH_ARGS+=(-i "${SSH_KEY}")
-    SCP_ARGS+=(-i "${SSH_KEY}")
-    RSYNC_SSH+=(-i "${SSH_KEY}")
-fi
 
-SSH_TARGET="${SSH_USER}@${SSH_HOST}"
+    SSH_TARGET="${SSH_USER}@${SSH_HOST}"
+fi
 LOCAL_LLAMA_OFFICIAL_PATH="${LOCAL_LLAMA_OFFICIAL_DIR}"
 if [[ "${LOCAL_LLAMA_OFFICIAL_PATH}" != /* ]]; then
     LOCAL_LLAMA_OFFICIAL_PATH="${PROJECT_ROOT}/${LOCAL_LLAMA_OFFICIAL_PATH}"
@@ -140,6 +155,9 @@ ssh_run() {
 }
 
 upload_controller() {
+    if [[ "${DEPLOY_TARGET}" == "local" ]]; then
+        return
+    fi
     scp "${SCP_ARGS[@]}" "${REMOTE_CONTROLLER}" "${CONFIG_EXAMPLE}" "${CONFIG_FILE}" \
         "${SSH_TARGET}:/tmp/"
     ssh_run chmod 700 /tmp/remote_runtime.sh
@@ -149,7 +167,11 @@ upload_controller() {
 remote_command() {
     local command_name="$1"
     shift
-    ssh_run /tmp/remote_runtime.sh "${command_name}" /tmp/"$(basename "${CONFIG_FILE}")" "$@"
+    if [[ "${DEPLOY_TARGET}" == "ssh" ]]; then
+        ssh_run /tmp/remote_runtime.sh "${command_name}" /tmp/"$(basename "${CONFIG_FILE}")" "$@"
+        return
+    fi
+    "${REMOTE_CONTROLLER}" "${command_name}" "${CONFIG_FILE}" "$@"
 }
 
 validate_llama_source_tree() {
@@ -197,67 +219,96 @@ prepare_local_sources() {
 
 sync_sources() {
     require_command rsync "Install rsync on the local development machine."
-    local rsync_transport
-    printf -v rsync_transport '%q ' "${RSYNC_SSH[@]}"
-    log "Synchronizing minimal inference runtime to ${SSH_TARGET}:${REMOTE_PROJECT_ROOT}"
-    rsync -az --delete --delete-excluded --prune-empty-dirs \
-        -e "${rsync_transport% }" \
-        --include '/agent_factory/' \
-        --include '/agent_factory/__init__.py' \
-        --include '/agent_factory/warnings.py' \
-        --include '/agent_factory/env.py' \
-        --include '/agent_factory/paths.py' \
-        --include '/agent_factory/sqlite_runtime.py' \
-        --include '/agent_factory/local_inference/' \
-        --exclude '/agent_factory/local_inference/__init__.py' \
-        --include '/agent_factory/local_inference/*.py' \
-        --include '/agent_factory/model_pool/' \
-        --exclude '/agent_factory/model_pool/__init__.py' \
-        --include '/agent_factory/model_pool/config.py' \
-        --include '/agent_factory/model_pool/schema.py' \
-        --include '/agent_factory/model_pool/store.py' \
-        --include '/agent_factory/model_pool/storage.py' \
-        --include '/agent_factory/model_pool/download.py' \
-        --include '/agent_factory/models/' \
-        --exclude '/agent_factory/models/__init__.py' \
-        --include '/agent_factory/models/protocol.py' \
-        --include '/deploy/' \
-        --include '/deploy/configure_model_pool.py' \
-        --include '/deploy/kernel-catalogs/' \
-        --include '/deploy/kernel-catalogs/*.json' \
-        --exclude '*' \
-        "${PROJECT_ROOT}/" "${SSH_TARGET}:${REMOTE_PROJECT_ROOT}/"
+    local rsync_transport=""
+    local target_prefix=""
+    local transport_args=()
+    if [[ "${DEPLOY_TARGET}" == "ssh" ]]; then
+        printf -v rsync_transport '%q ' "${RSYNC_SSH[@]}"
+        transport_args=(-e "${rsync_transport% }")
+        target_prefix="${SSH_TARGET}:"
+    fi
 
-    log "Synchronizing bundled official llama.cpp source"
-    rsync -az --delete \
-        -e "${rsync_transport% }" \
-        --exclude 'build*/' \
-        "${LOCAL_LLAMA_OFFICIAL_PATH}/" "${SSH_TARGET}:${REMOTE_LLAMA_SOURCE_ROOT}/official/"
-    log "Synchronizing bundled AMD llama.cpp source"
-    rsync -az --delete \
-        -e "${rsync_transport% }" \
-        --exclude 'build*/' \
-        "${LOCAL_LLAMA_AMD_PATH}/" "${SSH_TARGET}:${REMOTE_LLAMA_SOURCE_ROOT}/amd/"
-    log "Synchronizing shared llama.cpp operator trace source"
-    rsync -az --delete \
-        -e "${rsync_transport% }" \
-        "${LOCAL_LLAMA_COMMON_PATH}/" "${SSH_TARGET}:${REMOTE_LLAMA_SOURCE_ROOT}/llama.cpp-common/"
-    log "Synchronizing bundled stable-diffusion.cpp source"
-    rsync -az --delete \
-        -e "${rsync_transport% }" \
-        --exclude '.git/' \
-        --exclude '/build*/' \
-        "${LOCAL_STABLE_DIFFUSION_CPP_PATH}/" "${SSH_TARGET}:${REMOTE_STABLE_DIFFUSION_CPP_DIR}/"
+    if [[ "${DEPLOY_TARGET}" == "local" ]] && paths_refer_same_location "${PROJECT_ROOT}" "${REMOTE_PROJECT_ROOT}"; then
+        log "Using the current FastAgentFactory checkout as the local inference runtime"
+    else
+        log "Synchronizing minimal inference runtime to ${target_prefix}${REMOTE_PROJECT_ROOT}"
+        rsync -az --delete --delete-excluded --prune-empty-dirs \
+            "${transport_args[@]}" \
+            --include '/agent_factory/' \
+            --include '/agent_factory/__init__.py' \
+            --include '/agent_factory/warnings.py' \
+            --include '/agent_factory/env.py' \
+            --include '/agent_factory/paths.py' \
+            --include '/agent_factory/sqlite_runtime.py' \
+            --include '/agent_factory/local_inference/' \
+            --exclude '/agent_factory/local_inference/__init__.py' \
+            --include '/agent_factory/local_inference/*.py' \
+            --include '/agent_factory/model_pool/' \
+            --exclude '/agent_factory/model_pool/__init__.py' \
+            --include '/agent_factory/model_pool/config.py' \
+            --include '/agent_factory/model_pool/schema.py' \
+            --include '/agent_factory/model_pool/store.py' \
+            --include '/agent_factory/model_pool/storage.py' \
+            --include '/agent_factory/model_pool/download.py' \
+            --include '/agent_factory/models/' \
+            --exclude '/agent_factory/models/__init__.py' \
+            --include '/agent_factory/models/protocol.py' \
+            --include '/deploy/' \
+            --include '/deploy/configure_model_pool.py' \
+            --include '/deploy/kernel-catalogs/' \
+            --include '/deploy/kernel-catalogs/*.json' \
+            --exclude '*' \
+            "${PROJECT_ROOT}/" "${target_prefix}${REMOTE_PROJECT_ROOT}/"
+    fi
+
+    sync_source_tree "official llama.cpp" "${LOCAL_LLAMA_OFFICIAL_PATH}" \
+        "${REMOTE_LLAMA_SOURCE_ROOT}/official" "${transport_args[@]}" --exclude 'build*/'
+    sync_source_tree "AMD llama.cpp" "${LOCAL_LLAMA_AMD_PATH}" \
+        "${REMOTE_LLAMA_SOURCE_ROOT}/amd" "${transport_args[@]}" --exclude 'build*/'
+    sync_source_tree "shared llama.cpp operator trace" "${LOCAL_LLAMA_COMMON_PATH}" \
+        "${REMOTE_LLAMA_SOURCE_ROOT}/llama.cpp-common" "${transport_args[@]}"
+    sync_source_tree "stable-diffusion.cpp" "${LOCAL_STABLE_DIFFUSION_CPP_PATH}" \
+        "${REMOTE_STABLE_DIFFUSION_CPP_DIR}" "${transport_args[@]}" \
+        --exclude '.git/' --exclude '/build*/'
+}
+
+paths_refer_same_location() {
+    local left="$1"
+    local right="$2"
+    [[ "$(python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve())' "${left}")" == \
+        "$(python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve())' "${right}")" ]]
+}
+
+sync_source_tree() {
+    local label="$1"
+    local source_dir="$2"
+    local target_dir="$3"
+    shift 3
+    if [[ "${DEPLOY_TARGET}" == "local" ]] && paths_refer_same_location "${source_dir}" "${target_dir}"; then
+        log "Using bundled ${label} source in place"
+        return
+    fi
+    log "Synchronizing bundled ${label} source"
+    rsync -az --delete "$@" "${source_dir}/" "${SSH_TARGET:+${SSH_TARGET}:}${target_dir}/"
 }
 
 configure_local_env() {
+    local connection_mode="direct"
+    local configure_args=()
+    if [[ "${DEPLOY_TARGET}" == "ssh" ]]; then
+        connection_mode="ssh"
+        configure_args+=(
+            --ssh-host "${SSH_HOST}"
+            --ssh-port "${SSH_PORT}"
+            --ssh-user "${SSH_USER}"
+            --ssh-key "${SSH_KEY:-}"
+        )
+    fi
     python3 "${PROJECT_ROOT}/deploy/configure_local_env.py" \
         --env-file "${PROJECT_ROOT}/.env" \
         --example-file "${PROJECT_ROOT}/.env.example" \
-        --ssh-host "${SSH_HOST}" \
-        --ssh-port "${SSH_PORT}" \
-        --ssh-user "${SSH_USER}" \
-        --ssh-key "${SSH_KEY:-}" \
+        --connection-mode "${connection_mode}" \
+        "${configure_args[@]}" \
         --chat-local-port "${LOCAL_CHAT_PORT}" \
         --chat-remote-port "${REMOTE_CHAT_PORT}" \
         --embedding-local-port "${LOCAL_EMBEDDING_PORT}" \
@@ -303,6 +354,11 @@ configure_local_profiles() {
         --cache-type-k "${CHAT_CACHE_TYPE_K}" \
         --cache-type-v "${CHAT_CACHE_TYPE_V}" \
         "$(boolean_argument "${CHAT_FLASH_ATTENTION:-1}" flash-attention)" \
+        "$(boolean_argument "${CHAT_MTP_ENABLED:-0}" chat-mtp-enabled)" \
+        --chat-mtp-max-draft-tokens "${CHAT_MTP_MAX_DRAFT_TOKENS:-3}" \
+        --chat-mtp-min-draft-tokens "${CHAT_MTP_MIN_DRAFT_TOKENS:-0}" \
+        --chat-mtp-min-acceptance-probability "${CHAT_MTP_MIN_ACCEPTANCE_PROBABILITY:-0.0}" \
+        "$(boolean_argument "${CHAT_MTP_BACKEND_SAMPLING:-1}" chat-mtp-backend-sampling)" \
         "$(boolean_argument "${CHAT_REASONING_SUPPORTED:-1}" reasoning-supported)" \
         --embedding-profile-id "${EMBEDDING_PROFILE_ID}" \
         --embedding-served-model-name "${EMBEDDING_SERVED_MODEL_NAME}" \
@@ -332,6 +388,9 @@ check_bootstrap_prerequisites() {
     require_command python3 "Install Python 3.11 or newer."
     require_command rsync "Install rsync on the local development machine."
     require_command uv "Install uv from https://docs.astral.sh/uv/."
+    if [[ "${DEPLOY_TARGET}" == "local" && "$(uname -s)" != "Linux" ]]; then
+        fail "DEPLOY_TARGET=local requires a Linux host with ROCm device access"
+    fi
 }
 
 check_web_prerequisites() {
@@ -343,8 +402,12 @@ check_web_prerequisites() {
 
 bootstrap() {
     check_bootstrap_prerequisites
-    log "Checking SSH connectivity"
-    ssh_run true
+    if [[ "${DEPLOY_TARGET}" == "ssh" ]]; then
+        log "Checking SSH connectivity"
+        ssh_run true
+    else
+        log "Using the local machine as the inference node"
+    fi
     prepare_local_sources
     upload_controller
     remote_command prepare-host
@@ -363,10 +426,14 @@ case "${COMMAND}" in
         fi
         bootstrap
         if [[ "${START_LOCAL_WEB}" == "1" ]]; then
-            log "Starting the local Web application and SSH tunnel"
+            if [[ "${DEPLOY_TARGET}" == "ssh" ]]; then
+                log "Starting the local Web application and SSH tunnel"
+            else
+                log "Starting the Web application with direct inference-node access"
+            fi
             exec "${PROJECT_ROOT}/start.sh"
         fi
-        log "Remote inference deployment is ready; local Web startup was skipped"
+        log "Inference-node deployment is ready; Web startup was skipped"
         ;;
     bootstrap)
         bootstrap

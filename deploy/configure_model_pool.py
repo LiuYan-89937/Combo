@@ -6,6 +6,8 @@ from pathlib import Path
 from agent_factory.model_pool.schema import (
     ExternalInferenceConfig,
     LlamaCppInferenceConfig,
+    LlamaCppMtpConfig,
+    LlamaCppSpeculativeDecodingDisabledConfig,
     LocalModelArtifact,
     ModelContextExtensionCapability,
     ModelPoolCapabilities,
@@ -66,6 +68,16 @@ def main() -> None:
         cache_type_v=args.cache_type_v,
         flash_attention=args.flash_attention,
         mmproj_path=str(args.chat_mmproj_path) if args.chat_mmproj_path else None,
+        speculative_decoding=(
+            LlamaCppMtpConfig(
+                max_draft_tokens=args.chat_mtp_max_draft_tokens,
+                min_draft_tokens=args.chat_mtp_min_draft_tokens,
+                min_acceptance_probability=args.chat_mtp_min_acceptance_probability,
+                backend_sampling=args.chat_mtp_backend_sampling,
+            )
+            if args.chat_mtp_enabled
+            else LlamaCppSpeculativeDecodingDisabledConfig()
+        ),
     )
     chat_context_extension = (
         ModelContextExtensionCapability(
@@ -302,6 +314,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--cache-type-k")
     parser.add_argument("--cache-type-v")
     parser.add_argument("--flash-attention", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--chat-mtp-enabled", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--chat-mtp-max-draft-tokens", type=int, default=3)
+    parser.add_argument("--chat-mtp-min-draft-tokens", type=int, default=0)
+    parser.add_argument("--chat-mtp-min-acceptance-probability", type=float, default=0.0)
+    parser.add_argument("--chat-mtp-backend-sampling", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument(
         "--reasoning-supported",
         action=argparse.BooleanOptionalAction,

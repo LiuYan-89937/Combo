@@ -15,6 +15,7 @@ def list_local_inference_engines() -> list[dict[str, Any]]:
                 "gpu_layers": {"default": 99, "min": 0},
                 "parallel_slots": {"default": 1, "min": 1},
                 "cache_types": ["f16", "bf16", "q8_0", "q4_0"],
+                "speculative_decoding_methods": ["mtp"],
             },
         },
         {
