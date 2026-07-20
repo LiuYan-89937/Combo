@@ -76,6 +76,9 @@ CONTAINER_RESOURCE_STORE_PATH = "/runtime/control_plane/resources.sqlite"
 SHARED_PROJECT_ROOT = PurePosixPath("/agentfactory/project")
 CONTAINER_ISOLATION_ENV = "AGENTFACTORY_CONTAINER_ISOLATION"
 CONTAINER_INCOMPATIBLE_POLICY_ENV = "AGENTFACTORY_CONTAINER_INCOMPATIBLE_POLICY"
+DOCKER_PROJECT_ID_ENV = "AGENTFACTORY_DOCKER_PROJECT_ID"
+DOCKER_MANAGED_LABEL = "agentfactory.runtime.managed"
+DOCKER_PROJECT_LABEL = "agentfactory.runtime.project"
 SAFE_RESOURCE_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 ALLOWED_CONTAINER_ROOTS = (
     PurePosixPath(CONTAINER_DEPENDENCY_POOL_ROOT),
@@ -248,6 +251,10 @@ class DockerAgentRuntimeLauncher:
             network,
             "--add-host",
             f"{CONTAINER_HOST_ALIAS}:host-gateway",
+            "--label",
+            f"{DOCKER_MANAGED_LABEL}=true",
+            "--label",
+            f"{DOCKER_PROJECT_LABEL}={_docker_project_id()}",
         ]
         mounts = [
             f"{package.package_root.resolve()}:/package:ro",
@@ -812,6 +819,10 @@ class _SharedDockerRuntime:
                 "no-new-privileges",
                 "--label",
                 "agentfactory.runtime.isolation=logical",
+                "--label",
+                f"{DOCKER_MANAGED_LABEL}=true",
+                "--label",
+                f"{DOCKER_PROJECT_LABEL}={_docker_project_id()}",
                 "-v",
                 f"{project}:{SHARED_PROJECT_ROOT}:ro",
                 "-v",
@@ -950,6 +961,11 @@ def _container_endpoint(endpoint: str) -> str:
 
 def shutdown_shared_runtime() -> None:
     _SHARED_RUNTIME.close()
+
+
+def _docker_project_id() -> str:
+    configured = str(os.getenv(DOCKER_PROJECT_ID_ENV) or "").strip()
+    return configured or str(project_root().resolve())
 
 
 def _container_isolation(package: LoadedAgentPackage) -> str:

@@ -19,6 +19,10 @@ RUNTIME_IMAGE="${AGENTFACTORY_RUNTIME_IMAGE:-agentfactory-runtime-python:3.12}"
 export AGENTFACTORY_RUNTIME_IMAGE="${RUNTIME_IMAGE}"
 RUNTIME_DOCKERFILE="${AGENTFACTORY_RUNTIME_DOCKERFILE:-${PROJECT_ROOT}/docker/agent-runtime/Dockerfile}"
 RUNTIME_SOURCE_DIGEST_LABEL="org.fastagentfactory.runtime.source_digest"
+DOCKER_RUNTIME_MANAGED_LABEL="agentfactory.runtime.managed"
+DOCKER_RUNTIME_PROJECT_LABEL="agentfactory.runtime.project"
+AGENTFACTORY_DOCKER_PROJECT_ID="${AGENTFACTORY_DOCKER_PROJECT_ID:-${PROJECT_ROOT}}"
+export AGENTFACTORY_DOCKER_PROJECT_ID
 WEB_SEARCH_MCP_DIR="${AGENTFACTORY_WEB_SEARCH_MCP_DIR:-${PROJECT_ROOT}/.agentfactory/mcp/web_search}"
 WEB_SEARCH_MCP_REPOSITORY="${AGENTFACTORY_WEB_SEARCH_MCP_REPOSITORY:-https://github.com/LiuYan-89937/BigOpenLLMSearch.git}"
 INFERENCE_SSH_TUNNEL_PID=""
@@ -42,6 +46,24 @@ web_require_command() {
     if ! command -v "${command_name}" >/dev/null 2>&1; then
         web_fail "${command_name} not found. ${install_hint}"
     fi
+}
+
+web_stop_managed_runtime_containers() {
+    command -v docker >/dev/null 2>&1 || return 0
+    docker info >/dev/null 2>&1 || return 0
+    local container_ids=()
+    local container_id
+    while read -r container_id; do
+        [[ -n "${container_id}" ]] && container_ids+=("${container_id}")
+    done < <(
+        docker ps --quiet \
+            --filter "label=${DOCKER_RUNTIME_MANAGED_LABEL}=true" \
+            --filter "label=${DOCKER_RUNTIME_PROJECT_LABEL}=${AGENTFACTORY_DOCKER_PROJECT_ID}"
+    )
+    (( ${#container_ids[@]} > 0 )) || return 0
+    echo "Stopping ${#container_ids[@]} managed Agent runtime container(s)..."
+    docker stop --time 5 "${container_ids[@]}" >/dev/null 2>&1 \
+        || web_warn "One or more managed Agent runtime containers could not be stopped cleanly"
 }
 
 web_validate_port() {
