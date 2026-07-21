@@ -3,25 +3,28 @@
     <div class="manager-header">
       <div class="manager-title">
         <n-text strong>{{ t('knowledge.title') }}</n-text>
-        <n-text depth="3" class="context-label">
-          {{ t('resource.currentContext', { label: resourceContext.label.value }) }}
-        </n-text>
       </div>
-      <n-space>
-        <n-button
-          v-if="selectedCount > 0"
-          :loading="busyAction === 'delete'"
-          @click="confirmDeleteSources(selectedSources)"
-        >
-          {{ t('knowledge.deleteSelected', { count: selectedCount }) }}
-        </n-button>
-        <n-button type="primary" @click="showCreateModal = true">
-          <template #icon>
-            <n-icon><Add /></n-icon>
-          </template>
-          {{ t('knowledge.add') }}
-        </n-button>
-      </n-space>
+      <div class="manager-controls">
+        <ResourceTargetSelector
+          v-model="resourceContext.selectedValue.value"
+          :options="resourceContext.targetOptions.value"
+        />
+        <n-space>
+          <n-button
+            v-if="selectedCount > 0"
+            :loading="busyAction === 'delete'"
+            @click="confirmDeleteSources(selectedSources)"
+          >
+            {{ t('knowledge.deleteSelected', { count: selectedCount }) }}
+          </n-button>
+          <n-button type="primary" @click="showCreateModal = true">
+            <template #icon>
+              <n-icon><Add /></n-icon>
+            </template>
+            {{ t('knowledge.add') }}
+          </n-button>
+        </n-space>
+      </div>
     </div>
 
     <n-scrollbar class="source-list">
@@ -195,6 +198,7 @@ import {
 import { Add, Document, Library, Settings, EllipsisHorizontal } from '@/components/icons'
 import { useKnowledgeManager } from '@/composables/knowledge/useKnowledgeManager'
 import KnowledgeSourceFormModal from './KnowledgeSourceFormModal.vue'
+import ResourceTargetSelector from '@/components/resources/ResourceTargetSelector.vue'
 import FilePreviewContent from '@/components/workspace/FilePreviewContent.vue'
 import { useI18n } from '@/composables/useI18n'
 import type { KnowledgeSourceView, WorkspaceFileView } from '@/types/protocol'
@@ -331,8 +335,12 @@ function ingestionProgressStatus(source: KnowledgeSourceView): 'default' | 'succ
   min-width: 0;
 }
 
-.context-label {
-  font-size: var(--app-font-sm);
+.manager-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--app-space-md);
+  flex-wrap: wrap;
 }
 
 .source-list {

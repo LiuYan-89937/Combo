@@ -3,7 +3,7 @@ import { useDialog } from 'naive-ui'
 import { DocumentText, FolderOutline, Globe } from '@/components/icons'
 import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
-import { useResourceContext } from '@/composables/useResourceContext'
+import { useManagedResourceContext } from '@/composables/useManagedResourceContext'
 import { useKnowledgeStore } from '@/stores/knowledge'
 import type { KnowledgeDocumentView, KnowledgeSourceView } from '@/types/protocol'
 
@@ -11,7 +11,7 @@ export function useKnowledgeManager() {
   const knowledgeStore = useKnowledgeStore()
   const commands = useCommand()
   const dialog = useDialog()
-  const resourceContext = useResourceContext()
+  const resourceContext = useManagedResourceContext('package_only')
   const { t } = useI18n()
 
   const showCreateModal = ref(false)

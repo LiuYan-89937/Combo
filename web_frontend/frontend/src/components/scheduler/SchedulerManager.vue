@@ -3,14 +3,19 @@
     <div class="manager-header">
       <div class="manager-title">
         <n-text strong>{{ t('scheduler.title') }}</n-text>
-        <n-text depth="3" class="context-label">{{ schedulerContextLabel }}</n-text>
       </div>
-      <n-button type="primary" @click="showCreateModal = true">
-        <template #icon>
-          <n-icon><Add /></n-icon>
-        </template>
-        {{ t('scheduler.createTask') }}
-      </n-button>
+      <div class="manager-controls">
+        <ResourceTargetSelector
+          v-model="resourceContext.selectedValue.value"
+          :options="resourceContext.targetOptions.value"
+        />
+        <n-button type="primary" @click="showCreateModal = true">
+          <template #icon>
+            <n-icon><Add /></n-icon>
+          </template>
+          {{ t('scheduler.createTask') }}
+        </n-button>
+      </div>
     </div>
 
     <n-scrollbar class="job-list">
@@ -101,13 +106,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted, watch } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { NText, NButton, NIcon, NScrollbar, NCard, NTag, NSpace, NSwitch, NDivider, NDropdown, NEmpty, useDialog } from 'naive-ui'
 import { Add, Time, LocateOutline, EllipsisHorizontal } from '@/components/icons'
 import { useSchedulerStore } from '@/stores/scheduler'
 import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
-import { useResourceContext } from '@/composables/useResourceContext'
+import { useManagedResourceContext } from '@/composables/useManagedResourceContext'
+import ResourceTargetSelector from '@/components/resources/ResourceTargetSelector.vue'
 import SchedulerJobFormModal from './SchedulerJobFormModal.vue'
 import SchedulerHistoryDrawer from './SchedulerHistoryDrawer.vue'
 import type { SchedulerJobView } from '@/types/protocol'
@@ -115,15 +121,11 @@ import type { SchedulerJobView } from '@/types/protocol'
 const schedulerStore = useSchedulerStore()
 const commands = useCommand()
 const dialog = useDialog()
-const resourceContext = useResourceContext()
+const resourceContext = useManagedResourceContext('package_only')
 const { t } = useI18n()
 const showCreateModal = ref(false)
 const showHistoryDrawer = ref(false)
 const selectedJobId = ref<string | null>(null)
-
-const schedulerContextLabel = computed(() => {
-  return t('resource.currentContext', { label: resourceContext.label.value })
-})
 
 function handleToggleEnabled(job: SchedulerJobView, enabled: boolean) {
   const jobId = job.payload?.job_id
@@ -228,7 +230,7 @@ onMounted(() => {
 })
 
 watch(
-  () => resourceContext.packageId.value,
+  () => resourceContext.workspaceContextKey.value,
   () => {
     refreshCurrentScheduler()
   }
@@ -271,8 +273,12 @@ function refreshCurrentScheduler() {
   min-width: 0;
 }
 
-.context-label {
-  font-size: var(--app-font-sm);
+.manager-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--app-space-md);
+  flex-wrap: wrap;
 }
 
 .job-list {
