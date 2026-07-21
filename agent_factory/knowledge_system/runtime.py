@@ -38,6 +38,7 @@ class KnowledgeRuntime:
     owner_id: str
     catalog: KnowledgeCatalog
     store: BaseStore | None = None
+    semantic_index_enabled: bool = False
     event_sink: KnowledgeEventSink | None = None
     pending_jobs: deque[str] = field(default_factory=deque)
     _queue_condition: threading.Condition = field(default_factory=threading.Condition)
@@ -100,6 +101,7 @@ class KnowledgeRuntime:
 
     def confirm_source(self, source: dict[str, Any]) -> KnowledgeIngestionJob:
         source_type, mount_mode, uri, source_id, display_name, metadata = self._normalize_source_spec(source)
+        self._require_semantic_index(mount_mode)
         ingestion_plan = _ingestion_plan_from_source(source, metadata)
         if ingestion_plan is None:
             discovery = discover_source(
@@ -178,6 +180,7 @@ class KnowledgeRuntime:
         self.catalog.set_source_status(job.source_id, "indexing")
         self._emit_job("knowledge_ingestion_started", job, message="Knowledge ingestion started.")
         try:
+            self._require_semantic_index(manifest.mount_mode)
             discovery = discover_source(
                 source_type=manifest.source_type,
                 uri=manifest.uri,
@@ -230,6 +233,7 @@ class KnowledgeRuntime:
                 message="Writing knowledge catalog and keyword index.",
             )
             self.catalog.replace_source_documents(source_id=manifest.source_id, documents=documents, chunks=chunks)
+            chunks_embedded = 0
             if manifest.mount_mode == "rag":
                 self._emit_job(
                     "knowledge_ingestion_progress",
@@ -238,7 +242,7 @@ class KnowledgeRuntime:
                     progress={"current": 5, "total": 6, "percent": 83},
                     message="Writing semantic index through LangGraph BaseStore.",
                 )
-                self._write_semantic_index(manifest=manifest, chunks=chunks)
+                chunks_embedded = self._write_semantic_index(manifest=manifest, chunks=chunks)
             report_path = self._write_report(job=job, manifest=manifest, documents=documents, chunks=chunks, warnings=discovery.warnings)
             completed = job.model_copy(
                 update={
@@ -249,7 +253,7 @@ class KnowledgeRuntime:
                         "documents_discovered": len(discovery.documents),
                         "documents_loaded": len(documents),
                         "chunks_created": len(chunks),
-                        "chunks_embedded": len(chunks) if manifest.mount_mode == "rag" and self.store is not None else 0,
+                        "chunks_embedded": chunks_embedded,
                         "documents_skipped": max(0, len(discovery.documents) - len(documents)),
                         "errors": 0,
                     },
@@ -318,9 +322,11 @@ class KnowledgeRuntime:
             return []
         limit = min(top_k, self.config.limits.max_search_results)
         results: list[KnowledgeResult] = []
+        if mode in {"semantic", "hybrid"}:
+            self._require_semantic_index("rag")
         if mode in {"auto", "keyword", "hybrid", "readable"}:
             results.extend(self.catalog.keyword_search(query=query, source_id=source_id, limit=limit))
-        if mode in {"auto", "semantic", "hybrid"} and self.store is not None:
+        if mode in {"auto", "semantic", "hybrid"} and self.semantic_index_enabled:
             results.extend(self._semantic_search(query=query, source_id=source_id, limit=limit))
         return _dedupe_results(results)[:limit]
 
@@ -418,25 +424,63 @@ class KnowledgeRuntime:
             )
         return results
 
-    def _write_semantic_index(self, *, manifest: KnowledgeSourceManifest, chunks: list[Any]) -> None:
-        if self.store is None:
-            return
+    def _write_semantic_index(self, *, manifest: KnowledgeSourceManifest, chunks: list[Any]) -> int:
+        self._require_semantic_index("rag")
+        assert self.store is not None
         namespace = self._namespace(manifest.source_id)
-        for chunk in chunks:
-            self.store.put(
-                namespace,
-                chunk.chunk_id,
-                {
-                    "chunk_id": chunk.chunk_id,
-                    "source_id": chunk.source_id,
-                    "document_id": chunk.document_id,
-                    "title": chunk.title,
-                    "summary": chunk.summary or "",
-                    "content": chunk.content,
-                    "uri": chunk.metadata.get("relative_path") or chunk.metadata.get("file_name"),
-                    "metadata": chunk.metadata,
-                },
-            )
+        self._clear_semantic_namespace(namespace)
+        embedded_count = 0
+        try:
+            for chunk in chunks:
+                self.store.put(
+                    namespace,
+                    chunk.chunk_id,
+                    {
+                        "chunk_id": chunk.chunk_id,
+                        "source_id": chunk.source_id,
+                        "document_id": chunk.document_id,
+                        "title": chunk.title,
+                        "summary": chunk.summary or "",
+                        "content": chunk.content,
+                        "uri": chunk.metadata.get("relative_path") or chunk.metadata.get("file_name"),
+                        "metadata": chunk.metadata,
+                    },
+                )
+                self._raise_for_semantic_write_failure(chunk.chunk_id)
+                embedded_count += 1
+        except Exception:
+            self._clear_semantic_namespace(namespace)
+            raise
+        return embedded_count
+
+    def _require_semantic_index(self, mount_mode: MountMode) -> None:
+        if mount_mode != "rag":
+            return
+        if self.store is None or not self.semantic_index_enabled:
+            raise RuntimeError("RAG knowledge source requires an available embedding model and semantic vector store")
+
+    def _clear_semantic_namespace(self, namespace: tuple[str, ...]) -> None:
+        assert self.store is not None
+        for item in self.store.search(namespace, limit=100000):
+            self.store.delete(tuple(item.namespace), item.key)
+
+    def _raise_for_semantic_write_failure(self, chunk_id: str) -> None:
+        assert self.store is not None
+        report_fn = getattr(self.store, "semantic_index_report", None)
+        if not callable(report_fn):
+            return
+        diagnostics = list(report_fn().get("diagnostics") or [])
+        diagnostic = next(
+            (item for item in reversed(diagnostics) if str(item.get("key") or "") == chunk_id),
+            None,
+        )
+        if diagnostic is None:
+            raise RuntimeError(f"embedding result was not reported for chunk {chunk_id}")
+        if diagnostic.get("status") == "ok":
+            return
+        reason = str(diagnostic.get("reason") or "embedding_failed")
+        message = str(diagnostic.get("message") or reason)
+        raise RuntimeError(f"embedding failed for chunk {chunk_id}: {message}")
 
     def _write_report(
         self,
