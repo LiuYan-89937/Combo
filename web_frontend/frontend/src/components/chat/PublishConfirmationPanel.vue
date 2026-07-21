@@ -94,8 +94,8 @@ const validationLabel = computed(() => {
 
 async function handleConfirmPublish() {
   if (publishSubmitting.value) return
-  const sessionId = String(payload.value.session_id || '').trim()
-  if (!sessionId) {
+  const workspaceId = String(payload.value.workspace_id || '').trim()
+  if (!workspaceId) {
     uiStore.addNotification({
       type: 'error',
       title: t('publish.failedTitle'),
@@ -106,7 +106,7 @@ async function handleConfirmPublish() {
   }
   publishSubmitting.value = true
   try {
-    await createAgentApi.publish(sessionId)
+    await createAgentApi.publish(workspaceId)
     runtimeStore.clearCreateAgentPublishReady()
     commands.listAgentPackages()
     uiStore.addNotification({

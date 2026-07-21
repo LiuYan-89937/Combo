@@ -52,7 +52,7 @@ interface ResourceRequestView {
   secret_fields?: string[]
 }
 
-const props = defineProps<{ sessionId: string; requests: ResourceRequestView[] }>()
+const props = defineProps<{ workspaceId: string; requests: ResourceRequestView[] }>()
 const emit = defineEmits<{ configured: [resourceIds: string[]]; skip: [] }>()
 const drafts = ref<Record<string, unknown>>({})
 const errors = ref<Record<string, string>>({})
@@ -83,7 +83,7 @@ async function saveAll() {
     for (const request of props.requests) {
       try {
         const value = resourceDraftValue(request.value_schema || {}, drafts.value[request.resource_id])
-        await createAgentApi.putResource(props.sessionId, request.resource_id, value)
+        await createAgentApi.putResource(props.workspaceId, request.resource_id, value)
         saved.push(request.resource_id)
       } catch (error) {
         errors.value = {

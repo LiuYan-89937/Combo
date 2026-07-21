@@ -74,8 +74,8 @@
         class="approval-section"
       />
       <ResourceRequestPanel
-        v-if="resourceRequests.length && runtimeStore.activeFactorySessionId"
-        :session-id="runtimeStore.activeFactorySessionId"
+        v-if="resourceRequests.length && resourceWorkspaceId"
+        :workspace-id="resourceWorkspaceId"
         :requests="resourceRequests"
         @configured="handleResourceConfigured"
         @skip="handleResourceSkipped"
@@ -218,6 +218,12 @@ const resourceRequests = computed(() => {
     secret_fields?: string[]
   } => Boolean(item && typeof item.resource_id === 'string')) : []
 })
+
+const resourceWorkspaceId = computed(() => String(
+  runtimeStore.pendingInterrupt?.payload?.workspace_id
+    || resourceContext.workspaceContext.value.createAgentSessionId
+    || '',
+).trim())
 
 const activeSchedulerRunCards = computed(() => {
   const scope = runtimeStore.activeConversationScope
