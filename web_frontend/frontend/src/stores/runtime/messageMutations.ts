@@ -79,6 +79,7 @@ function ensureMessage(
 ): TranscriptItem {
   const existing = state.transcript.find((item) => item.id === messageId)
   if (existing) return existing
+  const turn = ensureConversationTurn(state, event.request_id || state.activeRequestId, event.timestamp)
   const message: TranscriptItem = {
     id: messageId,
     role: event.payload?.role === 'user' || event.payload?.role === 'system' ? event.payload.role : 'assistant',
@@ -88,6 +89,7 @@ function ensureMessage(
     parts: [],
     streamId: event.payload?.stream_id || messageId,
     metadata: {
+      ...(turn.metadata || {}),
       request_id: event.request_id,
       node_id: event.node_id,
       message_protocol: 'parts',

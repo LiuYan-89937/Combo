@@ -170,6 +170,7 @@ export function useFactoryConversation() {
         mode: 'agent_package',
         package_id: packageId,
         agent_session_id: agentSessionId || null,
+        ...runtimeSelectionMetadata(),
       }, visibleAttachments)
       return true
     }
@@ -190,6 +191,7 @@ export function useFactoryConversation() {
       runtimeStore.addUserMessage(message, command.request_id, {
         mode,
         package_id: evolutionPackageId,
+        ...runtimeSelectionMetadata(),
       }, visibleAttachments)
       return true
     }
@@ -201,8 +203,17 @@ export function useFactoryConversation() {
       mode,
       package_id: mode === 'evolve_agent' ? selectedEvolutionPackageId.value : undefined,
       interrupt_resume: runtimeStore.isAwaitingUserInputInterrupt,
+      ...runtimeSelectionMetadata(),
     }, runtimeStore.isAwaitingUserInputInterrupt ? [] : visibleAttachments)
     return true
+  }
+
+  function runtimeSelectionMetadata(): Record<string, string | number> {
+    const profileId = effectiveMainModelProfileId.value
+    return {
+      ...(profileId ? { model_profile_id: profileId } : {}),
+      ...(reasoningIntensity.value !== null ? { reasoning_intensity: reasoningIntensity.value } : {}),
+    }
   }
 
   function cancelRequest() {
