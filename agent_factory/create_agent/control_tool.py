@@ -4,6 +4,7 @@ from typing import Any
 
 from agent_factory.create_agent.models import CreateAgentAction
 from agent_factory.create_agent.output_safety import looks_like_internal_observation_text
+from agent_factory.create_agent.resource_contract import resource_request_payloads
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.tooling.envelope import tool_envelope
 from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolRiskResult, ToolSpec
@@ -54,6 +55,10 @@ def build_create_agent_control_tool_spec() -> ToolSpec:
                         "additionalProperties": False,
                     },
                     "default": [],
+                    "description": (
+                        "Resources to render as schema forms. Every resource_id must already be declared with a "
+                        "non-empty value_schema in contracts/resources.json before ask_user is called."
+                    ),
                 },
             },
             "required": ["action"],
@@ -109,6 +114,10 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     )
     if action.action == "ask_user" and not action.message.strip():
         raise ValueError("message is required when action is ask_user")
+    if action.resource_requests and action.action != "ask_user":
+        raise ValueError("resource_requests are only valid when action is ask_user")
+    if action.action == "ask_user":
+        resource_request_payloads(workspace, action.resource_requests)
     if action.action == "finalize" and looks_like_internal_observation_text(action.message):
         raise ValueError("finalize message must be a concise user-facing summary, not raw tool/probe JSON")
     workspace.write_action(action)
