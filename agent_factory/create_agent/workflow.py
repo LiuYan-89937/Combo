@@ -221,6 +221,7 @@ class CreateAgentWorkflow:
                 "resume_kind": "answer",
                 "title": title,
                 "message": question,
+                "workspace_id": workspace.root.name,
                 "workspace_path": str(workspace.root),
                 "resource_facts": [fact.model_dump(mode="json") for fact in action.resource_facts],
                 "resource_requests": _resource_request_payloads(workspace, action),
@@ -473,6 +474,7 @@ def _publish_ready_payload(workspace: CreateAgentWorkspace, report: PackageValid
     return {
         "version": "agent_package_publish_report.v0",
         "status": "ready",
+        "workspace_id": workspace.root.name,
         "source_workspace": str(workspace.root),
         "message": _publish_ready_text(workspace, report, runtime_configuration),
         "validation": report.to_digest().model_dump(mode="json"),

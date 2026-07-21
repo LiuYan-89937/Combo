@@ -13,12 +13,12 @@ from agent_factory.runtime_contracts import AgentPackageLoader, ResourcesContrac
 def create_create_agent_router() -> APIRouter:
     router = APIRouter(prefix="/api/create-agent")
 
-    @router.post("/sessions/{session_id}/publish")
-    async def publish_create_agent_workspace(session_id: str, payload: dict[str, Any] | None = None):
+    @router.post("/workspaces/{workspace_id}/publish")
+    async def publish_create_agent_workspace(workspace_id: str, payload: dict[str, Any] | None = None):
         confirmation = _confirmation_text(payload)
         try:
             result = confirm_and_publish(
-                workspace=CreateAgentWorkspace.for_session(session_id),
+                workspace=CreateAgentWorkspace.for_session(workspace_id),
                 confirmation=confirmation,
             )
         except FileNotFoundError as exc:
@@ -27,11 +27,11 @@ def create_create_agent_router() -> APIRouter:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"published": result}
 
-    @router.put("/sessions/{session_id}/resources/{resource_id}")
-    async def put_create_agent_resource(session_id: str, resource_id: str, payload: dict[str, Any]):
+    @router.put("/workspaces/{workspace_id}/resources/{resource_id}")
+    async def put_create_agent_resource(workspace_id: str, resource_id: str, payload: dict[str, Any]):
         if "value" not in payload:
             raise HTTPException(status_code=400, detail="resource value is required")
-        workspace = CreateAgentWorkspace.for_session(session_id)
+        workspace = CreateAgentWorkspace.for_session(workspace_id)
         try:
             package = AgentPackageLoader().load_path(workspace.package_manifest_path())
             contract = ResourcesContract.model_validate(package.contracts.get("resources") or {})
