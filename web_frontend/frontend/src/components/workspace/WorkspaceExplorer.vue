@@ -6,14 +6,6 @@
         <n-text depth="3" class="header-subtitle">{{ effectiveScope }}</n-text>
       </div>
       <n-space :size="6">
-        <n-select
-          v-if="!fixedScope"
-          v-model:value="workspaceStore.currentScope"
-          :options="scopeOptions"
-          size="small"
-          class="scope-select"
-          @update:value="handleScopeChange"
-        />
         <n-button size="small" quaternary circle @click="refreshTree">
           <template #icon>
             <n-icon><Refresh /></n-icon>
@@ -84,7 +76,6 @@ import {
   NEmpty,
   NIcon,
   NScrollbar,
-  NSelect,
   NSpace,
   NText,
   NPopconfirm,
@@ -142,15 +133,7 @@ const rootLoading = computed(() => loadingPaths.value.has('') && !entriesByPath.
 const requestContext = computed<WorkspaceRequestContext | string | undefined>(() => (
   props.workspaceContext || props.packageId || undefined
 ))
-const effectiveScope = computed<WorkspaceScope>(() => props.fixedScope || workspaceStore.currentScope)
-
-const scopeOptions = computed(() => [
-  { label: t('workspace.scope.package'), value: 'package' },
-  { label: t('workspace.scope.workdir'), value: 'workdir' },
-  { label: t('workspace.scope.artifacts'), value: 'artifacts' },
-  { label: t('workspace.scope.extensions'), value: 'extensions' },
-])
-const visibleScopes = computed(() => new Set(scopeOptions.value.map((option) => option.value)))
+const effectiveScope = computed<WorkspaceScope>(() => props.fixedScope || 'workdir')
 
 const visibleRows = computed<TreeRow[]>(() => {
   const rows: TreeRow[] = []
@@ -207,12 +190,6 @@ function entriesFromEvent(event: FactoryFrontendEvent | null | undefined): Works
   const entries = event?.payload?.entries
   if (!Array.isArray(entries)) return []
   return entries.map(workspaceEntryView)
-}
-
-function handleScopeChange(scope: WorkspaceScope) {
-  workspaceStore.setScope(scope)
-  resetTree()
-  void loadDirectory('')
 }
 
 function refreshTree() {
@@ -311,22 +288,22 @@ function formatFileSize(bytes: number): string {
 }
 
 onMounted(() => {
-  ensureVisibleScope()
+  syncWorkspaceScope()
   void loadDirectory('')
 })
 
 watch(
   () => workspaceContextKey(requestContext.value),
   () => {
-    ensureVisibleScope()
+    syncWorkspaceScope()
     resetTree()
     void loadDirectory('')
   },
 )
 
-function ensureVisibleScope() {
-  if (!props.fixedScope && !visibleScopes.value.has(workspaceStore.currentScope)) {
-    workspaceStore.setScope('workdir')
+function syncWorkspaceScope() {
+  if (workspaceStore.currentScope !== effectiveScope.value) {
+    workspaceStore.setScope(effectiveScope.value)
   }
 }
 
@@ -372,10 +349,6 @@ function workspaceContextKey(context: WorkspaceRequestContext | string | undefin
 
 .header-subtitle {
   font-size: 12px;
-}
-
-.scope-select {
-  width: 116px;
 }
 
 .tree-scrollbar {

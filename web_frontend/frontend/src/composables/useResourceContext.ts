@@ -77,11 +77,7 @@ export function useResourceContext() {
     workspaceContext.value.collaborationId || '',
     workspaceContext.value.groupId || '',
   ].join(':'))
-  const workspaceDefaultScope = computed<WorkspaceScope>(() => (
-    workspaceContext.value.resourceMode === 'create_agent' || workspaceContext.value.resourceMode === 'evolve_agent'
-      ? 'package'
-      : 'workdir'
-  ))
+  const workspaceDefaultScope = computed<WorkspaceScope>(() => 'workdir')
   const packageIdForApi = computed(() => packageId.value || SYSTEM_CHAT_PACKAGE_ID)
   const isAgentContext = computed(() => Boolean(packageId.value))
   const label = computed(() => {
