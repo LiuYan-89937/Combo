@@ -104,7 +104,7 @@
             <n-button
               text
               :disabled="runtimeStore.hasActiveRun"
-              @click="createNewConversationSession"
+              @click="startNewConversationSession"
             >
               <template #icon>
                 <n-icon><Add /></n-icon>
@@ -231,12 +231,14 @@ function addMessageReference(message: TranscriptItem) {
 
 function tipContextFor(message: TranscriptItem): Omit<TipMessageContext, 'sourceMessageId' | 'sourceRole' | 'sourceContent'> | null {
   if (!tipScopeId.value || message.role !== 'assistant') return null
+  const modelProfileId = String(message.metadata?.model_profile_id || '').trim() || null
+  const messageReasoningIntensity = message.metadata?.reasoning_intensity
   return {
     scopeType: tipScopeType.value,
     scopeId: tipScopeId.value,
     agentPackageId: String(message.metadata?.package_id || agentStore.activeChatPackageId || 'factory_chat'),
-    modelProfileId: selectedMainModelProfileId.value || null,
-    reasoningIntensity: reasoningIntensity.value,
+    modelProfileId,
+    reasoningIntensity: typeof messageReasoningIntensity === 'number' ? messageReasoningIntensity : null,
   }
 }
 
