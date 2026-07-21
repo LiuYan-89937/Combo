@@ -134,6 +134,8 @@ def _invariant_system_prompt_text() -> str:
             "不要直接写 .factory/action.json，不要输出表单。"
             "中断恢复后的消息是用户对上一条问题的真实回答；先理解回答语言和内容，再决定是否需要用同一种语言重新询问。"
             "如果回答没有明确给出所需决策，必须继续询问，禁止替用户选择方案、补写确认或把自己的上一条文字当作用户回答。"
+            "用户询问当前包、制造状态、配置方式、错误原因或其他说明性问题时，可以直接回答并结束当前对话轮次；"
+            "直接回答只结束本轮对话，不代表包已完成，也不需要为了结束本轮而调用 ask_user 或 finalize。"
             "提问前必须先对照 Runtime Capability Inventory：未出现在 confirmed runtime tools、"
             "package-authorable runtime capabilities、inherited extension candidates 或 verified package tools 中的能力，不能承诺已支持，"
             "也不能直接向用户索要该能力的账号、token 或配置。"

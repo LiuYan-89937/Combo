@@ -37,7 +37,7 @@ class CreateAgentGraphState(TypedDict, total=False):
     evolution_context: dict[str, Any]
     runtime_main_model_profile_id: str
     runtime_reasoning_intensity: int | None
-    done: bool
+    flow_status: Literal["running", "turn_complete", "package_complete"]
     final_answer: str
     publish_ready: dict[str, Any]
     interrupt_answer: dict[str, Any]
@@ -77,7 +77,7 @@ class CreateAgentWorkflow:
         _ai_message, unresolved_tool_calls = latest_ai_tool_calls(state.get("messages") or [])
         if unresolved_tool_calls:
             return {
-                "done": False,
+                "flow_status": "running",
             }
         runtime_model = resolve_runtime_main_chat_model_from_state(state)
         model = runtime_model.model if runtime_model is not None else self.model or get_main_model()
@@ -143,7 +143,7 @@ class CreateAgentWorkflow:
             package_id = str(publish_report.get("package_id") or "").strip()
             package_path = str(publish_report.get("package_path") or "").strip()
             return {
-                "done": True,
+                "flow_status": "package_complete",
                 "final_answer": f"AgentPackage 已发布：{package_id} ({package_path})",
             }
         action = workspace.read_action()
@@ -155,21 +155,18 @@ class CreateAgentWorkflow:
                 title="补充制造信息",
                 default_message="请补充制造这个 AgentPackage 所需的信息。",
             )
-        implicit_question = _plain_assistant_turn(state)
-        if implicit_question:
-            return {
-                "messages": [SystemMessage(content=_explicit_control_action_required(implicit_question))],
-                "done": False,
-            }
+        assistant_turn = _assistant_turn_without_tools(state)
+        if assistant_turn is not None:
+            return _turn_complete_result(assistant_turn)
         if action.action != "finalize":
-            return {"done": False}
+            return {"flow_status": "running"}
         report = workspace.read_validation()
         ready_error = _publish_readiness_error(workspace=workspace, report=report)
         if ready_error:
             workspace.write_action(CreateAgentAction())
             return {
                 "messages": [SystemMessage(content=ready_error)],
-                "done": False,
+                "flow_status": "running",
             }
         workspace.write_action(CreateAgentAction())
         return _publish_ready_result(workspace, report)
@@ -184,27 +181,24 @@ class CreateAgentWorkflow:
                 title="补充进化信息",
                 default_message="请补充进化这个已发布 AgentPackage 所需的信息。",
             )
-        implicit_question = _plain_assistant_turn(state)
-        if implicit_question:
-            return {
-                "messages": [SystemMessage(content=_explicit_control_action_required(implicit_question))],
-                "done": False,
-            }
+        assistant_turn = _assistant_turn_without_tools(state)
+        if assistant_turn is not None:
+            return _turn_complete_result(assistant_turn)
         if action.action != "finalize":
-            return {"done": False}
+            return {"flow_status": "running"}
         report = workspace.read_validation()
         ready_error = _evolution_publish_readiness_error(workspace=workspace, report=report)
         if ready_error:
             workspace.write_action(CreateAgentAction())
             return {
                 "messages": [SystemMessage(content=ready_error)],
-                "done": False,
+                "flow_status": "running",
             }
         final_answer = _evolution_final_answer(action.message)
         workspace.write_action(CreateAgentAction())
         return {
             "validation": report.to_digest().model_dump(mode="json"),
-            "done": True,
+            "flow_status": "package_complete",
             "final_answer": final_answer,
         }
 
@@ -245,7 +239,7 @@ class CreateAgentWorkflow:
                 interrupt_type=interrupt_type,
             ),
             "validation": previous_report.to_digest().model_dump(mode="json"),
-            "done": False,
+            "flow_status": "running",
         }
 
     def _route_after_supervisor(self, state: CreateAgentGraphState) -> Literal["tools", "control_gate"]:
@@ -257,7 +251,7 @@ class CreateAgentWorkflow:
         return "control_gate" if _has_control_action(tool_calls) else "supervisor"
 
     def _route_after_control_gate(self, state: CreateAgentGraphState) -> Literal["supervisor", "end"]:
-        return "end" if state.get("done") else "supervisor"
+        return "end" if state.get("flow_status") in {"turn_complete", "package_complete"} else "supervisor"
 
 
 def _emit_tool_activity(payload: dict[str, Any]) -> None:
@@ -341,11 +335,20 @@ def _has_control_action(tool_calls: list[dict[str, Any]]) -> bool:
     return any(str(call.get("name") or "") == "create_agent_control" for call in tool_calls)
 
 
-def _plain_assistant_turn(state: CreateAgentGraphState) -> str:
+def _assistant_turn_without_tools(state: CreateAgentGraphState) -> str | None:
     ai_message, tool_calls = latest_ai_declared_tool_calls(state.get("messages") or [])
     if ai_message is None or tool_calls:
-        return ""
+        return None
     return content_to_text(ai_message.content).strip()
+
+
+def _turn_complete_result(assistant_text: str) -> dict[str, Any]:
+    if not assistant_text:
+        raise RuntimeError("create-agent model returned neither a tool call nor a user-visible answer")
+    return {
+        "flow_status": "turn_complete",
+        "final_answer": assistant_text,
+    }
 
 
 def _publish_readiness_error(*, workspace: CreateAgentWorkspace, report: PackageValidationReport | None) -> str:
@@ -441,16 +444,6 @@ def _operation_prompt(messages: list[BaseMessage]) -> tuple[dict[str, Any], list
     return {}, messages
 
 
-def _explicit_control_action_required(assistant_text: str) -> str:
-    return (
-        "Create-agent protocol violation: a plain assistant message cannot end or interrupt manufacturing. "
-        "If user input is required, call create_agent_control(action='ask_user', message=...). "
-        "If the package is complete, run full_static validation and call create_agent_control(action='finalize'). "
-        "Otherwise continue with the next manufacturing tool action. Do not repeat the previous assistant text. "
-        f"Previous plain message: {assistant_text[:500]}"
-    )
-
-
 def _publish_ready_text(workspace: CreateAgentWorkspace, report: PackageValidationReport) -> str:
     return (
         "AgentPackage 已完成制造并通过最终静态校验。\n\n"
@@ -478,6 +471,6 @@ def _publish_ready_result(workspace: CreateAgentWorkspace, report: PackageValida
     return {
         "validation": report.to_digest().model_dump(mode="json"),
         "publish_ready": publish_ready,
-        "done": True,
+        "flow_status": "package_complete",
         "final_answer": _publish_ready_text(workspace, report),
     }

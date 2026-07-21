@@ -1,17 +1,6 @@
-"""Built-in tool specifications grouped by capability domain."""
+"""Built-in tool implementations grouped by capability domain.
 
-from agent_factory.tooling.builtins.registry import (
-    get_always_available_system_tool_ids,
-    get_builtin_protected_tool_ids,
-    get_builtin_tool_ids,
-    get_builtin_tool_specs,
-    get_read_only_system_tool_ids,
-)
-
-__all__ = [
-    "get_always_available_system_tool_ids",
-    "get_builtin_protected_tool_ids",
-    "get_builtin_tool_ids",
-    "get_builtin_tool_specs",
-    "get_read_only_system_tool_ids",
-]
+The package initializer intentionally has no registry imports. Importing a
+specific built-in implementation must not initialize every built-in tool and
+its runtime dependencies.
+"""

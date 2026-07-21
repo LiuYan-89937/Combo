@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 import os
 
-from agent_factory.tooling.builtins import (
+from agent_factory.tooling.builtins.registry import (
     get_always_available_system_tool_ids,
     get_builtin_tool_ids,
     get_builtin_tool_specs,

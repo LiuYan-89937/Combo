@@ -411,7 +411,7 @@ def _system_agent_permission_tools(system_owner: SystemAgentExtensionOwner | Non
             CREATE_AGENT_STAGE_TOOL_ID,
             CREATE_AGENT_VALIDATE_TOOL_ID,
         )
-        from agent_factory.tooling.builtins import (
+        from agent_factory.tooling.builtins.registry import (
             get_always_available_system_tool_ids,
             get_builtin_tool_specs,
             get_read_only_system_tool_ids,
@@ -466,7 +466,7 @@ def _builtin_permission_tools(package: LoadedAgentPackage) -> list[dict[str, Any
         return []
     configured_ids = [str(item) for item in config.get("builtin_tool_ids") or [] if str(item).strip()]
     try:
-        from agent_factory.tooling.builtins import (
+        from agent_factory.tooling.builtins.registry import (
             get_always_available_system_tool_ids,
             get_builtin_tool_specs,
             get_read_only_system_tool_ids,
