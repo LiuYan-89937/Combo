@@ -45,6 +45,7 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
   if (
     event.event_type === 'session_started' ||
     event.event_type === 'session_switched' ||
+    event.event_type === 'session_empty' ||
     event.event_type === 'session_deleted' ||
     event.event_type === 'sessions_listed' ||
     (event.event_type === 'agent_package_selected' && event.payload?.purpose === 'evolution' && event.payload?.session)
@@ -55,7 +56,7 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
     const activeFactorySession = runtimeStore.sessions.find((session: any) => (
       session.session_id === activeFactorySessionId && isStandaloneFactorySession(session)
     ))
-    if (activeFactorySession || event.event_type === 'session_deleted') {
+    if (activeFactorySession || event.event_type === 'session_deleted' || event.event_type === 'session_empty') {
       sessionStore.setCurrentSession(activeFactorySession ? activeFactorySessionId : null)
     }
     const sessionPayload = event.payload?.session

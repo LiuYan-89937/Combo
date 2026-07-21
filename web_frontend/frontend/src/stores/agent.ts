@@ -6,6 +6,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { isStandaloneAgentSession } from '@/utils/sessionPresentation'
+import { SYSTEM_CHAT_PACKAGE_ID } from '@/utils/resourceScope'
 
 export interface AgentPackageToolView {
   kind?: string
@@ -323,7 +324,12 @@ export const useAgentStore = defineStore('agent', () => {
   function normalizeRecentSessions(sessions: AgentRecentSessionView[]): AgentRecentSessionView[] {
     const byKey = new Map<string, AgentRecentSessionView>()
     sessions
-      .filter((session) => session.package_id && session.session_id && isStandaloneAgentSession(session))
+      .filter((session) => (
+        session.package_id
+        && session.package_id !== SYSTEM_CHAT_PACKAGE_ID
+        && session.session_id
+        && isStandaloneAgentSession(session)
+      ))
       .forEach((session) => {
         byKey.set(`${session.package_id}:${session.session_id}`, session)
       })

@@ -64,13 +64,8 @@ export function useAgentSessionNavigation() {
   async function openMostRecentAgentSession(): Promise<boolean> {
     await commands.listRecentAgentSessions(20)
     const preferred = agentStore.preferredRecentSession()
-    if (preferred) {
-      await openAgentSession(preferred)
-      return true
-    }
-    const packageId = agentStore.lastAgentSession?.packageId || agentStore.selectedPackageId
-    if (!packageId) return false
-    await startNewAgentSession(packageId)
+    if (!preferred) return false
+    await openAgentSession(preferred)
     return true
   }
 

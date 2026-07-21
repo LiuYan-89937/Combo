@@ -226,23 +226,17 @@ export function useFactoryConversation() {
   function applyRouteMode() {
     if (isManufacturingRoute.value) {
       agentStore.leaveAgentChat()
-      const shouldSwitchSession = runtimeStore.currentMode !== 'create_agent'
-        || runtimeStore.isCollaborationConversationActive
       runtimeStore.enterFactoryConversation('create_agent')
-      if (shouldSwitchSession) {
-        commands.startSession(true, 'create_agent')
-      }
+      commands.startSession(true, 'create_agent')
       return
     }
     if (isEvolutionRoute.value) {
       agentStore.leaveAgentChat()
       const packageId = agentStore.selectedPackageId
-      const shouldSwitchSession = runtimeStore.currentMode !== 'evolve_agent'
-        || runtimeStore.isCollaborationConversationActive
       runtimeStore.enterFactoryConversation('evolve_agent', packageId)
       if (packageId) {
         void commands.selectAgentPackage(packageId, 'evolution')
-      } else if (shouldSwitchSession) {
+      } else {
         commands.startSession(true, 'evolve_agent')
       }
       if (agentStore.agentPackages.length === 0) {
@@ -250,14 +244,9 @@ export function useFactoryConversation() {
       }
       return
     }
-    if (route.name === 'Factory' && runtimeStore.isCollaborationConversationActive) {
-      agentStore.leaveAgentChat()
-      runtimeStore.enterFactoryConversation('chat')
-      commands.startSession(true, 'chat')
-      return
-    }
     if (isAgentChatActive.value) return
-    if (route.name === 'Factory' && runtimeStore.currentMode !== 'chat') {
+    if (route.name === 'Factory') {
+      agentStore.leaveAgentChat()
       runtimeStore.enterFactoryConversation('chat')
       commands.startSession(true, 'chat')
     }

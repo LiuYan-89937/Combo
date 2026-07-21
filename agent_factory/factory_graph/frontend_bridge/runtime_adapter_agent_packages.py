@@ -87,7 +87,7 @@ class RuntimeAgentPackageCommandMixin:
         package_id: str,
         package_info: dict[str, Any],
     ) -> None:
-        self._ensure_evolution_package_session(command, package_id)
+        self._restore_evolution_package_session(package_id)
         trace_payload: dict[str, Any] = {}
         try:
             trace_payload["latest_failed_trace_id"] = self.evolution_runtime.latest_failed_trace_id(package_id)
@@ -102,13 +102,24 @@ class RuntimeAgentPackageCommandMixin:
                 payload={
                     "package": package_info,
                     "package_id": package_id,
-                    "session": self._session_payload(),
+                    "session": self._session_payload() if self.session_record is not None else None,
                     "sessions": [],
                     "purpose": "evolution",
                     **trace_payload,
                 },
             )
         )
+
+    def _restore_evolution_package_session(self, package_id: str) -> None:
+        normalized_package_id = package_id.strip()
+        if not normalized_package_id:
+            raise ValueError("evolution package_id is required")
+        self.session_record = self._latest_session_for_start(
+            "evolve_agent",
+            normalized_package_id,
+        )
+        self.mode = "evolve_agent"
+        self.evolution_package_id = normalized_package_id
 
     def _ensure_evolution_package_session(self, command: FactoryFrontendCommand, package_id: str) -> None:
         normalized_package_id = package_id.strip()
