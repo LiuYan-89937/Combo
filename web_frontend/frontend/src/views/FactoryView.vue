@@ -145,11 +145,13 @@ import TipPanel from '@/components/chat/TipPanel.vue'
 import type { TipMessageContext } from '@/stores/tips'
 import { useResourceContext } from '@/composables/useResourceContext'
 import { useConversationSessionNavigation } from '@/composables/useConversationSessionNavigation'
+import { useWorkspaceStore } from '@/stores/workspace'
 
 const runtimeStore = useRuntimeStore()
 const agentStore = useAgentStore()
 const uiStore = useUiStore()
 const commands = useCommand()
+const workspaceStore = useWorkspaceStore()
 const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
@@ -315,8 +317,10 @@ watch(
   followBottomIfNeeded,
 )
 
+let routeActivationVersion = 0
+
 onMounted(async () => {
-  if (!await openRoutedAgentSession()) applyRouteMode()
+  await activateCurrentRoute()
   void loadRuntimeMainModelProfiles()
 
   // 聚焦输入框
@@ -327,9 +331,7 @@ onMounted(async () => {
 
 watch(
   () => route.fullPath,
-  async () => {
-    if (!await openRoutedAgentSession()) applyRouteMode()
-  },
+  () => void activateCurrentRoute(),
 )
 
 watch(
@@ -338,19 +340,27 @@ watch(
     const packageId = agentStore.activeChatPackageId
     const sessionId = runtimeStore.activeAgentSessionId
     if (route.name !== 'Factory' || !packageId || !sessionId) return
+    if (routeQueryText(route.query.package_id) !== packageId || routeQueryText(route.query.new) !== '1') return
     if (
-      routeQueryText(route.query.package_id) === packageId
-      && routeQueryText(route.query.session_id) === sessionId
+      routeQueryText(route.query.session_id) === sessionId
     ) return
     void router.replace({ name: 'Factory', query: { package_id: packageId, session_id: sessionId } })
   },
 )
 
-async function openRoutedAgentSession(): Promise<boolean> {
+async function activateCurrentRoute(): Promise<void> {
+  const version = ++routeActivationVersion
+  const openedAgentSession = await openRoutedAgentSession(version)
+  if (version !== routeActivationVersion) return
+  if (!openedAgentSession) applyRouteMode()
+}
+
+async function openRoutedAgentSession(version: number): Promise<boolean> {
   if (route.name !== 'Factory') return false
   const packageId = routeQueryText(route.query.package_id)
   const sessionId = routeQueryText(route.query.session_id)
   if (!packageId) return false
+  activateAgentWorkspace()
   if (!sessionId && routeQueryText(route.query.new) === '1') {
     if (
       agentStore.activeChatPackageId === packageId
@@ -363,7 +373,23 @@ async function openRoutedAgentSession(): Promise<boolean> {
     await commands.selectAgentPackage(packageId, 'run')
     return true
   }
-  if (!sessionId) return false
+  if (!sessionId) {
+    const rememberedSessionId = agentStore.lastAgentSession?.packageId === packageId
+      ? agentStore.lastAgentSession.sessionId
+      : null
+    agentStore.enterAgentChat(packageId, null)
+    runtimeStore.showEmptyAgentPackageSession(packageId)
+    await commands.listAgentPackageSessions(packageId)
+    if (version !== routeActivationVersion || routeQueryText(route.query.package_id) !== packageId) return true
+    const preferred = preferredSessionForPackage(packageId, rememberedSessionId)
+    await router.replace({
+      name: 'Factory',
+      query: preferred
+        ? { package_id: packageId, session_id: preferred.session_id }
+        : { package_id: packageId, new: '1' },
+    })
+    return true
+  }
   if (
     agentStore.activeChatPackageId === packageId
     && agentStore.selectedSessionId === sessionId
@@ -384,6 +410,7 @@ async function openRoutedAgentSession(): Promise<boolean> {
     runtimeStore.expectAgentPackageSession(packageId, sessionId)
   }
   await commands.selectAgentPackage(packageId, 'run')
+  if (version !== routeActivationVersion || !routeMatchesAgentSession(packageId, sessionId)) return true
   await commands.loadAgentPackageSession(
     packageId,
     sessionId,
@@ -391,6 +418,28 @@ async function openRoutedAgentSession(): Promise<boolean> {
     collaborationTaskId,
   )
   return true
+}
+
+function activateAgentWorkspace(): void {
+  workspaceStore.setScope('workdir')
+  uiStore.openRightSidebar('workspace')
+}
+
+function preferredSessionForPackage(packageId: string, rememberedSessionId: string | null) {
+  const sessions = agentStore.agentSessions
+    .filter((session) => session.package_id === packageId)
+    .sort((left, right) => (right.updated_at || right.created_at).localeCompare(left.updated_at || left.created_at))
+  if (rememberedSessionId) {
+    const preferred = sessions.find((session) => session.session_id === rememberedSessionId)
+    if (preferred) return preferred
+  }
+  return sessions[0] || null
+}
+
+function routeMatchesAgentSession(packageId: string, sessionId: string): boolean {
+  return route.name === 'Factory'
+    && routeQueryText(route.query.package_id) === packageId
+    && routeQueryText(route.query.session_id) === sessionId
 }
 
 function routeQueryText(value: unknown): string | null {

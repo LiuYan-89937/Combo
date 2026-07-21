@@ -237,7 +237,6 @@ export function useFactoryConversation() {
       }
       return
     }
-    if (isAgentChatActive.value) return
     if (route.name === 'Factory') {
       agentStore.leaveAgentChat()
       runtimeStore.enterFactoryConversation('chat')
