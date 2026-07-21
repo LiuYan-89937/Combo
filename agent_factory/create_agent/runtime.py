@@ -333,7 +333,9 @@ class CreateAgentRuntime:
             "user_input": user_input,
             "attachments": normalized_runtime_attachments(values.get("runtime_attachments")),
             "final_answer": final_answer,
-            "status": "completed" if values.get("done") else "running",
+            "status": "completed"
+            if values.get("flow_status") in {"turn_complete", "package_complete"}
+            else "running",
         }
         turn["messages"] = build_chat_turn_messages(
             index=turn["index"],
@@ -568,7 +570,8 @@ class CreateAgentRuntime:
                     RUNTIME_MAIN_MODEL_PROFILE_ID_KEY: runtime_main_model_profile_id or "",
                     RUNTIME_REASONING_INTENSITY_KEY: runtime_reasoning_intensity,
                     "iteration": 0,
-                    "done": False,
+                    "flow_status": "running",
+                    "final_answer": "",
                     "messages": [HumanMessage(content=user_input)],
                 }
             else:
@@ -636,7 +639,9 @@ class CreateAgentRuntime:
             model_trace.flush()
             if not final_state:
                 raise RuntimeError("create-agent workflow did not produce final state")
-            if final_state.get("done"):
+            flow_status = str(final_state.get("flow_status") or "running")
+            if flow_status in {"turn_complete", "package_complete"}:
+                package_complete = flow_status == "package_complete"
                 normalizer.complete_visible_assistant_output_from_text(
                     str(final_state.get("final_answer") or ""),
                     node_id=graph_id,
@@ -655,7 +660,11 @@ class CreateAgentRuntime:
                     "node_completed",
                     node_id=graph_id,
                     node_label=node_label,
-                    payload={"workspace_path": str(workspace.root), "status": "completed"},
+                    payload={
+                        "workspace_path": str(workspace.root),
+                        "status": "completed",
+                        "package_complete": package_complete,
+                    },
                 )
                 record_trace(
                     "lifecycle",
@@ -663,7 +672,11 @@ class CreateAgentRuntime:
                         "event_type": "node_completed",
                         "node_id": graph_id,
                         "node_label": node_label,
-                        "payload": {"workspace_path": str(workspace.root), "status": "completed"},
+                        "payload": {
+                            "workspace_path": str(workspace.root),
+                            "status": "completed",
+                            "package_complete": package_complete,
+                        },
                     },
                 )
                 normalizer.emit_run_completed(
@@ -671,6 +684,7 @@ class CreateAgentRuntime:
                         "status": "completed",
                         "workspace_path": str(workspace.root),
                         "graph_kind": graph_kind,
+                        "package_complete": package_complete,
                         "agent_session": {"session_id": session_id},
                         **(
                             {"publish_ready": final_state.get("publish_ready")}
@@ -687,6 +701,7 @@ class CreateAgentRuntime:
                             "status": "completed",
                             "workspace_path": str(workspace.root),
                             "graph_kind": graph_kind,
+                            "package_complete": package_complete,
                             "agent_session": {"session_id": session_id},
                             **(
                                 {"publish_ready": _json_safe(final_state.get("publish_ready"))}

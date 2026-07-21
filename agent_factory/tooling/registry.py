@@ -13,7 +13,7 @@ from agent_factory.tooling.entrypoints import MCPToolClient
 from agent_factory.tooling.output_store import TOOL_OUTPUT_STORE_RESOURCE, ToolOutputStore
 from agent_factory.tooling.providers import MCPToolCatalogClient
 from agent_factory.tooling.skillhub import SKILLHUB_RUNTIME_RESOURCE, build_skillhub_runtime_resource
-from agent_factory.tooling.builtins import (
+from agent_factory.tooling.builtins.registry import (
     get_always_available_system_tool_ids,
     get_builtin_protected_tool_ids,
     get_builtin_tool_ids,
