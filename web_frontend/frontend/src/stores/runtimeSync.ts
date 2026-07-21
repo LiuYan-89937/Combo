@@ -19,6 +19,7 @@ import {
   isStandaloneAgentSession,
   isStandaloneFactorySession,
 } from '@/utils/sessionPresentation'
+import { sessionDeletionFromPayload } from './runtime/sessionDeletion'
 
 export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
   const runtimeStore = useRuntimeStore()
@@ -101,8 +102,10 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
     ) {
       agentStore.mergeRecentSessions([sessionWithPackage(event.payload.session, event.payload.package_id)])
     }
-    if (event.event_type === 'agent_package_session_deleted' && event.payload?.session_id) {
-      agentStore.removeSession(String(event.payload.session_id))
+    if (event.event_type === 'agent_package_session_deleted') {
+      sessionDeletionFromPayload(event.payload).sessionIds.forEach((sessionId) => {
+        agentStore.removeSession(sessionId)
+      })
     }
     if (hasRunAgentSession && isStandaloneAgentSession(event.payload?.agent_session || {})) {
       agentStore.mergeRecentSessions([sessionWithPackage(event.payload.agent_session, event.payload.package_id)])
