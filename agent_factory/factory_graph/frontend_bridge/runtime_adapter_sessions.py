@@ -53,17 +53,24 @@ class RuntimeSessionCommandMixin:
                 requested_evolution_package_id,
                 collaboration_id=(presentation_context or {}).get("collaboration_id"),
             )
-            self.session_record = existing or self.session_manager.create(
-                mode=requested_mode,
-                **(presentation_context or {}),
-            )
-            self.mode = requested_mode or self.session_record.current_mode
+            if existing is None:
+                self.session_record = None
+                self.mode = requested_mode
+                self._restore_session_mode_context()
+                self._emit_empty_session_event(
+                    command.request_id,
+                    mode=requested_mode,
+                    package_id=requested_evolution_package_id,
+                )
+                return
+            self.session_record = existing
+            self.mode = requested_mode or existing.current_mode
             if requested_evolution_package_id:
                 self.session_record = self.session_manager.set_evolution_package(
                     self.session_record.session_id,
                     requested_evolution_package_id,
                 )
-            session_event_type = "session_switched" if existing else "session_started"
+            session_event_type = "session_switched"
         else:
             self.session_record = self.session_manager.create(
                 mode=requested_mode,
@@ -277,6 +284,27 @@ class RuntimeSessionCommandMixin:
             )
         )
 
+    def _emit_empty_session_event(
+        self,
+        request_id: str | None,
+        *,
+        mode: str | None,
+        package_id: str | None,
+    ) -> None:
+        self.emit(
+            event(
+                "session_empty",
+                request_id=request_id,
+                session_id=None,
+                mode=mode,
+                payload={
+                    "mode": mode,
+                    "package_id": package_id,
+                    "sessions": self._session_payloads_for_client(),
+                },
+            )
+        )
+
     def _emit_error(self, command: FactoryFrontendCommand, message: str) -> None:
         self.emit(
             event(
@@ -323,16 +351,18 @@ class RuntimeSessionCommandMixin:
                 collaboration_id,
                 mode=requested_mode,
             )
+        records = self._client_session_records()
         if requested_evolution_package_id:
-            return self.session_manager.latest_evolution_for_package(requested_evolution_package_id)
-        if requested_mode == "chat":
-            for record in self._client_session_records():
-                if _client_record_matches_mode(record, "chat"):
+            for record in records:
+                if _evolve_agent_package_id(record) == requested_evolution_package_id:
                     return record
             return None
         if requested_mode is not None:
-            return self.session_manager.latest(mode=requested_mode)
-        return self.session_manager.latest()
+            for record in records:
+                if _client_record_matches_mode(record, requested_mode):
+                    return record
+            return None
+        return records[0] if records else None
 
     def _restore_session_mode_context(self) -> None:
         if self.session_record is None:
@@ -600,7 +630,9 @@ def _client_record_has_source(record: Any) -> bool:
 def _client_record_matches_mode(record: Any, mode: str) -> bool:
     if mode == "chat":
         return bool(_chat_agent_session_id(record))
-    return record_has_mode_source(record, mode)
+    if mode == "create_agent":
+        return record_has_mode_source(record, "create_agent")
+    return bool(getattr(record, "evolve_agent_turn_count", 0) or getattr(record, "evolve_agent_turns", []))
 
 
 def _chat_agent_session_id(record: Any) -> str:
