@@ -35,6 +35,10 @@ from agent_factory.create_agent.model_pool_tool import (
 )
 from agent_factory.create_agent.publish_tool import CREATE_AGENT_PACKAGE_REGISTRY_RESOURCE
 from agent_factory.create_agent.probe_tool import CREATE_AGENT_PROBE_TOOL_ID, build_create_agent_probe_tool_spec
+from agent_factory.create_agent.resource_tool import (
+    CREATE_AGENT_RESOURCE_TOOL_ID,
+    build_create_agent_resource_tool_spec,
+)
 from agent_factory.create_agent.skillhub_runtime import wrap_create_agent_skillhub_runtime
 from agent_factory.create_agent.stage_context import CREATE_AGENT_STAGE_CONTEXT_RESOURCE, stage_context_payload
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
@@ -270,6 +274,7 @@ class CreateAgentToolEnvironmentBuilder:
                 CREATE_AGENT_CONTROL_TOOL_ID,
                 CREATE_AGENT_MODEL_POOL_TOOL_ID,
                 CREATE_AGENT_PROBE_TOOL_ID,
+                CREATE_AGENT_RESOURCE_TOOL_ID,
                 CREATE_AGENT_VALIDATE_TOOL_ID,
                 CREATE_AGENT_STAGE_TOOL_ID,
             ]
@@ -286,6 +291,7 @@ class CreateAgentToolEnvironmentBuilder:
                 build_model_pool_select_tool_spec(),
                 build_create_agent_authoring_tool_spec(),
                 build_create_agent_probe_tool_spec(),
+                build_create_agent_resource_tool_spec(),
                 build_create_agent_validate_tool_spec(),
                 build_create_agent_stage_tool_spec(),
                 *skill_specs,

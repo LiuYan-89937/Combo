@@ -133,6 +133,8 @@ def _invariant_system_prompt_text() -> str:
             "不能只输出问题文字，也不能先输出问题再等待下一次模型调用补发 ask_user。"
             "不要直接写 .factory/action.json，不要输出表单。"
             "中断恢复后的消息是用户对上一条问题的真实回答；先理解回答语言和内容，再决定是否需要用同一种语言重新询问。"
+            "如果所问内容对应 contracts/resources.json 中已声明的 Resource，ask_user 必须同时传入对应 resource_requests，"
+            "让前端渲染完整 value_schema 表单，禁止只在自然语言里索取凭证。"
             "如果回答没有明确给出所需决策，必须继续询问，禁止替用户选择方案、补写确认或把自己的上一条文字当作用户回答。"
             "用户询问当前包、制造状态、配置方式、错误原因或其他说明性问题时，可以直接回答并结束当前对话轮次；"
             "直接回答只结束本轮对话，不代表包已完成，也不需要为了结束本轮而调用 ask_user 或 finalize。"
@@ -187,7 +189,11 @@ def _invariant_system_prompt_text() -> str:
             "用户要求先留空或后续补配置时，只写 descriptor 及其 value_schema，default_value 保持空对象，不得把占位账户、假密钥或假端点写入包。"
             "Package Tool 消费 Resource 时，在同一次 upsert_package_tool 中传 resource_descriptors，并让 tool_spec.resources selector 与 descriptor.resource_id 对齐、descriptor.used_by 包含 tool id、tool_source 只从 resources 读取。"
             "Package Tool 生成的用户交付文件必须通过 tool_spec.resources 声明 workspace_root，并写入当前会话 workspace_root；不要把交付产物放进独立包级目录。"
-            "不属于 Package Tool 的独立资源才使用 create_agent_authoring(action='upsert_resources', resource_descriptors=[...])；该 action 不接受 resources 或任何运行时值。需要用户填写时调用 create_agent_control(action='ask_user', resource_requests=[{resource_id, description, secret}])。秘密值由前端安全写入资源存储，不会回传给模型。"
+            "不属于 Package Tool 的独立资源才使用 create_agent_authoring(action='upsert_resources', resource_descriptors=[...])；该 action 不接受 resources 或任何运行时值。"
+            "需要用户填写时调用 create_agent_control(action='ask_user', resource_requests=[{resource_id, description, secret}])。"
+            "如果用户已在当前对话中明确给出某个已声明 Resource 的完整真实值，可调用 create_agent_resource(action='put', resource_id=..., value=...) 写入加密 ResourceStore；"
+            "缺字段时必须通过带 resource_requests 的 ask_user 补齐，禁止猜测或制造账号、密码、授权码、Key、端点和默认收件人。"
+            "create_agent_resource 的观察结果只返回配置状态，不回显 value。"
             "调用 create_agent_probe_tool(action='call') 时，必须填写 timeout_seconds，且应覆盖依赖初始化与目标工具实际执行的总时长。"
         ),
         (

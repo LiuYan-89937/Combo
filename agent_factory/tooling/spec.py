@@ -11,6 +11,7 @@ SNAKE_CASE_ID = re.compile(r"^[a-z][a-z0-9_]*$")
 ToolObservationStatus = Literal[
     "denied",
     "revision_requested",
+    "resource_required",
     "invalid_arguments",
     "invalid_output",
     "execution_failed",
@@ -173,6 +174,7 @@ class ToolSpec(BaseModel):
     output_compression: ToolOutputCompressionConfig = Field(default_factory=ToolOutputCompressionConfig)
     output_projection: ToolOutputProjectionMode = "compress"
     loop_policy: ToolLoopPolicyConfig = Field(default_factory=ToolLoopPolicyConfig)
+    sensitive_argument_paths: list[str] = Field(default_factory=list)
 
     @field_validator("id")
     @classmethod
@@ -229,6 +231,18 @@ class ToolSpec(BaseModel):
                 tags.append(tag)
                 seen.add(tag)
         return tags
+
+    @field_validator("sensitive_argument_paths")
+    @classmethod
+    def validate_sensitive_argument_paths(cls, value: list[str]) -> list[str]:
+        paths: list[str] = []
+        for item in value:
+            path = str(item).strip()
+            if not path.startswith("/"):
+                raise ValueError("sensitive argument paths must be JSON Pointers beginning with '/'")
+            if path not in paths:
+                paths.append(path)
+        return paths
 
 
 class ModelToolView(BaseModel):
