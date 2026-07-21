@@ -78,6 +78,10 @@ import {
   factorySessionSnapshotView,
 } from './runtime/sessionSnapshots'
 import {
+  sessionDeletionFromPayload,
+  sessionDeletionIncludes,
+} from './runtime/sessionDeletion'
+import {
   attachmentPart,
   errorPart,
   messageReasoning,
@@ -309,16 +313,23 @@ export const useRuntimeStore = defineStore('runtime', {
       } else if (type === 'sessions_listed') {
         this.sessions = (payload?.sessions || []).filter(isStandaloneFactorySession)
       } else if (type === 'session_deleted') {
-        const deletedSessionId = String(payload?.session_id || '')
+        const deletion = sessionDeletionFromPayload(payload)
+        const deletedSessionIds = new Set(deletion.sessionIds)
+        const deletedCurrentSession = sessionDeletionIncludes(deletion, this.activeFactorySessionId)
+          || (deletion.deletedActive && this.currentMode !== 'agent_package')
         this.sessions = payload?.sessions
           ? payload.sessions.filter(isStandaloneFactorySession)
-          : this.sessions.filter((session: any) => session.session_id !== deletedSessionId)
-        this._deleteConversationScopesForSession(deletedSessionId)
-        if (deletedSessionId && this.activeFactorySessionId === deletedSessionId) {
-          this.activeFactorySessionId = null
-          this.activeConversationScope = null
-          this._clearConversationViewState()
+          : this.sessions.filter((session: any) => !deletedSessionIds.has(session.session_id))
+        if (deletedCurrentSession) {
+          const emptyConversationMode = this.currentMode === 'create_agent' || this.currentMode === 'evolve_agent'
+            ? this.currentMode
+            : 'chat'
+          const evolutionPackageId = emptyConversationMode === 'evolve_agent'
+            ? this.selectedAgentPackage?.package_id || null
+            : null
+          this.showEmptyFactoryConversation(emptyConversationMode, evolutionPackageId)
         }
+        this._deleteConversationScopesForSessions(deletion.sessionIds)
       } else if (type === 'mode_changed') {
         this._handleModeChanged(event)
       }
@@ -348,16 +359,17 @@ export const useRuntimeStore = defineStore('runtime', {
       } else if (type === 'agent_package_session_loaded') {
         this._restoreAgentPackageSession(payload?.session, payload?.package_id)
       } else if (type === 'agent_package_session_deleted') {
-        const deletedSessionId = String(payload?.session_id || '')
+        const deletion = sessionDeletionFromPayload(payload)
+        const deletedSessionIds = new Set(deletion.sessionIds)
+        const deletedCurrentSession = sessionDeletionIncludes(deletion, this.activeAgentSessionId)
         this.agentSessions = payload?.sessions
           ? payload.sessions.filter(isStandaloneAgentSession)
-          : this.agentSessions.filter((session: any) => session.session_id !== deletedSessionId)
-        this._deleteConversationScopesForSession(deletedSessionId)
-        if (deletedSessionId && this.activeAgentSessionId === deletedSessionId) {
-          this.activeAgentSessionId = null
-          this.activeConversationScope = null
-          this._clearConversationViewState()
+          : this.agentSessions.filter((session: any) => !deletedSessionIds.has(session.session_id))
+        if (deletedCurrentSession) {
+          const packageId = String(payload?.package_id || this.selectedAgentPackage?.package_id || '').trim() || null
+          this.showEmptyAgentPackageSession(packageId)
         }
+        this._deleteConversationScopesForSessions(deletion.sessionIds)
       }
 
       // Run lifecycle
@@ -1094,27 +1106,13 @@ export const useRuntimeStore = defineStore('runtime', {
       collaborationId: string | null = null,
       collaborationTaskId: string | null = null,
     ) {
-      this._switchConversationScope(agentPackageConversationScope(packageId, null, {
+      this._resetConversationScope(agentPackageConversationScope(packageId, null, {
         collaborationId,
         collaborationTaskId,
       }))
-      if (this._hasLiveConversationState()) {
-        this.currentMode = 'agent_package'
-        return
-      }
       this.activeFactorySessionId = null
       this.activeAgentSessionId = null
       this.currentMode = 'agent_package'
-      this.currentPlan = null
-      this.contextActivity = { status: 'idle' }
-      this.contextWindow = null
-      this.memoryActivity = { status: 'idle' }
-      this.modelStreams = {}
-      this.tools = []
-      this.pendingInterrupt = null
-      this.transcript = []
-      this.conversationTurns = []
-      this.timeline = []
       this.workspaceFile = null
       this.workspaceEntries = []
     },
@@ -1212,7 +1210,7 @@ export const useRuntimeStore = defineStore('runtime', {
         collaboration_id: collaborationId,
       })
       if (scope) {
-        this._switchConversationScope(scope)
+        this._resetConversationScope(scope)
       }
       this.currentMode = mode
       this.activeFactorySessionId = null
@@ -1373,11 +1371,21 @@ export const useRuntimeStore = defineStore('runtime', {
       this._renameConversationScope(previousScope, nextScope)
     },
 
-    _deleteConversationScopesForSession(sessionId: string) {
-      if (!sessionId) return
-      const suffix = `:${sessionId}`
+    _resetConversationScope(scope: string) {
+      if (!scope) return
+      if (this.activeConversationScope && this.activeConversationScope !== scope) {
+        this._saveActiveConversationScope()
+      }
+      delete this.conversationScopes[scope]
+      this.activeConversationScope = scope
+      this._clearConversationViewState()
+    },
+
+    _deleteConversationScopesForSessions(sessionIds: string[]) {
+      const suffixes = sessionIds.filter(Boolean).map((sessionId) => `:${sessionId}`)
+      if (suffixes.length === 0) return
       Object.keys(this.conversationScopes)
-        .filter((scope) => scope.endsWith(suffix))
+        .filter((scope) => suffixes.some((suffix) => scope.endsWith(suffix)))
         .forEach((scope) => {
           delete this.conversationScopes[scope]
         })
@@ -1395,28 +1403,31 @@ export const useRuntimeStore = defineStore('runtime', {
     },
 
     _promoteFactoryScopeFromSessionEvent(event: FactoryFrontendEvent): boolean {
-      const requestId = event.request_id || null
-      if (!requestId || requestId !== this.activeRequestId) return false
-      const request = this.activeRequests[requestId]
-      if (!request || request.source !== 'user') return false
       const sessionId = String(
         event.session_id || event.payload?.session_id || event.payload?.session?.session_id || '',
       ).trim()
       if (!sessionId) return false
-      const nextScope = conversationScopeForMode(event.mode || request.mode || this.currentMode, {
+      const eventRequest = event.request_id ? this.activeRequests[event.request_id] : null
+      const nextScope = conversationScopeForMode(event.mode || eventRequest?.mode || this.currentMode, {
         ...(event.payload || {}),
         session_id: sessionId,
       })
-      const previousScope = request.conversationScope || this.activeConversationScope
-      if (!isMoreSpecificConversationScope(previousScope, nextScope)) return false
-      this._renameConversationScope(previousScope as string, nextScope as string)
-      request.conversationScope = nextScope
-      request.payload = {
-        ...(request.payload || {}),
-        session_id: sessionId,
-      }
+      const previousScope = [eventRequest?.conversationScope, this.activeConversationScope]
+        .find((scope) => isMoreSpecificConversationScope(scope, nextScope))
+      if (!previousScope || !nextScope) return false
+      this._renameConversationScope(previousScope, nextScope)
+      Object.values(this.activeRequests)
+        .filter((request) => request.conversationScope === nextScope)
+        .forEach((request) => {
+          request.payload = {
+            ...(request.payload || {}),
+            session_id: sessionId,
+          }
+        })
+      if (this.activeConversationScope !== nextScope) return false
+      this.activeFactorySessionId = sessionId
       this.activeAgentSessionId = null
-      return this.activeConversationScope === nextScope
+      return true
     },
 
     _hasLiveConversationState(): boolean {
