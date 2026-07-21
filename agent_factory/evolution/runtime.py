@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import json
@@ -81,12 +81,14 @@ class AgentEvolutionRuntime:
         model: Any | None = None,
         tool_environment_builder: CreateAgentToolEnvironmentBuilder | None = None,
         checkpointer: Any | None = None,
+        package_restart_handler: Callable[[str, str | None], dict[str, Any]] | None = None,
     ) -> None:
         self.package_root = Path(package_root).expanduser() if package_root else factory_artifact_path("packages")
         self.runtime_root = Path(runtime_root).expanduser() if runtime_root else factory_artifact_path("agent_runtime")
         self.model = model
         self.tool_environment_builder = tool_environment_builder or CreateAgentToolEnvironmentBuilder()
         self.checkpointer = checkpointer or build_factory_checkpointer_handle().saver
+        self.package_restart_handler = package_restart_handler
         self._active_runs: dict[str, _EvolutionRunContext] = {}
         self._cancel_lock = threading.Lock()
         self._active_cancel_tokens: dict[str, threading.Event] = {}
@@ -494,7 +496,7 @@ class AgentEvolutionRuntime:
                         **({"error_pack": provided_error_pack} if provided_error_pack else {}),
                     },
                     "iteration": 0,
-                    "done": False,
+                    "flow_status": "running",
                     "messages": [HumanMessage(content=context.user_input)],
                 }
             else:
@@ -564,8 +566,33 @@ class AgentEvolutionRuntime:
             model_trace.flush()
             if not final_state:
                 raise RuntimeError("agent evolution workflow did not produce final state")
-            if not final_state.get("done"):
+            flow_status = str(final_state.get("flow_status") or "running")
+            if flow_status not in {"turn_complete", "package_complete"}:
                 raise RuntimeError("agent evolution workflow stopped before completion")
+            if flow_status == "turn_complete":
+                current_fingerprint = package_fingerprint(package_path)
+                if context.backup_path is not None:
+                    if current_fingerprint != context.before_fingerprint:
+                        _restore_package(context.backup_path, package_path)
+                    else:
+                        shutil.rmtree(context.backup_path, ignore_errors=True)
+                self._active_runs.pop(active_run_key, None)
+                final_answer = _safe_evolution_summary(str(final_state.get("final_answer") or ""))
+                normalizer.complete_visible_assistant_output_from_text(
+                    final_answer,
+                    node_id="agent_evolution",
+                    reason="turn_completed",
+                )
+                normalizer.emit_run_completed(
+                    {
+                        "status": "completed",
+                        "package_id": package_id,
+                        "trace_id": context.trace_id,
+                        "changed_files": [],
+                    }
+                )
+                yield from drain_events()
+                return
             changed_files = _changed_files(context.before_fingerprint, package_fingerprint(package_path))
             final_answer = _safe_evolution_summary(str(final_state.get("final_answer") or ""))
             report_path = _write_evolution_publish_report(
@@ -579,13 +606,26 @@ class AgentEvolutionRuntime:
             )
             if context.backup_path is not None:
                 shutil.rmtree(context.backup_path, ignore_errors=True)
+            restart = self._restart_evolved_package(package_id, request_id)
+            if restart.get("status") == "ready":
+                final_answer = f"{final_answer}\n\n子 Agent 已自动重启并加载本次进化结果。"
+            elif restart.get("status") == "failed":
+                final_answer = (
+                    f"{final_answer}\n\n进化结果已保存，但子 Agent 自动重启失败："
+                    f"{restart.get('error') or 'unknown error'}"
+                )
             self._active_runs.pop(active_run_key, None)
             normalizer.runtime_event(
                 "node_completed",
                 node_id="agent_evolution",
                 node_label="Agent Evolution",
                 node_kind="create_agent_workflow",
-                payload={"package_id": package_id, "changed_files": changed_files, "report_path": str(report_path)},
+                payload={
+                    "package_id": package_id,
+                    "changed_files": changed_files,
+                    "report_path": str(report_path),
+                    "restart": restart,
+                },
             )
             record_trace(
                 "lifecycle",
@@ -597,6 +637,7 @@ class AgentEvolutionRuntime:
                         "package_id": package_id,
                         "changed_files": changed_files,
                         "report_path": str(report_path),
+                        "restart": restart,
                     },
                 },
             )
@@ -612,6 +653,7 @@ class AgentEvolutionRuntime:
                     "trace_id": context.trace_id,
                     "changed_files": changed_files,
                     "report_path": str(report_path),
+                    "restart": restart,
                 }
             )
             record_trace(
@@ -624,6 +666,7 @@ class AgentEvolutionRuntime:
                         "trace_id": context.trace_id,
                         "changed_files": changed_files,
                         "report_path": str(report_path),
+                        "restart": restart,
                     },
                 },
             )
@@ -653,6 +696,19 @@ class AgentEvolutionRuntime:
             yield from drain_events()
         finally:
             self._forget_cancel_token(request_id, cancel_token)
+
+    def _restart_evolved_package(self, package_id: str, request_id: str | None) -> dict[str, Any]:
+        if self.package_restart_handler is None:
+            return {"status": "not_configured", "package_id": package_id}
+        try:
+            result = self.package_restart_handler(package_id, request_id)
+            return {"status": str(result.get("status") or "ready"), "package_id": package_id, **result}
+        except Exception as exc:
+            return {
+                "status": "failed",
+                "package_id": package_id,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
 
 
 def _ensure_evolution_managed_files(workspace: CreateAgentWorkspace) -> None:

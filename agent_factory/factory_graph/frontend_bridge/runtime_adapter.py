@@ -61,7 +61,14 @@ class FactoryRuntimeAdapter(
         if self.create_agent_runtime is None:
             self.create_agent_runtime = CreateAgentRuntime()
         if self.evolution_runtime is None:
-            self.evolution_runtime = AgentEvolutionRuntime()
+            self.evolution_runtime = AgentEvolutionRuntime(
+                package_restart_handler=(
+                    lambda package_id, request_id: self.agent_package_runtime.restart_package_instance(
+                        package_id,
+                        request_id=request_id,
+                    )
+                )
+            )
         self.agent_package_runtime.set_emit(self.emit)
 
     def handle(self, command: FactoryFrontendCommand) -> bool:

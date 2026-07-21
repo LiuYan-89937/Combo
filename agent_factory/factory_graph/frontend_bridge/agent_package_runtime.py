@@ -478,6 +478,37 @@ class AgentPackageRuntimeManager:
             )
         return status
 
+    def restart_package_instance(
+        self,
+        package_id: str,
+        *,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        initialization_lock = self._package_initialization_lock(package_id)
+        initialization_lock.acquire()
+        try:
+            package = self.load_package(package_id)
+            self._publish_instance_status(
+                package_id=package_id,
+                package=package,
+                request_id=request_id,
+                status="initializing",
+                ready=False,
+                stage="restarting_runtime",
+            )
+            self._close_package_containers(package_id)
+            self._close_package_system_handles(package_id)
+            self._close_knowledge_runtime(package_id)
+            self._instance_status_overrides.pop(package_id, None)
+            package = self.load_package(package_id)
+            return self._initialize_package_locked(
+                package_id,
+                package=package,
+                request_id=request_id,
+            )
+        finally:
+            initialization_lock.release()
+
     def shutdown_session_runtime(
         self,
         package_id: str,
