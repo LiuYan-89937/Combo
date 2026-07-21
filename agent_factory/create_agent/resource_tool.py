@@ -3,9 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 from agent_factory.create_agent.control_tool import CREATE_AGENT_WORKSPACE_RESOURCE
+from agent_factory.create_agent.resource_contract import load_resource_descriptors
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.resource_system import ResourceStore
-from agent_factory.runtime_contracts.schema import ResourceDescriptor, ResourcesContract
+from agent_factory.runtime_contracts.schema import ResourceDescriptor
 from agent_factory.tooling.envelope import tool_envelope
 from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolRiskResult, ToolSpec
 
@@ -62,7 +63,7 @@ def build_create_agent_resource_tool_spec() -> ToolSpec:
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     workspace = _workspace(resources)
-    descriptors = _descriptors(workspace)
+    descriptors = load_resource_descriptors(workspace)
     store = ResourceStore()
     action = str(arguments.get("action") or "").strip()
     if action == "status":
@@ -112,14 +113,6 @@ def _workspace(resources: dict[str, Any]) -> CreateAgentWorkspace:
     if isinstance(raw, dict) and isinstance(raw.get("root"), str):
         return CreateAgentWorkspace(raw["root"])
     raise ValueError("create_agent workspace resource is missing")
-
-
-def _descriptors(workspace: CreateAgentWorkspace) -> list[ResourceDescriptor]:
-    path = workspace.root / "contracts" / "resources.json"
-    if not path.is_file():
-        return []
-    contract = ResourcesContract.model_validate_json(path.read_text(encoding="utf-8"))
-    return list(contract.config.resource_descriptors)
 
 
 def _descriptor(descriptors: list[ResourceDescriptor], resource_id: str) -> ResourceDescriptor:

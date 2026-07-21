@@ -13,13 +13,13 @@ from langgraph.types import interrupt
 from agent_factory.create_agent.models import CreateAgentAction, PackageValidationReport
 from agent_factory.create_agent.output_safety import looks_like_internal_observation_text
 from agent_factory.create_agent.prompt_builder import build_create_agent_prompt
+from agent_factory.create_agent.resource_contract import load_resource_descriptors, resource_request_payloads
 from agent_factory.create_agent.validation_state import package_fingerprint
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.models import get_main_model
 from agent_factory.models.content import content_to_text
 from agent_factory.model_pool.runtime_override import resolve_runtime_main_chat_model_from_state
 from agent_factory.resource_system import ResourceStore
-from agent_factory.runtime_contracts import ResourcesContract
 from agent_factory.runtime_kernel.model_operations import ModelOperationService
 from agent_factory.tooling.langgraph_node import (
     build_tool_node_runner,
@@ -224,7 +224,7 @@ class CreateAgentWorkflow:
                 "workspace_id": workspace.root.name,
                 "workspace_path": str(workspace.root),
                 "resource_facts": [fact.model_dump(mode="json") for fact in action.resource_facts],
-                "resource_requests": _resource_request_payloads(workspace, action),
+                "resource_requests": resource_request_payloads(workspace, action.resource_requests),
             }
         )
         workspace.write_action(CreateAgentAction())
@@ -494,25 +494,8 @@ def _publish_ready_result(workspace: CreateAgentWorkspace, report: PackageValida
     }
 
 
-def _resource_request_payloads(workspace: CreateAgentWorkspace, action: CreateAgentAction) -> list[dict[str, Any]]:
-    descriptors = {item.resource_id: item for item in _resource_descriptors(workspace)}
-    payloads: list[dict[str, Any]] = []
-    for request in action.resource_requests:
-        payload = request.model_dump(mode="json")
-        descriptor = descriptors.get(request.resource_id)
-        if descriptor is not None:
-            payload.update({
-                "description": request.description or descriptor.description,
-                "required": descriptor.required,
-                "value_schema": descriptor.value_schema,
-                "secret_fields": list(descriptor.secret_fields),
-            })
-        payloads.append(payload)
-    return payloads
-
-
 def _runtime_configuration_status(workspace: CreateAgentWorkspace) -> dict[str, Any]:
-    descriptors = _resource_descriptors(workspace)
+    descriptors = load_resource_descriptors(workspace)
     statuses = ResourceStore().status(workspace.root.name, descriptors)
     pending = [
         {
@@ -528,11 +511,3 @@ def _runtime_configuration_status(workspace: CreateAgentWorkspace) -> dict[str, 
         "status": "required" if pending else "ready",
         "pending_resources": pending,
     }
-
-
-def _resource_descriptors(workspace: CreateAgentWorkspace) -> list[Any]:
-    path = workspace.root / "contracts" / "resources.json"
-    if not path.exists():
-        return []
-    contract = ResourcesContract.model_validate_json(path.read_text(encoding="utf-8"))
-    return list(contract.config.resource_descriptors)
