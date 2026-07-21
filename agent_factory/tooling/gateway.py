@@ -33,6 +33,7 @@ from agent_factory.tooling.approval_policy import (
     tool_approval_policy_action,
 )
 from agent_factory.tooling.resource_context import build_tool_resource_context
+from agent_factory.tooling.redaction import redact_json_pointer_paths
 from agent_factory.tooling.risk import ToolRiskEvaluator, call_llm_risk_evaluator, merge_risk_results
 from agent_factory.tooling.schema_compiler import CompiledJsonSchema
 from agent_factory.tooling.spec import ToolObservation, ToolRiskContext, ToolRiskResult, ToolSpec
@@ -227,7 +228,7 @@ class ToolExecutionGateway:
                 output=output,
                 tool_id=self.spec.id,
                 tool_call_id=tool_call_id,
-                arguments=arguments,
+                arguments=self._public_arguments(arguments),
                 store=self.output_store,
                 policy=self.output_policy,
                 compression_model=get_compression_model(),
@@ -274,7 +275,7 @@ class ToolExecutionGateway:
         return ToolApprovalRequest(
             tool_call_id=tool_call_id or "",
             tool_name=self.spec.id,
-            args=normalized_arguments,
+            args=self._public_arguments(normalized_arguments),
             summary=self.spec.id,
             risk_level=effective_risk_level,
             risk_reasons=risk.reasons,
@@ -359,7 +360,7 @@ class ToolExecutionGateway:
         )
         if effective_risk_level != risk.risk_level:
             risk = risk.model_copy(update={"risk_level": effective_risk_level})
-        return handler(self.spec, arguments, risk)
+        return handler(self.spec, self._public_arguments(arguments), risk)
 
     def _resolve_resources(self) -> dict[str, Any]:
         resources: dict[str, Any] = {}
@@ -419,7 +420,7 @@ class ToolExecutionGateway:
                 "event_type": "tool_started",
                 "tool_id": self.spec.id,
                 "tool_call_id": tool_call_id or "",
-                "arguments": arguments,
+                "arguments": self._public_arguments(arguments),
                 "status": "running",
                 "risk_level": risk.risk_level,
                 "risk_reasons": risk.reasons,
@@ -451,7 +452,7 @@ class ToolExecutionGateway:
             message=message,
             user_instruction=user_instruction,
             retryable=retryable,
-            arguments=arguments,
+            arguments=self._public_arguments(arguments),
             output=output,
             output_ref=output_ref,
             output_summary=output_summary,
@@ -461,6 +462,10 @@ class ToolExecutionGateway:
             contract_status=contract_status,  # type: ignore[arg-type]
             errors=errors or [],
         ).model_dump(mode="json")
+
+    def _public_arguments(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        redacted = redact_json_pointer_paths(arguments, self.spec.sensitive_argument_paths)
+        return redacted if isinstance(redacted, dict) else {}
 
 
 def default_tool_max_revisions() -> int:

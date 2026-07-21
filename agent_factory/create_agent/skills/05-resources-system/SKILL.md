@@ -38,13 +38,15 @@ Guides confirmed resource facts and runtime resource descriptors for produced ag
 - `contracts/resources.json` is the only published package resource surface; it declares resource descriptors and never stores user values.
 - Use .factory/resources.json only as confirmed manufacturing facts; do not expose it as a produced-agent runtime tool.
 - Write produced-agent resource descriptors with create_agent_authoring(action="upsert_resources", resource_descriptors=[...]) instead of generic filesystem write. This action never accepts deployment values or placeholder credentials.
+- When the user has explicitly supplied every field of a declared Resource in the conversation, store it with `create_agent_resource(action="put", resource_id=..., value=...)`. The tool validates against `value_schema`, encrypts the value, and returns configuration metadata without echoing the value.
+- When any required field is missing, call `create_agent_control(action="ask_user", resource_requests=[...])`. A natural-language credential question without `resource_requests` is invalid because it cannot render the secure schema form.
 - When a Resource is consumed by a Package Tool, supply the descriptor through that tool's `upsert_package_tool` call so ToolSpec selectors, descriptor `used_by`, source, dependencies, and exposure are validated as one capability increment. Use `upsert_resources` for descriptors not owned by a Package Tool increment.
 - Stable deployment configuration is not ordinary Tool input. Accounts, credentials, API keys, mailboxes, database connections, fixed endpoints, and default delivery destinations belong here; preserve known enum, range, and length constraints in `value_schema`.
 - Before asking, check capability inventory and existing confirmed facts.
 - Ask only for resources required by an implemented or confirmed capability, never for unsupported capability guesses.
 
 ## Boundaries
-- Do not hardcode secrets, API keys, account ids, external paths, URLs, schedules, delivery channels, user data, or runtime resource values. Runtime values are collected after publication through the package resource form.
+- Do not hardcode secrets, API keys, account ids, external paths, URLs, schedules, delivery channels, user data, or runtime resource values in package files. Runtime values are collected through the schema form or, only after explicit user disclosure, through `create_agent_resource` into the encrypted ResourceStore.
 - Do not expose create-agent manufacturing tools, .factory files, traces, caches, or validation state as produced-agent runtime capability.
 - Do not infer package schemas from project source code during manufacturing; use validator evidence and this skill's examples/resources.
 - If required information is missing and cannot be discovered from confirmed resources, ask the user in natural language through create_agent_control.

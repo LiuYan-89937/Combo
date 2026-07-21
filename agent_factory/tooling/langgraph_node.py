@@ -21,6 +21,7 @@ from agent_factory.tooling.gateway import (
     TRUST_TOOL_ACTIONS,
     parse_approval_decision,
 )
+from agent_factory.tooling.redaction import redact_json_pointer_paths
 from agent_factory.tooling.runtime_resources import runtime_resource_overrides_from_state
 
 
@@ -60,6 +61,9 @@ class AgentFactoryToolNode:
         self.stream_events = stream_events
         self._concurrent_by_name = {tool.name: _tool_concurrent(tool) for tool in tools}
         self._approval_request_by_name = {tool.name: _tool_approval_request(tool) for tool in tools}
+        self._sensitive_argument_paths_by_name = {
+            tool.name: _tool_sensitive_argument_paths(tool) for tool in tools
+        }
         self._tool_node = ToolNode(
             list(tools),
             name=name or node_id,
@@ -154,6 +158,7 @@ class AgentFactoryToolNode:
         tool_id = str(tool_call.get("name") or "")
         tool_call_id = str(tool_call.get("id") or tool_id)
         arguments = dict(tool_call.get("args") or {})
+        public_arguments = self._public_arguments(tool_id, arguments)
         if self.allowed_tool_ids is not None and tool_id not in self.allowed_tool_ids:
             message = "Tool is not visible to this node."
             payload = _observation_payload(
@@ -161,7 +166,7 @@ class AgentFactoryToolNode:
                 tool_id=tool_id,
                 tool_call_id=tool_call_id,
                 message=message,
-                arguments=arguments,
+                arguments=public_arguments,
                 output={"visible_tool_ids": sorted(self.allowed_tool_ids)},
                 retryable=True,
             )
@@ -170,7 +175,7 @@ class AgentFactoryToolNode:
                     "event_type": "tool_failed",
                     "tool_id": tool_id,
                     "tool_call_id": tool_call_id,
-                    "arguments": arguments,
+                    "arguments": public_arguments,
                     "status": "failed",
                     "error": message,
                     "observation": payload,
@@ -183,7 +188,7 @@ class AgentFactoryToolNode:
                 "event_type": "tool_proposed",
                 "tool_id": tool_id,
                 "tool_call_id": tool_call_id,
-                "arguments": arguments,
+                "arguments": public_arguments,
                 "status": "proposed",
             }
         )
@@ -201,7 +206,7 @@ class AgentFactoryToolNode:
                 result,
                 tool_id=tool_id,
                 tool_call_id=tool_call_id,
-                arguments=arguments,
+                arguments=public_arguments,
             )
             event_type = _tool_event_type(normalized)
             self._emit(
@@ -209,7 +214,7 @@ class AgentFactoryToolNode:
                     "event_type": event_type,
                     "tool_id": tool_id,
                     "tool_call_id": tool_call_id,
-                    "arguments": arguments,
+                    "arguments": public_arguments,
                     "status": "completed" if event_type in {"tool_completed", "tool_contract_invalid"} else "failed",
                     "result": normalized,
                     "output": normalized.get("output"),
@@ -232,12 +237,19 @@ class AgentFactoryToolNode:
                 "event_type": "tool_completed",
                 "tool_id": tool_id,
                 "tool_call_id": tool_call_id,
-                "arguments": arguments,
+                "arguments": public_arguments,
                 "status": "completed",
                 "message": "Tool returned a LangGraph command.",
             }
         )
         return result
+
+    def _public_arguments(self, tool_id: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        redacted = redact_json_pointer_paths(
+            arguments,
+            self._sensitive_argument_paths_by_name.get(tool_id, []),
+        )
+        return redacted if isinstance(redacted, dict) else {}
 
     def _emit(self, payload: dict[str, Any]) -> None:
         payload = {"node_id": self.node_id, **payload}
@@ -283,6 +295,17 @@ def _tool_approval_request(tool: BaseTool) -> Callable[..., dict[str, Any] | Non
         return None
     approval_request = agent_factory.get("approval_request")
     return approval_request if callable(approval_request) else None
+
+
+def _tool_sensitive_argument_paths(tool: BaseTool) -> list[str]:
+    metadata = getattr(tool, "metadata", None)
+    if not isinstance(metadata, dict):
+        return []
+    agent_factory = metadata.get("agent_factory")
+    if not isinstance(agent_factory, dict):
+        return []
+    paths = agent_factory.get("sensitive_argument_paths")
+    return [str(item) for item in paths] if isinstance(paths, list) else []
 
 
 def _batch_approval_payload(requests: Sequence[dict[str, Any]]) -> dict[str, Any]:
