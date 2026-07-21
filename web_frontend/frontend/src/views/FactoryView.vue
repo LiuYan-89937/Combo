@@ -209,7 +209,14 @@ const {
 
 const resourceRequests = computed(() => {
   const values = runtimeStore.pendingInterrupt?.payload?.resource_requests
-  return Array.isArray(values) ? values.filter((item): item is { resource_id: string; description?: string; secret?: boolean } => Boolean(item && typeof item.resource_id === 'string')) : []
+  return Array.isArray(values) ? values.filter((item): item is {
+    resource_id: string
+    description?: string
+    secret?: boolean
+    required?: boolean
+    value_schema?: Record<string, unknown>
+    secret_fields?: string[]
+  } => Boolean(item && typeof item.resource_id === 'string')) : []
 })
 
 const activeSchedulerRunCards = computed(() => {
@@ -247,8 +254,8 @@ function tipContextFor(message: TranscriptItem): Omit<TipMessageContext, 'source
   }
 }
 
-function handleResourceConfigured(resourceId: string) {
-  handleSend(`运行时资源 ${resourceId} 已安全配置。`, [])
+function handleResourceConfigured(resourceIds: string[]) {
+  handleSend(`运行时资源 ${resourceIds.join(', ')} 已安全配置。`, [])
 }
 
 function handleResourceSkipped() {

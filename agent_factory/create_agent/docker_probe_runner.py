@@ -72,7 +72,7 @@ def _run_probe(request: dict[str, Any]) -> dict[str, Any]:
     try:
         compiler = ToolCompiler(
             package_root=PACKAGE_ROOT,
-            resources=_probe_resources(),
+            resources=_probe_resources(request),
             approval_handler=_approval_handler,
         )
         tool = compiler.compile(spec)
@@ -125,8 +125,11 @@ def _run_probe(request: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _probe_resources() -> dict[str, Any]:
+def _probe_resources(request: dict[str, Any]) -> dict[str, Any]:
+    runtime_resources = request.get("runtime_resources")
+    configured = dict(runtime_resources) if isinstance(runtime_resources, dict) else {}
     return {
+        **configured,
         "package_root": str(PACKAGE_ROOT),
         "runtime_root": str(RUNTIME_ROOT),
         "artifacts_root": str(ARTIFACTS_ROOT),

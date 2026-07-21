@@ -521,7 +521,7 @@ class PackageToolProbeRecord(BaseModel):
     package_digest: str = ""
     tool_digest: str = ""
     tool_digest_kind: str = "package_tool_surface.v1"
-    status: Literal["passed", "failed"] = "failed"
+    status: Literal["passed", "failed", "configuration_required"] = "failed"
     observation_status: str = ""
     execution_status: str = ""
     contract_status: str = ""

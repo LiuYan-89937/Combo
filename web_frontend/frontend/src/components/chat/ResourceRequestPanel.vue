@@ -1,61 +1,138 @@
 <template>
   <section class="resource-request-panel">
-    <div class="resource-request-title">需要运行时资源配置</div>
-    <div v-for="request in requests" :key="request.resource_id" class="resource-request-row">
+    <div class="resource-request-header">
+      <div>
+        <div class="resource-request-title">需要运行时资源配置</div>
+        <div class="resource-request-hint">值会加密保存，只在工具执行时由 Gateway 注入，不会写入 AgentPackage 或模型上下文。</div>
+      </div>
+    </div>
+
+    <div v-for="request in requests" :key="request.resource_id" class="resource-request-card">
       <div class="resource-request-copy">
         <strong>{{ request.resource_id }}</strong>
         <span>{{ request.description || '此能力需要运行时资源后才能使用。' }}</span>
       </div>
-      <n-input
-        v-model:value="drafts[request.resource_id]"
-        :type="request.secret ? 'password' : 'textarea'"
-        :show-password-on="request.secret ? 'click' : undefined"
-        :placeholder="request.secret ? '安全填写后保存' : '填写 JSON 值或普通文本'"
+      <ResourceSchemaForm
+        :model-value="drafts[request.resource_id]"
+        :schema="request.value_schema || {}"
+        :secret-fields="request.secret_fields || (request.secret ? [''] : [])"
+        @update:model-value="drafts[request.resource_id] = $event"
       />
-      <div class="resource-request-actions">
-        <n-button type="primary" size="small" :loading="saving === request.resource_id" @click="save(request)">保存并继续</n-button>
-        <n-button size="small" quaternary :disabled="saving !== ''" @click="$emit('skip')">稍后配置</n-button>
+      <div v-if="errors[request.resource_id]" class="resource-request-error">
+        {{ errors[request.resource_id] }}
       </div>
+    </div>
+
+    <div class="resource-request-actions">
+      <n-button size="small" quaternary :disabled="saving" @click="$emit('skip')">稍后配置</n-button>
+      <n-button type="primary" size="small" :loading="saving" :disabled="!allComplete" @click="saveAll">
+        保存并继续
+      </n-button>
     </div>
   </section>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
-import { NButton, NInput } from 'naive-ui'
+import { computed, ref, watch } from 'vue'
+import { NButton } from 'naive-ui'
 import { createAgentApi } from '@/api/createAgent'
+import ResourceSchemaForm from '@/components/agent/ResourceSchemaForm.vue'
+import {
+  createResourceDraft,
+  resourceDraftComplete,
+  resourceDraftValue,
+} from '@/components/agent/resourceSchema'
 
 interface ResourceRequestView {
   resource_id: string
   description?: string
   secret?: boolean
+  required?: boolean
+  value_schema?: Record<string, unknown>
+  secret_fields?: string[]
 }
 
 const props = defineProps<{ sessionId: string; requests: ResourceRequestView[] }>()
-const emit = defineEmits<{ configured: [resourceId: string]; skip: [] }>()
-const drafts = ref<Record<string, string>>({})
-const saving = ref('')
+const emit = defineEmits<{ configured: [resourceIds: string[]]; skip: [] }>()
+const drafts = ref<Record<string, unknown>>({})
+const errors = ref<Record<string, string>>({})
+const saving = ref(false)
 
-async function save(request: ResourceRequestView) {
-  const raw = drafts.value[request.resource_id] || ''
-  let value: unknown = raw
-  try { value = JSON.parse(raw) } catch { /* A scalar string is valid when the descriptor permits it. */ }
-  saving.value = request.resource_id
+const allComplete = computed(() => props.requests.length > 0 && props.requests.every((request) => (
+  resourceDraftComplete(request.value_schema || {}, drafts.value[request.resource_id])
+)))
+
+watch(
+  () => props.requests,
+  (requests) => {
+    drafts.value = Object.fromEntries(requests.map((request) => [
+      request.resource_id,
+      createResourceDraft(request.value_schema || {}),
+    ]))
+    errors.value = {}
+  },
+  { immediate: true, deep: true },
+)
+
+async function saveAll() {
+  if (!allComplete.value || saving.value) return
+  saving.value = true
+  errors.value = {}
+  const saved: string[] = []
   try {
-    await createAgentApi.putResource(props.sessionId, request.resource_id, value)
-    drafts.value[request.resource_id] = ''
-    emit('configured', request.resource_id)
+    for (const request of props.requests) {
+      try {
+        const value = resourceDraftValue(request.value_schema || {}, drafts.value[request.resource_id])
+        await createAgentApi.putResource(props.sessionId, request.resource_id, value)
+        saved.push(request.resource_id)
+      } catch (error) {
+        errors.value = {
+          ...errors.value,
+          [request.resource_id]: error instanceof Error ? error.message : String(error),
+        }
+        return
+      }
+    }
+    emit('configured', saved)
   } finally {
-    saving.value = ''
+    saving.value = false
   }
 }
 </script>
 
 <style scoped>
-.resource-request-panel { border-top: 1px solid var(--app-border); padding: var(--app-space-md); display: grid; gap: var(--app-space-sm); background: var(--app-surface); }
-.resource-request-title { width: min(100%, 920px); margin: 0 auto; font-weight: 600; }
-.resource-request-row { width: min(100%, 920px); margin: 0 auto; display: grid; gap: var(--app-space-sm); padding: var(--app-space-sm); border: 1px solid var(--app-border); border-radius: var(--app-radius-md); }
+.resource-request-panel {
+  border-top: 1px solid var(--app-border);
+  padding: var(--app-space-md);
+  display: grid;
+  gap: var(--app-space-sm);
+  background: var(--app-surface);
+}
+
+.resource-request-header,
+.resource-request-card,
+.resource-request-actions {
+  width: min(100%, 920px);
+  margin: 0 auto;
+}
+
+.resource-request-title { font-weight: 600; }
+.resource-request-hint,
+.resource-request-copy span {
+  color: var(--app-text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.resource-request-card {
+  display: grid;
+  gap: var(--app-space-sm);
+  padding: var(--app-space-md);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+}
+
 .resource-request-copy { display: grid; gap: 2px; font-size: 13px; }
-.resource-request-copy span { color: var(--app-text-muted); }
 .resource-request-actions { display: flex; justify-content: flex-end; gap: var(--app-space-xs); }
+.resource-request-error { color: var(--app-error); font-size: 12px; }
 </style>

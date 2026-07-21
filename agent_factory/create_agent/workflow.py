@@ -18,6 +18,8 @@ from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.models import get_main_model
 from agent_factory.models.content import content_to_text
 from agent_factory.model_pool.runtime_override import resolve_runtime_main_chat_model_from_state
+from agent_factory.resource_system import ResourceStore
+from agent_factory.runtime_contracts import ResourcesContract
 from agent_factory.runtime_kernel.model_operations import ModelOperationService
 from agent_factory.tooling.langgraph_node import (
     build_tool_node_runner,
@@ -221,7 +223,7 @@ class CreateAgentWorkflow:
                 "message": question,
                 "workspace_path": str(workspace.root),
                 "resource_facts": [fact.model_dump(mode="json") for fact in action.resource_facts],
-                "resource_requests": [item.model_dump(mode="json") for item in action.resource_requests],
+                "resource_requests": _resource_request_payloads(workspace, action),
             }
         )
         workspace.write_action(CreateAgentAction())
@@ -444,23 +446,37 @@ def _operation_prompt(messages: list[BaseMessage]) -> tuple[dict[str, Any], list
     return {}, messages
 
 
-def _publish_ready_text(workspace: CreateAgentWorkspace, report: PackageValidationReport) -> str:
+def _publish_ready_text(
+    workspace: CreateAgentWorkspace,
+    report: PackageValidationReport,
+    runtime_configuration: dict[str, Any] | None = None,
+) -> str:
+    pending = list((runtime_configuration or {}).get("pending_resources") or [])
+    pending_text = ""
+    if pending:
+        resource_ids = ", ".join(str(item.get("resource_id") or "") for item in pending if isinstance(item, dict))
+        pending_text = (
+            f"\n- Runtime Resources: {resource_ids} 尚未配置，可发布后在包详情中填写。\n"
+        )
     return (
         "AgentPackage 已完成制造并通过最终静态校验。\n\n"
         f"- Workspace: {workspace.root}\n"
         f"- Validation: {report.validation_scope} / {report.status}\n"
-        f"- Summary: {report.summary}\n\n"
+        f"- Summary: {report.summary}\n"
+        f"{pending_text}\n"
         "当前包已进入待发布状态。请在下方确认发布面板中决定发布或继续修改。"
     )
 
 
 def _publish_ready_payload(workspace: CreateAgentWorkspace, report: PackageValidationReport) -> dict[str, Any]:
+    runtime_configuration = _runtime_configuration_status(workspace)
     return {
         "version": "agent_package_publish_report.v0",
         "status": "ready",
         "source_workspace": str(workspace.root),
-        "message": _publish_ready_text(workspace, report),
+        "message": _publish_ready_text(workspace, report, runtime_configuration),
         "validation": report.to_digest().model_dump(mode="json"),
+        "runtime_configuration": runtime_configuration,
         "package_fingerprint": package_fingerprint(workspace.root),
     }
 
@@ -472,5 +488,49 @@ def _publish_ready_result(workspace: CreateAgentWorkspace, report: PackageValida
         "validation": report.to_digest().model_dump(mode="json"),
         "publish_ready": publish_ready,
         "flow_status": "package_complete",
-        "final_answer": _publish_ready_text(workspace, report),
+        "final_answer": str(publish_ready["message"]),
     }
+
+
+def _resource_request_payloads(workspace: CreateAgentWorkspace, action: CreateAgentAction) -> list[dict[str, Any]]:
+    descriptors = {item.resource_id: item for item in _resource_descriptors(workspace)}
+    payloads: list[dict[str, Any]] = []
+    for request in action.resource_requests:
+        payload = request.model_dump(mode="json")
+        descriptor = descriptors.get(request.resource_id)
+        if descriptor is not None:
+            payload.update({
+                "description": request.description or descriptor.description,
+                "required": descriptor.required,
+                "value_schema": descriptor.value_schema,
+                "secret_fields": list(descriptor.secret_fields),
+            })
+        payloads.append(payload)
+    return payloads
+
+
+def _runtime_configuration_status(workspace: CreateAgentWorkspace) -> dict[str, Any]:
+    descriptors = _resource_descriptors(workspace)
+    statuses = ResourceStore().status(workspace.root.name, descriptors)
+    pending = [
+        {
+            "resource_id": str(item.get("resource_id") or ""),
+            "description": str(item.get("description") or ""),
+            "required": bool(item.get("required")),
+            "used_by": list(item.get("used_by") or []),
+        }
+        for item in statuses
+        if item.get("required") and not item.get("configured")
+    ]
+    return {
+        "status": "required" if pending else "ready",
+        "pending_resources": pending,
+    }
+
+
+def _resource_descriptors(workspace: CreateAgentWorkspace) -> list[Any]:
+    path = workspace.root / "contracts" / "resources.json"
+    if not path.exists():
+        return []
+    contract = ResourcesContract.model_validate_json(path.read_text(encoding="utf-8"))
+    return list(contract.config.resource_descriptors)

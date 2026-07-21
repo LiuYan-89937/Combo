@@ -16,6 +16,12 @@
       {{ messageText }}
     </p>
 
+    <div v-if="pendingResources.length" class="publish-resource-notice">
+      <strong>发布后待配置 Resource</strong>
+      <span>{{ pendingResources.map(item => item.resource_id).join('、') }}</span>
+      <small>这些配置不阻断发布；对应工具在包详情中完成配置前不可执行。</small>
+    </div>
+
     <div class="revision-row">
       <n-input
         v-model:value="revisionGuidance"
@@ -73,6 +79,11 @@ const publishSubmitting = ref(false)
 
 const payload = computed(() => runtimeStore.publishConfirmationPayload || {})
 const messageText = computed(() => String(payload.value.message || t('publish.defaultMessage')))
+const pendingResources = computed<Array<{ resource_id: string }>>(() => {
+  const values = payload.value.runtime_configuration?.pending_resources
+  if (!Array.isArray(values)) return []
+  return values.filter((item): item is { resource_id: string } => Boolean(item && typeof item.resource_id === 'string'))
+})
 const validationLabel = computed(() => {
   const validation = payload.value.validation
   if (!validation || typeof validation !== 'object') return t('publish.ready')
@@ -173,6 +184,21 @@ function handleContinueRevision() {
   white-space: pre-wrap;
 }
 
+.publish-resource-notice {
+  margin-top: 12px;
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--app-warning);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface-muted);
+  color: var(--app-text-secondary);
+  font-size: 12px;
+}
+
+.publish-resource-notice strong { color: var(--app-text); }
+.publish-resource-notice small { color: var(--app-text-muted); line-height: 1.5; }
+
 .revision-row {
   margin-top: 14px;
 }
@@ -181,4 +207,3 @@ function handleContinueRevision() {
   margin-top: 12px;
 }
 </style>
-
