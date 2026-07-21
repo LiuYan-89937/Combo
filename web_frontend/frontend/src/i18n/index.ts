@@ -458,6 +458,11 @@ const zhCN = {
   'resource.subAgent': '子 Agent',
   'resource.currentContext': '当前上下文：{label}',
   'resource.currentConfigTarget': '当前配置目标：{label}',
+  'resource.configTarget': '配置目标',
+  'resource.contextGroup': '当前上下文',
+  'resource.followContext': '跟随当前上下文 · {label}',
+  'resource.systemAgents': '系统 Agent',
+  'resource.publishedAgents': '已发布 Agent',
 
   'localModel.title': '模型配置',
   'localModel.subtitle': '通过网络端点管理推理模型、GPU 状态和运行配置',
@@ -1484,6 +1489,11 @@ const enUS: Record<MessageKey, string> = {
   'resource.subAgent': 'Sub-agent',
   'resource.currentContext': 'Current context: {label}',
   'resource.currentConfigTarget': 'Current configuration target: {label}',
+  'resource.configTarget': 'Configuration target',
+  'resource.contextGroup': 'Current context',
+  'resource.followContext': 'Follow current context · {label}',
+  'resource.systemAgents': 'System Agents',
+  'resource.publishedAgents': 'Published Agents',
 
   'localModel.title': 'Model Configuration',
   'localModel.runtimeMode': 'Runtime mode',

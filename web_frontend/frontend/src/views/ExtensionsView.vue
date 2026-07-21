@@ -3,9 +3,12 @@
     <div class="context-bar">
       <div class="context-title">
         <n-text strong>{{ t('extensions.title') }}</n-text>
-        <n-text depth="3" class="context-subtitle">{{ activePackageLabel }}</n-text>
       </div>
       <n-space align="center">
+        <ResourceTargetSelector
+          v-model="resourceContext.selectedValue.value"
+          :options="resourceContext.targetOptions.value"
+        />
         <n-button @click="refreshCurrentExtensions">
           <template #icon>
             <n-icon><Refresh /></n-icon>
@@ -347,18 +350,19 @@ import { Add, EllipsisHorizontal, Refresh } from '@/components/icons'
 import { useExtensionsManager } from '@/composables/extensions/useExtensionsManager'
 import McpConfigModal from '@/components/extensions/McpConfigModal.vue'
 import SkillConfigModal from '@/components/extensions/SkillConfigModal.vue'
+import ResourceTargetSelector from '@/components/resources/ResourceTargetSelector.vue'
 import { useI18n } from '@/composables/useI18n'
 
 const { t } = useI18n()
 
 const {
-  activePackageLabel,
   activePermissionModeLabel,
   busyKey,
   editingMcp,
   editingSkill,
   extensionKey,
   extensionStore,
+  resourceContext,
   handleMcpAction,
   handlePermissionModeChange,
   handleResetToolPermission,
@@ -425,10 +429,6 @@ const {
   flex-direction: column;
   gap: var(--app-space-xs);
   min-width: 0;
-}
-
-.context-subtitle {
-  font-size: var(--app-font-sm);
 }
 
 .test-result {

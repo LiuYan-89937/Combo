@@ -2,7 +2,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useDialog } from 'naive-ui'
 import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
-import { useResourceContext } from '@/composables/useResourceContext'
+import { useManagedResourceContext } from '@/composables/useManagedResourceContext'
 import { useExtensionStore } from '@/stores/extension'
 import type { McpServerConfig, SkillConfig } from '@/api/resourceTypes'
 import type {
@@ -19,7 +19,7 @@ export function useExtensionsManager() {
   const extensionStore = useExtensionStore()
   const commands = useCommand()
   const dialog = useDialog()
-  const resourceContext = useResourceContext()
+  const resourceContext = useManagedResourceContext('system_and_package')
   const { t } = useI18n()
 
   const showMcpModal = ref(false)
@@ -30,7 +30,6 @@ export function useExtensionsManager() {
   const skillHubQuery = ref('')
 
   const extensionContext = computed(() => resourceContext.workspaceContext.value)
-  const activePackageLabel = computed(() => t('resource.currentConfigTarget', { label: resourceContext.label.value }))
   const testResultType = computed(() => (
     extensionStore.testResult?.status === 'ok' ? 'success' : 'error'
   ))
@@ -319,13 +318,13 @@ export function useExtensionsManager() {
   }
 
   return {
-    activePackageLabel,
     activePermissionModeLabel,
     busyKey,
     editingMcp,
     editingSkill,
     extensionKey,
     extensionStore,
+    resourceContext,
     handleMcpAction,
     handleSaveMcp,
     handleSaveSkill,
