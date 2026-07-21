@@ -14,6 +14,14 @@
         :placeholder="fieldPlaceholder(field)"
         @update:value="setFieldValue(field.name, $event)"
       />
+      <ResourceSchemaForm
+        v-else-if="field.schema.type === 'object'"
+        :model-value="fieldValue(field.name)"
+        :schema="schemaRecord(field.schema)"
+        :secret-fields="childSecretFields(field.name)"
+        class="nested-resource-form"
+        @update:model-value="setFieldValue(field.name, $event)"
+      />
       <n-input-number
         v-else-if="field.schema.type === 'integer' || field.schema.type === 'number'"
         :value="numberFieldValue(field.name)"
@@ -143,6 +151,20 @@ function isStringArray(schema: ResourceJsonSchema): boolean {
   return schema.type === 'array' && schema.items?.type === 'string'
 }
 
+function schemaRecord(schema: ResourceJsonSchema): Record<string, unknown> {
+  return schema as unknown as Record<string, unknown>
+}
+
+function childSecretFields(name: string): string[] {
+  const dottedPrefix = `${name}.`
+  const pointerPrefix = `/${name}/`
+  return props.secretFields.flatMap((path) => {
+    if (path.startsWith(dottedPrefix)) return [path.slice(dottedPrefix.length)]
+    if (path.startsWith(pointerPrefix)) return [path.slice(pointerPrefix.length).replaceAll('/', '.')]
+    return []
+  })
+}
+
 function fieldPlaceholder(field: ResourceSchemaField): string {
   if (isStringArray(field.schema)) return `输入${field.schema.title || field.name}后按回车添加`
   return field.required ? `填写 ${field.schema.title || field.name}` : `可选：${field.schema.title || field.name}`
@@ -180,5 +202,10 @@ function fieldPlaceholder(field: ResourceSchemaField): string {
   display: flex;
   align-items: center;
   gap: var(--app-space-sm);
+}
+
+.nested-resource-form {
+  padding-left: var(--app-space-sm);
+  border-left: 2px solid var(--app-divider);
 }
 </style>

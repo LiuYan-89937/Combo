@@ -20,7 +20,8 @@ from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.factory_graph.frontend_bridge.agent_package_paths import manufacturing_probe_runtime_workspace
 from agent_factory.factory_graph.frontend_bridge.agent_runtime_launcher import AgentRuntimeLaunchError, DockerAgentRuntimeLauncher
 from agent_factory.models import get_task_model
-from agent_factory.runtime_contracts import AgentPackageLoader
+from agent_factory.resource_system import ResourceStore, ResourceStoreError
+from agent_factory.runtime_contracts import AgentPackageLoader, ResourcesContract
 from agent_factory.tooling.envelope import tool_envelope
 from agent_factory.tooling.providers import PackageToolProvider, ToolProviderContext
 from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolRiskResult, ToolSpec
@@ -49,8 +50,9 @@ def build_create_agent_probe_tool_spec() -> ToolSpec:
         description=(
             "Inspect package-owned tools generated in this create-agent workspace, then probe one generated tool by "
             "executing it inside the Docker runtime image through ToolExecutionGateway. Calls require explicit "
-            "arguments; prompt is user-facing context only. Final validation "
-            "requires a fresh success-path probe."
+            "arguments; prompt is user-facing context only. Final validation requires fresh probe evidence; "
+            "a resource_required observation is recorded as configuration_required and does not classify the "
+            "tool implementation as failed."
         ),
         entrypoint="agent_factory.create_agent.probe_tool:run",
         input_schema={
@@ -448,7 +450,14 @@ def _run_docker_probe(
             "dependency_report": {},
         }
     command = plan.command_for_python_module("agent_factory.create_agent.docker_probe_runner")
-    request = json.dumps({"tool_id": spec.id, "arguments": arguments}, ensure_ascii=False)
+    request = json.dumps(
+        {
+            "tool_id": spec.id,
+            "arguments": arguments,
+            "runtime_resources": _configured_probe_resources(workspace, spec),
+        },
+        ensure_ascii=False,
+    )
     _emit_probe_progress(
         f"Docker probe 启动：{spec.id} image={plan.image}",
         {"tool_id": spec.id, "image": plan.image, "network": plan.network},
@@ -486,6 +495,28 @@ def _run_docker_probe(
     if completed.returncode != 0 and not payload.get("errors"):
         payload["errors"] = [f"docker probe exited with code {completed.returncode}"]
     return payload
+
+
+def _configured_probe_resources(workspace: CreateAgentWorkspace, spec: ToolSpec) -> dict[str, Any]:
+    contract_path = workspace.root / "contracts" / "resources.json"
+    if not contract_path.exists() or not spec.resources:
+        return {}
+    contract = ResourcesContract.model_validate_json(contract_path.read_text(encoding="utf-8"))
+    descriptors = {item.resource_id: item for item in contract.config.resource_descriptors}
+    store = ResourceStore()
+    values: dict[str, Any] = {}
+    for selector in spec.resources.values():
+        resource_id = selector.split(".", 1)[0]
+        descriptor = descriptors.get(resource_id)
+        if descriptor is None or resource_id in values:
+            continue
+        try:
+            values[resource_id] = store.resolve(workspace.root.name, descriptor)
+        except ResourceStoreError as exc:
+            if str(exc).startswith("resource_required:"):
+                continue
+            raise
+    return values
 
 
 def _parse_docker_probe_output(*, stdout: str, stderr: str, returncode: int) -> dict[str, Any]:
@@ -630,6 +661,11 @@ def _record_from_direct_probe(
         and (not contract_status or contract_status == "valid")
         and bool(final_answer)
     )
+    probe_status = (
+        "configuration_required"
+        if observation_status == "resource_required"
+        else "passed" if contract_passed else "failed"
+    )
     return PackageToolProbeRecord(
         tool_id=tool_id,
         probe_kind=probe_kind,
@@ -641,7 +677,7 @@ def _record_from_direct_probe(
         ],
         package_digest=package_digest(workspace.root),
         tool_digest=package_tool_digest(workspace.root, tool_id),
-        status="passed" if contract_passed else "failed",
+        status=probe_status,
         observation_status=observation_status,
         execution_status=execution_status,
         contract_status=contract_status,
@@ -680,6 +716,16 @@ def _normalized_probe_kind(
 
 def _probe_system_evaluation(direct_probe: dict[str, Any]) -> dict[str, Any]:
     observation = direct_probe.get("observation") if isinstance(direct_probe.get("observation"), dict) else {}
+    if str(observation.get("status") or "") == "resource_required":
+        return {
+            "evaluator": "system",
+            "summary": str(observation.get("message") or "Runtime Resource configuration is required.")[:1000],
+            "probe_kind": "unknown",
+            "goal_satisfied": None,
+            "tool_returned_business_output": False,
+            "only_error_handling_verified": False,
+            "resource_ids": list((observation.get("evidence") or {}).get("resource_ids") or []),
+        }
     if observation:
         return {}
     infrastructure_error = direct_probe.get("infrastructure_error") if isinstance(direct_probe.get("infrastructure_error"), dict) else {}

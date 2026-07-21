@@ -45,6 +45,13 @@ ToolApprovalHandler = Callable[[ToolSpec, dict[str, Any], ToolRiskResult], "Tool
 TRUST_TOOL_ACTIONS = {"trust", "trust_tool", "always_allow", "no_approval", "无需审批"}
 
 
+class ToolResourceRequiredError(RuntimeError):
+    def __init__(self, resource_ids: list[str]) -> None:
+        normalized = list(dict.fromkeys(item.strip() for item in resource_ids if item.strip()))
+        self.resource_ids = normalized
+        super().__init__(f"required runtime resources are not configured: {', '.join(normalized)}")
+
+
 class ToolApprovalDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -122,19 +129,17 @@ class ToolExecutionGateway:
             )
         try:
             tool_resources = self._resolve_resources()
+        except ToolResourceRequiredError as exc:
+            return self._observation(
+                "resource_required",
+                f"Required runtime resources are not configured: {', '.join(exc.resource_ids)}",
+                tool_call_id=tool_call_id,
+                arguments=arguments,
+                retryable=False,
+                errors=[str(exc)],
+                evidence={"resource_ids": exc.resource_ids},
+            )
         except Exception as exc:
-            message = str(exc).strip("'")
-            if message.startswith("resource_required:"):
-                resource_id = message.partition(":")[2].strip()
-                return self._observation(
-                    "resource_required",
-                    f"Required runtime resource is not configured: {resource_id}",
-                    tool_call_id=tool_call_id,
-                    arguments=arguments,
-                    retryable=False,
-                    errors=[message],
-                    evidence={"resource_id": resource_id},
-                )
             return self._observation(
                 "execution_failed",
                 f"Tool resource resolution failed: {type(exc).__name__}: {exc}",
@@ -365,11 +370,12 @@ class ToolExecutionGateway:
             except KeyError as exc:
                 detail = str(exc).strip("'")
                 if detail.startswith("resource_required:"):
-                    raise KeyError(detail) from exc
-                missing.append(selector)
+                    missing.append(detail.partition(":")[2].strip())
+                else:
+                    missing.append(selector.split(".", 1)[0])
                 continue
         if missing:
-            raise KeyError(f"missing required resources: {', '.join(sorted(missing))}")
+            raise ToolResourceRequiredError(missing)
         return resources
 
     def _resolve_resource_selector(self, selector: str) -> Any:

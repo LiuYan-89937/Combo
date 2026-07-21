@@ -1504,6 +1504,8 @@ def _package_tool_probe_report(
                 },
             ))
             continue
+        if record.status == "configuration_required":
+            continue
         if record.status != "passed":
             issues.append(_probe_issue(
                 tool_id=tool_id,

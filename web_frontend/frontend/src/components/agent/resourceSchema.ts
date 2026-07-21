@@ -11,6 +11,8 @@ export interface ResourceJsonSchema {
   maximum?: number
   minLength?: number
   maxLength?: number
+  pattern?: string
+  format?: string
   minItems?: number
   maxItems?: number
   uniqueItems?: boolean
@@ -85,7 +87,7 @@ export function resourceDraftValue(schema: Record<string, unknown>, draft: unkno
   return Object.fromEntries(
     fields
       .filter(field => field.required || !isEmptyResourceValue(values[field.name]))
-      .map(field => [field.name, values[field.name]]),
+      .map(field => [field.name, normalizedFieldValue(field.schema, values[field.name])]),
   )
 }
 
@@ -93,6 +95,7 @@ function initialFieldValue(schema: ResourceJsonSchema): unknown {
   if (schema.default !== undefined) return schema.default
   if (schema.type === 'boolean') return false
   if (schema.type === 'array') return []
+  if (schema.type === 'object') return createResourceDraft(schema as unknown as Record<string, unknown>)
   return null
 }
 
@@ -105,12 +108,45 @@ function isEmptyResourceValue(value: unknown): boolean {
 function isStructuredField(schema: ResourceJsonSchema): boolean {
   if (schema.enum?.length) return true
   if (STRUCTURED_FIELD_TYPES.has(String(schema.type))) return true
+  if (schema.type === 'object' && schema.properties) {
+    return Object.values(schema.properties).every(isStructuredField)
+  }
   return schema.type === 'array' && schema.items?.type === 'string'
 }
 
 function resourceFieldComplete(schema: ResourceJsonSchema, value: unknown): boolean {
   if (isEmptyResourceValue(value)) return false
+  if (schema.enum?.length && !schema.enum.some(item => Object.is(item, value))) return false
+  if (schema.type === 'string') {
+    if (typeof value !== 'string') return false
+    if (schema.minLength !== undefined && value.length < schema.minLength) return false
+    if (schema.maxLength !== undefined && value.length > schema.maxLength) return false
+    if (schema.pattern) {
+      try {
+        if (!new RegExp(schema.pattern).test(value)) return false
+      } catch {
+        return false
+      }
+    }
+    return true
+  }
+  if (schema.type === 'integer') return typeof value === 'number' && Number.isInteger(value) && numberInRange(schema, value)
+  if (schema.type === 'number') return typeof value === 'number' && numberInRange(schema, value)
+  if (schema.type === 'object') {
+    return resourceDraftComplete(schema as unknown as Record<string, unknown>, value)
+  }
   if (schema.type !== 'array' || !Array.isArray(value)) return true
-  return value.length >= Math.max(1, schema.minItems || 0) &&
-    (schema.maxItems === undefined || value.length <= schema.maxItems)
+  if (value.length < Math.max(1, schema.minItems || 0)) return false
+  if (schema.maxItems !== undefined && value.length > schema.maxItems) return false
+  return !schema.uniqueItems || new Set(value.map(item => JSON.stringify(item))).size === value.length
+}
+
+function normalizedFieldValue(schema: ResourceJsonSchema, value: unknown): unknown {
+  if (schema.type !== 'object') return value
+  return resourceDraftValue(schema as unknown as Record<string, unknown>, value)
+}
+
+function numberInRange(schema: ResourceJsonSchema, value: number): boolean {
+  return (schema.minimum === undefined || value >= schema.minimum) &&
+    (schema.maximum === undefined || value <= schema.maximum)
 }
