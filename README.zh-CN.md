@@ -74,7 +74,7 @@ AMD ROCm inference host       ▼
 
 ## 默认模型
 
-首次部署使用以下组合，均可在 `deploy/deploy.env` 修改：
+首次部署使用以下组合；需要覆盖默认值时统一写入根目录 `.env`：
 
 | 用途 | 模型 | 下载方式 | 默认配置 |
 | --- | --- | --- | --- |
@@ -115,7 +115,7 @@ cd FastAgentFactory
 ### 2. 选择推理节点位置
 
 ```bash
-cp deploy/deploy.env.example deploy/deploy.env
+cp .env.example .env
 ```
 
 AMD GPU 在另一台机器时保留默认 SSH 模式并填写：
@@ -171,8 +171,8 @@ SSH_KEY=
 9. 从 ModelScope 下载或复用 `BAAI/bge-m3`。
 10. 从 ModelScope 国内直链断点续传并校验 FLUX.1-dev Q4_0、VAE、CLIP-L 与 T5XXL。
 11. 幂等同步 Chat、Embedding、Image Generation 的推理节点 Profile 和 Web 端 external Profile，并清理不属于当前部署清单的旧模型与推理配置。
-12. 激活配置指定的 llama.cpp 实现并启动推理节点，等待 Chat 与 Embedding 都进入 `ready`。
-13. 生成本机 `.env` 的节点连接配置与资源加密密钥；SSH 模式使用隧道，本机模式直连回环端口。
+12. 激活配置指定的 llama.cpp 实现并启动推理节点，等待 Chat、Embedding 与已启用的 Image Generation 都进入 `ready`。
+13. 从统一的 `.env` 派生本机节点连接参数并按需生成资源加密密钥；SSH 模式使用隧道，本机模式直连回环端口。
 14. 准备本机 Python/前端依赖和 Docker Agent Runtime，启动前后端。
 
 模型下载支持续传。已校验文件会通过旁路校验标记直接复用，重复执行不会重新下载 20 GB 以上的 GGUF。
@@ -341,8 +341,8 @@ cd ../..
 ### 本机
 
 ```text
-.env                         本机运行与 SSH 隧道配置，不提交
-deploy/deploy.env            一键部署配置，不提交
+.env                         本机运行、SSH 与一键部署的唯一用户配置，不提交
+deploy/defaults.env          版本化内部默认值，不作为用户配置编辑
 .agentfactory/               模型池、知识库、记忆与平台状态，不提交
 .agent_runtime/              Agent 工作区、Trace 与 Checkpoint，不提交
 vendor/llama.cpp-official/   随仓库提交的官方 Baseline 源码
@@ -364,12 +364,12 @@ vendor/stable-diffusion.cpp/ 随仓库提交的图片推理源码与递归子模
 /root/stable-diffusion.cpp           从本机 vendor 同步的完整源码与远端构建产物
 ```
 
-`/root` 是否持久取决于实例类型。若平台提供持久卷，应在 `deploy/deploy.env` 将模型、状态和 llama.cpp 路径改到其挂载点；否则工作空间到期前必须备份 Benchmark、Profile、Trace、演示材料和 llama.cpp 改动。
+`/root` 是否持久取决于实例类型。若平台提供持久卷，应在根目录 `.env` 覆盖模型、状态和 llama.cpp 路径；否则工作空间到期前必须备份 Benchmark、Profile、Trace、演示材料和 llama.cpp 改动。
 
 ## 安全边界
 
 - SSH 必须使用 Key 登录，不在配置文件中保存密码。
-- `deploy/deploy.env`、`.env`、模型文件和运行状态均已排除 Git 提交；两套 llama.cpp 和 stable-diffusion.cpp 完整源码属于交付内容。
+- `.env`、模型文件和运行状态均已排除 Git 提交；`deploy/defaults.env` 只保存公开默认值，两套 llama.cpp 和 stable-diffusion.cpp 完整源码属于交付内容。
 - 远端 `8002`、`8003`、`8004` 只监听 `127.0.0.1`，不要直接暴露公网。
 - `AGENTFACTORY_RESOURCE_MASTER_KEY` 首次部署自动生成并写入本机 `.env`；丢失后旧的加密资源无法恢复。
 - 部署脚本先复用可用的 ROCm/PyTorch HIP 环境，仅在缺失且配置允许时安装用户态组件。GPU 驱动和 `/dev/kfd` 必须由推理节点宿主环境提供。

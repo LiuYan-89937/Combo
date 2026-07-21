@@ -12,7 +12,7 @@ if [[ -z "${COMMAND}" || -z "${CONFIG_FILE}" || ! -r "${CONFIG_FILE}" ]]; then
 fi
 
 set -a
-DEFAULT_CONFIG_FILE="$(dirname "${CONFIG_FILE}")/deploy.env.example"
+DEFAULT_CONFIG_FILE="$(dirname "${CONFIG_FILE}")/defaults.env"
 if [[ -r "${DEFAULT_CONFIG_FILE}" ]]; then
     # shellcheck disable=SC1090
     source "${DEFAULT_CONFIG_FILE}"

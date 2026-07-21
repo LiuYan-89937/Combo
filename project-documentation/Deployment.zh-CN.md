@@ -36,7 +36,7 @@
 | 远端 | 模型文件 | `/root/models` |
 | 远端 | 推理状态与日志 | `/root/.fastagentfactory` |
 
-推理节点路径均可在 `deploy/deploy.env` 修改。若运行环境提供持久卷，应优先改到持久卷挂载点。
+推理节点路径均可在根目录 `.env` 覆盖。若运行环境提供持久卷，应优先改到持久卷挂载点。
 
 ## 2. 部署前检查
 
@@ -111,7 +111,7 @@ git pull --ff-only
 创建私有配置：
 
 ```bash
-cp deploy/deploy.env.example deploy/deploy.env
+cp .env.example .env
 ```
 
 GPU 位于另一台机器时使用默认 SSH 目标：
@@ -228,7 +228,7 @@ Worker 租约以协作任务为唯一边界。同一个 AgentPackage 可以在�
 12. 幂等同步 Chat、Embedding、Image Generation 的节点 Profile 与 Web external Profile，并清理不属于当前部署清单的旧模型与推理配置。
 13. 设置 `main`、`task`、`compression` 和 `embedding` 默认 Profile。
 14. 激活 `LLAMA_DEFAULT_IMPLEMENTATION`，启动推理节点并等待 Chat、Embedding 与已启用的 Image Generation 都进入 `ready`。
-15. 生成 `.env`；SSH 目标建立隧道，本机目标直连节点，随后启动前后端；传入 `--no-web` 时跳过 Web 启动。
+15. 从统一的 `.env` 派生运行时连接参数；SSH 目标建立隧道，本机目标直连节点，随后启动前后端；传入 `--no-web` 时跳过 Web 启动。
 
 首次下载和编译时间取决于网络、磁盘和 Radeon GPU 主机 CPU。终端会直接显示 curl 与 ModelScope 下载进度。
 
@@ -252,7 +252,7 @@ FLUX.1-dev 使用 Non-Commercial License，不等同于 Apache/MIT。比赛演�
 - 远端无需访问 GitHub；CA 探针只验证国内 Python/模型下载链路，DNS、路由或防火墙问题会原样报错；
 - Profile 按固定 ID 更新，不重复创建随机记录；
 - 部署生成的模型池以当前清单为准，旧主机、旧命名规则和已移除模型留下的 Profile 与 Artifact 会被清理；
-- 本机 `.env` 保留已有 `AGENTFACTORY_RESOURCE_MASTER_KEY`。
+- 本机 `.env` 保留已有 `AGENTFACTORY_RESOURCE_MASTER_KEY`，缺失时只生成一次。
 
 ## 6. 部署验收
 
@@ -420,7 +420,7 @@ Benchmark 页面提供 Official/AMD 实现切换器。切换由远端控制节�
 新实例创建后：
 
 1. 开启 SSH Access 并确认 sshd 可用；
-2. 更新 `deploy/deploy.env` 的 `SSH_HOST` 与 `SSH_PORT`；
+2. 更新根目录 `.env` 的 `SSH_HOST` 与 `SSH_PORT`；
 3. 如果持久卷挂载点变化，更新三个远端数据路径；
 4. 执行 `./deploy.sh up`；
 5. 执行本文档第 6 节验收。

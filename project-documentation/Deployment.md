@@ -25,7 +25,7 @@ Both modes use the same inference control API, model profiles, Official/AMD swit
 | Default remote models | `/root/models` |
 | Default remote runtime state | `/root/.fastagentfactory` |
 
-All inference-node paths can be changed in `deploy/deploy.env`. Use persistent storage when the hosting platform provides it.
+All inference-node paths can be overridden in the root `.env`. Use persistent storage when the hosting platform provides it.
 
 ## 2. Prerequisites
 
@@ -71,10 +71,10 @@ The deployment process may install missing user-space build dependencies when co
 ```bash
 git clone https://github.com/LiuYan-89937/FastAgentFactory.git
 cd FastAgentFactory
-cp deploy/deploy.env.example deploy/deploy.env
+cp .env.example .env
 ```
 
-Runtime secrets and host addresses belong in `deploy/deploy.env` and `.env`; both are excluded from Git.
+Runtime secrets, host addresses, and deployment overrides belong in `.env`, the only user-edited configuration file excluded from Git. `deploy/defaults.env` is an internal defaults table.
 
 ## 4. Configure the Inference Target
 
@@ -239,7 +239,7 @@ MTP uses the model's retained NextN layers through `--spec-type draft-mtp`. The 
 ## 10. Replacing an SSH Inference Host
 
 1. Install the required SSH public key on the new host.
-2. Update `SSH_HOST`, `SSH_PORT`, and persistent paths in `deploy/deploy.env`.
+2. Update `SSH_HOST`, `SSH_PORT`, and any persistent-path overrides in `.env`.
 3. Run `./deploy.sh up`.
 
 The script synchronizes source and runtime files again. Existing validated models are reused only when the configured storage path already contains them.

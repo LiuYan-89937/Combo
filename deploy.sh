@@ -3,9 +3,11 @@
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_FILE="${FASTAGENTFACTORY_DEPLOY_CONFIG:-${PROJECT_ROOT}/deploy/deploy.env}"
-CONFIG_EXAMPLE="${PROJECT_ROOT}/deploy/deploy.env.example"
+CONFIG_FILE="${PROJECT_ROOT}/.env"
+CONFIG_DEFAULTS="${PROJECT_ROOT}/deploy/defaults.env"
+CONFIG_EXAMPLE="${PROJECT_ROOT}/.env.example"
 REMOTE_CONTROLLER="${PROJECT_ROOT}/deploy/remote_runtime.sh"
+REMOTE_CONFIG_BASENAME="fastagentfactory-deploy.env"
 COMMAND="${1:-up}"
 shift $(( $# > 0 ? 1 : 0 ))
 START_LOCAL_WEB=1
@@ -32,13 +34,23 @@ require_command() {
 
 [[ -r "${CONFIG_FILE}" ]] \
     || fail "Deployment config is missing. Run: cp ${CONFIG_EXAMPLE} ${CONFIG_FILE}"
+[[ -r "${CONFIG_DEFAULTS}" ]] || fail "Deployment defaults are missing: ${CONFIG_DEFAULTS}"
+chmod 600 "${CONFIG_FILE}"
 
 set -a
 # shellcheck disable=SC1090
-source "${CONFIG_EXAMPLE}"
+source "${CONFIG_DEFAULTS}"
 # shellcheck disable=SC1090
 source "${CONFIG_FILE}"
 set +a
+
+if [[ -z "${AGENTFACTORY_RESOURCE_MASTER_KEY:-}" ]]; then
+    require_command python3 "Install Python 3.11 or newer."
+    AGENTFACTORY_RESOURCE_MASTER_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')"
+    export AGENTFACTORY_RESOURCE_MASTER_KEY
+    printf '\nAGENTFACTORY_RESOURCE_MASTER_KEY=%s\n' \
+        "${AGENTFACTORY_RESOURCE_MASTER_KEY}" >> "${CONFIG_FILE}"
+fi
 
 DEPLOY_TARGET="${DEPLOY_TARGET:-ssh}"
 if [[ "${DEPLOY_TARGET}" != "local" && "${DEPLOY_TARGET}" != "ssh" ]]; then
@@ -158,17 +170,31 @@ upload_controller() {
     if [[ "${DEPLOY_TARGET}" == "local" ]]; then
         return
     fi
-    scp "${SCP_ARGS[@]}" "${REMOTE_CONTROLLER}" "${CONFIG_EXAMPLE}" "${CONFIG_FILE}" \
-        "${SSH_TARGET}:/tmp/"
+    local rendered_config
+    local status=0
+    rendered_config="$(mktemp "${TMPDIR:-/tmp}/fastagentfactory-deploy.XXXXXX")"
+    chmod 600 "${rendered_config}"
+    while IFS= read -r name; do
+        printf '%s=%q\n' "${name}" "${!name-}"
+    done < <(sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "${CONFIG_DEFAULTS}") \
+        > "${rendered_config}"
+    scp "${SCP_ARGS[@]}" "${REMOTE_CONTROLLER}" "${CONFIG_DEFAULTS}" \
+        "${SSH_TARGET}:/tmp/" || status=$?
+    if (( status == 0 )); then
+        scp "${SCP_ARGS[@]}" "${rendered_config}" \
+            "${SSH_TARGET}:/tmp/${REMOTE_CONFIG_BASENAME}" || status=$?
+    fi
+    rm -f "${rendered_config}"
+    (( status == 0 )) || return "${status}"
     ssh_run chmod 700 /tmp/remote_runtime.sh
-    ssh_run chmod 600 /tmp/"$(basename "${CONFIG_FILE}")"
+    ssh_run chmod 600 "/tmp/${REMOTE_CONFIG_BASENAME}"
 }
 
 remote_command() {
     local command_name="$1"
     shift
     if [[ "${DEPLOY_TARGET}" == "ssh" ]]; then
-        ssh_run /tmp/remote_runtime.sh "${command_name}" /tmp/"$(basename "${CONFIG_FILE}")" "$@"
+        ssh_run /tmp/remote_runtime.sh "${command_name}" "/tmp/${REMOTE_CONFIG_BASENAME}" "$@"
         return
     fi
     "${REMOTE_CONTROLLER}" "${command_name}" "${CONFIG_FILE}" "$@"
@@ -292,33 +318,6 @@ sync_source_tree() {
     rsync -az --delete "$@" "${source_dir}/" "${SSH_TARGET:+${SSH_TARGET}:}${target_dir}/"
 }
 
-configure_local_env() {
-    local connection_mode="direct"
-    local configure_args=()
-    if [[ "${DEPLOY_TARGET}" == "ssh" ]]; then
-        connection_mode="ssh"
-        configure_args+=(
-            --ssh-host "${SSH_HOST}"
-            --ssh-port "${SSH_PORT}"
-            --ssh-user "${SSH_USER}"
-            --ssh-key "${SSH_KEY:-}"
-        )
-    fi
-    python3 "${PROJECT_ROOT}/deploy/configure_local_env.py" \
-        --env-file "${PROJECT_ROOT}/.env" \
-        --example-file "${PROJECT_ROOT}/.env.example" \
-        --connection-mode "${connection_mode}" \
-        "${configure_args[@]}" \
-        --chat-local-port "${LOCAL_CHAT_PORT}" \
-        --chat-remote-port "${REMOTE_CHAT_PORT}" \
-        --embedding-local-port "${LOCAL_EMBEDDING_PORT}" \
-        --embedding-remote-port "${REMOTE_EMBEDDING_PORT}" \
-        --telemetry-local-port "${LOCAL_TELEMETRY_PORT}" \
-        --telemetry-remote-port "${REMOTE_TELEMETRY_PORT}" \
-        --image-local-port "${LOCAL_IMAGE_PORT}" \
-        --image-remote-port "${REMOTE_IMAGE_PORT}"
-}
-
 boolean_argument() {
     local enabled="$1"
     local name="$2"
@@ -414,7 +413,6 @@ bootstrap() {
     sync_sources
     upload_controller
     remote_command bootstrap
-    configure_local_env
     configure_local_profiles
     log "Deployment bootstrap completed"
 }

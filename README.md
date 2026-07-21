@@ -111,7 +111,7 @@ The deployment scripts may install missing user-space build tools. They do not r
 ```bash
 git clone https://github.com/LiuYan-89937/FastAgentFactory.git
 cd FastAgentFactory
-cp deploy/deploy.env.example deploy/deploy.env
+cp .env.example .env
 ```
 
 For a remote GPU host:
@@ -134,7 +134,7 @@ SSH_USER=
 SSH_KEY=
 ```
 
-Set all runtime and model directories in `deploy/deploy.env` to writable absolute paths. Existing `REMOTE_*` names are retained for compatibility and mean “inference-node path” in both modes.
+Override runtime or model directories in `.env` only when the defaults in `deploy/defaults.env` do not fit the target host. Existing `REMOTE_*` names mean “inference-node path” in both modes.
 
 ### 2. Deploy and start
 
@@ -213,7 +213,7 @@ Full design details and measured boundaries are in [AMD Radeon GPU Inference Opt
 
 ## Configuration and Runtime Data
 
-Committed configuration templates include `.env.example` and `deploy/deploy.env.example`. Runtime secrets and generated state are excluded from Git, including `.env`, `deploy/deploy.env`, model weights, `.agentfactory/`, and local virtual environments.
+`.env` is the only user-edited configuration file and is excluded from Git. `deploy/defaults.env` is a committed internal defaults table, not a second configuration file. Model weights, `.agentfactory/`, and local virtual environments are also excluded.
 
 Important runtime boundaries:
 
