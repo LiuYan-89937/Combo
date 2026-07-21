@@ -63,7 +63,7 @@ class GeneratedAsset:
     def model_payload(self) -> dict[str, Any]:
         return {
             "asset_id": self.asset_id,
-            "path": self.path,
+            "path": self.relative_path,
             "relative_path": self.relative_path,
             "mime_type": self.mime_type,
             "provider": self.provider,

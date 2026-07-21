@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from agent_factory.artifact_system import ArtifactStore
 from agent_factory.models.image_generation.adapters import adapter_for_image_provider
+from agent_factory.runtime_workspace import SESSION_OUTPUT_DIR
 from agent_factory.models.image_generation.protocol import (
     GeneratedAsset,
     ImageGenerationRequest,
@@ -30,7 +31,7 @@ class ImageGenerationService:
         for index, source in enumerate(self.adapter.generate(request), start=1):
             mime_type = source.mime_type or "image/png"
             suffix = mimetypes.guess_extension(mime_type) or ".png"
-            relative_path = f"images/{uuid4().hex}_{index}{suffix}"
+            relative_path = f"{SESSION_OUTPUT_DIR}/{uuid4().hex}_{index}{suffix}"
             record = target_store.write_bytes(
                 kind="artifact",
                 relative_path=relative_path,

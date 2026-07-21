@@ -105,7 +105,12 @@ def _parse_openai_images(body: Any) -> list[GeneratedImageSource]:
                 data = base64.b64decode(encoded, validate=True)
             except ValueError as exc:
                 raise ImageGenerationAdapterError("stable-diffusion.cpp returned invalid base64 image data") from exc
-            result.append(GeneratedImageSource(data=data, provider_metadata=dict(item)))
+            result.append(
+                GeneratedImageSource(
+                    data=data,
+                    provider_metadata={key: value for key, value in item.items() if key != "b64_json"},
+                )
+            )
     if not result:
         raise ImageGenerationAdapterError("stable-diffusion.cpp response contained no generated images")
     return result
