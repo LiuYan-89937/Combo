@@ -66,6 +66,7 @@ const routes: RouteRecordRaw[] = [
     path: '/model-pool',
     name: 'ModelPool',
     component: () => import('@/views/ModelPoolView.vue'),
+    meta: { rightSidebarAvailable: false },
   },
 ]
 

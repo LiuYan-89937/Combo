@@ -173,6 +173,7 @@ const {
   thinkingMessages,
   timelineItems,
 } = useCollaborationRuntime()
+runtimeStore.showEmptyCollaborationConversation()
 const runtimeStatus = computed<CollaborationRuntimeStatus | null>(() => {
   if (runtimeStore.runStatus === 'interrupted' && hasApprovalRequests.value) {
     return 'waiting_for_approval'

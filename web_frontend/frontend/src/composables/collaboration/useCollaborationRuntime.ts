@@ -9,6 +9,7 @@ import { useFactoryMessageProjection } from '@/composables/factory/useFactoryMes
 import {
   agentPackageConversationScope,
   conversationScopeForMode,
+  isMoreSpecificConversationScope,
 } from '@/stores/runtime/scopes'
 import { messageReasoning, messageText } from '@/stores/runtime/messageParts'
 import type { RuntimeAttachmentInput, TranscriptAttachmentView } from '@/types/protocol'
@@ -67,7 +68,12 @@ export function useCollaborationRuntime() {
   function enterActiveMainAgentContext(): void {
     const packageId = mainAgentPackageId.value
     const collaborationId = collaborationStore.activeSession?.collaboration_id
-    if (!collaborationId) return
+    if (!collaborationId) {
+      agentStore.leaveAgentChat()
+      runtimeStore.showEmptyCollaborationConversation()
+      workspaceStore.setScope('package')
+      return
+    }
     if (packageId === SYSTEM_CHAT_PACKAGE_ID) {
       agentStore.leaveAgentChat()
       runtimeStore.enterCollaborationConversation(
@@ -170,7 +176,7 @@ export function useCollaborationRuntime() {
   async function rememberActiveMainAgentSession(): Promise<void> {
     await nextTick()
     const current = collaborationStore.activeSession
-    if (!current) return
+    if (!current || !ownsActiveMainAgentConversation()) return
     const nextPackageSessionId = mainAgentPackageId.value === SYSTEM_CHAT_PACKAGE_ID
       ? activeFactoryChatPackageSessionId.value
       : runtimeStore.activeAgentSessionId
@@ -189,6 +195,13 @@ export function useCollaborationRuntime() {
     }
     if (Object.keys(payload).length === 0) return
     await collaborationStore.updateSession(payload)
+  }
+
+  function ownsActiveMainAgentConversation(): boolean {
+    const expectedScope = mainAgentConversationScope.value
+    const activeScope = runtimeStore.activeConversationScope
+    if (!expectedScope || !activeScope) return false
+    return activeScope === expectedScope || isMoreSpecificConversationScope(expectedScope, activeScope)
   }
 
   function cancelMainAgentRequest(): void {

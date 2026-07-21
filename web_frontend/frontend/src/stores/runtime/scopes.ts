@@ -12,6 +12,11 @@ export interface CollaborationScopeIdentity {
 }
 
 const COLLABORATION_SCOPE_PREFIX = 'collaboration:'
+const EMPTY_COLLABORATION_SCOPE = 'collaboration:new'
+
+export function emptyCollaborationConversationScope(): string {
+  return EMPTY_COLLABORATION_SCOPE
+}
 
 export function isCollaborationConversationScope(scope: string | null | undefined): boolean {
   return Boolean(scope?.startsWith(COLLABORATION_SCOPE_PREFIX))

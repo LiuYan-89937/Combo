@@ -68,6 +68,7 @@ import {
   agentPackageConversationScope,
   agentPackageScopeInfoFromEvent,
   conversationScopeForMode,
+  emptyCollaborationConversationScope,
   isCollaborationConversationScope,
   isMoreSpecificConversationScope,
   scopeFromEventPayload,
@@ -1168,6 +1169,14 @@ export const useRuntimeStore = defineStore('runtime', {
       this.currentMode = 'agent_package'
       this.activeFactorySessionId = null
       this.activeAgentSessionId = sessionId
+    },
+
+    showEmptyCollaborationConversation() {
+      this._clearAgentPackageSelectionIntent()
+      this._resetConversationScope(emptyCollaborationConversationScope())
+      this.currentMode = 'chat'
+      this.activeFactorySessionId = null
+      this.activeAgentSessionId = null
     },
 
     expectFactorySession(
