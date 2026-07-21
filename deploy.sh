@@ -35,7 +35,8 @@ require_command() {
 [[ -r "${CONFIG_FILE}" ]] \
     || fail "Deployment config is missing. Run: cp ${CONFIG_EXAMPLE} ${CONFIG_FILE}"
 [[ -r "${CONFIG_DEFAULTS}" ]] || fail "Deployment defaults are missing: ${CONFIG_DEFAULTS}"
-chmod 600 "${CONFIG_FILE}"
+require_command python3 "Install Python 3.11 or newer."
+python3 "${PROJECT_ROOT}/deploy/configure_user_env.py" --env-file "${CONFIG_FILE}"
 
 set -a
 # shellcheck disable=SC1090
@@ -43,14 +44,6 @@ source "${CONFIG_DEFAULTS}"
 # shellcheck disable=SC1090
 source "${CONFIG_FILE}"
 set +a
-
-if [[ -z "${AGENTFACTORY_RESOURCE_MASTER_KEY:-}" ]]; then
-    require_command python3 "Install Python 3.11 or newer."
-    AGENTFACTORY_RESOURCE_MASTER_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')"
-    export AGENTFACTORY_RESOURCE_MASTER_KEY
-    printf '\nAGENTFACTORY_RESOURCE_MASTER_KEY=%s\n' \
-        "${AGENTFACTORY_RESOURCE_MASTER_KEY}" >> "${CONFIG_FILE}"
-fi
 
 DEPLOY_TARGET="${DEPLOY_TARGET:-ssh}"
 if [[ "${DEPLOY_TARGET}" != "local" && "${DEPLOY_TARGET}" != "ssh" ]]; then
