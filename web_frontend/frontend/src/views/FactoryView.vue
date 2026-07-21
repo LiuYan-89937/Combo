@@ -165,13 +165,18 @@ const referenceScope = computed(() => [
   runtimeStore.activeFactorySessionId || runtimeStore.activeAgentSessionId || 'new',
 ].join(':'))
 const tipAllowed = computed(() => !['Manufacturing', 'Evolution'].includes(String(route.name || '')))
-const tipScopeType = computed(() => agentStore.activeChatPackageId ? 'agent-session' : 'factory-session')
-const tipScopeId = computed(() => {
-  if (!tipAllowed.value) return ''
-  return agentStore.activeChatPackageId
-    ? runtimeStore.activeAgentSessionId || ''
-    : runtimeStore.activeFactorySessionId || ''
+const tipScope = computed(() => {
+  if (!tipAllowed.value) return null
+  if (runtimeStore.activeAgentSessionId) {
+    return { scopeType: 'agent-session', scopeId: runtimeStore.activeAgentSessionId }
+  }
+  if (runtimeStore.activeFactorySessionId) {
+    return { scopeType: 'factory-session', scopeId: runtimeStore.activeFactorySessionId }
+  }
+  return null
 })
+const tipScopeType = computed(() => tipScope.value?.scopeType || 'factory-session')
+const tipScopeId = computed(() => tipScope.value?.scopeId || '')
 
 const {
   isEvolutionRoute,
