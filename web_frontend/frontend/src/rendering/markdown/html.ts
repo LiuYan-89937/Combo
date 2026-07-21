@@ -33,7 +33,10 @@ export function renderMarkdownDocument(content: string, options: MarkdownRenderO
   try {
     const html = String(processor.processSync({
       value: source,
-      data: { resolveImageUrl: options.resolveImageUrl },
+      data: {
+        resolveImageUrl: options.resolveImageUrl,
+        surface: options.surface,
+      },
     }))
     return {
       source,

@@ -259,9 +259,19 @@ def _parse_openai_image_sources(body: dict[str, Any]) -> list[GeneratedImageSour
         url = item.get("url")
         b64 = item.get("b64_json")
         if isinstance(b64, str) and b64.strip():
-            sources.append(GeneratedImageSource(data=base64.b64decode(b64), provider_metadata=dict(item)))
+            sources.append(
+                GeneratedImageSource(
+                    data=base64.b64decode(b64),
+                    provider_metadata=_provider_metadata(item),
+                )
+            )
         elif isinstance(url, str) and url.strip():
-            sources.append(GeneratedImageSource(url=url.strip(), provider_metadata=dict(item)))
+            sources.append(
+                GeneratedImageSource(
+                    url=url.strip(),
+                    provider_metadata=_provider_metadata(item),
+                )
+            )
     if not sources:
         raise ImageGenerationAdapterError(f"image generation response contained no images: {body}")
     return sources
@@ -275,13 +285,29 @@ def _parse_nested_image_sources(body: dict[str, Any]) -> list[GeneratedImageSour
         url = _text_value(item, "url") or _text_value(item, "image") or _text_value(item, "image_url")
         b64 = _text_value(item, "b64_json") or _text_value(item, "base64")
         if b64 and _looks_like_base64(b64):
-            sources.append(GeneratedImageSource(data=base64.b64decode(_strip_data_url(b64)), provider_metadata=dict(item)))
+            sources.append(
+                GeneratedImageSource(
+                    data=base64.b64decode(_strip_data_url(b64)),
+                    provider_metadata=_provider_metadata(item),
+                )
+            )
         elif url and (url.startswith("http://") or url.startswith("https://") or url.startswith("data:image/")):
             if url.startswith("data:image/"):
                 mime_type, data = _decode_data_url(url)
-                sources.append(GeneratedImageSource(data=data, mime_type=mime_type, provider_metadata=dict(item)))
+                sources.append(
+                    GeneratedImageSource(
+                        data=data,
+                        mime_type=mime_type,
+                        provider_metadata=_provider_metadata(item),
+                    )
+                )
             else:
-                sources.append(GeneratedImageSource(url=url, provider_metadata=dict(item)))
+                sources.append(
+                    GeneratedImageSource(
+                        url=url,
+                        provider_metadata=_provider_metadata(item),
+                    )
+                )
     if not sources:
         raise ImageGenerationAdapterError(f"image generation response contained no images: {body}")
     return sources
@@ -332,3 +358,12 @@ def _decode_data_url(value: str) -> tuple[str, bytes]:
 
 def _compact_dict(value: dict[str, Any]) -> dict[str, Any]:
     return {key: item for key, item in value.items() if item is not None and item != ""}
+
+
+def _provider_metadata(value: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: item
+        for key, item in value.items()
+        if key not in {"b64_json", "base64"}
+        and not (isinstance(item, str) and item.startswith("data:image/"))
+    }

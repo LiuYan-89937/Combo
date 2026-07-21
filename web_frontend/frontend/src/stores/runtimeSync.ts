@@ -83,9 +83,14 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
     hasRunAgentSession
   ) {
     const agentStore = useAgentStore()
-    agentStore.setPackages(runtimeStore.agentPackages as any)
+    if (event.event_type === 'agent_packages_listed' || event.event_type === 'agent_package_deleted') {
+      agentStore.setPackages(runtimeStore.agentPackages as any)
+    }
     if (event.event_type === 'agent_package_deleted' && event.payload?.package_id) {
       agentStore.removePackage(String(event.payload.package_id))
+    }
+    if (event.event_type === 'agent_package_selected' && event.payload?.package?.package_id) {
+      agentStore.addPackage(event.payload.package as any)
     }
     if (runtimeStore.selectedAgentPackage?.package_id) {
       agentStore.selectPackage(runtimeStore.selectedAgentPackage.package_id)
@@ -118,7 +123,12 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
     ) {
       const loadedSessionId = String(event.payload.session.session_id)
       if (runtimeStore.activeAgentSessionId === loadedSessionId) {
-        agentStore.setActiveAgentSession(loadedSessionId)
+        const packageId = String(event.payload.package_id || event.payload.session.package_id || '').trim()
+        if (packageId) {
+          agentStore.enterAgentChat(packageId, loadedSessionId)
+        } else {
+          agentStore.setActiveAgentSession(loadedSessionId)
+        }
       }
     }
     if (
@@ -126,7 +136,12 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
       && runtimeStore.activeAgentSessionId
       && isStandaloneAgentSession(event.payload?.agent_session || {})
     ) {
-      agentStore.setActiveAgentSession(runtimeStore.activeAgentSessionId)
+      const packageId = String(event.payload.package_id || event.payload.agent_session?.package_id || '').trim()
+      if (packageId) {
+        agentStore.enterAgentChat(packageId, runtimeStore.activeAgentSessionId)
+      } else {
+        agentStore.setActiveAgentSession(runtimeStore.activeAgentSessionId)
+      }
     }
   }
 

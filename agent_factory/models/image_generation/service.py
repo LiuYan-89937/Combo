@@ -9,6 +9,7 @@ import httpx
 
 from agent_factory.artifact_system import ArtifactStore
 from agent_factory.models.image_generation.adapters import adapter_for_image_provider
+from agent_factory.runtime_workspace import SESSION_OUTPUT_DIR
 from agent_factory.models.image_generation.protocol import (
     GeneratedAsset,
     ImageGenerationRequest,
@@ -36,7 +37,7 @@ class ImageGenerationService:
             image_bytes = source.data if source.data is not None else _download(source.url, timeout=self.settings.timeout_seconds)
             mime_type = source.mime_type or _mime_type_from_url(source.url) or "image/png"
             suffix = _extension_for_mime(mime_type)
-            relative_path = f"images/{uuid4().hex}_{index}{suffix}"
+            relative_path = f"{SESSION_OUTPUT_DIR}/{uuid4().hex}_{index}{suffix}"
             record = target_store.write_bytes(
                 kind="artifact",
                 relative_path=relative_path,
