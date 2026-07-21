@@ -233,10 +233,16 @@ class AgentPackageRuntimeManager:
         )
 
     def list_packages(self) -> list[dict[str, Any]]:
-        packages = [
-            self._package_summary(manifest_path)
-            for manifest_path in self.repository.manifest_paths()
-        ]
+        packages: list[dict[str, Any]] = []
+        for manifest_path in self.repository.manifest_paths():
+            try:
+                package = self.repository.load_manifest(manifest_path)
+            except Exception:
+                packages.append(self._package_summary(manifest_path))
+                continue
+            if _is_host_system_package(package):
+                continue
+            packages.append(self._package_summary(manifest_path))
         return sorted(packages, key=lambda item: str(item.get("updated_at") or ""), reverse=True)
 
     def resource_status(self, package_id: str, *, include_values: bool = False) -> dict[str, Any]:

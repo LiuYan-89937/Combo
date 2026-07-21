@@ -131,7 +131,7 @@ class FrontendWorkspaceService:
     def _package_target(self, payload: dict[str, Any]) -> FrontendWorkspaceTarget:
         package_id = str(payload.get("package_id") or "").strip() or SYSTEM_CHAT_PACKAGE_ID
         package_session_id = self._package_session_id(payload)
-        roots = self.agent_package_runtime.workspace_root_paths(package_id, session_id=package_session_id)
+        runtime_roots = self.agent_package_runtime.workspace_root_paths(package_id, session_id=package_session_id)
         return FrontendWorkspaceTarget(
             resource_mode="package",
             context={
@@ -139,7 +139,7 @@ class FrontendWorkspaceService:
                 "package_id": package_id,
                 **({"package_session_id": package_session_id} if package_session_id else {}),
             },
-            roots=roots,
+            roots={"workdir": runtime_roots["workdir"]},
         )
 
     def _create_agent_target(
@@ -286,13 +286,7 @@ def _resource_mode(payload: dict[str, Any]) -> str:
 
 
 def _factory_workspace_roots(root: Path) -> dict[str, Path]:
-    return {
-        "package": root,
-        "workdir": root,
-        "runtime": root / ".factory",
-        "artifacts": root / "artifacts",
-        "extensions": root / "extensions",
-    }
+    return {"workdir": root}
 
 
 def _factory_session_context(payload: dict[str, Any], record: Any | None) -> dict[str, str]:

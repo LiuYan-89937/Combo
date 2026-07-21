@@ -5,9 +5,13 @@ from pathlib import Path
 from typing import Any
 
 from agent_factory.runtime_attachments import ATTACHMENT_INPUT_DIR
+from agent_factory.runtime_workspace import (
+    RUNTIME_OUTPUT_ROOT_SESSION_KEY,
+    RUNTIME_WORKSPACE_ROOT_SESSION_KEY,
+    SESSION_OUTPUT_DIR,
+)
 
 
-RUNTIME_WORKSPACE_ROOT_SESSION_KEY = "runtime_workspace_root"
 PACKAGE_TOOL_SYSTEM_RESOURCE_IDS = frozenset(
     {"artifacts_root", "package_root", "runtime_root", "workdir_root", "workspace_root"}
 )
@@ -25,6 +29,9 @@ def runtime_resource_overrides_from_state(state: Any) -> dict[str, Any]:
     root = str(session_config.get(RUNTIME_WORKSPACE_ROOT_SESSION_KEY) or "").strip()
     if not root:
         return {}
+    output_root = str(session_config.get(RUNTIME_OUTPUT_ROOT_SESSION_KEY) or "").strip()
+    if not output_root:
+        output_root = str(Path(root) / SESSION_OUTPUT_DIR)
     read_only_input = str(Path(root) / ATTACHMENT_INPUT_DIR)
     workspace_boundary = {
         "root": root,
@@ -33,7 +40,7 @@ def runtime_resource_overrides_from_state(state: Any) -> dict[str, Any]:
     return {
         "filesystem": dict(workspace_boundary),
         "process_runtime": dict(workspace_boundary),
-        "artifacts_root": root,
+        "artifacts_root": output_root,
         "workdir_root": root,
         "workspace_root": root,
     }
