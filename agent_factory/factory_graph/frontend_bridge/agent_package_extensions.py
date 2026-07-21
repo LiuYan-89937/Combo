@@ -103,10 +103,10 @@ def _extension_summary(
     system_owner: SystemAgentExtensionOwner | None = None,
 ) -> dict[str, Any]:
     _prune_missing_local_skills(extension_root)
-    bundle = (
-        load_system_agent_extension_bundle(extension_root)
-        if system_owner is not None
-        else load_extension_bundle(extension_root, package=package)
+    bundle = _load_effective_extension_bundle(
+        extension_root,
+        package=package,
+        system_owner=system_owner,
     )
     return {
         "package_id": scope_id,
@@ -154,7 +154,12 @@ def _manage_extension_root(
     if action == "list":
         return ExtensionManageResult(summary())
     if action == "upsert_mcp":
-        server = _mcp_server_for_upsert(extension_root, payload, package=package)
+        server = _mcp_server_for_upsert(
+            extension_root,
+            payload,
+            package=package,
+            system_owner=system_owner,
+        )
         _save_mcp_server(extension_root, server)
         return ExtensionManageResult(
             {
@@ -187,7 +192,12 @@ def _manage_extension_root(
             changed=True,
         )
     if action == "test_mcp":
-        server = _mcp_server_for_test(extension_root, payload, package=package)
+        server = _mcp_server_for_test(
+            extension_root,
+            payload,
+            package=package,
+            system_owner=system_owner,
+        )
         return ExtensionManageResult({"test": _test_mcp_server(server), **summary()})
     if action == "update_tool_permissions":
         policy = _tool_approval_policy_from_payload(payload)
@@ -541,6 +551,17 @@ def load_system_agent_extension_bundle(extension_root: Path) -> Any:
     ).load()
 
 
+def _load_effective_extension_bundle(
+    extension_root: Path,
+    *,
+    package: LoadedAgentPackage | None = None,
+    system_owner: SystemAgentExtensionOwner | None = None,
+) -> Any:
+    if system_owner is not None:
+        return load_system_agent_extension_bundle(extension_root)
+    return load_extension_bundle(extension_root, package=package)
+
+
 def public_mcp_server(payload: dict[str, Any]) -> dict[str, Any]:
     server_id = str(payload.get("server_id") or "").strip()
     source = dict(payload.get("source") or {})
@@ -757,10 +778,20 @@ def _mcp_server_for_upsert(
     payload: dict[str, Any],
     *,
     package: LoadedAgentPackage | None = None,
+    system_owner: SystemAgentExtensionOwner | None = None,
 ) -> MCPServerConfig:
     server_payload = payload.get("server") if isinstance(payload.get("server"), dict) else payload
     server_id = str(server_payload.get("server_id") or "").strip()
-    existing = _find_mcp_server(extension_root, server_id, package=package) if server_id else None
+    existing = (
+        _find_mcp_server(
+            extension_root,
+            server_id,
+            package=package,
+            system_owner=system_owner,
+        )
+        if server_id
+        else None
+    )
     return _mcp_server_from_payload(server_payload, existing=existing)
 
 
@@ -769,23 +800,18 @@ def _find_mcp_server(
     server_id: str,
     *,
     package: LoadedAgentPackage | None = None,
+    system_owner: SystemAgentExtensionOwner | None = None,
 ) -> MCPServerConfig | None:
     if not server_id:
         return None
-    try:
-        bundle = load_extension_bundle(extension_root, package=package)
-    except Exception:
-        bundle = None
-    if bundle is not None:
-        for server in bundle.mcp_servers.servers:
-            if server.server_id == server_id:
-                return server
-    try:
-        for server in _load_local_mcp_config(extension_root).servers:
-            if server.server_id == server_id:
-                return server
-    except Exception:
-        return None
+    bundle = _load_effective_extension_bundle(
+        extension_root,
+        package=package,
+        system_owner=system_owner,
+    )
+    for server in bundle.mcp_servers.servers:
+        if server.server_id == server_id:
+            return server
     return None
 
 
@@ -794,14 +820,19 @@ def _mcp_server_for_test(
     payload: dict[str, Any],
     *,
     package: LoadedAgentPackage | None = None,
+    system_owner: SystemAgentExtensionOwner | None = None,
 ) -> MCPServerConfig:
     server_payload = payload.get("server") if isinstance(payload.get("server"), dict) else payload
     server_id = str(server_payload.get("server_id") or "").strip()
     if server_id:
-        bundle = load_extension_bundle(extension_root, package=package)
-        for server in bundle.mcp_servers.servers:
-            if server.server_id == server_id:
-                return _mcp_server_from_payload(server_payload, existing=server)
+        existing = _find_mcp_server(
+            extension_root,
+            server_id,
+            package=package,
+            system_owner=system_owner,
+        )
+        if existing is not None:
+            return _mcp_server_from_payload(server_payload, existing=existing)
     return _mcp_server_from_payload(server_payload)
 
 
