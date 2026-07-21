@@ -40,6 +40,7 @@
     "runtime_ready",
     "session_started",
     "session_switched",
+    "session_empty",
     "session_deleted",
     "sessions_listed",
     "agent_packages_listed",
