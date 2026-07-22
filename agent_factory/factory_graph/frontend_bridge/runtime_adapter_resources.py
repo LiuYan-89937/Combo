@@ -92,7 +92,7 @@ class RuntimeResourceCommandMixin:
                 },
             )
 
-        progress = emit_progress if action == "install_mcp" else None
+        progress = emit_progress if action in {"install_mcp", "test_mcp"} else None
         if resource_mode in {"create_agent", "evolve_agent"}:
             result = self.agent_package_runtime.system_extensions_manage(
                 resource_mode,

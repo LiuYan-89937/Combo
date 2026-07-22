@@ -41,7 +41,6 @@
             <span v-else>
               {{ t('extensions.headers') }}：{{ recordKeys(server.headers) || '—' }}
             </span>
-            <span>{{ t('extensions.timeoutSeconds') }}：{{ server.timeout_seconds }}s</span>
           </div>
         </div>
       </div>
@@ -86,8 +85,8 @@
       </template>
 
       <n-grid :cols="2" :x-gap="16">
-        <n-form-item-gi :label="t('extensions.timeoutSeconds')">
-          <n-input-number v-model:value="formData.timeout_seconds" :min="1" :max="300" />
+        <n-form-item-gi :label="t('extensions.toolCallTimeoutSeconds')">
+          <n-input-number v-model:value="formData.timeout_seconds" :min="1" />
         </n-form-item-gi>
         <n-form-item-gi :label="t('permissions.riskLevel')">
           <n-select v-model:value="formData.risk_level_default" :options="riskOptions" />

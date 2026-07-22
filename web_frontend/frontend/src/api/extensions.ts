@@ -15,11 +15,11 @@ export const extensionsApi = {
       method: 'POST',
       body: JSON.stringify({ servers, request_id: requestId, ...packageResourceContextPayload(context) }),
     }),
-  testMcp: (serverIdOrConfig: string | McpServerConfig, context?: WorkspaceContextInput) => {
+  testMcp: (serverIdOrConfig: string | McpServerConfig, requestId: string, context?: WorkspaceContextInput) => {
     const payload =
       typeof serverIdOrConfig === 'string'
-        ? { server_id: serverIdOrConfig, ...packageResourceContextPayload(context) }
-        : { server: serverIdOrConfig, ...packageResourceContextPayload(context) }
+        ? { server_id: serverIdOrConfig, request_id: requestId, ...packageResourceContextPayload(context) }
+        : { server: serverIdOrConfig, request_id: requestId, ...packageResourceContextPayload(context) }
     return requestEvent('/api/extensions/mcp/test', {
       method: 'POST',
       body: JSON.stringify(payload),

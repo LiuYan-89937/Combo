@@ -46,12 +46,14 @@ def create_extensions_router(runtime_bridge: RuntimeBridge) -> APIRouter:
 
     @router.post("/mcp/test")
     async def test_mcp(payload: dict[str, Any]):
+        request_id_value = str(payload.pop("request_id", "")).strip() or None
         event = await resource_command(
             runtime_bridge,
             "extensions_manage",
             {"action": "test_mcp", **payload, **optional_resource_mode(payload.get("resource_mode"))},
             {"extension_config_tested"},
-            timeout_seconds=60.0,
+            timeout_seconds=None,
+            request_id_value=request_id_value,
         )
         return {"event": event}
 

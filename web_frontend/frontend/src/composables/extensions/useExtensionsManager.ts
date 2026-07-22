@@ -31,6 +31,8 @@ export function useExtensionsManager() {
   const mcpInstallResult = ref<Record<string, any> | null>(null)
   const mcpInstallRequestId = ref<string | null>(null)
   const mcpInstallStopping = ref(false)
+  const mcpTestRequestId = ref<string | null>(null)
+  const mcpTestStopping = ref(false)
   const mcpInstallDisplayResult = computed<Record<string, any> | null>(() => {
     const liveResult = extensionStore.testResult
     if (
@@ -145,13 +147,26 @@ export function useExtensionsManager() {
 
   async function handleTestMcp(item: ExtensionItemView): Promise<void> {
     const serverId = String(item.payload?.server_id || '')
-    if (!serverId) return
+    if (!serverId || busyKey.value) return
+    const requestId = crypto.randomUUID()
     busyKey.value = `test:${extensionKey(item)}`
+    mcpTestRequestId.value = requestId
+    mcpTestStopping.value = false
+    extensionStore.setTestResult(null)
     try {
-      await commands.testMcp(serverId, extensionContext.value)
+      await commands.testMcp(serverId, requestId, extensionContext.value)
     } finally {
+      mcpTestRequestId.value = null
+      mcpTestStopping.value = false
       busyKey.value = null
     }
+  }
+
+  function handleStopMcpTest(): void {
+    const requestId = mcpTestRequestId.value
+    if (!requestId || mcpTestStopping.value) return
+    mcpTestStopping.value = true
+    commands.cancelRequest('user_cancelled', requestId)
   }
 
   async function handleToggleMcp(item: ExtensionItemView, enabled: boolean): Promise<void> {
@@ -368,6 +383,7 @@ export function useExtensionsManager() {
     handleMcpAction,
     handleInstallMcp,
     handleStopMcpInstall,
+    handleStopMcpTest,
     handleSaveSkill,
     handleSkillHubInstall,
     handleSkillHubSearch,
@@ -379,6 +395,7 @@ export function useExtensionsManager() {
     mcpCommandLine,
     mcpInstallDisplayResult,
     mcpInstallStopping,
+    mcpTestStopping,
     openAddMcp,
     openAddSkill,
     permissionModeOptions,
