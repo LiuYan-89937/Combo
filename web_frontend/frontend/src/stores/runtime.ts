@@ -724,11 +724,12 @@ export const useRuntimeStore = defineStore('runtime', {
     },
 
     _syncAgentSessionFromRunEvent(event: FactoryFrontendEvent) {
+      if (event.mode !== 'agent_package') return
       if (!event.payload?.agent_session?.session_id) return
       this.activeFactorySessionId = null
       this.activeAgentSessionId = event.payload.agent_session.session_id
       this._upsertAgentSession(event.payload.agent_session)
-      if (event.mode !== 'agent_package' || !event.payload?.package_id) return
+      if (!event.payload?.package_id) return
       const nextScope = agentPackageConversationScope(
         String(event.payload.package_id),
         String(event.payload.agent_session.session_id),

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
@@ -43,6 +43,7 @@ class RuntimeStreamConsumeResult:
     payload: dict[str, Any] | None = None
     final_answer: str = ""
     reasoning_content: str = ""
+    tool_activities: list[dict[str, Any]] = field(default_factory=list)
 
 
 class RuntimeAgentPackageCommandMixin:
@@ -320,15 +321,13 @@ class RuntimeAgentPackageCommandMixin:
                 extra_payload=group_payload,
                 sync_system_chat_session=False,
             )
+            self._persist_agent_package_stream_result(
+                package_id=package_id,
+                run=stream_run,
+                result=result,
+                request_id=command.request_id,
+            )
             if result.status in {"completed", "failed", "cancelled"}:
-                self.agent_package_runtime.finish_session_turn(
-                    package_id,
-                    session_id=package_session_id,
-                    request_id=command.request_id,
-                    final_answer=result.final_answer,
-                    reasoning_content=result.reasoning_content,
-                    status=result.status,
-                )
                 store.update_run(group_run_id, {"status": result.status})
         except Exception as exc:
             self.agent_package_runtime.finish_session_turn(
@@ -376,7 +375,13 @@ class RuntimeAgentPackageCommandMixin:
                 require_ready=require_ready,
                 attachments=command.payload.get("attachments"),
             )
-            self._consume_agent_package_stream(package_id=package_id, run=run, normalizer=normalizer)
+            result = self._consume_agent_package_stream(package_id=package_id, run=run, normalizer=normalizer)
+            self._persist_agent_package_stream_result(
+                package_id=package_id,
+                run=run,
+                result=result,
+                request_id=command.request_id,
+            )
         except AttachmentImportError as exc:
             _emit_attachment_import_failed(normalizer, exc)
         except Exception as exc:
@@ -469,6 +474,7 @@ class RuntimeAgentPackageCommandMixin:
                     final_answer=visible_output.content,
                     reasoning_content=visible_output.reasoning_content,
                     status="interrupted",
+                    tool_activities=visible_output.tool_activities,
                 )
                 self.pending_evolution_run = PendingEvolutionRun(
                     package_id=package_id,
@@ -502,6 +508,7 @@ class RuntimeAgentPackageCommandMixin:
                     final_answer=visible_output.content,
                     reasoning_content=visible_output.reasoning_content,
                     status=runtime_stream_status(item),
+                    tool_activities=visible_output.tool_activities,
                 )
                 terminal_event = item
         if terminal_event is not None:
@@ -510,6 +517,7 @@ class RuntimeAgentPackageCommandMixin:
                 terminal_event=terminal_event,
                 final_answer=visible_output.content,
                 reasoning_content=visible_output.reasoning_content,
+                tool_activities=list(visible_output.tool_activities),
             )
         raise RuntimeError("agent evolution runtime stream ended without a terminal event")
 
@@ -526,13 +534,27 @@ class RuntimeAgentPackageCommandMixin:
                 resume_payload=command.payload,
                 request_id=command.request_id,
             )
-            self._consume_agent_package_stream(
+            result = self._consume_agent_package_stream(
                 package_id=pending.package_id,
                 run=run,
                 normalizer=pending.normalizer,
                 frontend_mode=pending.normalizer.mode if pending.normalizer.mode == "chat" else None,
                 frontend_session_id=pending.normalizer.session_id if pending.normalizer.mode == "chat" else None,
             )
+            self._persist_agent_package_stream_result(
+                package_id=pending.package_id,
+                run=run,
+                result=result,
+                request_id=result.terminal_event.request_id if result.terminal_event else command.request_id,
+            )
+            if pending.normalizer.mode == "chat":
+                self._finish_system_chat_turn(
+                    request_id=result.terminal_event.request_id if result.terminal_event else command.request_id,
+                    final_answer=result.final_answer,
+                    reasoning_content=result.reasoning_content,
+                    status=result.status,
+                    tool_activities=result.tool_activities,
+                )
         except Exception as exc:
             pending.normalizer.emit_run_failed(exc)
 
@@ -553,7 +575,7 @@ class RuntimeAgentPackageCommandMixin:
                 "package_id": pending.package_id,
                 "package_session_id": pending.session_id,
             }
-            self._consume_agent_package_stream(
+            result = self._consume_agent_package_stream(
                 package_id=pending.package_id,
                 run=run,
                 normalizer=pending.normalizer,
@@ -561,6 +583,12 @@ class RuntimeAgentPackageCommandMixin:
                 frontend_session_id=pending.session_id,
                 extra_payload=group_payload,
                 sync_system_chat_session=False,
+            )
+            self._persist_agent_package_stream_result(
+                package_id=pending.package_id,
+                run=run,
+                result=result,
+                request_id=result.terminal_event.request_id if result.terminal_event else command.request_id,
             )
         except Exception as exc:
             pending.normalizer.emit_run_failed(exc)
@@ -837,7 +865,12 @@ class RuntimeAgentPackageCommandMixin:
                 if isinstance(payload, dict):
                     payload = {**payload, "package_id": package_id}
                 normalizer.emit_interrupt(payload)
-                return RuntimeStreamConsumeResult(status="interrupted")
+                return RuntimeStreamConsumeResult(
+                    status="interrupted",
+                    final_answer=visible_output.content,
+                    reasoning_content=visible_output.reasoning_content,
+                    tool_activities=list(visible_output.tool_activities),
+                )
             if stream_mode == "runtime_final":
                 final_state = chunk
                 continue
@@ -848,6 +881,7 @@ class RuntimeAgentPackageCommandMixin:
                 terminal_event=terminal_event,
                 final_answer=visible_output.content,
                 reasoning_content=visible_output.reasoning_content,
+                tool_activities=list(visible_output.tool_activities),
             )
         if final_state is None:
             raise RuntimeError("agent package runtime did not produce a final state")
@@ -860,6 +894,7 @@ class RuntimeAgentPackageCommandMixin:
                 message=message,
                 final_answer=visible_output.content,
                 reasoning_content=visible_output.reasoning_content,
+                tool_activities=list(visible_output.tool_activities),
             )
         normalizer.complete_visible_assistant_output_from_state(final_state, reason="run_completed")
         normalizer.emit_run_completed(
@@ -875,6 +910,40 @@ class RuntimeAgentPackageCommandMixin:
             status="completed",
             final_answer=visible_output.content,
             reasoning_content=visible_output.reasoning_content,
+            tool_activities=list(visible_output.tool_activities),
+        )
+
+    def _persist_agent_package_stream_result(
+        self,
+        *,
+        package_id: str,
+        run: Any,
+        result: RuntimeStreamConsumeResult,
+        request_id: str | None,
+    ) -> None:
+        terminal_payload = (
+            result.terminal_event.payload
+            if result.terminal_event is not None and isinstance(result.terminal_event.payload, dict)
+            else {}
+        )
+        terminal_session = terminal_payload.get("agent_session")
+        terminal_session_id = (
+            str(terminal_session.get("session_id") or "").strip()
+            if isinstance(terminal_session, dict)
+            else ""
+        )
+        run_session = run.session if isinstance(run.session, dict) else {}
+        session_id = terminal_session_id or str(run_session.get("session_id") or "").strip()
+        if not session_id:
+            raise RuntimeError("agent package stream result is missing its runtime session_id")
+        self.agent_package_runtime.finish_session_turn(
+            package_id,
+            session_id=session_id,
+            request_id=request_id,
+            final_answer=result.final_answer,
+            reasoning_content=result.reasoning_content,
+            status=result.status,
+            tool_activities=result.tool_activities,
         )
 
     def _run_chat(self, command: FactoryFrontendCommand, message: str) -> None:
@@ -904,12 +973,25 @@ class RuntimeAgentPackageCommandMixin:
                 attachments=command.payload.get("attachments"),
                 visible_in_agent_session_list=True,
             )
-            self._consume_agent_package_stream(
+            result = self._consume_agent_package_stream(
                 package_id=SYSTEM_CHAT_PACKAGE_ID,
                 run=run,
                 normalizer=normalizer,
                 frontend_mode="chat",
                 frontend_session_id=self._session_id(),
+            )
+            self._persist_agent_package_stream_result(
+                package_id=SYSTEM_CHAT_PACKAGE_ID,
+                run=run,
+                result=result,
+                request_id=result.terminal_event.request_id if result.terminal_event else command.request_id,
+            )
+            self._finish_system_chat_turn(
+                request_id=result.terminal_event.request_id if result.terminal_event else command.request_id,
+                final_answer=result.final_answer,
+                reasoning_content=result.reasoning_content,
+                status=result.status,
+                tool_activities=result.tool_activities,
             )
         except AttachmentImportError as exc:
             _emit_attachment_import_failed(normalizer, exc)
@@ -1086,6 +1168,7 @@ class RuntimeAgentPackageCommandMixin:
         final_answer: str | None,
         status: str,
         reasoning_content: str | None = None,
+        tool_activities: list[dict[str, Any]] | None = None,
     ) -> None:
         if self.session_record is None:
             return
@@ -1096,6 +1179,7 @@ class RuntimeAgentPackageCommandMixin:
             final_answer=final_answer,
             reasoning_content=reasoning_content,
             status=status,
+            tool_activities=tool_activities,
         )
 
     def _consume_create_agent_stream(self, *, run: Any) -> RuntimeStreamConsumeResult:
@@ -1114,6 +1198,7 @@ class RuntimeAgentPackageCommandMixin:
                     final_answer=visible_output.content,
                     reasoning_content=visible_output.reasoning_content,
                     status="interrupted",
+                    tool_activities=visible_output.tool_activities,
                 )
                 self.pending_create_agent_run = PendingCreateAgentRun(
                     session_id=run.session_id,
@@ -1131,10 +1216,17 @@ class RuntimeAgentPackageCommandMixin:
                     final_answer=visible_output.content,
                     reasoning_content=visible_output.reasoning_content,
                     status=runtime_stream_status(item),
+                    tool_activities=visible_output.tool_activities,
                 )
                 terminal_event = item
         if terminal_event is not None:
-            return RuntimeStreamConsumeResult(status=runtime_stream_status(terminal_event), terminal_event=terminal_event)
+            return RuntimeStreamConsumeResult(
+                status=runtime_stream_status(terminal_event),
+                terminal_event=terminal_event,
+                final_answer=visible_output.content,
+                reasoning_content=visible_output.reasoning_content,
+                tool_activities=list(visible_output.tool_activities),
+            )
         raise RuntimeError("create-agent runtime stream ended without a terminal event")
 
     def _finish_host_create_agent_turn(
@@ -1144,6 +1236,7 @@ class RuntimeAgentPackageCommandMixin:
         final_answer: str | None,
         status: str,
         reasoning_content: str | None = None,
+        tool_activities: list[dict[str, Any]] | None = None,
     ) -> None:
         if self.session_record is None:
             return
@@ -1154,6 +1247,7 @@ class RuntimeAgentPackageCommandMixin:
             final_answer=final_answer,
             reasoning_content=reasoning_content,
             status=status,
+            tool_activities=tool_activities,
         )
 
 
