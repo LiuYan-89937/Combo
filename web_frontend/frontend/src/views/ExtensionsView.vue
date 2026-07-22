@@ -23,10 +23,22 @@
       class="test-result"
       :type="testResultType"
       :title="testResultTitle"
-      closable
+      :closable="extensionStore.testResult?.status !== 'running'"
       @close="extensionStore.setTestResult(null)"
     >
       <McpTestResultDetails :result="extensionStore.testResult" />
+      <template v-if="extensionStore.testResult?.status === 'running'" #action>
+        <n-button
+          size="small"
+          type="error"
+          secondary
+          :loading="mcpTestStopping"
+          :disabled="mcpTestStopping"
+          @click="handleStopMcpTest"
+        >
+          {{ mcpTestStopping ? t('extensions.mcpInstallStopping') : t('extensions.stopMcpInstall') }}
+        </n-button>
+      </template>
     </n-alert>
 
     <n-tabs type="line" animated>
@@ -65,10 +77,15 @@
                   <n-space>
                     <n-button
                       size="small"
-                      :loading="busyKey === `test:${extensionKey(item)}`"
-                      @click="handleTestMcp(item)"
+                      :type="busyKey === `test:${extensionKey(item)}` ? 'error' : 'default'"
+                      :secondary="busyKey === `test:${extensionKey(item)}`"
+                      :loading="busyKey === `test:${extensionKey(item)}` && mcpTestStopping"
+                      :disabled="Boolean(busyKey) && busyKey !== `test:${extensionKey(item)}`"
+                      @click="busyKey === `test:${extensionKey(item)}` ? handleStopMcpTest() : handleTestMcp(item)"
                     >
-                      {{ t('extensions.testConnection') }}
+                      {{ busyKey === `test:${extensionKey(item)}`
+                        ? (mcpTestStopping ? t('extensions.mcpInstallStopping') : t('extensions.stopMcpInstall'))
+                        : t('extensions.testConnection') }}
                     </n-button>
                     <n-switch
                       :value="item.enabled"
@@ -363,6 +380,7 @@ const {
   handleResetToolPermission,
   handleInstallMcp,
   handleStopMcpInstall,
+  handleStopMcpTest,
   handleSaveSkill,
   handleSkillHubInstall,
   handleSkillHubSearch,
@@ -377,6 +395,7 @@ const {
   mcpCommandLine,
   mcpInstallDisplayResult,
   mcpInstallStopping,
+  mcpTestStopping,
   openAddMcp,
   openAddSkill,
   permissionModeOptions,

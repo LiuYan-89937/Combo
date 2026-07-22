@@ -137,7 +137,7 @@ class AgentPackageExtensionService:
         progress: Callable[[str, str], None] | None,
         manage: Callable[[MCPRuntimeOperation | None], ExtensionManageResult],
     ) -> ExtensionManageResult:
-        if action != "install_mcp" or not request_id:
+        if action not in {"install_mcp", "test_mcp"} or not request_id:
             return manage(None)
         operation = MCPRuntimeOperation(
             wait_without_deadline=True,
