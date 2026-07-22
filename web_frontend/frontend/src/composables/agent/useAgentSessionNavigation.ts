@@ -1,6 +1,7 @@
 import { useRouter } from 'vue-router'
 import { useCommand } from '@/composables/useCommand'
 import { useAgentStore, type AgentRecentSessionView } from '@/stores/agent'
+import { agentSessionsLandingQuery } from '@/utils/agentSessionRoute'
 
 export function useAgentSessionNavigation() {
   const router = useRouter()
@@ -34,7 +35,14 @@ export function useAgentSessionNavigation() {
     return true
   }
 
+  async function openAgentSessions(): Promise<void> {
+    const opened = await openMostRecentAgentSession()
+    if (opened) return
+    await router.push({ name: 'Factory', query: agentSessionsLandingQuery() })
+  }
+
   return {
+    openAgentSessions,
     openAgentSession,
     openMostRecentAgentSession,
     openPackageAgentChat,

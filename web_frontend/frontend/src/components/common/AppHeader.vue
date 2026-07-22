@@ -128,6 +128,7 @@ import { useI18n } from '@/composables/useI18n'
 import { useAgentStore } from '@/stores/agent'
 import { useUiStore } from '@/stores/ui'
 import { useRuntimeStore } from '@/stores/runtime'
+import { isAgentSessionsLanding } from '@/utils/agentSessionRoute'
 
 const route = useRoute()
 const { t } = useI18n()
@@ -141,12 +142,16 @@ const schedulerRunning = computed(() => runtimeStore.schedulerRunNotices.some((n
 const isAgentConversation = computed(() => (
   route.name === 'Factory'
   && runtimeStore.currentMode === 'agent_package'
-  && Boolean(agentStore.activeChatPackageId)
+  && (Boolean(agentStore.activeChatPackageId) || isAgentSessionsLanding(route.query))
 ))
 
 const activeAgentName = computed(() => {
   const pkg = agentStore.activeChatPackage
-  return pkg?.agent_name || pkg?.name || pkg?.package_id || agentStore.activeChatPackageId || ''
+  return pkg?.agent_name
+    || pkg?.name
+    || pkg?.package_id
+    || agentStore.activeChatPackageId
+    || t('agentSessions.selectAgent')
 })
 
 const agentPackageOptions = computed(() => agentStore.agentPackages.map((pkg) => ({
