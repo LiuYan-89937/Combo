@@ -126,6 +126,7 @@
     "extension_configs_listed",
     "extension_config_updated",
     "extension_config_tested",
+    "extension_config_test_output_delta",
     "extension_skillhub_result",
     "scheduler_job_created",
     "scheduler_job_updated",

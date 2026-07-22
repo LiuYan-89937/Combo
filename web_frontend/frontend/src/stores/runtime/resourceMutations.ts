@@ -76,6 +76,49 @@ export function applyWorkspaceEvent(state: ResourceMutationState, event: Factory
 }
 
 export function applyExtensionsEvent(state: ResourceMutationState, event: FactoryFrontendEvent) {
+  if (event.event_type === 'extension_config_test_output_delta') {
+    const requestId = String(event.request_id || '')
+    const serverId = String(event.payload?.server_id || '')
+    const line = String(event.payload?.line || '').trim()
+    if (!requestId || !serverId || !line) return
+
+    const current = state.extensionTestResult?.request_id === requestId
+      ? state.extensionTestResult
+      : {
+          status: 'running',
+          request_id: requestId,
+          message: line,
+          tests: [],
+        }
+    const tests = Array.isArray(current.tests) ? [...current.tests] : []
+    const testIndex = tests.findIndex((test: any) => test?.server_id === serverId)
+    const test = testIndex >= 0
+      ? { ...tests[testIndex] }
+      : {
+          server_id: serverId,
+          status: 'running',
+          message: line,
+          stderr: [],
+          tools: [],
+          tool_count: 0,
+        }
+
+    test.status = 'running'
+    test.message = line
+    test.stderr = [...(Array.isArray(test.stderr) ? test.stderr : []), line]
+    if (testIndex >= 0) tests[testIndex] = test
+    else tests.push(test)
+
+    state.extensionTestResult = {
+      ...current,
+      status: 'running',
+      request_id: requestId,
+      message: line,
+      tests,
+    }
+    return
+  }
+
   const mcpServers = Array.isArray(event.payload?.mcp_servers) ? event.payload?.mcp_servers : []
   const skills = Array.isArray(event.payload?.skills) ? event.payload?.skills : []
   state.extensionItems = [
