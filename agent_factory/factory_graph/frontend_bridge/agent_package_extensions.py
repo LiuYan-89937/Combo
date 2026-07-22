@@ -6,6 +6,7 @@ import re
 import shutil
 import shlex
 import subprocess
+import threading
 from typing import Any, Callable
 from urllib.parse import urlparse
 
@@ -30,7 +31,11 @@ from agent_factory.tooling.factory_extensions import (
     default_builtin_factory_extension_root,
     default_system_agent_extension_root,
 )
-from agent_factory.tooling.mcp_runtime import MCPRuntimeManager
+from agent_factory.tooling.mcp_runtime import (
+    MCPRuntimeCancelled,
+    MCPRuntimeManager,
+    MCPRuntimeOperation,
+)
 from agent_factory.tooling.providers import (
     EnabledSkillConfig,
     EnabledSkillsConfig,
@@ -51,6 +56,10 @@ class ExtensionManageResult:
 
 
 class AgentPackageExtensionService:
+    def __init__(self) -> None:
+        self._operation_lock = threading.RLock()
+        self._operations: dict[str, MCPRuntimeOperation] = {}
+
     def summary(self, package_id: str, package: LoadedAgentPackage) -> dict[str, Any]:
         extension_root = extension_root_for_package(package_id, package)
         return _extension_summary(
@@ -71,13 +80,22 @@ class AgentPackageExtensionService:
         owner: SystemAgentExtensionOwner,
         action: str,
         payload: dict[str, Any],
+        *,
+        request_id: str | None = None,
+        progress: Callable[[str, str], None] | None = None,
     ) -> ExtensionManageResult:
-        return _manage_extension_root(
-            scope_id=owner,
-            extension_root=default_system_agent_extension_root(owner),
+        return self._manage_with_operation(
             action=action,
-            payload=payload,
-            system_owner=owner,
+            request_id=request_id,
+            progress=progress,
+            manage=lambda operation: _manage_extension_root(
+                scope_id=owner,
+                extension_root=default_system_agent_extension_root(owner),
+                action=action,
+                payload=payload,
+                system_owner=owner,
+                operation=operation,
+            ),
         )
 
     def manage(
@@ -86,14 +104,60 @@ class AgentPackageExtensionService:
         package: LoadedAgentPackage,
         action: str,
         payload: dict[str, Any],
+        *,
+        request_id: str | None = None,
+        progress: Callable[[str, str], None] | None = None,
     ) -> ExtensionManageResult:
-        return _manage_extension_root(
-            scope_id=package_id,
-            extension_root=extension_root_for_package(package_id, package),
+        return self._manage_with_operation(
             action=action,
-            payload=payload,
-            package=package,
+            request_id=request_id,
+            progress=progress,
+            manage=lambda operation: _manage_extension_root(
+                scope_id=package_id,
+                extension_root=extension_root_for_package(package_id, package),
+                action=action,
+                payload=payload,
+                package=package,
+                operation=operation,
+            ),
         )
+
+    def cancel_operation(self, request_id: str | None) -> bool:
+        if not request_id:
+            return False
+        with self._operation_lock:
+            operation = self._operations.get(request_id)
+        return operation.cancel() if operation is not None else False
+
+    def _manage_with_operation(
+        self,
+        *,
+        action: str,
+        request_id: str | None,
+        progress: Callable[[str, str], None] | None,
+        manage: Callable[[MCPRuntimeOperation | None], ExtensionManageResult],
+    ) -> ExtensionManageResult:
+        if action != "install_mcp" or not request_id:
+            return manage(None)
+        operation = MCPRuntimeOperation(
+            wait_without_deadline=True,
+            stderr_callback=(
+                lambda server, line: progress(
+                    server.server_id,
+                    _redact_mcp_test_text(line, [*server.env.values(), *server.headers.values()]),
+                )
+                if progress is not None
+                else None
+            ),
+        )
+        with self._operation_lock:
+            self._operations[request_id] = operation
+        try:
+            return manage(operation)
+        finally:
+            with self._operation_lock:
+                if self._operations.get(request_id) is operation:
+                    self._operations.pop(request_id, None)
 
 
 def _extension_summary(
@@ -143,6 +207,7 @@ def _manage_extension_root(
     payload: dict[str, Any],
     package: LoadedAgentPackage | None = None,
     system_owner: SystemAgentExtensionOwner | None = None,
+    operation: MCPRuntimeOperation | None = None,
 ) -> ExtensionManageResult:
     def summary() -> dict[str, Any]:
         return _extension_summary(
@@ -177,6 +242,7 @@ def _manage_extension_root(
             summary=summary,
             package=package,
             system_owner=system_owner,
+            operation=operation,
         )
     if action == "set_mcp_enabled":
         server_id = _required_config_id(payload, "server_id")
@@ -940,17 +1006,33 @@ def _skill_path_for_validation(path: str, extension_root: Path | None) -> str:
     return str(skill_path)
 
 
-def _test_mcp_server(server: MCPServerConfig) -> dict[str, Any]:
+def _test_mcp_server(
+    server: MCPServerConfig,
+    *,
+    operation: MCPRuntimeOperation | None = None,
+) -> dict[str, Any]:
     preflight = _mcp_server_preflight(server)
     if preflight["status"] != "ok":
         return {**preflight, "tool_count": 0, "tools": []}
-    manager = MCPRuntimeManager(MCPServersConfig(servers=[server.model_copy(update={"enabled": True})]))
+    manager = MCPRuntimeManager(
+        MCPServersConfig(servers=[server.model_copy(update={"enabled": True})]),
+        operation=operation,
+    )
     client = manager.clients().get(server.server_id)
     if client is None:
         return {"status": "failed", "message": "MCP server is disabled or unavailable", "tool_count": 0, "tools": []}
     try:
         tools = [tool.model_dump(mode="json") for tool in client.list_tools()]
-    except Exception as exc:
+    except BaseException as exc:
+        if _exception_contains(exc, MCPRuntimeCancelled):
+            failure = _mcp_test_failure(
+                exc,
+                stderr=client.stderr_logs(),
+                sensitive_values=[*server.env.values(), *server.headers.values()],
+            )
+            return {**failure, "status": "cancelled", "message": str(exc)}
+        if not isinstance(exc, Exception):
+            raise
         return _mcp_test_failure(
             exc,
             stderr=client.stderr_logs(),
@@ -1007,6 +1089,14 @@ def _exception_leaf_messages(exc: BaseException) -> list[str]:
     return [f"{type(exc).__name__}: {message}" if message else type(exc).__name__]
 
 
+def _exception_contains(exc: BaseException, exception_type: type[BaseException]) -> bool:
+    if isinstance(exc, exception_type):
+        return True
+    if isinstance(exc, BaseExceptionGroup):
+        return any(_exception_contains(nested, exception_type) for nested in exc.exceptions)
+    return False
+
+
 def _redact_mcp_test_text(value: str, sensitive_values: list[str]) -> str:
     redacted = value
     secrets = sorted({secret for secret in sensitive_values if secret}, key=len, reverse=True)
@@ -1022,6 +1112,7 @@ def _install_mcp_servers(
     summary: Callable[[], dict[str, Any]],
     package: LoadedAgentPackage | None,
     system_owner: SystemAgentExtensionOwner | None,
+    operation: MCPRuntimeOperation | None,
 ) -> ExtensionManageResult:
     raw_servers = payload.get("servers")
     if not isinstance(raw_servers, list) or not raw_servers:
@@ -1040,10 +1131,24 @@ def _install_mcp_servers(
         raise ValueError("install_mcp servers must contain objects")
     if len({server.server_id for server in servers}) != len(servers):
         raise ValueError("install_mcp server_id values must be unique")
-    tests = [
-        {"server_id": server.server_id, **_test_mcp_server(server.model_copy(update={"enabled": True}))}
-        for server in servers
-    ]
+    tests: list[dict[str, Any]] = []
+    for server in servers:
+        test = {
+            "server_id": server.server_id,
+            **_test_mcp_server(server.model_copy(update={"enabled": True}), operation=operation),
+        }
+        tests.append(test)
+        if test.get("status") == "cancelled":
+            return ExtensionManageResult(
+                {
+                    "install": {
+                        "status": "cancelled",
+                        "message": "MCP server validation was stopped; no configuration was saved.",
+                        "tests": tests,
+                    },
+                    **summary(),
+                }
+            )
     failed = [test for test in tests if test.get("status") != "ok"]
     if failed:
         return ExtensionManageResult(

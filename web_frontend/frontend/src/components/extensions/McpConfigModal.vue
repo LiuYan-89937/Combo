@@ -100,7 +100,7 @@
 
     <n-alert
       v-if="installResult"
-      :type="installResult.status === 'ok' ? 'success' : 'error'"
+      :type="installResultType"
       :title="installResult.message || t('extensions.connectionFailed')"
     >
       <div v-for="test in installResult.tests || []" :key="test.server_id" class="test-row">
@@ -108,10 +108,10 @@
           <strong>{{ test.server_id }}</strong>
           <n-tag
             size="small"
-            :type="test.status === 'ok' ? 'success' : 'error'"
+            :type="test.status === 'ok' ? 'success' : test.status === 'running' ? 'info' : test.status === 'cancelled' ? 'warning' : 'error'"
             :bordered="false"
           >
-            {{ test.status === 'ok' ? t('extensions.connectionOk') : t('extensions.connectionFailed') }}
+            {{ testStatusLabel(test.status) }}
           </n-tag>
         </div>
         <McpTestResultDetails :result="test" />
@@ -122,8 +122,18 @@
       <n-space justify="space-between">
         <n-text depth="3">{{ t('extensions.mcpInstallNotice') }}</n-text>
         <n-space>
-          <n-button :disabled="busy" @click="show = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="busy" @click="handleSubmit">
+          <n-button
+            v-if="busy"
+            type="error"
+            secondary
+            :loading="stopping"
+            :disabled="stopping"
+            @click="emit('cancel-install')"
+          >
+            {{ stopping ? t('extensions.mcpInstallStopping') : t('extensions.stopMcpInstall') }}
+          </n-button>
+          <n-button v-else @click="show = false">{{ t('common.cancel') }}</n-button>
+          <n-button type="primary" :loading="busy" :disabled="busy" @click="handleSubmit">
             {{ t('extensions.testAndAdd') }}
           </n-button>
         </n-space>
@@ -167,15 +177,18 @@ const props = withDefaults(defineProps<{
   show: boolean
   item?: ExtensionItemView | null
   busy?: boolean
+  stopping?: boolean
   installResult?: any | null
 }>(), {
   busy: false,
+  stopping: false,
   installResult: null,
 })
 
 const emit = defineEmits<{
   'update:show': [value: boolean]
   submit: [servers: McpServerConfig[]]
+  'cancel-install': []
 }>()
 
 const show = computed({ get: () => props.show, set: value => emit('update:show', value) })
@@ -186,6 +199,12 @@ const importText = ref('')
 const importErrors = ref<string[]>([])
 const importedServers = ref<McpServerConfig[]>([])
 const modalTitle = computed(() => props.item ? t('extensions.mcpEditTitle') : t('extensions.mcpAddTitle'))
+const installResultType = computed(() => {
+  if (props.installResult?.status === 'ok') return 'success'
+  if (props.installResult?.status === 'running') return 'info'
+  if (props.installResult?.status === 'cancelled') return 'warning'
+  return 'error'
+})
 const formData = ref(emptyForm())
 
 const transportOptions = computed(() => [
@@ -298,6 +317,13 @@ function serverCommand(server: McpServerConfig): string {
 function recordKeys(value: string | Record<string, string> | undefined): string {
   const text = mcpConfigRecordText(value)
   return text.split('\n').map(line => line.split('=', 1)[0]?.trim()).filter(Boolean).join(', ')
+}
+
+function testStatusLabel(status: unknown): string {
+  if (status === 'ok') return t('extensions.connectionOk')
+  if (status === 'running') return t('extensions.mcpInstallRunning')
+  if (status === 'cancelled') return t('extensions.mcpInstallCancelled')
+  return t('extensions.connectionFailed')
 }
 </script>
 

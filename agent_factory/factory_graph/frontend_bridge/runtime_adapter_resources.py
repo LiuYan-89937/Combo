@@ -80,10 +80,35 @@ class RuntimeResourceCommandMixin:
         resource_mode = str(command.payload.get("resource_mode") or "").strip()
         package_id = _package_id_from_payload(command.payload)
         action = str(command.payload.get("action") or "list").strip()
+        def emit_progress(server_id: str, line: str) -> None:
+            self._emit_resource_event(
+                command,
+                "extension_config_test_output_delta",
+                {
+                    "package_id": package_id,
+                    **_optional_resource_mode(command.payload),
+                    "server_id": server_id,
+                    "line": line,
+                },
+            )
+
+        progress = emit_progress if action == "install_mcp" else None
         if resource_mode in {"create_agent", "evolve_agent"}:
-            result = self.agent_package_runtime.system_extensions_manage(resource_mode, action, command.payload)
+            result = self.agent_package_runtime.system_extensions_manage(
+                resource_mode,
+                action,
+                command.payload,
+                request_id=command.request_id,
+                progress=progress,
+            )
         else:
-            result = self.agent_package_runtime.extensions_manage(package_id, action, command.payload)
+            result = self.agent_package_runtime.extensions_manage(
+                package_id,
+                action,
+                command.payload,
+                request_id=command.request_id,
+                progress=progress,
+            )
         event_type = "extension_configs_listed"
         if action in {
             "upsert_mcp",

@@ -668,6 +668,8 @@ class RuntimeAgentPackageCommandMixin:
             cancelled += self.evolution_runtime.cancel_active_requests(reason=reason, request_id=target_request_id)
         if self.create_agent_runtime is not None:
             cancelled += self.create_agent_runtime.cancel_active_requests(reason=reason, request_id=target_request_id)
+        if self.agent_package_runtime is not None:
+            cancelled += int(self.agent_package_runtime.cancel_extension_request(target_request_id))
         self.pending_agent_package_run = None
         self.pending_evolution_run = None
         if self.pending_create_agent_run is not None:

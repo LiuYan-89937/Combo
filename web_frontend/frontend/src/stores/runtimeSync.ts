@@ -218,6 +218,7 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
     event.event_type === 'extension_configs_listed' ||
     event.event_type === 'extension_config_updated' ||
     event.event_type === 'extension_config_tested' ||
+    event.event_type === 'extension_config_test_output_delta' ||
     event.event_type === 'extension_skillhub_result'
   ) {
     if (!resourceEventMatchesCurrentContext(event)) return

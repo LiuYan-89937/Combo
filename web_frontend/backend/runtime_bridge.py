@@ -35,7 +35,7 @@ ALWAYS_LONG_RUNNING_COMMANDS = {
 
 LONG_RUNNING_ACTIONS = {
     "knowledge_manage": {"confirm_source", "reindex"},
-    "extensions_manage": {"test_mcp"},
+    "extensions_manage": {"install_mcp", "test_mcp"},
     "scheduler_manage": {"run_now"},
 }
 
@@ -141,20 +141,24 @@ class RuntimeBridge:
         command: FactoryFrontendCommand,
         *,
         event_types: set[str],
-        timeout_seconds: float = 30.0,
+        timeout_seconds: float | None = 30.0,
         event_filter: Callable[[dict[str, Any]], bool] | None = None,
     ) -> dict[str, Any]:
         event_queue = self.subscribe(replay_history=False)
         try:
             await self.send_frontend_command(command)
             loop = asyncio.get_running_loop()
-            deadline = loop.time() + timeout_seconds
+            deadline = loop.time() + timeout_seconds if timeout_seconds is not None else None
             while True:
-                remaining = deadline - loop.time()
-                if remaining <= 0:
+                remaining = deadline - loop.time() if deadline is not None else None
+                if remaining is not None and remaining <= 0:
                     raise HTTPException(status_code=504, detail=f"Timed out waiting for {command.type}")
                 try:
-                    event_payload = await asyncio.wait_for(event_queue.get(), timeout=remaining)
+                    event_payload = (
+                        await event_queue.get()
+                        if remaining is None
+                        else await asyncio.wait_for(event_queue.get(), timeout=remaining)
+                    )
                 except TimeoutError as exc:
                     raise HTTPException(status_code=504, detail=f"Timed out waiting for {command.type}") from exc
                 if event_payload.get("request_id") != command.request_id:

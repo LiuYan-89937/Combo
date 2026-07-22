@@ -14,8 +14,8 @@ export function useExtensionCommands() {
     return transport.applyEventRequest(extensionsApi.saveMcp(server, context))
   }
 
-  const installMcp = (servers: McpServerConfig[], context?: WorkspaceContextInput) => {
-    return transport.applyEventRequest(extensionsApi.installMcp(servers, context))
+  const installMcp = (servers: McpServerConfig[], requestId: string, context?: WorkspaceContextInput) => {
+    return transport.applyEventRequest(extensionsApi.installMcp(servers, requestId, context))
   }
 
   const testMcp = (serverIdOrConfig: string | McpServerConfig, context?: WorkspaceContextInput) => {

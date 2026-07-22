@@ -29,14 +29,32 @@ export function useExtensionsManager() {
   const busyKey = ref<string | null>(null)
   const skillHubQuery = ref('')
   const mcpInstallResult = ref<Record<string, any> | null>(null)
+  const mcpInstallRequestId = ref<string | null>(null)
+  const mcpInstallStopping = ref(false)
+  const mcpInstallDisplayResult = computed<Record<string, any> | null>(() => {
+    const liveResult = extensionStore.testResult
+    if (
+      mcpInstallRequestId.value
+      && liveResult?.request_id === mcpInstallRequestId.value
+    ) {
+      return liveResult
+    }
+    return mcpInstallResult.value
+  })
 
   const extensionContext = computed(() => resourceContext.workspaceContext.value)
-  const testResultType = computed(() => (
-    extensionStore.testResult?.status === 'ok' ? 'success' : 'error'
-  ))
-  const testResultTitle = computed(() => (
-    extensionStore.testResult?.status === 'ok' ? t('extensions.connectionOk') : t('extensions.connectionFailed')
-  ))
+  const testResultType = computed(() => {
+    if (extensionStore.testResult?.status === 'ok') return 'success'
+    if (extensionStore.testResult?.status === 'running') return 'info'
+    if (extensionStore.testResult?.status === 'cancelled') return 'warning'
+    return 'error'
+  })
+  const testResultTitle = computed(() => {
+    if (extensionStore.testResult?.status === 'ok') return t('extensions.connectionOk')
+    if (extensionStore.testResult?.status === 'running') return t('extensions.mcpInstallRunning')
+    if (extensionStore.testResult?.status === 'cancelled') return t('extensions.mcpInstallCancelled')
+    return t('extensions.connectionFailed')
+  })
   const toolPermissionPolicy = computed<ToolPermissionPolicyView>(() => (
     extensionStore.toolPermissions?.policy || defaultToolPermissionPolicy()
   ))
@@ -162,16 +180,29 @@ export function useExtensionsManager() {
     if (busyKey.value || servers.length === 0) return
     busyKey.value = 'mcp:install'
     mcpInstallResult.value = null
+    extensionStore.setTestResult(null)
+    const requestId = crypto.randomUUID()
+    mcpInstallRequestId.value = requestId
+    mcpInstallStopping.value = false
     try {
-      const event = await commands.installMcp(servers, extensionContext.value)
+      const event = await commands.installMcp(servers, requestId, extensionContext.value)
       const install = event?.payload?.install
       mcpInstallResult.value = install && typeof install === 'object' ? install : null
       if (mcpInstallResult.value?.status !== 'ok') return
       showMcpModal.value = false
       editingMcp.value = null
     } finally {
+      mcpInstallRequestId.value = null
+      mcpInstallStopping.value = false
       busyKey.value = null
     }
+  }
+
+  function handleStopMcpInstall(): void {
+    const requestId = mcpInstallRequestId.value
+    if (!requestId || mcpInstallStopping.value) return
+    mcpInstallStopping.value = true
+    commands.cancelRequest('user_cancelled', requestId)
   }
 
   async function handleSaveSkill(config: SkillConfig): Promise<void> {
@@ -336,6 +367,7 @@ export function useExtensionsManager() {
     resourceContext,
     handleMcpAction,
     handleInstallMcp,
+    handleStopMcpInstall,
     handleSaveSkill,
     handleSkillHubInstall,
     handleSkillHubSearch,
@@ -345,7 +377,8 @@ export function useExtensionsManager() {
     handleToggleSkill,
     mcpActions,
     mcpCommandLine,
-    mcpInstallResult,
+    mcpInstallDisplayResult,
+    mcpInstallStopping,
     openAddMcp,
     openAddSkill,
     permissionModeOptions,

@@ -19,7 +19,7 @@
     </div>
 
     <n-alert
-      v-if="extensionStore.testResult"
+      v-if="extensionStore.testResult && !showMcpModal"
       class="test-result"
       :type="testResultType"
       :title="testResultTitle"
@@ -305,8 +305,10 @@
       v-model:show="showMcpModal"
       :item="editingMcp"
       :busy="busyKey === 'mcp:install'"
-      :install-result="mcpInstallResult"
+      :stopping="mcpInstallStopping"
+      :install-result="mcpInstallDisplayResult"
       @submit="handleInstallMcp"
+      @cancel-install="handleStopMcpInstall"
     />
 
     <SkillConfigModal
@@ -360,6 +362,7 @@ const {
   handlePermissionModeChange,
   handleResetToolPermission,
   handleInstallMcp,
+  handleStopMcpInstall,
   handleSaveSkill,
   handleSkillHubInstall,
   handleSkillHubSearch,
@@ -372,7 +375,8 @@ const {
   hasToolOverride,
   mcpActions,
   mcpCommandLine,
-  mcpInstallResult,
+  mcpInstallDisplayResult,
+  mcpInstallStopping,
   openAddMcp,
   openAddSkill,
   permissionModeOptions,

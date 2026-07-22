@@ -10,10 +10,10 @@ export const extensionsApi = {
       method: 'POST',
       body: JSON.stringify({ server, ...packageResourceContextPayload(context) }),
     }),
-  installMcp: (servers: McpServerConfig[], context?: WorkspaceContextInput) =>
+  installMcp: (servers: McpServerConfig[], requestId: string, context?: WorkspaceContextInput) =>
     requestEvent('/api/extensions/mcp/install', {
       method: 'POST',
-      body: JSON.stringify({ servers, ...packageResourceContextPayload(context) }),
+      body: JSON.stringify({ servers, request_id: requestId, ...packageResourceContextPayload(context) }),
     }),
   testMcp: (serverIdOrConfig: string | McpServerConfig, context?: WorkspaceContextInput) => {
     const payload =

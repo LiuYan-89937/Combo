@@ -878,19 +878,51 @@ class AgentPackageRuntimeManager:
             raise ValueError(f"unsupported system extension resource mode: {resource_mode}")
         return self.extensions.system_summary(resource_mode)
 
-    def extensions_manage(self, package_id: str, action: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def extensions_manage(
+        self,
+        package_id: str,
+        action: str,
+        payload: dict[str, Any],
+        *,
+        request_id: str | None = None,
+        progress: Callable[[str, str], None] | None = None,
+    ) -> dict[str, Any]:
         package = self.load_package(package_id)
-        result = self.extensions.manage(package_id, package, action, payload)
+        result = self.extensions.manage(
+            package_id,
+            package,
+            action,
+            payload,
+            request_id=request_id,
+            progress=progress,
+        )
         if result.changed:
             self._close_package_containers(package_id)
             self._close_package_system_handles(package_id)
         return result.payload
 
-    def system_extensions_manage(self, resource_mode: str, action: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def system_extensions_manage(
+        self,
+        resource_mode: str,
+        action: str,
+        payload: dict[str, Any],
+        *,
+        request_id: str | None = None,
+        progress: Callable[[str, str], None] | None = None,
+    ) -> dict[str, Any]:
         if resource_mode not in {"create_agent", "evolve_agent"}:
             raise ValueError(f"unsupported system extension resource mode: {resource_mode}")
-        result = self.extensions.system_manage(resource_mode, action, payload)
+        result = self.extensions.system_manage(
+            resource_mode,
+            action,
+            payload,
+            request_id=request_id,
+            progress=progress,
+        )
         return result.payload
+
+    def cancel_extension_request(self, request_id: str | None) -> bool:
+        return self.extensions.cancel_operation(request_id)
 
     def knowledge_runtime_for_package(
         self,

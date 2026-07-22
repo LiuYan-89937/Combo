@@ -13,8 +13,9 @@ async def resource_command(
     payload: dict[str, Any],
     event_types: set[str],
     *,
-    timeout_seconds: float = 30.0,
+    timeout_seconds: float | None = 30.0,
     event_filter: Callable[[dict[str, Any]], bool] | None = None,
+    request_id_value: str | None = None,
 ) -> dict[str, Any]:
     return await send_and_wait(
         runtime_bridge,
@@ -23,6 +24,7 @@ async def resource_command(
         event_types,
         timeout_seconds=timeout_seconds,
         event_filter=event_filter,
+        request_id_value=request_id_value,
     )
 
 
@@ -32,10 +34,11 @@ async def send_and_wait(
     payload: dict[str, Any],
     event_types: set[str],
     *,
-    timeout_seconds: float = 30.0,
+    timeout_seconds: float | None = 30.0,
     event_filter: Callable[[dict[str, Any]], bool] | None = None,
+    request_id_value: str | None = None,
 ) -> dict[str, Any]:
-    command = FactoryFrontendCommand(type=command_type, request_id=request_id(), payload=payload)
+    command = FactoryFrontendCommand(type=command_type, request_id=request_id_value or request_id(), payload=payload)
     return await runtime_bridge.send_and_wait(
         command,
         event_types=event_types,
