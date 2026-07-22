@@ -18,6 +18,10 @@ FastAgentFactory 的核心能力由多个可组合后端子系统构成。能力
 
 支持枚举、选择、初始化、运行、关闭、删除 AgentPackage 实例，并刷新 Agent Registry。Package 是部署和版本管理的核心单元。
 
+下面的界面展示自然语言制造工作区。它用于观察制造阶段、资源声明、工具验证和发布状态，不代表仅凭前端展示即可绕过运行时校验。
+
+![Agent 制造工作区](assets/screenshots/agent-authoring.png)
+
 ## 2. RuntimeKernel 与图编排
 
 - YAML Pattern 编译为 LangGraph `StateGraph<RuntimeGraphState>`；
@@ -125,6 +129,10 @@ Memory System 负责记忆提取、分段、排名、命名空间、存储、后
 
 Knowledge 服务注册到 RuntimeServices，不代表知识正文自动拼入 Prompt。对大部分业务包，显式检索比全量注入更可控。
 
+知识库界面提供来源注册、后台摄取状态和文档访问入口；实际可检索性仍以 ingestion 完成和对应 Knowledge Contract 生效为准。
+
+![知识库管理与摄取状态](assets/screenshots/knowledge-base.png)
+
 ## 8. Resource 与 Secret
 
 Resource Contract 声明工具依赖的配置项和敏感资源。ResourceStore 按 package ID 管理值，EnvironmentResolver 在运行前解析环境与资源，ToolGateway 在调用时只向对应 entrypoint 提供所需资源。
@@ -166,6 +174,10 @@ Trace 是诊断数据，不是默认对话上下文。只有诊断、进化或�
 Collaboration System 和 Agent Group System 支持主 Agent、worker、任务派发、授权工件复制、状态回传和最终汇总。协作上下文通过运行时配置开启，并动态增加有限的协作工具，同时排除不适合 worker 的工具。
 
 协作不是多个 Agent 共享同一个任意可写目录。材料授权、结果回收和 Artifact 复制由 orchestrator 控制。
+
+协作页面集中展示主 Agent、任务状态、worker 动态、思考摘要和交付入口，便于判断任务是否真正并行执行以及最终产物是否被验收。
+
+![多 Agent 协作与任务可观测界面](assets/screenshots/collaboration.png)
 
 ## 13. 运行隔离与扩展
 

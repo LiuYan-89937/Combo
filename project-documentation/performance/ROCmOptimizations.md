@@ -13,6 +13,8 @@ The measured work has two distinct layers:
 
 Normal service benchmarks provide user-facing throughput. rocprof and GGML traces are used only to attribute cost and confirm dispatch; profiler duration is never presented as normal service speed.
 
+The latest ten-round paired run enabled MTP for both implementations. AMD Decode reached `124.111 tok/s` versus `123.897 tok/s` for Official: a **small `0.17%` gain and effectively a tie**. This does not replace the non-MTP result below, where the AMD single-token Decode path improved by `5.64%`; MTP changes the workload into proposal generation and multi-token target validation.
+
 ## Experimental Discipline
 
 Official and AMD comparisons use the same:
@@ -137,6 +139,29 @@ Under the same 790-token prompt, 128-token output, cold prompt cache, one slot, 
 MTP improves throughput because one target forward pass can accept multiple tokens, amortizing model-weight reads, MMVQ, MoE routing, elementwise kernels, and launch overhead. It does not make an individual MMVQ read fewer weights and adds work in the MTP proposal head.
 
 The AMD MTP result was 0.77% below Official MTP in this run and had a 2.69-percentage-point lower acceptance rate. This indicates that a single-token MMVQ advantage does not automatically carry into the multi-token validation path. Future AMD work must attribute the MTP proposal head and target multi-token path independently.
+
+### Latest Ten-round Paired Experiment with MTP Enabled
+
+The latest experiment group, completed on July 22, 2026, used the same long prompt, `max_output_tokens=256`, `temperature=0`, `seed=42`, a cold prompt cache, one warm-up, and three measured iterations. Concurrency used two client requests. Each of ten rounds ran Official and AMD performance, concurrent QPS, and operator analysis, completing all `60 / 60` sub-experiments. MTP was enabled for both implementations, so this measures the complete MTP-enabled service path rather than an isolated single-token MMVQ path.
+
+| Metric, ten-round mean | Official | AMD | AMD relative change |
+| --- | ---: | ---: | ---: |
+| Decode TPS | 123.897 tok/s | 124.111 tok/s | **+0.17%** |
+| Prompt TPS | 1460.670 tok/s | 1704.649 tok/s | **+16.70%** |
+| Model-compute TTFT | 540.873 ms | 463.456 ms | **-14.31%** |
+| MTP acceptance rate | 66.54% | 64.62% | -1.92 percentage points |
+| Two-client QPS | 0.3788 req/s | 0.3981 req/s | **+5.09%** |
+| Aggregate output TPS | 96.97 tok/s | 101.91 tok/s | **+5.09%** |
+| Mean request latency | 4626.39 ms | 4399.97 ms | **-4.89%** |
+| Error rate | 0% | 0% | Equal |
+
+The accurate conclusion is: **with MTP enabled, AMD Decode is effectively tied with Official but retains a small `0.17%` gain; this is not a significant Decode improvement.** The clearer AMD gains are in Prompt/Prefill and two-client aggregate throughput. MTP changes per-token MMVQ execution into proposal generation plus multi-token target validation, and AMD's acceptance rate was 1.92 percentage points lower in this group. This dilutes the previously measured `5.64%` single-token Decode gain without MTP. The results are not contradictory: `5.64%` describes autoregressive Decode with MTP disabled, while `0.17%` describes the latest complete MTP-enabled service path.
+
+![Ten-round Official and AMD paired experiment history](../assets/screenshots/benchmark-experiment-history.png)
+
+![Prefill HIP kernel hotspots](../assets/screenshots/benchmark-prefill-hotspots.png)
+
+![AMD custom-kernel hits and Decode hotspots](../assets/screenshots/benchmark-decode-kernel-hits.png)
 
 The correctness check hashed the complete `reasoning_content + content` output. AMD MTP on/off and Official MTP on matched for this run, while Official without MTP diverged under greedy execution. The result is retained as a floating-point/batching-path boundary; it is not claimed that all four paths are bitwise identical.
 

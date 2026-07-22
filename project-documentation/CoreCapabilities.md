@@ -16,6 +16,10 @@ Evolution starts from an existing published package, selected trace evidence, fa
 
 Published packages expose configuration, runtime state, resources, model/tool descriptions, context policy, memory write interval, sessions, workspaces, and artifacts. Package initialization is idempotent and single-flight, while conversation data remains session-isolated.
 
+The manufacturing workspace below exposes stage progress, resource declarations, tool validation, and publication state. The UI is an observability surface; it does not bypass runtime validation.
+
+![Agent manufacturing workspace](assets/screenshots/agent-authoring.png)
+
 ## 2. RuntimeKernel and Graph Orchestration
 
 RuntimeKernel executes the pattern declared by the package:
@@ -75,6 +79,10 @@ The memory system asynchronously extracts durable user preferences and decisions
 
 Knowledge sources can be attached at package or session scope. The runtime performs ingestion, chunking, embedding, retrieval, opening, and citation. Authored package assets are not automatically treated as runtime knowledge; they must be declared through the knowledge contract.
 
+The knowledge UI exposes source registration, background ingestion state, and document access. A source becomes retrievable only after ingestion completes and the relevant knowledge contract is active.
+
+![Knowledge management and ingestion state](assets/screenshots/knowledge-base.png)
+
 ## 8. Resources and Secrets
 
 Resource descriptors declare structured value schemas, validation constraints, and consuming tools. Users configure each resource from package details. Values are encrypted at rest using the local master key and are not written back into AgentPackage source files. Configured values can be revealed in the authorized UI while password controls remain visually masked by default.
@@ -100,6 +108,10 @@ Profiler runs are isolated from normal performance runs so profiling overhead ca
 ## 12. Multi-agent Collaboration
 
 The collaboration system provides agent search, semantic task creation, worker scheduling, task inspection, retry, cancellation, artifact submission, and main-agent resumption. It applies inference capacity backpressure and package-environment single-flight initialization. The main agent summarizes the delegation after creation and waits for active notifications instead of polling inspection continuously.
+
+The collaboration view presents the main agent, task state, worker activity, recent reasoning summaries, and delivery entry points so parallel execution and semantic acceptance remain observable.
+
+![Multi-agent collaboration and task observability](assets/screenshots/collaboration.png)
 
 ## 13. Runtime Isolation and Extensions
 

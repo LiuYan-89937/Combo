@@ -4,7 +4,9 @@
 
 ## 结论
 
-在 Qwen3.6-35B-A3B Q6_K、gfx1100、单并发、256K 上下文、Q8_0 KV Cache 与 Flash Attention 开启的相同条件下，AMD 实现包含三项已命中的 Decode 优化：复用同一 F32 激活的 Q8_1 临时量化结果；将 `Residual Add + RMSNorm + 权重缩放` 融合为一个 RDNA3 HIP Kernel；以及使用原生 HIP Wave32 Kernel 执行普通二维 Q6_K × Q8_1 MatVec。前两项与已有 AMD Kernel 集合将正常服务 Decode 吞吐从 Official 的 `84.0867 tok/s` 提升到 `88.8320 tok/s`，提升 `5.64%`；Native Q6_K MMVQ 在该 AMD 基线上进一步取得 `0.94%` 的五轮平均增益。
+在 Qwen3.6-35B-A3B Q6_K、gfx1100、单并发、256K 上下文、Q8_0 KV Cache、Flash Attention 开启且 **MTP 关闭** 的相同条件下，AMD 实现包含三项已命中的 Decode 优化：复用同一 F32 激活的 Q8_1 临时量化结果；将 `Residual Add + RMSNorm + 权重缩放` 融合为一个 RDNA3 HIP Kernel；以及使用原生 HIP Wave32 Kernel 执行普通二维 Q6_K × Q8_1 MatVec。前两项与已有 AMD Kernel 集合将正常服务 Decode 吞吐从 Official 的 `84.0867 tok/s` 提升到 `88.8320 tok/s`，提升 `5.64%`；Native Q6_K MMVQ 在该 AMD 基线上进一步取得 `0.94%` 的五轮平均增益。
+
+最新的 10 轮配对实验则同时为 Official 与 AMD 开启 MTP：AMD Decode 为 `124.111 tok/s`，Official 为 `123.897 tok/s`，AMD **略有 `0.17%` 收益、整体基本持平**。MTP 会把单 Token Decode 改为候选生成与多 Token Target 验证，因此不能用这组 `0.17%` 覆盖或否定关闭 MTP 时的 `5.64%` 单 Token Decode 提升。
 
 两组各包含 1 次预热和 5 次计量，计量标准差分别为 `0.1943 tok/s` 与 `0.1718 tok/s`。Official 与 AMD 的 5 次归一化流式输出哈希一致，均为 `6c7bf1d59882869591634b94616d151349bfdf6081fde7ea45686fdd3a83d473`。
 
@@ -19,7 +21,7 @@
 | 普通 Q6_K MatVec | CUDA/HIP 共用 Kernel 使用两个 Wave 协作计算一个输出行，并通过 LDS 合并跨 Wave 部分和 | 原生 HIP Kernel 使用一个 Wave32 计算一个输出行，四个 Wave 共享 LDS 激活，并采用双累加链 | 删除每行的跨 Wave LDS 写入、同步和合并，减少 Workgroup 数并复用激活读取 |
 | 架构分派 | 使用通用 CUDA/HIP 实现与原有融合匹配器 | Host 运行时识别 RDNA3，设备端使用 Wave32、`float4` 和 RDNA3 归约实现 | 非 RDNA3 或约束不满足时保持 Official 路径 |
 
-这两项优化都没有减少模型应执行的数学运算，也没有改变权重、KV Cache、上下文、采样参数或输出长度。区别只在于删除重复的数据变换与中间显存往返。
+这些优化都没有减少模型应执行的数学运算，也没有改变权重、KV Cache、上下文、采样参数或输出长度。区别只在于删除重复的数据变换与中间显存往返。
 
 ## 优化一：复用 MatVec 激活的 Q8_1 量化结果
 
@@ -265,6 +267,29 @@ AMD 实现保留 Official 的量化解码、点积、累加、Stream-K 和边界
 | AMD | 开启 | 117.0653 tok/s | 0.0125 | 60.00% | +32.99% |
 
 MTP 的收益来自一次 Target Forward 接受多个 Token，从而摊薄自回归 Decode 中的权重读取、MMVQ、MoE 路由、逐元素 Kernel 和启动开销；它不会让单次 MMVQ 少读权重，还会增加 MTP Head 的候选生成成本。当前 AMD MTP 比 Official MTP 低 `0.77%`，同时接受率低 2.69 个百分点，说明原来面向单 Token MMVQ 的 AMD 优势在多候选验证路径中被稀释。后续优化应分别归因 MTP Draft Head 和 Target 多 Token 验证路径，不能把非 MTP 的 MMVQ 收益直接外推。
+
+### 最新 10 轮 MTP 配对实验
+
+2026 年 7 月 22 日完成的最新实验组使用同一长 Prompt、`max_output_tokens=256`、`temperature=0`、`seed=42`、冷 Prompt Cache、1 次预热和 3 次计量；并发测试固定为 2 个客户端并发请求。每轮依次运行 Official 与 AMD 的普通性能、并发 QPS 和算子分析，共 10 轮、`60 / 60` 个子实验完成。两套实现均开启 MTP，因此这组结果衡量的是“自定义 Kernel 与 MTP 共同工作”的实际表现，不是单 Token MMVQ 的独立消融。
+
+| 指标（10 轮平均） | Official | AMD | AMD 相对变化 |
+| --- | ---: | ---: | ---: |
+| Decode TPS | 123.897 tok/s | 124.111 tok/s | **+0.17%** |
+| Prompt TPS | 1460.670 tok/s | 1704.649 tok/s | **+16.70%** |
+| 模型计算 TTFT | 540.873 ms | 463.456 ms | **-14.31%** |
+| MTP 接受率 | 66.54% | 64.62% | -1.92 个百分点 |
+| 2 并发 QPS | 0.3788 req/s | 0.3981 req/s | **+5.09%** |
+| 聚合输出 TPS | 96.97 tok/s | 101.91 tok/s | **+5.09%** |
+| 平均请求延迟 | 4626.39 ms | 4399.97 ms | **-4.89%** |
+| 错误率 | 0% | 0% | 一致 |
+
+最新结果应准确表述为：**开启 MTP 后，AMD 的 Decode 与 Official 基本持平，但仍有 `0.17%` 的轻微收益；不能将其描述为显著 Decode 提升。** AMD 更明显的收益出现在 Prompt/Prefill 和 2 并发整体吞吐。MTP 会把原本逐 Token 的 MMVQ 路径改为候选生成与多 Token Target 验证，且本组 AMD 接受率比 Official 低 1.92 个百分点，因此未开启 MTP 时记录的 `5.64%` 单 Token Decode 提升被明显稀释。两组结论并不冲突：`5.64%` 描述关闭 MTP 的自回归 Decode，`0.17%` 描述开启 MTP 后的最新完整服务路径。
+
+![10 轮 Official 与 AMD 配对实验历史](../assets/screenshots/benchmark-experiment-history.png)
+
+![Prefill 阶段 HIP Kernel 热点](../assets/screenshots/benchmark-prefill-hotspots.png)
+
+![AMD 自定义 Kernel 命中与 Decode 热点](../assets/screenshots/benchmark-decode-kernel-hits.png)
 
 正确性补测对 `reasoning_content + content` 的完整 128 Token 输出计算 SHA256。AMD 的 MTP 开/关输出一致，Official MTP 与 AMD 也一致；Official 关闭 MTP 的输出不同，因此本轮不能宣称四条路径位级一致。所有路径都固定生成 128 Token，这一差异应作为不同批处理/浮点执行路径下的贪心分叉保留，而不能删除不利样本。
 

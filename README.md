@@ -210,6 +210,17 @@ The optimization work includes activation quantization reuse, fused Residual Add
 
 Full design details and measured boundaries are in [AMD Radeon GPU Inference Optimizations](project-documentation/performance/ROCmOptimizations.md).
 
+## Demo Video Scope
+
+The 3–5 minute demonstration intentionally avoids rerunning the full ten-round profiling suite:
+
+1. Show a few short personal-assistant conversations, including one `react_agent` tool loop and one `plan_and_execute` task with its visible plan and final deliverable.
+2. Show the AMD Radeon inference node and model runtime as ready from the command line or GUI.
+3. Run one short paired Official/AMD performance experiment with identical parameters.
+4. Open the result view and show Decode/Prompt throughput, two-client QPS, and the custom-kernel hit table.
+
+The pre-recorded ten-round paired results remain in the optimization document; the video run demonstrates the end-to-end workflow and responsiveness rather than replacing repeated measurement.
+
 ## Configuration and Runtime Data
 
 `.env` is the only user-edited configuration file and is excluded from Git. `deploy/defaults.env` is a committed internal defaults table, not a second configuration file. Model weights, `.agentfactory/`, and local virtual environments are also excluded.
@@ -232,16 +243,37 @@ cd web_frontend/frontend && npm run type-check
 
 ## Third-party Components and Licenses
 
-Third-party source, models, and online data services retain their own licenses and terms. Bundled native source trees preserve upstream license files:
+This section distinguishes project-owned source, vendored native source, runtime-downloaded model weights, and external data services. Each third-party component remains governed by its own license and terms. This inventory does not replace the complete upstream license text or constitute legal advice.
 
-| Component | Upstream | License | Repository path |
-| --- | --- | --- | --- |
-| llama.cpp | ggml-org/llama.cpp | MIT | `vendor/llama.cpp-official`, `vendor/llama.cpp-amd` |
-| stable-diffusion.cpp | leejet/stable-diffusion.cpp | MIT | `vendor/stable-diffusion.cpp` |
-| Qwen3.6 APEX GGUF | SC117 derivative model | Model card currently declares Apache-2.0; verify upstream lineage before redistribution | Downloaded at runtime |
-| BAAI/bge-m3 | BAAI | MIT | Downloaded at runtime |
-| FLUX.1-dev | Black Forest Labs | FLUX.1-dev Non-Commercial License | Downloaded at runtime |
+### Vendored native source
 
-Python dependencies are declared in `pyproject.toml` and resolved in `uv.lock`. Web dependencies are declared in `web_frontend/frontend/package.json` and locked in `package-lock.json`.
+| Component | Upstream | Pinned revision | License | License location |
+| --- | --- | --- | --- | --- |
+| llama.cpp Official | [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) | `f955e394bf94e01e5e36186d13c985727e5ef5b5` | MIT | `vendor/llama.cpp-official/LICENSE` |
+| llama.cpp AMD derivative | Based on the same llama.cpp revision | Same as Official | MIT; project modifications do not change the upstream notice | `vendor/llama.cpp-amd/LICENSE` |
+| stable-diffusion.cpp | [leejet/stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) | `833369da848e8e2f960fe1896a825e3a08ef9733` | MIT | `vendor/stable-diffusion.cpp/LICENSE` |
+| libwebm | stable-diffusion.cpp submodule | Included in the pinned source tree | BSD 3-Clause | `vendor/stable-diffusion.cpp/thirdparty/libwebm/LICENSE.TXT` |
+| libwebp | stable-diffusion.cpp submodule | Included in the pinned source tree | BSD 3-Clause | `vendor/stable-diffusion.cpp/thirdparty/libwebp/COPYING` |
 
-The project itself does not currently declare a single root source-code license. Do not infer a project-wide MIT, Apache-2.0, or other license from third-party subdirectories.
+Source or binary redistribution must preserve the applicable copyright, license, patent, and notice files. The AMD derivative retains upstream attribution; its modifications do not relicense upstream code.
+
+### Runtime-downloaded models
+
+| Purpose | Model | License status and boundary |
+| --- | --- | --- |
+| Chat | [SC117/Qwen3.6-35B-A3B APEX GGUF](https://huggingface.co/SC117/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-APEX-GGUF) | The current model card declares Apache-2.0. It is a third-party derivative and quantization; verify its base-model lineage and current card before redistribution. |
+| Embedding | [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3) | MIT; retain model provenance and citation information. |
+| Image generation | [black-forest-labs/FLUX.1-dev](https://huggingface.co/black-forest-labs/FLUX.1-dev) | FLUX.1-dev Non-Commercial License. It is not an unrestricted OSI-approved commercial-use license. |
+| FLUX GGUF | [city96/FLUX.1-dev-gguf](https://modelscope.cn/models/city96/FLUX.1-dev-gguf) | Quantization and the download mirror do not replace or broaden the upstream FLUX license. |
+
+Model weights are downloaded during deployment and are not distributed as repository source. Mirrors and packaging repositories are not independent grants of rights.
+
+### Language, web, data, and service dependencies
+
+Python direct dependencies are declared in `pyproject.toml` and resolved in `uv.lock`; Web dependencies are declared in `web_frontend/frontend/package.json` and locked in `package-lock.json`. A binary, container, or offline bundle should ship a generated Software Bill of Materials and the corresponding third-party license archive rather than relying only on this summary.
+
+The repository does not distribute a model-training dataset. Market data, web-search results, uploaded knowledge, email content, and other external material remain subject to their providers' and owners' terms. Public accessibility does not itself grant redistribution rights.
+
+### Project-owned source
+
+The repository root does not currently declare a single project-wide source-code license. Until the owner adds a root `LICENSE`, do not infer MIT, Apache-2.0, or another license for project-owned code from licenses present in third-party directories.

@@ -318,7 +318,7 @@ vendor/llama.cpp-common/     两套实现共享的算子分析追踪协议
 vendor/stable-diffusion.cpp/ 完整图片推理源码与递归子模块
 ```
 
-当前 AMD 目录与官方基线计算实现相同，仅构建产物名称和实现元数据独立，状态会显示 `optimization_status=placeholder`。后续自定义算子只修改 AMD 目录：
+当前 AMD 目录在同一 Official revision 上集成项目的 RDNA3 HIP Kernel、融合与分派追踪；Official 目录保持基线不变。后续自定义算子只修改 AMD 目录：
 
 ```bash
 cd vendor/llama.cpp-amd
@@ -335,6 +335,17 @@ cd ../..
 ```
 
 官方和 AMD 使用相互独立的 CMake/Ninja 构建目录，并同时生成 `llama-server` 与 `llama-bench`。切换实现不会改变模型 Profile；性能测试和算子分析都会自动识别当前活动构建。Kernel 名称、家族、符号匹配和中英文作用说明来自构建产物中的 Kernel Catalog，Benchmark 页面支持悬浮查看说明和展开原始符号；未登记 Kernel 会明确标记，不使用 Python 硬编码猜测。实现 AMD Kernel 后，需要将描述加入 `vendor/llama.cpp-amd/.fastagentfactory-kernel-catalog.json`，并把构建清单的 `custom_kernels` 和 `optimization_status` 更新为真实状态，再用算子分析中的 Kernel 调用与耗时数据证明命中。
+
+## 演示视频范围
+
+3–5 分钟演示不重复运行完整的十轮 Profiler 测试，按以下范围录制：
+
+1. 展示几轮个人助手对话，其中一轮体现 `react_agent` 的工具调用循环，另一轮体现 `plan_and_execute` 的可见计划与最终交付物。
+2. 从命令行或 GUI 展示 AMD Radeon 推理节点与模型运行时已就绪。
+3. 使用相同参数执行一轮简短的 Official/AMD 配对性能测试。
+4. 打开实验结果，展示 Decode/Prompt 吞吐、2 并发 QPS 与自定义 Kernel 命中表。
+
+优化文档保留已经完成的十轮配对数据；视频中的单轮短测用于展示端到端操作流程与流畅度，不替代重复实验结论。
 
 ## 配置与数据目录
 
@@ -458,8 +469,8 @@ npm run type-check
 | llama.cpp Official | [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) | `f955e394bf94e01e5e36186d13c985727e5ef5b5` | MIT | `vendor/llama.cpp-official/` |
 | llama.cpp AMD derivative | 基于同一 llama.cpp revision | 同上 | MIT；项目修改不改变上游许可声明 | `vendor/llama.cpp-amd/` |
 | stable-diffusion.cpp | [leejet/stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) | `833369da848e8e2f960fe1896a825e3a08ef9733` | MIT | `vendor/stable-diffusion.cpp/` |
-| libwebm | stable-diffusion.cpp 子模块 | 随固定源码树 | BSD 3-Clause style | `vendor/stable-diffusion.cpp/thirdparty/libwebm/` |
-| libwebp | stable-diffusion.cpp 子模块 | 随固定源码树 | BSD-style | `vendor/stable-diffusion.cpp/thirdparty/libwebp/` |
+| libwebm | stable-diffusion.cpp 子模块 | 随固定源码树 | BSD 3-Clause | `vendor/stable-diffusion.cpp/thirdparty/libwebm/LICENSE.TXT` |
+| libwebp | stable-diffusion.cpp 子模块 | 随固定源码树 | BSD 3-Clause | `vendor/stable-diffusion.cpp/thirdparty/libwebp/COPYING` |
 
 完整许可证正文保留在对应源码目录。分发二进制或修改后的源码时，必须同时保留相应版权和许可证文件。
 
