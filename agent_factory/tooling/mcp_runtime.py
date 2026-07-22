@@ -63,11 +63,21 @@ class MCPRuntimeClient:
 
     @asynccontextmanager
     async def _session(self) -> AsyncIterator[Any]:
-        if self.server.transport != "stdio":
-            raise MCPRuntimeError(f"unsupported MCP transport: {self.server.transport}")
+        sdk = _load_mcp_sdk()
+        if self.server.transport == "stdio":
+            async with self._stdio_session(sdk) as session:
+                yield session
+            return
+        if self.server.transport in {"streamable_http", "sse"}:
+            async with self._remote_session(sdk) as session:
+                yield session
+            return
+        raise MCPRuntimeError(f"unsupported MCP transport: {self.server.transport}")
+
+    @asynccontextmanager
+    async def _stdio_session(self, sdk: dict[str, Any]) -> AsyncIterator[Any]:
         if not self.server.command:
             raise MCPRuntimeError(f"MCP stdio server requires command: {self.server.server_id}")
-        sdk = _load_mcp_sdk()
         env = {**os.environ, **self.server.env}
         cwd = str(Path(self.server.cwd).expanduser().resolve()) if self.server.cwd else None
         params_kwargs = {
@@ -100,6 +110,29 @@ class MCPRuntimeClient:
         finally:
             self._stderr_logs.extend(stderr_capture.lines())
             stderr_capture.close()
+
+    @asynccontextmanager
+    async def _remote_session(self, sdk: dict[str, Any]) -> AsyncIterator[Any]:
+        if not self.server.url:
+            raise MCPRuntimeError(f"MCP {self.server.transport} server requires url: {self.server.server_id}")
+        client_factory = sdk.get(self.server.transport)
+        if client_factory is None:
+            raise MCPRuntimeError(f"Python MCP SDK does not provide {self.server.transport} client support")
+        try:
+            client_context = client_factory(self.server.url, headers=dict(self.server.headers))
+        except TypeError:
+            client_context = client_factory(self.server.url)
+        async with client_context as streams:
+            if not isinstance(streams, tuple) or len(streams) < 2:
+                raise MCPRuntimeError(f"invalid {self.server.transport} client streams")
+            read_stream, write_stream = streams[0], streams[1]
+            async with sdk["ClientSession"](read_stream, write_stream) as session:
+                await _with_timeout(
+                    session.initialize(),
+                    timeout_seconds=self.server.timeout_seconds,
+                    operation=f"initialize MCP server {self.server.server_id}",
+                )
+                yield session
 
 
 class MCPRuntimeManager:
@@ -172,11 +205,20 @@ def _load_mcp_sdk() -> dict[str, Any]:
         stdio_module = importlib.import_module("mcp.client.stdio")
     except ModuleNotFoundError as exc:
         raise MCPRuntimeError("Python package 'mcp' is required to use MCP servers") from exc
-    return {
+    sdk = {
         "ClientSession": mcp_module.ClientSession,
         "StdioServerParameters": mcp_module.StdioServerParameters,
         "stdio_client": stdio_module.stdio_client,
     }
+    for transport, module_name, attribute in (
+        ("streamable_http", "mcp.client.streamable_http", "streamablehttp_client"),
+        ("sse", "mcp.client.sse", "sse_client"),
+    ):
+        try:
+            sdk[transport] = getattr(importlib.import_module(module_name), attribute)
+        except (ModuleNotFoundError, AttributeError):
+            sdk[transport] = None
+    return sdk
 
 
 def _normalize_tool(tool: Any) -> MCPDiscoveredTool:

@@ -44,15 +44,18 @@ export interface McpServerConfig {
   server_id?: string
   display_name: string
   description?: string
-  transport: 'stdio'
-  command: string
-  args: string
-  cwd: string
+  transport: 'stdio' | 'streamable_http' | 'sse'
+  command?: string
+  args?: string | string[]
+  cwd?: string
   env?: string | Record<string, string>
+  url?: string
+  headers?: string | Record<string, string>
   timeout_seconds: number
   enabled: boolean
+  risk_level_default?: 'low' | 'medium' | 'high'
   source?: {
-    type: 'local'
+    type: 'local' | 'remote' | 'imported'
     name: string
     description?: string
   }

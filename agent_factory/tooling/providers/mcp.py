@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import re
-from typing import Any, Iterable, Mapping, Protocol
+from typing import Any, Iterable, Literal, Mapping, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -39,11 +39,13 @@ class MCPServerConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     server_id: str
-    transport: str
+    transport: Literal["stdio", "streamable_http", "sse"]
     command: str | None = None
     args: list[str] = Field(default_factory=list)
     cwd: str | None = None
     env: dict[str, str] = Field(default_factory=dict)
+    url: str | None = None
+    headers: dict[str, str] = Field(default_factory=dict)
     source: dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
     required: bool = False

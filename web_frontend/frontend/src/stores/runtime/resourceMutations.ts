@@ -84,7 +84,7 @@ export function applyExtensionsEvent(state: ResourceMutationState, event: Factor
   ]
   state.toolPermissions = toolPermissionsView(event.payload?.tool_permissions)
   if (event.event_type === 'extension_config_tested') {
-    state.extensionTestResult = event.payload?.test || event.payload || null
+    state.extensionTestResult = event.payload?.test || event.payload?.install || event.payload || null
   } else if (event.event_type === 'extension_config_updated') {
     state.extensionTestResult = null
   }

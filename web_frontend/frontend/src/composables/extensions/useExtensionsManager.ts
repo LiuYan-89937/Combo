@@ -28,6 +28,7 @@ export function useExtensionsManager() {
   const editingSkill = ref<ExtensionItemView | null>(null)
   const busyKey = ref<string | null>(null)
   const skillHubQuery = ref('')
+  const mcpInstallResult = ref<Record<string, any> | null>(null)
 
   const extensionContext = computed(() => resourceContext.workspaceContext.value)
   const testResultType = computed(() => (
@@ -108,11 +109,13 @@ export function useExtensionsManager() {
 
   function openAddMcp(): void {
     editingMcp.value = null
+    mcpInstallResult.value = null
     showMcpModal.value = true
   }
 
   function openEditMcp(item: ExtensionItemView): void {
     editingMcp.value = item
+    mcpInstallResult.value = null
     showMcpModal.value = true
   }
 
@@ -159,11 +162,19 @@ export function useExtensionsManager() {
     }
   }
 
-  async function handleSaveMcp(config: McpServerConfig): Promise<void> {
-    const event = await commands.saveMcp(config, extensionContext.value)
-    if (event) {
+  async function handleInstallMcp(servers: McpServerConfig[]): Promise<void> {
+    if (busyKey.value || servers.length === 0) return
+    busyKey.value = 'mcp:install'
+    mcpInstallResult.value = null
+    try {
+      const event = await commands.installMcp(servers, extensionContext.value)
+      const install = event?.payload?.install
+      mcpInstallResult.value = install && typeof install === 'object' ? install : null
+      if (mcpInstallResult.value?.status !== 'ok') return
       showMcpModal.value = false
       editingMcp.value = null
+    } finally {
+      busyKey.value = null
     }
   }
 
@@ -287,6 +298,8 @@ export function useExtensionsManager() {
   ])
 
   function mcpCommandLine(item: ExtensionItemView): string {
+    const url = String(item.payload?.url || '')
+    if (url) return url
     const command = String(item.payload?.command || '')
     const args = Array.isArray(item.payload?.args)
       ? item.payload.args.join(' ')
@@ -326,7 +339,7 @@ export function useExtensionsManager() {
     extensionStore,
     resourceContext,
     handleMcpAction,
-    handleSaveMcp,
+    handleInstallMcp,
     handleSaveSkill,
     handleSkillHubInstall,
     handleSkillHubSearch,
@@ -336,6 +349,7 @@ export function useExtensionsManager() {
     handleToggleSkill,
     mcpActions,
     mcpCommandLine,
+    mcpInstallResult,
     openAddMcp,
     openAddSkill,
     permissionModeOptions,

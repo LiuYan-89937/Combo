@@ -87,6 +87,7 @@ class RuntimeResourceCommandMixin:
         event_type = "extension_configs_listed"
         if action in {
             "upsert_mcp",
+            "install_mcp",
             "set_mcp_enabled",
             "remove_mcp",
             "upsert_skill",
@@ -97,7 +98,12 @@ class RuntimeResourceCommandMixin:
             "reset_tool_permission",
             "skillhub_install",
         }:
-            event_type = "extension_config_updated"
+            install = result.get("install") if isinstance(result.get("install"), dict) else {}
+            event_type = (
+                "extension_config_tested"
+                if action == "install_mcp" and install.get("status") != "ok"
+                else "extension_config_updated"
+            )
         elif action == "test_mcp":
             event_type = "extension_config_tested"
         elif action in {"skillhub_status", "skillhub_search"}:
