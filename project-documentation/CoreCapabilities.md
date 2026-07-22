@@ -81,7 +81,7 @@ Knowledge sources can be attached at package or session scope. The runtime perfo
 
 The knowledge UI exposes source registration, background ingestion state, and document access. A source becomes retrievable only after ingestion completes and the relevant knowledge contract is active.
 
-![Knowledge management and ingestion state](assets/screenshots/knowledge-base.png)
+![Knowledge management and ingestion entry point](assets/screenshots/capability-knowledge.png)
 
 ## 8. Resources and Secrets
 
@@ -90,6 +90,10 @@ Resource descriptors declare structured value schemas, validation constraints, a
 ## 9. Scheduler
 
 Scheduled tasks use stable task identities and dedicated execution records. A rerun replaces the failed active attempt instead of accumulating duplicate live sessions, and retry guidance can include the prior failure reason. Scheduled activity is visible from every session through a dedicated view; an active related chat can receive status cards.
+
+The scheduled-task view selects an execution target from the active context and exposes task creation, status, and run-history entry points. Triggering, leases, and failure recovery remain owned by the Scheduler Runtime.
+
+![Scheduled-task creation and management](assets/screenshots/capability-scheduler.png)
 
 ## 10. Artifacts and Delivery
 
@@ -118,6 +122,10 @@ The collaboration view presents the main agent, task state, worker activity, rec
 Docker isolates AgentPackage, MCP, and sub-agent processes. Logical ownership further separates package environments, sessions, workspaces, SQLite connections, tool outputs, and artifacts. Dependency environments are resolved by lock identity and reused safely without sharing writable runtime databases.
 
 Extensions remain declarative through package contracts and installed registries. The platform avoids package-specific branches in the core runtime.
+
+The extension-management view brings MCP servers, Skill extensions, and tool permissions into one surface. The active context supplies the default target while users can select another target explicitly; connection tests and enablement still pass through Gateway resource and permission boundaries.
+
+![MCP, Skill, and tool-permission extension management](assets/screenshots/capability-extensions.png)
 
 ## 14. Local and Remote Inference
 

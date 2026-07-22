@@ -131,7 +131,7 @@ Knowledge 服务注册到 RuntimeServices，不代表知识正文自动拼入 Pr
 
 知识库界面提供来源注册、后台摄取状态和文档访问入口；实际可检索性仍以 ingestion 完成和对应 Knowledge Contract 生效为准。
 
-![知识库管理与摄取状态](assets/screenshots/knowledge-base.png)
+![知识库管理与摄取入口](assets/screenshots/capability-knowledge.png)
 
 ## 8. Resource 与 Secret
 
@@ -151,6 +151,10 @@ Scheduler System 提供：
 - 独立 scheduler run session。
 
 Scheduler Contract 构建 Scheduler Runtime，并把 scheduler 工具资源提供给工具系统。调度状态可通过专用工具或 API 查询，不需要每轮注入聊天上下文。
+
+定时任务界面按当前上下文选择执行目标，提供任务创建、状态查看和运行记录入口；实际触发、租约和失败恢复仍由 Scheduler Runtime 负责。
+
+![定时任务创建与管理界面](assets/screenshots/capability-scheduler.png)
 
 ## 10. Artifact 与交付
 
@@ -187,6 +191,10 @@ Collaboration System 和 Agent Group System 支持主 Agent、worker、任务派
 - MCP 与 SkillHub 通过宿主 Gateway 向容器提供服务；
 - Package Tool、Builtin Tool 和扩展工具统一进入 Registry/Gateway；
 - 路径策略和 `builtin_allow_external_paths` 控制文件访问边界。
+
+扩展管理界面统一呈现 MCP 服务器、Skill 扩展和工具权限。配置目标可显式切换，当前上下文仍作为默认选择；连接测试与启停操作不会绕过 Gateway 的资源和权限边界。
+
+![MCP、Skill 与工具权限扩展管理](assets/screenshots/capability-extensions.png)
 
 ## 14. 本地与外部推理
 
