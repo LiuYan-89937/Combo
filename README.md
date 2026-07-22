@@ -16,7 +16,6 @@ The platform supports both local and split-host deployment. On a Linux workstati
 - [Core capabilities](project-documentation/CoreCapabilities.md)
 - [Deployment and acceptance guide](project-documentation/Deployment.md)
 - [AMD Radeon GPU inference optimizations](project-documentation/performance/ROCmOptimizations.md)
-- [Demo video](DEMO_VIDEO.md)
 - [Supplementary materials and poster](SUPPLEMENTARY_MATERIALS.md)
 
 ## Application: A Private Personal AI Assistant

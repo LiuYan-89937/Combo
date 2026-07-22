@@ -16,7 +16,7 @@ FastAgentFactory 是一套完全本地化、可制造、可进化的个人智能
 - [Agent 架构](project-documentation/AgentArchitecture.zh-CN.md)：运行层次、工具网关与隔离边界。
 - [核心能力](project-documentation/CoreCapabilities.zh-CN.md)：模型、工具、记忆、知识、调度和交付能力。
 - [AMD Radeon GPU 推理优化](project-documentation/performance/ROCmOptimizations.zh-CN.md)：自研 HIP Kernel、融合与 MTP 说明。
-- [演示视频](DEMO_VIDEO.zh-CN.md)与[补充材料](SUPPLEMENTARY_MATERIALS.zh-CN.md)。
+- [补充材料](SUPPLEMENTARY_MATERIALS.zh-CN.md)。
 - README 当前页面：项目定位、系统架构、主要功能、日常使用和开发入口。
 
 ## 应用场景：个人智能助手
