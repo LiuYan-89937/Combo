@@ -31,6 +31,17 @@ def create_extensions_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         )
         return {"event": event}
 
+    @router.post("/mcp/install")
+    async def install_mcp(payload: dict[str, Any]):
+        event = await resource_command(
+            runtime_bridge,
+            "extensions_manage",
+            {"action": "install_mcp", **payload, **optional_resource_mode(payload.get("resource_mode"))},
+            {"extension_config_updated", "extension_config_tested"},
+            timeout_seconds=300.0,
+        )
+        return {"event": event}
+
     @router.post("/mcp/test")
     async def test_mcp(payload: dict[str, Any]):
         event = await resource_command(

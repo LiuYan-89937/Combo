@@ -14,6 +14,10 @@ export function useExtensionCommands() {
     return transport.applyEventRequest(extensionsApi.saveMcp(server, context))
   }
 
+  const installMcp = (servers: McpServerConfig[], context?: WorkspaceContextInput) => {
+    return transport.applyEventRequest(extensionsApi.installMcp(servers, context))
+  }
+
   const testMcp = (serverIdOrConfig: string | McpServerConfig, context?: WorkspaceContextInput) => {
     return transport.applyEventRequest(extensionsApi.testMcp(serverIdOrConfig, context))
   }
@@ -65,6 +69,7 @@ export function useExtensionCommands() {
   return {
     refreshExtensions,
     saveMcp,
+    installMcp,
     testMcp,
     setMcpEnabled,
     removeMcp,

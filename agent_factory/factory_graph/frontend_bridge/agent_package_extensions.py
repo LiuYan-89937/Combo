@@ -6,7 +6,8 @@ import re
 import shutil
 import shlex
 import subprocess
-from typing import Any
+from typing import Any, Callable
+from urllib.parse import urlparse
 
 from agent_factory.runtime_contracts import LoadedAgentPackage
 from agent_factory.runtime_kernel.extensions.loader import (
@@ -168,6 +169,14 @@ def _manage_extension_root(
                 **summary(),
             },
             changed=True,
+        )
+    if action == "install_mcp":
+        return _install_mcp_servers(
+            extension_root,
+            payload,
+            summary=summary,
+            package=package,
+            system_owner=system_owner,
         )
     if action == "set_mcp_enabled":
         server_id = _required_config_id(payload, "server_id")
@@ -567,6 +576,7 @@ def public_mcp_server(payload: dict[str, Any]) -> dict[str, Any]:
     source = dict(payload.get("source") or {})
     enabled = payload.get("enabled", True) is not False
     env = payload.get("env") if isinstance(payload.get("env"), dict) else {}
+    headers = payload.get("headers") if isinstance(payload.get("headers"), dict) else {}
     name = str(source.get("package") or source.get("name") or humanize_identifier(server_id) or "MCP server")
     description = str(source.get("description") or source.get("summary") or "").strip()
     safe_payload = {
@@ -577,6 +587,7 @@ def public_mcp_server(payload: dict[str, Any]) -> dict[str, Any]:
         "command": payload.get("command"),
         "args": list(payload.get("args") or []),
         "cwd": payload.get("cwd"),
+        "url": payload.get("url"),
         "source": source,
         "enabled": enabled,
         "required": bool(payload.get("required")),
@@ -584,6 +595,7 @@ def public_mcp_server(payload: dict[str, Any]) -> dict[str, Any]:
         "risk_level_default": payload.get("risk_level_default"),
         "timeout_seconds": payload.get("timeout_seconds"),
         "env_keys": sorted(str(key) for key in env),
+        "header_keys": sorted(str(key) for key in headers),
     }
     return {
         "kind": "mcp",
@@ -669,6 +681,16 @@ def _save_mcp_server(extension_root: Path, server: MCPServerConfig) -> None:
     _write_local_mcp_config(
         extension_root,
         config.model_copy(update={"servers": sorted(servers, key=lambda item: item.server_id)}),
+    )
+
+
+def _save_mcp_servers(extension_root: Path, servers: list[MCPServerConfig]) -> None:
+    config = _load_local_mcp_config(extension_root)
+    replacements = {server.server_id: server for server in servers}
+    retained = [server for server in config.servers if server.server_id not in replacements]
+    _write_local_mcp_config(
+        extension_root,
+        config.model_copy(update={"servers": sorted([*retained, *servers], key=lambda item: item.server_id)}),
     )
 
 
@@ -851,6 +873,9 @@ def _mcp_server_from_payload(payload: dict[str, Any], *, existing: MCPServerConf
     cwd_value = raw.get("cwd") if "cwd" in raw else existing.cwd if existing is not None else None
     cwd = str(cwd_value or "").strip() or None
     env = _parse_env(raw["env"]) if "env" in raw else dict(existing.env) if existing is not None else {}
+    url_value = raw.get("url") if "url" in raw else existing.url if existing is not None else None
+    url = str(url_value or "").strip() or None
+    headers = _parse_env(raw["headers"]) if "headers" in raw else dict(existing.headers) if existing is not None else {}
     enabled = raw.get("enabled") if "enabled" in raw else existing.enabled if existing is not None else True
     server_id = _config_identifier(
         str(raw.get("server_id") or ""),
@@ -867,6 +892,8 @@ def _mcp_server_from_payload(payload: dict[str, Any], *, existing: MCPServerConf
         args=args,
         cwd=cwd,
         env=env,
+        url=url,
+        headers=headers,
         source=source,
         enabled=enabled is not False,
         required=bool(raw.get("required") if "required" in raw else existing.required if existing is not None else False),
@@ -914,6 +941,9 @@ def _skill_path_for_validation(path: str, extension_root: Path | None) -> str:
 
 
 def _test_mcp_server(server: MCPServerConfig) -> dict[str, Any]:
+    preflight = _mcp_server_preflight(server)
+    if preflight["status"] != "ok":
+        return {**preflight, "tool_count": 0, "tools": []}
     manager = MCPRuntimeManager(MCPServersConfig(servers=[server.model_copy(update={"enabled": True})]))
     client = manager.clients().get(server.server_id)
     if client is None:
@@ -930,6 +960,7 @@ def _test_mcp_server(server: MCPServerConfig) -> dict[str, Any]:
     return {
         "status": "ok",
         "message": f"Discovered {len(tools)} tools.",
+        "preflight": preflight,
         "tool_count": len(tools),
         "tools": [
             {
@@ -938,6 +969,93 @@ def _test_mcp_server(server: MCPServerConfig) -> dict[str, Any]:
             }
             for tool in tools
         ],
+    }
+
+
+def _install_mcp_servers(
+    extension_root: Path,
+    payload: dict[str, Any],
+    *,
+    summary: Callable[[], dict[str, Any]],
+    package: LoadedAgentPackage | None,
+    system_owner: SystemAgentExtensionOwner | None,
+) -> ExtensionManageResult:
+    raw_servers = payload.get("servers")
+    if not isinstance(raw_servers, list) or not raw_servers:
+        raise ValueError("install_mcp requires a non-empty servers array")
+    servers = [
+        _mcp_server_for_upsert(
+            extension_root,
+            {"server": raw},
+            package=package,
+            system_owner=system_owner,
+        )
+        for raw in raw_servers
+        if isinstance(raw, dict)
+    ]
+    if len(servers) != len(raw_servers):
+        raise ValueError("install_mcp servers must contain objects")
+    if len({server.server_id for server in servers}) != len(servers):
+        raise ValueError("install_mcp server_id values must be unique")
+    tests = [
+        {"server_id": server.server_id, **_test_mcp_server(server.model_copy(update={"enabled": True}))}
+        for server in servers
+    ]
+    failed = [test for test in tests if test.get("status") != "ok"]
+    if failed:
+        return ExtensionManageResult(
+            {
+                "install": {
+                    "status": "failed",
+                    "message": f"{len(failed)} MCP server(s) failed validation; no configuration was saved.",
+                    "tests": tests,
+                },
+                **summary(),
+            }
+        )
+    _save_mcp_servers(extension_root, servers)
+    return ExtensionManageResult(
+        {
+            "install": {
+                "status": "ok",
+                "message": f"Installed {len(servers)} MCP server(s).",
+                "tests": tests,
+            },
+            **summary(),
+        },
+        changed=True,
+    )
+
+
+def _mcp_server_preflight(server: MCPServerConfig) -> dict[str, Any]:
+    if server.transport == "stdio":
+        command = str(server.command or "").strip()
+        if not command:
+            return {"status": "failed", "message": f"MCP stdio server requires command: {server.server_id}"}
+        resolved = shutil.which(command)
+        if resolved is None and ("/" in command or "\\" in command):
+            candidate = Path(command).expanduser()
+            resolved = str(candidate.resolve()) if candidate.is_file() else None
+        if resolved is None:
+            return {"status": "failed", "message": f"MCP command is not available: {command}"}
+        runner = Path(command).name
+        return {
+            "status": "ok",
+            "message": f"Command is available: {resolved}",
+            "transport": "stdio",
+            "strategy": "package_runner" if runner in {"npx", "uvx", "pipx", "bunx"} else "local_command",
+            "resolved_command": resolved,
+        }
+    if server.transport not in {"streamable_http", "sse"}:
+        return {"status": "failed", "message": f"Unsupported MCP transport: {server.transport}"}
+    parsed = urlparse(str(server.url or ""))
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return {"status": "failed", "message": f"MCP {server.transport} server requires a valid HTTP(S) URL"}
+    return {
+        "status": "ok",
+        "message": f"Remote endpoint is configured: {parsed.scheme}://{parsed.netloc}",
+        "transport": server.transport,
+        "strategy": "remote_endpoint",
     }
 
 
@@ -990,12 +1108,15 @@ def _parse_env(value: Any) -> dict[str, str]:
 def _mcp_server_summary(payload: dict[str, Any]) -> str:
     transport = str(payload.get("transport") or "unknown")
     command = str(payload.get("command") or "").strip()
+    url = str(payload.get("url") or "").strip()
     source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
     package = str(source.get("package") or "").strip()
     if package:
         return f"{transport} connection from {package}"
     if command:
         return f"{transport} connection via {command}"
+    if url:
+        return f"{transport} connection to {url}"
     return f"{transport} connection"
 
 

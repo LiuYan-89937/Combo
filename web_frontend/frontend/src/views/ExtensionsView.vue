@@ -314,7 +314,9 @@
     <McpConfigModal
       v-model:show="showMcpModal"
       :item="editingMcp"
-      @submit="handleSaveMcp"
+      :busy="busyKey === 'mcp:install'"
+      :install-result="mcpInstallResult"
+      @submit="handleInstallMcp"
     />
 
     <SkillConfigModal
@@ -366,7 +368,7 @@ const {
   handleMcpAction,
   handlePermissionModeChange,
   handleResetToolPermission,
-  handleSaveMcp,
+  handleInstallMcp,
   handleSaveSkill,
   handleSkillHubInstall,
   handleSkillHubSearch,
@@ -379,6 +381,7 @@ const {
   hasToolOverride,
   mcpActions,
   mcpCommandLine,
+  mcpInstallResult,
   openAddMcp,
   openAddSkill,
   permissionModeOptions,
