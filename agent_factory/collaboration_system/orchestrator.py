@@ -227,7 +227,6 @@ class CollaborationOrchestrator:
             self.runtime.emit_factory_session_updated(session_record=initial_factory_record, mode="chat")
 
         output = VisibleAssistantOutputAccumulator()
-        tool_activities: list[dict[str, Any]] = []
         status = "failed"
         message = ""
         for stream_mode, chunk in run.events:
@@ -243,7 +242,6 @@ class CollaborationOrchestrator:
                 )
             )
             output.accept(item)
-            _upsert_tool_activity(tool_activities, item)
             if item.event_type in RUN_TERMINAL_EVENT_TYPES:
                 status = runtime_stream_status(item)
                 message = str(item.message or item.payload.get("message") or "").strip()
@@ -261,7 +259,7 @@ class CollaborationOrchestrator:
                 final_answer=output.content,
                 reasoning_content=output.reasoning_content,
                 status=status,
-                tool_activities=tool_activities,
+                tool_activities=output.tool_activities,
             )
             if package_id == SYSTEM_CHAT_PACKAGE_ID and factory_session_id:
                 factory_record = _sync_factory_chat_session_from_agent_session(
@@ -922,7 +920,6 @@ class CollaborationOrchestrator:
                 task_id,
                 {"assignee_session_id": assignee_session_id},
             )
-        tool_activities: list[dict[str, Any]] = []
         for stream_mode, chunk in run.events:
             if stream_mode != "frontend_event":
                 continue
@@ -939,27 +936,26 @@ class CollaborationOrchestrator:
                         collaboration_task_id=task_id,
                     )
                 )
-            _upsert_tool_activity(tool_activities, item)
             if item.event_type in RUN_TERMINAL_EVENT_TYPES:
                 return WorkerRunOutcome(
                     status=runtime_stream_status(item),
                     message=str(item.message or item.payload.get("message") or "").strip(),
                     assignee_session_id=assignee_session_id,
-                    tool_activities=tool_activities,
+                    tool_activities=output.tool_activities,
                 )
             if item.event_type in INTERRUPT_TERMINAL_EVENT_TYPES:
                 return WorkerRunOutcome(
                     status="blocked",
                     message=_interrupt_summary(item),
                     assignee_session_id=assignee_session_id,
-                    tool_activities=tool_activities,
+                    tool_activities=output.tool_activities,
                     interrupt_payload=_pending_interrupt_payload(item),
                 )
         return WorkerRunOutcome(
             status="failed",
             message="worker runtime stream ended without terminal status",
             assignee_session_id=assignee_session_id,
-            tool_activities=tool_activities,
+            tool_activities=output.tool_activities,
         )
 
     def _finish_worker_session_turn(
@@ -1150,139 +1146,6 @@ def _pending_interrupt_payload(item: FactoryFrontendEvent) -> dict[str, Any]:
         "payload": payload,
         "resume_payload": _approval_resume_payload(item) if _is_tool_approval_interrupt(item) else {},
     }
-
-
-TOOL_ACTIVITY_EVENT_STATUS = {
-    "tool_call_proposed": "proposed",
-    "tool_approval_requested": "approval",
-    "tool_approval_resolved": "approval",
-    "tool_call_started": "started",
-    "tool_call_completed": "completed",
-    "tool_call_failed": "failed",
-    "tool_contract_invalid": "failed",
-    "tool_observation_available": "observed",
-}
-
-
-def _upsert_tool_activity(activities: list[dict[str, Any]], item: FactoryFrontendEvent) -> None:
-    status = TOOL_ACTIVITY_EVENT_STATUS.get(item.event_type)
-    if status is None:
-        return
-    for payload in _tool_activity_payloads(item):
-        _upsert_projected_tool_activity(activities, item=item, payload=payload, status=status)
-
-
-def _tool_activity_payloads(item: FactoryFrontendEvent) -> list[dict[str, Any]]:
-    payload = item.payload if isinstance(item.payload, dict) else {}
-    if item.event_type == "tool_approval_requested":
-        requests = payload.get("requests") if isinstance(payload.get("requests"), list) else []
-        common = {key: value for key, value in payload.items() if key != "requests"}
-        return [
-            {**common, **request}
-            for request in requests
-            if isinstance(request, dict)
-        ]
-    if item.event_type == "tool_approval_resolved":
-        call_ids = _approval_tool_call_ids(payload)
-        return [{**payload, "tool_call_id": call_id} for call_id in call_ids]
-    return [payload]
-
-
-def _approval_tool_call_ids(payload: dict[str, Any]) -> list[str]:
-    requests = payload.get("requests") if isinstance(payload.get("requests"), list) else []
-    candidates = [
-        payload.get("tool_call_id"),
-        payload.get("toolCallId"),
-        *(payload.get("tool_call_ids") if isinstance(payload.get("tool_call_ids"), list) else []),
-        *(payload.get("toolCallIds") if isinstance(payload.get("toolCallIds"), list) else []),
-        *(
-            request.get("tool_call_id") or request.get("toolCallId")
-            for request in requests
-            if isinstance(request, dict)
-        ),
-    ]
-    return list(dict.fromkeys(str(value or "").strip() for value in candidates if str(value or "").strip()))
-
-
-def _upsert_projected_tool_activity(
-    activities: list[dict[str, Any]],
-    *,
-    item: FactoryFrontendEvent,
-    payload: dict[str, Any],
-    status: str,
-) -> None:
-    tool_call_id = _first_payload_text(payload, "tool_call_id", "toolCallId")
-    activity_key = tool_call_id or str(item.span_id or item.event_id)
-    existing_index = next(
-        (
-            index
-            for index, activity in enumerate(activities)
-            if activity.get("activityKey") == activity_key
-            or (tool_call_id and activity.get("toolCallId") == tool_call_id)
-        ),
-        -1,
-    )
-    existing = activities[existing_index] if existing_index >= 0 else {}
-    tool_name = _first_payload_text(payload, "tool_name", "tool_id", "name") or existing.get("toolName") or "tool_call"
-    merged_payload = {
-        **(existing.get("payload") if isinstance(existing.get("payload"), dict) else {}),
-        **payload,
-    }
-    merged_payload["arguments"] = {
-        **_payload_arguments(existing.get("payload") if isinstance(existing.get("payload"), dict) else {}),
-        **_payload_arguments(payload),
-    }
-    activity = {
-        "activityKey": str(existing.get("activityKey") or activity_key),
-        "requestId": item.request_id or existing.get("requestId"),
-        "eventType": item.event_type,
-        "timestamp": item.timestamp,
-        "createdAt": existing.get("createdAt") or item.timestamp,
-        "stageId": item.stage_id or existing.get("stageId"),
-        "nodeId": item.node_id or existing.get("nodeId"),
-        "toolCallId": tool_call_id or existing.get("toolCallId"),
-        "toolName": tool_name,
-        "status": status,
-        "approvalState": _approval_state(item, existing.get("approvalState")),
-        "payload": merged_payload,
-    }
-    if existing_index >= 0:
-        activities[existing_index] = activity
-    else:
-        activities.append(activity)
-
-
-def _first_payload_text(payload: dict[str, Any], *keys: str) -> str | None:
-    for key in keys:
-        value = str(payload.get(key) or "").strip()
-        if value:
-            return value
-    return None
-
-
-def _payload_arguments(payload: dict[str, Any]) -> dict[str, Any]:
-    arguments = payload.get("arguments")
-    if isinstance(arguments, dict):
-        return dict(arguments)
-    args = payload.get("args")
-    if isinstance(args, dict):
-        return dict(args)
-    return {}
-
-
-def _approval_state(item: FactoryFrontendEvent, existing: Any) -> str | None:
-    if item.event_type == "tool_approval_requested":
-        return "pending"
-    if item.event_type != "tool_approval_resolved":
-        return str(existing) if existing else None
-    payload = item.payload if isinstance(item.payload, dict) else {}
-    approved = payload.get("approved")
-    action = str(payload.get("action") or payload.get("decision") or "").strip().lower()
-    if approved is True or action == "approve":
-        return "approved"
-    if approved is False or action in {"deny", "reject", "rejected"}:
-        return "denied"
-    return str(existing) if existing else None
 
 
 def _interrupt_summary(item: FactoryFrontendEvent) -> str:
