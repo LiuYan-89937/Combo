@@ -951,7 +951,11 @@ def _test_mcp_server(server: MCPServerConfig) -> dict[str, Any]:
     try:
         tools = [tool.model_dump(mode="json") for tool in client.list_tools()]
     except Exception as exc:
-        return _mcp_test_failure(exc, stderr=client.stderr_logs())
+        return _mcp_test_failure(
+            exc,
+            stderr=client.stderr_logs(),
+            sensitive_values=[*server.env.values(), *server.headers.values()],
+        )
     return {
         "status": "ok",
         "message": f"Discovered {len(tools)} tools.",
@@ -967,9 +971,18 @@ def _test_mcp_server(server: MCPServerConfig) -> dict[str, Any]:
     }
 
 
-def _mcp_test_failure(exc: BaseException, *, stderr: list[str]) -> dict[str, Any]:
-    details = _exception_leaf_messages(exc)
-    stderr_lines = [line.strip() for line in stderr if line.strip()]
+def _mcp_test_failure(
+    exc: BaseException,
+    *,
+    stderr: list[str],
+    sensitive_values: list[str],
+) -> dict[str, Any]:
+    details = [_redact_mcp_test_text(message, sensitive_values) for message in _exception_leaf_messages(exc)]
+    stderr_lines = [
+        _redact_mcp_test_text(line.strip(), sensitive_values)
+        for line in stderr
+        if line.strip()
+    ]
     primary_message = stderr_lines[-1] if stderr_lines else details[0]
     return {
         "status": "failed",
@@ -992,6 +1005,14 @@ def _exception_leaf_messages(exc: BaseException) -> list[str]:
         return list(dict.fromkeys(messages))
     message = str(exc).strip()
     return [f"{type(exc).__name__}: {message}" if message else type(exc).__name__]
+
+
+def _redact_mcp_test_text(value: str, sensitive_values: list[str]) -> str:
+    redacted = value
+    secrets = sorted({secret for secret in sensitive_values if secret}, key=len, reverse=True)
+    for secret in secrets:
+        redacted = redacted.replace(secret, "[REDACTED]")
+    return redacted
 
 
 def _install_mcp_servers(
