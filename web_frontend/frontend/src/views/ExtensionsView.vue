@@ -26,17 +26,7 @@
       closable
       @close="extensionStore.setTestResult(null)"
     >
-      <div>{{ testResultMessage }}</div>
-      <div v-if="testTools.length > 0" class="test-tools">
-        <n-tag
-          v-for="(tool, index) in testTools"
-          :key="tool.name || index"
-          size="small"
-          :bordered="false"
-        >
-          {{ tool.name }}
-        </n-tag>
-      </div>
+      <McpTestResultDetails :result="extensionStore.testResult" />
     </n-alert>
 
     <n-tabs type="line" animated>
@@ -351,6 +341,7 @@ import {
 import { Add, EllipsisHorizontal, Refresh } from '@/components/icons'
 import { useExtensionsManager } from '@/composables/extensions/useExtensionsManager'
 import McpConfigModal from '@/components/extensions/McpConfigModal.vue'
+import McpTestResultDetails from '@/components/extensions/McpTestResultDetails.vue'
 import SkillConfigModal from '@/components/extensions/SkillConfigModal.vue'
 import ResourceTargetSelector from '@/components/resources/ResourceTargetSelector.vue'
 import { useI18n } from '@/composables/useI18n'
@@ -400,10 +391,8 @@ const {
   toolPermissionTools,
   toolRiskValue,
   toolSourceLabel,
-  testResultMessage,
   testResultTitle,
   testResultType,
-  testTools,
 } = useExtensionsManager()
 </script>
 

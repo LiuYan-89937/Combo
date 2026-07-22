@@ -37,10 +37,6 @@ export function useExtensionsManager() {
   const testResultTitle = computed(() => (
     extensionStore.testResult?.status === 'ok' ? t('extensions.connectionOk') : t('extensions.connectionFailed')
   ))
-  const testResultMessage = computed(() => String(extensionStore.testResult?.message || t('extensions.noTestResult')))
-  const testTools = computed(() => (
-    Array.isArray(extensionStore.testResult?.tools) ? extensionStore.testResult.tools : []
-  ))
   const toolPermissionPolicy = computed<ToolPermissionPolicyView>(() => (
     extensionStore.toolPermissions?.policy || defaultToolPermissionPolicy()
   ))
@@ -373,10 +369,8 @@ export function useExtensionsManager() {
     toolPermissionTools,
     toolRiskValue,
     toolSourceLabel,
-    testResultMessage,
     testResultTitle,
     testResultType,
-    testTools,
   }
 }
 
