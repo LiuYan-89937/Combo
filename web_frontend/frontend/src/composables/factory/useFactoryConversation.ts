@@ -10,6 +10,7 @@ import { useI18n } from '@/composables/useI18n'
 import type { FactoryMode, RuntimeAttachmentInput, TranscriptAttachmentView } from '@/types/protocol'
 import { REASONING_INTENSITY_MAX } from '@/utils/reasoning'
 import { enabledChatProfiles, runtimeMainModelOptions as buildRuntimeMainModelOptions } from '@/utils/modelProfileOptions'
+import { isAgentSessionsLanding } from '@/utils/agentSessionRoute'
 
 const MAIN_MODEL_PROFILE_STORAGE_KEY = 'fastagentfactory.runtimeMainModelProfileId'
 const REASONING_INTENSITY_STORAGE_KEY = 'fastagentfactory.runtimeReasoningIntensity'
@@ -31,6 +32,9 @@ export function useFactoryConversation() {
   const reasoningIntensity = ref<number | null>(loadReasoningIntensity())
 
   const isAgentChatActive = computed(() => Boolean(agentStore.activeChatPackageId))
+  const isAgentSessionLanding = computed(() => (
+    route.name === 'Factory' && isAgentSessionsLanding(route.query)
+  ))
   const isManufacturingRoute = computed(() => route.name === 'Manufacturing')
   const isEvolutionRoute = computed(() => route.name === 'Evolution')
   const currentFactoryMessageMode = computed<FactoryMode>(() => {
@@ -49,7 +53,7 @@ export function useFactoryConversation() {
     const pkg = agentStore.selectedPackage
     return pkg?.agent_name || pkg?.name || t('common.current')
   })
-  const evolutionPackageOptions = computed(() => agentStore.agentPackages.map((pkg) => ({
+  const agentPackageOptions = computed(() => agentStore.agentPackages.map((pkg) => ({
     label: pkg.agent_name || pkg.name || pkg.package_id,
     value: pkg.package_id,
   })))
@@ -63,6 +67,8 @@ export function useFactoryConversation() {
   const inputPlaceholder = computed(() => (
     isAgentChatActive.value
       ? t('factory.sendToAgentPlaceholder', { name: activeChatPackageTitle.value })
+      : isAgentSessionLanding.value
+        ? t('factory.selectAgentFirst')
       : currentFactoryMessageMode.value === 'create_agent'
         ? t('factory.createAgentPlaceholder')
         : currentFactoryMessageMode.value === 'evolve_agent'
@@ -74,14 +80,17 @@ export function useFactoryConversation() {
   const inputDisabled = computed(() => (
     runtimeStore.isInputLocked
     || runtimeStore.isPublishConfirmationPending
+    || (isAgentSessionLanding.value && !isAgentChatActive.value)
     || (isEvolutionRoute.value && !selectedEvolutionPackageId.value)
   ))
   const emptyDescription = computed(() => {
+    if (isAgentSessionLanding.value) return t('factory.emptyAgentSelection')
     if (isEvolutionRoute.value) return selectedEvolutionPackageId.value ? t('factory.emptyEvolutionReady') : t('factory.emptyEvolutionSelect')
     if (isManufacturingRoute.value) return t('factory.emptyManufacturing')
     return t('factory.emptyChat')
   })
   const emptyHint = computed(() => {
+    if (isAgentSessionLanding.value) return t('factory.emptyAgentSelectionHint')
     if (isEvolutionRoute.value) {
       return selectedEvolutionPackageId.value
         ? t('factory.emptyEvolutionHint')
@@ -253,9 +262,10 @@ export function useFactoryConversation() {
 
   return {
     isAgentChatActive,
+    isAgentSessionLanding,
     isEvolutionRoute,
     selectedEvolutionPackageId,
-    evolutionPackageOptions,
+    agentPackageOptions,
     inputPlaceholder,
     inputDisabled,
     emptyDescription,

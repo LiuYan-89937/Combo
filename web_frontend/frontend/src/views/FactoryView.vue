@@ -6,7 +6,7 @@
         <n-select
           class="evolution-target-select"
           :value="selectedEvolutionPackageId"
-          :options="evolutionPackageOptions"
+          :options="agentPackageOptions"
           :placeholder="t('factory.evolutionTargetPlaceholder')"
           filterable
           @update:value="handleEvolutionPackageSelect"
@@ -28,9 +28,17 @@
                 </n-icon>
               </template>
               <template #extra>
-                <n-text depth="3" class="chat-empty-hint">
-                  {{ emptyHint }}
-                </n-text>
+                <div v-if="isAgentSessionLanding" class="agent-selection-empty">
+                  <n-select
+                    class="agent-selection-select"
+                    :options="agentPackageOptions"
+                    :placeholder="t('agentSessions.selectAgent')"
+                    filterable
+                    @update:value="selectAgentForNewConversation"
+                  />
+                  <n-text depth="3" class="chat-empty-hint">{{ emptyHint }}</n-text>
+                </div>
+                <n-text v-else depth="3" class="chat-empty-hint">{{ emptyHint }}</n-text>
               </template>
             </n-empty>
 
@@ -146,6 +154,8 @@ import type { TipMessageContext } from '@/stores/tips'
 import { useResourceContext } from '@/composables/useResourceContext'
 import { useConversationSessionNavigation } from '@/composables/useConversationSessionNavigation'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { useAgentSessionNavigation } from '@/composables/agent/useAgentSessionNavigation'
+import { isAgentSessionsLanding as routeIsAgentSessionsLanding } from '@/utils/agentSessionRoute'
 
 const runtimeStore = useRuntimeStore()
 const agentStore = useAgentStore()
@@ -160,6 +170,7 @@ const inputRef = ref()
 const referenceStore = useContextReferenceStore()
 const resourceContext = useResourceContext()
 const { startNewConversationSession } = useConversationSessionNavigation()
+const { openPackageAgentChat } = useAgentSessionNavigation()
 const messageWorkspaceContext = computed(() => resourceContext.workspaceContext.value)
 const referenceScope = computed(() => [
   'factory',
@@ -182,8 +193,9 @@ const tipScopeId = computed(() => tipScope.value?.scopeId || '')
 
 const {
   isEvolutionRoute,
+  isAgentSessionLanding,
   selectedEvolutionPackageId,
-  evolutionPackageOptions,
+  agentPackageOptions,
   inputPlaceholder,
   inputDisabled,
   loadRuntimeMainModelProfiles,
@@ -242,6 +254,10 @@ function handleSend(message: string, attachments: RuntimeAttachmentInput[]) {
 
 function handleCancel() {
   cancelRequest()
+}
+
+function selectAgentForNewConversation(packageId: string) {
+  void openPackageAgentChat(packageId)
 }
 
 function addMessageReference(message: TranscriptItem) {
@@ -357,6 +373,12 @@ async function activateCurrentRoute(): Promise<void> {
 
 async function openRoutedAgentSession(version: number): Promise<boolean> {
   if (route.name !== 'Factory') return false
+  if (routeIsAgentSessionsLanding(route.query)) {
+    agentStore.leaveAgentChat()
+    runtimeStore.showEmptyAgentPackageSession()
+    if (agentStore.agentPackages.length === 0) commands.listAgentPackages()
+    return true
+  }
   const packageId = routeQueryText(route.query.package_id)
   const sessionId = routeQueryText(route.query.session_id)
   if (!packageId) return false
@@ -456,6 +478,18 @@ function routeQueryText(value: unknown): string | null {
   flex-direction: row;
   background: var(--app-surface);
   position: relative;
+}
+
+.agent-selection-empty {
+  width: min(360px, calc(100vw - 48px));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--app-space-sm);
+}
+
+.agent-selection-select {
+  width: 100%;
 }
 
 .chat-container {
