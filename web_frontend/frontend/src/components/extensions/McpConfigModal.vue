@@ -104,9 +104,17 @@
       :title="installResult.message || t('extensions.connectionFailed')"
     >
       <div v-for="test in installResult.tests || []" :key="test.server_id" class="test-row">
-        <strong>{{ test.server_id }}</strong>
-        <span>{{ test.message }}</span>
-        <span v-if="test.tool_count">{{ t('extensions.discoveredTools', { count: test.tool_count }) }}</span>
+        <div class="test-heading">
+          <strong>{{ test.server_id }}</strong>
+          <n-tag
+            size="small"
+            :type="test.status === 'ok' ? 'success' : 'error'"
+            :bordered="false"
+          >
+            {{ test.status === 'ok' ? t('extensions.connectionOk') : t('extensions.connectionFailed') }}
+          </n-tag>
+        </div>
+        <McpTestResultDetails :result="test" />
       </div>
     </n-alert>
 
@@ -148,6 +156,7 @@ import type { FormInst, FormRules } from 'naive-ui'
 import type { McpServerConfig } from '@/api/resourceTypes'
 import type { ExtensionItemView } from '@/types/protocol'
 import { useI18n } from '@/composables/useI18n'
+import McpTestResultDetails from './McpTestResultDetails.vue'
 import {
   mcpConfigArgsText,
   mcpConfigRecordText,
@@ -300,4 +309,5 @@ function recordKeys(value: string | Record<string, string> | undefined): string 
 .preview-command { display: block; margin-top: var(--app-space-xs); font-family: var(--app-font-mono); overflow-wrap: anywhere; }
 .preview-meta { margin-top: var(--app-space-sm); color: var(--app-text-muted); font-size: var(--app-font-xs); justify-content: flex-start; flex-wrap: wrap; }
 .test-row { gap: var(--app-space-xs); margin-top: var(--app-space-xs); }
+.test-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--app-space-md); }
 </style>

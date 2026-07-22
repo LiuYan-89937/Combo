@@ -951,12 +951,7 @@ def _test_mcp_server(server: MCPServerConfig) -> dict[str, Any]:
     try:
         tools = [tool.model_dump(mode="json") for tool in client.list_tools()]
     except Exception as exc:
-        return {
-            "status": "failed",
-            "message": f"{type(exc).__name__}: {exc}",
-            "tool_count": 0,
-            "tools": [],
-        }
+        return _mcp_test_failure(exc, stderr=client.stderr_logs())
     return {
         "status": "ok",
         "message": f"Discovered {len(tools)} tools.",
@@ -970,6 +965,33 @@ def _test_mcp_server(server: MCPServerConfig) -> dict[str, Any]:
             for tool in tools
         ],
     }
+
+
+def _mcp_test_failure(exc: BaseException, *, stderr: list[str]) -> dict[str, Any]:
+    details = _exception_leaf_messages(exc)
+    stderr_lines = [line.strip() for line in stderr if line.strip()]
+    primary_message = stderr_lines[-1] if stderr_lines else details[0]
+    return {
+        "status": "failed",
+        "message": primary_message,
+        "error_type": type(exc).__name__,
+        "details": details,
+        "stderr": stderr_lines,
+        "tool_count": 0,
+        "tools": [],
+    }
+
+
+def _exception_leaf_messages(exc: BaseException) -> list[str]:
+    if isinstance(exc, BaseExceptionGroup):
+        messages = [
+            message
+            for nested in exc.exceptions
+            for message in _exception_leaf_messages(nested)
+        ]
+        return list(dict.fromkeys(messages))
+    message = str(exc).strip()
+    return [f"{type(exc).__name__}: {message}" if message else type(exc).__name__]
 
 
 def _install_mcp_servers(
