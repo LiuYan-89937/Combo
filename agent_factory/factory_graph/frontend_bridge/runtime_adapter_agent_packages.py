@@ -354,7 +354,7 @@ class RuntimeAgentPackageCommandMixin:
         if not message and not has_attachment_payload(command.payload.get("attachments")):
             self._emit_error(command, f"{command.type} requires message")
             return
-        if self.pending_agent_package_run is not None:
+        if session_id and self._has_pending_agent_package_run(package_id, session_id):
             self._emit_error(command, "cannot send an agent package message while an interrupt is pending")
             return
         normalizer = RuntimeEventNormalizer(
@@ -521,12 +521,11 @@ class RuntimeAgentPackageCommandMixin:
             )
         raise RuntimeError("agent evolution runtime stream ended without a terminal event")
 
-    def _resume_agent_package_interrupt(self, command: FactoryFrontendCommand) -> None:
-        pending = self.pending_agent_package_run
-        self.pending_agent_package_run = None
-        if pending is None:
-            self._emit_error(command, "no pending agent package interrupt to resume")
-            return
+    def _resume_agent_package_interrupt(
+        self,
+        command: FactoryFrontendCommand,
+        pending: PendingAgentPackageRun,
+    ) -> None:
         try:
             run = self.agent_package_runtime.resume_stream(
                 pending.package_id,
@@ -670,7 +669,7 @@ class RuntimeAgentPackageCommandMixin:
             cancelled += self.create_agent_runtime.cancel_active_requests(reason=reason, request_id=target_request_id)
         if self.agent_package_runtime is not None:
             cancelled += int(self.agent_package_runtime.cancel_extension_request(target_request_id))
-        self.pending_agent_package_run = None
+        cancelled += self._discard_pending_agent_package_runs(request_id=target_request_id)
         self.pending_evolution_run = None
         if self.pending_create_agent_run is not None:
             cancelled += 1
@@ -818,9 +817,9 @@ class RuntimeAgentPackageCommandMixin:
                             )
                             self.pending_agent_group_runs[pending.group_run_id] = pending
                         else:
-                            self.pending_agent_package_run = pending
+                            self._remember_pending_agent_package_run(pending)
                     else:
-                        self.pending_agent_package_run = pending
+                        self._remember_pending_agent_package_run(pending)
                 self.emit(
                     _frontend_scoped_agent_event(
                         item,
@@ -857,12 +856,13 @@ class RuntimeAgentPackageCommandMixin:
                 session_id = str((run.session or {}).get("session_id") or "")
                 if not session_id:
                     raise RuntimeError("agent package interrupt missing session_id")
-                self.pending_agent_package_run = PendingAgentPackageRun(
+                pending = PendingAgentPackageRun(
                     package_id=package_id,
                     session_id=session_id,
                     normalizer=normalizer,
                     interrupt_id=_interrupt_id_from_payload(interrupt_payload),
                 )
+                self._remember_pending_agent_package_run(pending)
                 payload = json_safe(interrupt_payload)
                 if isinstance(payload, dict):
                     payload = {**payload, "package_id": package_id}

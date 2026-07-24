@@ -101,7 +101,7 @@
           <template #auxiliary-action>
             <n-button
               text
-              :disabled="runtimeStore.hasActiveRun"
+              :disabled="!canStartNewConversationSession"
               @click="startNewConversationSession"
             >
               <template #icon>
@@ -158,7 +158,7 @@ const scrollbarRef = ref()
 const inputRef = ref()
 const referenceStore = useContextReferenceStore()
 const resourceContext = useResourceContext()
-const { startNewConversationSession } = useConversationSessionNavigation()
+const { canStartNewConversationSession, startNewConversationSession } = useConversationSessionNavigation()
 const messageWorkspaceContext = computed(() => resourceContext.workspaceContext.value)
 const referenceScope = computed(() => [
   'factory',

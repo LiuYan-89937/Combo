@@ -5,7 +5,10 @@ from typing import Any
 
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendCommand, event
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import session_payload
-from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import SYSTEM_CHAT_PACKAGE_ID
+from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import (
+    PendingAgentPackageRun,
+    SYSTEM_CHAT_PACKAGE_ID,
+)
 from agent_factory.factory_graph.session import (
     COLLABORATION_MAIN_FACTORY_SESSION_KIND,
     record_has_any_source,
@@ -168,7 +171,6 @@ class RuntimeSessionCommandMixin:
             self.session_record = None
             self.pending_create_agent_run = None
             self.pending_evolution_run = None
-            self.pending_agent_package_run = None
         self.emit(
             event(
                 "session_deleted",
@@ -204,11 +206,16 @@ class RuntimeSessionCommandMixin:
         if not message and not has_attachment_payload(command.payload.get("attachments")):
             self._emit_error(command, "send_message requires message")
             return
-        if (
-            self.pending_agent_package_run is not None
-            or self.pending_create_agent_run is not None
-            or self.pending_evolution_run is not None
-        ):
+        chat_session_id = self._planned_system_chat_agent_session_id() if self.mode == "chat" else None
+        interrupt_pending = (
+            (self.mode == "chat" and chat_session_id is not None and self._has_pending_agent_package_run(
+                SYSTEM_CHAT_PACKAGE_ID,
+                chat_session_id,
+            ))
+            or (self.mode == "create_agent" and self.pending_create_agent_run is not None)
+            or (self.mode == "evolve_agent" and self.pending_evolution_run is not None)
+        )
+        if interrupt_pending:
             self._emit_error(command, "cannot send a new message while an interrupt is pending")
             return
         if self.mode == "chat":
@@ -254,16 +261,54 @@ class RuntimeSessionCommandMixin:
         if self.pending_evolution_run is not None and _pending_evolution_matches(self.pending_evolution_run, target):
             self._resume_evolution_interrupt(command)
             return
-        if self.pending_agent_package_run is not None and _pending_agent_package_matches(self.pending_agent_package_run, target):
-            self._resume_agent_package_interrupt(command)
+        pending_agent_package_run = self._take_pending_agent_package_run(target)
+        if pending_agent_package_run is not None:
+            self._resume_agent_package_interrupt(command, pending_agent_package_run)
             return
         if target.explicit:
             self._emit_error(command, "no matching pending interrupt to resume")
             return
-        if self.pending_agent_package_run is None:
-            self._emit_error(command, "no pending interrupt to resume")
-            return
-        self._resume_agent_package_interrupt(command)
+        self._emit_error(command, "no pending interrupt to resume")
+
+    def _remember_pending_agent_package_run(self, pending: PendingAgentPackageRun) -> None:
+        key = _pending_agent_package_key(pending)
+        with self.pending_agent_package_runs_lock:
+            self.pending_agent_package_runs[key] = pending
+
+    def _has_pending_agent_package_run(self, package_id: str, session_id: str) -> bool:
+        key = (str(package_id).strip(), str(session_id).strip())
+        with self.pending_agent_package_runs_lock:
+            return key in self.pending_agent_package_runs
+
+    def _take_pending_agent_package_run(
+        self,
+        target: _InterruptResumeTarget,
+    ) -> PendingAgentPackageRun | None:
+        with self.pending_agent_package_runs_lock:
+            matches = [
+                (key, pending)
+                for key, pending in self.pending_agent_package_runs.items()
+                if _pending_agent_package_matches(pending, target)
+            ]
+            if len(matches) != 1:
+                return None
+            key, pending = matches[0]
+            self.pending_agent_package_runs.pop(key, None)
+            return pending
+
+    def _discard_pending_agent_package_runs(self, *, request_id: str | None) -> int:
+        if not request_id:
+            return 0
+        with self.pending_agent_package_runs_lock:
+            keys = [
+                key
+                for key, pending in self.pending_agent_package_runs.items()
+                if _normalized_optional(getattr(getattr(pending, "normalizer", None), "request_id", None))
+                == request_id
+            ]
+            for key in keys:
+                self.pending_agent_package_runs.pop(key, None)
+            return len(keys)
 
     def _emit_session_event(
         self,
@@ -734,6 +779,14 @@ def _pending_agent_package_matches(pending: object, target: _InterruptResumeTarg
         interrupt_event_id=getattr(pending, "interrupt_event_id", None),
         target=target,
     )
+
+
+def _pending_agent_package_key(pending: object) -> tuple[str, str]:
+    package_id = _normalized_optional(getattr(pending, "package_id", None))
+    session_id = _normalized_optional(getattr(pending, "session_id", None))
+    if not package_id or not session_id:
+        raise ValueError("pending agent package run requires package_id and session_id")
+    return package_id, session_id
 
 
 def _pending_common_matches(

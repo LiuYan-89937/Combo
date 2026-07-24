@@ -1,3 +1,4 @@
+import { computed } from 'vue'
 import { useAgentSessionNavigation } from '@/composables/agent/useAgentSessionNavigation'
 import { useCommand } from '@/composables/useCommand'
 import { useAgentStore } from '@/stores/agent'
@@ -10,6 +11,9 @@ export function useConversationSessionNavigation() {
   const agentStore = useAgentStore()
   const runtimeStore = useRuntimeStore()
   const { startNewAgentSession } = useAgentSessionNavigation()
+  const canStartNewConversationSession = computed(() => (
+    Boolean(agentStore.activeChatPackageId) || !runtimeStore.hasActiveRun
+  ))
 
   function activeFactoryMode(): FactoryConversationMode {
     if (runtimeStore.currentMode === 'create_agent') return 'create_agent'
@@ -18,7 +22,7 @@ export function useConversationSessionNavigation() {
   }
 
   async function startNewConversationSession(): Promise<void> {
-    if (runtimeStore.hasActiveRun) return
+    if (!canStartNewConversationSession.value) return
     const packageId = agentStore.activeChatPackageId
     if (packageId) {
       await startNewAgentSession(packageId)
@@ -32,6 +36,7 @@ export function useConversationSessionNavigation() {
 
   return {
     activeFactoryMode,
+    canStartNewConversationSession,
     startNewConversationSession,
   }
 }
