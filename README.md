@@ -130,6 +130,12 @@ TAVILY_API_KEY=
 - 后端：[http://localhost:8000](http://localhost:8000)
 - 健康检查：[http://localhost:8000/health](http://localhost:8000/health)
 
+### 首次使用前初始化 Agent
+
+首次启动后，先进入「已发布 Agent」，初始化准备使用的内置 Agent 包。普通闲聊至少需要初始化 **Factory Chat**；运行 A 股多 Agent 示例前，需要初始化三个内置 A 股研究 Agent。初始化会准备包运行环境、工具和依赖，因此第一次启动通常比后续对话更慢。
+
+如果 Factory Chat 尚未就绪就直接发送第一条闲聊消息，系统会自动开始初始化，并显示“正在初始化运行环境…”。等待界面切换到正常的 Assistant 思考状态后，即会开始流式输出。
+
 ## 推荐工作流
 
 ### 1. 配置模型池
