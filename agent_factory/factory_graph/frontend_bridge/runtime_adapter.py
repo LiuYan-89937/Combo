@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from threading import RLock
 from typing import Any
 
 from agent_factory.env import load_agentfactory_dotenv
@@ -39,7 +40,8 @@ class FactoryRuntimeAdapter(
     options: FactoryBridgeOptions = field(default_factory=FactoryBridgeOptions)
     session_record: Any | None = None
     mode: FactoryMode | None = None
-    pending_agent_package_run: PendingAgentPackageRun | None = None
+    pending_agent_package_runs: dict[tuple[str, str], PendingAgentPackageRun] = field(default_factory=dict)
+    pending_agent_package_runs_lock: RLock = field(default_factory=RLock)
     pending_agent_group_runs: dict[str, PendingAgentPackageRun] = field(default_factory=dict)
     pending_create_agent_run: PendingCreateAgentRun | None = None
     pending_evolution_run: PendingEvolutionRun | None = None

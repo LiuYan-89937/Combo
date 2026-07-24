@@ -2,7 +2,7 @@
   <div class="session-panel">
     <div class="sidebar-header">
       <n-text strong>{{ panelTitle }}</n-text>
-      <n-button size="small" :disabled="runtimeStore.hasActiveRun" @click="handleNewSession">
+      <n-button size="small" :disabled="!canStartNewConversationSession" @click="handleNewSession">
         <template #icon>
           <n-icon><Add /></n-icon>
         </template>
@@ -102,7 +102,7 @@ const sessionStore = useSessionStore()
 const runtimeStore = useRuntimeStore()
 const agentStore = useAgentStore()
 const commands = useCommand()
-const { startNewConversationSession } = useConversationSessionNavigation()
+const { canStartNewConversationSession, startNewConversationSession } = useConversationSessionNavigation()
 const { locale, t } = useI18n()
 const searchQuery = ref('')
 const dialog = useDialog()
