@@ -149,6 +149,12 @@ Open:
 http://localhost:3000
 ```
 
+### 3. Initialize Agents before first use
+
+After the first deployment, open **Published Agents** and initialize the built-in Agent packages you plan to use. Initialize **Factory Chat** before starting a regular chat; initialize the three built-in A-share research Agents before running the corresponding multi-agent example. Initialization prepares the package runtime, tools, and dependencies, so the first startup may take longer than later messages.
+
+If the first chat message is sent before Factory Chat is ready, the application starts initialization automatically and displays **Initializing runtime…**. Wait until it changes to the normal Assistant reasoning state before expecting streamed output.
+
 After a successful bootstrap, the regular local startup path is:
 
 ```bash
