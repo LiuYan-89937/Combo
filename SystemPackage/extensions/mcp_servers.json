@@ -43,6 +43,12 @@
           ]
         }
       },
+      "tool_description_contexts": {
+        "web_search": {
+          "current_date": true,
+          "timezone": "Asia/Shanghai"
+        }
+      },
       "timeout_seconds": 60
     }
   ]

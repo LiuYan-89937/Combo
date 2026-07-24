@@ -24,6 +24,7 @@ from agent_factory.model_pool.runtime_override import (
 )
 from agent_factory.runtime_kernel.model_inputs import build_runtime_model_input
 from agent_factory.runtime_kernel.types import ModelInvocationResult
+from agent_factory.tooling.description_context import contextualize_tool_descriptions
 
 
 ModelRole = Literal["main", "task", "compression"]
@@ -101,12 +102,13 @@ class LangChainModelServiceAdapter:
         model, settings = resolve_runtime_reasoning_model(model, settings, state)
         if model is None:
             raise RuntimeError(f"{self.model_role} model is not configured for AgentPackage runtime")
-        bound_model = _bind_tools(model, tools or [])
+        contextual_tools = contextualize_tool_descriptions(tools or [])
+        bound_model = _bind_tools(model, contextual_tools)
         envelope = build_runtime_model_input(
             state=state,
             prompt_binding=prompt_binding or {},
             messages=messages or [],
-            tools=tools or [],
+            tools=contextual_tools,
             image_input_enabled=bool(settings.multimodal),
         )
         response = bound_model.invoke(
@@ -122,7 +124,7 @@ class LangChainModelServiceAdapter:
             tool_calls=tool_calls,
             metadata={
                 **settings.metadata(),
-                "tool_count": len(tools or []),
+                "tool_count": len(contextual_tools),
                 **envelope.diagnostics(),
                 **({"reasoning_content": reasoning_content} if reasoning_content else {}),
             },

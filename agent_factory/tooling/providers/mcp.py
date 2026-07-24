@@ -12,7 +12,13 @@ from agent_factory.tooling.providers.base import (
     ToolProviderResult,
     diagnostic,
 )
-from agent_factory.tooling.spec import ToolLoopPolicyConfig, ToolRiskEvaluatorConfig, ToolRiskLevel, ToolSpec
+from agent_factory.tooling.spec import (
+    ToolDescriptionContextConfig,
+    ToolLoopPolicyConfig,
+    ToolRiskEvaluatorConfig,
+    ToolRiskLevel,
+    ToolSpec,
+)
 
 
 SNAKE_CHARS = re.compile(r"[^a-z0-9_]+")
@@ -55,6 +61,7 @@ class MCPServerConfig(BaseModel):
     timeout_seconds: float = Field(default=30.0, gt=0)
     tool_input_property_enums: dict[str, dict[str, list[str]]] = Field(default_factory=dict)
     tool_loop_policies: dict[str, ToolLoopPolicyConfig] = Field(default_factory=dict)
+    tool_description_contexts: dict[str, ToolDescriptionContextConfig] = Field(default_factory=dict)
 
     @field_validator("tool_input_property_enums", mode="before")
     @classmethod
@@ -181,6 +188,10 @@ def _tool_spec_from_mcp_tool(server: MCPServerConfig, tool: MCPDiscoveredTool) -
     return ToolSpec(
         id=tool_id,
         description=tool.description or f"MCP tool {tool.name} from server {server.server_id}.",
+        description_context=server.tool_description_contexts.get(
+            tool.name,
+            ToolDescriptionContextConfig(),
+        ),
         entrypoint=f"mcp:{server.server_id}/{tool.name}",
         input_schema=_apply_input_property_enums(
             tool.input_schema or {"type": "object", "additionalProperties": True},

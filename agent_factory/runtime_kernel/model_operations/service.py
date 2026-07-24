@@ -34,6 +34,7 @@ from agent_factory.context_system.token_counter import (
     token_count_from_usage_metadata,
 )
 from agent_factory.models.usage import normalize_usage_metadata
+from agent_factory.tooling.description_context import contextualize_tool_descriptions
 
 _DEFAULT_STRUCTURED_METHOD = "json_mode"
 
@@ -90,7 +91,7 @@ class ModelOperationService:
     ) -> ModelInvocationResult:
         model, metadata = self._resolve_model(model_role, state=state)
         effective_model_role = str(metadata.get("model_role") or model_role or self.model_role)
-        tool_list = list(tools or [])
+        tool_list = contextualize_tool_descriptions(tools or [])
         envelope = build_runtime_model_input(
             state=state,
             prompt_binding=prompt_binding or {},
