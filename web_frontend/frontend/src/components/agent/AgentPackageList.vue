@@ -60,8 +60,9 @@
             <n-checkbox
               class="package-select"
               :checked="selectedPackageIds.has(pkg.package_id)"
+              :disabled="!isPackageDeletable(pkg)"
               @click.stop
-              @update:checked="(checked) => setPackageSelected(pkg.package_id, checked)"
+              @update:checked="(checked) => setPackageSelected(pkg, checked)"
             />
             <n-avatar
               :size="44"
@@ -71,9 +72,14 @@
               {{ getPackageInitial(pkg) }}
             </n-avatar>
             <div class="package-info">
-              <n-text strong class="package-name">
-                {{ pkg.agent_name || pkg.name || pkg.package_id }}
-              </n-text>
+              <div class="package-name-row">
+                <n-text strong class="package-name">
+                  {{ pkg.agent_name || pkg.name || pkg.package_id }}
+                </n-text>
+                <n-tag v-if="pkg.is_builtin" size="small" :bordered="false">
+                  {{ t('agents.builtin') }}
+                </n-tag>
+              </div>
               <n-text depth="3" class="package-desc">
                 {{ pkg.agent_description || t('common.noDescription') }}
               </n-text>
@@ -122,7 +128,7 @@
             <n-button size="small" @click.stop="handleEvolve(pkg)">
               {{ t('agents.evolve') }}
             </n-button>
-            <n-dropdown :options="getPackageActions()" @select="(key) => handleAction(key, pkg)">
+            <n-dropdown :options="getPackageActions(pkg)" @select="(key) => handleAction(key, pkg)">
               <n-button size="small" quaternary circle>
                 <n-icon><EllipsisHorizontal /></n-icon>
               </n-button>
@@ -229,7 +235,9 @@ const filteredPackages = computed(() => {
   return packages
 })
 const selectedPackages = computed(() => {
-  return agentStore.agentPackages.filter((pkg) => selectedPackageIds.value.has(pkg.package_id))
+  return agentStore.agentPackages.filter(
+    (pkg) => selectedPackageIds.value.has(pkg.package_id) && isPackageDeletable(pkg),
+  )
 })
 const selectedCount = computed(() => selectedPackages.value.length)
 
@@ -298,33 +306,44 @@ function enterPackageContext(pkg: AgentPackageView, purpose: 'run' | 'evolution'
 function handleAction(key: string, pkg: AgentPackageView) {
   switch (key) {
     case 'delete':
+      if (!isPackageDeletable(pkg)) return
       confirmDeletePackages([pkg])
       break
     case 'export':
+      if (!isPackageExportable(pkg)) return
       void handleExport(pkg)
       break
   }
 }
 
-function getPackageActions() {
+function getPackageActions(pkg: AgentPackageView) {
   return [
-    { label: t('common.export'), key: 'export' },
-    { label: t('common.delete'), key: 'delete' },
+    { label: t('common.export'), key: 'export', disabled: !isPackageExportable(pkg) },
+    { label: t('common.delete'), key: 'delete', disabled: !isPackageDeletable(pkg) },
   ]
 }
 
-function setPackageSelected(packageId: string, checked: boolean) {
+function isPackageDeletable(pkg: AgentPackageView): boolean {
+  return pkg.capabilities?.deletable !== false
+}
+
+function isPackageExportable(pkg: AgentPackageView): boolean {
+  return pkg.capabilities?.exportable !== false
+}
+
+function setPackageSelected(pkg: AgentPackageView, checked: boolean) {
+  if (!isPackageDeletable(pkg)) return
   const next = new Set(selectedPackageIds.value)
   if (checked) {
-    next.add(packageId)
+    next.add(pkg.package_id)
   } else {
-    next.delete(packageId)
+    next.delete(pkg.package_id)
   }
   selectedPackageIds.value = next
 }
 
 function confirmDeletePackages(packages: AgentPackageView[]) {
-  const targets = packages.filter((pkg) => pkg.package_id)
+  const targets = packages.filter((pkg) => pkg.package_id && isPackageDeletable(pkg))
   if (targets.length === 0 || busyAction.value) return
   const names = targets.map((pkg) => packageDisplayName(pkg, t)).join('、')
   dialog.warning({
@@ -346,7 +365,7 @@ async function deletePackages(packages: AgentPackageView[]) {
       const event = await commands.deleteAgentPackage(pkg.package_id)
       if (event) {
         deleted += 1
-        setPackageSelected(pkg.package_id, false)
+        setPackageSelected(pkg, false)
       }
     }
     if (deleted > 0) {
@@ -492,8 +511,16 @@ onMounted(() => {
   min-width: 0;
 }
 
+.package-name-row {
+  display: flex;
+  align-items: center;
+  gap: var(--app-space-xs);
+  min-width: 0;
+}
+
 .package-name {
   display: block;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

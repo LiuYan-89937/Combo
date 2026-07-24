@@ -295,6 +295,7 @@ const zhCN = {
   'agents.empty': '没有 Agent 包',
   'agents.tools': '{count} 工具',
   'agents.sessions': '{count} 会话',
+  'agents.builtin': '内置',
   'agents.initialize': '初始化',
   'agents.run': '运行',
   'agents.evolve': '进化',
@@ -340,6 +341,7 @@ const zhCN = {
   'roles.assistantReasoningActive': '思考中',
   'factory.status.intentAnalysis': '正在分析请求意图',
   'factory.status.taskAnalysis': '正在分析制造任务',
+  'factory.status.runtimeInitialization': '正在初始化运行环境…',
 
   'attachments.title': '添加附件',
   'attachments.localFile': '本地文件',
@@ -1357,6 +1359,7 @@ const enUS: Record<MessageKey, string> = {
   'agents.empty': 'No Agent packages',
   'agents.tools': '{count} tools',
   'agents.sessions': '{count} sessions',
+  'agents.builtin': 'Built-in',
   'agents.initialize': 'Initialize',
   'agents.run': 'Run',
   'agents.evolve': 'Evolve',
@@ -1402,6 +1405,7 @@ const enUS: Record<MessageKey, string> = {
   'roles.assistantReasoningActive': 'Reasoning',
   'factory.status.intentAnalysis': 'Analyzing request intent',
   'factory.status.taskAnalysis': 'Analyzing manufacturing task',
+  'factory.status.runtimeInitialization': 'Initializing runtime…',
 
   'attachments.title': 'Add attachment',
   'attachments.localFile': 'Local file',

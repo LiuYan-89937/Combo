@@ -102,6 +102,12 @@ export interface AgentPackageView {
   package_id: string
   package_path?: string
   manifest_path?: string
+  package_origin?: 'system' | 'user'
+  is_builtin?: boolean
+  capabilities?: {
+    deletable?: boolean
+    exportable?: boolean
+  }
   factory_run_id?: string | null
   agent_id?: string | null
   agent_name: string | null

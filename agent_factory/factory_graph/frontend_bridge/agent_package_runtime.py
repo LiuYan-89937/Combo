@@ -226,16 +226,10 @@ class AgentPackageRuntimeManager:
         )
 
     def list_packages(self) -> list[dict[str, Any]]:
-        packages: list[dict[str, Any]] = []
-        for manifest_path in self.repository.manifest_paths():
-            try:
-                package = self.repository.load_manifest(manifest_path)
-            except Exception:
-                packages.append(self._package_summary(manifest_path))
-                continue
-            if _is_host_system_package(package):
-                continue
-            packages.append(self._package_summary(manifest_path))
+        packages = [
+            self._package_summary(manifest_path)
+            for manifest_path in self.repository.manifest_paths()
+        ]
         return sorted(packages, key=lambda item: str(item.get("updated_at") or ""), reverse=True)
 
     def resource_status(self, package_id: str, *, include_values: bool = False) -> dict[str, Any]:
@@ -612,6 +606,9 @@ class AgentPackageRuntimeManager:
         return self.package_summary(package_id)
 
     def delete_package(self, package_id: str) -> dict[str, Any]:
+        manifest_path = self._manifest_path(package_id)
+        if not self.repository.package_capabilities(manifest_path)["deletable"]:
+            raise ValueError(f"built-in agent package cannot be deleted: {package_id}")
         self._close_package_containers(package_id)
         self._close_package_system_handles(package_id)
         self._close_knowledge_runtime(package_id)
@@ -1272,6 +1269,8 @@ class AgentPackageRuntimeManager:
 
     def _package_summary(self, manifest_path: Path) -> dict[str, Any]:
         package_id = manifest_path.parent.name
+        package_origin = self.repository.package_origin(manifest_path)
+        package_capabilities = self.repository.package_capabilities(manifest_path)
         try:
             package = self.repository.load_manifest(manifest_path)
             report = _read_json_object(manifest_path.parent / "package_report.json")
@@ -1281,6 +1280,9 @@ class AgentPackageRuntimeManager:
                 "package_id": package_id,
                 "package_path": str(manifest_path.parent),
                 "manifest_path": str(manifest_path),
+                "package_origin": package_origin,
+                "is_builtin": package_origin == "system",
+                "capabilities": package_capabilities,
                 "factory_run_id": package.manifest.factory_run_id,
                 "agent_id": package.assembly_spec.agent.id,
                 "agent_name": package.assembly_spec.agent.name,
@@ -1305,6 +1307,9 @@ class AgentPackageRuntimeManager:
                 "package_id": package_id,
                 "package_path": str(manifest_path.parent),
                 "manifest_path": str(manifest_path),
+                "package_origin": package_origin,
+                "is_builtin": package_origin == "system",
+                "capabilities": package_capabilities,
                 "status": "invalid",
                 "updated_at": _path_updated_at(manifest_path.parent),
                 "error": f"{type(exc).__name__}: {exc}",
@@ -1408,7 +1413,12 @@ class AgentPackageRuntimeManager:
                 request_id,
                 "node_started",
                 node_id="runtime_container",
-                payload={"package_id": package_id, "backend": "host", "status": "preflight"},
+                payload={
+                    "package_id": package_id,
+                    "backend": "host",
+                    "status": "preflight",
+                    "status_key": "runtime_initialization",
+                },
             )
         try:
             handle = self._system_handle(
@@ -1461,7 +1471,12 @@ class AgentPackageRuntimeManager:
                 request_id,
                 "node_started",
                 node_id="runtime_container",
-                payload={"package_id": package_id, "status": "preflight"},
+                payload={
+                    "package_id": package_id,
+                    "backend": "container",
+                    "status": "preflight",
+                    "status_key": "runtime_initialization",
+                },
             )
         try:
             handle = self._container(
