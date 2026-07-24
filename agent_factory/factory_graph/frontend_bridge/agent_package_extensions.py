@@ -977,6 +977,11 @@ def _mcp_server_from_payload(payload: dict[str, Any], *, existing: MCPServerConf
             if "tool_loop_policies" in raw
             else dict(existing.tool_loop_policies) if existing is not None else {}
         ),
+        tool_description_contexts=(
+            dict(raw.get("tool_description_contexts") or {})
+            if "tool_description_contexts" in raw
+            else dict(existing.tool_description_contexts) if existing is not None else {}
+        ),
     )
 
 

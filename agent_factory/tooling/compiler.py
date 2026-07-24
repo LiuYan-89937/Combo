@@ -119,6 +119,8 @@ class ToolCompiler:
                     "approval_request": gateway.approval_request,
                     "loop_policy": spec.loop_policy.model_dump(mode="json", exclude_none=True),
                     "sensitive_argument_paths": list(spec.sensitive_argument_paths),
+                    "base_description": spec.description,
+                    "description_context": spec.description_context.model_dump(mode="json"),
                 }
             },
             handle_validation_error=lambda error: json.dumps(

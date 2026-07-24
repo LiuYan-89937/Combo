@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from typing import Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -45,6 +46,25 @@ class ToolRiskEvaluatorConfig(BaseModel):
     hard: str | None = None
     llm: str | None = None
     llm_mode: ToolLLMRiskMode = "disabled"
+
+
+class ToolDescriptionContextConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    current_date: bool = False
+    timezone: str = "Asia/Shanghai"
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str) -> str:
+        timezone_name = str(value or "").strip()
+        if not timezone_name:
+            raise ValueError("tool description context timezone must be non-empty")
+        try:
+            ZoneInfo(timezone_name)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError(f"unknown tool description context timezone: {timezone_name}") from exc
+        return timezone_name
 
 
 class ToolRiskContext(BaseModel):
@@ -161,6 +181,7 @@ class ToolSpec(BaseModel):
 
     id: str
     description: str
+    description_context: ToolDescriptionContextConfig = Field(default_factory=ToolDescriptionContextConfig)
     schema_error_guidance: str = ""
     entrypoint: str
     input_schema: dict[str, Any] = Field(default_factory=dict)
