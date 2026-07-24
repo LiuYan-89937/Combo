@@ -55,6 +55,22 @@ class AgentPackageRepository:
     def manifest_path(self, package_id: str) -> Path:
         return self.package_dir(package_id) / "agent_package.json"
 
+    def package_origin(self, manifest_path: Path) -> str:
+        resolved_manifest = manifest_path.resolve()
+        resolved_system_root = self.system_package_root.resolve()
+        try:
+            resolved_manifest.relative_to(resolved_system_root)
+        except ValueError:
+            return "user"
+        return "system"
+
+    def package_capabilities(self, manifest_path: Path) -> dict[str, bool]:
+        user_managed = self.package_origin(manifest_path) == "user"
+        return {
+            "deletable": user_managed,
+            "exportable": user_managed,
+        }
+
     def package_dir(self, package_id: str, *, include_system_packages: bool = True) -> Path:
         if not package_id or "/" in package_id or "\\" in package_id or package_id in {".", ".."}:
             raise ValueError(f"invalid agent package id: {package_id}")
@@ -69,6 +85,9 @@ class AgentPackageRepository:
     def delete_user_package(self, package_id: str) -> dict[str, object]:
         target = self.package_dir(package_id, include_system_packages=False)
         if not target.exists():
+            system_target = safe_child(self.system_package_root, package_id, label="system package")
+            if system_target.exists():
+                raise ValueError(f"built-in agent package cannot be deleted: {package_id}")
             raise FileNotFoundError(f"agent package not found: {package_id}")
         shutil.rmtree(target)
         return {"package_id": package_id, "deleted": True}
@@ -77,6 +96,9 @@ class AgentPackageRepository:
         target = self.package_dir(package_id, include_system_packages=False)
         manifest_path = target / "agent_package.json"
         if not manifest_path.is_file():
+            system_target = safe_child(self.system_package_root, package_id, label="system package")
+            if (system_target / "agent_package.json").is_file():
+                raise ValueError(f"built-in agent package cannot be exported: {package_id}")
             raise FileNotFoundError(f"agent package not found: {package_id}")
         archive_stem = safe_archive_stem(package_id)
         with tempfile.NamedTemporaryFile(prefix=f"{archive_stem}-", suffix=".zip", delete=False) as handle:
