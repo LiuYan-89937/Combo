@@ -17,6 +17,8 @@ $FrontendDir = Join-Path $ProjectRoot "web_frontend\frontend"
 $PythonResourcesDir = Join-Path $TauriDir "resources\python"
 $PythonExecutable = Join-Path $PythonResourcesDir "python.exe"
 $DownloadDir = Join-Path $ProjectRoot "build\python-downloads"
+$BuildLogDir = Join-Path $ProjectRoot "build\logs"
+$BuildLogPath = Join-Path $BuildLogDir "windows-package.log"
 
 $PythonArchiveName = "cpython-3.11.9+20240726-x86_64-pc-windows-msvc-shared-install_only.tar.gz"
 $PythonArchiveUrl = "https://github.com/astral-sh/python-build-standalone/releases/download/20240726/cpython-3.11.9%2B20240726-x86_64-pc-windows-msvc-shared-install_only.tar.gz"
@@ -197,26 +199,29 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "Building Windows x64 installers..."
+New-Item -ItemType Directory -Force -Path $BuildLogDir | Out-Null
 Push-Location $TauriDir
 try {
-    & cargo.exe tauri build --target x86_64-pc-windows-msvc
-    if ($LASTEXITCODE -ne 0) {
-        throw "Tauri build failed with exit code $LASTEXITCODE."
+    $BuildCommand = "cargo.exe tauri build --target $RustTarget --bundles nsis 2>&1"
+    & cmd.exe /d /s /c $BuildCommand |
+        Tee-Object -FilePath $BuildLogPath
+    $BuildExitCode = $LASTEXITCODE
+    if ($BuildExitCode -ne 0) {
+        throw "Tauri build failed with exit code $BuildExitCode. Full log: $BuildLogPath"
     }
 }
 finally {
     Pop-Location
 }
 
-$BundleDir = Join-Path $TauriDir "target\$RustTarget\release\bundle"
+$BundleDir = Join-Path $TauriDir "target\$RustTarget\release\bundle\nsis"
 if (-not (Test-Path -LiteralPath $BundleDir -PathType Container)) {
-    throw "Tauri bundle directory not found: $BundleDir"
+    throw "Tauri NSIS bundle directory not found: $BundleDir"
 }
 
-$Installers = Get-ChildItem -Path $BundleDir -Recurse -File |
-    Where-Object { $_.Extension -in @(".msi", ".exe") }
+$Installers = Get-ChildItem -Path $BundleDir -File -Filter "*.exe"
 if (-not $Installers) {
-    throw "No Windows installer was produced under $BundleDir."
+    throw "No Windows NSIS installer was produced under $BundleDir."
 }
 
 Write-Host ""
