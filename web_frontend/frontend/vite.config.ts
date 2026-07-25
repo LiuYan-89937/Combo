@@ -15,7 +15,9 @@ export default defineConfig({
     }
   },
   server: {
-    port: 3000,
+    port: 5173, // Tauri expects frontend on 5173 by default
+    strictPort: true, // Fail if port is already in use
+    host: '127.0.0.1', // Bind to localhost for security
     proxy: {
       '/events': {
         target: 'http://localhost:8000',

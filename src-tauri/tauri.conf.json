@@ -1,0 +1,50 @@
+{
+  "$schema": "https://schema.tauri.app/config/2.0",
+  "productName": "FastAgentFactory",
+  "version": "0.1.0",
+  "identifier": "com.fastagentfactory.app",
+  "build": {
+    "beforeDevCommand": "cd web_frontend/frontend && npm run dev",
+    "beforeBuildCommand": "cd web_frontend/frontend && npm run build",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../web_frontend/frontend/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "FastAgentFactory",
+        "width": 1400,
+        "height": 900,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "resources/*"
+    ],
+    "externalBin": [],
+    "copyright": "Copyright (c) 2026 FastAgentFactory Team",
+    "category": "DeveloperTool",
+    "shortDescription": "AI Agent 工厂桌面应用",
+    "longDescription": "FastAgentFactory 是一个跨平台的 AI Agent 开发与运行环境，支持原生进程隔离无需 Docker"
+  },
+  "plugins": {
+    "shell": {
+      "open": true
+    }
+  }
+}
