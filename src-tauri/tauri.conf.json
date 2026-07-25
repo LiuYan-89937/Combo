@@ -5,7 +5,7 @@
   "identifier": "com.fastagentfactory.app",
   "build": {
     "beforeDevCommand": "cd web_frontend/frontend && npm run dev",
-    "beforeBuildCommand": "cd web_frontend/frontend && npm run build",
+    "beforeBuildCommand": "cd web_frontend/frontend && npx vite build",
     "devUrl": "http://localhost:5173",
     "frontendDist": "../web_frontend/frontend/dist"
   },

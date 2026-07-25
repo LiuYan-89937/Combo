@@ -1,0 +1,5 @@
+# Tauri 打包时忽略的文件
+# Python 资源包中的测试和文档文件
+resources/python/lib/python3.11/test/
+resources/python/lib/python3.11/lib2to3/tests/
+resources/python/share/doc/
