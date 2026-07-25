@@ -76,7 +76,10 @@ const statusLabel = computed(() => {
   } as const
   return t(keyByStatus[props.notice.status as keyof typeof keyByStatus] || 'scheduler.status.updated')
 })
-const formattedTime = computed(() => new Date(props.notice.timestamp).toLocaleString(locale.value))
+const formattedTime = computed(() => {
+  const date = new Date(props.notice.timestamp)
+  return isNaN(date.getTime()) ? props.notice.timestamp : date.toLocaleString(locale.value)
+})
 </script>
 
 <style scoped>

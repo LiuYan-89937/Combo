@@ -65,12 +65,15 @@ export function statusType(status: string): NaiveTagType {
 export function formatPackageDate(timestamp: string | null, locale: Locale, t: Translate): string {
   if (!timestamp) return t('common.unknown')
   const date = new Date(timestamp)
+  if (isNaN(date.getTime())) return t('common.unknown')
   return date.toLocaleDateString(locale, { month: '2-digit', day: '2-digit' })
 }
 
 export function formatPackageDateTime(timestamp: string | null, locale: Locale, t: Translate): string {
   if (!timestamp) return t('common.unknown')
-  return new Date(timestamp).toLocaleString(locale)
+  const date = new Date(timestamp)
+  if (isNaN(date.getTime())) return t('common.unknown')
+  return date.toLocaleString(locale)
 }
 
 export function extensionKey(item: AgentPackageExtensionView): string {

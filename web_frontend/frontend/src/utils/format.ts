@@ -7,7 +7,18 @@ interface RelativeTimeLabels {
 }
 
 export function formatTime(timestamp: string, locale: Locale = 'zh-CN', labels?: RelativeTimeLabels): string {
+  if (!timestamp) {
+    return ''
+  }
+
   const date = new Date(timestamp)
+
+  // 检查日期是否有效
+  if (isNaN(date.getTime())) {
+    console.warn('Invalid timestamp:', timestamp)
+    return timestamp
+  }
+
   const now = new Date()
   const diff = now.getTime() - date.getTime()
 

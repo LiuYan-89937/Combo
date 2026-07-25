@@ -209,9 +209,15 @@ function markdownWithMentions(content: string): string {
     .filter(Boolean)
     .sort((left, right) => right.length - left.length)
   if (!names.length) return content
-  const alternatives = names.map(escapeRegExp).join('|')
-  const mentionPattern = new RegExp(`@(${alternatives})(?=$|[\\s，。！？、,.!?;:])`, 'gu')
-  return content.replace(mentionPattern, (_match, name: string) => `[@${name}](#agent-mention)`)
+
+  try {
+    const alternatives = names.map(escapeRegExp).join('|')
+    const mentionPattern = new RegExp(`@(${alternatives})(?=$|[\\s，。！？、,.!?;:])`, 'gu')
+    return content.replace(mentionPattern, (_match, name: string) => `[@${name}](#agent-mention)`)
+  } catch (error) {
+    console.warn('Failed to create mention pattern:', error)
+    return content
+  }
 }
 
 function escapeRegExp(value: string): string {
