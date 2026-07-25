@@ -47,10 +47,10 @@ class SkillHubService:
         self.command = command
 
     def status(self) -> dict[str, Any]:
-        cli_path = shutil.which(self.command)
+        cli_path = resolve_skillhub_cli(self.command)
         version = ""
         if cli_path:
-            result = _run_command([self.command, "--version"], timeout_seconds=15)
+            result = _run_command([cli_path, "--version"], timeout_seconds=15)
             version = result.combined_output
         return {
             "action": "status",
@@ -69,8 +69,8 @@ class SkillHubService:
 
     def search(self, query: str, *, timeout_seconds: int = 60) -> dict[str, Any]:
         query = normalize_skillhub_search_query(query)
-        self._require_cli()
-        result = _run_command([self.command, "search", query], timeout_seconds=timeout_seconds)
+        cli_path = self._require_cli()
+        result = _run_command([cli_path, "search", query], timeout_seconds=timeout_seconds)
         if result.returncode != 0:
             raise RuntimeError(result.combined_output or f"skillhub search failed with exit code {result.returncode}")
         raw_output = result.combined_output
@@ -80,7 +80,7 @@ class SkillHubService:
             "status": "ok",
             "message": f"SkillHUB search completed. {len(items)} candidates returned.",
             "cli_available": True,
-            "cli_path": shutil.which(self.command),
+            "cli_path": cli_path,
             "cli_version": self.status().get("cli_version") or "",
             "extension_root": str(self.extension_root),
             "skills_dir": str(self.skills_dir),
@@ -95,7 +95,7 @@ class SkillHubService:
         skill = str(skill or "").strip()
         if not skill:
             raise ValueError("skillhub install requires skill")
-        self._require_cli()
+        cli_path = self._require_cli()
         self.skills_dir.mkdir(parents=True, exist_ok=True)
         before = _skill_dir_snapshots(self.skills_dir)
         requested = _install_name_candidates(skill)
@@ -104,7 +104,7 @@ class SkillHubService:
         installed_name = requested[0]
         for candidate in requested:
             result = _run_command(
-                [self.command, "install", candidate, "--dir", str(self.skills_dir)],
+                [cli_path, "install", candidate, "--dir", str(self.skills_dir)],
                 timeout_seconds=timeout_seconds,
             )
             if result.returncode == 0:
@@ -121,7 +121,7 @@ class SkillHubService:
             "status": "ok",
             "message": f"Skill installed and enabled: {enabled_skill.skill_id}",
             "cli_available": True,
-            "cli_path": shutil.which(self.command),
+            "cli_path": cli_path,
             "cli_version": self.status().get("cli_version") or "",
             "extension_root": str(self.extension_root),
             "skills_dir": str(self.skills_dir),
@@ -140,6 +140,7 @@ class SkillHubService:
         skill_id = str(skill or "").strip()
         if not skill_id:
             raise ValueError("skillhub remove requires skill")
+        cli_path = resolve_skillhub_cli(self.command)
         config = _load_enabled_skills(self.extension_root)
         targets = [item for item in config.skills if item.skill_id == skill_id]
         remaining = [item for item in config.skills if item.skill_id != skill_id]
@@ -164,8 +165,8 @@ class SkillHubService:
             "action": "remove",
             "status": "ok",
             "message": f"Skill removed: {skill_id}" if removed else f"Skill was not installed: {skill_id}",
-            "cli_available": bool(shutil.which(self.command)),
-            "cli_path": shutil.which(self.command),
+            "cli_available": bool(cli_path),
+            "cli_path": cli_path,
             "cli_version": self.status().get("cli_version") or "",
             "extension_root": str(self.extension_root),
             "skills_dir": str(self.skills_dir),
@@ -200,9 +201,10 @@ class SkillHubService:
             "mode": "direct",
         }
 
-    def _require_cli(self) -> None:
-        if shutil.which(self.command):
-            return
+    def _require_cli(self) -> str:
+        cli_path = resolve_skillhub_cli(self.command)
+        if cli_path:
+            return cli_path
         raise RuntimeError("SkillHUB CLI is not installed. Start the web backend once or install skillhub globally.")
 
     def _resolve_installed_skill(self, requested: str, before: dict[str, float]) -> Path:
@@ -255,9 +257,9 @@ class SkillHubService:
 
 
 def ensure_global_skillhub_cli(*, auto_install: bool = True, timeout_seconds: int = 180) -> dict[str, Any]:
-    cli_path = shutil.which(SKILLHUB_COMMAND)
+    cli_path = resolve_skillhub_cli()
     if cli_path:
-        version = _run_command([SKILLHUB_COMMAND, "--version"], timeout_seconds=15).combined_output
+        version = _run_command([cli_path, "--version"], timeout_seconds=15).combined_output
         return {
             "status": "ok",
             "cli_available": True,
@@ -283,14 +285,35 @@ def ensure_global_skillhub_cli(*, auto_install: bool = True, timeout_seconds: in
             script.unlink()
         except FileNotFoundError:
             pass
-    cli_path = shutil.which(SKILLHUB_COMMAND)
+    cli_path = resolve_skillhub_cli()
     return {
         "status": "ok" if cli_path else "missing",
         "cli_available": bool(cli_path),
         "cli_path": cli_path,
-        "cli_version": _run_command([SKILLHUB_COMMAND, "--version"], timeout_seconds=15).combined_output if cli_path else "",
+        "cli_version": _run_command([cli_path, "--version"], timeout_seconds=15).combined_output if cli_path else "",
         "installed": bool(cli_path),
     }
+
+
+def resolve_skillhub_cli(command: str = SKILLHUB_COMMAND) -> str | None:
+    requested = str(command or "").strip()
+    if not requested:
+        return None
+    discovered = shutil.which(requested)
+    if discovered:
+        return str(Path(discovered).expanduser().resolve())
+    explicit = Path(requested).expanduser()
+    if explicit.is_absolute() or Path(requested).parent != Path("."):
+        return str(explicit.resolve()) if _is_executable_file(explicit) else None
+    if requested != SKILLHUB_COMMAND:
+        return None
+    suffix = ".exe" if os.name == "nt" else ""
+    candidate = Path.home() / ".local" / "bin" / f"{SKILLHUB_COMMAND}{suffix}"
+    return str(candidate.resolve()) if _is_executable_file(candidate) else None
+
+
+def _is_executable_file(path: Path) -> bool:
+    return path.is_file() and os.access(path, os.X_OK)
 
 
 def _load_enabled_skills(extension_root: Path) -> EnabledSkillsConfig:
