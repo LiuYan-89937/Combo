@@ -172,15 +172,11 @@ def _convert_symlinks_to_files(python_dir: Path):
     print(f"✓ 转换了 {converted} 个符号链接")
 
 
-def install_dependencies(python_dir: Path, requirements_file: Path):
+def install_dependencies(python_dir: Path, project_root: Path):
     """使用打包的 Python 安装项目依赖"""
     python_exe = _find_python_executable(python_dir)
     if not python_exe:
         print("✗ 无法找到 Python 可执行文件，跳过依赖安装")
-        return
-
-    if not requirements_file.exists():
-        print(f"⚠ requirements.txt 不存在: {requirements_file}")
         return
 
     print(f"\n安装依赖到打包的 Python...")
@@ -188,16 +184,19 @@ def install_dependencies(python_dir: Path, requirements_file: Path):
 
     try:
         # 升级 pip
+        print("升级 pip...")
         subprocess.run([str(python_exe), "-m", "pip", "install", "--upgrade", "pip"], check=True)
 
-        # 安装依赖
+        # 安装项目及其依赖（包括 web 可选依赖）
+        print("安装项目依赖...")
         subprocess.run(
-            [str(python_exe), "-m", "pip", "install", "-r", str(requirements_file)],
+            [str(python_exe), "-m", "pip", "install", "-e", f"{project_root}[web]"],
             check=True
         )
         print("✓ 依赖安装完成")
     except subprocess.CalledProcessError as e:
         print(f"✗ 依赖安装失败: {e}")
+        sys.exit(1)
 
 
 def main():
@@ -223,12 +222,9 @@ def main():
     # 2. 解压到资源目录
     extract_python(archive_path, python_bundle_dir)
 
-    # 3. 安装项目依赖（可选，可以在运行时首次启动时安装）
-    requirements_file = project_root / "requirements.txt"
-    if requirements_file.exists():
-        install_choice = input("\n是否安装项目依赖到打包的 Python？(y/N): ").strip().lower()
-        if install_choice == "y":
-            install_dependencies(python_bundle_dir, requirements_file)
+    # 3. 安装项目依赖
+    print("\n准备安装项目依赖...")
+    install_dependencies(python_bundle_dir, project_root)
 
     print("\n" + "=" * 60)
     print("✓ Python 打包完成")

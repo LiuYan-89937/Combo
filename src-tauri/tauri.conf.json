@@ -35,7 +35,9 @@
     ],
     "resources": {
       "resources/python": "python",
-      "resources/README.md": "README.md"
+      "resources/README.md": "README.md",
+      "../web_frontend": "web_frontend",
+      "../.agentfactory": ".agentfactory"
     },
     "externalBin": [],
     "copyright": "Copyright (c) 2026 FastAgentFactory Team",
