@@ -293,7 +293,7 @@ class AgentPackageRuntimeManager:
 
     def package_instance_status(self, package_id: str) -> dict[str, Any]:
         package = self.load_package(package_id)
-        backend = "host" if _is_host_system_package(package) else "container"
+        backend = "host" if _is_host_system_package(package) else "local"
         handles = self._runtime_handles_for_package(package_id, backend=backend)
         running = any(bool(getattr(handle, "is_running", False)) for handle in handles)
         active_request_count = sum(int(getattr(handle, "active_request_count", 0)) for handle in handles)
@@ -1435,7 +1435,7 @@ class AgentPackageRuntimeManager:
                 node_id="runtime_container",
                 payload={
                     "package_id": package_id,
-                    "backend": "container",
+                    "backend": "local",
                     "status": "preflight",
                     "status_key": "runtime_initialization",
                 },
@@ -1471,7 +1471,7 @@ class AgentPackageRuntimeManager:
                 "where": "agent_runtime.launch",
                 "why": "local_runtime_start_failed",
                 "message": f"{type(exc).__name__}: {exc}",
-                "suggested_action": "Check the local runtime, dependency lock, and sandbox contract.",
+                "suggested_action": "Check the local runtime, dependency lock, and runtime contract.",
             }
             if will_start:
                 yield "frontend_event", node_event(
@@ -1515,7 +1515,7 @@ class AgentPackageRuntimeManager:
         detail: dict[str, Any] | None = None,
         error: str | None = None,
     ) -> dict[str, Any]:
-        backend = "host" if _is_host_system_package(package) else "container"
+        backend = "host" if _is_host_system_package(package) else "local"
         payload: dict[str, Any] = {
             "package_id": package_id,
             "agent_id": package.assembly_spec.agent.id,

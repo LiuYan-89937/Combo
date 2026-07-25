@@ -58,7 +58,7 @@ def node_event(
         graph_id="agent_package_runtime",
         producer_type="agent_runtime_host",
         node_id=node_id,
-        node_label="Runtime Container",
+        node_label="Local Runtime",
         node_kind="system",
         severity=severity,
         payload=payload,

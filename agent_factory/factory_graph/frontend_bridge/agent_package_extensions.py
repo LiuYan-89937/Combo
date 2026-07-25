@@ -377,7 +377,7 @@ def extensions_summary(package_id: str, *, package: LoadedAgentPackage | None = 
     )
     return {
         "host_root": str(host_root),
-        "container_root": "/runtime/extensions",
+        "runtime_root": str(host_root),
     }
 
 

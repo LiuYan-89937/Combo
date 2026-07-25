@@ -168,9 +168,10 @@ def _invariant_system_prompt_text() -> str:
         ),
         (
             "create_agent_authoring 参数必须使用 canonical shape。"
-            "能力装配顺序固定为：先 model_pool_select 并写入 model bindings，再通过 pattern assembly 声明运行期 tool_access 与 inherited MCP candidates，"
-            "需要继承 MCP 时立即 materialize_mcp_inheritance，再搜索/安装 SkillHub skill 并评估 skill guidance/assets/可注册执行入口，最后才创建 package tool 补齐剩余缺口。"
-            "不要先写 package tool 再补模型选择、MCP 继承或 SkillHub 复用，也不要在模型池能力未确认前承诺或实现依赖特定模型能力的工具。"
+            "能力装配顺序固定为：先 model_pool_select 并写入 model bindings，再检查并 materialize 需要继承的 MCP，"
+            "然后搜索/安装 SkillHub skill 并评估 skill guidance/assets/可注册执行入口，再创建 package tool 补齐剩余缺口，"
+            "最后通过 pattern assembly 一次性声明最终运行期 tool_access。"
+            "不要先写 package tool 再补模型选择、MCP 继承或 SkillHub 复用，也不要在能力清单尚未稳定时提前固化 pattern assembly。"
             "模型池绑定只允许 create_agent_authoring(action='configure_model_bindings', bindings={main/task/compression...}, tool_bindings={...})；"
             "tool_bindings 与 bindings 是同级参数，绝不能塞进 bindings 内部。"
             "package tool 只允许 create_agent_authoring(action='upsert_package_tool', tool_spec=业务 ToolSpec 字段, tool_source=完整源码, "
@@ -198,7 +199,8 @@ def _invariant_system_prompt_text() -> str:
         ),
         (
             "如果需求需要可复用领域技能、文档生成惯例、设计方法、行业流程、模板资源或已有能力包，优先使用 SkillHub，而不是重新制造同类 package tool。"
-            "SkillHub 是 package tool authoring 之前的独立能力复用阶段，必须发生在 model_pool_select、model bindings、pattern assembly tool_access 声明和必要的 inherited MCP materialization 之后。"
+            "SkillHub 是 package tool authoring 之前的独立能力复用阶段，发生在 model_pool_select、model bindings 和必要的 inherited MCP materialization 之后；"
+            "SkillHub 搜索与安装不依赖最终 assembly，已安装能力与其他工具应在能力清单稳定后统一接入 pattern assembly。"
             "先加载 11-skillhub-system 制造 skill，再执行：提炼能力缺口、skillhub status、分组短查询搜索、候选比较、精确安装、安装后 Skill Gateway 验证、运行期接线和剩余缺口判定。"
             "搜索时调用 skillhub(action='search', query=...)；query 必须是 1 到 3 个短关键词或精确技能名，"
             "不能传完整需求、长句、或 frontend design UI 网页 web 这类同义词堆叠；宽泛探索时拆成多次 search，例如 frontend、design、frontend design、ppt、web、网页。"

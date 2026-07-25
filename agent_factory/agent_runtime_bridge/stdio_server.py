@@ -234,7 +234,7 @@ class BridgeRuntimeState:
             normalizer.runtime_event(
                 "node_started",
                 node_id="runtime_container",
-                node_label="Runtime Container",
+                node_label="Local Runtime",
                 node_kind="system",
                 payload={
                     "package_root": str(PACKAGE_ROOT),
@@ -247,7 +247,7 @@ class BridgeRuntimeState:
             normalizer.runtime_event(
                 "node_completed",
                 node_id="runtime_container",
-                node_label="Runtime Container",
+                node_label="Local Runtime",
                 node_kind="system",
                 payload={"status": "ready"},
             )
@@ -370,7 +370,7 @@ def main() -> int:
                 graph_id="agent_runtime_bridge",
                 producer_type="agent_runtime",
                 node_id="runtime_container",
-                node_label="Runtime Container",
+                node_label="Local Runtime",
                 node_kind="system",
                 payload={"status": "command_received", "command_type": command_type},
             )
@@ -569,7 +569,7 @@ def _instance_status_payload(
         "package_id": resolved_package.package_root.name if resolved_package is not None else PACKAGE_ROOT.name,
         "agent_id": resolved_package.assembly_spec.agent.id if resolved_package is not None else PACKAGE_ROOT.name,
         "agent_name": resolved_package.assembly_spec.agent.name if resolved_package is not None else PACKAGE_ROOT.name,
-        "backend": "container",
+        "backend": "local",
         "status": status,
         "ready": status == "ready",
     }

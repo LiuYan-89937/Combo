@@ -118,6 +118,18 @@ AgentPackage 保存模型 `profile_id` 和能力要求，不保存模型池中�
 
 ![已发布 Agent](readme-assets/images/agent-marketplace.png)
 
+初始化用于准备本地运行环境并启动 Agent bridge，不再创建 Docker 容器。普通对话发送第一条消息时会自动初始化；手动“初始化”只用于提前预热。多 Agent 协作在调度子 Agent 前也会自动完成初始化。
+
+AgentPackage 在 `contracts/dependencies.json` 声明依赖，初始化时解析为 `environment.lock.json`：
+
+- Python 依赖构建为 wheel，按内容哈希保存到共享依赖池。
+- npm 依赖按锁文件哈希保存为共享 `node_modules` profile。
+- 每个本地 Agent 子进程只通过自己的 `PYTHONPATH`、`NODE_PATH` 和环境锁引用声明过的依赖。
+- 不同 Agent 可以复用相同依赖文件，但会话工作区、运行目录、扩展目录和进程生命周期彼此独立。
+- 操作系统包不会由应用自动安装；需要的系统命令必须作为宿主机能力声明并在初始化时验证。
+
+该机制提供依赖与工作区的逻辑隔离和缓存复用，不提供 Docker/虚拟机级内核隔离。
+
 ### 进化 Agent
 
 进入「Agent 进化」，选择目标 AgentPackage 并描述需要改变的行为。进化会话与普通运行会话分离。
@@ -170,15 +182,18 @@ npm install
 
 ### Web 开发模式
 
+分别启动后端和前端：
+
 ```bash
-./start.sh
+uv run --extra web python web_frontend/backend/event_api_server.py
 ```
 
-默认地址：
+```bash
+cd web_frontend/frontend
+npm run dev
+```
 
-- 前端：`http://127.0.0.1:3000`
-- 后端：`http://127.0.0.1:8000`
-- 健康检查：`http://127.0.0.1:8000/health`
+开发服务器地址以终端输出为准，后端健康检查为 `/health`。
 
 ### Tauri 开发模式
 
@@ -191,32 +206,30 @@ cargo tauri dev
 
 ## 构建桌面安装包
 
-首次准备内置 Python：
+macOS 在 macOS 主机执行：
 
 ```bash
-python3 scripts/bundle_python.py
+./scripts/package_macos.sh
 ```
 
-生成图标：
+Windows 在 PowerShell 中执行。Windows ARM64 主机仍生成通用的 Windows x64
+安装包，脚本会下载并校验相同架构的内置 Python：
 
-```bash
-python3 scripts/generate_icons.py
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\package_windows.ps1
 ```
 
-构建：
-
-```bash
-cd src-tauri
-cargo tauri build
-```
-
-构建产物位于：
+构建产物分别位于：
 
 ```text
-src-tauri/target/release/bundle/
+src-tauri/target/release/bundle/dmg/
+src-tauri/target/x86_64-pc-windows-msvc/release/bundle/
 ```
 
-Tauri 构建前会清理准备打包的 Python 源码缓存，避免将旧 `__pycache__` 和已删除模块的 `.pyc` 带入安装包。
+macOS 脚本会准备前端与内置 Python、构建 `.app`、执行严格的 ad-hoc
+签名校验，再生成并校验 DMG。Windows 脚本固定校验内置 Python 归档的
+SHA-256，并使用 `x86_64-pc-windows-msvc` 同架构构建 Tauri 安装包。
+两个脚本都不会启动应用或运行 Agent 业务示例。
 
 ### 跨平台终端
 

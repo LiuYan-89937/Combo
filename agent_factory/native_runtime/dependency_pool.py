@@ -5,12 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 import subprocess
 import sys
-import tempfile
-from typing import Any
 
 from agent_factory.environment_system.pool import (
     DependencyPool,
     DependencyPoolError,
+    DependencyPoolResolution,
     normalize_python_requirements,
     PythonRequirementError,
     _sha256_file,
@@ -27,7 +26,7 @@ class NativeDependencyPool(DependencyPool):
         python_requirements: list[str],
         npm_requirements: list[str],
         timeout_seconds: int | None,
-    ) -> dict[str, Any]:
+    ) -> DependencyPoolResolution:
         """
         Resolve dependencies using the local Python environment.
 
@@ -54,7 +53,6 @@ class NativeDependencyPool(DependencyPool):
         with self._profile_lock(profile_key):
             existing = self._read_profile(profile_key)
             if existing is not None and self.references_available(existing.to_lock_payload()):
-                from agent_factory.environment_system.pool import DependencyPoolResolution
                 return DependencyPoolResolution(
                     python_entries=existing.python_entries,
                     system_entries=existing.system_entries,
@@ -78,7 +76,6 @@ class NativeDependencyPool(DependencyPool):
                 timeout_seconds=timeout_seconds,
             )
 
-            from agent_factory.environment_system.pool import DependencyPoolResolution
             resolution = DependencyPoolResolution(
                 python_entries=python_entries,
                 system_entries=system_entries,

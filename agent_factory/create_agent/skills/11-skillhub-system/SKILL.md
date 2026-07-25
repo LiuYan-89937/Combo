@@ -13,9 +13,9 @@ Guides the complete SkillHub reuse phase between model/MCP assembly and package-
 
 ## Baseline Package Assumption
 - Model selection and model bindings are complete.
-- Pattern assembly already declares the runtime tool-access shape.
-- Every referenced factory MCP candidate has either been materialized or intentionally excluded.
+- Required factory MCP capabilities have been materialized or intentionally excluded.
 - No package tool has been authored for a capability that may already exist as a reusable skill.
+- Final pattern assembly is deferred until the reusable-skill and package-tool capability set is stable.
 
 ## When To Use This Skill
 - The requested Agent needs reusable domain guidance, document conventions, workflows, templates, assets, scripts, or skill-derived tools.
@@ -35,7 +35,7 @@ Guides the complete SkillHub reuse phase between model/MCP assembly and package-
 4. Install only a selected result using its exact `install_name`: `skillhub(action="install", skill=<install_name>)`. Never concatenate title, version, summary, punctuation, or multiple candidates.
 5. Verify the installed registration with `skill(action="describe", name=<installed skill_id>, current_system="capability_implementation")`. Load SKILL.md only when its guidance is needed; read only listed resources or script source required by the capability.
 6. Classify what the installed skill actually provides: guidance, template/asset, non-executable script source, or registered ToolSpec execution entry. File presence alone is not runtime capability.
-7. Wire the runtime `skill` tool or registered skill-derived tool into the appropriate assembly nodes. `react_agent` uses `answer`; `plan_and_execute` uses `executor` and `casual_react`, with `final_answer` only when delivery needs the skill. The planner does not call business tools.
+7. Include the runtime `skill` tool or registered skill-derived tool in the final pattern assembly. `react_agent` uses `answer`; `plan_and_execute` uses `executor` and `casual_react`, with `final_answer` only when delivery needs the skill. The planner does not call business tools.
 8. Record the remaining execution gap. Create a package tool only when the installed skill and existing runtime/MCP/model tools cannot perform that action through the governed tool system.
 9. Validate the resulting capability increment before moving to package-tool authoring or final assembly.
 

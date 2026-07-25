@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
-import fcntl
 import hashlib
 import json
 from pathlib import Path, PurePosixPath
@@ -15,9 +14,9 @@ import zipfile
 
 from packaging.utils import InvalidWheelFilename, canonicalize_name, parse_wheel_filename
 
+from agent_factory.file_lock import exclusive_file_lock
 from agent_factory.paths import factory_artifact_path
 
-from .python_requirements import PythonRequirementError, normalize_python_requirements
 from .versions import DEPENDENCY_POOL_VERSION
 
 
@@ -49,6 +48,23 @@ class DependencyPool:
 
     def __init__(self, root: Path | None = None) -> None:
         self.root = (root or factory_artifact_path("dependency_pool")).resolve()
+
+    def references_available(self, payload: object) -> bool:
+        if not isinstance(payload, dict) or payload.get("version") != DEPENDENCY_POOL_VERSION:
+            return False
+        for key in ("python_entries", "system_entries"):
+            entries = payload.get(key)
+            if not isinstance(entries, list):
+                return False
+            for entry in entries:
+                if not isinstance(entry, dict) or not self._entry_exists(entry.get("path")):
+                    return False
+                if key == "python_entries" and not self._entry_exists(entry.get("artifact_path")):
+                    return False
+        npm_profile = payload.get("npm_profile")
+        return npm_profile is None or (
+            isinstance(npm_profile, dict) and self._entry_exists(npm_profile.get("path"))
+        )
 
     def _store_wheel(self, wheel: Path) -> dict[str, str]:
         with self._exclusive_lock():
@@ -265,35 +281,20 @@ class DependencyPool:
     @contextmanager
     def _exclusive_lock(self) -> Iterator[None]:
         lock_path = self.root / ".pool.lock"
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with lock_path.open("a+") as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        with exclusive_file_lock(lock_path):
+            yield
 
     @contextmanager
     def _profile_lock(self, profile_key: str) -> Iterator[None]:
         lock_path = self.root / "profiles" / ".locks" / f"{profile_key}.lock"
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with lock_path.open("a+") as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        with exclusive_file_lock(lock_path):
+            yield
 
     @contextmanager
     def _cache_lock(self, ecosystem: str) -> Iterator[None]:
         lock_path = self.root / ".cache_locks" / f"{ecosystem}.lock"
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with lock_path.open("a+") as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        with exclusive_file_lock(lock_path):
+            yield
 
     @contextmanager
     def _staging_directory(self) -> Iterator[Path]:

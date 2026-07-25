@@ -6,55 +6,32 @@ import shutil
 import subprocess
 from typing import Any
 
+from .pool import DependencyPool
 from .versions import DEPENDENCY_POOL_VERSION, ENVIRONMENT_LOCK_VERSION
 
 
 DEPENDENCY_POOL_ROOT_ENV = "AGENTFACTORY_DEPENDENCY_POOL_ROOT"
 ENVIRONMENT_LOCK_PATH_ENV = "AGENTFACTORY_ENVIRONMENT_LOCK_PATH"
-CONTAINER_DEPENDENCY_POOL_ROOT = "/dependency_pool"
-CONTAINER_ENVIRONMENT_LOCK_PATH = "/package/environment.lock.json"
 
 
 class RuntimeDependencyError(RuntimeError):
     pass
 
 
-def runtime_environment(
-    lock: dict[str, Any],
-    *,
-    inherited: dict[str, str] | None = None,
-    environment_lock_path: str = CONTAINER_ENVIRONMENT_LOCK_PATH,
-) -> dict[str, str]:
-    environment = dict(inherited or {})
-    pool = _pool_payload(lock)
-    python_paths = [
-        str(PurePosixPath(CONTAINER_DEPENDENCY_POOL_ROOT) / _pool_relative(entry["path"]) / "site-packages")
-        for entry in _entries(pool, "python_entries")
-    ]
-    npm_profile = pool.get("npm_profile")
-    if isinstance(npm_profile, dict):
-        npm_path = str(PurePosixPath(CONTAINER_DEPENDENCY_POOL_ROOT) / _pool_relative(_required_path(npm_profile)) / "node_modules")
-        environment["NODE_PATH"] = _prepend_path(npm_path, environment.get("NODE_PATH"))
-    if python_paths:
-        environment["PYTHONPATH"] = _prepend_paths(python_paths, environment.get("PYTHONPATH"))
-    environment[DEPENDENCY_POOL_ROOT_ENV] = CONTAINER_DEPENDENCY_POOL_ROOT
-    environment[ENVIRONMENT_LOCK_PATH_ENV] = environment_lock_path
-    return environment
-
-
 def activate_runtime_dependencies() -> dict[str, Any]:
-    lock_path = Path(os.environ.get(ENVIRONMENT_LOCK_PATH_ENV, CONTAINER_ENVIRONMENT_LOCK_PATH))
-    pool_root = Path(os.environ.get(DEPENDENCY_POOL_ROOT_ENV, CONTAINER_DEPENDENCY_POOL_ROOT))
+    lock_path = _required_environment_path(ENVIRONMENT_LOCK_PATH_ENV)
+    pool_root = _required_environment_path(DEPENDENCY_POOL_ROOT_ENV)
     lock = _read_lock(lock_path)
     pool = _pool_payload(lock)
-    archives = [pool_root / _pool_relative(entry["path"]) for entry in _entries(pool, "system_entries")]
+    if not DependencyPool(pool_root).references_available(pool):
+        raise RuntimeDependencyError("environment lock references unavailable dependency-pool entries")
+    system_entries = _entries(pool, "system_entries")
+    if system_entries:
+        raise RuntimeDependencyError(
+            "local runtime environment locks cannot contain operating-system package artifacts"
+        )
     requirements = lock.get("requirements") if isinstance(lock.get("requirements"), dict) else {}
     timeout_seconds = _timeout_seconds(requirements.get("install_timeout_seconds"))
-    missing = [str(path) for path in archives if not path.is_file()]
-    if missing:
-        raise RuntimeDependencyError("dependency pool entries are missing: " + ", ".join(missing))
-    if archives:
-        _run_system_install(archives, timeout_seconds=timeout_seconds)
     binaries = requirements.get("system_binaries") if isinstance(requirements.get("system_binaries"), list) else []
     commands = requirements.get("verification_commands") if isinstance(requirements.get("verification_commands"), list) else []
     _verify_binaries([str(item) for item in binaries])
@@ -62,28 +39,17 @@ def activate_runtime_dependencies() -> dict[str, Any]:
     return {
         "source": "dependency_pool",
         "python_entry_count": len(_entries(pool, "python_entries")),
-        "system_entry_count": len(archives),
+        "system_entry_count": 0,
         "npm_profile": bool(pool.get("npm_profile")),
+        "pool_root": str(pool_root),
     }
 
 
-def _run_system_install(archives: list[Path], *, timeout_seconds: int | None) -> None:
-    command = [
-        "apt-get",
-        "install",
-        "--no-download",
-        "--no-install-recommends",
-        "-y",
-        *[str(path) for path in archives],
-    ]
-    environment = {**os.environ, "DEBIAN_FRONTEND": "noninteractive"}
-    try:
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout_seconds, check=False, env=environment)
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeDependencyError(f"cached system dependency installation timed out after {timeout_seconds}s") from exc
-    if completed.returncode != 0:
-        detail = (completed.stderr or completed.stdout or "cached system dependency installation failed").strip()
-        raise RuntimeDependencyError(detail[-4000:])
+def _required_environment_path(name: str) -> Path:
+    value = str(os.environ.get(name) or "").strip()
+    if not value:
+        raise RuntimeDependencyError(f"local runtime environment variable is missing: {name}")
+    return Path(value).expanduser().resolve()
 
 
 def _verify_binaries(binaries: list[str]) -> None:
@@ -150,14 +116,6 @@ def _pool_relative(value: str) -> PurePosixPath:
     if path.is_absolute() or not path.parts or any(part in {"", ".", ".."} for part in path.parts):
         raise RuntimeDependencyError(f"unsafe dependency pool path: {value}")
     return path
-
-
-def _prepend_paths(prefixes: list[str], existing: str | None) -> str:
-    return _prepend_path(":".join(prefixes), existing)
-
-
-def _prepend_path(prefix: str, existing: str | None) -> str:
-    return f"{prefix}:{existing}" if existing else prefix
 
 
 def _timeout_seconds(value: object) -> int | None:

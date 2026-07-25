@@ -248,9 +248,9 @@ class NativeAgentRuntimeLauncher:
         python_paths = self._build_pythonpath_from_pool(environment_lock, dependency_pool)
         if python_paths:
             existing_pythonpath = env.get("PYTHONPATH", "")
-            combined = ":".join(python_paths)
+            combined = os.pathsep.join(python_paths)
             env["PYTHONPATH"] = (
-                f"{combined}:{existing_pythonpath}" if existing_pythonpath else combined
+                f"{combined}{os.pathsep}{existing_pythonpath}" if existing_pythonpath else combined
             )
 
         # Build NODE_PATH from dependency pool
@@ -258,7 +258,7 @@ class NativeAgentRuntimeLauncher:
         if node_path:
             existing_node_path = env.get("NODE_PATH", "")
             env["NODE_PATH"] = (
-                f"{node_path}:{existing_node_path}" if existing_node_path else node_path
+                f"{node_path}{os.pathsep}{existing_node_path}" if existing_node_path else node_path
             )
 
         # Model pool and resource store
