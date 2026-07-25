@@ -36,8 +36,16 @@
     "resources": {
       "resources/python": "python",
       "resources/README.md": "README.md",
-      "../web_frontend": "web_frontend",
-      "../.agentfactory": ".agentfactory"
+      "../web_frontend/frontend/dist": "web_frontend/dist",
+      "../.agentfactory/mcp": ".agentfactory/mcp",
+      "../.agentfactory/agent_runtime": ".agentfactory/agent_runtime",
+      "../.agentfactory/agent_registry": ".agentfactory/agent_registry",
+      "../.agentfactory/model_pool": ".agentfactory/model_pool",
+      "../.agentfactory/benchmark": ".agentfactory/benchmark",
+      "../.agentfactory/factory": ".agentfactory/factory",
+      "../.agentfactory/packages": ".agentfactory/packages",
+      "../.agentfactory/resources": ".agentfactory/resources",
+      "../.agentfactory/tips": ".agentfactory/tips"
     },
     "externalBin": [],
     "copyright": "Copyright (c) 2026 FastAgentFactory Team",
