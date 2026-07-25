@@ -84,6 +84,8 @@ from agent_factory.factory_graph.frontend_bridge.agent_package_workspace import 
 from agent_factory.factory_graph.frontend_bridge.container_runtime_handle import AgentRuntimeContainerHandle
 from agent_factory.factory_graph.frontend_bridge.runtime_events import node_event, run_failed_event
 from agent_factory.factory_graph.frontend_bridge.system_package_runtime_handle import SystemPackageRuntimeHandle
+from agent_factory.native_runtime import NativeAgentRuntimeHandle, NativeAgentRuntimeLauncher
+from agent_factory.native_runtime.config import is_native_runtime_enabled
 
 
 DEFAULT_AGENT_RUNTIME_IDLE_TIMEOUT_SECONDS = 1800
@@ -124,7 +126,7 @@ class AgentPackageRuntimeManager:
         package_root: str | Path | None = None,
         system_package_root: str | Path | None = None,
         repository: AgentPackageRepository | None = None,
-        launcher: DockerAgentRuntimeLauncher | None = None,
+        launcher: DockerAgentRuntimeLauncher | NativeAgentRuntimeLauncher | None = None,
         emit: Emit | None = None,
     ) -> None:
         configured_root = package_root or os.getenv("AGENTFACTORY_PACKAGE_ROOT")
@@ -133,7 +135,10 @@ class AgentPackageRuntimeManager:
             package_root=configured_root,
             system_package_root=configured_system_root,
         )
-        self.launcher = launcher or DockerAgentRuntimeLauncher()
+        # Auto-select launcher based on AGENTFACTORY_NATIVE_RUNTIME environment variable
+        if launcher is None:
+            launcher = NativeAgentRuntimeLauncher() if is_native_runtime_enabled() else DockerAgentRuntimeLauncher()
+        self.launcher = launcher
         self.workspace = AgentPackageWorkspaceService()
         self.extensions = AgentPackageExtensionService()
         self.idle_timeout_seconds = _env_int(
@@ -1671,27 +1676,58 @@ class AgentPackageRuntimeManager:
             mcp_gateway_url=mcp_gateway.docker_url if mcp_gateway is not None else None,
             skillhub_gateway_url=skillhub_gateway.docker_url,
         )
-        handle = AgentRuntimeContainerHandle(
-            package_id=package_id,
-            package_fingerprint=fingerprint,
-            idle_timeout_seconds=self.idle_timeout_seconds,
-            request_policy=self.request_policy,
-            bridge_startup_timeout_seconds=self.bridge_startup_timeout_seconds,
-            command=plan.command,
-            emit=self._emit,
-        )
-        handle.startup_payload = {
-            "package_id": package_id,
-            "status": "running",
-            "pid": handle.process.pid,
-            "image": plan.image,
-            "network": plan.network,
-            "mount_count": plan.mount_count,
-            "extension_root": str(plan.extension_root),
-            "preflight": plan.preflight,
-            "isolation": plan.isolation,
-            "shared_container_id": plan.shared_container_id,
-        }
+
+        # Create appropriate handle based on launcher type
+        if isinstance(self.launcher, NativeAgentRuntimeLauncher):
+            # Native runtime (no Docker)
+            from agent_factory.native_runtime import NativeAgentRuntimePlan
+            if not isinstance(plan, NativeAgentRuntimePlan):
+                raise RuntimeError("NativeAgentRuntimeLauncher must return NativeAgentRuntimePlan")
+            handle = NativeAgentRuntimeHandle(
+                package_id=package_id,
+                package_fingerprint=fingerprint,
+                idle_timeout_seconds=self.idle_timeout_seconds,
+                request_policy=self.request_policy,
+                bridge_startup_timeout_seconds=self.bridge_startup_timeout_seconds,
+                command=plan.command,
+                environment=plan.environment,
+                emit=self._emit,
+            )
+            handle.startup_payload = {
+                "package_id": package_id,
+                "status": "running",
+                "pid": handle.process.pid,
+                "runtime_type": "native",
+                "extension_root": str(plan.extension_root),
+                "preflight": plan.preflight,
+                "isolation": plan.isolation,
+            }
+        else:
+            # Docker runtime (default)
+            from agent_factory.factory_graph.frontend_bridge.agent_runtime_launcher import DockerAgentRuntimePlan
+            if not isinstance(plan, DockerAgentRuntimePlan):
+                raise RuntimeError("DockerAgentRuntimeLauncher must return DockerAgentRuntimePlan")
+            handle = AgentRuntimeContainerHandle(
+                package_id=package_id,
+                package_fingerprint=fingerprint,
+                idle_timeout_seconds=self.idle_timeout_seconds,
+                request_policy=self.request_policy,
+                bridge_startup_timeout_seconds=self.bridge_startup_timeout_seconds,
+                command=plan.command,
+                emit=self._emit,
+            )
+            handle.startup_payload = {
+                "package_id": package_id,
+                "status": "running",
+                "pid": handle.process.pid,
+                "image": plan.image,
+                "network": plan.network,
+                "mount_count": plan.mount_count,
+                "extension_root": str(plan.extension_root),
+                "preflight": plan.preflight,
+                "isolation": plan.isolation,
+                "shared_container_id": plan.shared_container_id,
+            }
         return handle
 
     def _system_handle(
