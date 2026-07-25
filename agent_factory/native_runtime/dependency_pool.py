@@ -10,10 +10,12 @@ from agent_factory.environment_system.pool import (
     DependencyPool,
     DependencyPoolError,
     DependencyPoolResolution,
-    normalize_python_requirements,
-    PythonRequirementError,
     _sha256_file,
     _normalized_values,
+)
+from agent_factory.environment_system.python_requirements import (
+    PythonRequirementError,
+    normalize_python_requirements,
 )
 
 
