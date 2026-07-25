@@ -33,9 +33,10 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [
-      "resources/**"
-    ],
+    "resources": {
+      "resources/python": "python",
+      "resources/README.md": "README.md"
+    },
     "externalBin": [],
     "copyright": "Copyright (c) 2026 FastAgentFactory Team",
     "category": "DeveloperTool",
