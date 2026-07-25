@@ -31,6 +31,55 @@ function Assert-Command {
     }
 }
 
+function Import-VisualStudioBuildEnvironment {
+    $VsWhereCandidates = @(
+        (Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"),
+        (Join-Path $env:ProgramFiles "Microsoft Visual Studio\Installer\vswhere.exe")
+    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) }
+
+    $VsWhere = $VsWhereCandidates | Select-Object -First 1
+    if (-not $VsWhere) {
+        throw (
+            "Visual Studio 2022 Build Tools with the C++ workload is required. " +
+            "Install Microsoft.VisualStudio.2022.BuildTools with " +
+            "Microsoft.VisualStudio.Workload.VCTools, VC.Tools.x86.x64, VC.Tools.ARM64, " +
+            "and the recommended Windows SDK components."
+        )
+    }
+
+    $InstallationPath = [string](& $VsWhere `
+        -latest `
+        -products * `
+        -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+        -property installationPath)
+    $InstallationPath = $InstallationPath.Trim()
+    if (-not $InstallationPath) {
+        throw "Visual Studio Build Tools is installed without the x64 C++ toolchain."
+    }
+
+    $VsDevCmd = Join-Path $InstallationPath "Common7\Tools\VsDevCmd.bat"
+    if (-not (Test-Path -LiteralPath $VsDevCmd -PathType Leaf)) {
+        throw "Visual Studio developer environment script not found: $VsDevCmd"
+    }
+
+    $EnvironmentLines = & cmd.exe /s /c "`"$VsDevCmd`" -no_logo -arch=x64 -host_arch=x64 && set"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Visual Studio x64 build environment initialization failed with exit code $LASTEXITCODE."
+    }
+
+    foreach ($Line in $EnvironmentLines) {
+        $Separator = $Line.IndexOf("=")
+        if ($Separator -le 0) {
+            continue
+        }
+        $Name = $Line.Substring(0, $Separator)
+        $Value = $Line.Substring($Separator + 1)
+        [System.Environment]::SetEnvironmentVariable($Name, $Value, "Process")
+    }
+
+    Assert-Command -Name "link.exe"
+}
+
 function Test-ArchiveChecksum {
     if (-not (Test-Path -LiteralPath $PythonArchivePath -PathType Leaf)) {
         return $false
@@ -45,12 +94,20 @@ function Test-TauriCli {
     return $LASTEXITCODE -eq 0
 }
 
-foreach ($CommandName in @("cargo.exe", "rustup.exe", "npm.cmd", "curl.exe", "tar.exe")) {
+foreach ($CommandName in @("cargo.exe", "rustup.exe", "npm.cmd", "curl.exe", "tar.exe", "cmd.exe")) {
     Assert-Command -Name $CommandName
 }
 
 if ($RustTarget -ne "x86_64-pc-windows-msvc") {
     throw "The bundled Python runtime is x64, so the Rust target must be x86_64-pc-windows-msvc."
+}
+
+Import-VisualStudioBuildEnvironment
+
+Write-Host "Preparing Rust x64 target..."
+& rustup.exe target add $RustTarget
+if ($LASTEXITCODE -ne 0) {
+    throw "rustup target add failed with exit code $LASTEXITCODE."
 }
 
 $FrontendLockfile = Join-Path $FrontendDir "package-lock.json"
@@ -59,8 +116,8 @@ if (-not (Test-Path -LiteralPath $FrontendLockfile -PathType Leaf)) {
 }
 
 if (-not (Test-TauriCli)) {
-    Write-Host "Installing Tauri CLI 2..."
-    & cargo.exe install tauri-cli --version "^2.0.0" --locked
+    Write-Host "Installing Tauri CLI 2 for Windows x64..."
+    & cargo.exe install tauri-cli --version "^2.0.0" --locked --target $RustTarget
     if ($LASTEXITCODE -ne 0) {
         throw "Tauri CLI installation failed with exit code $LASTEXITCODE."
     }
@@ -133,12 +190,6 @@ if ($LASTEXITCODE -ne 0) {
 & $PythonExecutable -m pip install --no-compile -e "${ProjectRoot}[web]"
 if ($LASTEXITCODE -ne 0) {
     throw "Python dependency installation failed with exit code $LASTEXITCODE."
-}
-
-Write-Host "Preparing Rust x64 target..."
-& rustup.exe target add $RustTarget
-if ($LASTEXITCODE -ne 0) {
-    throw "rustup target add failed with exit code $LASTEXITCODE."
 }
 
 Write-Host "Building Windows x64 installers..."

@@ -213,7 +213,8 @@ macOS 在 macOS 主机执行：
 ```
 
 Windows 在 PowerShell 中执行。Windows ARM64 主机仍生成通用的 Windows x64
-安装包，脚本会下载并校验相同架构的内置 Python：
+安装包。主机需要 Visual Studio 2022 Build Tools 的 C++ workload、x64/ARM64
+编译工具和推荐的 Windows SDK；脚本会导入 x64 MSVC 环境，并下载、校验相同架构的内置 Python：
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\package_windows.ps1
