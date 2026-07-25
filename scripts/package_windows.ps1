@@ -40,6 +40,11 @@ function Test-ArchiveChecksum {
     return $ActualHash -eq $PythonArchiveSha256
 }
 
+function Test-TauriCli {
+    & cargo.exe tauri --version *> $null
+    return $LASTEXITCODE -eq 0
+}
+
 foreach ($CommandName in @("cargo.exe", "rustup.exe", "npm.cmd", "curl.exe", "tar.exe")) {
     Assert-Command -Name $CommandName
 }
@@ -51,6 +56,17 @@ if ($RustTarget -ne "x86_64-pc-windows-msvc") {
 $FrontendLockfile = Join-Path $FrontendDir "package-lock.json"
 if (-not (Test-Path -LiteralPath $FrontendLockfile -PathType Leaf)) {
     throw "Frontend lockfile is required: $FrontendLockfile"
+}
+
+if (-not (Test-TauriCli)) {
+    Write-Host "Installing Tauri CLI 2..."
+    & cargo.exe install tauri-cli --version "^2.0.0" --locked
+    if ($LASTEXITCODE -ne 0) {
+        throw "Tauri CLI installation failed with exit code $LASTEXITCODE."
+    }
+}
+if (-not (Test-TauriCli)) {
+    throw "Tauri CLI is unavailable after installation."
 }
 
 Write-Host "Preparing frontend dependencies..."

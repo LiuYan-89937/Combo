@@ -28,6 +28,12 @@ done
 [[ -f "${CONFIG_PATH}" ]] || fail "Tauri configuration not found: ${CONFIG_PATH}"
 [[ -f "${FRONTEND_DIR}/package-lock.json" ]] || fail "Frontend lockfile is required."
 
+if ! cargo tauri --version >/dev/null 2>&1; then
+    echo "Installing Tauri CLI 2..."
+    cargo install tauri-cli --version '^2.0.0' --locked
+fi
+cargo tauri --version >/dev/null 2>&1 || fail "Tauri CLI is unavailable after installation."
+
 IFS=$'\t' read -r PRODUCT_NAME PRODUCT_VERSION < <(
     python3 - "${CONFIG_PATH}" <<'PY'
 import json
