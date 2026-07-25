@@ -5,6 +5,13 @@ let resolvedBackendBaseUrl: string | null = null
 const BACKEND_READINESS_TIMEOUT_MS = 60_000
 const BACKEND_READINESS_POLL_INTERVAL_MS = 200
 
+interface BackendStatus {
+  running: boolean
+  error?: string | null
+  log_path?: string | null
+  log_tail?: string | null
+}
+
 export function backendUrl(path: string): Promise<string> {
   if (!isTauri()) return Promise.resolve(path)
 
@@ -24,6 +31,14 @@ export async function initializeBackendUrl(): Promise<void> {
   await backendUrl('/')
 }
 
+export async function restartBackend(): Promise<void> {
+  backendBaseUrl = null
+  resolvedBackendBaseUrl = null
+  if (isTauri()) {
+    await invoke('restart_backend')
+  }
+}
+
 export async function waitForBackendReady(): Promise<void> {
   const healthUrl = await backendUrl('/health')
   const deadline = Date.now() + BACKEND_READINESS_TIMEOUT_MS
@@ -36,11 +51,31 @@ export async function waitForBackendReady(): Promise<void> {
       lastFailure = `HTTP ${response.status}`
     } catch (error) {
       lastFailure = error instanceof Error ? error.message : String(error)
+      const processFailure = await backendProcessFailure()
+      if (processFailure) {
+        throw new Error(processFailure)
+      }
     }
     await delay(BACKEND_READINESS_POLL_INTERVAL_MS)
   }
 
   throw new Error(`Backend initialization timed out${lastFailure ? `: ${lastFailure}` : ''}`)
+}
+
+async function backendProcessFailure(): Promise<string | null> {
+  if (!isTauri()) return null
+  try {
+    const status = await invoke<BackendStatus>('backend_status')
+    if (status.running) return null
+    const details = [
+      status.error || 'Python backend process exited before becoming ready.',
+      status.log_tail?.trim(),
+      status.log_path ? `Log: ${status.log_path}` : '',
+    ].filter(Boolean)
+    return details.join('\n\n')
+  } catch {
+    return null
+  }
 }
 
 async function delay(milliseconds: number): Promise<void> {

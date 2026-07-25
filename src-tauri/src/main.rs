@@ -19,15 +19,24 @@ struct AppState {
 fn backend_status(state: tauri::State<AppState>) -> serde_json::Value {
     let mut sidecar = state.sidecar.lock().unwrap();
     match sidecar.as_mut() {
-        Some(s) => serde_json::json!({
-            "running": s.is_running(),
-            "port": s.port(),
-            "pid": s.pid(),
-        }),
+        Some(s) => {
+            let running = s.is_running();
+            serde_json::json!({
+                "running": running,
+                "port": s.port(),
+                "pid": s.pid(),
+                "error": s.last_error(),
+                "log_path": s.log_path(),
+                "log_tail": if running { None } else { s.log_tail() },
+            })
+        }
         None => serde_json::json!({
             "running": false,
             "port": null,
             "pid": null,
+            "error": "Python backend process has not been initialized",
+            "log_path": null,
+            "log_tail": null,
         }),
     }
 }
@@ -41,15 +50,42 @@ fn backend_url(state: tauri::State<AppState>) -> Result<String, String> {
             if s.is_running() {
                 Ok(format!("http://127.0.0.1:{}", s.port()))
             } else {
-                Err("Python backend process is not running".to_string())
+                Err(format!(
+                    "{}; log: {}",
+                    s.last_error()
+                        .unwrap_or("Python backend process is not running"),
+                    s.log_path().display()
+                ))
             }
         }
         None => Err("Python backend process has not been initialized".to_string()),
     }
 }
 
+#[tauri::command]
+fn restart_backend(app: tauri::AppHandle, state: tauri::State<AppState>) -> Result<(), String> {
+    {
+        let mut sidecar = state.sidecar.lock().unwrap();
+        if let Some(mut running) = sidecar.take() {
+            running.shutdown();
+        }
+    }
+    let restarted = PythonSidecar::spawn(&app).map_err(|error| error.to_string())?;
+    *state.sidecar.lock().unwrap() = Some(restarted);
+    Ok(())
+}
+
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(
+            |app, _arguments, _working_directory| {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.unminimize();
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            },
+        ))
         .plugin(tauri_plugin_shell::init())
         .manage(AppState {
             sidecar: Mutex::new(None),
@@ -78,6 +114,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             backend_status,
             backend_url,
+            restart_backend,
             reveal_in_file_manager,
             save_file_as,
         ])

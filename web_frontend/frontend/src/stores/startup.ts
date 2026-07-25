@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { initializeBackendUrl, waitForBackendReady } from '@/api/backendUrl'
+import { initializeBackendUrl, restartBackend, waitForBackendReady } from '@/api/backendUrl'
 
 type StartupStatus = 'idle' | 'initializing' | 'ready' | 'failed'
 
@@ -34,7 +34,14 @@ export const useStartupStore = defineStore('startup', () => {
 
   function retry(): void {
     if (status.value === 'initializing') return
-    void initialize().catch(() => undefined)
+    status.value = 'initializing'
+    error.value = ''
+    void restartBackend()
+      .then(() => initialize())
+      .catch((reason: unknown) => {
+        status.value = 'failed'
+        error.value = reason instanceof Error ? reason.message : String(reason)
+      })
   }
 
   return {

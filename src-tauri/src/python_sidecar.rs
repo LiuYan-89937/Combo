@@ -1,13 +1,24 @@
 use std::env;
+use std::fs::{self, File, OpenOptions};
+use std::io;
 use std::net::TcpListener;
-use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use tauri::{AppHandle, Manager};
+
+#[cfg(all(windows, not(debug_assertions)))]
+use std::os::windows::process::CommandExt;
+#[cfg(all(windows, not(debug_assertions)))]
+use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+
+const BACKEND_LOG_TAIL_BYTES: usize = 12_000;
 
 /// Python backend sidecar process manager.
 pub struct PythonSidecar {
     process: Option<Child>,
     port: u16,
+    log_path: PathBuf,
+    last_error: Option<String>,
 }
 
 impl PythonSidecar {
@@ -43,6 +54,11 @@ impl PythonSidecar {
             let system_packages = resource_dir.join("SystemPackage");
             (root, system_packages)
         };
+        let log_path = project_root
+            .join(".agentfactory")
+            .join("logs")
+            .join("backend.log");
+        let (stdout_log, stderr_log) = Self::open_backend_log(&log_path)?;
 
         // Launch Python backend
         let mut cmd = Command::new(&python_path);
@@ -59,7 +75,14 @@ impl PythonSidecar {
             .env("AGENTFACTORY_PROJECT_ROOT", &project_root)
             .env("AGENTFACTORY_SYSTEM_PACKAGE_ROOT", &system_package_root)
             .env("AGENTFACTORY_PARENT_STDIN_WATCHDOG", "1")
-            .stdin(Stdio::piped());
+            .env("PYTHONUTF8", "1")
+            .env("PYTHONUNBUFFERED", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::from(stdout_log))
+            .stderr(Stdio::from(stderr_log));
+
+        #[cfg(all(windows, not(debug_assertions)))]
+        cmd.creation_flags(CREATE_NO_WINDOW);
 
         if !cfg!(debug_assertions) {
             let mut python_paths = vec![resource_dir];
@@ -75,7 +98,22 @@ impl PythonSidecar {
         Ok(Self {
             process: Some(process),
             port,
+            log_path,
+            last_error: None,
         })
+    }
+
+    fn open_backend_log(path: &Path) -> io::Result<(File, File)> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let stdout = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(path)?;
+        let stderr = stdout.try_clone()?;
+        Ok((stdout, stderr))
     }
 
     fn allocate_loopback_port() -> std::io::Result<u16> {
@@ -123,9 +161,20 @@ impl PythonSidecar {
 
     /// Check if the backend process is still running.
     pub fn is_running(&mut self) -> bool {
-        self.process
-            .as_mut()
-            .is_some_and(|process| matches!(process.try_wait(), Ok(None)))
+        let Some(process) = self.process.as_mut() else {
+            return false;
+        };
+        match process.try_wait() {
+            Ok(None) => true,
+            Ok(Some(status)) => {
+                self.record_exit_status(status);
+                false
+            }
+            Err(error) => {
+                self.last_error = Some(format!("Failed to query backend process: {error}"));
+                false
+            }
+        }
     }
 
     /// Get the backend port.
@@ -138,12 +187,37 @@ impl PythonSidecar {
         self.process.as_ref().map(|p| p.id())
     }
 
+    pub fn log_path(&self) -> &Path {
+        &self.log_path
+    }
+
+    pub fn last_error(&self) -> Option<&str> {
+        self.last_error.as_deref()
+    }
+
+    pub fn log_tail(&self) -> Option<String> {
+        let content = fs::read(&self.log_path).ok()?;
+        if content.is_empty() {
+            return None;
+        }
+        let start = content.len().saturating_sub(BACKEND_LOG_TAIL_BYTES);
+        Some(String::from_utf8_lossy(&content[start..]).into_owned())
+    }
+
+    fn record_exit_status(&mut self, status: ExitStatus) {
+        if self.last_error.is_none() {
+            self.last_error = Some(format!("Python backend exited with status {status}"));
+        }
+    }
+
     /// Shutdown the Python backend gracefully.
     pub fn shutdown(&mut self) {
         if let Some(mut process) = self.process.take() {
             println!("Shutting down Python backend (PID: {})", process.id());
             let _ = process.kill();
-            let _ = process.wait();
+            if let Ok(status) = process.wait() {
+                self.record_exit_status(status);
+            }
         }
     }
 }

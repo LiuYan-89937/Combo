@@ -56,24 +56,12 @@ def create_icns(png_1024: Path, output_icns: Path):
             print(f"⚠ iconutil 未找到，跳过 .icns 生成")
 
 
-def create_ico(png_256: Path, output_ico: Path):
+def create_ico(source_path: Path, output_ico: Path):
     """创建 Windows .ico 文件"""
-    img = Image.open(png_256)
-
-    # 生成多尺寸 ico
     sizes = [(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
-    images = []
-    for size in sizes:
-        resized = img.resize(size, Image.Resampling.LANCZOS)
-        images.append(resized)
-
-    # 保存为 ico（第一个图片是主图）
-    images[0].save(
-        output_ico,
-        format='ICO',
-        sizes=[img.size for img in images],
-        append_images=images[1:]
-    )
+    with Image.open(source_path) as source:
+        image = source.convert("RGBA")
+        image.save(output_ico, format="ICO", sizes=sizes)
     print(f"✓ 生成 Windows 图标: {output_ico}")
 
 
@@ -99,7 +87,7 @@ def main():
     create_icns(icons_dir / "icon-1024.png", icons_dir / "icon.icns")
 
     # 3. 生成 Windows .ico
-    create_ico(icons_dir / "128x128@2x.png", icons_dir / "icon.ico")
+    create_ico(icons_dir / "icon-1024.png", icons_dir / "icon.ico")
 
     print("=" * 60)
     print("✓ 图标生成完成")
