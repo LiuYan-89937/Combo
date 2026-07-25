@@ -1,8 +1,9 @@
 # FastAgentFactory 跨平台桌面应用改造方案
 
-**目标**: 基于 Electron/Tauri，使用原生进程隔离（路线 C），去除 Docker 依赖  
+**目标**: 基于 Tauri，使用原生进程隔离（路线 C），去除 Docker 依赖  
 **约束**: 会话工作区隔离效果必须与原有 Docker logical 模式完全一致  
-**日期**: 2026-07-25
+**开始日期**: 2026-07-25  
+**状态**: 阶段 1-2 已完成 ✅，阶段 3 进行中
 
 ---
 
@@ -559,6 +560,68 @@ FastAgentFactory/
 | `system_package_runtime_handle.py` | (合并到统一句柄) | 删除 |
 | (无) | `desktop/main.js` | 新增 |
 | (无) | `desktop/preload.js` | 新增 |
+
+---
+
+## 实施进度总结
+
+### ✅ 阶段 1: 核心原生运行时实现（已完成）
+
+**完成时间**: 2026-07-25
+
+**已完成项**:
+- ✅ 创建 `agent_factory/native_runtime/` 模块结构
+- ✅ `launcher.py`: 原生启动器，构建环境变量和启动计划
+- ✅ `handle.py`: 原生进程句柄，管理 subprocess 生命周期和 stdio JSON-RPC 通信
+- ✅ `dependency_pool.py`: 原生依赖池，使用 venv + pip wheel 构建 Python 依赖
+- ✅ `config.py`: 环境变量开关 `AGENTFACTORY_NATIVE_RUNTIME`
+- ✅ 集成到 `agent_package_runtime.py`：自动选择 Docker/Native 启动器
+- ✅ `test_isolation.py`: 验证工作区隔离与 Docker 模式完全一致（macOS symlink 适配）
+- ✅ `test_e2e.py`: 端到端验证启动计划准备流程
+
+**技术要点**:
+- 工作区隔离完全在代码层面实现（`resolve().relative_to()`），不依赖容器
+- 环境变量机制保持不变，只是路径从容器路径改为宿主机绝对路径
+- 向后兼容：默认 Docker 模式，设置环境变量后切换到原生模式
+
+**推送记录**: 
+- `a619371d` - 初始原生运行时实现
+- `b4779c17` - 修复测试并验证隔离机制
+
+### ✅ 阶段 2: Tauri 桌面应用框架（已完成）
+
+**完成时间**: 2026-07-25
+
+**已完成项**:
+- ✅ Tauri 2.0 项目结构 `src-tauri/`
+- ✅ Rust 入口 `main.rs`: AppState、Python sidecar 管理、窗口事件处理
+- ✅ Python sidecar 启动器 `python_sidecar.rs`: 开发/生产模式、uvicorn + FastAPI 集成
+- ✅ 自动注入 `AGENTFACTORY_NATIVE_RUNTIME=1` 环境变量
+- ✅ Tauri 配置 `tauri.conf.json`: identifier、beforeDevCommand、frontendDist 等
+- ✅ Vite 配置调整：端口 5173、strictPort、host 127.0.0.1
+- ✅ 开发文档 `TAURI_DEVELOPMENT.md`
+
+**技术要点**:
+- Python sidecar 模式：Rust 主进程启动 Python 后端（uvicorn），前端通过代理访问
+- 开发模式使用系统 Python，生产模式使用 `resources/python/` 打包的 python-build-standalone
+- Tauri plugin-shell 管理子进程生命周期
+- 跨平台构建：macOS (aarch64-apple-darwin), Windows (x86_64-pc-windows-msvc), Linux (x86_64-unknown-linux-gnu)
+
+**推送记录**: 
+- `32a0be6b` - Tauri 项目结构和 Python sidecar 集成
+
+### 🔄 阶段 3: 测试与优化（进行中）
+
+**待完成项**:
+- [ ] 验证 Rust 代码编译（`cargo check` 运行中）
+- [ ] 验证 Tauri CLI 安装（`cargo install tauri-cli` 运行中）
+- [ ] 开发模式验证：`cargo tauri dev` 启动完整应用
+- [ ] 端到端功能测试：Agent 创建、会话管理、工具调用
+- [ ] 内存占用对比测试：Docker vs Native 模式
+- [ ] 跨平台测试：macOS、Windows、Linux
+- [ ] 生产打包流程：下载 python-build-standalone，生成应用图标，`cargo tauri build`
+- [ ] 性能优化：启动时间、动态端口分配、错误处理
+- [ ] CI/CD 集成：自动构建多平台安装包
 
 ---
 

@@ -12,6 +12,7 @@ impl PythonSidecar {
     /// Spawn the Python backend process.
     pub fn spawn(app: &AppHandle) -> Result<Self, Box<dyn std::error::Error>> {
         let port = 8000u16; // TODO: dynamic port allocation
+        let port_str = port.to_string();
 
         // Determine Python executable path
         // In development: use system Python
@@ -25,7 +26,7 @@ impl PythonSidecar {
         // Set environment variables for native runtime mode
         let mut env_vars = std::collections::HashMap::new();
         env_vars.insert("AGENTFACTORY_NATIVE_RUNTIME", "1");
-        env_vars.insert("AGENTFACTORY_PORT", &port.to_string());
+        env_vars.insert("AGENTFACTORY_PORT", &port_str);
 
         // Get project root (parent of src-tauri in dev, resource dir in prod)
         let project_root = if cfg!(debug_assertions) {

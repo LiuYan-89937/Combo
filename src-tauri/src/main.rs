@@ -64,7 +64,7 @@ fn main() {
                 let state = app_handle.state::<AppState>();
                 if let Some(sidecar) = state.sidecar.lock().unwrap().as_mut() {
                     sidecar.shutdown();
-                }
+                };
             }
         })
         .invoke_handler(tauri::generate_handler![backend_status, backend_url])
