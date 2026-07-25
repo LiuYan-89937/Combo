@@ -18,11 +18,12 @@ from agent_factory.knowledge_system.schema import KnowledgeContractConfig
 from agent_factory.agent_registry import refresh_agent_registry_index
 from agent_factory.collaboration_system.store import CollaborationStore, SYSTEM_CHAT_PACKAGE_ID
 from agent_factory.runtime_contracts import ContextContract, LoadedAgentPackage, MemoryContract
-from agent_factory.context_system.schema import (
-    DEFAULT_COMPRESSION_TRIGGER_TOKEN_THRESHOLD,
-    MODEL_COMPRESSION_TRIGGER_TOKENS_ENV,
+from agent_factory.model_pool.resolver import (
+    resolve_available_chat_model,
+    resolve_chat_model_binding,
 )
-from agent_factory.context_system.token_counter import context_window_tokens_from_env
+from agent_factory.model_pool.schema import ModelProfileBinding
+from agent_factory.context_system.token_counter import model_context_limits
 from agent_factory.runtime_kernel.session import AgentSessionConfig, AgentSessionManager
 from agent_factory.runtime_kernel.persistence import delete_sqlite_checkpoint_thread
 from agent_factory.mcp_gateway import HostMCPGatewayManager
@@ -535,42 +536,6 @@ class AgentPackageRuntimeManager:
     def package_summary(self, package_id: str) -> dict[str, Any]:
         return self._package_summary(self._manifest_path(package_id))
 
-    def update_context_config(
-        self,
-        package_id: str,
-        payload: dict[str, Any],
-    ) -> dict[str, Any]:
-        package_dir = self.repository.package_dir(package_id)
-        contract_path = package_dir / "contracts" / "context.json"
-        if not contract_path.is_file():
-            raise FileNotFoundError(f"context contract not found: {package_id}")
-        document = _read_json_object(contract_path)
-        config = document.setdefault("config", {})
-        if not isinstance(config, dict):
-            raise ValueError("context contract config must be an object")
-        if "context_window_tokens" in payload:
-            if payload["context_window_tokens"] is None:
-                config.pop("context_window_tokens", None)
-            else:
-                config["context_window_tokens"] = payload["context_window_tokens"]
-        if "compression_threshold_tokens" in payload:
-            default_policy = config.setdefault("default_policy", {})
-            if not isinstance(default_policy, dict):
-                raise ValueError("context default_policy must be an object")
-            compression = default_policy.setdefault("compression", {})
-            if not isinstance(compression, dict):
-                raise ValueError("context compression policy must be an object")
-            if payload["compression_threshold_tokens"] is None:
-                compression.pop("trigger_token_threshold", None)
-            else:
-                compression["trigger_token_threshold"] = payload["compression_threshold_tokens"]
-        ContextContract.model_validate(document)
-        contract_path.write_text(
-            json.dumps(document, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        return self.package_summary(package_id)
-
     def update_tool_description(
         self,
         package_id: str,
@@ -660,7 +625,6 @@ class AgentPackageRuntimeManager:
         package_id: str,
         session_id: str,
         *,
-        delete_workdir: bool = False,
         unlink_collaboration: bool = True,
     ) -> dict[str, Any]:
         package = self.load_package(package_id)
@@ -672,7 +636,7 @@ class AgentPackageRuntimeManager:
         manager = self._session_manager_for_package(package_id, package)
         record = manager.load_optional(session_id)
         if record is None:
-            deleted_workdir = _delete_agent_session_workdir(package_id, session_id) if delete_workdir else False
+            deleted_workdir = _delete_agent_session_workdir(package_id, session_id)
             collaboration_unlink = (
                 CollaborationStore().unlink_runtime_session(
                     package_id=package_id,
@@ -700,11 +664,7 @@ class AgentPackageRuntimeManager:
             session_id=record.session_id,
             thread_id=record.thread_id,
         )
-        deleted_workdir = (
-            _delete_agent_session_workdir(package_id, record.session_id)
-            if delete_workdir
-            else False
-        )
+        deleted_workdir = _delete_agent_session_workdir(package_id, record.session_id)
         result = manager.delete(record.session_id)
         collaboration_unlink = (
             CollaborationStore().unlink_runtime_session(
@@ -788,7 +748,6 @@ class AgentPackageRuntimeManager:
                 result = self.delete_session(
                     package_id,
                     session_id,
-                    delete_workdir=True,
                     unlink_collaboration=False,
                 )
                 cleanups.append({**targets[(package_id, session_id)], **result})
@@ -1998,23 +1957,21 @@ def _model_contract_summary(package: LoadedAgentPackage) -> dict[str, Any]:
 
 def _context_contract_summary(package_root: Path) -> dict[str, Any]:
     contract_path = package_root / "contracts" / "context.json"
-    env_context_window = context_window_tokens_from_env()
-    env_compression_threshold = _compression_threshold_from_env()
-    env_effective_compression_threshold = (
-        min(env_compression_threshold, env_context_window)
-        if isinstance(env_context_window, int) and env_context_window > 0
-        else env_compression_threshold
+    resolved = _resolved_main_model_for_package(package_root)
+    settings = resolved.settings if resolved is not None else None
+    fallback_limits = model_context_limits(model_role="main")
+    context_window = getattr(settings, "max_input_tokens", None) or fallback_limits.context_window_tokens
+    compression_threshold = (
+        getattr(settings, "compression_trigger_tokens", None)
+        or fallback_limits.compression_trigger_tokens
     )
     base = {
         "version": "",
-        "context_window_tokens": None,
-        "context_window_tokens_source": "env" if env_context_window is not None else "unset",
-        "context_window_tokens_env": env_context_window,
-        "context_window_tokens_custom": None,
-        "compression_threshold_tokens": env_effective_compression_threshold,
-        "compression_threshold_tokens_source": "env",
-        "compression_threshold_tokens_env": env_compression_threshold,
-        "compression_threshold_tokens_custom": None,
+        "context_window_tokens": context_window,
+        "context_window_tokens_source": "model_profile",
+        "compression_threshold_tokens": compression_threshold,
+        "compression_threshold_tokens_source": "model_profile",
+        "model_profile_id": getattr(settings, "profile_id", None),
     }
     if not contract_path.is_file():
         return base
@@ -2023,26 +1980,30 @@ def _context_contract_summary(package_root: Path) -> dict[str, Any]:
         validated = ContextContract.model_validate(document)
     except Exception as exc:
         return {**base, "error": f"{type(exc).__name__}: {exc}"}
-    config = document.get("config") if isinstance(document.get("config"), dict) else {}
-    custom_window = config.get("context_window_tokens")
-    window = custom_window if isinstance(custom_window, int) and custom_window > 0 else env_context_window
-    compression = {}
-    default_policy = config.get("default_policy") if isinstance(config.get("default_policy"), dict) else {}
-    if isinstance(default_policy, dict):
-        compression = default_policy.get("compression") if isinstance(default_policy.get("compression"), dict) else {}
-    custom_threshold = compression.get("trigger_token_threshold") if isinstance(compression, dict) else None
-    threshold = custom_threshold if isinstance(custom_threshold, int) and custom_threshold > 0 else env_compression_threshold
-    effective_threshold = min(threshold, window) if isinstance(window, int) and window > 0 else threshold
     return {
         **base,
         "version": validated.version,
-        "context_window_tokens": window,
-        "context_window_tokens_source": "package" if isinstance(custom_window, int) and custom_window > 0 else base["context_window_tokens_source"],
-        "context_window_tokens_custom": custom_window if isinstance(custom_window, int) and custom_window > 0 else None,
-        "compression_threshold_tokens": effective_threshold,
-        "compression_threshold_tokens_source": "package" if isinstance(custom_threshold, int) and custom_threshold > 0 else "env",
-        "compression_threshold_tokens_custom": custom_threshold if isinstance(custom_threshold, int) and custom_threshold > 0 else None,
     }
+
+
+def _resolved_main_model_for_package(package_root: Path):
+    contract_path = package_root / "contracts" / "model.json"
+    if contract_path.is_file():
+        try:
+            document = _read_json_object(contract_path)
+            config = document.get("config") if isinstance(document.get("config"), dict) else {}
+            bindings = config.get("bindings") if isinstance(config.get("bindings"), dict) else {}
+            main = bindings.get("main")
+            if isinstance(main, dict):
+                binding = ModelProfileBinding.model_validate(main)
+                if binding.source != "runtime":
+                    return resolve_chat_model_binding(binding, role="main")
+        except Exception:
+            pass
+    try:
+        return resolve_available_chat_model("main")
+    except Exception:
+        return None
 
 
 def _memory_contract_summary(package_root: Path) -> dict[str, Any]:
@@ -2162,18 +2123,6 @@ def _trace_root_from_ref(ref: dict[str, Any]) -> Path | None:
 
 def _safe_path_id(value: str) -> bool:
     return bool(value) and all(char.isalnum() or char in {"-", "_"} for char in value)
-
-
-def _compression_threshold_from_env() -> int:
-    value = os.getenv(MODEL_COMPRESSION_TRIGGER_TOKENS_ENV)
-    if value:
-        try:
-            parsed = int(value)
-        except ValueError:
-            parsed = 0
-        if parsed >= 1000:
-            return parsed
-    return DEFAULT_COMPRESSION_TRIGGER_TOKEN_THRESHOLD
 
 
 def _package_detail_summary(

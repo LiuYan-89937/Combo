@@ -171,7 +171,7 @@ export interface RuntimeOptionsView {
   show_state?: boolean
   show_messages?: boolean
   context_window_tokens: number | null
-  context_window_tokens_source: 'env' | 'unset' | string
+  context_window_tokens_source: 'model_profile' | 'unset' | string
 }
 
 // ========== 对话相关 ==========

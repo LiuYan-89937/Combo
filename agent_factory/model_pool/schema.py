@@ -23,6 +23,8 @@ ModelPoolModality = Literal["text", "image", "audio"]
 ModelToolCapability = Literal["image_input", "image_output", "image_edit", "audio_input", "audio_output"]
 ModelSelectionSource = Literal["auto", "manual"]
 ModelSelectionOptimizeFor = Literal["balanced", "quality", "cost", "latency", "context"]
+DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS = 256 * 1024
+DEFAULT_MODEL_COMPRESSION_TRIGGER_TOKENS = 200_000
 
 _ID_RE = re.compile(r"^[a-z][a-z0-9_.-]{1,127}$")
 _TOOL_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -69,10 +71,21 @@ class ModelPoolLimits(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     max_input_tokens: int | None = Field(default=None, ge=1)
+    compression_trigger_tokens: int | None = Field(default=None, ge=1)
     max_output_tokens: int | None = Field(default=None, ge=1)
     timeout_seconds: float | None = Field(default=None, gt=0)
     requests_per_minute: int | None = Field(default=None, ge=1)
     tokens_per_minute: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def _compression_fits_context_window(self) -> "ModelPoolLimits":
+        if (
+            self.max_input_tokens is not None
+            and self.compression_trigger_tokens is not None
+            and self.compression_trigger_tokens > self.max_input_tokens
+        ):
+            raise ValueError("compression_trigger_tokens must not exceed max_input_tokens")
+        return self
 
 
 class ModelPoolPricing(BaseModel):
@@ -194,6 +207,18 @@ class ModelPoolProfile(BaseModel):
     def _provider_matches_kind(self) -> "ModelPoolProfile":
         if not provider_supports_kind(self.provider, self.kind):
             raise ValueError(f"provider {self.provider!r} does not support model kind {self.kind}")
+        if self.kind == "chat" and (
+            self.limits.max_input_tokens is None
+            or self.limits.compression_trigger_tokens is None
+        ):
+            values = self.limits.model_dump(mode="python")
+            context_window = self.limits.max_input_tokens or DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS
+            values["max_input_tokens"] = context_window
+            values["compression_trigger_tokens"] = (
+                self.limits.compression_trigger_tokens
+                or min(DEFAULT_MODEL_COMPRESSION_TRIGGER_TOKENS, context_window)
+            )
+            self.limits = ModelPoolLimits.model_validate(values)
         return self
 
     def to_public(self, credential: ModelPoolCredential | None = None) -> "ModelPoolProfilePublic":

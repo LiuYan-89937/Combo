@@ -67,7 +67,8 @@ def resolve_chat_model_profile(
         temperature=overrides.temperature,
         timeout_seconds=overrides.timeout_seconds or profile.limits.timeout_seconds,
         max_output_tokens=overrides.max_output_tokens or profile.limits.max_output_tokens,
-        max_input_tokens=overrides.max_input_tokens or profile.limits.max_input_tokens,
+        max_input_tokens=profile.limits.max_input_tokens,
+        compression_trigger_tokens=profile.limits.compression_trigger_tokens,
         multimodal=bool(overrides.multimodal) if overrides.multimodal is not None else ("image" in profile.capabilities.input_modalities),
         reasoning=overrides.reasoning or _default_reasoning(),
         structured_output_method=overrides.structured_output_method,
@@ -103,6 +104,21 @@ def resolve_available_chat_model(
         reason=f"Select an available {role} model from the configured model pool.",
     )
     try:
+        model_store = store or ModelPoolStore(setup=False)
+        assigned_profile_id = model_store.role_binding(
+            role if role in {"main", "task", "compression"} else "task"
+        )
+        if assigned_profile_id:
+            return resolve_chat_model_profile(
+                binding.model_copy(
+                    update={
+                        "profile_id": assigned_profile_id,
+                        "selection_source": "manual",
+                    }
+                ),
+                role=role,
+                store=model_store,
+            )
         return resolve_chat_model_binding(binding, role=role, store=store)
     except LookupError:
         return None
@@ -181,7 +197,20 @@ def _select_chat_profile_id(
         min_context_window_tokens=_optional_positive_int(capabilities.get("min_context_window_tokens")),
         optimize_for="balanced",
     )
-    result = ModelPoolSelector(store=store).select(ModelSelectionRequest(requirements=[requirement]))
+    model_store = store or ModelPoolStore(setup=False)
+    assigned_profile_id = model_store.role_binding(requirement_role)
+    if assigned_profile_id:
+        issues = ModelPoolSelector(store=model_store).profile_match_issues(
+            assigned_profile_id,
+            requirement,
+        )
+        if issues:
+            raise LookupError(
+                f"assigned {requirement_role} model {assigned_profile_id} does not match runtime requirements: "
+                + ", ".join(issues)
+            )
+        return assigned_profile_id
+    result = ModelPoolSelector(store=model_store).select(ModelSelectionRequest(requirements=[requirement]))
     recommendation = next((item for item in result.recommendations if item.role == requirement_role), None)
     if recommendation is None:
         raise LookupError(f"no configured model pool profile matches the {role} model requirements")

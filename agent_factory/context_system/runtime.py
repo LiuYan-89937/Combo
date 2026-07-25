@@ -20,10 +20,9 @@ from agent_factory.context_system.schema import (
 from agent_factory.context_system.sources import ContextSource, ContextSourceRuntime, default_context_sources
 from agent_factory.context_system.token_counter import (
     TokenCountResult,
-    context_window_tokens_from_env,
     count_messages_tokens,
     context_window_payload,
-    effective_compression_threshold,
+    model_context_limits,
 )
 
 
@@ -72,8 +71,9 @@ class ContextSystemRuntime:
                 injection_report=injection_report,
             )
         policy = self.policy_for_node(node_id)
-        context_window_tokens = _context_window_token_limit(services)
-        trigger_limit = _compression_trigger_limit(policy=policy, context_window_tokens=context_window_tokens)
+        active_limits = model_context_limits(services=services, state=state, model_role="main")
+        context_window_tokens = active_limits.context_window_tokens
+        trigger_limit = active_limits.compression_trigger_tokens
         compression_policy = policy.compression.model_copy(
             update={"trigger_token_threshold": trigger_limit}
         )
@@ -476,27 +476,6 @@ def _effective_context_token_count(
         method="previous_provider_usage_after_call",
         model_role=str(budget.get("last_provider_model_role") or measured_count.model_role or "main"),
     )
-
-
-def _compression_trigger_limit(*, policy: ContextPolicy, context_window_tokens: int | None) -> int:
-    threshold = effective_compression_threshold(
-        configured_threshold=int(policy.compression.trigger_token_threshold),
-        context_window_tokens=context_window_tokens,
-    )
-    return int(threshold or policy.compression.trigger_token_threshold)
-
-
-def _context_window_token_limit(services: Any) -> int | None:
-    resources = getattr(services, "runtime_resources", None)
-    if isinstance(resources, dict):
-        value = resources.get("context_window_tokens")
-        try:
-            parsed = int(value)
-        except (TypeError, ValueError):
-            parsed = 0
-        if parsed > 0:
-            return parsed
-    return context_window_tokens_from_env()
 
 
 def _emit_context_window_if_available(

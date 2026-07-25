@@ -27,6 +27,7 @@ class ChatModelSettings:
     timeout_seconds: float | None = None
     max_output_tokens: int | None = None
     max_input_tokens: int | None = None
+    compression_trigger_tokens: int | None = None
     multimodal: bool = False
     reasoning: ModelReasoningSettings = field(default_factory=ModelReasoningSettings)
     structured_output_method: StructuredOutputMethod | None = None
@@ -47,6 +48,7 @@ class ChatModelSettings:
             "provider_adapter": self.profile.adapter_id,
             "transport": capabilities.transport,
             "max_input_tokens": self.max_input_tokens,
+            "compression_trigger_tokens": self.compression_trigger_tokens,
             "max_output_tokens": self.max_output_tokens,
             "multimodal": self.multimodal,
             "structured_output_method": self.structured_output_method or "",

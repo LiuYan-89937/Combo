@@ -9,6 +9,7 @@ from typing import Any
 
 from agent_factory.model_pool.config import model_pool_store_read_only, resolve_model_pool_store_path
 from agent_factory.model_pool.schema import (
+    ModelBindingRole,
     ModelPoolCredential,
     ModelPoolProfile,
     provider_default_capabilities,
@@ -50,6 +51,20 @@ class ModelPoolStore:
 
     def upsert_credential(self, credential: ModelPoolCredential) -> ModelPoolCredential:
         existing = self.get_credential(credential.credential_id)
+        if not credential.enabled or not credential.api_key:
+            assigned = [
+                (profile.profile_id, self.roles_for_profile(profile.profile_id))
+                for profile in self.list_profiles(credential_id=credential.credential_id)
+            ]
+            assigned = [(profile_id, roles) for profile_id, roles in assigned if roles]
+            if assigned:
+                role_labels = ", ".join(
+                    f"{profile_id} ({'/'.join(roles)})"
+                    for profile_id, roles in assigned
+                )
+                raise ModelPoolStoreError(
+                    f"credential is used by assigned model roles and must remain enabled with an API key: {role_labels}"
+                )
         now = utc_now_text()
         credential = credential.model_copy(
             update={
@@ -120,6 +135,13 @@ class ModelPoolStore:
                 f"profile provider {profile.provider!r} must match credential provider {credential.provider!r}"
             )
         existing = self.get_profile(profile.profile_id)
+        if not profile.enabled:
+            assigned_roles = self.roles_for_profile(profile.profile_id)
+            if assigned_roles:
+                raise ModelPoolStoreError(
+                    f"model profile is assigned to roles {', '.join(assigned_roles)} and cannot be disabled: "
+                    f"{profile.profile_id}"
+                )
         now = utc_now_text()
         capabilities = profile.capabilities
         if (
@@ -205,9 +227,85 @@ class ModelPoolStore:
         return [ModelPoolProfile.model_validate_json(str(row["payload_json"])) for row in rows]
 
     def delete_profile(self, profile_id: str) -> bool:
+        assigned_roles = self.roles_for_profile(profile_id)
+        if assigned_roles:
+            raise ModelPoolStoreError(
+                f"model profile is assigned to roles {', '.join(assigned_roles)}: {profile_id}"
+            )
         with self._connect(write=True) as conn:
             cursor = conn.execute("delete from model_pool_profiles where profile_id = ?", (profile_id,))
         return cursor.rowcount > 0
+
+    def role_bindings(self) -> dict[ModelBindingRole, str | None]:
+        result: dict[ModelBindingRole, str | None] = {
+            "main": None,
+            "task": None,
+            "compression": None,
+        }
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    "select role, profile_id from model_role_bindings order by role"
+                ).fetchall()
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc).lower():
+                raise
+            return result
+        for row in rows:
+            role = str(row["role"])
+            if role in result:
+                result[role] = str(row["profile_id"])
+        return result
+
+    def role_binding(self, role: ModelBindingRole) -> str | None:
+        return self.role_bindings()[role]
+
+    def save_role_bindings(
+        self,
+        bindings: dict[ModelBindingRole, str | None],
+    ) -> dict[ModelBindingRole, str | None]:
+        normalized: dict[ModelBindingRole, str | None] = {}
+        for role in ("main", "task", "compression"):
+            profile_id = bindings.get(role)
+            if profile_id is None:
+                normalized[role] = None
+                continue
+            profile = self.require_profile(profile_id)
+            if profile.kind != "chat":
+                raise ModelPoolStoreError(f"{role} role requires a chat model profile: {profile_id}")
+            if not profile.enabled:
+                raise ModelPoolStoreError(f"{role} role requires an enabled model profile: {profile_id}")
+            credential = self.require_credential(profile.credential_id)
+            if not credential.enabled or not credential.api_key:
+                raise ModelPoolStoreError(
+                    f"{role} role requires an enabled credential with an API key: {profile_id}"
+                )
+            normalized[role] = profile_id
+        now = utc_now_text()
+        with self._connect(write=True) as conn:
+            for role, profile_id in normalized.items():
+                if profile_id is None:
+                    conn.execute("delete from model_role_bindings where role = ?", (role,))
+                    continue
+                conn.execute(
+                    """
+                    insert into model_role_bindings (role, profile_id, updated_at)
+                    values (?, ?, ?)
+                    on conflict(role) do update set
+                      profile_id=excluded.profile_id,
+                      updated_at=excluded.updated_at
+                    """,
+                    (role, profile_id, now),
+                )
+        return self.role_bindings()
+
+    def roles_for_profile(self, profile_id: str) -> list[str]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "select role from model_role_bindings where profile_id = ? order by role",
+                (profile_id,),
+            ).fetchall()
+        return [str(row["role"]) for row in rows]
 
     def public_profiles(self) -> list[dict[str, Any]]:
         credentials = {credential.credential_id: credential for credential in self.list_credentials()}
@@ -273,6 +371,13 @@ class ModelPoolStore:
                 create index if not exists idx_model_pool_profiles_credential on model_pool_profiles(credential_id);
                 create index if not exists idx_model_pool_profiles_kind on model_pool_profiles(kind);
                 create index if not exists idx_model_pool_profiles_enabled on model_pool_profiles(enabled);
+
+                create table if not exists model_role_bindings (
+                  role text primary key check (role in ('main', 'task', 'compression')),
+                  profile_id text not null,
+                  updated_at text not null
+                );
+                create index if not exists idx_model_role_bindings_profile on model_role_bindings(profile_id);
                 """
             )
 

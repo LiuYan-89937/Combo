@@ -11,7 +11,6 @@ import type { FactoryMode, RuntimeAttachmentInput, TranscriptAttachmentView } fr
 import { REASONING_INTENSITY_MAX } from '@/utils/reasoning'
 import { isAgentSessionsLanding } from '@/utils/agentSessionRoute'
 
-const MAIN_MODEL_PROFILE_STORAGE_KEY = 'fastagentfactory.runtimeMainModelProfileId'
 const REASONING_INTENSITY_STORAGE_KEY = 'fastagentfactory.runtimeReasoningIntensity'
 
 export function useFactoryConversation() {
@@ -23,7 +22,7 @@ export function useFactoryConversation() {
   const commands = useCommand()
   const { t } = useI18n()
   const chatModelProfiles = ref<ModelPoolProfile[]>([])
-  const selectedMainModelProfileId = ref(localStorage.getItem(MAIN_MODEL_PROFILE_STORAGE_KEY) || '')
+  const selectedMainModelProfileId = ref('')
   const reasoningIntensity = ref<number | null>(loadReasoningIntensity())
 
   const isAgentChatActive = computed(() => Boolean(agentStore.activeChatPackageId))
@@ -107,14 +106,23 @@ export function useFactoryConversation() {
 
   async function loadRuntimeMainModelProfiles() {
     try {
-      const response = await modelPoolApi.profiles()
+      const [response, roleBindingResponse] = await Promise.all([
+        modelPoolApi.profiles(),
+        modelPoolApi.roleBindings(),
+      ])
       chatModelProfiles.value = response.profiles.filter((profile) => (
         profile.kind === 'chat'
         && profile.enabled
         && profile.credential?.enabled !== false
         && profile.credential?.has_api_key === true
       ))
-      if (!chatModelProfiles.value.some((profile) => profile.profile_id === selectedMainModelProfileId.value)) {
+      const configuredMainProfileId = roleBindingResponse.bindings.main
+      if (
+        configuredMainProfileId
+        && chatModelProfiles.value.some((profile) => profile.profile_id === configuredMainProfileId)
+      ) {
+        setSelectedMainModelProfileId(configuredMainProfileId)
+      } else if (!chatModelProfiles.value.some((profile) => profile.profile_id === selectedMainModelProfileId.value)) {
         await selectRecommendedRuntimeMainModel()
       }
     } catch (error) {
@@ -154,11 +162,6 @@ export function useFactoryConversation() {
 
   function setSelectedMainModelProfileId(profileId: string) {
     selectedMainModelProfileId.value = profileId
-    if (profileId) {
-      localStorage.setItem(MAIN_MODEL_PROFILE_STORAGE_KEY, profileId)
-    } else {
-      localStorage.removeItem(MAIN_MODEL_PROFILE_STORAGE_KEY)
-    }
   }
 
   function runtimeModelOptions() {

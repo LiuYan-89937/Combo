@@ -19,7 +19,11 @@ from agent_factory.model_pool import (
     list_model_pool_provider_profiles,
 )
 from agent_factory.model_pool.resolver import resolve_chat_model_profile
-from agent_factory.model_pool.schema import ModelProfileBinding
+from agent_factory.model_pool.schema import (
+    DEFAULT_MODEL_COMPRESSION_TRIGGER_TOKENS,
+    DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS,
+    ModelProfileBinding,
+)
 from agent_factory.model_pool.store import ModelPoolStoreError
 
 
@@ -74,6 +78,38 @@ def create_model_pool_router() -> APIRouter:
         ]
         return {"profiles": profiles}
 
+    @router.get("/role-bindings")
+    def get_role_bindings():
+        return {
+            "bindings": ModelPoolStore().role_bindings(),
+            "defaults": {
+                "context_window_tokens": DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS,
+                "compression_trigger_tokens": DEFAULT_MODEL_COMPRESSION_TRIGGER_TOKENS,
+            },
+        }
+
+    @router.put("/role-bindings")
+    def save_role_bindings(payload: dict[str, Any]):
+        raw = payload.get("bindings")
+        if not isinstance(raw, dict):
+            raise HTTPException(status_code=400, detail="bindings must be an object")
+        expected_roles = {"main", "task", "compression"}
+        unexpected = set(raw) - expected_roles
+        if unexpected:
+            raise HTTPException(
+                status_code=400,
+                detail=f"unsupported model roles: {', '.join(sorted(unexpected))}",
+            )
+        bindings = {
+            role: (str(raw.get(role)).strip() or None) if raw.get(role) is not None else None
+            for role in expected_roles
+        }
+        try:
+            saved = ModelPoolStore().save_role_bindings(bindings)
+        except Exception as exc:
+            raise _http_error(exc) from exc
+        return {"bindings": saved}
+
     @router.get("/usage")
     async def usage_summary(group_by: str = "model", days: int = 14):
         value = group_by.strip().lower()
@@ -103,7 +139,10 @@ def create_model_pool_router() -> APIRouter:
 
     @router.delete("/profiles/{profile_id}")
     def delete_profile(profile_id: str):
-        return {"deleted": ModelPoolStore().delete_profile(profile_id)}
+        try:
+            return {"deleted": ModelPoolStore().delete_profile(profile_id)}
+        except Exception as exc:
+            raise _http_error(exc) from exc
 
     @router.post("/profiles/{profile_id}/ping")
     async def ping_profile(profile_id: str):

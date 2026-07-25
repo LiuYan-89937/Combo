@@ -102,6 +102,25 @@ class ModelPoolSelector:
             enabled_profile_count=len(enabled_profiles),
         )
 
+    def profile_match_issues(
+        self,
+        profile_id: str,
+        requirement: ModelSelectionRequirement,
+    ) -> list[str]:
+        profile = self.store.require_profile(profile_id)
+        if not profile.enabled:
+            return ["profile_disabled"]
+        credential = self.store.get_credential(profile.credential_id)
+        if credential is None:
+            return ["credential_missing"]
+        if not credential.enabled:
+            return ["credential_disabled"]
+        if not credential.api_key:
+            return ["api_key_missing"]
+        if requirement.kind and profile.kind != requirement.kind:
+            return [f"kind:{requirement.kind}"]
+        return _missing_capabilities(requirement, profile)
+
     def _rank_candidates(
         self,
         requirement: ModelSelectionRequirement,

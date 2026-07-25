@@ -339,7 +339,18 @@ watch(
   () => {
     const packageId = agentStore.activeChatPackageId
     const sessionId = runtimeStore.activeAgentSessionId
-    if (route.name !== 'Factory' || !packageId || !sessionId) return
+    if (route.name !== 'Factory' || !packageId) return
+    if (
+      !sessionId
+      && agentStore.selectedSessionId === null
+      && routeQueryText(route.query.package_id) === packageId
+      && Boolean(routeQueryText(route.query.session_id))
+      && runtimeStore.currentMode === 'agent_package'
+    ) {
+      void router.replace({ name: 'Factory', query: { package_id: packageId, new: '1' } })
+      return
+    }
+    if (!sessionId) return
     if (routeQueryText(route.query.package_id) !== packageId || routeQueryText(route.query.new) !== '1') return
     if (
       routeQueryText(route.query.session_id) === sessionId

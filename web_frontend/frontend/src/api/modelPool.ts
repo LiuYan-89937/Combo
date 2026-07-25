@@ -1,6 +1,12 @@
 import { requestJson, withQuery } from './http'
 
 export type ModelUsageGroupBy = 'model' | 'provider' | 'agent'
+export type ModelRole = 'main' | 'task' | 'compression'
+export type ModelRoleBindings = Record<ModelRole, string | null>
+export interface ModelPoolDefaults {
+  context_window_tokens: number
+  compression_trigger_tokens: number
+}
 
 export interface ModelProviderProfile {
   provider_id: string
@@ -61,6 +67,7 @@ export interface ModelPoolProfile {
   }
   limits: {
     max_input_tokens?: number | null
+    compression_trigger_tokens?: number | null
     max_output_tokens?: number | null
     timeout_seconds?: number | null
   }
@@ -145,6 +152,13 @@ export const modelPoolApi = {
       method: 'DELETE',
     }),
   profiles: () => requestJson<{ profiles: ModelPoolProfile[] }>('/api/model-pool/profiles'),
+  roleBindings: () =>
+    requestJson<{ bindings: ModelRoleBindings; defaults: ModelPoolDefaults }>('/api/model-pool/role-bindings'),
+  saveRoleBindings: (bindings: ModelRoleBindings) =>
+    requestJson<{ bindings: ModelRoleBindings }>('/api/model-pool/role-bindings', {
+      method: 'PUT',
+      body: JSON.stringify({ bindings }),
+    }),
   select: (payload: Record<string, unknown>) =>
     requestJson<ModelSelectionResult>('/api/model-pool/select', {
       method: 'POST',

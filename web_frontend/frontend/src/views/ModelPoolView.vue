@@ -16,6 +16,44 @@
     <n-tabs type="line" animated>
       <n-tab-pane name="profiles" :tab="t('modelPool.profiles')">
         <div class="tab-content">
+          <div class="role-bindings-panel">
+            <div>
+              <n-text strong>{{ t('modelPool.roleBindings') }}</n-text>
+              <n-text depth="3" class="role-bindings-hint">{{ t('modelPool.roleBindingsHint') }}</n-text>
+            </div>
+            <div class="role-bindings-grid">
+              <n-form-item :label="t('modelPool.mainRole')" :show-feedback="false">
+                <n-select
+                  v-model:value="roleBindings.main"
+                  :options="chatProfileOptions"
+                  :placeholder="t('modelPool.autoSelect')"
+                  clearable
+                />
+              </n-form-item>
+              <n-form-item :label="t('modelPool.taskRole')" :show-feedback="false">
+                <n-select
+                  v-model:value="roleBindings.task"
+                  :options="chatProfileOptions"
+                  :placeholder="t('modelPool.autoSelect')"
+                  clearable
+                />
+              </n-form-item>
+              <n-form-item :label="t('modelPool.compressionRole')" :show-feedback="false">
+                <n-select
+                  v-model:value="roleBindings.compression"
+                  :options="chatProfileOptions"
+                  :placeholder="t('modelPool.autoSelect')"
+                  clearable
+                />
+              </n-form-item>
+            </div>
+            <n-space justify="end">
+              <n-button type="primary" :loading="savingRoles" @click="saveRoleBindings">
+                {{ t('modelPool.saveRoleBindings') }}
+              </n-button>
+            </n-space>
+          </div>
+
           <div class="content-header">
             <n-text>{{ t('modelPool.profileHint') }}</n-text>
             <n-button type="primary" @click="openProfile()">
@@ -275,6 +313,14 @@
           <n-form-item :label="t('modelPool.maxInput')">
             <n-input-number v-model:value="profileForm.max_input_tokens" :min="1" clearable />
           </n-form-item>
+          <n-form-item :label="t('modelPool.compressionTrigger')">
+            <n-input-number
+              v-model:value="profileForm.compression_trigger_tokens"
+              :min="1"
+              :max="profileForm.max_input_tokens || undefined"
+              clearable
+            />
+          </n-form-item>
           <n-form-item :label="t('modelPool.maxOutput')">
             <n-input-number v-model:value="profileForm.max_output_tokens" :min="1" clearable />
           </n-form-item>
@@ -352,6 +398,8 @@ import {
   modelPoolApi,
   type ModelPoolCredential,
   type ModelPoolProfile,
+  type ModelPoolDefaults,
+  type ModelRoleBindings,
   type ModelProviderProfile,
   type ModelUsageGroup,
   type ModelUsageGroupBy,
@@ -367,10 +415,17 @@ const dialog = useDialog()
 
 const loading = ref(false)
 const saving = ref(false)
+const savingRoles = ref(false)
 const testingProfileId = ref<string | null>(null)
 const providers = ref<ModelProviderProfile[]>([])
 const credentials = ref<ModelPoolCredential[]>([])
 const profiles = ref<ModelPoolProfile[]>([])
+const roleBindings = reactive<ModelRoleBindings>({
+  main: null,
+  task: null,
+  compression: null,
+})
+const modelDefaults = ref<ModelPoolDefaults | null>(null)
 const usageLoading = ref(false)
 const usageGroupBy = ref<ModelUsageGroupBy>('model')
 const usageChartType = ref<'line' | 'bar'>('line')
@@ -407,6 +462,7 @@ const profileForm = reactive({
   batch_generation: true,
   async_job: false,
   max_input_tokens: null as number | null,
+  compression_trigger_tokens: null as number | null,
   max_output_tokens: null as number | null,
   timeout_seconds: null as number | null,
   input_per_1m_tokens: null as number | null,
@@ -427,6 +483,14 @@ const credentialOptions = computed(() =>
   credentials.value
     .filter((item) => providerSupportsKind(item.provider, profileForm.kind))
     .map((item) => ({ label: `${item.display_name} · ${providerLabel(item.provider)}`, value: item.credential_id })),
+)
+const chatProfileOptions = computed(() =>
+  profiles.value
+    .filter((item) => item.kind === 'chat' && item.enabled && item.credential?.enabled && item.credential?.has_api_key)
+    .map((item) => ({
+      label: `${item.display_name} · ${item.model_name}`,
+      value: item.profile_id,
+    })),
 )
 const usageDayOptions = computed(() => [
   { label: t('modelPool.usageLast7Days'), value: 7 },
@@ -517,15 +581,18 @@ watch(
 async function refresh(): Promise<void> {
   loading.value = true
   try {
-    const [providerData, credentialData, profileData, usageData] = await Promise.all([
+    const [providerData, credentialData, profileData, roleBindingData, usageData] = await Promise.all([
       modelPoolApi.providers(),
       modelPoolApi.credentials(),
       modelPoolApi.profiles(),
+      modelPoolApi.roleBindings(),
       modelPoolApi.usage({ groupBy: usageGroupBy.value, days: usageDays.value }),
     ])
     providers.value = providerData.providers
     credentials.value = credentialData.credentials
     profiles.value = profileData.profiles
+    Object.assign(roleBindings, roleBindingData.bindings)
+    modelDefaults.value = roleBindingData.defaults
     usageSummary.value = usageData
   } catch (error) {
     message.error(error instanceof Error ? error.message : t('common.requestFailed'))
@@ -597,7 +664,10 @@ function openProfile(item?: ModelPoolProfile): void {
   profileForm.multi_image_reference = item?.capabilities.multi_image_reference ?? false
   profileForm.batch_generation = item?.capabilities.batch_generation ?? true
   profileForm.async_job = item?.capabilities.async_job ?? false
-  profileForm.max_input_tokens = item?.limits.max_input_tokens ?? null
+  profileForm.max_input_tokens = item?.limits.max_input_tokens ?? modelDefaults.value?.context_window_tokens ?? null
+  profileForm.compression_trigger_tokens = item?.limits.compression_trigger_tokens
+    ?? modelDefaults.value?.compression_trigger_tokens
+    ?? null
   profileForm.max_output_tokens = item?.limits.max_output_tokens ?? null
   profileForm.timeout_seconds = item?.limits.timeout_seconds ?? null
   profileForm.input_per_1m_tokens = item?.pricing.input_per_1m_tokens ?? null
@@ -656,6 +726,7 @@ async function saveProfile(): Promise<void> {
       },
       limits: {
         max_input_tokens: isImageModel ? null : profileForm.max_input_tokens,
+        compression_trigger_tokens: isImageModel ? null : profileForm.compression_trigger_tokens,
         max_output_tokens: profileForm.max_output_tokens,
         timeout_seconds: profileForm.timeout_seconds,
       },
@@ -679,6 +750,19 @@ async function saveProfile(): Promise<void> {
     message.error(error instanceof Error ? error.message : t('common.requestFailed'))
   } finally {
     saving.value = false
+  }
+}
+
+async function saveRoleBindings(): Promise<void> {
+  savingRoles.value = true
+  try {
+    const result = await modelPoolApi.saveRoleBindings({ ...roleBindings })
+    Object.assign(roleBindings, result.bindings)
+    message.success(t('modelPool.roleBindingsSaved'))
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : t('common.requestFailed'))
+  } finally {
+    savingRoles.value = false
   }
 }
 
@@ -808,6 +892,32 @@ function formatCost(value: number | null | undefined): string {
   padding: 18px 20px;
   overflow: auto;
   background: var(--app-surface);
+}
+
+.role-bindings-panel {
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid var(--app-border);
+  border-radius: 10px;
+  background: var(--app-panel);
+}
+
+.role-bindings-hint {
+  display: block;
+  margin-top: 4px;
+}
+
+.role-bindings-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+@media (max-width: 900px) {
+  .role-bindings-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .context-bar {

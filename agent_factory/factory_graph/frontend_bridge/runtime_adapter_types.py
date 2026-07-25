@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from agent_factory.context_system.token_counter import context_window_tokens_from_env
 from agent_factory.factory_graph.frontend_bridge.event_normalizer import RuntimeEventNormalizer
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent
 
@@ -16,16 +15,6 @@ SYSTEM_CHAT_PACKAGE_ID = "factory_chat"
 class FactoryBridgeOptions:
     show_state: bool = False
     show_messages: bool = True
-    context_window_tokens: int | None = None
-    context_window_tokens_source: str = "unset"
-
-    @classmethod
-    def from_env(cls) -> "FactoryBridgeOptions":
-        value = context_window_tokens_from_env()
-        return cls(
-            context_window_tokens=value,
-            context_window_tokens_source="env" if value is not None else "unset",
-        )
 
 
 @dataclass(slots=True)

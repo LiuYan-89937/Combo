@@ -57,7 +57,7 @@ export interface AgentPackageModelContractView {
   version: string
   bindings: Record<string, {
     profile_id?: string
-    source?: 'model_pool' | 'env' | string
+    source?: 'model_pool' | 'runtime' | string
     selection_source?: string
     reason?: string
     required_capabilities?: Record<string, any>
@@ -79,12 +79,9 @@ export interface AgentPackageContextContractView {
   version: string
   context_window_tokens?: number | null
   context_window_tokens_source?: string | null
-  context_window_tokens_env?: number | null
-  context_window_tokens_custom?: number | null
   compression_threshold_tokens?: number | null
   compression_threshold_tokens_source?: string | null
-  compression_threshold_tokens_env?: number | null
-  compression_threshold_tokens_custom?: number | null
+  model_profile_id?: string | null
   error?: string | null
 }
 
@@ -274,8 +271,9 @@ export const useAgentStore = defineStore('agent', () => {
       selectedSessionId.value = null
     }
     if (lastAgentSession.value?.sessionId === sessionId) {
-      const fallback = recentAgentSessions.value[0]
-      rememberAgentSession(fallback?.package_id || '', fallback?.session_id || null)
+      const packageId = lastAgentSession.value.packageId
+      const fallback = recentAgentSessions.value.find((session) => session.package_id === packageId)
+      rememberAgentSession(packageId, fallback?.session_id || null)
     }
   }
 
