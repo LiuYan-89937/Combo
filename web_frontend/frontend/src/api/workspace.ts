@@ -11,6 +11,10 @@ export const workspaceApi = {
     requestEvent(withQuery('/api/workspace/file', { scope, path, ...workspaceQuery(context), max_chars: maxChars })),
   rawUrl: (scope: WorkspaceScope, path: string, context?: WorkspaceContextInput) =>
     resolvedBackendUrl(withQuery('/api/workspace/raw', { scope, path, ...workspaceQuery(context) })),
+  nativePath: (scope: WorkspaceScope, path: string, context?: WorkspaceContextInput) =>
+    requestJson<{ native_path: string; kind: 'file' | 'directory' }>(
+      withQuery('/api/workspace/native-path', { scope, path, ...workspaceQuery(context) }),
+    ),
   deleteFile: (scope: WorkspaceScope, path: string, context?: WorkspaceContextInput) =>
     requestJson<{ deleted: boolean; path: string }>(
       withQuery('/api/workspace/file', { scope, path, ...workspaceQuery(context) }),

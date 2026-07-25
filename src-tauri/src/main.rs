@@ -1,8 +1,10 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod desktop_file_actions;
 mod python_sidecar;
 
+use desktop_file_actions::{reveal_in_file_manager, save_file_as};
 use python_sidecar::PythonSidecar;
 use std::sync::Mutex;
 use tauri::Manager;
@@ -73,7 +75,12 @@ fn main() {
                 };
             }
         })
-        .invoke_handler(tauri::generate_handler![backend_status, backend_url])
+        .invoke_handler(tauri::generate_handler![
+            backend_status,
+            backend_url,
+            reveal_in_file_manager,
+            save_file_as,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

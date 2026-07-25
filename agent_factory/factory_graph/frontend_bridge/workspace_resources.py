@@ -11,6 +11,7 @@ from agent_factory.factory_graph.frontend_bridge.agent_package_workspace import 
     list_workspace_entries_from_roots,
     delete_workspace_file_from_roots,
     read_workspace_file_from_roots,
+    resolve_workspace_entry_from_roots,
     resolve_workspace_file_from_roots,
     workspace_roots_payload,
 )
@@ -93,6 +94,23 @@ class FrontendWorkspaceService:
         if not target.available:
             raise FileNotFoundError(target.unavailable_reason or "workspace is not available")
         return resolve_workspace_file_from_roots(
+            roots=target.roots,
+            scope=scope,
+            relative_path=relative_path,
+        )
+
+    def resolve_entry(
+        self,
+        payload: dict[str, Any],
+        *,
+        scope: str = "workdir",
+        relative_path: str,
+        session_record: Any | None = None,
+    ) -> Path:
+        target = self._target(payload, session_record=session_record)
+        if not target.available:
+            raise FileNotFoundError(target.unavailable_reason or "workspace is not available")
+        return resolve_workspace_entry_from_roots(
             roots=target.roots,
             scope=scope,
             relative_path=relative_path,
