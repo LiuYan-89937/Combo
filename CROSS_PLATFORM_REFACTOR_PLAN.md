@@ -609,13 +609,23 @@ FastAgentFactory/
 
 **推送记录**: 
 - `32a0be6b` - Tauri 项目结构和 Python sidecar 集成
+- `7c9708d8` - 修复 Rust 编译问题并添加占位图标
+- `dd414bb9` - 修复开发模式下 Python sidecar 的路径解析
 
 ### 🔄 阶段 3: 测试与优化（进行中）
 
+**已完成项**:
+- ✅ Rust 代码编译验证：`cargo check` 通过
+- ✅ Tauri CLI 安装：tauri-cli 2.11.4
+- ✅ 开发模式验证：`cargo tauri dev` 成功启动完整应用
+  - Python sidecar 正确使用 venv Python
+  - 项目根目录正确定位（CARGO_MANIFEST_DIR）
+  - 环境变量 AGENTFACTORY_NATIVE_RUNTIME=1 正确注入
+  - 后端 API 正常响应（/api/agent-packages）
+  - 前端 Vite 服务正常（端口 5173）
+- ✅ 原生运行时单元测试：test_isolation.py、test_e2e.py 全部通过
+
 **待完成项**:
-- [ ] 验证 Rust 代码编译（`cargo check` 运行中）
-- [ ] 验证 Tauri CLI 安装（`cargo install tauri-cli` 运行中）
-- [ ] 开发模式验证：`cargo tauri dev` 启动完整应用
 - [ ] 端到端功能测试：Agent 创建、会话管理、工具调用
 - [ ] 内存占用对比测试：Docker vs Native 模式
 - [ ] 跨平台测试：macOS、Windows、Linux

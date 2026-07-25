@@ -453,6 +453,16 @@ class AgentPackageRuntimeManager:
             raise
         return latest_status or self.package_instance_status(package_id)
 
+    def _package_runtime_is_initialized(
+        self,
+        package_id: str,
+        package: LoadedAgentPackage,
+    ) -> bool:
+        if not self._has_ready_runtime(package_id, package):
+            return False
+        status = self.package_instance_status(package_id)
+        return bool(status.get("ready")) and status.get("status") == "ready"
+
     def shutdown_package_instance(
         self,
         package_id: str,
