@@ -5,7 +5,7 @@
  */
 
 import { requestJson } from './http'
-import type { ContextReferenceInput } from '@/types/protocol'
+import type { ContextReferenceInput, FactoryFrontendEvent } from '@/types/protocol'
 
 // ===== 类型定义 =====
 
@@ -48,6 +48,7 @@ export interface AgentGroupMemberRunView {
   base_workspace_revision: number
   response_message_id?: string
   request_id?: string
+  pending_approval?: FactoryFrontendEvent | null
   created_at: string
   updated_at: string
 }

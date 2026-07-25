@@ -16,6 +16,7 @@ FastAgentFactory 是一套完全本地化、可制造、可进化的个人智能
 - [Agent 架构](project-documentation/AgentArchitecture.zh-CN.md)：运行层次、工具网关与隔离边界。
 - [核心能力](project-documentation/CoreCapabilities.zh-CN.md)：模型、工具、记忆、知识、调度和交付能力。
 - [AMD Radeon GPU 推理优化](project-documentation/performance/ROCmOptimizations.zh-CN.md)：自研 HIP Kernel、融合与 MTP 说明。
+- [演示视频](FastAgentFactory-Demo.mp4)：从对话与工具调用到 AMD Radeon GPU 推理和性能对比的完整操作演示。
 - [补充材料](SUPPLEMENTARY_MATERIALS.zh-CN.md)。
 - README 当前页面：项目定位、系统架构、主要功能、日常使用和开发入口。
 
@@ -349,9 +350,21 @@ cd ../..
 
 官方和 AMD 使用相互独立的 CMake/Ninja 构建目录，并同时生成 `llama-server` 与 `llama-bench`。切换实现不会改变模型 Profile；性能测试和算子分析都会自动识别当前活动构建。Kernel 名称、家族、符号匹配和中英文作用说明来自构建产物中的 Kernel Catalog，Benchmark 页面支持悬浮查看说明和展开原始符号；未登记 Kernel 会明确标记，不使用 Python 硬编码猜测。实现 AMD Kernel 后，需要将描述加入 `vendor/llama.cpp-amd/.fastagentfactory-kernel-catalog.json`，并把构建清单的 `custom_kernels` 和 `optimization_status` 更新为真实状态，再用算子分析中的 Kernel 调用与耗时数据证明命中。
 
-## 演示视频范围
+## 演示视频
 
-3–5 分钟演示不重复运行完整的十轮 Profiler 测试，按以下范围录制：
+<video
+  controls
+  preload="metadata"
+  poster="supplementary-materials/poster/fastagentfactory-project-poster.png"
+  width="100%"
+>
+  <source src="FastAgentFactory-Demo.mp4" type="video/mp4">
+  当前 Markdown 阅读器不支持嵌入式视频。
+</video>
+
+如果当前页面未显示播放器，请[直接播放或下载 MP4 演示视频](FastAgentFactory-Demo.mp4)（约 34 MB）。
+
+本演示不重复运行完整的十轮 Profiler 测试，内容包括：
 
 1. 展示几轮个人助手对话，其中一轮体现 `react_agent` 的工具调用循环，另一轮体现 `plan_and_execute` 的可见计划与最终交付物。
 2. 从命令行或 GUI 展示 AMD Radeon 推理节点与模型运行时已就绪。

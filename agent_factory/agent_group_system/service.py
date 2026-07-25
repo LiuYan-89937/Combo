@@ -428,10 +428,9 @@ class AgentGroupService:
             )
             return
         if event_type == "tool_approval_requested":
-            self.store.transition_run_status(
+            self.store.set_pending_approval(
                 group_run_id,
-                expected_statuses={"running", "awaiting_approval"},
-                status="awaiting_approval",
+                event_payload,
             )
             return
         status = {
@@ -441,7 +440,10 @@ class AgentGroupService:
         }.get(event_type)
         if status is None:
             return
-        self.store.update_run(group_run_id, {"status": status})
+        self.store.update_run(
+            group_run_id,
+            {"status": status, "pending_approval": None},
+        )
         if status != "completed":
             if status == "failed":
                 detail = str(event_payload.get("message") or payload.get("message") or "成员运行失败。")

@@ -16,6 +16,7 @@ The platform supports both local and split-host deployment. On a Linux workstati
 - [Core capabilities](project-documentation/CoreCapabilities.md)
 - [Deployment and acceptance guide](project-documentation/Deployment.md)
 - [AMD Radeon GPU inference optimizations](project-documentation/performance/ROCmOptimizations.md)
+- [Demo video](FastAgentFactory-Demo.mp4)
 - [Supplementary materials and poster](SUPPLEMENTARY_MATERIALS.md)
 
 ## Application: A Private Personal AI Assistant
@@ -223,9 +224,21 @@ The MTP scheduling gain is not attributed to AMD kernels. In the same MTP-enable
 
 Full design details and measured boundaries are in [AMD Radeon GPU Inference Optimizations](project-documentation/performance/ROCmOptimizations.md).
 
-## Demo Video Scope
+## Demo Video
 
-The 3–5 minute demonstration intentionally avoids rerunning the full ten-round profiling suite:
+<video
+  controls
+  preload="metadata"
+  poster="supplementary-materials/poster/fastagentfactory-project-poster.png"
+  width="100%"
+>
+  <source src="FastAgentFactory-Demo.mp4" type="video/mp4">
+  This Markdown viewer does not support embedded video.
+</video>
+
+If the embedded player is unavailable, [open or download the MP4 demo directly](FastAgentFactory-Demo.mp4) (approximately 34 MB).
+
+The demonstration intentionally avoids rerunning the full ten-round profiling suite and includes:
 
 1. Show a few short personal-assistant conversations, including one `react_agent` tool loop and one `plan_and_execute` task with its visible plan and final deliverable.
 2. Show the AMD Radeon inference node and model runtime as ready from the command line or GUI.

@@ -112,6 +112,7 @@ class AgentGroupMemberRun(BaseModel):
     base_workspace_revision: int
     request_id: str | None = None
     response_message_id: str | None = None
+    pending_approval: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime
 

@@ -159,6 +159,7 @@ class AgentGroupStore:
                     base_workspace_revision integer not null,
                     request_id text,
                     response_message_id text,
+                    pending_approval_json text,
                     created_at text not null,
                     updated_at text not null,
                     foreign key (group_id) references agent_group_sessions(group_id)
@@ -227,6 +228,7 @@ class AgentGroupStore:
             _ensure_column(conn, "agent_group_messages", "reply_to_message_id", "text")
             _ensure_column(conn, "agent_group_messages", "context_references_json", "text not null default '[]'")
             _ensure_column(conn, "agent_group_member_runs", "request_id", "text")
+            _ensure_column(conn, "agent_group_member_runs", "pending_approval_json", "text")
 
 
     # ===== 群聊会话 CRUD =====
@@ -314,7 +316,7 @@ class AgentGroupStore:
             run_rows = conn.execute("""
                 select group_run_id, group_id, message_id, speaker_package_id, package_session_id,
                        status, base_context_version, base_workspace_revision, request_id, response_message_id,
-                       created_at, updated_at
+                       pending_approval_json, created_at, updated_at
                 from agent_group_member_runs
                 where group_id = ?
                 order by created_at desc
@@ -638,7 +640,7 @@ class AgentGroupStore:
             row = conn.execute("""
                 select group_run_id, group_id, message_id, speaker_package_id, package_session_id,
                        status, base_context_version, base_workspace_revision, request_id, response_message_id,
-                       created_at, updated_at
+                       pending_approval_json, created_at, updated_at
                 from agent_group_member_runs
                 where group_run_id = ?
             """, (group_run_id,)).fetchone()
@@ -668,6 +670,11 @@ class AgentGroupStore:
         if "request_id" in payload:
             updates.append("request_id = ?")
             params.append(payload["request_id"])
+
+        if "pending_approval" in payload:
+            updates.append("pending_approval_json = ?")
+            pending_approval = payload["pending_approval"]
+            params.append(json_dumps(pending_approval) if isinstance(pending_approval, dict) else None)
 
         if not updates:
             return
@@ -702,10 +709,33 @@ class AgentGroupStore:
             cursor = conn.execute(
                 f"""
                 update agent_group_member_runs
-                set status = ?, updated_at = ?
+                set status = ?,
+                    pending_approval_json = case
+                        when ? = 'awaiting_approval' then pending_approval_json
+                        else null
+                    end,
+                    updated_at = ?
                 where group_run_id = ? and status in ({placeholders})
                 """,
-                (status, now, group_run_id, *expected),
+                (status, status, now, group_run_id, *expected),
+            )
+            return cursor.rowcount > 0
+
+    def set_pending_approval(
+        self,
+        group_run_id: str,
+        approval_event: dict[str, Any],
+    ) -> bool:
+        """Persist the complete approval event while atomically entering the approval state."""
+        now = utc_now_text()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                update agent_group_member_runs
+                set status = 'awaiting_approval', pending_approval_json = ?, updated_at = ?
+                where group_run_id = ? and status in ('running', 'awaiting_approval')
+                """,
+                (json_dumps(approval_event), now, group_run_id),
             )
             return cursor.rowcount > 0
 
@@ -715,7 +745,7 @@ class AgentGroupStore:
             rows = conn.execute("""
                 select group_run_id, group_id, message_id, speaker_package_id, package_session_id,
                        status, base_context_version, base_workspace_revision, request_id, response_message_id,
-                       created_at, updated_at
+                       pending_approval_json, created_at, updated_at
                 from agent_group_member_runs
                 where group_id = ? and status = 'queued'
                 order by created_at
@@ -1009,7 +1039,14 @@ class AgentGroupStore:
 
     def _run_view(self, row: sqlite3.Row) -> dict[str, Any]:
         """运行记录视图"""
-        return dict(row)
+        data = dict(row)
+        pending_approval_json = data.pop("pending_approval_json", None)
+        data["pending_approval"] = (
+            json_loads(pending_approval_json, None)
+            if pending_approval_json
+            else None
+        )
+        return data
 
     def _context_version_view(self, row: sqlite3.Row) -> dict[str, Any]:
         """上下文版本视图"""

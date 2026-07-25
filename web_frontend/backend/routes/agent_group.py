@@ -195,6 +195,12 @@ def create_agent_group_router(
                     payload={**payload, "group_run_id": run_id, "mode": "agent_group"},
                 )
             )
+            await asyncio.to_thread(
+                service.transition_run_status,
+                run_id,
+                expected_statuses={"awaiting_approval"},
+                status="running",
+            )
             return {"group": await asyncio.to_thread(service.get_group, group_id)}
         except Exception as e:
             raise _http_error(e)

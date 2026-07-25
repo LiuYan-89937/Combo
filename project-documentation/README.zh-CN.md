@@ -12,5 +12,6 @@
 | 核心能力介绍 | [核心能力](CoreCapabilities.zh-CN.md) |
 | 模型介绍与本地部署 | [部署与验收](Deployment.zh-CN.md) |
 | AMD Radeon GPU 推理优化 | [ROCm 推理优化](performance/ROCmOptimizations.zh-CN.md) |
+| 演示视频 | [FastAgentFactory-Demo.mp4](../FastAgentFactory-Demo.mp4) |
 
 架构图及相关视觉资产保存在 `assets/`。运行时模型权重、密钥和生成的 Benchmark 状态不属于源码交付内容。
