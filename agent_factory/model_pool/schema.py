@@ -18,7 +18,7 @@ from agent_factory.models.protocol import ModelReasoningSettings, StructuredOutp
 
 ModelPoolProfileKind = Literal["chat", "image_generation"]
 ModelBindingRole = Literal["main", "task", "compression"]
-ModelBindingSource = Literal["model_pool", "env"]
+ModelBindingSource = Literal["model_pool", "runtime"]
 ModelPoolModality = Literal["text", "image", "audio"]
 ModelToolCapability = Literal["image_input", "image_output", "image_edit", "audio_input", "audio_output"]
 ModelSelectionSource = Literal["auto", "manual"]
@@ -488,10 +488,10 @@ class ModelProfileBinding(BaseModel):
 
     @model_validator(mode="after")
     def _validate_source(self) -> "ModelProfileBinding":
-        if self.source == "model_pool" and not self.profile_id:
-            raise ValueError("profile_id is required for model_pool bindings")
-        if self.source == "env" and self.profile_id:
-            raise ValueError("profile_id must be omitted for env bindings")
+        if self.source == "model_pool" and self.selection_source == "manual" and not self.profile_id:
+            raise ValueError("profile_id is required for manually selected model_pool bindings")
+        if self.source == "runtime" and self.profile_id:
+            raise ValueError(f"profile_id must be omitted for {self.source} bindings")
         return self
 
 
@@ -514,10 +514,10 @@ class ModelToolBinding(BaseModel):
 
     @model_validator(mode="after")
     def _validate_source(self) -> "ModelToolBinding":
-        if self.source == "model_pool" and not self.profile_id:
-            raise ValueError("profile_id is required for model_pool bindings")
-        if self.source == "env" and self.profile_id:
-            raise ValueError("profile_id must be omitted for env bindings")
+        if self.source == "model_pool" and self.selection_source == "manual" and not self.profile_id:
+            raise ValueError("profile_id is required for manually selected model_pool bindings")
+        if self.source == "runtime" and self.profile_id:
+            raise ValueError(f"profile_id must be omitted for {self.source} bindings")
         return self
 
     @field_validator("description")

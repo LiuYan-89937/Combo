@@ -374,8 +374,11 @@ class ModelContractBuilder:
         resolved_profiles = {
             role: resolve_chat_model_binding(binding, role=role)
             for role, binding in contract.config.bindings.items()
+            if binding.source != "runtime"
         }
-        resolved_main = resolved_profiles["main"]
+        runtime_main_profile_required = main_binding.source == "runtime"
+        if not runtime_main_profile_required and "main" not in resolved_profiles:
+            raise ValueError("model_contract.v1 main binding could not be resolved")
         models_by_role = {
             role: (resolved.model, resolved.settings)
             for role, resolved in resolved_profiles.items()
@@ -424,12 +427,14 @@ class ModelContractBuilder:
             services={
                 "model_service": LangChainModelServiceAdapter(
                     role="main",
-                    model=resolved_main.model,
-                    settings=resolved_main.settings,
+                    model=(resolved_profiles["main"].model if "main" in resolved_profiles else None),
+                    settings=(resolved_profiles["main"].settings if "main" in resolved_profiles else None),
+                    require_runtime_profile=runtime_main_profile_required,
                 ),
                 "model_operation_service": ModelOperationService(
                     role="main",
                     models_by_role=models_by_role,
+                    require_runtime_profile=runtime_main_profile_required,
                 ),
             },
             tool_runtime_resources=(

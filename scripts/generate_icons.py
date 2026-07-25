@@ -1,57 +1,22 @@
 #!/usr/bin/env python3
-"""
-生成 Tauri 应用图标
-使用 PIL/Pillow 创建简单的品牌图标
-"""
+"""从 FastAgentFactory 品牌源图生成 Tauri 应用图标。"""
 import sys
 from pathlib import Path
 
 try:
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import Image
 except ImportError:
     print("需要安装 Pillow: pip install Pillow")
     sys.exit(1)
 
 
-def create_icon(size: int, output_path: Path):
-    """创建应用图标"""
-    # 创建背景（RGBA 模式，Tauri 要求）
-    img = Image.new('RGBA', (size, size), color=(26, 26, 46, 255))
-    draw = ImageDraw.Draw(img)
-
-    # 绘制圆角矩形背景
-    margin = size // 8
-    draw.rounded_rectangle(
-        [(margin, margin), (size - margin, size - margin)],
-        radius=size // 10,
-        fill=(15, 52, 96, 255),
-        outline=(22, 33, 62, 255),
-        width=size // 40
-    )
-
-    # 绘制简化的 "FA" 文字标识
-    try:
-        # 尝试使用系统字体
-        font_size = size // 2
-        font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", font_size)
-    except:
-        # 回退到默认字体
-        font = ImageFont.load_default()
-
-    text = "FA"
-    # 获取文字边界框
-    bbox = draw.textbbox((0, 0), text, font=font)
-    text_width = bbox[2] - bbox[0]
-    text_height = bbox[3] - bbox[1]
-
-    # 居中绘制文字
-    x = (size - text_width) // 2
-    y = (size - text_height) // 2 - size // 20
-
-    draw.text((x, y), text, fill=(233, 69, 96, 255), font=font)
-
-    # 保存
-    img.save(output_path, format='PNG')
+def create_icon(source_path: Path, size: int, output_path: Path):
+    """按目标尺寸导出品牌源图，并合成不透明纯白背景。"""
+    with Image.open(source_path) as source:
+        foreground = source.convert("RGBA").resize((size, size), Image.Resampling.LANCZOS)
+    image = Image.new("RGBA", (size, size), (255, 255, 255, 255))
+    image.alpha_composite(foreground)
+    image.save(output_path, format='PNG')
     print(f"✓ 生成图标: {output_path} ({size}x{size})")
 
 
@@ -113,20 +78,22 @@ def create_ico(png_256: Path, output_ico: Path):
 
 
 def main():
-    # 图标输出目录
     project_root = Path(__file__).parent.parent
     icons_dir = project_root / "src-tauri" / "icons"
+    source_path = project_root / "web_frontend" / "frontend" / "src" / "assets" / "fast-agent-factory-icon.png"
     icons_dir.mkdir(parents=True, exist_ok=True)
+    if not source_path.is_file():
+        print(f"品牌源图不存在: {source_path}")
+        sys.exit(1)
 
     print("=" * 60)
     print("FastAgentFactory 图标生成工具")
     print("=" * 60)
 
-    # 1. 生成各种尺寸的 PNG
-    create_icon(32, icons_dir / "32x32.png")
-    create_icon(128, icons_dir / "128x128.png")
-    create_icon(256, icons_dir / "128x128@2x.png")
-    create_icon(1024, icons_dir / "icon-1024.png")
+    create_icon(source_path, 32, icons_dir / "32x32.png")
+    create_icon(source_path, 128, icons_dir / "128x128.png")
+    create_icon(source_path, 256, icons_dir / "128x128@2x.png")
+    create_icon(source_path, 1024, icons_dir / "icon-1024.png")
 
     # 2. 生成 macOS .icns
     create_icns(icons_dir / "icon-1024.png", icons_dir / "icon.icns")

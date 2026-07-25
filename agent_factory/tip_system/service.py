@@ -6,9 +6,13 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from agent_factory.create_agent.model_tool_access import load_model_contract
 from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import AgentPackageRuntimeManager
-from agent_factory.model_pool.resolver import resolve_chat_model_binding, resolve_chat_model_profile
+from agent_factory.model_pool.resolver import (
+    resolve_available_chat_model,
+    resolve_chat_model_binding,
+    resolve_chat_model_profile,
+)
 from agent_factory.model_pool.schema import ModelProfileBinding
-from agent_factory.models import create_chat_model_from_settings, get_main_model, get_main_model_settings
+from agent_factory.models import create_chat_model_from_settings
 from agent_factory.models.reasoning import apply_reasoning_intensity, coerce_reasoning_content
 from agent_factory.tip_system.schema import TipCreateRequest, TipMessage, TipRecord
 from agent_factory.tip_system.store import TipStore
@@ -88,10 +92,11 @@ class TipService:
             settings = resolved.settings
             model = resolved.model
         else:
-            settings = get_main_model_settings()
-            model = get_main_model()
-            if model is None:
-                raise ValueError("main model is not configured")
+            resolved = resolve_available_chat_model("main")
+            if resolved is None:
+                raise ValueError("main model is not configured in the model pool")
+            settings = resolved.settings
+            model = resolved.model
 
         if tip.reasoning_intensity is None:
             return model

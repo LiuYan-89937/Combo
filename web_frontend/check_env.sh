@@ -28,8 +28,8 @@ node --version
 npm --version
 echo ""
 
-echo "4. Docker runtime image"
-web_ensure_runtime_image
+echo "4. Local runtime"
+echo "   Local dependency pool and process isolation are enabled."
 echo ""
 
 echo "5. Port status"
@@ -41,7 +41,6 @@ echo "6. Critical files"
 FILES=(
     "pyproject.toml"
     "uv.lock"
-    "docker/agent-runtime/Dockerfile"
     "web_frontend/backend/event_api_server.py"
     "web_frontend/frontend/package.json"
     "web_frontend/frontend/src/main.ts"

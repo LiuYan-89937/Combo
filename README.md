@@ -1,424 +1,275 @@
 # FastAgentFactory
 
-FastAgentFactory 是一个本地优先的 Agent 工厂系统，用来创建、运行、进化和协作调度可交付的 Agent。它把模型池、工具权限、知识库、MCP/Skill 扩展、工作区、会话、记忆、定时任务和运行 trace 收进同一个 Web 工作台里，让 Agent 从“能聊”走向“能生产、能交付、能复盘”。
+FastAgentFactory 是一个本地优先、桌面优先的 Agent 工厂。它把模型配置、Agent 制造与进化、知识库、MCP/Skill、工具权限、工作区、定时任务、长期记忆和多 Agent 协作放在同一个应用中。
 
-![闲聊工作台](readme-assets/images/chat.png)
+![FastAgentFactory 对话工作台](readme-assets/images/chat.png)
 
-## 适合做什么
-
-- 用自然语言制造一个可发布的 AgentPackage。
-- 为不同 Agent 配置不同模型、工具、知识库和扩展能力。
-- 运行已发布 Agent，并保留独立会话、工作区和产物。
-- 对已有 Agent 做进化改造，再验证和发布新版本。
-- 用多 Agent 协作完成复杂任务，由主 Agent 拆分、调度、验收和汇总。
-- 统一管理多供应商模型、图片生成模型、token 用量和估算费用。
-- 在本地查看每次运行的文件、工具调用、trace、记忆和上下文状态。
-
-## 功能概览
+## 核心能力
 
 | 能力 | 说明 |
 | --- | --- |
-| 闲聊助手 | 内置 `factory_chat` 系统包，支持普通对话、工具调用、附件、图片输入和图片生成。 |
-| Agent 制造 | 根据目标自动分析任务、选择模式、装配模型/工具/Skill/知识库并生成 AgentPackage。 |
-| 已发布 Agent | 每个 AgentPackage 拥有独立会话、工作区、知识库、定时任务、MCP/Skill 和模型绑定。 |
-| Agent 进化 | 对已发布 Agent 做独立上下文改造、验证和重新发布。 |
-| 多 Agent 协作 | 主 Agent 检索可用子 Agent，创建任务、管理依赖、验收交付并推进后续步骤。 |
-| 模型池 | 管理文本模型、图片生成模型、供应商凭证、能力标签和用量统计。 |
-| 知识库与 RAG | 上传文件或文件夹，解析、分块、索引、检索并挂载到指定上下文。 |
-| 扩展系统 | 管理 MCP、Skill、SkillHUB 安装结果和工具权限策略。 |
-| 工作区 | 查看运行文件、附件、产物、共享材料和 Agent 输出。 |
-| 长期记忆 | 按 Agent 写入和查询跨会话记忆，支持置信度排序和删除。 |
+| Factory Chat | 内置系统对话包，支持流式回复、工具调用、附件、图片输入和图片生成。 |
+| Agent 制造 | 从自然语言目标生成可验证、可发布的 AgentPackage。 |
+| Agent 进化 | 在独立上下文中修改已有 AgentPackage，并重新验证和发布。 |
+| 已发布 Agent | 为每个 Agent 提供独立会话、工作区、知识库、记忆、定时任务和扩展。 |
+| 多 Agent 协作 | 由主 Agent 拆分任务、声明依赖、调度子 Agent、验收和汇总交付物。 |
+| 模型池 | 管理文本模型、图片模型、供应商凭证、能力标签、上下文限制和用量。 |
+| 知识库 | 导入文件或目录，完成解析、分块、索引、检索和上下文挂载。 |
+| 扩展系统 | 添加本地或远程 MCP、Skill 和 SkillHUB 能力，并配置工具风险策略。 |
+| 可观察运行时 | 查看事件流、工具调用、审批、trace、checkpoint、工作区文件和产物。 |
 
-## 产品界面
+## 当前架构
 
-Agent 制造把需求分析、能力装配、工具调用和发布过程放在同一条对话链路里。
+```text
+Tauri 2 Desktop
+├── Vue 3 + TypeScript + Vite
+├── Rust process supervisor
+│   ├── 分配动态本地端口
+│   ├── 启动 Python sidecar
+│   └── 应用退出时终止后端
+└── Python FastAPI + Agent Runtime
+    ├── RuntimeKernel / LangGraph
+    ├── 本地依赖池
+    ├── 独立运行工作区
+    ├── Model Pool
+    └── MCP / Skill / Knowledge / Memory
+```
 
-![Agent 制造](readme-assets/images/agent-authoring.png)
+桌面版不依赖 Docker。AgentPackage 使用本地子进程、独立工作区和依赖环境进行逻辑隔离。该边界用于依赖复用、路径约束和运行状态隔离，不应被描述为虚拟机或内核级安全沙箱；不可信代码仍应在受控主机上运行。
 
-模型池用于集中维护模型配置、供应商、能力和用量。AgentPackage 只引用 `profile_id`，不会保存真实密钥。
+前端不会假设后端固定监听 `8000`。Tauri 启动时分配空闲回环端口，前端通过 Tauri command 获取实际地址，并在 `/health` 就绪前显示初始化界面，之后才建立 SSE 事件流。
+
+## 桌面版安装
+
+### macOS
+
+1. 下载与处理器架构匹配的 `.dmg`。
+2. 打开安装包，将 FastAgentFactory 拖入 `Applications`。
+3. 首次启动后进入「模型池」配置凭证和模型。
+
+安装包已经包含 Python 后端及运行依赖，不要求用户额外安装 Python、Node.js 或 Docker。只有当你主动添加以 `npx`、`uvx` 等命令启动的本地 MCP 时，才需要安装对应的外部命令；远程 Streamable HTTP/SSE MCP 不需要这些本地运行器。
+
+Windows 和 Linux 代码路径已纳入跨平台结构，但发行包仍应分别在对应系统上完成构建和验收。不要用 macOS 构建成功代替其他平台验证。
+
+## 首次配置
+
+### 1. 配置模型池
+
+进入「模型池」，依次添加：
+
+1. 供应商凭证：Base URL、API Key。
+2. 模型 Profile：模型名、输入输出模态、工具调用、结构化输出、推理和上下文限制。
+3. 使用「测试连接」确认该 Profile 可调用。
 
 ![模型池](readme-assets/images/model-pool.png)
 
-已发布 Agent 可以像普通应用一样进入会话、查看工作区、挂载知识库和管理扩展。
+Factory Chat、Agent 制造、Agent 进化以及平台内部的任务/压缩调用均从模型池或当前请求选择模型，不再读取主模型、任务模型、压缩模型和图片模型的 env 配置。
+
+没有符合能力要求的文本模型时，系统对话输入区会保持禁用并提示先配置模型。图片模型是可选能力；没有匹配的图片 Profile 不影响普通文本对话。
+
+### 2. 初始化系统 Agent
+
+进入「已发布 Agent」并初始化 **Factory Chat**。首次初始化需要准备本地运行目录和依赖环境，耗时可能高于后续启动。
+
+应用刚启动时，前端会等待后端健康检查。此时显示“正在初始化”，不会提前连接事件流。
+
+### 3. 按需添加 MCP
+
+系统不再预装网页搜索 MCP，也不会自动启动 SearXNG 或 Docker 容器。进入「扩展管理」可以添加：
+
+- `stdio`：本地命令，例如 `npx`、`uvx` 或自有可执行文件。
+- `streamable_http`：远程 Streamable HTTP MCP。
+- `sse`：远程 SSE MCP。
+
+例如 Tavily 官方远程 MCP：
+
+```json
+{
+  "mcpServers": {
+    "tavily": {
+      "transport": "streamable_http",
+      "url": "https://mcp.tavily.com/mcp/",
+      "headers": {
+        "Authorization": "Bearer tvly-你的API密钥"
+      },
+      "timeout_seconds": 60,
+      "risk_level_default": "medium",
+      "enabled": true
+    }
+  }
+}
+```
+
+在「添加 MCP 服务器」的导入模式粘贴配置，然后执行“测试并添加”。MCP Header 当前保存在本机扩展配置中，不要提交、分享或截图暴露真实密钥。
+
+## 推荐工作流
+
+### 制造 Agent
+
+进入「Agent 制造」，描述用途、输入、输出、工具边界和验收标准。制造流程会分析需求并装配模型、工具、Skill、知识库和运行契约。
+
+![Agent 制造](readme-assets/images/agent-authoring.png)
+
+AgentPackage 保存模型 `profile_id` 和能力要求，不保存模型池中的真实 API Key。
+
+### 运行 Agent
+
+进入「已发布 Agent」，选择并初始化 Agent。每个会话拥有独立工作区，可以接收附件、调用工具、生成文件并展示结构化产物。
 
 ![已发布 Agent](readme-assets/images/agent-marketplace.png)
 
-多 Agent 协作让主 Agent 根据任务检索子 Agent，按依赖关系分配工作，并在交付后继续验收和推进。
+### 进化 Agent
+
+进入「Agent 进化」，选择目标 AgentPackage 并描述需要改变的行为。进化会话与普通运行会话分离。
+
+![Agent 进化](readme-assets/images/agent-evolution.png)
+
+### 多 Agent 协作
+
+主 Agent 可以检索合适的已发布 Agent，创建带依赖关系的任务，并在子 Agent 交付后继续验收或推进。
 
 ![多 Agent 协作](readme-assets/images/collaboration.png)
 
-## 快速开始
+### 知识库与扩展
+
+知识源按系统对话或 AgentPackage 上下文隔离。扩展也可以按目标范围安装和启用。
+
+![知识库](readme-assets/images/knowledge-base.png)
+
+![扩展管理](readme-assets/images/extensions.png)
+
+## 数据与安全边界
+
+- 桌面生产环境将用户状态写入系统应用数据目录，不把仓库中的 `.agentfactory` 历史数据打入安装包。
+- 开发模式默认使用仓库下的 `.agentfactory/` 和 `.agent_runtime/`。
+- 模型池凭证保存在本地模型池存储中；AgentPackage 只引用 Profile。
+- MCP `env` 和 `headers` 属于本地扩展配置，当前不等同于模型池加密凭证。
+- 工作区路径限制属于应用层逻辑隔离，不是恶意代码安全沙箱。
+- 高风险工具应保留人工确认，不建议对未知 MCP 长期使用全部自动放行。
+- 删除会话时会清理与该会话关联的 checkpoint、trace 和运行记录。
+
+## 本地开发
 
 ### 环境要求
 
 - Python `>= 3.11`
+- [uv](https://docs.astral.sh/uv/)
 - Node.js `>= 18`
 - npm
-- uv
-- Docker Desktop 或可用 Docker daemon
-- 可用的文本模型服务
-- 可用的 embedding 模型服务
+- Rust stable
+- Tauri 2 CLI
 
-### 配置环境变量
-
-复制模板：
+### 安装依赖
 
 ```bash
-cp .env.example .env
-```
-
-填写 `.env`。最小可运行配置包括：
-
-```bash
-AGENTFACTORY_MODEL_PROVIDER=openai_compatible_chat
-AGENTFACTORY_MODEL_BASE_URL=
-AGENTFACTORY_MODEL_API_KEY=
-AGENTFACTORY_MAIN_MODEL=
-
-AGENTFACTORY_TASK_MODEL_PROVIDER=
-AGENTFACTORY_TASK_MODEL_BASE_URL=
-AGENTFACTORY_TASK_MODEL_API_KEY=
-AGENTFACTORY_TASK_MODEL=
-
-AGENTFACTORY_COMPRESSION_MODEL_PROVIDER=
-AGENTFACTORY_COMPRESSION_MODEL_BASE_URL=
-AGENTFACTORY_COMPRESSION_MODEL_API_KEY=
-AGENTFACTORY_COMPRESSION_MODEL=
-
-# Optional image model used by the built-in factory_chat package.
-AGENTFACTORY_IMAGE_MODEL_PROVIDER=
-AGENTFACTORY_IMAGE_MODEL_BASE_URL=
-AGENTFACTORY_IMAGE_MODEL_API_KEY=
-AGENTFACTORY_IMAGE_MODEL=
-AGENTFACTORY_IMAGE_MODEL_TIMEOUT_SECONDS=
-
-AGENTFACTORY_EMBEDDING_PROVIDER=openai_compatible
-AGENTFACTORY_EMBEDDING_BASE_URL=
-AGENTFACTORY_EMBEDDING_API_KEY=
-AGENTFACTORY_EMBEDDING_MODEL=
-AGENTFACTORY_RESOURCE_MASTER_KEY=
-AGENTFACTORY_EMBEDDING_DIMS=
-
-# Optional stable web search provider for the built-in web_search MCP.
-TAVILY_API_KEY=
-```
-
-说明：
-
-- 主模型用于闲聊、制造、进化和普通 Agent 对话。
-- 任务模型用于结构化输出、分类、抽取、意图分析等辅助任务；未单独配置时会回退到主模型。
-- 压缩模型用于上下文压缩。
-- `factory_chat` 的对话模型默认读取主模型 env 配置；生图模型读取独立的 image model env 配置。未配置生图模型时，不影响普通对话。
-- embedding 模型用于知识库、RAG、长期记忆和 Agent 检索。
-- 配置 `TAVILY_API_KEY` 后，内置 `web_search` 默认使用 Tavily；未配置时自动回退到 SearXNG/DuckDuckGo。密钥只放在本机 `.env`，不要写入 SystemPackage JSON。
-- `AGENTFACTORY_RESOURCE_MASTER_KEY` 用于加密 Agent 的运行时资源配置；请使用稳定的长随机值，丢失后无法解密已保存的资源。
-- `.env` 是本地私有配置，不要提交到 git。
-
-### 启动
-
-在仓库根目录运行：
-
-```bash
-./start.sh
-```
-
-启动脚本会检查 `.env`、Python 依赖、前端依赖、Docker daemon 和运行时镜像。镜像不存在时会自动构建 `agentfactory-runtime-python:3.12`。Agent 的额外本地依赖会在制造/probe 阶段构建为锁定的派生镜像，运行时不会临时安装依赖。
-
-启动成功后访问：
-
-- 前端：[http://localhost:3000](http://localhost:3000)
-- 后端：[http://localhost:8000](http://localhost:8000)
-- 健康检查：[http://localhost:8000/health](http://localhost:8000/health)
-
-### 首次使用前初始化 Agent
-
-首次启动后，先进入「已发布 Agent」，初始化准备使用的内置 Agent 包。普通闲聊至少需要初始化 **Factory Chat**；运行 A 股多 Agent 示例前，需要初始化三个内置 A 股研究 Agent。初始化会准备包运行环境、工具和依赖，因此第一次启动通常比后续对话更慢。
-
-如果 Factory Chat 尚未就绪就直接发送第一条闲聊消息，系统会自动开始初始化，并显示“正在初始化运行环境…”。等待界面切换到正常的 Assistant 思考状态后，即会开始流式输出。
-
-## 推荐工作流
-
-### 1. 配置模型池
-
-先在模型池中添加可供 Agent 使用的文本模型、图片模型和能力信息。模型池会记录供应商、模型名、上下文窗口、价格、能力和凭证来源。
-
-![模型配置](readme-assets/images/model-profile-form.png)
-
-模型用量会按模型、供应商和 Agent 记录，便于比较不同模型在实际任务中的消耗。
-
-![模型用量统计](readme-assets/images/model-usage.png)
-
-### 2. 制造 Agent
-
-进入「Agent 制造」，描述目标 Agent 的用途、边界和交付标准。系统会完成任务分析、模式选择、工具/Skill/模型装配、验证和发布准备。
-
-制造出的 AgentPackage 会保存：
-
-- Agent 身份和说明。
-- 运行模式和节点配置。
-- 模型 `profile_id`。
-- 工具、MCP、Skill 和知识库配置。
-- 工作区和运行契约。
-
-不会保存真实 API key。
-
-### 3. 运行 Agent
-
-进入「已发布 Agent」，选择 Agent 后初始化运行实例。每个 Agent 都有自己的会话、工作区、知识库、定时任务、记忆和扩展配置。
-
-你可以上传附件、粘贴图片、调用工具、生成文件，并在右侧工作区查看产物。
-
-### 4. 进化 Agent
-
-进入「Agent 进化」，选择目标 AgentPackage 并描述修改目标。进化过程使用独立会话和上下文，不会混入普通运行会话。
-
-![Agent 进化](readme-assets/images/agent-evolution.png)
-
-### 5. 组织多 Agent 协作
-
-进入「多 Agent 协作」，主 Agent 会根据任务检索合适的子 Agent，创建任务并声明依赖。子 Agent 默认彼此不可见，共享材料通过协作工作区传递。子 Agent 提交后，主 Agent 会收到协作事件并继续验收或推进后续任务。多个 worker 几乎同时更新状态时，每条原始事件会独立保留用于审计，再通过短窗口合并为一次主 Agent 恢复；窗口和单批上限可分别通过 `AGENTFACTORY_COLLABORATION_EVENT_COALESCE_WINDOW_SECONDS`、`AGENTFACTORY_COLLABORATION_EVENT_BATCH_LIMIT` 配置。
-
-第一版重点支持：
-
-- 主 Agent 拆目标和定义交付标准。
-- 最多多个子 Agent 并行执行。
-- 任务依赖和后续自动推进。
-- 协作共享工作区。
-- 子 Agent 交付物汇总与主 Agent 验收。
-
-## 知识库、扩展与工具权限
-
-知识库按上下文隔离：闲聊属于 `factory_chat`，子 Agent 属于对应 AgentPackage，进化上下文属于目标包和进化会话。
-
-![知识库](readme-assets/images/knowledge-base.png)
-
-扩展系统支持 MCP、Skill 和 SkillHUB 安装结果。你可以为每个 Agent 单独启用扩展、配置工具权限、调整风险等级。
-
-![扩展管理](readme-assets/images/extensions.png)
-
-工具权限分为两层：
-
-- 粗粒度模式：严格审批、高风险以下自动放行、全部自动放行。
-- 细粒度配置：每个 Agent 可以单独调整工具风险等级和审批策略。
-
-建议默认使用中间档：低/中风险工具自动放行，高风险工具保留确认。
-
-## 多模态与图片生成
-
-对话支持图片输入、图片粘贴和图片生成工具。图片生成模型通过模型池添加，并作为系统内置模型工具暴露给 Agent 使用。
-
-![图片生成](readme-assets/images/image-generation.png)
-
-支持的图片能力取决于具体模型和供应商，常见能力包括：
-
-- 文生图。
-- 图生图。
-- 图片编辑。
-- 多图参考。
-- 批量生成。
-
-生成结果会保存为运行产物，可在对话和工作区中查看。
-
-## 支持的文本模型 Provider
-
-文本模型经过统一模型协议层适配。总体遵循 OpenAI 风格的消息、工具调用、结构化输出和多模态输入抽象；不同供应商的差异由 adapter 处理。
-
-| Provider | 配置值 | 协议形态 | 工具调用 | 结构化输出 | 思考模式 | 图片输入 |
-| --- | --- | --- | --- | --- | --- | --- |
-| OpenAI Chat Completions | `openai_chat` | Chat Completions | 支持 | 支持 | 按模型能力 | 按模型能力 |
-| OpenAI 兼容服务 | `openai_compatible_chat` | Chat Completions 兼容 | 按服务能力 | 支持 | 按服务能力 | 按模型能力 |
-| Anthropic Claude | `anthropic` | Messages API | 按模型能力 | 支持 | 支持 | 按模型能力 |
-| DeepSeek | `deepseek` | OpenAI 兼容 | 按模型能力 | 支持 | 支持 `reasoning_content` | 按模型能力 |
-| 千问 / 百炼 / DashScope | `qwen` | OpenAI 兼容 | 按模型能力 | 支持 | 按模型能力 | 按模型能力 |
-| 智谱 / Z.ai GLM | `zhipu` | OpenAI 兼容 | 按模型能力 | 支持 | 按模型能力 | 按模型能力 |
-| Kimi / Moonshot | `kimi` | OpenAI 兼容 | 按模型能力 | 支持 | 按模型能力 | 按模型能力 |
-| MiniMax | `minimax` | OpenAI 兼容 | 按模型能力 | 支持 | 按模型能力 | 按模型能力 |
-| 小米 MiMo | `mimo` | OpenAI 兼容 | 按模型能力 | 支持 | 按模型能力 | 按模型能力 |
-| 腾讯混元 | `hunyuan` | OpenAI 兼容 | 按模型能力 | 支持 | 按模型能力 | 按模型能力 |
-
-注意：
-
-- “按模型能力”表示协议层支持该方向，最终是否可用取决于具体模型。
-- DeepSeek 思考模式下，工具调用轮次需要按供应商要求回传 reasoning 内容。
-- 图片输入需要同时满足：前端上传了图片、主模型配置为多模态、模型本身支持图片输入。
-
-## 支持的图片生成 Provider
-
-| Provider | 配置值 | 文生图 | 图生图 | 图片编辑 | 多图参考 | 批量生成 |
-| --- | --- | --- | --- | --- | --- | --- |
-| OpenAI Images | `openai_image` | 支持 | 支持 | 支持 | 支持 | 支持 |
-| 千问 / 万相 | `qwen` | 支持 | 支持 | 支持 | 支持 | 支持 |
-| 豆包 Seedream / 火山方舟 | `volcengine_seedream` | 支持 | 支持 | 支持 | 支持 | 支持 |
-
-千问万相还支持这些别名：
-
-- `wanx`
-- `dashscope_wanx`
-- `aliyun_wanx`
-
-## 附件与工作区
-
-附件支持：
-
-- 本地文件上传。
-- 批量上传，单次消息最多 9 个附件。
-- 图片直接粘贴到输入框。
-- 文本片段。
-- URL。
-- 工作区文件。
-
-附件会进入统一导入链路，保存到当前 Agent/闲聊工作区，然后解析为文本、文件引用或图片输入。图片在多模态主模型可用时作为图片输入，否则仍可走文档解析或 OCR 类链路。
-
-运行数据默认写入：
-
-```text
-.agentfactory/
-.agent_runtime/
-```
-
-这些目录包含会话、checkpoint、trace、工作区文件、附件导入文件、知识库索引、定时任务数据库、模型池 SQLite 和子 Agent 运行产物。它们是本地运行状态，不应提交到 git。
-
-## 常用命令
-
-```bash
-# 一键启动前后端
-./start.sh
-
-# 只启动后端
-./web_frontend/start_backend.sh
-
-# 只启动前端
-cd web_frontend/frontend
-npm run dev
-
-# 同步 Python 依赖
 uv sync --extra web
 
-# 前端类型检查
-cd web_frontend/frontend
-npm run type-check
-
-# 构建前端
-cd web_frontend/frontend
-npm run build
-```
-
-## Web API
-
-后端服务默认运行在 `http://localhost:8000`。
-
-主要 API 分组：
-
-- `/api/runtime`：运行时事件、命令和状态。
-- `/api/agent-packages`：已发布 Agent 包、实例和会话。
-- `/api/model-pool`：模型池、凭证、模型配置和用量统计。
-- `/api/workspace`：工作区根目录、文件列表、文件读取和原始文件预览。
-- `/api/knowledge`：知识源、文档、检索和索引。
-- `/api/scheduler`：定时任务、运行记录和立即运行。
-- `/api/extensions`：MCP、Skill、工具权限。
-- `/api/memory`：跨会话记忆查询和删除。
-- `/api/collaboration`：多 Agent 协作会话、任务、消息和共享工作区。
-
-前端通过 HTTP API 和 SSE 事件流与后端通信。普通请求走 HTTP；流式回复、工具审批、状态更新和运行事件走事件流。
-
-## 开发说明
-
-后端：
-
-- Python 包位于 [agent_factory](agent_factory)。
-- Web API 位于 [web_frontend/backend](web_frontend/backend)。
-- 依赖由 `uv` 管理。
-
-前端：
-
-- Vue 3 + Vite + Pinia。
-- 页面和组件位于 [web_frontend/frontend/src](web_frontend/frontend/src)。
-- UI 组件基于 Naive UI。
-- Markdown、代码块、LaTeX、Mermaid 和图表渲染由前端渲染管线处理。
-
-常用检查：
-
-```bash
-python -m py_compile path/to/file.py
-
-cd web_frontend/frontend
-npm run type-check
-```
-
-如果只改文档，不需要启动前后端。
-
-## 排障
-
-### `.env` 缺少配置
-
-`./start.sh` 会提示缺失的关键变量。服务仍可能启动，但模型调用、RAG、记忆或知识库可能失败。
-
-处理方式：
-
-1. 复制 `.env.example` 到 `.env`。
-2. 填写主模型、任务模型、压缩模型和 embedding 模型。
-3. 重新运行 `./start.sh`。
-
-### Docker daemon 不可用
-
-报错通常说明 Docker Desktop 没启动，或当前 shell 找不到 `docker`。
-
-处理方式：
-
-1. 启动 Docker Desktop。
-2. 确认 `docker info` 可用。
-3. 重新运行 `./start.sh`。
-
-### 运行时镜像缺失
-
-`./start.sh` 会自动构建默认镜像：
-
-```text
-agentfactory-runtime-python:3.12
-```
-
-如需指定镜像名：
-
-```bash
-AGENTFACTORY_RUNTIME_IMAGE=your-image:tag ./start.sh
-```
-
-### 前端依赖缺失
-
-如果 `node_modules` 存在但 Vite 不可用，启动脚本会自动执行 `npm install`。也可以手动执行：
-
-```bash
 cd web_frontend/frontend
 npm install
 ```
 
-### 子 Agent 初始化后无法对话
+### Web 开发模式
 
-检查：
+```bash
+./start.sh
+```
 
-- AgentPackage 是否已初始化完成。
-- Docker daemon 是否正常。
-- 模型池中的模型凭证是否启用。
-- AgentPackage 的模型配置是否引用了存在且启用的 `profile_id`。
-- 后端日志和该 Agent 的 trace。
+默认地址：
 
-### 思考模式报错
+- 前端：`http://127.0.0.1:3000`
+- 后端：`http://127.0.0.1:8000`
+- 健康检查：`http://127.0.0.1:8000/health`
 
-思考模式依赖供应商规则。尤其是 DeepSeek 工具调用链路需要在后续请求中回传必要 reasoning 内容。
+### Tauri 开发模式
 
-处理方式：
+```bash
+cd src-tauri
+cargo tauri dev
+```
 
-- 确认模型确实支持 reasoning/thinking。
-- 确认 provider 配置正确。
-- 关闭思考模式后复现，判断是否为 provider 规则问题。
+开发模式优先使用仓库 `.venv/bin/python`。生产模式使用 `src-tauri/resources/python` 中的内置 Python。
 
-## 数据与安全边界
+## 构建桌面安装包
 
-- AgentPackage 保存模型 `profile_id` 和能力要求，不保存真实密钥。
-- `.env`、`.agentfactory/`、`.agent_runtime/` 是本地私有运行状态。
-- 删除会话会连带清理对应 trace/checkpoint 等运行记录。
-- 工具审批策略应按任务风险调整，不建议长期对未知工具全部自动放行。
+首次准备内置 Python：
 
-## 当前定位
+```bash
+python3 scripts/bundle_python.py
+```
 
-FastAgentFactory 面向本地开发、个人工作流和团队内部 Agent 生产实验。它不是只展示单次对话的聊天壳，而是围绕“制造 Agent、运行 Agent、扩展 Agent、观察 Agent、协作 Agent”搭建的一套完整工作台。
+生成图标：
+
+```bash
+python3 scripts/generate_icons.py
+```
+
+构建：
+
+```bash
+cd src-tauri
+cargo tauri build
+```
+
+构建产物位于：
+
+```text
+src-tauri/target/release/bundle/
+```
+
+Tauri 构建前会清理准备打包的 Python 源码缓存，避免将旧 `__pycache__` 和已删除模块的 `.pyc` 带入安装包。
+
+## 静态检查
+
+本项目不应通过运行特化 Agent 示例来代替常规构建检查。按变更范围选择：
+
+```bash
+# Python 语法
+python3 -m compileall -q agent_factory web_frontend/backend
+
+# Rust
+cd src-tauri
+cargo fmt --check
+cargo check
+
+# 前端生产构建
+cd web_frontend/frontend
+npx vite build
+
+# Diff 格式
+git diff --check
+```
+
+当前仓库的旧版 `vue-tsc` 与部分较新 Node.js/TypeScript 组合存在 `supportedTSExtensions` 兼容问题。该错误发生在项目类型检查开始前；升级工具链前，应将 `npx vite build` 与 Python/Rust 检查结果分别记录，不要把工具链错误误判为业务代码错误。
+
+## 目录结构
+
+```text
+FastAgentFactory/
+├── agent_factory/                 Python Agent 运行时与平台能力
+├── SystemPackage/                 内置系统 AgentPackage
+├── web_frontend/
+│   ├── backend/                   FastAPI 后端
+│   └── frontend/                  Vue 前端
+├── src-tauri/                     Tauri/Rust 桌面壳与打包配置
+├── scripts/                       Python 运行时、图标和构建准备脚本
+└── readme-assets/                 README 图片
+```
+
+## 主要 API
+
+- `/api/commands`：前端命令入口。
+- `/api/model-pool`：凭证、模型 Profile、选择、连接测试和用量。
+- `/api/agent-packages`：AgentPackage、实例和会话。
+- `/api/workspace`：工作区文件与产物。
+- `/api/knowledge`：知识源、索引和检索。
+- `/api/extensions`：MCP、Skill 和权限。
+- `/api/memory`：长期记忆。
+- `/api/scheduler`：定时任务。
+- `/api/collaboration`：多 Agent 协作。
+- `/health`：后端健康检查。
+
+普通请求使用 HTTP；流式回复、工具审批、状态和运行事件使用 SSE。
+
+## 项目定位
+
+FastAgentFactory 面向本地开发、个人工作流和团队内部 Agent 工程实验。它提供的是完整的 Agent 生命周期工作台，而不是只封装一次模型请求的聊天界面。

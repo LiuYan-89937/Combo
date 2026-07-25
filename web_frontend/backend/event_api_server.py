@@ -44,6 +44,7 @@ from web_frontend.backend.routes.tips import create_tip_router
 from web_frontend.backend.routes.workspace import create_workspace_router
 from web_frontend.backend.runtime_bridge import RuntimeBridge
 from web_frontend.backend.event_loop_watchdog import EventLoopWatchdog
+from web_frontend.backend.parent_process_watchdog import start_parent_process_watchdog
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -174,6 +175,7 @@ async def _ensure_skillhub_cli() -> None:
 
 @app.on_event("startup")
 async def startup_event():
+    start_parent_process_watchdog()
     event_loop_watchdog.start(asyncio.get_running_loop())
     await _ensure_skillhub_cli()
     await runtime_bridge.start()

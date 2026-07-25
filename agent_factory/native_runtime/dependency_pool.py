@@ -1,4 +1,4 @@
-"""Native dependency pool resolver without Docker (uses local venv for wheel building)."""
+"""Local dependency-pool resolver using local virtual environments."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from agent_factory.environment_system.pool import (
 
 
 class NativeDependencyPool(DependencyPool):
-    """Native dependency pool that builds wheels using local Python venv instead of Docker."""
+    """Builds dependency artifacts from local Python and npm runtimes."""
 
     def resolve_native(
         self,
@@ -29,7 +29,7 @@ class NativeDependencyPool(DependencyPool):
         timeout_seconds: int | None,
     ) -> dict[str, Any]:
         """
-        Resolve dependencies using native Python environment (no Docker).
+        Resolve dependencies using the local Python environment.
 
         System packages are not supported in native mode since we don't have apt/deb.
         """
@@ -40,7 +40,7 @@ class NativeDependencyPool(DependencyPool):
         except PythonRequirementError as exc:
             raise DependencyPoolError("unsupported", str(exc)) from exc
 
-        # Native profile request (no Docker/image/architecture)
+        # Local profile request.
         profile_request = {
             "runtime_compatibility": self._native_runtime_compatibility(),
             "python_requirements": normalized_python_requirements,
@@ -127,7 +127,7 @@ class NativeDependencyPool(DependencyPool):
         requirements: list[str],
         timeout_seconds: int | None,
     ) -> list[dict[str, str]]:
-        """Build Python wheels using local venv instead of Docker."""
+        """Build Python wheels using a local virtual environment."""
         if not requirements:
             return []
 
@@ -221,7 +221,7 @@ class NativeDependencyPool(DependencyPool):
         requirements: list[str],
         timeout_seconds: int | None,
     ) -> dict[str, str] | None:
-        """Resolve npm dependencies using local npm (no Docker)."""
+        """Resolve npm dependencies using the local npm executable."""
         if not requirements:
             return None
 
@@ -325,6 +325,6 @@ class NativeDependencyPool(DependencyPool):
 
 
 def native_dependency_pool_path() -> Path:
-    """Get the native dependency pool path (same as Docker pool)."""
+    """Get the shared local dependency-pool path."""
     from agent_factory.paths import factory_artifact_path
     return factory_artifact_path("dependency_pool")

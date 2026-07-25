@@ -2,8 +2,7 @@
 """
 Workspace isolation verification for native runtime.
 
-Validates that native subprocess isolation maintains the same boundary
-enforcement as Docker containers.
+Validates the workspace-path boundary enforced by the native subprocess runtime.
 """
 
 from pathlib import Path
@@ -14,7 +13,7 @@ from agent_factory.runtime_defaults import DEFAULT_BUILTIN_WORKSPACE_ROOT
 
 
 def test_workspace_isolation():
-    """Test that path resolution and boundary checking work identically in native mode."""
+    """Test native workspace path resolution and boundary checking."""
     print("Testing workspace isolation for native runtime...")
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -88,7 +87,7 @@ def test_workspace_isolation():
         print(f"✓ Safe internal path allowed: {safe_path} -> {resolved}")
 
     print("\n✅ All workspace isolation tests passed!")
-    print("Native runtime maintains identical boundary enforcement to Docker mode.")
+    print("Native runtime workspace path boundary checks passed.")
 
 
 if __name__ == "__main__":

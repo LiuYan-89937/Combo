@@ -15,8 +15,8 @@ struct AppState {
 /// Command to check if the Python backend is running.
 #[tauri::command]
 fn backend_status(state: tauri::State<AppState>) -> serde_json::Value {
-    let sidecar = state.sidecar.lock().unwrap();
-    match sidecar.as_ref() {
+    let mut sidecar = state.sidecar.lock().unwrap();
+    match sidecar.as_mut() {
         Some(s) => serde_json::json!({
             "running": s.is_running(),
             "port": s.port(),
@@ -32,11 +32,17 @@ fn backend_status(state: tauri::State<AppState>) -> serde_json::Value {
 
 /// Command to get the backend base URL for frontend API calls.
 #[tauri::command]
-fn backend_url(state: tauri::State<AppState>) -> String {
-    let sidecar = state.sidecar.lock().unwrap();
-    match sidecar.as_ref() {
-        Some(s) => format!("http://127.0.0.1:{}", s.port()),
-        None => "http://127.0.0.1:8000".to_string(),
+fn backend_url(state: tauri::State<AppState>) -> Result<String, String> {
+    let mut sidecar = state.sidecar.lock().unwrap();
+    match sidecar.as_mut() {
+        Some(s) => {
+            if s.is_running() {
+                Ok(format!("http://127.0.0.1:{}", s.port()))
+            } else {
+                Err("Python backend process is not running".to_string())
+            }
+        }
+        None => Err("Python backend process has not been initialized".to_string()),
     }
 }
 

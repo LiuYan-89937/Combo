@@ -3,6 +3,10 @@ export const localeStorageKey = 'fast-agent-factory.locale'
 
 const zhCN = {
   'app.name': 'FastAgentFactory',
+  'startup.title': '正在启动 FastAgentFactory',
+  'startup.initializing': '正在初始化本地后端和运行服务，请稍候…',
+  'startup.failed': '初始化失败，请重试。',
+  'startup.retry': '重新初始化',
   'common.add': '添加',
   'common.all': '全部',
   'common.auto': '自动',
@@ -39,6 +43,8 @@ const zhCN = {
   'chat.inputPlaceholder': '输入消息...',
   'chat.modelSelectorPlaceholder': '主模型',
   'chat.defaultMainModel': '默认模型',
+  'chat.modelRequiredTitle': '需要配置主模型',
+  'chat.modelRequiredMessage': '请先在模型池中配置并启用一个可用的对话模型。',
   'chat.reasoningLabel': '思考',
   'chat.reasoningIntensity': '思考强度',
   'chat.reasoningDefault': '默认',
@@ -853,6 +859,10 @@ type MessageKey = keyof typeof zhCN
 
 const enUS: Record<MessageKey, string> = {
   'app.name': 'FastAgentFactory',
+  'startup.title': 'Starting FastAgentFactory',
+  'startup.initializing': 'Initializing the local backend and runtime services…',
+  'startup.failed': 'Initialization failed. Please try again.',
+  'startup.retry': 'Retry initialization',
   'common.add': 'Add',
   'common.all': 'All',
   'common.auto': 'Auto',
@@ -889,6 +899,8 @@ const enUS: Record<MessageKey, string> = {
   'chat.inputPlaceholder': 'Enter a message...',
   'chat.modelSelectorPlaceholder': 'Main model',
   'chat.defaultMainModel': 'Default model',
+  'chat.modelRequiredTitle': 'Main model required',
+  'chat.modelRequiredMessage': 'Configure and enable an available chat model in the model pool first.',
   'chat.reasoningLabel': 'Reasoning',
   'chat.reasoningIntensity': 'Reasoning intensity',
   'chat.reasoningDefault': 'Default',

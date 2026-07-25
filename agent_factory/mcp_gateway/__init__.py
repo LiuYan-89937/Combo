@@ -7,7 +7,7 @@ from agent_factory.mcp_gateway.manager import (
     MCP_GATEWAY_URL_ENV,
     HostMCPGatewayManager,
     build_gateway_clients,
-    configured_container_gateway_url,
+    configured_local_gateway_url,
 )
 from agent_factory.mcp_gateway.server import MCPGatewayEndpoint, MCPGatewayServer
 
@@ -21,6 +21,5 @@ __all__ = [
     "MCP_GATEWAY_PORT_ENV",
     "MCP_GATEWAY_URL_ENV",
     "build_gateway_clients",
-    "configured_container_gateway_url",
+    "configured_local_gateway_url",
 ]
-

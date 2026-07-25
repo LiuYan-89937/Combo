@@ -53,11 +53,13 @@ class ModelOperationService:
         model: Any | None = None,
         settings: Any | None = None,
         models_by_role: Mapping[str, tuple[Any, Any]] | None = None,
+        require_runtime_profile: bool = False,
     ) -> None:
         self.model_role = role
         self._model = model
         self._settings = settings
         self._models_by_role = dict(models_by_role or {})
+        self._require_runtime_profile = require_runtime_profile
 
     def text(
         self,
@@ -389,7 +391,7 @@ class ModelOperationService:
 
     def _resolve_model(self, role: ModelRole | None = None, *, state: Any | None = None) -> tuple[Any, dict[str, Any]]:
         requested_role = role or self.model_role
-        if requested_role == "main" and state is not None:
+        if state is not None and (requested_role == "main" or self._require_runtime_profile):
             override = resolve_runtime_main_chat_model_from_state(state)
             if override is not None:
                 return self._apply_runtime_reasoning(
@@ -403,6 +405,8 @@ class ModelOperationService:
                     model_role="main",
                     requested_model_role=requested_role,
                 )
+        if self._require_runtime_profile:
+            raise RuntimeError("runtime main model profile is not selected")
         if self._models_by_role:
             item = self._models_by_role.get(requested_role)
             resolved_role = requested_role

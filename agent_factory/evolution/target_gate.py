@@ -53,7 +53,7 @@ def decide_evolution_target(
             requires_probe=False,
             runtime_blocker=blocker,
             rationale="Structured evolution analysis identifies a runtime-infrastructure goal that package authoring cannot satisfy.",
-            constraints=["Do not modify package files to compensate for RuntimeKernel, Docker, or model infrastructure failures."],
+            constraints=["Do not modify package files to compensate for RuntimeKernel, local runtime, or model infrastructure failures."],
         )
     capability_changes = _normalized_texts(task_analysis.get("capability_changes"))
     return EvolutionTargetPlan(
@@ -88,7 +88,7 @@ def _error_text(error_pack: dict[str, Any]) -> str:
 
 def _runtime_blocker(*, error_pack: dict[str, Any], trace_context: dict[str, Any]) -> dict[str, Any] | None:
     text = f"{_error_text(error_pack)} {trace_context}".casefold()
-    markers = ("docker_daemon_unavailable", "docker.preflight", "runtime_root", "model contract", "response_format")
+    markers = ("local_runtime_unavailable", "local.preflight", "runtime_root", "model contract", "response_format")
     if any(marker in text for marker in markers):
         return {"kind": "runtime_infrastructure", "evidence": text[:1000]}
     return None

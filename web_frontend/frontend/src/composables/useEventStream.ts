@@ -13,6 +13,7 @@ import { useUiStore } from '@/stores/ui'
 import type { FactoryFrontendEvent } from '@/types/protocol'
 import { agentPackagesApi } from '@/api/agentPackages'
 import { postCommand } from '@/api/http'
+import { backendUrl } from '@/api/backendUrl'
 import { switchSessionCommand } from '@/api/commands'
 
 let client: EventStreamClient | null = null
@@ -63,11 +64,14 @@ export function useEventStream() {
   const uiStore = useUiStore()
   const { t } = useI18n()
 
-  function connect() {
+  async function connect() {
+    if (client) return
+
+    const eventUrl = await backendUrl('/events')
     if (client) return
 
     client = new EventStreamClient({
-      url: '/events',
+      url: eventUrl,
       onEvent: (event) => {
         applyRuntimeEvent(event)
       },

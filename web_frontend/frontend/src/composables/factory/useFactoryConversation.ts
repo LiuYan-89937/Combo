@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { modelPoolApi, type ModelPoolProfile } from '@/api/modelPool'
 import { useAgentStore } from '@/stores/agent'
@@ -53,7 +53,7 @@ export function useFactoryConversation() {
     value: pkg.package_id,
   })))
   const runtimeMainModelOptions = computed(() => [
-    { label: t('chat.defaultMainModel'), value: '' },
+    ...(isAgentChatActive.value ? [{ label: t('chat.defaultMainModel'), value: '' }] : []),
     ...chatModelProfiles.value.map((profile) => ({
       label: profile.display_name || profile.model_name || profile.profile_id,
       value: profile.profile_id,
@@ -75,6 +75,7 @@ export function useFactoryConversation() {
   const inputDisabled = computed(() => (
     runtimeStore.isInputLocked
     || runtimeStore.isPublishConfirmationPending
+    || (!isAgentChatActive.value && !selectedMainModelProfileId.value)
     || (isAgentSessionLanding.value && !isAgentChatActive.value)
     || (isEvolutionRoute.value && !selectedEvolutionPackageId.value)
   ))
@@ -108,13 +109,13 @@ export function useFactoryConversation() {
     try {
       const response = await modelPoolApi.profiles()
       chatModelProfiles.value = response.profiles.filter((profile) => (
-        profile.kind === 'chat' && profile.enabled && profile.credential?.enabled !== false
+        profile.kind === 'chat'
+        && profile.enabled
+        && profile.credential?.enabled !== false
+        && profile.credential?.has_api_key === true
       ))
-      if (
-        selectedMainModelProfileId.value
-        && !chatModelProfiles.value.some((profile) => profile.profile_id === selectedMainModelProfileId.value)
-      ) {
-        setSelectedMainModelProfileId('')
+      if (!chatModelProfiles.value.some((profile) => profile.profile_id === selectedMainModelProfileId.value)) {
+        await selectRecommendedRuntimeMainModel()
       }
     } catch (error) {
       uiStore.addNotification({
@@ -124,6 +125,31 @@ export function useFactoryConversation() {
         duration: 3000,
       })
     }
+  }
+
+  async function selectRecommendedRuntimeMainModel() {
+    if (chatModelProfiles.value.length === 0) {
+      setSelectedMainModelProfileId('')
+      return
+    }
+    const selection = await modelPoolApi.select({
+      requirements: [{
+        role: 'main',
+        purpose: 'Factory runtime main conversation model',
+        kind: 'chat',
+        input_modalities: ['text'],
+        output_modalities: ['text'],
+        tool_calling: true,
+        structured_output_methods: ['json_mode', 'function_calling'],
+        optimize_for: 'balanced',
+      }],
+    })
+    const profileId = String(
+      selection.recommendations.find(item => item.role === 'main')?.profile_id || ''
+    ).trim()
+    setSelectedMainModelProfileId(
+      chatModelProfiles.value.some(profile => profile.profile_id === profileId) ? profileId : ''
+    )
   }
 
   function setSelectedMainModelProfileId(profileId: string) {
@@ -175,6 +201,16 @@ export function useFactoryConversation() {
         ...runtimeSelectionMetadata(),
       }, visibleAttachments)
       return true
+    }
+
+    if (!selectedMainModelProfileId.value.trim()) {
+      uiStore.addNotification({
+        type: 'warning',
+        title: t('chat.modelRequiredTitle'),
+        message: t('chat.modelRequiredMessage'),
+        duration: 4000,
+      })
+      return false
     }
 
     const mode = currentFactoryMessageMode.value
@@ -252,6 +288,12 @@ export function useFactoryConversation() {
       commands.startSession(true, 'chat')
     }
   }
+
+  watch(isAgentChatActive, (active) => {
+    if (!active && !selectedMainModelProfileId.value && chatModelProfiles.value.length > 0) {
+      void selectRecommendedRuntimeMainModel()
+    }
+  })
 
   return {
     isAgentChatActive,

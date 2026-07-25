@@ -26,7 +26,6 @@ dependencies = [
     "jsonschema>=4.23",
     "mcp>=1.0",
     "packaging>=24",
-    "playwright>=1.45",
     "pydantic>=2.8",
     "pypdf>=4.0",
     "ruamel.yaml>=0.18",

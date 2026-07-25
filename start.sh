@@ -18,8 +18,6 @@ web_check_env_configuration
 echo ""
 web_sync_python_dependencies
 web_sync_frontend_dependencies
-web_ensure_builtin_web_search_mcp
-web_ensure_runtime_image
 web_require_command "curl" "Install curl first."
 web_require_command "pgrep" "Install procps first."
 web_require_command "tee" "Install coreutils first."
@@ -79,7 +77,6 @@ cleanup() {
         stop_process_tree "${BACKEND_PID}"
         wait "${BACKEND_PID}" 2>/dev/null || true
     fi
-    web_stop_managed_runtime_containers
     exit "${exit_code}"
 }
 trap cleanup EXIT HUP INT TERM
@@ -136,7 +133,6 @@ supervise_services() {
 }
 
 echo ""
-web_stop_managed_runtime_containers
 echo "Starting backend web runtime service on port 8000..."
 mkdir -p "${RUNTIME_LOG_DIR}"
 "${PYTHON_BIN}" web_frontend/backend/event_api_server.py > >(tee -a "${BACKEND_LOG_PATH}") 2>&1 &

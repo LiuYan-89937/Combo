@@ -26,8 +26,8 @@ class SkillHubGatewayHandle:
         return self.endpoint.host_url
 
     @property
-    def docker_url(self) -> str:
-        return self.endpoint.docker_url
+    def local_url(self) -> str:
+        return self.endpoint.local_url
 
     def stop(self) -> None:
         self.server.stop()
@@ -63,7 +63,7 @@ class HostSkillHubGatewayManager:
             handle.stop()
 
 
-def configured_container_skillhub_gateway_url() -> str | None:
+def configured_local_skillhub_gateway_url() -> str | None:
     value = os.getenv(SKILLHUB_GATEWAY_URL_ENV)
     return value.strip() if value and value.strip() else None
 

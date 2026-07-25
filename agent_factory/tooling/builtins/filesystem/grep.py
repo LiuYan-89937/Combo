@@ -35,7 +35,6 @@ _TEXT_SUFFIXES = {
     ".conf",
     ".css",
     ".csv",
-    ".dockerfile",
     ".env",
     ".go",
     ".h",

@@ -5,8 +5,8 @@
   "config": {
     "bindings": {
       "main": {
-        "source": "env",
-        "reason": "Use the host environment main chat model by default.",
+        "source": "runtime",
+        "reason": "Resolve the main chat model from the model pool profile selected for this request.",
         "required_capabilities": {
           "input_modalities": [
             "text"
@@ -25,9 +25,10 @@
     },
     "tool_bindings": {
       "generate_image": {
-        "source": "env",
+        "source": "model_pool",
+        "selection_source": "auto",
         "capability": "image_output",
-        "reason": "Use the host environment image model when configured.",
+        "reason": "Use a compatible image generation profile from the configured model pool when available.",
         "required_capabilities": {
           "output_modalities": [
             "image"

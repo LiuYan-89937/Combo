@@ -1,5 +1,7 @@
-use std::process::{Child, Command};
+use std::env;
+use std::net::TcpListener;
 use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
 use tauri::{AppHandle, Manager};
 
 /// Python backend sidecar process manager.
@@ -11,8 +13,9 @@ pub struct PythonSidecar {
 impl PythonSidecar {
     /// Spawn the Python backend process.
     pub fn spawn(app: &AppHandle) -> Result<Self, Box<dyn std::error::Error>> {
-        let port = 8000u16; // TODO: dynamic port allocation
+        let port = Self::allocate_loopback_port()?;
         let port_str = port.to_string();
+        let resource_dir = app.path().resource_dir()?;
 
         // Determine Python executable path
         // In development: use system Python
@@ -23,22 +26,22 @@ impl PythonSidecar {
             Self::find_bundled_python(app)?
         };
 
-        // Set environment variables for native runtime mode
-        let mut env_vars = std::collections::HashMap::new();
-        env_vars.insert("AGENTFACTORY_NATIVE_RUNTIME", "1");
-        env_vars.insert("AGENTFACTORY_PORT", &port_str);
-
-        // Get project root
-        let project_root = if cfg!(debug_assertions) {
+        let (project_root, system_package_root) = if cfg!(debug_assertions) {
             // In dev mode, get from CARGO_MANIFEST_DIR at build time
             // The manifest is in src-tauri/, so parent is project root
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .parent()
                 .ok_or("Cannot determine project root")?
-                .to_path_buf()
+                .to_path_buf();
+            let system_packages = root.join("SystemPackage");
+            (root, system_packages)
         } else {
-            // In production, use the bundled resource directory
-            app.path().resource_dir()?
+            // Production state belongs to the per-user application data
+            // directory. Bundled resources remain immutable application assets.
+            let root = app.path().app_local_data_dir()?;
+            std::fs::create_dir_all(root.join(".agentfactory"))?;
+            let system_packages = resource_dir.join("SystemPackage");
+            (root, system_packages)
         };
 
         // Launch Python backend
@@ -50,11 +53,20 @@ impl PythonSidecar {
             .arg("127.0.0.1")
             .arg("--port")
             .arg(port.to_string())
-            .current_dir(&project_root);
+            .current_dir(&project_root)
+            .env("AGENTFACTORY_NATIVE_RUNTIME", "1")
+            .env("AGENTFACTORY_PORT", &port_str)
+            .env("AGENTFACTORY_PROJECT_ROOT", &project_root)
+            .env("AGENTFACTORY_SYSTEM_PACKAGE_ROOT", &system_package_root)
+            .env("AGENTFACTORY_PARENT_STDIN_WATCHDOG", "1")
+            .stdin(Stdio::piped());
 
-        // Inject environment variables
-        for (key, value) in env_vars {
-            cmd.env(key, value);
+        if !cfg!(debug_assertions) {
+            let mut python_paths = vec![resource_dir];
+            if let Some(existing) = env::var_os("PYTHONPATH") {
+                python_paths.extend(env::split_paths(&existing));
+            }
+            cmd.env("PYTHONPATH", env::join_paths(python_paths)?);
         }
 
         println!("Launching Python backend: {:?}", cmd);
@@ -64,6 +76,11 @@ impl PythonSidecar {
             process: Some(process),
             port,
         })
+    }
+
+    fn allocate_loopback_port() -> std::io::Result<u16> {
+        let listener = TcpListener::bind(("127.0.0.1", 0))?;
+        listener.local_addr().map(|address| address.port())
     }
 
     /// Find system Python executable (development mode).
@@ -105,8 +122,10 @@ impl PythonSidecar {
     }
 
     /// Check if the backend process is still running.
-    pub fn is_running(&self) -> bool {
-        self.process.is_some()
+    pub fn is_running(&mut self) -> bool {
+        self.process
+            .as_mut()
+            .is_some_and(|process| matches!(process.try_wait(), Ok(None)))
     }
 
     /// Get the backend port.

@@ -65,7 +65,7 @@ def _failure_category(event_type: str, payload: dict) -> str | None:
         return "context_budget_error"
     if "model" in text or "badrequest" in text or "provider" in text:
         return "model_call_error"
-    if "sandbox" in text or "docker" in text:
+    if "sandbox" in text or "local runtime" in text:
         return "sandbox_runtime_error"
     if "memory" in text:
         return "memory_system_error"
@@ -85,7 +85,7 @@ def _suspected_root_causes(category: str | None, payload: dict) -> list[str]:
         "timeout": ["运行请求、节点执行、工具执行或外部服务调用超过配置超时。"],
         "context_budget_error": ["上下文组装或压缩策略没有把模型输入控制在预算内。"],
         "model_call_error": ["模型 provider 拒绝请求、返回非法消息结构或模型配置不可用。"],
-        "sandbox_runtime_error": ["Docker sandbox、mount、network、secret 或依赖初始化失败。"],
+        "sandbox_runtime_error": ["本地逻辑隔离、工作区、secret 或依赖初始化失败。"],
         "memory_system_error": ["跨会话记忆检索、注入或后台写入失败。"],
         "knowledge_system_error": ["知识源准备、索引、检索或读取失败。"],
         "scheduler_system_error": ["定时任务触发、执行、总结或失败策略处理异常。"],
@@ -105,7 +105,7 @@ def _repair_targets(category: str | None) -> list[str]:
         "timeout": ["runtime_request_policy", "tool_timeout_policy", "external_service_health"],
         "context_budget_error": ["context_policy", "compression_policy", "context_source_limits"],
         "model_call_error": ["model_contract", "model_adapter", "message_protocol"],
-        "sandbox_runtime_error": ["runtime_container", "dependencies_contract", "docker_runtime"],
+        "sandbox_runtime_error": ["runtime_local", "dependencies_contract", "local_runtime"],
         "memory_system_error": ["memory_contract", "memory_store", "memory_injection"],
         "knowledge_system_error": ["knowledge_contract", "knowledge_catalog", "knowledge_ingestion"],
         "scheduler_system_error": ["scheduler_contract", "scheduler_job", "scheduler_executor"],

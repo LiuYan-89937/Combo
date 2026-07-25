@@ -55,7 +55,7 @@ def _command_session_id(command: dict[str, Any]) -> str:
 
 
 class NativeAgentRuntimeHandle:
-    """Manages native subprocess runtime (replaces AgentRuntimeContainerHandle)."""
+    """Manages the local subprocess runtime lifecycle."""
 
     def __init__(
         self,

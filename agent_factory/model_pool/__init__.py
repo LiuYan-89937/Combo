@@ -8,6 +8,7 @@ from agent_factory.model_pool.config import (
 from agent_factory.model_pool.resolver import (
     ResolvedChatModelProfile,
     ResolvedImageGenerationProfile,
+    resolve_available_chat_model,
     resolve_chat_model_binding,
     resolve_chat_model_profile,
     resolve_image_generation_binding,
@@ -65,6 +66,7 @@ __all__ = [
     "model_pool_store_read_only",
     "resolve_chat_model_profile",
     "resolve_chat_model_binding",
+    "resolve_available_chat_model",
     "resolve_image_generation_binding",
     "resolve_image_generation_model_profile",
     "resolve_model_pool_store_path",

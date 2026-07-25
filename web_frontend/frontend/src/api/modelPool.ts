@@ -107,6 +107,17 @@ export interface ModelUsageSeries {
   points: Array<{ bucket: string } & ModelUsageTotals>
 }
 
+export interface ModelSelectionRecommendation {
+  role: 'main' | 'task' | 'compression'
+  profile_id: string
+}
+
+export interface ModelSelectionResult {
+  status: 'completed' | 'blocked'
+  recommendations: ModelSelectionRecommendation[]
+  unmatched: Array<Record<string, unknown>>
+}
+
 export interface ModelUsageSummary {
   group_by: ModelUsageGroupBy
   since: string
@@ -134,6 +145,11 @@ export const modelPoolApi = {
       method: 'DELETE',
     }),
   profiles: () => requestJson<{ profiles: ModelPoolProfile[] }>('/api/model-pool/profiles'),
+  select: (payload: Record<string, unknown>) =>
+    requestJson<ModelSelectionResult>('/api/model-pool/select', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   saveProfile: (payload: Record<string, unknown>) =>
     requestJson<{ profile: ModelPoolProfile }>('/api/model-pool/profiles', {
       method: 'POST',

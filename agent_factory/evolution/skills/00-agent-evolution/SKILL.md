@@ -31,19 +31,19 @@ Guide changes to an already published AgentPackage. Evolution is not manufacturi
 - If a required managed-surface field is not supported by the current authoring actions, stop and report the authoring gap. Do not try `edit` or `write` against managed contracts.
 - For `plan_and_execute`, planner only maintains `runtime_plan`; executor performs plan steps; final_answer may use delivery tools for final artifacts but must not expose `runtime_plan`.
 - If the user goal is unrelated to a failed trace, do not repair the trace unless it blocks validation or runtime readiness.
-- Docker, model-contract, checkpointer, ToolGateway, and RuntimeKernel infrastructure errors are not package evolution targets. Report them as environment/runtime blockers instead of modifying the package to compensate.
+- Local runtime, model-contract, checkpointer, ToolGateway, and RuntimeKernel infrastructure errors are not package evolution targets. Report them as environment/runtime blockers instead of modifying the package to compensate.
 
 ## Anti-Patterns
 - Do not alternate between `reset_contract`, `upsert_package_tool`, and generic edits hoping validation will improve.
 - Do not reset a contract unless validator evidence identifies that contract as malformed and no more specific authoring action applies.
 - Do not bypass `create_agent_stage`; evolution uses the same authoring stage machine with evolution-specific task analysis and Skill guidance.
 - Do not read broad schema resources or project source code to discover package structure when current package files and validator evidence are enough.
-- Do not add hardcoded local paths, user-specific files, API keys, Docker socket paths, or one-off test fixtures.
+- Do not add hardcoded local paths, user-specific files, API keys, privileged host-service paths, or one-off test fixtures.
 - Do not treat stale probe records as proof after changing package code.
 
 ## Completion Criteria
 - The user goal is implemented in the package surface that actually owns the behavior.
-- Changed package tools have fresh successful-path probe evidence, unless an infrastructure blocker such as Docker daemon unavailable prevents probing.
+- Changed package tools have fresh successful-path probe evidence, unless a local runtime infrastructure blocker prevents probing.
 - `create_agent_validate(scope="full_static")` passes.
 - `create_agent_control(action="finalize")` is called exactly once after validation passes.
 

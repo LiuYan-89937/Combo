@@ -1703,7 +1703,7 @@ def _tool_dependency_issues(root: Path, package: Any, package_tools: dict[str, A
             expected="Package tools with external imports declare installable Python distributions in dependencies.config.python_requirements.",
             actual="python_requirements is empty",
             repair_hint=(
-                "Regenerate the package tool through create_agent_authoring(action='upsert_package_tool') with the required installable distributions in requirements, then probe it in Docker."
+                "Regenerate the package tool through create_agent_authoring(action='upsert_package_tool') with the required installable distributions in requirements, then probe it in the local runtime."
             ),
             target_files=["contracts/dependencies.json", *source_files],
             recommended_skill="10-package-tool-system",

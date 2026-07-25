@@ -59,7 +59,7 @@ class CompiledPackageRuntime:
 class PackageRuntimeCore:
     """Shared AgentPackage runtime compile/stream core.
 
-    The core has no transport opinion. Docker stdio bridges and host
+    The core has no transport opinion. Local stdio bridges and host
     SystemPackage handles can both feed commands into it and receive standard
     frontend events from the supplied emitter.
     """

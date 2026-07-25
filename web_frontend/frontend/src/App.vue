@@ -9,8 +9,33 @@
       <n-notification-provider>
         <n-dialog-provider>
           <n-loading-bar-provider>
-            <AppContent />
-            <SelectionReferenceMenu />
+            <AppContent v-if="startupStore.ready" />
+            <SelectionReferenceMenu v-if="startupStore.ready" />
+            <n-modal
+              :show="!startupStore.ready"
+              :mask-closable="false"
+              :close-on-esc="false"
+              preset="card"
+              class="startup-dialog"
+              :title="t('startup.title')"
+            >
+              <div class="startup-dialog-content" role="status" aria-live="polite">
+                <n-spin v-if="startupStore.initializing" size="large" />
+                <p>
+                  {{ startupStore.initializing ? t('startup.initializing') : t('startup.failed') }}
+                </p>
+                <n-text v-if="startupStore.error" type="error" class="startup-error">
+                  {{ startupStore.error }}
+                </n-text>
+                <n-button
+                  v-if="startupStore.status === 'failed'"
+                  type="primary"
+                  @click="startupStore.retry"
+                >
+                  {{ t('startup.retry') }}
+                </n-button>
+              </div>
+            </n-modal>
           </n-loading-bar-provider>
         </n-dialog-provider>
       </n-notification-provider>
@@ -25,6 +50,7 @@ import { darkTheme, dateEnUS, dateZhCN, enUS, zhCN, type GlobalThemeOverrides } 
 import { routeTitleKey } from '@/i18n'
 import { useI18n } from '@/composables/useI18n'
 import { useUiStore } from '@/stores/ui'
+import { useStartupStore } from '@/stores/startup'
 import { getPalette, type AppPalette } from '@/theme/palette'
 import { applyPaletteToRoot } from '@/theme/cssVariables'
 import AppContent from '@/layouts/AppContent.vue'
@@ -33,6 +59,7 @@ import SelectionReferenceMenu from '@/components/chat/SelectionReferenceMenu.vue
 const route = useRoute()
 const { locale, t } = useI18n()
 const uiStore = useUiStore()
+const startupStore = useStartupStore()
 
 const isDark = computed(() => uiStore.actualTheme === 'dark')
 const palette = computed(() => getPalette(isDark.value))
@@ -179,6 +206,31 @@ function createThemeOverrides(p: AppPalette): GlobalThemeOverrides {
   }
 }
 </script>
+
+<style scoped>
+.startup-dialog {
+  width: min(420px, calc(100vw - 32px));
+}
+
+.startup-dialog-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 0 4px;
+  text-align: center;
+}
+
+.startup-dialog-content p {
+  margin: 0;
+  color: var(--app-text-secondary);
+}
+
+.startup-error {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+</style>
 
 <style>
 * {

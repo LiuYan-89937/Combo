@@ -1,4 +1,4 @@
-"""Native process launcher for cross-platform agent runtime without Docker."""
+"""Local process launcher for cross-platform agent runtime."""
 
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ from agent_factory.runtime_contracts import LoadedAgentPackage
 
 @dataclass(frozen=True, slots=True)
 class NativeAgentRuntimePlan:
-    """Native process launch plan (replaces DockerAgentRuntimePlan)."""
+    """Local process launch plan for an AgentPackage runtime."""
 
     command: list[str]
     environment: dict[str, str]
@@ -75,7 +75,7 @@ class AgentRuntimeLaunchError(RuntimeError):
 
 
 class NativeAgentRuntimeLauncher:
-    """Launches agent runtime as native subprocess (no Docker)."""
+    """Launches an AgentPackage runtime as a local subprocess."""
 
     def prepare(
         self,

@@ -5,7 +5,7 @@
   "identifier": "com.fastagentfactory.app",
   "build": {
     "beforeDevCommand": "cd web_frontend/frontend && npm run dev",
-    "beforeBuildCommand": "cd web_frontend/frontend && npx vite build",
+    "beforeBuildCommand": "node scripts/prepare_tauri_resources.mjs && cd web_frontend/frontend && npx vite build",
     "devUrl": "http://localhost:5173",
     "frontendDist": "../web_frontend/frontend/dist"
   },
@@ -36,22 +36,16 @@
     "resources": {
       "resources/python": "python",
       "resources/README.md": "README.md",
+      "../agent_factory": "agent_factory",
+      "../web_frontend/backend": "web_frontend/backend",
       "../web_frontend/frontend/dist": "web_frontend/dist",
-      "../.agentfactory/mcp": ".agentfactory/mcp",
-      "../.agentfactory/agent_runtime": ".agentfactory/agent_runtime",
-      "../.agentfactory/agent_registry": ".agentfactory/agent_registry",
-      "../.agentfactory/model_pool": ".agentfactory/model_pool",
-      "../.agentfactory/benchmark": ".agentfactory/benchmark",
-      "../.agentfactory/factory": ".agentfactory/factory",
-      "../.agentfactory/packages": ".agentfactory/packages",
-      "../.agentfactory/resources": ".agentfactory/resources",
-      "../.agentfactory/tips": ".agentfactory/tips"
+      "../SystemPackage": "SystemPackage"
     },
     "externalBin": [],
     "copyright": "Copyright (c) 2026 FastAgentFactory Team",
     "category": "DeveloperTool",
     "shortDescription": "AI Agent 工厂桌面应用",
-    "longDescription": "FastAgentFactory 是一个跨平台的 AI Agent 开发与运行环境，支持原生进程隔离无需 Docker"
+    "longDescription": "FastAgentFactory 是一个跨平台的 AI Agent 开发与运行环境，使用本地进程逻辑隔离"
   },
   "plugins": {
     "shell": {
