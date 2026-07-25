@@ -107,7 +107,12 @@ Implemented and evaluated directions include:
 - Record host shapes and kernel selection to distinguish eligibility from actual dispatch.
 - Use MTP speculative decoding to validate multiple candidate tokens per target forward pass.
 
-In the archived same-condition service comparison, AMD improved non-MTP Decode throughput from `84.0867 tok/s` to `88.8320 tok/s`, a `5.64%` gain. MTP produced larger end-to-end Decode gains for both implementations by amortizing target-model work across accepted tokens. Results are specific to the tested model, shapes, ROCm version, and RDNA3 GPU and are not universal performance claims.
+The measured results use two separate attribution scopes:
+
+- With MTP disabled, AMD improved single-token Decode throughput from `84.0867 tok/s` to `88.8320 tok/s`, a `5.64%` gain over Official.
+- With MTP enabled for both implementations, Decode was effectively tied. AMD improved Prompt throughput by `16.70%`, reduced model-compute TTFT by `14.31%`, improved two-client QPS by `5.09%`, and reduced mean request latency by `4.89%`.
+
+MTP changes the decode schedule for both implementations, so its scheduling gain is not attributed to AMD kernels. Results are specific to the tested model, shapes, ROCm version, and RDNA3 GPU and are not universal performance claims.
 
 See [AMD Radeon GPU Inference Optimizations](performance/ROCmOptimizations.md) for implementation details, comparisons, and limitations.
 

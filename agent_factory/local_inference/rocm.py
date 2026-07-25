@@ -170,7 +170,7 @@ def inspect_rocm_runtime(*, require_available: bool = False) -> RocmRuntimeInfo:
         telemetry_source=_telemetry_source(
             kernel_busy_devices=kernel_busy_devices,
             rocm_smi_busy_devices=rocm_smi_busy_devices,
-            amd_smi_available=bool(static_devices or metric_devices),
+            amd_smi_available=bool(metric_devices),
         ),
     )
     return _require(info, require_available=require_available)
@@ -274,13 +274,15 @@ def _gpu_utilization(
     rocm_smi_devices: dict[int, float],
     amd_smi_metrics: dict[str, Any],
 ) -> tuple[float | None, str]:
+    value = _percent(_number(amd_smi_metrics, "usage", "gfx_activity"))
+    if value is not None:
+        return value, "amd-smi"
+    if index in rocm_smi_devices:
+        return rocm_smi_devices[index], "rocm-smi"
     normalized_bus = _normalize_pci_bus(pci_bus)
     if normalized_bus and normalized_bus in kernel_devices:
         return kernel_devices[normalized_bus], "linux-sysfs"
-    if index in rocm_smi_devices:
-        return rocm_smi_devices[index], "rocm-smi"
-    value = _percent(_number(amd_smi_metrics, "usage", "gfx_activity"))
-    return (value, "amd-smi") if value is not None else (None, "")
+    return None, ""
 
 
 def _telemetry_source(
@@ -292,9 +294,9 @@ def _telemetry_source(
     sources = [
         source
         for available, source in (
-            (bool(kernel_busy_devices), "linux-sysfs"),
-            (bool(rocm_smi_busy_devices), "rocm-smi"),
             (amd_smi_available, "amd-smi"),
+            (bool(rocm_smi_busy_devices), "rocm-smi"),
+            (bool(kernel_busy_devices), "linux-sysfs"),
         )
         if available
     ]

@@ -13,7 +13,12 @@ The measured work has two distinct layers:
 
 Normal service benchmarks provide user-facing throughput. rocprof and GGML traces are used only to attribute cost and confirm dispatch; profiler duration is never presented as normal service speed.
 
-The latest ten-round paired run enabled MTP for both implementations. AMD Decode reached `124.111 tok/s` versus `123.897 tok/s` for Official: a **small `0.17%` gain and effectively a tie**. This does not replace the non-MTP result below, where the AMD single-token Decode path improved by `5.64%`; MTP changes the workload into proposal generation and multi-token target validation.
+The performance claim is intentionally split into two scopes:
+
+- **Non-MTP single-token Decode:** AMD improved Decode throughput by `5.64%` over Official.
+- **MTP enabled for both implementations:** Decode was effectively tied, while AMD improved Prompt throughput by `16.70%`, reduced model-compute TTFT by `14.31%`, and improved two-client QPS by `5.09%`.
+
+The same MTP-enabled paired run reduced mean request latency by `4.89%`. MTP changes the workload into proposal generation and multi-token target validation for both implementations, so its scheduling gain is not presented as an AMD-kernel gain.
 
 ## Experimental Discipline
 
@@ -127,18 +132,9 @@ The selected Qwen3.6 GGUF retains NextN/MTP layers. When enabled, llama-server s
 
 The runtime considers MTP active only when llama-server slots report `speculative=true`. Benchmark results read the actual candidate and accepted-token counts from llama.cpp timings; configuration alone is not treated as proof of activation.
 
-Under the same 790-token prompt, 128-token output, cold prompt cache, one slot, `temperature=0`, and `seed=42`, each state was warmed once and measured five times:
-
-| Implementation | MTP | Mean Decode | Standard deviation | Acceptance rate | Relative to same implementation without MTP |
-| --- | --- | ---: | ---: | ---: | ---: |
-| Official | Off | 84.4307 tok/s | 0.1212 | — | — |
-| Official | On | 117.9770 tok/s | 0.2013 | 62.69% | +39.73% |
-| AMD | Off | 88.0247 tok/s | 1.5001 | — | — |
-| AMD | On | 117.0653 tok/s | 0.0125 | 60.00% | +32.99% |
-
 MTP improves throughput because one target forward pass can accept multiple tokens, amortizing model-weight reads, MMVQ, MoE routing, elementwise kernels, and launch overhead. It does not make an individual MMVQ read fewer weights and adds work in the MTP proposal head.
 
-The AMD MTP result was 0.77% below Official MTP in this run and had a 2.69-percentage-point lower acceptance rate. This indicates that a single-token MMVQ advantage does not automatically carry into the multi-token validation path. Future AMD work must attribute the MTP proposal head and target multi-token path independently.
+Earlier MTP on/off measurements remain useful for understanding speculative scheduling, but they are not used as an AMD-versus-Official kernel claim. AMD attribution comes only from paired Official/AMD runs with the same MTP state. A single-token MMVQ advantage does not automatically carry into the multi-token validation path; the MTP proposal head and target multi-token path must be attributed independently.
 
 ### Latest Ten-round Paired Experiment with MTP Enabled
 

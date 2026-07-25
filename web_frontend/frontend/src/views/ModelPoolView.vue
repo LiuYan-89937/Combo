@@ -39,6 +39,9 @@
                   {{ t('localModel.gpuBusy') }} {{ formatPercent(device.gpu_utilization_percent) }}
                   <small v-if="device.gpu_utilization_source">· {{ gpuUtilizationSourceLabel(device.gpu_utilization_source) }}</small>
                 </span>
+                <span v-if="device.memory_activity_percent !== null && device.memory_activity_percent !== undefined">
+                  {{ t('localModel.memoryActivity') }} {{ formatPercent(device.memory_activity_percent) }}
+                </span>
                 <span>{{ t('localModel.vramUsage') }} {{ formatMemoryUsage(device) }}</span>
                 <span>{{ t('localModel.gpuTemperature') }} {{ formatTemperature(device.temperature_hotspot_celsius) }}</span>
                 <span>{{ t('localModel.gpuPower') }} {{ formatPower(device.power_watts) }}</span>

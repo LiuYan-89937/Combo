@@ -6,9 +6,14 @@
 
 在 Qwen3.6-35B-A3B Q6_K、gfx1100、单并发、256K 上下文、Q8_0 KV Cache、Flash Attention 开启且 **MTP 关闭** 的相同条件下，AMD 实现包含三项已命中的 Decode 优化：复用同一 F32 激活的 Q8_1 临时量化结果；将 `Residual Add + RMSNorm + 权重缩放` 融合为一个 RDNA3 HIP Kernel；以及使用原生 HIP Wave32 Kernel 执行普通二维 Q6_K × Q8_1 MatVec。前两项与已有 AMD Kernel 集合将正常服务 Decode 吞吐从 Official 的 `84.0867 tok/s` 提升到 `88.8320 tok/s`，提升 `5.64%`；Native Q6_K MMVQ 在该 AMD 基线上进一步取得 `0.94%` 的五轮平均增益。
 
-最新的 10 轮配对实验则同时为 Official 与 AMD 开启 MTP：AMD Decode 为 `124.111 tok/s`，Official 为 `123.897 tok/s`，AMD **略有 `0.17%` 收益、整体基本持平**。MTP 会把单 Token Decode 改为候选生成与多 Token Target 验证，因此不能用这组 `0.17%` 覆盖或否定关闭 MTP 时的 `5.64%` 单 Token Decode 提升。
+性能宣传严格采用两条独立口径：
 
-两组各包含 1 次预热和 5 次计量，计量标准差分别为 `0.1943 tok/s` 与 `0.1718 tok/s`。Official 与 AMD 的 5 次归一化流式输出哈希一致，均为 `6c7bf1d59882869591634b94616d151349bfdf6081fde7ea45686fdd3a83d473`。
+- **关闭 MTP 的单 Token Decode：**AMD 自定义实现相对 Official 提升 `5.64%`。
+- **Official 与 AMD 均开启 MTP：**Decode 基本持平；AMD 的 Prompt 吞吐提升 `16.70%`、模型计算 TTFT 降低 `14.31%`、双客户端 QPS 提升 `5.09%`。
+
+同一组 MTP 配对实验中，AMD 的平均请求延迟还降低了 `4.89%`。MTP 会同时改变两套实现的 Decode 调度，因此不把 MTP 自身的调度收益归因于 AMD Kernel。
+
+关闭 MTP 的 `5.64%` 配对结果中，两套实现各包含 1 次预热和 5 次计量，计量标准差分别为 `0.1943 tok/s` 与 `0.1718 tok/s`。Official 与 AMD 的 5 次归一化流式输出哈希一致，均为 `6c7bf1d59882869591634b94616d151349bfdf6081fde7ea45686fdd3a83d473`。
 
 `5.64%` 是两项优化与当前 AMD Kernel 集合共同启用时的端到端综合收益。算子分析能够分别证明 Q8_1 重复调用被删除、Residual RMSNorm 融合实际命中，但当前数据没有通过逐项关闭优化进行消融，因此不把综合收益错误拆分到某一个 Kernel。
 
@@ -257,16 +262,9 @@ AMD 实现保留 Official 的量化解码、点积、累加、Stream-K 和边界
 
 当前 Qwen3.6 GGUF 保留了 NextN/MTP 层。推理 Profile 开启后，llama-server 使用 `--spec-type draft-mtp`，每轮最多生成 3 个候选 Token，再由 Target Model 批量验证。服务只有在 `/slots` 返回 `speculative=true` 后才进入 Ready；普通性能测试从 llama.cpp 最终 `timings` 直接读取候选数与接受数，避免用启动参数冒充实际命中。
 
-同一 790 Token Prompt、128 输出 Token、冷 Prompt Cache、单 Slot、`temperature=0`、`seed=42` 下，每个状态预热一次并计量五次：
+MTP 的收益来自一次 Target Forward 接受多个 Token，从而摊薄自回归 Decode 中的权重读取、MMVQ、MoE 路由、逐元素 Kernel 和启动开销；它不会让单次 MMVQ 少读权重，还会增加 MTP Head 的候选生成成本。
 
-| 实现 | MTP | Decode 平均 | 标准差 | 接受率 | 相对本实现关闭态 |
-| --- | --- | ---: | ---: | ---: | ---: |
-| Official | 关闭 | 84.4307 tok/s | 0.1212 | — | — |
-| Official | 开启 | 117.9770 tok/s | 0.2013 | 62.69% | +39.73% |
-| AMD | 关闭 | 88.0247 tok/s | 1.5001 | — | — |
-| AMD | 开启 | 117.0653 tok/s | 0.0125 | 60.00% | +32.99% |
-
-MTP 的收益来自一次 Target Forward 接受多个 Token，从而摊薄自回归 Decode 中的权重读取、MMVQ、MoE 路由、逐元素 Kernel 和启动开销；它不会让单次 MMVQ 少读权重，还会增加 MTP Head 的候选生成成本。当前 AMD MTP 比 Official MTP 低 `0.77%`，同时接受率低 2.69 个百分点，说明原来面向单 Token MMVQ 的 AMD 优势在多候选验证路径中被稀释。后续优化应分别归因 MTP Draft Head 和 Target 多 Token 验证路径，不能把非 MTP 的 MMVQ 收益直接外推。
+早期 MTP 开关测试仍可用于理解推测解码调度，但不用于宣传 AMD 相对 Official 的 Kernel 收益。AMD 归因只采用 MTP 状态相同的 Official/AMD 配对实验。面向单 Token MMVQ 的优势不会自动延续到多候选验证路径，后续仍需分别归因 MTP Draft Head 与 Target 多 Token 验证路径。
 
 ### 最新 10 轮 MTP 配对实验
 

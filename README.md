@@ -214,6 +214,13 @@ The repository carries two llama.cpp implementations built from the same baselin
 
 The optimization work includes activation quantization reuse, fused Residual Add + RMSNorm + scale, native RDNA3 Q6_K × Q8_1 MatVec, dynamic Wave32/Wave64 dispatch experiments, and MTP speculative decoding. Official/AMD experiments use the same model, prompt, profile, cache policy, and sampling settings. Operator profiling is separated from normal service performance so profiler overhead is never reported as user-facing throughput.
 
+Measured results are reported in two separate scopes:
+
+- **Non-MTP single-token Decode:** the AMD implementation improved Decode throughput by `5.64%` over Official.
+- **MTP enabled for both implementations:** Decode was effectively tied, while AMD improved Prompt throughput by `16.70%`, reduced model-compute TTFT by `14.31%`, and improved two-client QPS by `5.09%`.
+
+The MTP scheduling gain is not attributed to AMD kernels. In the same MTP-enabled paired run, AMD also reduced mean request latency by `4.89%`.
+
 Full design details and measured boundaries are in [AMD Radeon GPU Inference Optimizations](project-documentation/performance/ROCmOptimizations.md).
 
 ## Demo Video Scope

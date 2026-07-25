@@ -313,6 +313,13 @@ Image Profile 默认允许在显存预算足够时与 Chat 同时驻留，模型
 
 Benchmark 页面可以直接在 Official Baseline 与 AMD 优化实现之间切换。两套实现共享模型文件和推理 Profile，控制节点会互斥卸载当前实现、切换活动二进制并重新加载模型，因此不会让两份模型同时占用显存。Kernel 结果按计算家族聚合展示，完整 rocprof 符号作为可展开的原始变体保留。
 
+性能结论严格区分两种测试口径：
+
+- **关闭 MTP 的单 Token Decode：**AMD 自定义实现相对 Official 提升 `5.64%`。
+- **Official 与 AMD 均开启 MTP：**Decode 基本持平；AMD 的 Prompt 吞吐提升 `16.70%`、模型计算 TTFT 降低 `14.31%`、双客户端 QPS 提升 `5.09%`。
+
+MTP 自身带来的调度收益不归因于 AMD Kernel。同一组 MTP 配对实验中，AMD 的平均请求延迟还降低了 `4.89%`。
+
 ## llama.cpp AMD 算子改造
 
 仓库直接携带两套 llama.cpp 源码：

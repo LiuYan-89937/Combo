@@ -104,7 +104,12 @@ Factory 可以从自然语言需求制造新的 AgentPackage，也可以基于�
 - 通过 Kernel Catalog、Host Shape Trace 和 rocprof 证明自定义路径实际命中。
 - 使用 MTP 推测解码，一次 Target 验证多个候选 Token，提升自回归生成吞吐。
 
-在已归档的同条件五轮测试中，AMD 实现的正常服务 Decode 吞吐由 Official 的 `84.0867 tok/s` 提升至 `88.8320 tok/s`，综合提升 `5.64%`。该数值只代表归档测试环境，不承诺在其他模型、Shape、ROCm 版本或 GPU 上获得相同收益。
+性能结论采用两套独立归因口径：
+
+- 关闭 MTP 时，AMD 的单 Token Decode 吞吐由 Official 的 `84.0867 tok/s` 提升至 `88.8320 tok/s`，提升 `5.64%`。
+- Official 与 AMD 均开启 MTP 时，Decode 基本持平；AMD 的 Prompt 吞吐提升 `16.70%`、模型计算 TTFT 降低 `14.31%`、双客户端 QPS 提升 `5.09%`，平均请求延迟降低 `4.89%`。
+
+MTP 会同时改变两套实现的 Decode 调度，因此不把 MTP 自身的调度收益归因于 AMD Kernel。以上数值只代表归档测试环境，不承诺在其他模型、Shape、ROCm 版本或 GPU 上获得相同收益。
 
 详细实现、对照路径和适用边界见 [推理优化说明](performance/ROCmOptimizations.zh-CN.md)。
 
