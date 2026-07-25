@@ -63,7 +63,7 @@ class SchedulerExecutor:
         command = payload.get("command")
         if self.tool_runner is None:
             raise RuntimeError("scheduler script_run target requires a tool runner")
-        return self.tool_runner("bash", {"command": command, **_optional_tool_args(payload)}, job, run)
+        return self.tool_runner("shell", {"command": command, **_optional_tool_args(payload)}, job, run)
 
     def _execute_tool(self, job: SchedulerJob, run: SchedulerRun) -> dict[str, Any]:
         payload = job.target.payload
@@ -186,7 +186,7 @@ def _target_evidence(job: SchedulerJob) -> dict[str, Any]:
         command = payload.get("command")
         return {
             "target_type": target.target_type,
-            "tool_id": "bash",
+            "tool_id": "shell",
             "command_preview": _command_preview(command),
             "option_keys": sorted(key for key in payload if key != "command"),
         }

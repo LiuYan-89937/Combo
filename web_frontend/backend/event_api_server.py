@@ -170,7 +170,11 @@ async def _ensure_skillhub_cli() -> None:
             result.get("cli_version") or "",
         )
         return
-    logger.warning("SkillHUB CLI is not available; set AGENTFACTORY_SKILLHUB_AUTO_INSTALL=true or install it manually.")
+    logger.warning(
+        "%s",
+        result.get("message")
+        or "SkillHUB CLI is not available; install a native SkillHUB CLI distribution to enable it.",
+    )
 
 
 @app.on_event("startup")

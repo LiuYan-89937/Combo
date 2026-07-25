@@ -1,15 +1,16 @@
 from __future__ import annotations
 
+import atexit
 from dataclasses import dataclass, field
 from pathlib import Path
 import os
-import signal
 import subprocess
 import threading
 import time
 import uuid
 from typing import Any, TextIO
 
+from agent_factory.tooling.builtins.process.runtime import ShellRuntime, resolve_shell_runtime
 from agent_factory.tooling.workspace_paths import workspace_path_candidate
 
 
@@ -50,6 +51,7 @@ class ManagedProcess:
     command: str
     cwd: Path
     process: subprocess.Popen[str]
+    shell_runtime: ShellRuntime
     started_at: float
     stdout: OutputBuffer = field(default_factory=OutputBuffer)
     stderr: OutputBuffer = field(default_factory=OutputBuffer)
@@ -82,24 +84,25 @@ class ProcessManager:
         max_output_chars: int,
     ) -> dict[str, Any]:
         process_id = uuid.uuid4().hex
+        shell_runtime = resolve_shell_runtime()
         process = subprocess.Popen(
-            command,
+            shell_runtime.command_argv(command),
             cwd=str(cwd),
-            executable="/bin/bash",
-            shell=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             stdin=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
             errors="replace",
-            start_new_session=True,
+            env=shell_runtime.environment(os.environ),
+            **shell_runtime.process_options(),
         )
         managed = ManagedProcess(
             process_id=process_id,
             command=command,
             cwd=cwd,
             process=process,
+            shell_runtime=shell_runtime,
             started_at=time.monotonic(),
         )
         with self._lock:
@@ -122,6 +125,8 @@ class ProcessManager:
             "process_id": managed.process_id,
             "status": managed.status(),
             "command": managed.command,
+            "shell": managed.shell_runtime.shell_id,
+            "shell_executable": str(managed.shell_runtime.executable),
             "cwd": str(managed.cwd),
             "exit_code": exit_code,
             "stdout": stdout,
@@ -135,13 +140,26 @@ class ProcessManager:
         managed = self._get(process_id)
         managed.stop_requested = True
         if managed.process.poll() is None:
-            self._terminate_process_group(managed)
+            managed.shell_runtime.terminate_tree(managed.process)
             try:
                 managed.process.wait(timeout=grace_seconds)
             except subprocess.TimeoutExpired:
-                self._kill_process_group(managed)
+                managed.shell_runtime.kill_tree(managed.process)
                 managed.process.wait()
         return self.snapshot(process_id=process_id, max_output_chars=max_output_chars)
+
+    def close(self) -> None:
+        with self._lock:
+            process_ids = list(self._processes)
+        for process_id in process_ids:
+            try:
+                self.stop(
+                    process_id=process_id,
+                    grace_seconds=0,
+                    max_output_chars=1,
+                )
+            except (KeyError, OSError, subprocess.SubprocessError):
+                continue
 
     def _get(self, process_id: str) -> ManagedProcess:
         with self._lock:
@@ -171,22 +189,6 @@ class ProcessManager:
         except subprocess.TimeoutExpired:
             return
 
-    def _terminate_process_group(self, managed: ManagedProcess) -> None:
-        try:
-            os.killpg(managed.process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            return
-        except Exception:
-            managed.process.terminate()
-
-    def _kill_process_group(self, managed: ManagedProcess) -> None:
-        try:
-            os.killpg(managed.process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            return
-        except Exception:
-            managed.process.kill()
-
 
 def _read_stream(stream: TextIO, buffer: OutputBuffer) -> None:
     try:
@@ -200,6 +202,7 @@ def _read_stream(stream: TextIO, buffer: OutputBuffer) -> None:
 
 
 PROCESS_MANAGER = ProcessManager()
+atexit.register(PROCESS_MANAGER.close)
 
 
 def process_runtime_boundary(resources: dict[str, Any]) -> tuple[Path, bool]:

@@ -6,7 +6,7 @@ from agent_factory.tooling.spec import ToolRiskResult
 
 
 EXECUTOR_FALLBACK_REASON_FIELD = "fallback_reason"
-EXECUTOR_FALLBACK_TOOL_IDS = frozenset({"bash"})
+EXECUTOR_FALLBACK_TOOL_IDS = frozenset({"shell"})
 
 
 def executor_fallback_risk(arguments: dict[str, Any], context: dict[str, Any]) -> ToolRiskResult | None:

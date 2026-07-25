@@ -12,6 +12,7 @@ from agent_factory.model_pool.schema import ModelBindingRole, ModelProfileBindin
 from agent_factory.scheduler_system.schema import SchedulerContractConfig, SchedulerSeedContractConfig
 from agent_factory.trace_system.schema import TraceContractConfig
 from agent_factory.tooling.approval_policy import ToolApprovalPolicyConfig
+from agent_factory.tooling.builtins.aliases import canonical_builtin_tool_ids
 from agent_factory.runtime_defaults import (
     DEFAULT_BUILTIN_ALLOW_EXTERNAL_PATHS,
     DEFAULT_BUILTIN_WORKSPACE_ROOT,
@@ -124,15 +125,12 @@ class ToolsContractConfig(BaseModel):
     @classmethod
     def _builtin_tool_ids_are_not_empty(cls, value: list[str]) -> list[str]:
         ids: list[str] = []
-        seen: set[str] = set()
         for item in value:
             tool_id = str(item).strip()
             if not tool_id:
                 raise ValueError("builtin_tool_ids must not contain empty ids")
-            if tool_id not in seen:
-                ids.append(tool_id)
-                seen.add(tool_id)
-        return ids
+            ids.append(tool_id)
+        return canonical_builtin_tool_ids(ids)
 
     @field_validator("builtin_workspace_root")
     @classmethod

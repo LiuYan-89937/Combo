@@ -275,6 +275,18 @@ def ensure_global_skillhub_cli(*, auto_install: bool = True, timeout_seconds: in
             "cli_version": "",
             "installed": False,
         }
+    if os.name == "nt":
+        return {
+            "status": "missing",
+            "cli_available": False,
+            "cli_path": None,
+            "cli_version": "",
+            "installed": False,
+            "message": (
+                "SkillHUB currently publishes a Bash bootstrap installer only; automatic installation "
+                "is disabled on Windows until a native distribution is available."
+            ),
+        }
     script = _download_install_script(timeout_seconds=timeout_seconds)
     try:
         result = _run_command(["bash", str(script), "--cli-only"], timeout_seconds=timeout_seconds)

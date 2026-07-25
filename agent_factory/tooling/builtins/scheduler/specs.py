@@ -162,7 +162,7 @@ def _script_run_target_schema() -> dict:
                     "command": {
                         "type": "string",
                         "minLength": 1,
-                        "description": "交给 bash 工具执行的命令文本。",
+                        "description": "交给当前平台 shell 工具执行的命令文本。",
                     },
                     "cwd": {"type": "string"},
                     "mode": {"type": "string", "enum": ["foreground", "background"]},

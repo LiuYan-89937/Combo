@@ -184,7 +184,7 @@ def _executor_tool_policy(state: Any) -> str:
         "glob, ls, and read may be used to inspect workspace files. "
         "If read reports a missing file or the path is uncertain, inspect the parent or nearby directory with ls "
         "before retrying read with the exact file name/path. "
-        "Call bash only when the available package/runtime tools cannot accomplish the current plan step; "
+        "Call shell only when the available package/runtime tools cannot accomplish the current plan step; "
         "when doing so, include fallback_reason in the tool arguments explaining the gap. "
         "Use write, edit, and multi_edit normally for workspace deliverables while respecting filesystem boundaries. "
         f"{boundary} Generated files should be written under the workspace root, for example "

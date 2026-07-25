@@ -24,7 +24,7 @@ class TraceDiagnostics:
             failure_category=failure_category,
             error_chain=projection.errors[-10:],
             recent_events=_recent_events(timeline, failed.record_id if failed else None),
-            tool_events=_events_with_prefix(timeline, ("tool_", "tool.", "bash.", "mcp.", "skill.")),
+            tool_events=_events_with_prefix(timeline, ("tool_", "tool.", "shell.", "mcp.", "skill.")),
             model_events=_events_with_prefix(timeline, ("model_", "model.")),
             context_events=_events_with_prefix(timeline, ("context_", "context.")),
             references=projection.references,

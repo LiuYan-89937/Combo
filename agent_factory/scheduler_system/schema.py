@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from agent_factory.tooling.builtins.aliases import canonical_builtin_tool_id
 
 SchedulerOwnerType = Literal["factory", "agent"]
 SchedulerStoreBackend = Literal["sqlite"]
@@ -66,6 +67,7 @@ class SchedulerTarget(BaseModel):
             arguments = self.payload.get("arguments")
             if not tool_id:
                 raise ValueError("tool_call target payload requires tool_id")
+            self.payload["tool_id"] = canonical_builtin_tool_id(tool_id)
             if arguments is not None and not isinstance(arguments, dict):
                 raise ValueError("tool_call target payload arguments must be an object")
         return self

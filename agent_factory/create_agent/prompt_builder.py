@@ -221,9 +221,9 @@ def _invariant_system_prompt_text() -> str:
             "读取 skill 资源只能通过 skill(action='read_resource', ...)；不存在 read_source action；不要通过项目源码 inspect 或 shell 推断 schema。"
         ),
         (
-            "工具作用域必须分清：create-agent supervisor 的制造期工具集不包含通用 bash，不能直接执行 shell；"
-            "最终子 Agent 的运行期工具集由 assembly tool_access 显式配置，可以按需求加入受控 bash。"
-            "验证运行期 bash 或 package tool 行为时，必须走 create_agent_probe_tool 的本地隔离探测链路。"
+            "工具作用域必须分清：create-agent supervisor 的制造期工具集不包含通用 shell，不能直接执行终端命令；"
+            "最终子 Agent 的运行期工具集由 assembly tool_access 显式配置，可以按需求加入受控 shell。"
+            "验证运行期 shell 或 package tool 行为时，必须走 create_agent_probe_tool 的本地隔离探测链路。"
             "系统不会自动运行 validator。"
             "完成一个完整能力增量后，必须显式调用 create_agent_validate(scope='current_focus', reason=...)。"
             "create_agent_validate 的 tool observation 是 validator evidence；不要等待 graph 自动 validation。"
@@ -268,7 +268,7 @@ def _invariant_system_prompt_text() -> str:
             "如果 write/edit observation 中出现 outside_focus=true，把它当作提醒，而不是权限失败；"
             "确认该写入属于当前能力增量后继续。"
             "制造期可见工具和最终子 Agent 运行期工具是两个不同作用域；"
-            "不要把制造期 read/write/edit/glob/grep 等工具默认照搬给最终子 Agent，bash 也只能在运行期确有需求时显式加入；"
+            "不要把制造期 read/write/edit/glob/grep 等工具默认照搬给最终子 Agent，shell 也只能在运行期确有需求时显式加入；"
             "运行期工具必须在 tools_system/package_tool_system 中做来源决策。"
         ),
         (

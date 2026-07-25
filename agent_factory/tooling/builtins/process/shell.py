@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import shlex
 from typing import Any
 
 from agent_factory.tooling.builtins.process.manager import (
@@ -12,14 +11,11 @@ from agent_factory.tooling.builtins.process.manager import (
     resolve_cwd,
     wait_seconds,
 )
+from agent_factory.tooling.builtins.process.runtime import resolve_shell_runtime
+from agent_factory.tooling.envelope import tool_envelope
 from agent_factory.tooling.executor_fallback import executor_fallback_risk
 from agent_factory.tooling.risk import merge_risk_results
 from agent_factory.tooling.spec import ToolRiskResult
-from agent_factory.tooling.envelope import tool_envelope
-
-
-HIGH_RISK_COMMANDS = {"rm", "dd", "mkfs", "sudo", "chmod", "chown", "curl", "wget", "scp", "ssh"}
-SHELL_CONTROL_TOKENS = ("|", "&&", "||", ";", "$(", "`", ">", "<")
 
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -28,28 +24,34 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
         return ToolRiskResult(
             action="deny",
             risk_level="high",
-            reasons=["bash command must be a non-empty string"],
+            reasons=["shell command must be a non-empty string"],
         ).model_dump(mode="json")
     cwd_result = _evaluate_cwd(arguments, context)
     if cwd_result.action == "deny":
         return cwd_result.model_dump(mode="json")
-    reasons = ["bash is a high-risk tool and requires approval"]
-    facts = dict(cwd_result.facts)
     try:
-        parts = shlex.split(command)
-    except ValueError as exc:
+        shell_runtime = resolve_shell_runtime()
+        analysis = shell_runtime.analyze(command)
+    except (RuntimeError, ValueError) as exc:
         return ToolRiskResult(
             action="deny",
             risk_level="high",
-            reasons=[f"bash command cannot be parsed safely: {exc}"],
-            facts=facts,
+            reasons=[f"shell command cannot be evaluated safely: {exc}"],
+            facts=dict(cwd_result.facts),
         ).model_dump(mode="json")
-    binary = parts[0] if parts else ""
-    facts["command_binary"] = binary
-    facts["contains_shell_control"] = any(token in command for token in SHELL_CONTROL_TOKENS)
-    if binary in HIGH_RISK_COMMANDS:
-        reasons.append(f"command starts with high-risk binary: {binary}")
-    if facts["contains_shell_control"]:
+    facts = {
+        **cwd_result.facts,
+        "shell": shell_runtime.shell_id,
+        "shell_executable": str(shell_runtime.executable),
+        "command_binary": analysis.command_binary,
+        "contains_shell_control": analysis.contains_shell_control,
+    }
+    reasons = [
+        f"shell executes through {shell_runtime.display_name} and requires approval",
+    ]
+    if analysis.high_risk_binary:
+        reasons.append(f"command starts with a high-risk executable: {analysis.command_binary}")
+    if analysis.contains_shell_control:
         reasons.append("command contains shell control structure")
     command_risk = ToolRiskResult(
         action="ask",
@@ -75,13 +77,15 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         raise NotADirectoryError(str(cwd))
     if is_read_only_process_path(cwd, root=root, resources=resources):
         raise PermissionError(f"cwd is read-only runtime input: {cwd}")
-    return tool_envelope(PROCESS_MANAGER.start(
-        command=command,
-        cwd=cwd,
-        mode=mode,
-        wait_seconds=wait_seconds(arguments),
-        max_output_chars=output_limit(arguments),
-    ))
+    return tool_envelope(
+        PROCESS_MANAGER.start(
+            command=command,
+            cwd=cwd,
+            mode=mode,
+            wait_seconds=wait_seconds(arguments),
+            max_output_chars=output_limit(arguments),
+        )
+    )
 
 
 def _evaluate_cwd(arguments: dict[str, Any], context: dict[str, Any]) -> ToolRiskResult:
@@ -119,9 +123,9 @@ def _evaluate_cwd(arguments: dict[str, Any], context: dict[str, Any]) -> ToolRis
     )
 
 
-def _process_workspace_guidance(root) -> str:
+def _process_workspace_guidance(root: Any) -> str:
     return (
         "Use a relative cwd inside the workspace or an absolute cwd under "
-        f"process root {root}; do not use /tmp, host paths, or arbitrary absolute paths "
-        "unless external paths are explicitly enabled."
+        f"process root {root}; do not use temporary directories, host paths, or arbitrary absolute "
+        "paths unless external paths are explicitly enabled."
     )

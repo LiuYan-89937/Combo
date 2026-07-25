@@ -218,6 +218,15 @@ src-tauri/target/release/bundle/
 
 Tauri 构建前会清理准备打包的 Python 源码缓存，避免将旧 `__pycache__` 和已删除模块的 `.pyc` 带入安装包。
 
+### 跨平台终端
+
+运行期统一暴露 `shell`、`shell_status` 和 `shell_stop` 工具。macOS/Linux 后端使用
+PATH 中的 Bash，Windows 后端优先使用 PowerShell 7（`pwsh`），并回退到系统自带的
+Windows PowerShell。后台命令由同一平台后端负责整棵进程树的查询与终止。
+
+旧 AgentPackage 中的 `bash`、`bash_status` 和 `bash_stop` 契约会在加载时统一迁移到
+新的 `shell` 能力，不会注册或维护第二套执行实现。
+
 ## 静态检查
 
 本项目不应通过运行特化 Agent 示例来代替常规构建检查。按变更范围选择：
