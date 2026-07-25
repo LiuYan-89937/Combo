@@ -28,14 +28,16 @@ impl PythonSidecar {
         env_vars.insert("AGENTFACTORY_NATIVE_RUNTIME", "1");
         env_vars.insert("AGENTFACTORY_PORT", &port_str);
 
-        // Get project root (parent of src-tauri in dev, resource dir in prod)
+        // Get project root
         let project_root = if cfg!(debug_assertions) {
-            app.path().app_config_dir()?
+            // In dev mode, get from CARGO_MANIFEST_DIR at build time
+            // The manifest is in src-tauri/, so parent is project root
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .parent()
-                .and_then(|p| p.parent())
                 .ok_or("Cannot determine project root")?
                 .to_path_buf()
         } else {
+            // In production, use the bundled resource directory
             app.path().resource_dir()?
         };
 
@@ -66,7 +68,16 @@ impl PythonSidecar {
 
     /// Find system Python executable (development mode).
     fn find_system_python() -> Result<PathBuf, Box<dyn std::error::Error>> {
-        // Try common Python names
+        // In dev mode, prefer venv Python if it exists
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let project_root = manifest_dir.parent().ok_or("Cannot find project root")?;
+        let venv_python = project_root.join(".venv").join("bin").join("python");
+
+        if venv_python.exists() {
+            return Ok(venv_python);
+        }
+
+        // Fallback to system Python
         for name in &["python3", "python"] {
             if let Ok(output) = Command::new(name).arg("--version").output() {
                 if output.status.success() {
