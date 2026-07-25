@@ -41,6 +41,7 @@ class EnvironmentResolver:
         package_root: str | Path,
         *,
         on_progress: EnvironmentProgress | None = None,
+        verify_runtime_image: bool = False,
     ) -> dict[str, Any]:
         root = Path(package_root).expanduser().resolve()
         _notify(on_progress, "checking_contract", package_root=str(root))
@@ -48,7 +49,10 @@ class EnvironmentResolver:
         config = contract.config
         base_image = str(config.base_image or "agentfactory-runtime-python:3.12").strip()
         if not _has_materializable_dependencies(enabled=contract.enabled, config=config):
-            base_digest = configured_runtime_image_id(base_image) or ""
+            base_digest = self._base_image_identity(
+                base_image,
+                verify_runtime_image=verify_runtime_image,
+            )
             request = _dependency_request(
                 enabled=contract.enabled,
                 base_image=base_image,
@@ -90,7 +94,11 @@ class EnvironmentResolver:
             )
         base_image = str(config.base_image or "agentfactory-runtime-python:3.12").strip()
         try:
-            base_digest = resolve_runtime_image(docker, base_image).resolved
+            base_digest = resolve_runtime_image(
+                docker,
+                base_image,
+                pinned_image=base_image if verify_runtime_image else None,
+            ).resolved
         except RuntimeImageResolutionError as exc:
             raise EnvironmentResolutionError(exc.status, str(exc)) from exc
         request = _dependency_request(
@@ -156,6 +164,29 @@ class EnvironmentResolver:
             dependency_count=_dependency_count(request),
         )
         return result
+
+    @staticmethod
+    def _base_image_identity(
+        base_image: str,
+        *,
+        verify_runtime_image: bool,
+    ) -> str:
+        if not verify_runtime_image:
+            return configured_runtime_image_id(base_image) or ""
+        docker = shutil.which("docker")
+        if not docker:
+            raise EnvironmentResolutionError(
+                "docker_unavailable",
+                "Docker CLI is required to verify the Agent runtime image",
+            )
+        try:
+            return resolve_runtime_image(
+                docker,
+                base_image,
+                pinned_image=base_image,
+            ).resolved
+        except RuntimeImageResolutionError as exc:
+            raise EnvironmentResolutionError(exc.status, str(exc)) from exc
 
     def read_lock(self, package_root: str | Path) -> dict[str, Any]:
         root = Path(package_root).expanduser().resolve()

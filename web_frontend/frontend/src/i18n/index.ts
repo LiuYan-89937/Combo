@@ -615,6 +615,11 @@ const zhCN = {
   'agentGroup.running': '运行中',
   'agentGroup.members': '成员',
   'agentGroup.activeRuns': '{count} 个 Agent 运行中',
+  'agentGroup.runQueued': '等待启动',
+  'agentGroup.runRunning': '正在处理',
+  'agentGroup.runAwaitingApproval': '等待工具审批',
+  'agentGroup.runCancelling': '正在停止',
+  'agentGroup.stopAgent': '停止',
   'agentGroup.revision': '版本',
   'agentGroup.browseFiles': '浏览文件',
 
@@ -1680,6 +1685,11 @@ const enUS: Record<MessageKey, string> = {
   'agentGroup.running': 'Running',
   'agentGroup.members': 'Members',
   'agentGroup.activeRuns': '{count} Agents running',
+  'agentGroup.runQueued': 'Waiting to start',
+  'agentGroup.runRunning': 'Working',
+  'agentGroup.runAwaitingApproval': 'Waiting for tool approval',
+  'agentGroup.runCancelling': 'Stopping',
+  'agentGroup.stopAgent': 'Stop',
   'agentGroup.revision': 'Revision',
   'agentGroup.browseFiles': 'Browse Files',
 

@@ -53,7 +53,10 @@
           <div class="participant-item">
             <div class="participant-name">{{ participant.agent_name }}</div>
             <div class="participant-stats">
-              <n-tag v-if="participant.active_run_count > 0" type="info" size="tiny">
+              <n-tag v-if="participant.statuses.includes('cancelling')" type="warning" size="tiny">
+                {{ t('agentGroup.runCancelling') }}
+              </n-tag>
+              <n-tag v-else-if="participant.active_run_count > 0" type="info" size="tiny">
                 运行中: {{ participant.active_run_count }}
               </n-tag>
               <span class="run-count">{{ participant.run_count }} 次运行</span>
@@ -163,12 +166,14 @@ import { useCommand } from '@/composables/useCommand'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useWorkspaceStore } from '@/stores/workspace'
 import type { WorkspaceEntry } from '@/types/protocol'
+import { useI18n } from '@/composables/useI18n'
 
 const store = useAgentGroupStore()
 const resourceContext = useResourceContext()
 const commands = useCommand()
 const runtimeStore = useRuntimeStore()
 const workspaceStore = useWorkspaceStore()
+const { t } = useI18n()
 const workspaceContext = computed(() => resourceContext.workspaceContext.value)
 
 // State

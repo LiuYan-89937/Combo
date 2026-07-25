@@ -26,7 +26,15 @@ from agent_factory.sqlite_runtime import connect_sqlite, initialize_sqlite_store
 SQLITE_BUSY_TIMEOUT_MS = 10000
 
 GROUP_STATUSES = {"draft", "active", "archived"}
-MEMBER_RUN_STATUSES = {"queued", "running", "awaiting_approval", "completed", "failed", "cancelled"}
+MEMBER_RUN_STATUSES = {
+    "queued",
+    "running",
+    "awaiting_approval",
+    "cancelling",
+    "completed",
+    "failed",
+    "cancelled",
+}
 MESSAGE_SPEAKER_TYPES = {"user", "agent", "system"}
 MESSAGE_KINDS = {
     "user_message",
@@ -675,6 +683,32 @@ class AgentGroupStore:
                 where group_run_id = ?
             """, params)
 
+    def transition_run_status(
+        self,
+        group_run_id: str,
+        *,
+        expected_statuses: set[str],
+        status: str,
+    ) -> bool:
+        """Apply one status transition without overwriting a concurrent terminal event."""
+        if status not in MEMBER_RUN_STATUSES:
+            raise AgentGroupStoreError(f"invalid run status: {status}")
+        expected = sorted({str(value) for value in expected_statuses if value in MEMBER_RUN_STATUSES})
+        if not expected:
+            raise AgentGroupStoreError("expected_statuses must contain at least one valid run status")
+        placeholders = ", ".join("?" for _ in expected)
+        now = utc_now_text()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                f"""
+                update agent_group_member_runs
+                set status = ?, updated_at = ?
+                where group_run_id = ? and status in ({placeholders})
+                """,
+                (status, now, group_run_id, *expected),
+            )
+            return cursor.rowcount > 0
+
     def list_queued_runs(self, group_id: str) -> list[dict[str, Any]]:
         """列出所有 queued 状态的 runs"""
         with self._connect() as conn:
@@ -689,9 +723,13 @@ class AgentGroupStore:
 
             return [self._run_view(r) for r in rows]
 
-    def cancel_run(self, group_run_id: str) -> None:
+    def cancel_run(self, group_run_id: str) -> bool:
         """取消运行"""
-        self.update_run(group_run_id, {"status": "cancelled"})
+        return self.transition_run_status(
+            group_run_id,
+            expected_statuses={"queued", "running", "awaiting_approval", "cancelling"},
+            status="cancelled",
+        )
 
     def requeue_run(self, group_run_id: str) -> None:
         run = self.get_run(group_run_id)

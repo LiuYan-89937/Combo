@@ -46,7 +46,7 @@ export const useAgentGroupStore = defineStore('agentGroup', () => {
   const members = computed(() => activeGroup.value?.members || [])
   const messages = computed(() => activeGroup.value?.messages || [])
   const runs = computed(() => activeGroup.value?.runs || [])
-  const activeRuns = computed(() => runs.value.filter(r => ['queued', 'running', 'awaiting_approval'].includes(r.status)))
+  const activeRuns = computed(() => runs.value.filter(r => ['queued', 'running', 'awaiting_approval', 'cancelling'].includes(r.status)))
   const completedRuns = computed(() => runs.value.filter(r => ['completed', 'failed', 'cancelled'].includes(r.status)))
   const transcript = computed<TranscriptItem[]>(() => {
     const persisted = messages.value.map(message => messageToTranscript(
@@ -86,7 +86,7 @@ export const useAgentGroupStore = defineStore('agentGroup', () => {
       const participant = participantMap.get(run.speaker_package_id)
       if (participant) {
         participant.run_count++
-        if (['queued', 'running', 'awaiting_approval'].includes(run.status)) {
+        if (['queued', 'running', 'awaiting_approval', 'cancelling'].includes(run.status)) {
           participant.active_run_count++
         }
         if (!participant.statuses.includes(run.status)) {
@@ -341,10 +341,12 @@ export const useAgentGroupStore = defineStore('agentGroup', () => {
     const run = activeGroup.value.runs.find(item => item.group_run_id === groupRunId)
     const display = speakerMetadata(run?.speaker_package_id)
     if (event.event_type === 'run_started') {
+      if (run?.status === 'cancelling' || run?.status === 'cancelled') return
       patchRun(groupRunId, { status: 'running', request_id: event.request_id || undefined })
       return
     }
     if (event.event_type === 'tool_approval_requested') {
+      if (run?.status === 'cancelling' || run?.status === 'cancelled') return
       patchRun(groupRunId, { status: 'awaiting_approval', request_id: event.request_id || undefined })
       pendingApprovals.value[groupRunId] = event
     }

@@ -28,6 +28,16 @@ RuntimeKind = Literal["chat", "embedding", "image_generation"]
 RuntimeAction = Literal["load", "unload", "restart"]
 
 
+class InferenceNodeHTTPError(RuntimeError):
+    def __init__(self, *, status_code: int, operation: str, detail: str) -> None:
+        suffix = f": {detail}" if detail else ""
+        super().__init__(
+            f"inference node {operation} failed with HTTP {status_code}{suffix}"
+        )
+        self.status_code = status_code
+        self.detail = detail
+
+
 class InferenceNodeAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -218,7 +228,10 @@ class InferenceNodeClient:
                 endpoint.endpoint("/runtime/llama/activate"),
                 json=request.model_dump(mode="json"),
             )
-            response.raise_for_status()
+            _raise_for_inference_node_error(
+                response,
+                operation="llama.cpp implementation activation",
+            )
             payload = response.json()
         if not isinstance(payload, dict):
             raise ValueError("inference node response does not contain activation status")
@@ -234,9 +247,10 @@ def _raise_for_inference_node_error(
         response.raise_for_status()
     except httpx.HTTPStatusError as exc:
         detail = _inference_node_error_detail(response)
-        suffix = f": {detail}" if detail else ""
-        raise RuntimeError(
-            f"inference node {operation} failed with HTTP {response.status_code}{suffix}"
+        raise InferenceNodeHTTPError(
+            status_code=response.status_code,
+            operation=operation,
+            detail=detail,
         ) from exc
 
 

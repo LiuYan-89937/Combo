@@ -13,6 +13,7 @@ from agent_factory.local_inference.rocm import inspect_rocm_runtime
 from agent_factory.local_inference.implementation import inspect_llama_implementations
 from agent_factory.local_inference.memory_budget import estimate_inference_memory
 from agent_factory.local_inference.node_control import (
+    InferenceNodeHTTPError,
     InferenceLlamaImplementationAction,
     InferenceMemoryEstimateRequest,
     InferenceNodeClient,
@@ -390,7 +391,14 @@ def _profile_from_payload(payload: dict[str, Any], *, store: ModelPoolStore) -> 
 
 
 def _http_error(exc: Exception) -> HTTPException:
-    status = 404 if isinstance(exc, ModelPoolStoreError) and str(exc).startswith("unknown ") else 400
+    if isinstance(exc, InferenceNodeHTTPError):
+        status = exc.status_code
+    else:
+        status = (
+            404
+            if isinstance(exc, ModelPoolStoreError) and str(exc).startswith("unknown ")
+            else 400
+        )
     return HTTPException(status_code=status, detail=f"{type(exc).__name__}: {exc}")
 
 

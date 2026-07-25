@@ -25,7 +25,7 @@ from agent_factory.package_runtime import host_runtime_package_view
 from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
 from agent_factory.paths import project_root
 from agent_factory.resource_system import ResourceStore, migrate_package_resources
-from agent_factory.environment_system import EnvironmentResolver
+from agent_factory.environment_system import EnvironmentResolutionError, EnvironmentResolver
 from agent_factory.runtime_contracts import ResourcesContract
 from agent_factory.runtime_attachments import (
     ATTACHMENT_INPUT_DIR,
@@ -146,7 +146,7 @@ class AgentPackageRuntimeManager:
         self._system_handles: dict[str, SystemPackageRuntimeHandle] = {}
         self._knowledge_handles: dict[str, KnowledgeRuntimeHandle] = {}
         self._runtime_handle_lock = threading.RLock()
-        self._package_initialization_locks: dict[str, threading.Lock] = {}
+        self._package_initialization_locks: dict[str, threading.RLock] = {}
         self._instance_status_overrides: dict[str, dict[str, Any]] = {}
         self._mcp_gateways = HostMCPGatewayManager()
         self._skillhub_gateways = HostSkillHubGatewayManager()
@@ -388,6 +388,7 @@ class AgentPackageRuntimeManager:
                     stage=stage,
                     detail=detail,
                 ),
+                verify_runtime_image=True,
             )
             environment_prepared = True
             self._environment_preparation_errors.pop(package_id, None)
@@ -433,11 +434,11 @@ class AgentPackageRuntimeManager:
             raise
         return latest_status or self.package_instance_status(package_id)
 
-    def _package_initialization_lock(self, package_id: str) -> threading.Lock:
+    def _package_initialization_lock(self, package_id: str) -> threading.RLock:
         with self._runtime_handle_lock:
             lock = self._package_initialization_locks.get(package_id)
             if lock is None:
-                lock = threading.Lock()
+                lock = threading.RLock()
                 self._package_initialization_locks[package_id] = lock
             return lock
 
@@ -1479,20 +1480,61 @@ class AgentPackageRuntimeManager:
                 },
             )
         try:
-            handle = self._container(
-                package_id,
-                package,
-                runtime_key=runtime_key,
-                workdir_root=workdir_root,
-            )
-            if handle.startup_payload is not None:
+            with self._package_initialization_lock(package_id):
+                if not self._has_reusable_container(runtime_key, package):
+                    EnvironmentResolver().ensure(
+                        package.package_root,
+                        verify_runtime_image=True,
+                    )
+                    self._environment_preparation_errors.pop(package_id, None)
+                handle = self._container(
+                    package_id,
+                    package,
+                    runtime_key=runtime_key,
+                    workdir_root=workdir_root,
+                )
+                startup_payload = handle.startup_payload
+                handle.startup_payload = None
+            if startup_payload is not None:
                 yield "frontend_event", node_event(
                     request_id,
                     "node_completed",
                     node_id="runtime_container",
-                    payload=handle.startup_payload,
+                    payload=startup_payload,
                 )
-                handle.startup_payload = None
+            elif will_start:
+                yield "frontend_event", node_event(
+                    request_id,
+                    "node_completed",
+                    node_id="runtime_container",
+                    payload={
+                        "package_id": package_id,
+                        "backend": "container",
+                        "status": "ready",
+                        "reused": True,
+                    },
+                )
+        except EnvironmentResolutionError as exc:
+            self._environment_preparation_errors[package_id] = f"{type(exc).__name__}: {exc}"
+            failure_payload = {
+                "where": "agent_runtime.environment",
+                "why": exc.status,
+                "message": str(exc),
+                "suggested_action": (
+                    "Make the Docker runtime image and dependency pool available, then "
+                    "send the message again."
+                ),
+            }
+            if will_start:
+                yield "frontend_event", node_event(
+                    request_id,
+                    "node_failed",
+                    node_id="runtime_container",
+                    payload=failure_payload,
+                    severity="error",
+                )
+            yield "frontend_event", run_failed_event(request_id, failure_payload)
+            return
         except AgentRuntimeLaunchError as exc:
             if will_start:
                 yield "frontend_event", node_event(

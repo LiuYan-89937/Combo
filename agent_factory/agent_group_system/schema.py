@@ -28,6 +28,7 @@ class MemberRunStatus(str, Enum):
     queued = "queued"
     running = "running"
     awaiting_approval = "awaiting_approval"
+    cancelling = "cancelling"
     completed = "completed"
     failed = "failed"
     cancelled = "cancelled"

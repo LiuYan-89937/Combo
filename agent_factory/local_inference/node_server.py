@@ -13,6 +13,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
+from agent_factory.local_inference.capacity import inspect_chat_inference_capacity
 from agent_factory.local_inference.context_allocation import resolve_llama_context_plan
 from agent_factory.env import load_agentfactory_dotenv
 from agent_factory.local_inference.memory_budget import (
@@ -229,6 +230,28 @@ async def _execute_implementation_activation(
             status_code=409,
             detail=f"chat runtime must be idle or ready before switching implementation: {phase}",
         )
+    if phase == "ready":
+        capacity = await asyncio.to_thread(
+            inspect_chat_inference_capacity,
+            timeout_seconds=2.0,
+        )
+        if not capacity.live:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "cannot switch llama.cpp implementation because chat slot activity "
+                    f"could not be verified: {capacity.detail or capacity.source}"
+                ),
+            )
+        if capacity.busy_slots or capacity.deferred_requests:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "cannot switch llama.cpp implementation while chat inference is active: "
+                    f"busy_slots={capacity.busy_slots}, "
+                    f"deferred_requests={capacity.deferred_requests}"
+                ),
+            )
     profile_id = str(chat_state.get("profile_id") or "") if phase == "ready" else ""
     if profile_id:
         await runtime_manager.unload(profile_id)
