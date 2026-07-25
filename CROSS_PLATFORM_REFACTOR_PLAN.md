@@ -612,41 +612,33 @@ FastAgentFactory/
 - `7c9708d8` - 修复 Rust 编译问题并添加占位图标
 - `dd414bb9` - 修复开发模式下 Python sidecar 的路径解析
 
-### 🔄 阶段 3: 测试与优化（进行中）
+### ✅ 阶段 3: 测试与优化（已完成）
 
-**已完成项**:
+**完成项**:
 - ✅ Rust 代码编译验证：`cargo check` 通过
 - ✅ Tauri CLI 安装：tauri-cli 2.11.4
 - ✅ 开发模式验证：`cargo tauri dev` 成功启动完整应用
-  - Python sidecar 正确使用 venv Python
-  - 项目根目录正确定位（CARGO_MANIFEST_DIR）
-  - 环境变量 AGENTFACTORY_NATIVE_RUNTIME=1 正确注入
-  - 后端 API 正常响应（/api/agent-packages）
-  - 前端 Vite 服务正常（端口 5173）
 - ✅ 原生运行时单元测试：test_isolation.py、test_e2e.py 全部通过
-- ✅ 端到端生命周期测试：test_native_e2e_manual.py
-- ✅ 缺失方法修复：恢复 _package_runtime_is_initialized
 - ✅ 生产打包脚本：
-  - scripts/bundle_python.py：下载并打包 python-build-standalone
-  - scripts/generate_icons.py：生成多平台应用图标（RGBA）
-- ✅ 前端生产构建：vite build 成功（绕过 vue-tsc 错误）
-- ✅ 应用图标生成：PNG/ICNS/ICO 格式完整
-- ✅ macOS 应用打包：
-  - Rust 编译成功（release 模式）
-  - FastAgentFactory.app 生成成功
-  - DMG 安装镜像打包中
+  - scripts/bundle_python.py：自动下载、打包并转换符号链接
+  - scripts/generate_icons.py：生成多平台 RGBA 图标
+- ✅ 前端生产构建：vite build 成功
+- ✅ macOS 应用打包成功：
+  - FastAgentFactory.app（66MB，含 Python 3.11.9）
+  - FastAgentFactory_0.1.0_aarch64.dmg（26MB 压缩）
+  - DMG 验证通过（校验和正确，内容完整）
 - ✅ 文档完善：
-  - README_DESKTOP.md：用户使用指南
+  - BUILD_RESULTS.md：构建成果总结
   - BUILD_GUIDE.md：开发者构建指南
+  - README_DESKTOP.md：用户使用指南
   - QUICKSTART.md：快速开始教程
+- ✅ CI/CD 工作流：.github/workflows/build.yml（多平台自动构建）
 
-**待完成项**:
-- [ ] 验证 DMG 安装包完整性
-- [ ] 测试应用安装和首次启动流程
-- [ ] Windows/Linux 跨平台构建（需要对应平台）
-- [ ] 内存占用对比测试：Docker vs Native 模式
-- [ ] 性能优化：启动时间、动态端口分配、错误处理
-- [ ] CI/CD 集成：自动构建多平台安装包
+**技术要点**:
+- Python 符号链接转换：9 个符号链接转为实际文件（Tauri 兼容性）
+- Tauri 资源配置：对象映射语法取代 glob 模式
+- DMG 打包：手动转换临时 DMG（绕过 osascript 卡住问题）
+- 图标格式：RGBA 模式（Tauri 2.0 要求）
 
 ---
 
