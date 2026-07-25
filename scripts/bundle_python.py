@@ -121,6 +121,9 @@ def extract_python(archive_path: Path, target_dir: Path):
     else:
         print("⚠ 警告: 未找到 Python 可执行文件")
 
+    # 转换符号链接为实际文件（Tauri 不支持打包符号链接）
+    _convert_symlinks_to_files(target_dir)
+
 
 def _find_python_executable(python_dir: Path) -> Optional[Path]:
     """查找 Python 可执行文件"""
@@ -133,6 +136,40 @@ def _find_python_executable(python_dir: Path) -> Optional[Path]:
         if candidate.exists():
             return candidate
     return None
+
+
+def _convert_symlinks_to_files(python_dir: Path):
+    """将符号链接转换为实际文件（Tauri 不支持打包符号链接）"""
+    import os
+
+    print(f"\n转换符号链接...")
+    converted = 0
+
+    for root, dirs, files in os.walk(python_dir):
+        root_path = Path(root)
+        for name in files + dirs:
+            item = root_path / name
+            if item.is_symlink():
+                try:
+                    target = item.readlink()
+                    # 解析相对路径
+                    if not target.is_absolute():
+                        target = (item.parent / target).resolve()
+
+                    # 删除符号链接
+                    item.unlink()
+
+                    # 复制实际文件或目录
+                    if target.is_dir():
+                        shutil.copytree(target, item)
+                    else:
+                        shutil.copy2(target, item)
+
+                    converted += 1
+                except Exception as e:
+                    print(f"⚠ 无法转换 {item}: {e}")
+
+    print(f"✓ 转换了 {converted} 个符号链接")
 
 
 def install_dependencies(python_dir: Path, requirements_file: Path):

@@ -15,8 +15,8 @@ except ImportError:
 
 def create_icon(size: int, output_path: Path):
     """创建应用图标"""
-    # 创建背景（渐变蓝色）
-    img = Image.new('RGB', (size, size), color='#1a1a2e')
+    # 创建背景（RGBA 模式，Tauri 要求）
+    img = Image.new('RGBA', (size, size), color=(26, 26, 46, 255))
     draw = ImageDraw.Draw(img)
 
     # 绘制圆角矩形背景
@@ -24,8 +24,8 @@ def create_icon(size: int, output_path: Path):
     draw.rounded_rectangle(
         [(margin, margin), (size - margin, size - margin)],
         radius=size // 10,
-        fill='#0f3460',
-        outline='#16213e',
+        fill=(15, 52, 96, 255),
+        outline=(22, 33, 62, 255),
         width=size // 40
     )
 
@@ -48,7 +48,7 @@ def create_icon(size: int, output_path: Path):
     x = (size - text_width) // 2
     y = (size - text_height) // 2 - size // 20
 
-    draw.text((x, y), text, fill='#e94560', font=font)
+    draw.text((x, y), text, fill=(233, 69, 96, 255), font=font)
 
     # 保存
     img.save(output_path, format='PNG')

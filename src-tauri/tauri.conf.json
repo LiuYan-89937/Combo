@@ -34,7 +34,7 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "resources/*"
+      "resources/**"
     ],
     "externalBin": [],
     "copyright": "Copyright (c) 2026 FastAgentFactory Team",

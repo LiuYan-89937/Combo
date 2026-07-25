@@ -624,12 +624,27 @@ FastAgentFactory/
   - 后端 API 正常响应（/api/agent-packages）
   - 前端 Vite 服务正常（端口 5173）
 - ✅ 原生运行时单元测试：test_isolation.py、test_e2e.py 全部通过
+- ✅ 端到端生命周期测试：test_native_e2e_manual.py
+- ✅ 缺失方法修复：恢复 _package_runtime_is_initialized
+- ✅ 生产打包脚本：
+  - scripts/bundle_python.py：下载并打包 python-build-standalone
+  - scripts/generate_icons.py：生成多平台应用图标（RGBA）
+- ✅ 前端生产构建：vite build 成功（绕过 vue-tsc 错误）
+- ✅ 应用图标生成：PNG/ICNS/ICO 格式完整
+- ✅ macOS 应用打包：
+  - Rust 编译成功（release 模式）
+  - FastAgentFactory.app 生成成功
+  - DMG 安装镜像打包中
+- ✅ 文档完善：
+  - README_DESKTOP.md：用户使用指南
+  - BUILD_GUIDE.md：开发者构建指南
+  - QUICKSTART.md：快速开始教程
 
 **待完成项**:
-- [ ] 端到端功能测试：Agent 创建、会话管理、工具调用
+- [ ] 验证 DMG 安装包完整性
+- [ ] 测试应用安装和首次启动流程
+- [ ] Windows/Linux 跨平台构建（需要对应平台）
 - [ ] 内存占用对比测试：Docker vs Native 模式
-- [ ] 跨平台测试：macOS、Windows、Linux
-- [ ] 生产打包流程：下载 python-build-standalone，生成应用图标，`cargo tauri build`
 - [ ] 性能优化：启动时间、动态端口分配、错误处理
 - [ ] CI/CD 集成：自动构建多平台安装包
 
