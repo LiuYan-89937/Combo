@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pathlib import PurePosixPath
+from pathlib import PurePath, PurePosixPath, PureWindowsPath
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -134,15 +134,15 @@ class ToolsContractConfig(BaseModel):
 
     @field_validator("builtin_workspace_root")
     @classmethod
-    def _builtin_workspace_root_is_sandbox_absolute(cls, value: str) -> str:
+    def _builtin_workspace_root_is_absolute(cls, value: str) -> str:
         root = str(value).strip()
         if not root:
             raise ValueError("builtin_workspace_root must not be empty")
-        path = PurePosixPath(root)
-        if not path.is_absolute():
-            raise ValueError("builtin_workspace_root must be an absolute sandbox path")
-        if path == PurePosixPath("/"):
-            raise ValueError("builtin_workspace_root must not be the container root")
+        path = _cross_platform_absolute_path(root)
+        if path is None:
+            raise ValueError("builtin_workspace_root must be an absolute workspace path")
+        if path == type(path)(path.anchor):
+            raise ValueError("builtin_workspace_root must not be a filesystem root")
         return root
 
     @field_validator("instance_extension_root")
@@ -464,3 +464,11 @@ def _validate_package_relative_path(value: str, *, field_name: str) -> str:
     if any(part in {"", ".", ".."} for part in path.parts):
         raise ValueError(f"{field_name} must not contain empty, current, or parent segments")
     return value
+
+
+def _cross_platform_absolute_path(value: str) -> PurePath | None:
+    for path_type in (PurePosixPath, PureWindowsPath):
+        path = path_type(value)
+        if path.is_absolute():
+            return path
+    return None
