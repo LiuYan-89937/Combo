@@ -10,7 +10,7 @@ from typing import Any
 
 from langgraph.store.base import BaseStore
 
-from agent_factory.context_system.compression import estimate_text_tokens
+from agent_factory.context_system.token_estimation import estimate_text_tokens
 from agent_factory.knowledge_system.catalog import KnowledgeCatalog
 from agent_factory.knowledge_system.chunking import chunk_document
 from agent_factory.knowledge_system.events import KnowledgeEventSink, emit_knowledge_event, knowledge_event_payload

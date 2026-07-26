@@ -97,6 +97,7 @@ export interface SendMessageOptions {
 export interface RuntimeMainModelOptions {
   mainModelProfileId?: string | null
   reasoningIntensity?: number | null
+  requestTimeoutSeconds?: number | null
   userConfig?: Record<string, unknown> | null
 }
 
@@ -194,32 +195,46 @@ export function runAgentEvolutionCommand(
 function runtimePayload(payload: Record<string, unknown>, runtimeOptions?: RuntimeMainModelOptions): Record<string, unknown> {
   const profileId = String(runtimeOptions?.mainModelProfileId || '').trim()
   const reasoningIntensity = runtimeOptions?.reasoningIntensity
+  const requestTimeoutSeconds = runtimeOptions?.requestTimeoutSeconds
   const payloadUserConfig = payload.user_config && typeof payload.user_config === 'object'
     ? payload.user_config as Record<string, unknown>
     : null
   const extraUserConfig = runtimeOptions?.userConfig && typeof runtimeOptions.userConfig === 'object'
     ? runtimeOptions.userConfig
     : null
-  if (!profileId && reasoningIntensity == null && !extraUserConfig && !payloadUserConfig) return payload
+  const hasRuntimeRequest = typeof requestTimeoutSeconds === 'number'
+  const hasUserConfig = Boolean(profileId || reasoningIntensity != null || extraUserConfig || payloadUserConfig)
+  if (!hasRuntimeRequest && !hasUserConfig) return payload
   return {
     ...payload,
-    user_config: {
-      ...(payloadUserConfig || {}),
-      ...(extraUserConfig || {}),
-      ...(profileId
-        ? {
-            model_profile_overrides: {
-              ...((extraUserConfig?.model_profile_overrides && typeof extraUserConfig.model_profile_overrides === 'object')
-                ? extraUserConfig.model_profile_overrides as Record<string, unknown>
-                : {}),
-              main: profileId,
-            },
-          }
-        : {}),
-      ...(typeof reasoningIntensity === 'number'
-        ? { reasoning_intensity: reasoningIntensity }
-        : {}),
-    },
+    ...(hasRuntimeRequest
+      ? {
+          runtime_request: {
+            timeout_seconds: Math.max(0, Math.round(requestTimeoutSeconds as number)),
+          },
+        }
+      : {}),
+    ...(hasUserConfig
+      ? {
+          user_config: {
+            ...(payloadUserConfig || {}),
+            ...(extraUserConfig || {}),
+            ...(profileId
+              ? {
+                  model_profile_overrides: {
+                    ...((extraUserConfig?.model_profile_overrides && typeof extraUserConfig.model_profile_overrides === 'object')
+                      ? extraUserConfig.model_profile_overrides as Record<string, unknown>
+                      : {}),
+                    main: profileId,
+                  },
+                }
+              : {}),
+            ...(typeof reasoningIntensity === 'number'
+              ? { reasoning_intensity: reasoningIntensity }
+              : {}),
+          },
+        }
+      : {}),
   }
 }
 
@@ -239,12 +254,13 @@ export interface ResumeInterruptOptions {
 export function resumeInterruptCommand(
   options: ResumeInterruptOptions,
   sessionId?: string | null,
+  runtimeOptions?: RuntimeMainModelOptions,
 ): FactoryFrontendCommand {
   const requestId = generateRequestId()
   return createCommand('resume_interrupt', {
     request_id: requestId,
     session_id: sessionId,
-    payload: options,
+    payload: runtimePayload(options, runtimeOptions),
   })
 }
 

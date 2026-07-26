@@ -83,7 +83,10 @@ export function useResourceContext() {
     || Boolean(workspaceContext.value.packageSessionId)
   ))
   const packageIdForApi = computed(() => packageId.value || SYSTEM_CHAT_PACKAGE_ID)
-  const isAgentContext = computed(() => Boolean(packageId.value))
+  const isAgentSessionContext = computed(() => (
+    runtimeStore.currentMode === 'agent_package'
+    && Boolean(agentStore.activeChatPackageId)
+  ))
   const label = computed(() => {
     if (workspaceContext.value.resourceMode === 'agent_group') return agentGroupStore.activeGroup?.title || 'Agent Group'
     if (runtimeStore.currentMode === 'create_agent') return t('resource.manufacturing')
@@ -97,7 +100,7 @@ export function useResourceContext() {
     packageId,
     packageIdForApi,
     packageInfo,
-    isAgentContext,
+    isAgentSessionContext,
     label,
     workspaceContext,
     workspaceContextKey,

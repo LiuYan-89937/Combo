@@ -6,7 +6,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_factory.context_system.assembly import assemble_context_frame
-from agent_factory.context_system.compression import estimate_text_tokens, maybe_compress_messages
+from agent_factory.context_system.compression import maybe_compress_messages
 from agent_factory.context_system.events import emit_context_event
 from agent_factory.context_system.schema import (
     ContextCandidate,
@@ -24,6 +24,7 @@ from agent_factory.context_system.token_counter import (
     context_window_payload,
     model_context_limits,
 )
+from agent_factory.context_system.token_estimation import estimate_text_tokens
 
 
 class ContextPreparationResult(BaseModel):

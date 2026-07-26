@@ -588,7 +588,7 @@ class AgentPackageRuntimeManager:
 
     def list_sessions(self, package_id: str) -> list[dict[str, Any]]:
         package = self.load_package(package_id)
-        return self._list_sessions_for_loaded_package(package)
+        return self._list_sessions_for_loaded_package(package_id, package)
 
     def list_recent_sessions(self, *, limit: int = 5) -> list[dict[str, Any]]:
         sessions: list[dict[str, Any]] = []
@@ -655,7 +655,7 @@ class AgentPackageRuntimeManager:
                 "deleted_workdir": deleted_workdir,
                 "collaboration_unlink": collaboration_unlink,
                 "cancelled_active_request_count": cancelled_active_request_count,
-                "sessions": self._list_sessions_for_loaded_package(package),
+                "sessions": self._list_sessions_for_loaded_package(package_id, package),
                 "recent_agent_sessions": self.list_recent_sessions(),
             }
         deleted_checkpoint_count = _delete_agent_session_checkpoint(
@@ -683,7 +683,7 @@ class AgentPackageRuntimeManager:
             "deleted_workdir": deleted_workdir,
             "collaboration_unlink": collaboration_unlink,
             "cancelled_active_request_count": cancelled_active_request_count,
-            "sessions": self._list_sessions_for_loaded_package(package),
+            "sessions": self._list_sessions_for_loaded_package(package_id, package),
             "recent_agent_sessions": self.list_recent_sessions(),
         }
 
@@ -1070,6 +1070,7 @@ class AgentPackageRuntimeManager:
         session_id: str | None = None,
         request_id: str | None = None,
         user_config: dict[str, Any] | None = None,
+        runtime_request: dict[str, Any] | None = None,
         attachments: Any = None,
         message_metadata: dict[str, Any] | None = None,
         require_ready: bool = False,
@@ -1130,6 +1131,10 @@ class AgentPackageRuntimeManager:
             message_metadata=message_metadata,
             status="running",
         )
+        request_policy = RuntimeRequestPolicy.from_payload(
+            runtime_request,
+            default=self.request_policy,
+        )
         command = {
             "type": "run_message",
             "request_id": resolved_request_id,
@@ -1138,7 +1143,7 @@ class AgentPackageRuntimeManager:
                 "session_id": session.session_id,
                 "user_config": dict(user_config or {}),
                 "attachments": attachment_result.attachments,
-                "runtime_request": self.request_policy.as_payload(),
+                "runtime_request": request_policy.as_payload(),
                 "runtime_workspace": runtime_workspace,
             },
         }
@@ -1185,19 +1190,24 @@ class AgentPackageRuntimeManager:
         session_id: str,
         resume_payload: dict[str, Any] | None = None,
         request_id: str | None = None,
+        runtime_request: dict[str, Any] | None = None,
         workdir_root: Path | None = None,
     ) -> AgentPackageStreamRun:
         package = self.load_package(package_id)
         session = self._session_manager_for_package(package_id, package).load(session_id)
         resolved_workdir_root = workdir_root or self.workdir_for_session(package_id, session.session_id)
         runtime_workspace = _runtime_workspace_payload(package_id, resolved_workdir_root)
+        request_policy = RuntimeRequestPolicy.from_payload(
+            runtime_request,
+            default=self.request_policy,
+        )
         command = {
             "type": "resume_interrupt",
             "request_id": request_id or uuid4().hex,
             "payload": {
                 "session_id": session_id,
                 "resume_payload": resume_payload or {},
-                "runtime_request": self.request_policy.as_payload(),
+                "runtime_request": request_policy.as_payload(),
                 "runtime_workspace": runtime_workspace,
             },
         }
@@ -1245,7 +1255,7 @@ class AgentPackageRuntimeManager:
         try:
             package = self.repository.load_manifest(manifest_path)
             report = _read_json_object(manifest_path.parent / "package_report.json")
-            sessions = self._list_sessions_for_loaded_package(package)
+            sessions = self._list_sessions_for_loaded_package(package_id, package)
             detail = _package_detail_summary(self, package_id=package_id, package=package)
             return {
                 "package_id": package_id,
@@ -1304,10 +1314,17 @@ class AgentPackageRuntimeManager:
                 root = _host_session_root(package_id=package_id, package=package, configured=configured)
         return AgentSessionManager(AgentSessionConfig(root=root))
 
-    def _list_sessions_for_loaded_package(self, package: LoadedAgentPackage) -> list[dict[str, Any]]:
-        manager = self._session_manager_for_package(package.package_root.name, package)
+    def _list_sessions_for_loaded_package(
+        self,
+        package_id: str,
+        package: LoadedAgentPackage,
+    ) -> list[dict[str, Any]]:
+        manager = self._session_manager_for_package(package_id, package)
         return [
-            record.model_dump(mode="json")
+            {
+                **record.model_dump(mode="json"),
+                "package_id": package_id,
+            }
             for record in manager.list_sessions(agent_id=package.assembly_spec.agent.id)
         ]
 

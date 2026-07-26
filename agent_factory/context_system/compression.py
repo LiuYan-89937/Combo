@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 
 from agent_factory.context_system.schema import CompressionPolicy, ContextCompressionReport
 from agent_factory.context_system.token_counter import TokenCountResult
+from agent_factory.context_system.token_estimation import estimate_messages_tokens, estimate_text_tokens
 from agent_factory.models import get_compression_model
 from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
 
@@ -142,14 +143,6 @@ def _count_messages(
     if token_counter is None:
         return TokenCountResult(token_count=estimate_messages_tokens(messages), method="text_estimation")
     return token_counter(messages)
-
-
-def estimate_messages_tokens(messages: list[Any]) -> int:
-    return sum(estimate_text_tokens(_message_text(message)) for message in messages)
-
-
-def estimate_text_tokens(text: str) -> int:
-    return max(1, len(text) // 4) if text else 0
 
 
 def _partition_messages(messages: list[Any], *, keep_recent: int) -> tuple[list[Any], list[Any], list[Any]]:

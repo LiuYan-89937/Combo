@@ -27,6 +27,28 @@
       <n-empty v-else :description="t('status.noContext')" size="small" />
     </section>
 
+    <section v-if="activeRuntimeRequest" class="status-section">
+      <div class="section-heading">
+        <div class="section-title compact">{{ t('status.currentRequest') }}</div>
+        <n-tag size="small" type="info" :bordered="false">
+          {{ t('status.requestRunning') }}
+        </n-tag>
+      </div>
+      <div class="request-status">
+        <div class="request-status-row">
+          <span>{{ t('status.requestElapsed') }}</span>
+          <strong>{{ t('status.seconds', { count: requestElapsedSeconds }) }}</strong>
+        </div>
+        <div class="request-status-row">
+          <span>{{ t('status.requestTimeout') }}</span>
+          <strong>{{ requestTimeoutText }}</strong>
+        </div>
+        <div v-if="requestTimeoutSeconds !== null && requestTimeoutSeconds > 0" class="request-progress" aria-hidden="true">
+          <div class="request-progress-fill" :style="{ width: requestProgressWidth }"></div>
+        </div>
+      </div>
+    </section>
+
     <section class="status-section">
       <div class="section-heading">
         <div class="section-title compact">{{ t('status.memory') }}</div>
@@ -135,7 +157,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NButton, NEmpty, NIcon, NInput, NPopconfirm, NSpin, NTag } from 'naive-ui'
 import { RefreshOutline, SearchOutline, TrashOutline } from '@/components/icons'
 import { memoryApi, type MemoryContextItemView } from '@/api/memory'
@@ -161,7 +183,42 @@ const memoryItems = ref<MemoryContextItemView[]>([])
 const memoryLoading = ref(false)
 const memoryError = ref('')
 const deletingMemoryIds = ref<Record<string, boolean>>({})
+const requestClock = ref(Date.now())
 let memoryRequestSerial = 0
+let requestClockTimer: number | null = null
+
+const activeRuntimeRequest = computed(() => {
+  const requestId = runtimeStore.activeRequestId
+  if (!requestId) return null
+  const request = runtimeStore.activeRequests[requestId]
+  if (!request || request.background || request.status !== 'running') return null
+  return request
+})
+const requestRuntimeNode = computed(() => runtimeStore.nodes.runtime_request || null)
+const requestTimeoutSeconds = computed<number | null>(() => {
+  const heartbeatTimeout = nonNegativeNumber(requestRuntimeNode.value?.payload?.timeout_seconds)
+  if (heartbeatTimeout !== null) return heartbeatTimeout
+  return nonNegativeNumber(activeRuntimeRequest.value?.payload?.runtime_request?.timeout_seconds)
+})
+const requestElapsedSeconds = computed(() => {
+  const heartbeatElapsed = nonNegativeNumber(requestRuntimeNode.value?.payload?.elapsed_seconds) || 0
+  const startedAt = Date.parse(activeRuntimeRequest.value?.startedAt || '')
+  const localElapsed = Number.isFinite(startedAt)
+    ? Math.max(0, Math.floor((requestClock.value - startedAt) / 1000))
+    : 0
+  return Math.floor(Math.max(heartbeatElapsed, localElapsed))
+})
+const requestTimeoutText = computed(() => {
+  const timeout = requestTimeoutSeconds.value
+  if (timeout === null) return t('status.requestTimeoutPending')
+  if (timeout === 0) return t('status.requestNoTimeout')
+  return t('status.seconds', { count: timeout })
+})
+const requestProgressWidth = computed(() => {
+  const timeout = requestTimeoutSeconds.value
+  if (timeout === null || timeout <= 0) return '0%'
+  return `${Math.min(100, (requestElapsedSeconds.value / timeout) * 100)}%`
+})
 
 const contextWindow = computed(() => runtimeStore.contextWindow)
 const contextWindowPercent = computed(() => (
@@ -275,6 +332,11 @@ function percentLabel(value: unknown): string {
   return `${Math.round(numericScore(value) * 100)}%`
 }
 
+function nonNegativeNumber(value: unknown): number | null {
+  const numberValue = Number(value)
+  return Number.isFinite(numberValue) && numberValue >= 0 ? numberValue : null
+}
+
 function memoryKindLabel(kind: string): string {
   if (kind === 'preference') return t('status.memoryKind.preference')
   if (kind === 'decision') return t('status.memoryKind.decision')
@@ -293,6 +355,24 @@ function formatMemoryTime(value: string): string {
 onMounted(() => {
   refreshMemory()
 })
+
+onBeforeUnmount(() => {
+  stopRequestClock()
+})
+
+watch(
+  activeRuntimeRequest,
+  (request) => {
+    requestClock.value = Date.now()
+    stopRequestClock()
+    if (request) {
+      requestClockTimer = window.setInterval(() => {
+        requestClock.value = Date.now()
+      }, 1000)
+    }
+  },
+  { immediate: true },
+)
 
 watch(
   () => resourceContext.packageIdForApi.value,
@@ -317,6 +397,12 @@ function memoryActivityFingerprint(activity: { eventType?: string, payload?: Rec
     payload.duration_ms || '',
     payload.updated_at || '',
   ].join(':')
+}
+
+function stopRequestClock() {
+  if (requestClockTimer === null) return
+  window.clearInterval(requestClockTimer)
+  requestClockTimer = null
 }
 
 function toolStatusLabel(tool: ToolActivity): string {
@@ -462,6 +548,44 @@ function toolStatusType(tool: ToolActivity): 'default' | 'success' | 'warning' |
   line-height: 16px;
   color: var(--app-text-muted);
   font-variant-numeric: tabular-nums;
+}
+
+.request-status {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-space-sm);
+  padding: var(--app-space-md);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface-muted);
+}
+
+.request-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-space-md);
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-sm);
+}
+
+.request-status-row strong {
+  color: var(--app-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.request-progress {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--app-border);
+}
+
+.request-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--app-text);
+  transition: width 0.2s ease;
 }
 
 .memory-activity {

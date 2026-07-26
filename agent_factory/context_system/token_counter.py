@@ -5,12 +5,12 @@ from typing import Any
 
 from langchain_core.messages import BaseMessage, HumanMessage
 
-from agent_factory.models import get_compression_model, get_main_model, get_task_model
 from agent_factory.models.usage import normalize_usage_metadata
 from agent_factory.model_pool.schema import (
     DEFAULT_MODEL_COMPRESSION_TRIGGER_TOKENS,
     DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS,
 )
+from agent_factory.context_system.token_estimation import estimate_messages_tokens
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,46 +71,16 @@ def count_messages_tokens(
     model_role: str | None = None,
     tools: list[Any] | None = None,
 ) -> TokenCountResult:
-    selected_model = model
-    if selected_model is None:
-        model_role = model_role or _model_role_from_services(services)
-        selected_model = _model_for_role(model_role, services=services)
-    if selected_model is None:
-        return TokenCountResult(
-            token_count=None,
-            method="unavailable",
-            error="model tokenizer is unavailable",
-            model_role=model_role,
-        )
+    del model
+    model_role = model_role or _model_role_from_services(services)
     normalized = [message for message in messages if isinstance(message, BaseMessage)]
     if not normalized:
         normalized = [HumanMessage(content=str(message)) for message in messages if str(message)]
-    counter = getattr(selected_model, "get_num_tokens_from_messages", None)
-    if not callable(counter):
-        return TokenCountResult(
-            token_count=None,
-            method="unavailable",
-            error="model does not expose get_num_tokens_from_messages",
-            model_role=model_role,
-        )
-    try:
-        method = "model_tokenizer_messages_only" if tools else "model_tokenizer"
-        return TokenCountResult(
-            token_count=int(counter(normalized)),
-            method=method,
-            model_role=model_role,
-        )
-    except TypeError:
-        try:
-            return TokenCountResult(
-                token_count=int(counter(normalized)),
-                method="model_tokenizer",
-                model_role=model_role,
-            )
-        except Exception as exc:
-            return _count_error(exc, model_role=model_role)
-    except Exception as exc:
-        return _count_error(exc, model_role=model_role)
+    return TokenCountResult(
+        token_count=estimate_messages_tokens(normalized),
+        method="text_estimation_messages_only" if tools else "text_estimation",
+        model_role=model_role,
+    )
 
 
 def count_text_tokens(
@@ -237,29 +207,6 @@ def _model_role_from_services(services: Any | None) -> str:
         if role:
             return str(role)
     return "main"
-
-
-def _model_for_role(role: str | None, *, services: Any | None = None) -> Any | None:
-    service = getattr(services, "model_operation_service", None) if services is not None else None
-    resolver = getattr(service, "model_for_role", None)
-    if callable(resolver):
-        model = resolver(role)
-        if model is not None:
-            return model
-    if role == "task":
-        return get_task_model()
-    if role == "compression":
-        return get_compression_model()
-    return get_main_model()
-
-
-def _count_error(exc: Exception, *, model_role: str | None) -> TokenCountResult:
-    return TokenCountResult(
-        token_count=None,
-        method="unavailable",
-        error=f"{type(exc).__name__}: {exc}",
-        model_role=model_role,
-    )
 
 
 def _token_int(value: Any) -> int | None:

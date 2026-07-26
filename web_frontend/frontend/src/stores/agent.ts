@@ -237,8 +237,14 @@ export const useAgentStore = defineStore('agent', () => {
     }
   }
 
-  function setSessions(sessions: AgentSessionView[]): void {
-    agentSessions.value = sessions.filter(isStandaloneAgentSession)
+  function setSessions(sessions: AgentSessionView[], packageId?: string | null): void {
+    const fallbackPackageId = String(packageId || '').trim()
+    agentSessions.value = sessions
+      .map((session) => ({
+        ...session,
+        package_id: String(session.package_id || fallbackPackageId).trim(),
+      }))
+      .filter((session) => Boolean(session.package_id) && isStandaloneAgentSession(session))
     if (
       selectedSessionId.value
       && !agentSessions.value.some((session) => session.session_id === selectedSessionId.value)

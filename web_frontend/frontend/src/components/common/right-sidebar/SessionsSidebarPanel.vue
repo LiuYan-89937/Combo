@@ -1,6 +1,6 @@
 <template>
   <AgentSessionPanel
-    v-if="agentContextActive && workspacePackageId"
+    v-if="agentSessionContextActive && workspacePackageId"
     :package-id="workspacePackageId"
   />
   <SessionSidebar v-else :title="t('sessions.main')" />
@@ -15,6 +15,6 @@ import SessionSidebar from '@/components/chat/SessionSidebar.vue'
 
 const resourceContext = useResourceContext()
 const { t } = useI18n()
-const agentContextActive = computed(() => resourceContext.isAgentContext.value)
+const agentSessionContextActive = computed(() => resourceContext.isAgentSessionContext.value)
 const workspacePackageId = computed(() => resourceContext.packageIdForApi.value)
 </script>

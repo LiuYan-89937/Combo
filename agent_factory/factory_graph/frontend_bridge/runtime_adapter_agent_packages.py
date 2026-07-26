@@ -372,6 +372,7 @@ class RuntimeAgentPackageCommandMixin:
                 session_id=session_id,
                 request_id=command.request_id,
                 user_config=_runtime_user_config(command),
+                runtime_request=_runtime_request(command),
                 require_ready=require_ready,
                 attachments=command.payload.get("attachments"),
             )
@@ -532,6 +533,7 @@ class RuntimeAgentPackageCommandMixin:
                 session_id=pending.session_id,
                 resume_payload=command.payload,
                 request_id=command.request_id,
+                runtime_request=_runtime_request(command),
             )
             result = self._consume_agent_package_stream(
                 package_id=pending.package_id,
@@ -972,6 +974,7 @@ class RuntimeAgentPackageCommandMixin:
                 session_id=agent_session_id,
                 request_id=command.request_id,
                 user_config=_runtime_user_config(command),
+                runtime_request=_runtime_request(command),
                 attachments=command.payload.get("attachments"),
                 visible_in_agent_session_list=True,
             )
@@ -1297,6 +1300,12 @@ def _runtime_user_config(command: FactoryFrontendCommand) -> dict[str, Any]:
     payload = command.payload if isinstance(command.payload, dict) else {}
     user_config = payload.get("user_config")
     return dict(user_config) if isinstance(user_config, dict) else {}
+
+
+def _runtime_request(command: FactoryFrontendCommand) -> dict[str, Any] | None:
+    payload = command.payload if isinstance(command.payload, dict) else {}
+    runtime_request = payload.get("runtime_request")
+    return dict(runtime_request) if isinstance(runtime_request, dict) else None
 
 
 def _resume_payload_text(payload: Any) -> str:

@@ -195,7 +195,15 @@ class PackageRuntimeCore:
                 )
                 return 1
         cancel_token = self._register_cancel_token(request_id, command_type)
-        normalizer.emit_run_started({"command": command_type, "attachment_count": _attachment_count(payload)})
+        run_started_payload: dict[str, Any] = {
+            "command": command_type,
+            "attachment_count": _attachment_count(payload),
+        }
+        if command_type in {"run_message", "resume_interrupt"}:
+            run_started_payload["runtime_request"] = RuntimeRequestPolicy.from_payload(
+                payload.get("runtime_request")
+            ).as_payload()
+        normalizer.emit_run_started(run_started_payload)
         try:
             if command_type == "list_sessions":
                 return self._list_sessions(normalizer)

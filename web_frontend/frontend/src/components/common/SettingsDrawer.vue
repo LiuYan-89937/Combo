@@ -45,6 +45,36 @@
           </div>
         </section>
 
+        <section class="settings-group">
+          <header class="group-header">
+            <div class="group-icon" aria-hidden="true">
+              <n-icon size="18"><Time /></n-icon>
+            </div>
+            <div class="group-title-block">
+              <div class="group-title">{{ t('settings.groupRuntime') }}</div>
+              <div class="group-desc">{{ t('settings.groupRuntimeDesc') }}</div>
+            </div>
+          </header>
+
+          <div class="group-body">
+            <div class="field-block">
+              <div class="field-block-head">
+                <label class="field-label">{{ t('settings.requestTimeout') }}</label>
+              </div>
+              <n-input-number
+                v-model:value="requestTimeoutSeconds"
+                class="field-input"
+                :min="0"
+                :step="30"
+                :show-button="true"
+              >
+                <template #suffix>{{ t('settings.seconds') }}</template>
+              </n-input-number>
+              <p class="field-hint">{{ t('settings.requestTimeoutHint') }}</p>
+            </div>
+          </div>
+        </section>
+
         <!-- 页脚：关于 -->
         <footer class="settings-footer">
           <div class="footer-title">{{ t('settings.about') }}</div>
@@ -62,12 +92,14 @@ import {
   NDrawer,
   NDrawerContent,
   NIcon,
+  NInputNumber,
   NRadioButton,
   NRadioGroup,
 } from 'naive-ui'
-import { ColorPalette } from '@/components/icons'
+import { ColorPalette, Time } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import { useUiStore } from '@/stores/ui'
+import { useRuntimePreferencesStore } from '@/stores/runtimePreferences'
 import type { Locale } from '@/i18n'
 import type { ThemeMode } from '@/stores/ui'
 
@@ -80,6 +112,7 @@ const emit = defineEmits<{
 }>()
 
 const uiStore = useUiStore()
+const runtimePreferences = useRuntimePreferencesStore()
 const { localeOptions, t } = useI18n()
 
 const show = computed({
@@ -100,6 +133,13 @@ const locale = computed({
 const themeMode = computed({
   get: () => uiStore.themeMode,
   set: (value: ThemeMode) => uiStore.setThemeMode(value),
+})
+
+const requestTimeoutSeconds = computed({
+  get: () => runtimePreferences.requestTimeoutSeconds,
+  set: (value: number | null) => {
+    if (value !== null) runtimePreferences.setRequestTimeoutSeconds(value)
+  },
 })
 
 const themeOptions = computed<Array<{ label: string; value: ThemeMode }>>(() => [

@@ -3,6 +3,7 @@ import { collaborationApi } from '@/api/collaboration'
 import { useAgentStore } from '@/stores/agent'
 import { SYSTEM_CHAT_PACKAGE_ID, useCollaborationStore } from '@/stores/collaboration'
 import { useRuntimeStore } from '@/stores/runtime'
+import { useRuntimePreferencesStore } from '@/stores/runtimePreferences'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useCommand } from '@/composables/useCommand'
 import { useFactoryMessageProjection } from '@/composables/factory/useFactoryMessageProjection'
@@ -17,6 +18,7 @@ import type { RuntimeAttachmentInput, TranscriptAttachmentView } from '@/types/p
 export function useCollaborationRuntime() {
   const collaborationStore = useCollaborationStore()
   const runtimeStore = useRuntimeStore()
+  const runtimePreferences = useRuntimePreferencesStore()
   const agentStore = useAgentStore()
   const workspaceStore = useWorkspaceStore()
   const commands = useCommand()
@@ -126,12 +128,13 @@ export function useCollaborationRuntime() {
     const visibleAttachments = attachmentViews(attachments)
     const packageId = mainAgentPackageId.value
     const collaborationRuntimeOptions = {
-      ...(collaborationStore.activeSession.execution_config?.model_profile_id
-        ? { mainModelProfileId: collaborationStore.activeSession.execution_config.model_profile_id }
+      ...(runtimePreferences.mainModelProfileId
+        ? { mainModelProfileId: runtimePreferences.mainModelProfileId }
         : {}),
-      ...(typeof collaborationStore.activeSession.execution_config?.reasoning_intensity === 'number'
-        ? { reasoningIntensity: collaborationStore.activeSession.execution_config.reasoning_intensity }
+      ...(typeof runtimePreferences.reasoningIntensity === 'number'
+        ? { reasoningIntensity: runtimePreferences.reasoningIntensity }
         : {}),
+      requestTimeoutSeconds: runtimePreferences.requestTimeoutSeconds,
       userConfig: {
         collaboration_id: collaborationStore.activeSession.collaboration_id,
         runtime_tool_access: promptResponse.runtime_tool_access,

@@ -107,6 +107,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { storeToRefs } from 'pinia'
 import {
   NEmpty,
   NScrollbar,
@@ -115,6 +116,7 @@ import { useCollaborationStore } from '@/stores/collaboration'
 import { useModelPoolStore } from '@/stores/modelPool'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useUiStore } from '@/stores/ui'
+import { useRuntimePreferencesStore } from '@/stores/runtimePreferences'
 import { useI18n } from '@/composables/useI18n'
 import { useCollaborationRuntime } from '@/composables/collaboration/useCollaborationRuntime'
 import MessageInput from '@/components/chat/MessageInput.vue'
@@ -132,6 +134,11 @@ const store = useCollaborationStore()
 const runtimeStore = useRuntimeStore()
 const modelPoolStore = useModelPoolStore()
 const uiStore = useUiStore()
+const runtimePreferences = useRuntimePreferencesStore()
+const {
+  mainModelProfileId: selectedModelProfileId,
+  reasoningIntensity,
+} = storeToRefs(runtimePreferences)
 const { t } = useI18n()
 const scrollbarRef = ref()
 const inputRef = ref()
@@ -141,8 +148,6 @@ const messageWorkspaceContext = computed(() => ({
   resourceMode: 'collaboration' as const,
   collaborationId: store.activeSession?.collaboration_id || null,
 }))
-const selectedModelProfileId = computed(() => store.activeSession?.execution_config?.model_profile_id || '')
-const reasoningIntensity = computed(() => store.activeSession?.execution_config?.reasoning_intensity ?? null)
 const selectedModelProfile = computed(() => (
   modelPoolStore.profile(selectedModelProfileId.value)
 ))
@@ -205,6 +210,10 @@ onMounted(() => {
 
 function updateModelProfile(value: string) {
   const nextProfile = modelPoolStore.profile(value)
+  runtimePreferences.setMainModelProfileId(value)
+  if (nextProfile?.capabilities.reasoning_supported === false) {
+    runtimePreferences.setReasoningIntensity(null)
+  }
   void store.updateSession({
     execution_config: {
       ...(store.activeSession?.execution_config || {}),
@@ -215,6 +224,7 @@ function updateModelProfile(value: string) {
 }
 
 function updateReasoningIntensity(value: number | null) {
+  runtimePreferences.setReasoningIntensity(value)
   void store.updateSession({
     execution_config: {
       ...(store.activeSession?.execution_config || {}),
