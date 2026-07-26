@@ -58,7 +58,7 @@
     <!-- 全局通知 -->
     <n-notification-provider>
       <AppNotifications />
-      <SchedulerRunNotifier />
+      <TaskNotificationManager />
     </n-notification-provider>
 
     <!-- 设置抽屉 -->
@@ -86,7 +86,7 @@ import AppSidebar from '@/components/common/AppSidebar.vue'
 import AppRightSidebar from '@/components/common/AppRightSidebar.vue'
 import AppLoadingBar from '@/components/common/AppLoadingBar.vue'
 import AppNotifications from '@/components/common/AppNotifications.vue'
-import SchedulerRunNotifier from '@/components/scheduler/SchedulerRunNotifier.vue'
+import TaskNotificationManager from '@/components/common/TaskNotificationManager.vue'
 import SettingsDrawer from '@/components/common/SettingsDrawer.vue'
 import DebugDrawer from '@/components/common/DebugDrawer.vue'
 import SchedulerActivityDrawer from '@/components/scheduler/SchedulerActivityDrawer.vue'

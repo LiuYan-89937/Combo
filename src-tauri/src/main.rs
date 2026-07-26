@@ -86,6 +86,7 @@ fn main() {
                 }
             },
         ))
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
         .manage(AppState {
             sidecar: Mutex::new(None),

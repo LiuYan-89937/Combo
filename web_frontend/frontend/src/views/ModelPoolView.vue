@@ -16,44 +16,6 @@
     <n-tabs type="line" animated>
       <n-tab-pane name="profiles" :tab="t('modelPool.profiles')">
         <div class="tab-content">
-          <div class="role-bindings-panel">
-            <div>
-              <n-text strong>{{ t('modelPool.roleBindings') }}</n-text>
-              <n-text depth="3" class="role-bindings-hint">{{ t('modelPool.roleBindingsHint') }}</n-text>
-            </div>
-            <div class="role-bindings-grid">
-              <n-form-item :label="t('modelPool.mainRole')" :show-feedback="false">
-                <n-select
-                  v-model:value="roleBindings.main"
-                  :options="chatProfileOptions"
-                  :placeholder="t('modelPool.autoSelect')"
-                  clearable
-                />
-              </n-form-item>
-              <n-form-item :label="t('modelPool.taskRole')" :show-feedback="false">
-                <n-select
-                  v-model:value="roleBindings.task"
-                  :options="chatProfileOptions"
-                  :placeholder="t('modelPool.autoSelect')"
-                  clearable
-                />
-              </n-form-item>
-              <n-form-item :label="t('modelPool.compressionRole')" :show-feedback="false">
-                <n-select
-                  v-model:value="roleBindings.compression"
-                  :options="chatProfileOptions"
-                  :placeholder="t('modelPool.autoSelect')"
-                  clearable
-                />
-              </n-form-item>
-            </div>
-            <n-space justify="end">
-              <n-button type="primary" :loading="savingRoles" @click="saveRoleBindings">
-                {{ t('modelPool.saveRoleBindings') }}
-              </n-button>
-            </n-space>
-          </div>
-
           <div class="content-header">
             <n-text>{{ t('modelPool.profileHint') }}</n-text>
             <n-button type="primary" @click="openProfile()">
@@ -399,7 +361,6 @@ import {
   type ModelPoolCredential,
   type ModelPoolProfile,
   type ModelPoolDefaults,
-  type ModelRoleBindings,
   type ModelProviderProfile,
   type ModelUsageGroup,
   type ModelUsageGroupBy,
@@ -415,16 +376,10 @@ const dialog = useDialog()
 
 const loading = ref(false)
 const saving = ref(false)
-const savingRoles = ref(false)
 const testingProfileId = ref<string | null>(null)
 const providers = ref<ModelProviderProfile[]>([])
 const credentials = ref<ModelPoolCredential[]>([])
 const profiles = ref<ModelPoolProfile[]>([])
-const roleBindings = reactive<ModelRoleBindings>({
-  main: null,
-  task: null,
-  compression: null,
-})
 const modelDefaults = ref<ModelPoolDefaults | null>(null)
 const usageLoading = ref(false)
 const usageGroupBy = ref<ModelUsageGroupBy>('model')
@@ -483,14 +438,6 @@ const credentialOptions = computed(() =>
   credentials.value
     .filter((item) => providerSupportsKind(item.provider, profileForm.kind))
     .map((item) => ({ label: `${item.display_name} · ${providerLabel(item.provider)}`, value: item.credential_id })),
-)
-const chatProfileOptions = computed(() =>
-  profiles.value
-    .filter((item) => item.kind === 'chat' && item.enabled && item.credential?.enabled && item.credential?.has_api_key)
-    .map((item) => ({
-      label: `${item.display_name} · ${item.model_name}`,
-      value: item.profile_id,
-    })),
 )
 const usageDayOptions = computed(() => [
   { label: t('modelPool.usageLast7Days'), value: 7 },
@@ -581,7 +528,7 @@ watch(
 async function refresh(): Promise<void> {
   loading.value = true
   try {
-    const [providerData, credentialData, profileData, roleBindingData, usageData] = await Promise.all([
+    const [providerData, credentialData, profileData, defaultsData, usageData] = await Promise.all([
       modelPoolApi.providers(),
       modelPoolApi.credentials(),
       modelPoolApi.profiles(),
@@ -591,8 +538,7 @@ async function refresh(): Promise<void> {
     providers.value = providerData.providers
     credentials.value = credentialData.credentials
     profiles.value = profileData.profiles
-    Object.assign(roleBindings, roleBindingData.bindings)
-    modelDefaults.value = roleBindingData.defaults
+    modelDefaults.value = defaultsData.defaults
     usageSummary.value = usageData
   } catch (error) {
     message.error(error instanceof Error ? error.message : t('common.requestFailed'))
@@ -753,19 +699,6 @@ async function saveProfile(): Promise<void> {
   }
 }
 
-async function saveRoleBindings(): Promise<void> {
-  savingRoles.value = true
-  try {
-    const result = await modelPoolApi.saveRoleBindings({ ...roleBindings })
-    Object.assign(roleBindings, result.bindings)
-    message.success(t('modelPool.roleBindingsSaved'))
-  } catch (error) {
-    message.error(error instanceof Error ? error.message : t('common.requestFailed'))
-  } finally {
-    savingRoles.value = false
-  }
-}
-
 async function setCredentialEnabled(item: ModelPoolCredential, enabled: boolean): Promise<void> {
   try {
     await modelPoolApi.patchCredential(item.credential_id, { enabled })
@@ -892,32 +825,6 @@ function formatCost(value: number | null | undefined): string {
   padding: 18px 20px;
   overflow: auto;
   background: var(--app-surface);
-}
-
-.role-bindings-panel {
-  display: grid;
-  gap: 16px;
-  padding: 18px;
-  border: 1px solid var(--app-border);
-  border-radius: 10px;
-  background: var(--app-panel);
-}
-
-.role-bindings-hint {
-  display: block;
-  margin-top: 4px;
-}
-
-.role-bindings-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
-}
-
-@media (max-width: 900px) {
-  .role-bindings-grid {
-    grid-template-columns: 1fr;
-  }
 }
 
 .context-bar {

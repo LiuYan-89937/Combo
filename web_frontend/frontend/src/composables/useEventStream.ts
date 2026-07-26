@@ -15,19 +15,26 @@ import { agentPackagesApi } from '@/api/agentPackages'
 import { postCommand } from '@/api/http'
 import { backendUrl } from '@/api/backendUrl'
 import { switchSessionCommand } from '@/api/commands'
+import {
+  captureTaskNotificationEventContext,
+  publishTaskNotificationsForEvent,
+} from '@/services/taskNotificationEvents'
 
 let client: EventStreamClient | null = null
 const status = ref<ConnectionStatus>('disconnected')
 let initialized = false
 
 export function applyRuntimeEvent(event: FactoryFrontendEvent): void {
+  const notificationContext = captureTaskNotificationEventContext(event)
   if (event.payload?.group_id && event.payload?.group_run_id) {
     useAgentGroupStore().applyRuntimeEvent(event)
+    publishTaskNotificationsForEvent(event, notificationContext)
     return
   }
   const runtimeStore = useRuntimeStore()
   runtimeStore.handleEvent(event)
   syncDomainStoresFromRuntime(event)
+  publishTaskNotificationsForEvent(event, notificationContext)
   if (event.event_type === 'runtime_ready' && event.payload?.event_replay?.gap === true) {
     void restoreActiveConversation(runtimeStore).catch((error) => {
       console.error('Failed to restore active conversation after an SSE replay gap:', error)

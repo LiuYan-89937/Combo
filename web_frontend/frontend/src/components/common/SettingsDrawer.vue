@@ -92,6 +92,46 @@
           </div>
         </section>
 
+        <section class="settings-group">
+          <header class="group-header">
+            <div class="group-icon" aria-hidden="true">
+              <n-icon size="18"><NotificationsOutline /></n-icon>
+            </div>
+            <div class="group-title-block">
+              <div class="group-title">{{ t('settings.groupNotifications') }}</div>
+              <div class="group-desc">{{ t('settings.groupNotificationsDesc') }}</div>
+            </div>
+          </header>
+
+          <div class="group-body">
+            <div class="field-row">
+              <div class="field-copy">
+                <label class="field-label">{{ t('settings.taskNotifications') }}</label>
+                <p class="field-hint">{{ t('settings.taskNotificationsHint') }}</p>
+              </div>
+              <n-switch
+                :value="taskNotificationPreferences.enabled"
+                @update:value="setTaskNotificationsEnabled"
+              />
+            </div>
+
+            <template v-if="taskNotificationPreferences.enabled">
+              <div class="field-divider" aria-hidden="true"></div>
+              <div
+                v-for="option in taskNotificationCategoryOptions"
+                :key="option.category"
+                class="field-row"
+              >
+                <label class="field-label">{{ option.label }}</label>
+                <n-switch
+                  :value="taskNotificationPreferences.categories[option.category]"
+                  @update:value="taskNotificationPreferences.setCategoryEnabled(option.category, $event)"
+                />
+              </div>
+            </template>
+          </div>
+        </section>
+
         <!-- 页脚：关于 -->
         <footer class="settings-footer">
           <div class="footer-title">{{ t('settings.about') }}</div>
@@ -112,13 +152,19 @@ import {
   NInputNumber,
   NRadioButton,
   NRadioGroup,
+  NSwitch,
 } from 'naive-ui'
-import { ColorPalette, Time } from '@/components/icons'
+import { ColorPalette, NotificationsOutline, Time } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import { useUiStore } from '@/stores/ui'
 import { useRuntimePreferencesStore } from '@/stores/runtimePreferences'
+import {
+  useTaskNotificationPreferencesStore,
+  type TaskNotificationCategory,
+} from '@/stores/taskNotificationPreferences'
 import type { Locale } from '@/i18n'
 import type { ThemeMode } from '@/stores/ui'
+import { requestNativeTaskNotificationPermission } from '@/services/taskNotifications'
 
 const props = defineProps<{
   show: boolean
@@ -130,6 +176,7 @@ const emit = defineEmits<{
 
 const uiStore = useUiStore()
 const runtimePreferences = useRuntimePreferencesStore()
+const taskNotificationPreferences = useTaskNotificationPreferencesStore()
 const { localeOptions, t } = useI18n()
 
 const show = computed({
@@ -171,6 +218,21 @@ const themeOptions = computed<Array<{ label: string; value: ThemeMode }>>(() => 
   { label: t('settings.themeDark'), value: 'dark' },
   { label: t('settings.themeAuto'), value: 'auto' },
 ])
+
+const taskNotificationCategoryOptions = computed<Array<{
+  category: TaskNotificationCategory
+  label: string
+}>>(() => [
+  { category: 'conversation', label: t('settings.notificationConversation') },
+  { category: 'collaboration', label: t('settings.notificationCollaboration') },
+  { category: 'agentGroup', label: t('settings.notificationAgentGroup') },
+  { category: 'scheduler', label: t('settings.notificationScheduler') },
+])
+
+function setTaskNotificationsEnabled(value: boolean): void {
+  taskNotificationPreferences.setEnabled(value)
+  if (value) void requestNativeTaskNotificationPermission()
+}
 </script>
 
 <style scoped>
@@ -257,6 +319,14 @@ const themeOptions = computed<Array<{ label: string; value: ThemeMode }>>(() => 
   font-size: var(--app-font-md);
   font-weight: 500;
   color: var(--app-text);
+}
+
+.field-copy {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-space-xs);
 }
 
 .field-control {
