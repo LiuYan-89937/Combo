@@ -145,6 +145,7 @@ import { useResourceContext } from '@/composables/useResourceContext'
 import { useConversationSessionNavigation } from '@/composables/useConversationSessionNavigation'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { isAgentSessionsLanding as routeIsAgentSessionsLanding } from '@/utils/agentSessionRoute'
+import { agentPackageConversationScope } from '@/stores/runtime/scopes'
 
 const runtimeStore = useRuntimeStore()
 const agentStore = useAgentStore()
@@ -407,14 +408,19 @@ async function openRoutedAgentSession(version: number): Promise<boolean> {
     })
     return true
   }
+  const collaborationId = routeQueryText(route.query.collaboration_id)
+  const collaborationTaskId = routeQueryText(route.query.collaboration_task_id)
+  const routedConversationScope = agentPackageConversationScope(packageId, sessionId, {
+    collaborationId,
+    collaborationTaskId,
+  })
   if (
     agentStore.activeChatPackageId === packageId
     && agentStore.selectedSessionId === sessionId
     && runtimeStore.activeAgentSessionId === sessionId
     && runtimeStore.currentMode === 'agent_package'
+    && runtimeStore.activeConversationScope === routedConversationScope
   ) return true
-  const collaborationId = routeQueryText(route.query.collaboration_id)
-  const collaborationTaskId = routeQueryText(route.query.collaboration_task_id)
   agentStore.enterAgentChat(packageId, sessionId)
   if (collaborationId) {
     runtimeStore.enterCollaborationConversation(

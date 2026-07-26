@@ -181,8 +181,11 @@ async def _ensure_skillhub_cli() -> None:
 async def startup_event():
     start_parent_process_watchdog()
     event_loop_watchdog.start(asyncio.get_running_loop())
-    await _ensure_skillhub_cli()
     await runtime_bridge.start()
+    app.state.skillhub_cli_install_task = asyncio.create_task(
+        _ensure_skillhub_cli(),
+        name="skillhub-cli-install",
+    )
     recovered_group_commits = agent_group_service.recover_workspace_transactions()
     if recovered_group_commits:
         logger.info("Recovered %s pending agent-group workspace commits", len(recovered_group_commits))

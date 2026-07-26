@@ -5,10 +5,14 @@
         <n-text depth="3">{{ t('workspace.context', { label: workspaceContextLabel }) }}</n-text>
       </div>
       <WorkspaceExplorer
+        v-if="workspaceAvailable"
         class="workspace-sidebar-explorer"
         :workspace-context="workspaceRequestContext"
         @select-file="handleWorkspaceFileSelect"
       />
+      <div v-else class="workspace-unavailable">
+        <n-empty :description="t('workspace.noActiveSession')" size="small" />
+      </div>
     </div>
     <div v-if="previewLoading && !runtimeStore.workspaceFile" class="workspace-loading">
       <n-spin size="small" />
@@ -25,7 +29,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { NSpin, NText } from 'naive-ui'
+import { NEmpty, NSpin, NText } from 'naive-ui'
 import { useCommand } from '@/composables/useCommand'
 import { useResourceContext } from '@/composables/useResourceContext'
 import { useRuntimeStore } from '@/stores/runtime'
@@ -47,6 +51,7 @@ const WORKSPACE_PREVIEW_MAX_CHARS = 1_000_000
 
 const workspaceRequestContext = computed(() => resourceContext.workspaceContext.value)
 const workspaceContextLabel = computed(() => resourceContext.label.value)
+const workspaceAvailable = computed(() => resourceContext.workspaceAvailable.value)
 
 async function handleWorkspaceFileSelect(entry: WorkspaceEntry) {
   uiStore.setRightSidebarTab('workspace')
@@ -105,6 +110,15 @@ watch(
 .workspace-sidebar-explorer {
   flex: 1;
   min-height: 0;
+}
+
+.workspace-unavailable {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--app-space-xl);
 }
 
 .workspace-loading {

@@ -21,7 +21,11 @@ from agent_factory.paths import factory_artifact_path
 from agent_factory.runtime_contracts import AgentPackageLoader, RuntimeBuildPlanner
 from agent_factory.runtime_contracts.builtins import default_runtime_contract_registry
 from agent_factory.runtime_kernel.kernel import RuntimeKernelFacade
-from agent_factory.runtime_kernel.persistence import LangGraphCheckpointerConfig, LangGraphStoreConfig
+from agent_factory.runtime_kernel.persistence import (
+    LangGraphCheckpointerConfig,
+    LangGraphStoreConfig,
+    close_shared_sqlite_checkpointers,
+)
 
 
 CREATE_AGENT_PACKAGE_REGISTRY_RESOURCE = "create_agent_package_registry"
@@ -174,17 +178,22 @@ def _assert_publish_ready(workspace: CreateAgentWorkspace) -> None:
 
 def _assert_runtime_ready(package_root: Path) -> None:
     package = AgentPackageLoader().load_path(package_root / "agent_package.json")
-    compiler = AgentAssemblyCompiler(
-        facade=RuntimeKernelFacade(
-            checkpointer_config=LangGraphCheckpointerConfig(backend="memory"),
-            memory_store_config=LangGraphStoreConfig(backend="memory"),
+    facade = RuntimeKernelFacade(
+        checkpointer_config=LangGraphCheckpointerConfig(backend="memory"),
+        memory_store_config=LangGraphStoreConfig(backend="memory"),
+    )
+    try:
+        compiler = AgentAssemblyCompiler(facade=facade)
+        runtime_build = RuntimeBuildPlanner(registry=default_runtime_contract_registry()).build(
+            package,
+            base_services=facade.instance.services,
         )
-    )
-    runtime_build = RuntimeBuildPlanner(registry=default_runtime_contract_registry()).build(
-        package,
-        base_services=compiler.facade.instance.services,
-    )
-    compiler.compile(package.assembly_spec, runtime_build=runtime_build)
+        compiler.compile(package.assembly_spec, runtime_build=runtime_build)
+    finally:
+        try:
+            facade.shutdown()
+        finally:
+            close_shared_sqlite_checkpointers(under_root=package_root)
 
 
 def _package_id(package: Any) -> str:

@@ -1504,6 +1504,7 @@ export const useRuntimeStore = defineStore('runtime', {
       this.activeRequestId = null
       this.runStatus = 'idle'
       this.pendingInterrupt = null
+      this.createAgentPublishReady = null
       this.currentRunId = null
       this.nodes = {}
       this.stages = {}

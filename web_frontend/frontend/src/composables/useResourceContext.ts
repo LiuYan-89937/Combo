@@ -78,6 +78,10 @@ export function useResourceContext() {
     workspaceContext.value.groupId || '',
   ].join(':'))
   const workspaceDefaultScope = computed<WorkspaceScope>(() => 'workdir')
+  const workspaceAvailable = computed(() => (
+    workspaceContext.value.resourceMode !== 'package'
+    || Boolean(workspaceContext.value.packageSessionId)
+  ))
   const packageIdForApi = computed(() => packageId.value || SYSTEM_CHAT_PACKAGE_ID)
   const isAgentContext = computed(() => Boolean(packageId.value))
   const label = computed(() => {
@@ -98,5 +102,6 @@ export function useResourceContext() {
     workspaceContext,
     workspaceContextKey,
     workspaceDefaultScope,
+    workspaceAvailable,
   }
 }
