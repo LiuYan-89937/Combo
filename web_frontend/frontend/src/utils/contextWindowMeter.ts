@@ -43,7 +43,7 @@ function contextWindowUsageRatio(contextWindow: ContextWindowView): number | nul
   return clamp(contextWindow.tokenCount / contextWindow.contextWindowTokens, 0, 1)
 }
 
-function formatCompactTokenCount(value: number | null): string {
+export function formatCompactTokenCount(value: number | null): string {
   if (value === null || !Number.isFinite(value)) {
     return '-'
   }

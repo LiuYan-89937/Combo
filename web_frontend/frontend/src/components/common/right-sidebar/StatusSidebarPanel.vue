@@ -25,6 +25,16 @@
         </div>
       </div>
       <n-empty v-else :description="t('status.noContext')" size="small" />
+      <div
+        v-if="compressionActivityText"
+        class="compression-activity"
+        :class="compressionActivityClass"
+        role="status"
+        aria-live="polite"
+      >
+        <span v-if="runtimeStore.contextActivity.status === 'running'" class="compression-pulse"></span>
+        <span>{{ compressionActivityText }}</span>
+      </div>
     </section>
 
     <section v-if="activeRuntimeRequest" class="status-section">
@@ -173,6 +183,7 @@ import {
   contextWindowThresholdLabel,
   contextWindowUsageLabel,
   contextWindowUsagePercent,
+  formatCompactTokenCount,
 } from '@/utils/contextWindowMeter'
 
 const runtimeStore = useRuntimeStore()
@@ -246,6 +257,33 @@ const contextThresholdMarker = computed(() => {
   const percent = contextWindowThresholdPercent(contextWindow.value)
   return percent === null ? '' : `${percent}%`
 })
+const compressionActivityText = computed(() => {
+  const activity = runtimeStore.contextActivity
+  const payload = activity.payload || {}
+  if (activity.status === 'running') {
+    return t('status.contextCompressionRunning', {
+      before: formatCompactTokenCount(optionalNumber(payload.token_estimate_before)),
+    })
+  }
+  if (activity.status === 'completed') {
+    return t('status.contextCompressionCompleted', {
+      before: formatCompactTokenCount(optionalNumber(payload.token_estimate_before)),
+      after: formatCompactTokenCount(optionalNumber(payload.token_estimate_after)),
+      count: Number(payload.original_message_count || 0) - Number(payload.compressed_message_count || 0),
+    })
+  }
+  if (activity.status === 'failed') {
+    return t('status.contextCompressionFailed', {
+      reason: String(payload.error || t('common.unknown')),
+    })
+  }
+  return ''
+})
+const compressionActivityClass = computed(() => ({
+  running: runtimeStore.contextActivity.status === 'running',
+  completed: runtimeStore.contextActivity.status === 'completed',
+  failed: runtimeStore.contextActivity.status === 'failed',
+}))
 const memoryActivityText = computed(() => {
   const activity = runtimeStore.memoryActivity
   const payload = activity.payload || {}
@@ -335,6 +373,11 @@ function percentLabel(value: unknown): string {
 function nonNegativeNumber(value: unknown): number | null {
   const numberValue = Number(value)
   return Number.isFinite(numberValue) && numberValue >= 0 ? numberValue : null
+}
+
+function optionalNumber(value: unknown): number | null {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 function memoryKindLabel(kind: string): string {
@@ -548,6 +591,45 @@ function toolStatusType(tool: ToolActivity): 'default' | 'success' | 'warning' |
   line-height: 16px;
   color: var(--app-text-muted);
   font-variant-numeric: tabular-nums;
+}
+
+.compression-activity {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--app-space-sm);
+  margin-top: var(--app-space-md);
+  padding: var(--app-space-sm) var(--app-space-md);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  color: var(--app-text-secondary);
+  background: var(--app-surface-muted);
+  font-size: var(--app-font-sm);
+  line-height: 1.5;
+}
+
+.compression-activity.running {
+  color: var(--app-text);
+  border-color: var(--app-border-hover);
+}
+
+.compression-activity.completed {
+  color: var(--app-success);
+  border-color: color-mix(in srgb, var(--app-success) 35%, var(--app-border));
+}
+
+.compression-activity.failed {
+  color: var(--app-error);
+  border-color: color-mix(in srgb, var(--app-error) 35%, var(--app-border));
+}
+
+.compression-pulse {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: currentColor;
+  animation: memory-pulse 1s ease-in-out infinite;
 }
 
 .request-status {

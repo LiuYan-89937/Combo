@@ -17,6 +17,14 @@
         <n-text depth="3" style="font-size: 12px">
           {{ formatTime(message.timestamp) }}
         </n-text>
+        <n-tag
+          v-if="dispatchStatusLabel"
+          :type="dispatchStatusType"
+          size="tiny"
+          :bordered="false"
+        >
+          {{ dispatchStatusLabel }}
+        </n-tag>
         <n-button
           v-if="quoteable"
           class="quote-button"
@@ -100,7 +108,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { CSSProperties } from 'vue'
-import { NAvatar, NButton, NIcon, NText } from 'naive-ui'
+import { NAvatar, NButton, NIcon, NTag, NText } from 'naive-ui'
 import { ReturnUpBackOutline } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import MessagePartRenderer from './MessagePartRenderer.vue'
@@ -242,6 +250,21 @@ const collaborationReportStatus = computed(() => {
   if (status === 'blocked') return t('collaboration.reportBlocked')
   return status || t('collaboration.reportUpdated')
 })
+const dispatchStatusLabel = computed(() => {
+  if (props.message.role !== 'user') return ''
+  const state = String(props.message.metadata?.dispatch_state || '')
+  if (state === 'queued') {
+    const position = Number(props.message.metadata?.queue_position || 0)
+    return position > 0
+      ? t('chat.messageQueuedAt', { position })
+      : t('chat.messageQueued')
+  }
+  if (state === 'running') return t('chat.messageRunning')
+  return ''
+})
+const dispatchStatusType = computed(() => (
+  props.message.metadata?.dispatch_state === 'queued' ? 'warning' : 'info'
+))
 
 function formatTime(timestamp: string): string {
   const date = new Date(timestamp)

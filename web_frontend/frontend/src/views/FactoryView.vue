@@ -86,6 +86,7 @@
           :placeholder="inputPlaceholder"
           :disabled="inputDisabled"
           :is-running="runtimeStore.hasActiveRun"
+          :queued-count="runtimeStore.queuedRequestCount"
           attachments-enabled
           model-selector-enabled
           :model-options="runtimeMainModelOptions"

@@ -157,21 +157,23 @@
         </n-text>
 
         <n-button
-          v-if="!isRunning"
           type="primary"
           class="send-button"
           :disabled="!canSend"
           :aria-label="t('common.send')"
           @click="handleSend"
         >
-          {{ t('common.send') }}
+          {{ isRunning ? t('chat.queueSend') : t('common.send') }}
+          <span v-if="queuedCount > 0" class="queued-count">
+            {{ t('chat.queuedCount', { count: queuedCount }) }}
+          </span>
           <template #icon>
             <n-icon><Send /></n-icon>
           </template>
         </n-button>
 
         <n-button
-          v-else
+          v-if="isRunning"
           type="error"
           class="cancel-button"
           :aria-label="t('common.cancel')"
@@ -215,6 +217,7 @@ const props = withDefaults(
     placeholder?: string
     disabled?: boolean
     isRunning?: boolean
+    queuedCount?: number
     rows?: number
     maxRows?: number
     attachmentsEnabled?: boolean
@@ -229,6 +232,7 @@ const props = withDefaults(
     placeholder: '',
     disabled: false,
     isRunning: false,
+    queuedCount: 0,
     rows: 3,
     maxRows: 10,
     attachmentsEnabled: true,
@@ -613,6 +617,12 @@ defineExpose({
 .cancel-button {
   border-radius: var(--app-radius-md);
   transition: transform var(--app-transition-fast);
+}
+
+.queued-count {
+  margin-left: var(--app-space-xs);
+  font-size: var(--app-font-xs);
+  opacity: 0.78;
 }
 
 .send-button:not(:disabled):active,

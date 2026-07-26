@@ -36,7 +36,7 @@ export function useFactoryMessageProjection() {
     const activeTurn = runtimeStore.activeTurn
     if (!activeTurn?.userMessage) return []
     if (activeTurn.assistantMessages.some(messageHasDisplayParts)) return []
-    const displayStatus = activeRuntimeDisplayStatus(runtimeStore.nodes, t)
+    const displayStatus = activeRuntimeDisplayStatus(runtimeStore.nodes, runtimeStore.contextActivity, t)
     const statusText = displayStatus.text
     return [
       {
@@ -97,8 +97,15 @@ export function useFactoryMessageProjection() {
 
 function activeRuntimeDisplayStatus(
   nodes: ReturnType<typeof useRuntimeStore>['nodes'],
+  contextActivity: ReturnType<typeof useRuntimeStore>['contextActivity'],
   t: ReturnType<typeof useI18n>['t'],
 ): { text: string; role: 'assistant' | 'system' } {
+  if (
+    contextActivity.status === 'running'
+    && contextActivity.eventType === 'context_compression_started'
+  ) {
+    return { text: t('context.context_compression_started'), role: 'system' }
+  }
   const activeNode = Object.values(nodes)
     .filter(node => node.status === 'running' && node.payload?.visible_to_user !== false)
     .sort((left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt))[0]

@@ -51,6 +51,8 @@
     "agent_package_session_loaded",
     "agent_package_session_deleted",
     "mode_changed",
+    "runtime_request_queued",
+    "runtime_request_dispatched",
     "run_started",
     "run_completed",
     "run_cancelled",
@@ -156,6 +158,8 @@
     "error"
   ],
   "process_event_types": [
+    "runtime_request_queued",
+    "runtime_request_dispatched",
     "run_started",
     "run_completed",
     "run_cancelled",
