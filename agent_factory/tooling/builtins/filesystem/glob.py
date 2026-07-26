@@ -1,31 +1,19 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from agent_factory.tooling.builtins.filesystem.common import (
     filesystem_boundary,
     path_risk_result,
-    path_type,
     positive_int,
     required_string,
     resolve_path,
 )
+from agent_factory.tooling.builtins.filesystem.workspace_search import (
+    DEFAULT_IGNORED_DIRECTORY_NAMES,
+    workspace_path_record,
+)
 from agent_factory.tooling.envelope import tool_envelope
-
-
-_SKIPPED_DIR_NAMES = {
-    ".git",
-    ".hg",
-    ".svn",
-    ".mypy_cache",
-    ".pytest_cache",
-    ".ruff_cache",
-    "__pycache__",
-    "node_modules",
-    "dist",
-    "build",
-}
 
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -40,6 +28,9 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     pattern = required_string(arguments, "pattern")
+    normalized_pattern_parts = pattern.replace("\\", "/").split("/")
+    if pattern.startswith("/") or ".." in normalized_pattern_parts:
+        raise ValueError("pattern must stay within base_path")
     base_path = str(arguments.get("base_path") or ".")
     max_results = positive_int(arguments.get("max_results", 100), "max_results")
     if max_results > 5000:
@@ -50,28 +41,13 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         raise FileNotFoundError(str(target))
     if not target.is_dir():
         raise NotADirectoryError(str(target))
-    matches: list[dict[str, str]] = []
+    matches: list[dict[str, object]] = []
     truncated = False
-    for item in _glob_paths(target, pattern):
+    for item in sorted(target.glob(pattern), key=lambda candidate: (not candidate.is_dir(), str(candidate))):
+        if any(part in DEFAULT_IGNORED_DIRECTORY_NAMES for part in item.relative_to(target).parts):
+            continue
         if len(matches) >= max_results:
             truncated = True
             break
-        matches.append(
-            {
-                "path": str(item),
-                "name": item.name,
-                "type": path_type(item),
-            }
-        )
+        matches.append(workspace_path_record(item, workspace_root=root))
     return tool_envelope({"matches": matches, "truncated": truncated})
-
-
-def _glob_paths(root: Path, pattern: str) -> list[Path]:
-    return sorted(
-        (path for path in root.glob(pattern) if not _is_skipped(path)),
-        key=lambda item: (not item.is_dir(), str(item)),
-    )
-
-
-def _is_skipped(path: Path) -> bool:
-    return any(part in _SKIPPED_DIR_NAMES for part in path.parts)

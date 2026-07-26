@@ -1,15 +1,17 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from agent_factory.tooling.builtins.filesystem.common import (
     filesystem_boundary,
     path_risk_result,
-    path_type,
     positive_int,
     required_string,
     resolve_path,
+)
+from agent_factory.tooling.builtins.filesystem.workspace_search import (
+    iter_workspace_entries,
+    workspace_path_record,
 )
 from agent_factory.tooling.envelope import tool_envelope
 
@@ -30,24 +32,11 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         raise FileNotFoundError(str(target))
     if not target.is_dir():
         raise NotADirectoryError(str(target))
-    paths = _iter_paths(target, recursive=recursive)
-    entries: list[dict[str, str]] = []
+    entries: list[dict[str, object]] = []
     truncated = False
-    for item in paths:
+    for item in iter_workspace_entries(target, recursive=recursive):
         if len(entries) >= max_entries:
             truncated = True
             break
-        entries.append(
-            {
-                "path": str(item),
-                "name": item.name,
-                "type": path_type(item),
-            }
-        )
+        entries.append(workspace_path_record(item, workspace_root=root))
     return tool_envelope({"entries": entries, "truncated": truncated})
-
-
-def _iter_paths(root: Path, *, recursive: bool) -> list[Path]:
-    if recursive:
-        return sorted(root.rglob("*"), key=lambda item: str(item))
-    return sorted(root.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower(), item.name))

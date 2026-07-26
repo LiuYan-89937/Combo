@@ -1,6 +1,8 @@
 import { defineConfig, presetUno, presetAttributify, presetIcons } from 'unocss'
+import { RESOURCE_ICON_CLASSES } from './src/utils/resourcePresentation'
 
 export default defineConfig({
+  safelist: RESOURCE_ICON_CLASSES,
   presets: [
     presetUno(),
     presetAttributify(),

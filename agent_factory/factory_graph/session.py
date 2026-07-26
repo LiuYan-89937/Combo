@@ -631,8 +631,7 @@ def _normalized_record(record: FactorySessionRecord) -> FactorySessionRecord:
         for superseded in normalize_running_turn_sequence(turns, updated_at=_now()):
             superseded.messages = _turn_messages(superseded)
         for turn in turns:
-            if not turn.messages:
-                turn.messages = _turn_messages(turn)
+            turn.messages = _turn_messages(turn)
     return record
 
 

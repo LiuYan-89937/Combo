@@ -17,6 +17,7 @@
               :close-on-esc="false"
               preset="card"
               class="startup-dialog"
+              style="width: min(420px, calc(100vw - 32px)); max-width: 420px"
               :title="t('startup.title')"
             >
               <div class="startup-dialog-content" role="status" aria-live="polite">

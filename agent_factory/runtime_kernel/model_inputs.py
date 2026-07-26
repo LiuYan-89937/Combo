@@ -186,7 +186,12 @@ def _executor_tool_policy(state: Any) -> str:
         "before retrying read with the exact file name/path. "
         "Call shell only when the available package/runtime tools cannot accomplish the current plan step; "
         "when doing so, include fallback_reason in the tool arguments explaining the gap. "
-        "Use write, edit, and multi_edit normally for workspace deliverables while respecting filesystem boundaries. "
+        "Use write for a simple full-content write to one file. "
+        "Use edit for every multi-file change and for structured create, replace, move, copy, or delete operations. "
+        "edit is transactional: first call action=preview with the complete operations array, inspect the returned "
+        "affected_files diff, then call action=commit with the exact transaction_id returned by that preview. "
+        "Never invent or reuse a transaction_id, and never use shell as a fallback for file creation, movement, "
+        "copying, or deletion when edit is available. "
         f"{boundary} Generated files should be written under the workspace root, for example "
         f"output/report.md or {workspace_root.rstrip('/')}/output/report.md."
     )

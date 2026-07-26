@@ -179,6 +179,7 @@ export function useFactoryConversation() {
       ...(profileId ? { mainModelProfileId: profileId } : {}),
       ...(reasoningIntensity.value !== null ? { reasoningIntensity: reasoningIntensity.value } : {}),
       requestTimeoutSeconds: runtimePreferences.requestTimeoutSeconds,
+      maxRetries: runtimePreferences.maxRetries,
     }
   }
 

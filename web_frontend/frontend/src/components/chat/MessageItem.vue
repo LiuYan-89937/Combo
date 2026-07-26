@@ -105,6 +105,7 @@ import { ReturnUpBackOutline } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import MessagePartRenderer from './MessagePartRenderer.vue'
 import type { TranscriptItem } from '@/types/protocol'
+import { mergeToolMessageParts } from '@/utils/toolPresentation'
 import type { WorkspaceRequestContext } from '@/api/resourceTypes'
 import { useTipStore, type TipMessageContext } from '@/stores/tips'
 import TipingIcon from './TipingIcon.vue'
@@ -215,7 +216,7 @@ const avatarText = computed(() => {
   return 'A'
 })
 
-const visibleParts = computed(() => props.message.parts)
+const visibleParts = computed(() => mergeToolMessageParts(props.message.parts))
 const isGroupUserMessage = computed(() => (
   props.message.role === 'user' && Boolean(props.message.metadata?.agent_group_message)
 ))

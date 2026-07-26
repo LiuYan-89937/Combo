@@ -6,10 +6,12 @@
         :key="`${reference.source_kind}:${reference.name}:${index}`"
         class="attachment-item context-reference-item"
       >
-        <n-icon size="18">
-          <Document v-if="reference.source_kind === 'workspace_file'" />
-          <Text v-else />
-        </n-icon>
+        <ResourceIcon
+          :name="reference.name"
+          :mime-type="reference.mime_type"
+          :kind="reference.source_kind === 'workspace_file' ? 'file' : 'text'"
+          :size="18"
+        />
         <span class="attachment-name">{{ reference.name }}</span>
         <n-text depth="3" class="reference-kind">{{ referenceKindLabel(reference.source_kind) }}</n-text>
         <n-button text size="small" @click="referenceStore.remove(index, normalizedReferenceScope)">
@@ -25,12 +27,12 @@
         :key="index"
         class="attachment-item"
       >
-        <n-icon size="18">
-          <ImageOutline v-if="isImageAttachment(attachment)" />
-          <Document v-else-if="attachment.kind === 'file'" />
-          <Link v-else-if="attachment.kind === 'url'" />
-          <Text v-else />
-        </n-icon>
+        <ResourceIcon
+          :name="attachment.name"
+          :mime-type="attachment.mime_type"
+          :kind="attachment.kind"
+          :size="18"
+        />
         <span class="attachment-name">{{ attachment.name }}</span>
         <n-button text size="small" @click="removeAttachment(index)">
           <n-icon><Close /></n-icon>
@@ -190,7 +192,8 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted } from 'vue'
 import { NInput, NButton, NIcon, NText, NPopover, NRadioButton, NRadioGroup, NSelect, useMessage } from 'naive-ui'
-import { AttachOutline, BulbOutline, CaretDown, Document, Link, Text, Close, CodeSlash, Send, Stop, ImageOutline } from '@/components/icons'
+import { AttachOutline, BulbOutline, CaretDown, Close, CodeSlash, Send, Stop } from '@/components/icons'
+import ResourceIcon from '@/components/common/ResourceIcon.vue'
 import { useI18n } from '@/composables/useI18n'
 import { useFileCapabilities } from '@/composables/useFileCapabilities'
 import { MAX_RUNTIME_ATTACHMENTS, extensionFromMimeType, pastedImageFiles, runtimeFileAttachmentFromFile } from '@/utils/attachments'
@@ -389,10 +392,6 @@ function showAttachmentLimitReached() {
 
 function showAttachmentLimitPartial(accepted: number) {
   messageApi.warning(t('attachments.limitPartial', { accepted, max: maxAttachments }))
-}
-
-function isImageAttachment(attachment: RuntimeAttachmentInput) {
-  return attachment.kind === 'file' && attachment.mime_type?.startsWith('image/')
 }
 
 function pastedImageName(file: File, index: number) {

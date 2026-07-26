@@ -358,9 +358,9 @@ class PackageRuntimeCore:
             agent_config=compiled.runtime_config["agent_config"],
             session_config=session_config,
         )
-        run_context.state.execution.timeout_seconds = RuntimeRequestPolicy.from_payload(
-            payload.get("runtime_request")
-        ).timeout_seconds
+        request_policy = RuntimeRequestPolicy.from_payload(payload.get("runtime_request"))
+        run_context.state.execution.timeout_seconds = request_policy.timeout_seconds
+        run_context.state.execution.max_retries = request_policy.max_retries
         normalizer.session_id = run_context.session_id
         if _emit_pending_checkpoint_interrupt(normalizer, compiled.compiled_app, run_context.thread_id):
             return 0
@@ -480,9 +480,9 @@ class PackageRuntimeCore:
             session_id=session_id,
             session_config=session_config,
         )
-        run_context.state.execution.timeout_seconds = RuntimeRequestPolicy.from_payload(
-            payload.get("runtime_request")
-        ).timeout_seconds
+        request_policy = RuntimeRequestPolicy.from_payload(payload.get("runtime_request"))
+        run_context.state.execution.timeout_seconds = request_policy.timeout_seconds
+        run_context.state.execution.max_retries = request_policy.max_retries
         final_state = None
         stop_requested = False
         stream_iter = facade.instance.controller.stream_resume(

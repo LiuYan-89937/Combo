@@ -1,16 +1,14 @@
 import type { WorkspaceFileView } from '@/types/protocol'
+import {
+  CODE_EXTENSIONS,
+  IMAGE_EXTENSIONS,
+  resourceExtension,
+} from '@/utils/resourcePresentation'
 
 export type FilePreviewKind = 'text' | 'markdown' | 'code' | 'image' | 'pdf' | 'unsupported'
 
-const CODE_EXTENSIONS = new Set([
-  'bash', 'c', 'cc', 'cpp', 'css', 'go', 'h', 'hpp', 'html', 'java', 'js', 'jsx',
-  'json', 'jsonl', 'kt', 'php', 'py', 'rb', 'rs', 'sh', 'sql', 'swift', 'toml',
-  'ts', 'tsx', 'vue', 'xml', 'yaml', 'yml', 'zsh',
-])
-const IMAGE_EXTENSIONS = new Set(['svg', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tif', 'tiff', 'heic'])
-
 export function fileExtension(file: WorkspaceFileView): string {
-  return file.name.split('.').pop()?.toLowerCase() || ''
+  return resourceExtension(file.name)
 }
 
 export function filePreviewKind(file: WorkspaceFileView): FilePreviewKind {

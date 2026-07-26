@@ -92,6 +92,17 @@ export interface ToolResultMessagePart extends BaseChatMessagePart {
   error?: unknown
 }
 
+export interface ToolExecutionMessagePart extends BaseChatMessagePart {
+  type: 'tool_execution'
+  toolName: string
+  callId: string | null
+  arguments: unknown
+  output: unknown
+  error?: unknown
+  approvalState?: ToolActivity['approvalState']
+  artifacts: ArtifactMessagePart[]
+}
+
 export interface ArtifactMessagePart extends BaseChatMessagePart {
   type: 'artifact'
   name: string
@@ -121,6 +132,7 @@ export type ChatMessagePart =
   | ReasoningMessagePart
   | ToolCallMessagePart
   | ToolResultMessagePart
+  | ToolExecutionMessagePart
   | ArtifactMessagePart
   | AttachmentMessagePart
   | ErrorMessagePart

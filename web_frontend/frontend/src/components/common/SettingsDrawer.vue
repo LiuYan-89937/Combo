@@ -72,6 +72,23 @@
               </n-input-number>
               <p class="field-hint">{{ t('settings.requestTimeoutHint') }}</p>
             </div>
+
+            <div class="field-divider" aria-hidden="true"></div>
+
+            <div class="field-block">
+              <div class="field-block-head">
+                <label class="field-label">{{ t('settings.maxRetries') }}</label>
+              </div>
+              <n-input-number
+                v-model:value="maxRetries"
+                class="field-input"
+                :min="0"
+                :step="1"
+                :precision="0"
+                :show-button="true"
+              />
+              <p class="field-hint">{{ t('settings.maxRetriesHint') }}</p>
+            </div>
           </div>
         </section>
 
@@ -139,6 +156,13 @@ const requestTimeoutSeconds = computed({
   get: () => runtimePreferences.requestTimeoutSeconds,
   set: (value: number | null) => {
     if (value !== null) runtimePreferences.setRequestTimeoutSeconds(value)
+  },
+})
+
+const maxRetries = computed({
+  get: () => runtimePreferences.maxRetries,
+  set: (value: number | null) => {
+    if (value !== null) runtimePreferences.setMaxRetries(value)
   },
 })
 

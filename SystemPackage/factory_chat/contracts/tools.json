@@ -8,7 +8,6 @@
       "read",
       "write",
       "edit",
-      "multi_edit",
       "glob",
       "grep",
       "ls",

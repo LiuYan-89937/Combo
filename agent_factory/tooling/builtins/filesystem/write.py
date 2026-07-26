@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from hashlib import sha256
-from tempfile import NamedTemporaryFile
 from typing import Any
 
 from agent_factory.tooling.builtins.filesystem.common import (
@@ -14,6 +13,11 @@ from agent_factory.tooling.builtins.filesystem.common import (
 )
 from agent_factory.tooling.envelope import tool_envelope
 from agent_factory.tooling.spec import ToolRiskResult
+from agent_factory.tooling.builtins.filesystem.text_changes import (
+    atomic_write_bytes,
+    text_change_summary,
+)
+from agent_factory.tooling.builtins.filesystem.workspace_search import workspace_relative_path
 
 
 FOCUS_EVIDENCE_KEY = "focus"
@@ -36,22 +40,29 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     assert_not_protected_write_path(target, root=root, resources=resources)
     existed = target.exists()
     before_hash = None
+    before_content = ""
     if existed:
         if not target.is_file():
             raise IsADirectoryError(str(target))
-        before_hash = sha256(target.read_bytes()).hexdigest()
+        before_bytes = target.read_bytes()
+        before_hash = sha256(before_bytes).hexdigest()
+        try:
+            before_content = before_bytes.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"existing file is not valid utf-8 text: {target}") from exc
     if not target.parent.exists():
         if not create_dirs:
             raise FileNotFoundError(str(target.parent))
         target.parent.mkdir(parents=True, exist_ok=True)
     content_bytes = content.encode("utf-8")
-    _atomic_write(target, content_bytes)
+    atomic_write_bytes(target, content_bytes)
     output = {
-        "path": str(target),
+        "path": workspace_relative_path(target, workspace_root=root),
         "created": not existed,
         "bytes_written": len(content_bytes),
         "before_hash": before_hash,
         "after_hash": sha256(content_bytes).hexdigest(),
+        "change_summary": text_change_summary(before_content, content),
     }
     evidence = _write_evidence(target, root=root, resources=resources)
     return tool_envelope(output, evidence=evidence)
@@ -59,10 +70,3 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
 
 def _write_evidence(target, *, root, resources: dict[str, Any]) -> dict[str, Any]:
     return {FOCUS_EVIDENCE_KEY: write_focus_facts(target, root=root, resources=resources)}
-
-
-def _atomic_write(target, content: bytes) -> None:
-    with NamedTemporaryFile("wb", delete=False, dir=str(target.parent)) as handle:
-        temp_path = target.parent / handle.name
-        handle.write(content)
-    temp_path.replace(target)

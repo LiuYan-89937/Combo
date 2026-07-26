@@ -135,6 +135,7 @@ export function useCollaborationRuntime() {
         ? { reasoningIntensity: runtimePreferences.reasoningIntensity }
         : {}),
       requestTimeoutSeconds: runtimePreferences.requestTimeoutSeconds,
+      maxRetries: runtimePreferences.maxRetries,
       userConfig: {
         collaboration_id: collaborationStore.activeSession.collaboration_id,
         runtime_tool_access: promptResponse.runtime_tool_access,

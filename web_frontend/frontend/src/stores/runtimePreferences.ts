@@ -3,17 +3,20 @@ import { ref } from 'vue'
 import { REASONING_INTENSITY_MAX } from '@/utils/reasoning'
 
 export const DEFAULT_RUNTIME_REQUEST_TIMEOUT_SECONDS = 300
+export const DEFAULT_RUNTIME_MAX_RETRIES = 5
 
 const STORAGE_KEYS = {
   mainModelProfileId: 'fast-agent-factory.runtimeMainModelProfileId',
   reasoningIntensity: 'fastagentfactory.runtimeReasoningIntensity',
   requestTimeoutSeconds: 'fast-agent-factory.runtimeRequestTimeoutSeconds',
+  maxRetries: 'fast-agent-factory.runtimeMaxRetries',
 } as const
 
 export const useRuntimePreferencesStore = defineStore('runtimePreferences', () => {
   const mainModelProfileId = ref(readStoredText(STORAGE_KEYS.mainModelProfileId))
   const reasoningIntensity = ref<number | null>(readStoredReasoningIntensity())
   const requestTimeoutSeconds = ref(readStoredRequestTimeoutSeconds())
+  const maxRetries = ref(readStoredMaxRetries())
 
   function setMainModelProfileId(profileId: string): void {
     mainModelProfileId.value = String(profileId || '').trim()
@@ -37,13 +40,21 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     writeStoredValue(STORAGE_KEYS.requestTimeoutSeconds, String(normalized))
   }
 
+  function setMaxRetries(value: number): void {
+    const normalized = Math.max(0, Math.round(value))
+    maxRetries.value = normalized
+    writeStoredValue(STORAGE_KEYS.maxRetries, String(normalized))
+  }
+
   return {
     mainModelProfileId,
     reasoningIntensity,
     requestTimeoutSeconds,
+    maxRetries,
     setMainModelProfileId,
     setReasoningIntensity,
     setRequestTimeoutSeconds,
+    setMaxRetries,
   }
 })
 
@@ -64,6 +75,13 @@ function readStoredRequestTimeoutSeconds(): number {
   if (!stored) return DEFAULT_RUNTIME_REQUEST_TIMEOUT_SECONDS
   const value = Number(stored)
   return Number.isInteger(value) && value >= 0 ? value : DEFAULT_RUNTIME_REQUEST_TIMEOUT_SECONDS
+}
+
+function readStoredMaxRetries(): number {
+  const stored = readStoredText(STORAGE_KEYS.maxRetries)
+  if (!stored) return DEFAULT_RUNTIME_MAX_RETRIES
+  const value = Number(stored)
+  return Number.isInteger(value) && value >= 0 ? value : DEFAULT_RUNTIME_MAX_RETRIES
 }
 
 function writeOrRemove(key: string, value: string): void {

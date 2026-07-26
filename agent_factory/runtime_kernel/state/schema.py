@@ -142,7 +142,7 @@ class ExecutionState(BaseModel):
     route_decision: str | None = None
     turn_count: int = 0
     retry_count: int = 0
-    max_retries: int = 2
+    max_retries: int = 5
     max_subgraph_depth: int = 4
     timeout_seconds: int = 0
     interrupted: bool = False

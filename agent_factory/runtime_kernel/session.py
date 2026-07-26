@@ -355,8 +355,7 @@ def _normalized_record(record: AgentSessionRecord) -> AgentSessionRecord:
     for superseded in normalize_running_turn_sequence(record.turns, updated_at=_now()):
         superseded.messages = _turn_messages(superseded)
     for turn in record.turns:
-        if not turn.messages:
-            turn.messages = _turn_messages(turn)
+        turn.messages = _turn_messages(turn)
     return record
 
 

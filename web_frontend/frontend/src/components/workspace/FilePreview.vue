@@ -2,10 +2,13 @@
   <div class="file-preview-container">
     <div class="preview-header">
       <div class="file-info">
-        <n-text strong class="file-name" :title="file.name">{{ file.name }}</n-text>
-        <n-text depth="3" class="file-meta">
-          {{ formatFileSize(file.sizeBytes) }} · {{ previewLabel }}
-        </n-text>
+        <ResourceIcon :name="file.name" :mime-type="file.mimeType" :size="28" />
+        <span class="file-info-copy">
+          <n-text strong class="file-name" :title="file.name">{{ file.name }}</n-text>
+          <n-text depth="3" class="file-meta">
+            {{ formatFileSize(file.sizeBytes) }} · {{ previewLabel }}
+          </n-text>
+        </span>
       </div>
       <div class="preview-actions">
         <n-button size="small" @click="addToReferences">
@@ -65,6 +68,7 @@ import { useContextReferenceStore } from '@/stores/contextReferences'
 import { workspaceFileContextReference } from '@/utils/contextReferences'
 import { useMessage } from 'naive-ui'
 import FilePreviewContent from './FilePreviewContent.vue'
+import ResourceIcon from '@/components/common/ResourceIcon.vue'
 import { fileExtension, filePreviewKind } from '@/utils/filePreview'
 
 const props = defineProps<{
@@ -224,6 +228,13 @@ function handleClose() {
 .file-info {
   min-width: 0;
   display: flex;
+  align-items: center;
+  gap: var(--app-space-sm);
+}
+
+.file-info-copy {
+  display: flex;
+  min-width: 0;
   flex-direction: column;
   gap: 4px;
 }

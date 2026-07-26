@@ -64,7 +64,10 @@ export function useRuntimeCommands() {
     const command = commands.resumeInterruptCommand(
       withPendingInterruptContext(runtimeStore, payload),
       runtimeStore.activeAgentSessionId || runtimeStore.activeFactorySessionId,
-      { requestTimeoutSeconds: runtimePreferences.requestTimeoutSeconds },
+      {
+        requestTimeoutSeconds: runtimePreferences.requestTimeoutSeconds,
+        maxRetries: runtimePreferences.maxRetries,
+      },
     )
     transport.sendRuntimeCommand(command)
     return command

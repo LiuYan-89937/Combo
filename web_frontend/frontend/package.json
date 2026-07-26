@@ -38,6 +38,7 @@
     "vue-router": "^4.2.0"
   },
   "devDependencies": {
+    "@iconify-json/vscode-icons": "^1.2.67",
     "@types/katex": "^0.16.7",
     "@types/node": "^20.10.0",
     "@typescript-eslint/eslint-plugin": "^6.15.0",

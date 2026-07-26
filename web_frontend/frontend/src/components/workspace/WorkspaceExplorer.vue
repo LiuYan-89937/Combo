@@ -45,9 +45,13 @@
           </button>
           <span v-else class="twisty-placeholder"></span>
 
-          <n-icon size="17" :color="entryIconColor(row.entry)" class="entry-icon">
-            <component :is="entryIcon(row.entry)" />
-          </n-icon>
+          <ResourceIcon
+            :name="row.entry.name"
+            :kind="row.entry.kind"
+            :expanded="row.expanded"
+            :size="18"
+            class="entry-icon"
+          />
 
           <span class="entry-name" :title="row.entry.path">{{ row.entry.name }}</span>
           <span v-if="row.entry.kind === 'file' && row.entry.sizeBytes" class="entry-size">
@@ -96,15 +100,11 @@ import {
 } from 'naive-ui'
 import {
   ChevronForward,
-  CodeSlash,
-  DocumentOutline,
-  FolderOpenOutline,
-  FolderOutline,
-  ImageOutline,
   Refresh,
   AddCircleOutline,
   TrashOutline,
 } from '@/components/icons'
+import ResourceIcon from '@/components/common/ResourceIcon.vue'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
@@ -353,20 +353,6 @@ async function toggleDirectory(entry: WorkspaceEntry) {
   }
 }
 
-function entryIcon(entry: WorkspaceEntry) {
-  if (entry.kind === 'directory') {
-    return isExpanded(entry.path) ? FolderOpenOutline : FolderOutline
-  }
-
-  const ext = entry.name.split('.').pop()?.toLowerCase()
-  const codeExts = ['js', 'ts', 'tsx', 'jsx', 'py', 'java', 'go', 'rs', 'cpp', 'c', 'h', 'sql', 'json', 'yaml', 'yml']
-  const imageExts = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp']
-
-  if (ext && codeExts.includes(ext)) return CodeSlash
-  if (ext && imageExts.includes(ext)) return ImageOutline
-  return DocumentOutline
-}
-
 function isExpanded(path: string): boolean {
   return expandedDirs.value.has(path)
 }
@@ -379,11 +365,6 @@ function toggleExpanded(path: string): void {
     next.add(path)
   }
   expandedDirs.value = next
-}
-
-function entryIconColor(entry: WorkspaceEntry): string {
-  if (entry.kind === 'directory') return 'var(--app-text)'
-  return 'var(--app-text-muted)'
 }
 
 function formatFileSize(bytes: number): string {
