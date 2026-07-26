@@ -26,7 +26,6 @@ from agent_factory.model_pool.runtime_override import (
 )
 from agent_factory.context_system.events import emit_context_event
 from agent_factory.context_system.token_counter import (
-    count_messages_tokens,
     context_window_payload,
     model_context_limits,
     provider_token_budget_payload,
@@ -100,16 +99,6 @@ class ModelOperationService:
             tools=tool_list,
             node_id=node_id,
             image_input_enabled=bool(metadata.get("multimodal")),
-        )
-        _emit_context_window(
-            state=state,
-            services=services,
-            node_id=node_id,
-            model=model,
-            model_role=effective_model_role,
-            messages=envelope.messages,
-            tools=tool_list,
-            source="model_operation.before_call",
         )
         trace_span_id = _start_trace_span(
             state=state,
@@ -271,16 +260,6 @@ class ModelOperationService:
             payload={"schema_name": output_model.__name__, **operation_context, "model_input": input_diagnostics},
         )
         for attempt in range(1, attempts + 1):
-            _emit_context_window(
-                state=state,
-                services=services,
-                node_id=node_id,
-                model=model,
-                model_role=effective_model_role,
-                messages=request_messages,
-                tools=[],
-                source="model_operation.before_structured_call",
-            )
             _emit(
                 emit_event,
                 "model_call_started",
@@ -907,41 +886,6 @@ def _structured_retry_instruction(
         f"Schema name: {output_model.__name__}\n"
         f"Validation observation from attempt {attempt}/{max_attempts}:\n{type(error).__name__}: {error}\n\n"
         f"Output JSON schema:\n{output_json_schema}"
-    )
-
-
-def _emit_context_window(
-    *,
-    state: Any,
-    services: Any | None,
-    node_id: str | None,
-    model: Any,
-    model_role: str,
-    messages: list[Any],
-    tools: list[BaseTool],
-    source: str,
-) -> None:
-    if services is None or node_id is None:
-        return
-    limits = model_context_limits(services=services, state=state, model_role=model_role)
-    result = count_messages_tokens(messages, services=services, model=model, model_role=model_role, tools=tools)
-    if result.token_count is None:
-        return
-    emit_context_event(
-        services=services,
-        state=state,
-        event_type="context_window_updated",
-        node_id=node_id,
-        payload=context_window_payload(
-            node_id=node_id,
-            token_count=result.token_count,
-            token_count_method=result.method,
-            compression_threshold_tokens=limits.compression_trigger_tokens,
-            context_window_tokens=limits.context_window_tokens,
-            error=result.error,
-            model_role=result.model_role or model_role,
-            source=source,
-        ),
     )
 
 

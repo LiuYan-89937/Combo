@@ -21,7 +21,6 @@ from agent_factory.context_system.sources import ContextSource, ContextSourceRun
 from agent_factory.context_system.token_counter import (
     TokenCountResult,
     count_messages_tokens,
-    context_window_payload,
     model_context_limits,
 )
 from agent_factory.context_system.token_estimation import estimate_text_tokens
@@ -73,7 +72,6 @@ class ContextSystemRuntime:
             )
         policy = self.policy_for_node(node_id)
         active_limits = model_context_limits(services=services, state=state, model_role="main")
-        context_window_tokens = active_limits.context_window_tokens
         trigger_limit = active_limits.compression_trigger_tokens
         compression_policy = policy.compression.model_copy(
             update={"trigger_token_threshold": trigger_limit}
@@ -84,15 +82,6 @@ class ContextSystemRuntime:
         effective_count = _effective_context_token_count(
             state=working_state,
             measured_count=measured_count,
-        )
-        _emit_context_window_if_available(
-            services=services,
-            state=working_state,
-            node_id=node_id,
-            count=effective_count,
-            compression_threshold_tokens=trigger_limit,
-            context_window_tokens=context_window_tokens,
-            source="context_prepare.before_compression",
         )
         compression_messages, compression_report = maybe_compress_messages(
             messages=working_messages,
@@ -124,17 +113,6 @@ class ContextSystemRuntime:
             raise RuntimeError(compression_report.error or "context compression failed")
         messages_changed = compression_messages != working_messages
         working_messages = compression_messages
-        if messages_changed:
-            compressed_count = count_messages_tokens(working_messages, services=services)
-            _emit_context_window_if_available(
-                services=services,
-                state=working_state,
-                node_id=node_id,
-                count=compressed_count,
-                compression_threshold_tokens=trigger_limit,
-                context_window_tokens=context_window_tokens,
-                source="context_prepare.after_compression",
-            )
         if not enable_dynamic_evidence:
             retrieval_report = ContextRetrievalReport(status="skipped", node_id=node_id)
             injection_report = ContextInjectionReport(status="skipped", node_id=node_id)
@@ -476,35 +454,6 @@ def _effective_context_token_count(
         token_count=token_count,
         method="previous_provider_usage_after_call",
         model_role=str(budget.get("last_provider_model_role") or measured_count.model_role or "main"),
-    )
-
-
-def _emit_context_window_if_available(
-    *,
-    services: Any,
-    state: Any,
-    node_id: str,
-    count: TokenCountResult,
-    compression_threshold_tokens: int,
-    context_window_tokens: int | None,
-    source: str,
-) -> None:
-    if count.token_count is None:
-        return
-    emit_context_event(
-        services=services,
-        state=state,
-        event_type="context_window_updated",
-        node_id=node_id,
-        payload=context_window_payload(
-            node_id=node_id,
-            token_count=count.token_count,
-            token_count_method=count.method,
-            compression_threshold_tokens=compression_threshold_tokens,
-            context_window_tokens=context_window_tokens,
-            model_role=count.model_role,
-            source=source,
-        ),
     )
 
 
