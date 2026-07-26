@@ -80,6 +80,7 @@ class RuntimeBridge:
         self.event_observers: set[Callable[[dict[str, Any]], None]] = set()
         self._background_threads: dict[str, threading.Thread] = {}
         self._active_requests: dict[str, dict[str, Any]] = {}
+        self._deleting_session_ids: set[str] = set()
         self._background_lock = threading.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._event_pipeline = RuntimeEventPipeline(
@@ -123,6 +124,7 @@ class RuntimeBridge:
         with self._background_lock:
             self._background_threads.clear()
             self._active_requests.clear()
+            self._deleting_session_ids.clear()
         logger.info("Runtime service stopped")
 
     async def send_frontend_command(self, command: FactoryFrontendCommand) -> None:
@@ -134,6 +136,9 @@ class RuntimeBridge:
             self._start_background(command)
             return
 
+        if command.type in {"delete_session", "delete_agent_package_session"}:
+            await self._cancel_and_join_deleted_session_requests(command)
+            return
         await asyncio.to_thread(self._handle_command, command)
 
     async def send_and_wait(
@@ -220,6 +225,8 @@ class RuntimeBridge:
         request_id = command.request_id or f"{command.type}-{id(command)}"
         with self._background_lock:
             session_id = _command_session_id(command)
+            if session_id and session_id in self._deleting_session_ids:
+                raise RuntimeError(f"session is being deleted: {session_id}")
             predecessors = [
                 thread
                 for active_request_id, thread in self._background_threads.items()
@@ -239,6 +246,45 @@ class RuntimeBridge:
             )
             self._background_threads[request_id] = thread
             thread.start()
+
+    async def _cancel_and_join_deleted_session_requests(
+        self,
+        command: FactoryFrontendCommand,
+    ) -> None:
+        session_id = _deleted_session_id(command)
+        if not session_id:
+            await asyncio.to_thread(self._handle_command, command)
+            return
+        with self._background_lock:
+            self._deleting_session_ids.add(session_id)
+            active = [
+                (request_id, thread)
+                for request_id, thread in self._background_threads.items()
+                if _active_request_session_id(self._active_requests.get(request_id)) == session_id
+            ]
+        try:
+            for request_id, _thread in active:
+                cancel_command = self._resolve_cancel_command(
+                    FactoryFrontendCommand(
+                        type="cancel_runtime_request",
+                        request_id=f"{command.request_id or uuid.uuid4().hex}:cancel:{request_id}",
+                        session_id=session_id,
+                        mode=command.mode,
+                        payload={
+                            "target_request_id": request_id,
+                            "reason": "session_deleted",
+                        },
+                    )
+                )
+                await asyncio.to_thread(self._handle_command, cancel_command)
+            if active:
+                await asyncio.gather(
+                    *(asyncio.to_thread(thread.join) for _request_id, thread in active)
+                )
+            await asyncio.to_thread(self._handle_command, command)
+        finally:
+            with self._background_lock:
+                self._deleting_session_ids.discard(session_id)
 
     def _run_background_command(
         self,
@@ -479,6 +525,12 @@ def _active_request_from_command(command: FactoryFrontendCommand, request_id: st
 
 def _command_session_id(command: FactoryFrontendCommand) -> str:
     return str(command.session_id or command.payload.get("session_id") or "").strip()
+
+
+def _deleted_session_id(command: FactoryFrontendCommand) -> str:
+    if command.type == "delete_agent_package_session":
+        return str(command.payload.get("session_id") or command.session_id or "").strip()
+    return _command_session_id(command)
 
 
 def _active_request_session_id(request: dict[str, Any] | None) -> str:

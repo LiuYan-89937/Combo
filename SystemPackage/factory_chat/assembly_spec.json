@@ -3,7 +3,7 @@
   "agent": {
     "id": "factory_chat",
     "name": "Factory Chat",
-    "description": "FastAgentFactory system chat assistant.",
+    "description": "FastAgentFactory built-in general-purpose Agent.",
     "version": "0.1.0"
   },
   "runtime": {

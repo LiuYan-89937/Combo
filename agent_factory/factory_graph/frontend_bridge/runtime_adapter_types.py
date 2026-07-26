@@ -5,10 +5,11 @@ from dataclasses import dataclass
 
 from agent_factory.factory_graph.frontend_bridge.event_normalizer import RuntimeEventNormalizer
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent
+from agent_factory.builtin_packages import DEFAULT_AGENT_PACKAGE_ID
 
 
 Emit = Callable[[FactoryFrontendEvent], None]
-SYSTEM_CHAT_PACKAGE_ID = "factory_chat"
+SYSTEM_CHAT_PACKAGE_ID = DEFAULT_AGENT_PACKAGE_ID
 
 
 @dataclass(slots=True)

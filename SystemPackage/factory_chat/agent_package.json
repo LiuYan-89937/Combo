@@ -4,7 +4,7 @@
   "agent": {
     "id": "factory_chat",
     "name": "Factory Chat",
-    "description": "System package that backs the FastAgentFactory chat mode."
+    "description": "Built-in general-purpose Agent Package for FastAgentFactory."
   },
   "runtime": {
     "system_package": true,

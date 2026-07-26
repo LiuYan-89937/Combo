@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from agent_factory.builtin_packages import DEFAULT_AGENT_PACKAGE_ID
 from agent_factory.tooling.builtins.aliases import canonical_builtin_tool_id
 
 SchedulerOwnerType = Literal["factory", "agent"]
@@ -53,11 +54,13 @@ class SchedulerTarget(BaseModel):
             message = str(self.payload.get("message") or "").strip()
             if not message:
                 raise ValueError("graph_run target payload requires message")
-            target_scope = str(self.payload.get("target_scope") or "chat").strip()
-            if target_scope not in {"chat", "agent_package"}:
+            target_scope = str(self.payload.get("target_scope") or "agent_package").strip()
+            if target_scope == "chat":
+                target_scope = "agent_package"
+                self.payload.setdefault("package_id", DEFAULT_AGENT_PACKAGE_ID)
+            if target_scope != "agent_package":
                 raise ValueError("graph_run target payload has invalid target_scope")
-            if target_scope == "agent_package" and not str(self.payload.get("package_id") or "").strip():
-                raise ValueError("graph_run target payload agent_package requires package_id")
+            self.payload["target_scope"] = target_scope
         elif self.target_type == "script_run":
             command = self.payload.get("command")
             if not isinstance(command, str) or not command.strip():
@@ -78,6 +81,13 @@ class SchedulerFeedbackConfig(BaseModel):
 
     enabled: bool = True
     mode: SchedulerFeedbackMode = "llm_summary"
+
+
+class SchedulerExecutionConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_config: dict[str, Any] = Field(default_factory=dict)
+    runtime_request: dict[str, Any] = Field(default_factory=dict)
 
 
 class SchedulerJobOrigin(BaseModel):
@@ -176,6 +186,7 @@ class SchedulerJob(BaseModel):
     max_concurrent_runs: int = Field(default=1, ge=1)
     timeout_seconds: int = Field(default=900, ge=1)
     retry_policy: dict[str, Any] = Field(default_factory=dict)
+    runtime_config: SchedulerExecutionConfig = Field(default_factory=SchedulerExecutionConfig)
     failure_policy: SchedulerFailurePolicy = Field(default_factory=SchedulerFailurePolicy)
     unattended_policy: SchedulerUnattendedPolicy = "deny_if_approval_required"
     origin: SchedulerJobOrigin | None = None

@@ -223,14 +223,14 @@ function notificationStatus(value: string): TaskNotificationStatus | null {
 
 function normalizedMode(
   mode: FactoryMode | null,
-): 'chat' | 'create_agent' | 'evolve_agent' | 'agent_package' {
+): 'create_agent' | 'evolve_agent' | 'agent_package' {
   if (mode === 'create_agent' || mode === 'evolve_agent' || mode === 'agent_package') return mode
-  return 'chat'
+  return 'agent_package'
 }
 
 function conversationSessionId(
   event: FactoryFrontendEvent,
-  mode: 'chat' | 'create_agent' | 'evolve_agent' | 'agent_package',
+  mode: 'create_agent' | 'evolve_agent' | 'agent_package',
 ): string | null {
   if (mode === 'agent_package') {
     return text(

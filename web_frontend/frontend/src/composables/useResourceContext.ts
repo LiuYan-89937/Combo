@@ -33,9 +33,6 @@ export function useResourceContext() {
   const createAgentSessionId = computed(() => (
     String(activeFactorySession.value?.create_agent_session_id || '').trim() || null
   ))
-  const chatAgentPackageSessionId = computed(() => (
-    String(activeFactorySession.value?.chat_agent_package_session_id || runtimeStore.activeAgentSessionId || '').trim() || null
-  ))
   const workspaceContext = computed<WorkspaceRequestContext>(() => {
     if (route.name === 'AgentGroup' && agentGroupStore.activeGroup?.group_id) {
       return { resourceMode: 'agent_group', groupId: agentGroupStore.activeGroup.group_id }
@@ -64,8 +61,7 @@ export function useResourceContext() {
     return {
       resourceMode: 'package',
       packageId: SYSTEM_CHAT_PACKAGE_ID,
-      packageSessionId: chatAgentPackageSessionId.value,
-      factorySessionId: runtimeStore.activeFactorySessionId,
+      packageSessionId: runtimeStore.activeAgentSessionId,
     }
   })
   const workspaceContextKey = computed(() => [

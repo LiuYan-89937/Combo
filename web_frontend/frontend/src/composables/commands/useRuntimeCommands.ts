@@ -19,7 +19,7 @@ export function useRuntimeCommands() {
   }
 
   const switchSession = (sessionId: string, mode?: FactoryMode | null, collaborationId?: string | null) => {
-    if (mode === 'chat' || mode === 'create_agent' || mode === 'evolve_agent') {
+    if (mode === 'create_agent' || mode === 'evolve_agent') {
       runtimeStore.expectFactorySession(sessionId, mode, collaborationId || null)
     }
     transport.sendRuntimeCommand(commands.switchSessionCommand(sessionId, mode, collaborationId))

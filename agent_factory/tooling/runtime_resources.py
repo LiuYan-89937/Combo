@@ -15,6 +15,7 @@ from agent_factory.runtime_workspace import (
 PACKAGE_TOOL_SYSTEM_RESOURCE_IDS = frozenset(
     {"artifacts_root", "package_root", "runtime_root", "workdir_root", "workspace_root"}
 )
+RUNTIME_EXECUTION_CONFIG_RESOURCE_ID = "runtime_execution_config"
 
 
 def runtime_resource_overrides_from_state(state: Any) -> dict[str, Any]:
@@ -24,11 +25,22 @@ def runtime_resource_overrides_from_state(state: Any) -> dict[str, Any]:
         if isinstance(runtime_config, Mapping)
         else getattr(runtime_config, "session_config", {})
     )
+    user_config = (
+        runtime_config.get("user_config", {})
+        if isinstance(runtime_config, Mapping)
+        else getattr(runtime_config, "user_config", {})
+    )
+    overrides: dict[str, Any] = {
+        RUNTIME_EXECUTION_CONFIG_RESOURCE_ID: {
+            "user_config": dict(user_config) if isinstance(user_config, Mapping) else {},
+            "runtime_request": _runtime_request_from_state(state),
+        }
+    }
     if not isinstance(session_config, dict):
-        return {}
+        return overrides
     root = str(session_config.get(RUNTIME_WORKSPACE_ROOT_SESSION_KEY) or "").strip()
     if not root:
-        return {}
+        return overrides
     output_root = str(session_config.get(RUNTIME_OUTPUT_ROOT_SESSION_KEY) or "").strip()
     if not output_root:
         output_root = str(Path(root) / SESSION_OUTPUT_DIR)
@@ -38,11 +50,30 @@ def runtime_resource_overrides_from_state(state: Any) -> dict[str, Any]:
         "read_only_paths": [read_only_input],
     }
     return {
+        **overrides,
         "filesystem": dict(workspace_boundary),
         "process_runtime": dict(workspace_boundary),
         "artifacts_root": output_root,
         "workdir_root": root,
         "workspace_root": root,
+    }
+
+
+def _runtime_request_from_state(state: Any) -> dict[str, Any]:
+    runtime_state = state.get("runtime") if isinstance(state, Mapping) else state
+    execution = (
+        runtime_state.get("execution", {})
+        if isinstance(runtime_state, Mapping)
+        else getattr(runtime_state, "execution", None)
+    )
+    values = {
+        key: execution.get(key) if isinstance(execution, Mapping) else getattr(execution, key, None)
+        for key in ("timeout_seconds", "max_retries")
+    }
+    return {
+        key: value
+        for key, value in values.items()
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0
     }
 
 

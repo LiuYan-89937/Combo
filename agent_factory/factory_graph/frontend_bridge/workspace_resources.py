@@ -296,13 +296,7 @@ class FrontendWorkspaceService:
             return None
 
     def _package_session_id(self, payload: dict[str, Any]) -> str:
-        explicit = str(payload.get("package_session_id") or payload.get("agent_session_id") or "").strip()
-        if explicit:
-            return explicit
-        record = self._session_record(payload, session_record=None)
-        if record is None:
-            return ""
-        return str(getattr(record, "chat_agent_package_session_id", "") or "").strip()
+        return str(payload.get("package_session_id") or payload.get("agent_session_id") or "").strip()
 
 
 def _resource_mode(payload: dict[str, Any]) -> str:

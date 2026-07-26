@@ -39,13 +39,6 @@ export function conversationScopeForMode(
   mode: string | null,
   payload: Record<string, any> = {},
 ): string | null {
-  if (mode === 'chat') {
-    const collaborationId = collaborationIdFromPayload(payload)
-    if (collaborationId) {
-      return `collaboration:${collaborationId}:main:factory_chat:${factorySessionIdFromPayload(payload) || 'new'}`
-    }
-    return factoryConversationScope('chat', factorySessionIdFromPayload(payload))
-  }
   if (mode === 'create_agent') return factoryConversationScope('create_agent', factorySessionIdFromPayload(payload))
   if (mode === 'evolve_agent') {
     const session = payload?.session && typeof payload.session === 'object' ? payload.session : {}

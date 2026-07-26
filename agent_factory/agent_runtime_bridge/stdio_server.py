@@ -32,6 +32,11 @@ from agent_factory.scheduler_system import (
 )
 from agent_factory.scheduler_system.events import SchedulerEventPayload
 from agent_factory.scheduler_system.management import manage_scheduler_runtime
+from agent_factory.scheduler_system.execution_config import (
+    scheduler_run_max_retries,
+    scheduler_run_timeout_seconds,
+    scheduler_run_user_config,
+)
 from agent_factory.scheduler_system.seeds import apply_scheduler_seed_contract
 from agent_factory.knowledge_system.events import KNOWLEDGE_EVENT_TYPES
 from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
@@ -465,9 +470,20 @@ def _scheduled_graph_runner(*, package: LoadedAgentPackage, compiled: Any, facad
         run_context = facade.prepare_run_context(
             compiled.compiled_app,
             user_input=message,
-            user_config=compiled.runtime_config["user_config"],
+            user_config=scheduler_run_user_config(
+                job,
+                compiled.runtime_config["user_config"],
+            ),
             agent_config=compiled.runtime_config["agent_config"],
             session_config=session_config,
+        )
+        run_context.state.execution.max_retries = scheduler_run_max_retries(
+            job,
+            run_context.state.execution.max_retries,
+        )
+        run_context.state.execution.timeout_seconds = scheduler_run_timeout_seconds(
+            job,
+            run_context.state.execution.timeout_seconds,
         )
         normalizer.session_id = run_context.session_id
         final_state = None

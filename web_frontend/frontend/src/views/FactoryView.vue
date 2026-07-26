@@ -146,6 +146,7 @@ import { useConversationSessionNavigation } from '@/composables/useConversationS
 import { useWorkspaceStore } from '@/stores/workspace'
 import { isAgentSessionsLanding as routeIsAgentSessionsLanding } from '@/utils/agentSessionRoute'
 import { agentPackageConversationScope } from '@/stores/runtime/scopes'
+import { SYSTEM_CHAT_PACKAGE_ID } from '@/utils/resourceScope'
 
 const runtimeStore = useRuntimeStore()
 const agentStore = useAgentStore()
@@ -377,7 +378,13 @@ async function openRoutedAgentSession(version: number): Promise<boolean> {
   }
   const packageId = routeQueryText(route.query.package_id)
   const sessionId = routeQueryText(route.query.session_id)
-  if (!packageId) return false
+  if (!packageId) {
+    await router.replace({
+      name: 'Factory',
+      query: { package_id: SYSTEM_CHAT_PACKAGE_ID },
+    })
+    return true
+  }
   activateAgentWorkspace()
   if (!sessionId && routeQueryText(route.query.new) === '1') {
     if (

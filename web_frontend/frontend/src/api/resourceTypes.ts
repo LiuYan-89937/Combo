@@ -76,6 +76,10 @@ export interface SchedulerJobInput {
   schedule_type: ScheduleType
   schedule_expr: string
   enabled?: boolean
+  runtime_config?: {
+    user_config?: Record<string, any>
+    runtime_request?: Record<string, any>
+  }
   target:
     | {
         target_type: 'graph_run'

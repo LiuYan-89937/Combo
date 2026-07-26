@@ -11,6 +11,7 @@ import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
 import type { FactoryMode, RuntimeAttachmentInput, TranscriptAttachmentView } from '@/types/protocol'
 import { isAgentSessionsLanding } from '@/utils/agentSessionRoute'
+import { SYSTEM_CHAT_PACKAGE_ID } from '@/utils/resourceScope'
 
 export function useFactoryConversation() {
   const route = useRoute()
@@ -28,6 +29,9 @@ export function useFactoryConversation() {
   } = storeToRefs(runtimePreferences)
 
   const isAgentChatActive = computed(() => Boolean(agentStore.activeChatPackageId))
+  const requiresRuntimeMainModel = computed(() => (
+    !agentStore.activeChatPackageId || agentStore.activeChatPackageId === SYSTEM_CHAT_PACKAGE_ID
+  ))
   const isAgentSessionLanding = computed(() => (
     route.name === 'Factory' && isAgentSessionsLanding(route.query)
   ))
@@ -36,7 +40,7 @@ export function useFactoryConversation() {
   const currentFactoryMessageMode = computed<FactoryMode>(() => {
     if (isManufacturingRoute.value) return 'create_agent'
     if (isEvolutionRoute.value) return 'evolve_agent'
-    return 'chat'
+    return 'agent_package'
   })
   const activeChatPackageTitle = computed(() => {
     const pkg = agentStore.activeChatPackage
@@ -76,7 +80,7 @@ export function useFactoryConversation() {
   const inputDisabled = computed(() => (
     runtimeStore.isInputLocked
     || runtimeStore.isPublishConfirmationPending
-    || (!isAgentChatActive.value && !selectedMainModelProfileId.value)
+    || (requiresRuntimeMainModel.value && !selectedMainModelProfileId.value)
     || (isAgentSessionLanding.value && !isAgentChatActive.value)
     || (isEvolutionRoute.value && !selectedEvolutionPackageId.value)
   ))
@@ -209,7 +213,7 @@ export function useFactoryConversation() {
       return true
     }
 
-    if (!selectedMainModelProfileId.value.trim()) {
+    if (requiresRuntimeMainModel.value && !selectedMainModelProfileId.value.trim()) {
       uiStore.addNotification({
         type: 'warning',
         title: t('chat.modelRequiredTitle'),
@@ -287,11 +291,6 @@ export function useFactoryConversation() {
         commands.listAgentPackages()
       }
       return
-    }
-    if (route.name === 'Factory') {
-      agentStore.leaveAgentChat()
-      runtimeStore.enterFactoryConversation('chat')
-      commands.startSession(true, 'chat')
     }
   }
 

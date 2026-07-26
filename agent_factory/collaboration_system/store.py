@@ -9,12 +9,13 @@ from pathlib import Path
 from typing import Any, Iterator
 from uuid import uuid4
 
+from agent_factory.builtin_packages import DEFAULT_AGENT_PACKAGE_ID
 from agent_factory.collaboration_system.delivery import normalize_delivery_standard
 from agent_factory.paths import factory_artifact_path, resolve_project_path
 from agent_factory.sqlite_runtime import connect_sqlite, initialize_sqlite_store
 
 
-SYSTEM_CHAT_PACKAGE_ID = "factory_chat"
+SYSTEM_CHAT_PACKAGE_ID = DEFAULT_AGENT_PACKAGE_ID
 DEFAULT_APPROVAL_MODE = "main_agent_delegated"
 APPROVAL_MODES = {"user_controlled", "main_agent_delegated"}
 SESSION_STATUSES = {"draft", "running", "completed", "failed", "cancelled"}
@@ -378,11 +379,6 @@ class CollaborationStore:
             if "main_agent_package_session_id" in payload
             else existing["main_agent_package_session_id"]
         )
-        main_factory_session_id = (
-            normalize_optional_text(payload.get("main_factory_session_id"))
-            if "main_factory_session_id" in payload
-            else existing["main_factory_session_id"]
-        )
         approval_mode = (
             validate_approval_mode(str(payload.get("approval_mode")))
             if "approval_mode" in payload
@@ -410,7 +406,7 @@ class CollaborationStore:
                 """
                 update collaboration_sessions
                 set title = ?, main_agent_package_id = ?, main_agent_package_session_id = ?,
-                    main_factory_session_id = ?, approval_mode = ?, execution_config_json = ?,
+                    approval_mode = ?, execution_config_json = ?,
                     status = ?, started_at = ?, completed_at = ?, updated_at = ?
                 where collaboration_id = ?
                 """,
@@ -418,7 +414,6 @@ class CollaborationStore:
                     title,
                     main_agent_package_id,
                     main_agent_package_session_id,
-                    main_factory_session_id,
                     approval_mode,
                     json_dumps(execution_config),
                     status,
@@ -1585,7 +1580,6 @@ class CollaborationStore:
                 "title",
                 "main_agent_package_id",
                 "main_agent_package_session_id",
-                "main_factory_session_id",
                 "approval_mode",
                 "status",
                 "created_at",
@@ -1643,7 +1637,6 @@ class CollaborationStore:
             "deleted": True,
             "main_agent_package_id": existing["main_agent_package_id"],
             "main_agent_package_session_id": existing.get("main_agent_package_session_id"),
-            "main_factory_session_id": existing.get("main_factory_session_id"),
             "archived_main_agent_event_count": archived_event_count,
             "sessions": self.list_sessions(),
         }
@@ -1936,7 +1929,6 @@ class CollaborationStore:
             "title",
             "main_agent_package_id",
             "main_agent_package_session_id",
-            "main_factory_session_id",
             "approval_mode",
             "status",
             "execution_config_json",
@@ -1955,7 +1947,6 @@ class CollaborationStore:
                   title text not null,
                   main_agent_package_id text not null,
                   main_agent_package_session_id text,
-                  main_factory_session_id text,
                   approval_mode text not null,
                   status text not null,
                   execution_config_json text not null default '{}',
@@ -1979,7 +1970,6 @@ class CollaborationStore:
               title text not null,
               main_agent_package_id text not null,
               main_agent_package_session_id text,
-              main_factory_session_id text,
               approval_mode text not null,
               status text not null,
               execution_config_json text not null default '{}',
@@ -1997,11 +1987,6 @@ class CollaborationStore:
             if "main_agent_package_session_id" in legacy
             else "null"
         )
-        factory_session_expr = (
-            "main_factory_session_id"
-            if "main_factory_session_id" in legacy
-            else "null"
-        )
         execution_config_expr = "execution_config_json" if "execution_config_json" in legacy else "'{}'"
         round_index_expr = "round_index" if "round_index" in legacy else "1"
         started_at_expr = "started_at" if "started_at" in legacy else "null"
@@ -2010,13 +1995,13 @@ class CollaborationStore:
             f"""
             insert into collaboration_sessions (
               collaboration_id, title, main_agent_package_id,
-              main_agent_package_session_id, main_factory_session_id,
+              main_agent_package_session_id,
               approval_mode, status, execution_config_json, round_index,
               started_at, completed_at, created_at, updated_at
             )
             select
               collaboration_id, title, main_agent_package_id,
-              {package_session_expr}, {factory_session_expr},
+              {package_session_expr},
               approval_mode, status, {execution_config_expr}, {round_index_expr},
               {started_at_expr}, {completed_at_expr}, created_at, updated_at
             from collaboration_sessions_legacy

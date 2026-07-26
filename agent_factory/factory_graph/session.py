@@ -25,7 +25,7 @@ from agent_factory.runtime_kernel.persistence import (
 )
 
 
-FactorySessionMode = Literal["chat", "create_agent", "evolve_agent"]
+FactorySessionMode = Literal["create_agent", "evolve_agent"]
 FactoryCheckpointerBackend = Literal["sqlite", "memory"]
 FactorySessionKind = Literal["normal", "collaboration_main"]
 NORMAL_FACTORY_SESSION_KIND: FactorySessionKind = "normal"
@@ -66,13 +66,10 @@ class FactorySessionRecord(BaseModel):
     collaboration_id: str | None = None
     visible_in_factory_session_list: bool = True
     current_mode: FactorySessionMode | None = None
-    chat_agent_package_session_id: str | None = None
     create_agent_session_id: str | None = None
     evolve_agent_package_id: str | None = None
-    chat_turn_count: int = 0
     create_agent_turn_count: int = 0
     evolve_agent_turn_count: int = 0
-    chat_turns: list[FactorySessionTurn] = Field(default_factory=list)
     create_agent_turns: list[FactorySessionTurn] = Field(default_factory=list)
     evolve_agent_turns: list[FactorySessionTurn] = Field(default_factory=list)
 
@@ -147,7 +144,7 @@ class FactorySessionManager:
         path = self._path(session_id)
         if not path.exists():
             raise FileNotFoundError(f"Factory session not found: {session_id}")
-        return _normalized_record(FactorySessionRecord.model_validate_json(path.read_text(encoding="utf-8")))
+        return _normalized_record(_factory_session_record_from_json(path.read_text(encoding="utf-8")))
 
     def save(self, record: FactorySessionRecord) -> None:
         record.updated_at = _now()
@@ -198,7 +195,7 @@ class FactorySessionManager:
         records: list[FactorySessionRecord] = []
         for path in self.config.root.glob("*.json"):
             try:
-                record = _normalized_record(FactorySessionRecord.model_validate_json(path.read_text(encoding="utf-8")))
+                record = _normalized_record(_factory_session_record_from_json(path.read_text(encoding="utf-8")))
                 if include_internal or record.visible_in_factory_session_list:
                     records.append(record)
             except Exception:
@@ -264,9 +261,7 @@ class FactorySessionManager:
             record.first_user_input = _first_user_input(messages)
         if not record.display_title:
             record.display_title = _display_title(record.first_user_input)
-        if mode == "chat":
-            record.chat_turn_count = _human_message_count(messages)
-        elif mode == "create_agent":
+        if mode == "create_agent":
             record.create_agent_turn_count = _human_message_count(messages)
         elif mode == "evolve_agent":
             record.evolve_agent_turn_count = _human_message_count(messages)
@@ -462,13 +457,6 @@ def _now() -> str:
 
 
 def _record_matches_mode(record: FactorySessionRecord, mode: FactorySessionMode) -> bool:
-    if mode == "chat":
-        return (
-            record.current_mode == mode
-            or record.chat_turn_count > 0
-            or bool(record.chat_turns)
-            or bool(record.chat_agent_package_session_id)
-        )
     if mode == "create_agent":
         return (
             record.current_mode == mode
@@ -489,10 +477,6 @@ def without_mode_source(
     mode: FactorySessionMode | None,
 ) -> FactorySessionRecord:
     view = record.model_copy(deep=True)
-    if mode in {None, "chat"}:
-        view.chat_agent_package_session_id = None
-        view.chat_turn_count = 0
-        view.chat_turns = []
     if mode in {None, "create_agent"}:
         view.create_agent_session_id = None
         view.create_agent_turn_count = 0
@@ -509,13 +493,11 @@ def without_mode_source(
 def record_has_any_source(record: FactorySessionRecord) -> bool:
     return any(
         record_has_mode_source(record, mode)
-        for mode in ("chat", "create_agent", "evolve_agent")
+        for mode in ("create_agent", "evolve_agent")
     )
 
 
 def record_has_mode_source(record: FactorySessionRecord, mode: FactorySessionMode) -> bool:
-    if mode == "chat":
-        return bool(str(record.chat_agent_package_session_id or "").strip())
     if mode == "create_agent":
         return (
             bool(str(record.create_agent_session_id or "").strip())
@@ -530,7 +512,7 @@ def record_has_mode_source(record: FactorySessionRecord, mode: FactorySessionMod
 
 
 def fallback_current_mode(record: FactorySessionRecord) -> FactorySessionMode | None:
-    for mode in ("chat", "create_agent", "evolve_agent"):
+    for mode in ("create_agent", "evolve_agent"):
         if record_has_mode_source(record, mode):
             return mode
     return None
@@ -542,8 +524,6 @@ def _record_evolution_package_id(record: FactorySessionRecord) -> str | None:
 
 
 def _turns_for_mode(record: FactorySessionRecord, mode: FactorySessionMode) -> list[FactorySessionTurn]:
-    if mode == "chat":
-        return record.chat_turns
     if mode == "create_agent":
         return record.create_agent_turns
     if mode == "evolve_agent":
@@ -552,9 +532,6 @@ def _turns_for_mode(record: FactorySessionRecord, mode: FactorySessionMode) -> l
 
 
 def _set_turns_for_mode(record: FactorySessionRecord, mode: FactorySessionMode, turns: list[FactorySessionTurn]) -> None:
-    if mode == "chat":
-        record.chat_turns = turns
-        return
     if mode == "create_agent":
         record.create_agent_turns = turns
         return
@@ -575,9 +552,7 @@ def _find_turn(turns: list[FactorySessionTurn], *, request_id: str | None) -> Fa
 
 
 def _sync_turn_count(record: FactorySessionRecord, mode: FactorySessionMode) -> None:
-    if mode == "chat":
-        record.chat_turn_count = len(record.chat_turns)
-    elif mode == "create_agent":
+    if mode == "create_agent":
         record.create_agent_turn_count = len(record.create_agent_turns)
     elif mode == "evolve_agent":
         record.evolve_agent_turn_count = len(record.evolve_agent_turns)
@@ -626,13 +601,29 @@ def _turn_messages(turn: FactorySessionTurn) -> list[dict[str, Any]]:
 
 
 def _normalized_record(record: FactorySessionRecord) -> FactorySessionRecord:
-    for mode in ("chat", "create_agent", "evolve_agent"):
+    for mode in ("create_agent", "evolve_agent"):
         turns = _turns_for_mode(record, mode)
         for superseded in normalize_running_turn_sequence(turns, updated_at=_now()):
             superseded.messages = _turn_messages(superseded)
         for turn in turns:
             turn.messages = _turn_messages(turn)
     return record
+
+
+def _factory_session_record_from_json(value: str) -> FactorySessionRecord:
+    payload = json.loads(value)
+    if not isinstance(payload, dict):
+        raise ValueError("Factory session payload must be an object")
+    if payload.get("current_mode") == "chat":
+        payload["current_mode"] = fallback_current_mode(
+            FactorySessionRecord.model_validate(
+                {
+                    **payload,
+                    "current_mode": None,
+                }
+            )
+        )
+    return FactorySessionRecord.model_validate(payload)
 
 
 def _message_metadata_from_messages(messages: Any) -> dict[str, Any]:

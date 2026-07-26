@@ -15,7 +15,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         })
     action = str(arguments.get("action") or "").strip()
     if action == "create":
-        job = runtime.create_job(_job_payload(arguments))
+        job = runtime.create_job(_job_payload(arguments, resources))
         return tool_envelope({"status": "completed", "job": job.model_dump(mode="json")})
     if action == "list":
         jobs = runtime.list_jobs()
@@ -53,8 +53,32 @@ def _job_id(arguments: dict[str, Any]) -> str:
     return job_id
 
 
-def _job_payload(arguments: dict[str, Any]) -> dict[str, Any]:
+def _job_payload(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     job = arguments.get("job")
     if not isinstance(job, dict):
         raise ValueError("scheduler create action requires job object")
-    return dict(job)
+    payload = dict(job)
+    if "runtime_config" not in payload:
+        runtime_config = resources.get("runtime_execution_config")
+        if isinstance(runtime_config, dict):
+            payload["runtime_config"] = _persistable_runtime_config(runtime_config)
+    return payload
+
+
+def _persistable_runtime_config(runtime_config: dict[str, Any]) -> dict[str, Any]:
+    user_config = runtime_config.get("user_config")
+    runtime_request = runtime_config.get("runtime_request")
+    safe_user_config = {}
+    if isinstance(user_config, dict):
+        for key in ("model_profile_overrides", "reasoning_intensity"):
+            if key in user_config:
+                safe_user_config[key] = user_config[key]
+    safe_runtime_request = {}
+    if isinstance(runtime_request, dict):
+        for key in ("timeout_seconds", "max_retries"):
+            if key in runtime_request:
+                safe_runtime_request[key] = runtime_request[key]
+    return {
+        "user_config": safe_user_config,
+        "runtime_request": safe_runtime_request,
+    }

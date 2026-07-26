@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from agent_factory.collaboration_system import CollaborationService
-from agent_factory.collaboration_system.store import CollaborationStoreError, SYSTEM_CHAT_PACKAGE_ID
+from agent_factory.collaboration_system.store import CollaborationStoreError
 from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import AgentPackageRuntimeManager
 from web_frontend.backend.runtime_bridge import RuntimeBridge
 
@@ -178,26 +178,17 @@ def _agent_package_runtime(runtime_bridge: RuntimeBridge) -> AgentPackageRuntime
 def _collaboration_agents(runtime_bridge: RuntimeBridge) -> list[dict[str, Any]]:
     runtime = _agent_package_runtime(runtime_bridge)
     packages = runtime.list_packages()
-    agents: list[dict[str, Any]] = [
-        {
-            "package_id": SYSTEM_CHAT_PACKAGE_ID,
-            "agent_name": "闲聊主 Agent",
-            "agent_description": "使用系统闲聊作为协作主 Agent。",
-            "source": "system",
-            "available_as_main": True,
-            "available_as_worker": False,
-        }
-    ]
+    agents: list[dict[str, Any]] = []
     for package in packages:
         package_id = str(package.get("package_id") or "").strip()
-        if not package_id or package_id == SYSTEM_CHAT_PACKAGE_ID:
+        if not package_id:
             continue
         agents.append(
             {
                 "package_id": package_id,
                 "agent_name": package.get("agent_name") or package.get("name") or package_id,
                 "agent_description": package.get("agent_description") or "",
-                "source": "package",
+                "source": package.get("package_origin") or "user",
                 "available_as_main": True,
                 "available_as_worker": True,
                 "status": package.get("status"),

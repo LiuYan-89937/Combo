@@ -16,7 +16,7 @@ from uuid import uuid4
 from agent_factory.knowledge_system import KnowledgeIngestionWorker, KnowledgeRuntime, build_knowledge_runtime
 from agent_factory.knowledge_system.schema import KnowledgeContractConfig
 from agent_factory.agent_registry import refresh_agent_registry_index
-from agent_factory.collaboration_system.store import CollaborationStore, SYSTEM_CHAT_PACKAGE_ID
+from agent_factory.collaboration_system.store import CollaborationStore
 from agent_factory.runtime_contracts import ContextContract, LoadedAgentPackage, MemoryContract
 from agent_factory.model_pool.resolver import (
     resolve_available_chat_model,
@@ -41,7 +41,6 @@ from agent_factory.runtime_attachments import (
     time_named_attachment_scope,
 )
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent, event
-from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import session_payload
 from agent_factory.factory_graph.frontend_bridge.agent_package_repository import (
     AgentPackageRepository,
 )
@@ -171,20 +170,11 @@ class AgentPackageRuntimeManager:
     def emit_collaboration_session_updated(self, *, collaboration_id: str, session: dict[str, Any]) -> None:
         if self._emit is None:
             return
-        session_id = str(
-            session.get("main_factory_session_id")
-            or session.get("main_agent_package_session_id")
-            or ""
-        ) or None
-        mode = (
-            "chat"
-            if str(session.get("main_agent_package_id") or "") == SYSTEM_CHAT_PACKAGE_ID
-            else "agent_package"
-        )
+        session_id = str(session.get("main_agent_package_session_id") or "") or None
         common = {
             "request_id": None,
             "session_id": session_id,
-            "mode": mode,
+            "mode": "agent_package",
             "graph_id": "collaboration",
             "producer_type": "collaboration_service",
         }
@@ -203,25 +193,6 @@ class AgentPackageRuntimeManager:
                     "collaboration_id": collaboration_id,
                     "runtime_status": session.get("runtime_status"),
                     "runtime_status_payload": session.get("runtime_status_payload") or {},
-                },
-            )
-        )
-
-    def emit_factory_session_updated(self, *, session_record: Any, mode: str = "chat") -> None:
-        if self._emit is None:
-            return
-        payload = session_payload(session_record, snapshot_mode=mode)
-        self._emit(
-            event(
-                "session_switched",
-                request_id=None,
-                session_id=str(payload.get("session_id") or ""),
-                mode=mode,
-                producer_type="collaboration_service",
-                payload={
-                    "session_id": payload.get("session_id"),
-                    "session": payload,
-                    "force_restore": True,
                 },
             )
         )
@@ -957,7 +928,7 @@ class AgentPackageRuntimeManager:
                 event(
                     event_type,
                     request_id=None,
-                    mode="chat" if package_id == SYSTEM_CHAT_PACKAGE_ID else "agent_package",
+                    mode="agent_package",
                     graph_id="knowledge_ingestion",
                     producer_type="knowledge_runtime",
                     payload={"package_id": package_id, **payload},

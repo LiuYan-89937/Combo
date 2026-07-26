@@ -9,7 +9,6 @@ import { useCommand } from '@/composables/useCommand'
 import { useFactoryMessageProjection } from '@/composables/factory/useFactoryMessageProjection'
 import {
   agentPackageConversationScope,
-  conversationScopeForMode,
   isMoreSpecificConversationScope,
 } from '@/stores/runtime/scopes'
 import { messageReasoning, messageText } from '@/stores/runtime/messageParts'
@@ -27,24 +26,11 @@ export function useCollaborationRuntime() {
 
   const mainAgentPackageId = computed(() => collaborationStore.mainAgentId || SYSTEM_CHAT_PACKAGE_ID)
   const mainAgentPackageSessionId = computed(() => collaborationStore.activeSession?.main_agent_package_session_id || null)
-  const mainFactorySessionId = computed(() => collaborationStore.activeSession?.main_factory_session_id || null)
-  const activeFactorySession = computed(() => (
-    runtimeStore.sessions.find((session: any) => session.session_id === runtimeStore.activeFactorySessionId) || null
-  ))
-  const activeFactoryChatPackageSessionId = computed(() => (
-    String(activeFactorySession.value?.chat_agent_package_session_id || '').trim() || null
-  ))
-  const mainAgentConversationScope = computed(() => {
-    if (mainAgentPackageId.value === SYSTEM_CHAT_PACKAGE_ID) {
-      return conversationScopeForMode('chat', {
-        session_id: mainFactorySessionId.value,
-        collaboration_id: collaborationStore.activeSession?.collaboration_id,
-      })
-    }
-    return agentPackageConversationScope(mainAgentPackageId.value, mainAgentPackageSessionId.value, {
+  const mainAgentConversationScope = computed(() => (
+    agentPackageConversationScope(mainAgentPackageId.value, mainAgentPackageSessionId.value, {
       collaborationId: collaborationStore.activeSession?.collaboration_id,
     })
-  })
+  ))
   const mainAgentActiveRequestId = computed(() => {
     const remembered = lastMainAgentRequestId.value
     if (remembered && runtimeStore.activeRequests[remembered]?.status === 'running') {
@@ -76,27 +62,6 @@ export function useCollaborationRuntime() {
       workspaceStore.setScope('package')
       return
     }
-    if (packageId === SYSTEM_CHAT_PACKAGE_ID) {
-      agentStore.leaveAgentChat()
-      runtimeStore.enterCollaborationConversation(
-        collaborationId,
-        SYSTEM_CHAT_PACKAGE_ID,
-        mainFactorySessionId.value,
-      )
-      workspaceStore.setScope('package')
-      if (mainFactorySessionId.value) {
-        commands.switchSession(
-          mainFactorySessionId.value,
-          'chat',
-          collaborationStore.activeSession?.collaboration_id,
-        )
-      } else {
-        runtimeStore.showEmptyFactoryConversation('chat', null, collaborationId)
-        commands.newSession('chat', null, collaborationId)
-      }
-      return
-    }
-
     agentStore.enterAgentChat(packageId, mainAgentPackageSessionId.value)
     runtimeStore.enterCollaborationConversation(
       collaborationId,
@@ -141,38 +106,24 @@ export function useCollaborationRuntime() {
         runtime_tool_access: promptResponse.runtime_tool_access,
       },
     }
-    if (packageId === SYSTEM_CHAT_PACKAGE_ID) {
-      const command = runtimeStore.isAwaitingUserInputInterrupt
-        ? commands.answerInterrupt(content)
-        : commands.sendMessage(mainAgentInput, 'chat', payloadAttachments, collaborationRuntimeOptions, content)
-      lastMainAgentRequestId.value = command.request_id || null
-      runtimeStore.addUserMessage(content, command.request_id, {
-        mode: 'chat',
-        package_id: SYSTEM_CHAT_PACKAGE_ID,
-        agent_session_id: mainAgentPackageSessionId.value,
-        factory_session_id: mainFactorySessionId.value,
-        collaboration_id: collaborationStore.activeSession.collaboration_id,
-        interrupt_resume: runtimeStore.isAwaitingUserInputInterrupt,
-      }, runtimeStore.isAwaitingUserInputInterrupt ? [] : visibleAttachments)
-      await rememberActiveMainAgentSession()
-      return true
-    }
-
-    const command = commands.sendAgentPackageMessage(
-      packageId,
-      mainAgentInput,
-      mainAgentPackageSessionId.value || undefined,
-      payloadAttachments,
-      collaborationRuntimeOptions,
-      content,
-    )
+    const command = runtimeStore.isAwaitingUserInputInterrupt
+      ? commands.answerInterrupt(content)
+      : commands.sendAgentPackageMessage(
+        packageId,
+        mainAgentInput,
+        mainAgentPackageSessionId.value || undefined,
+        payloadAttachments,
+        collaborationRuntimeOptions,
+        content,
+      )
     lastMainAgentRequestId.value = command.request_id || null
     runtimeStore.addUserMessage(content, command.request_id, {
       mode: 'agent_package',
       package_id: packageId,
       agent_session_id: mainAgentPackageSessionId.value,
       collaboration_id: collaborationStore.activeSession.collaboration_id,
-    }, visibleAttachments)
+      interrupt_resume: runtimeStore.isAwaitingUserInputInterrupt,
+    }, runtimeStore.isAwaitingUserInputInterrupt ? [] : visibleAttachments)
     await rememberActiveMainAgentSession()
     return true
   }
@@ -181,21 +132,10 @@ export function useCollaborationRuntime() {
     await nextTick()
     const current = collaborationStore.activeSession
     if (!current || !ownsActiveMainAgentConversation()) return
-    const nextPackageSessionId = mainAgentPackageId.value === SYSTEM_CHAT_PACKAGE_ID
-      ? activeFactoryChatPackageSessionId.value
-      : runtimeStore.activeAgentSessionId
-    const nextFactorySessionId = mainAgentPackageId.value === SYSTEM_CHAT_PACKAGE_ID
-      ? runtimeStore.activeFactorySessionId
-      : null
-    const payload: {
-      main_agent_package_session_id?: string | null
-      main_factory_session_id?: string | null
-    } = {}
+    const nextPackageSessionId = runtimeStore.activeAgentSessionId
+    const payload: { main_agent_package_session_id?: string | null } = {}
     if (nextPackageSessionId && current.main_agent_package_session_id !== nextPackageSessionId) {
       payload.main_agent_package_session_id = nextPackageSessionId
-    }
-    if (mainAgentPackageId.value === SYSTEM_CHAT_PACKAGE_ID && current.main_factory_session_id !== nextFactorySessionId) {
-      payload.main_factory_session_id = nextFactorySessionId
     }
     if (Object.keys(payload).length === 0) return
     await collaborationStore.updateSession(payload)
@@ -229,8 +169,6 @@ export function useCollaborationRuntime() {
   watch(
     () => [
       mainAgentPackageId.value,
-      runtimeStore.activeFactorySessionId,
-      activeFactoryChatPackageSessionId.value,
       runtimeStore.activeAgentSessionId,
       runtimeStore.currentMode,
     ].join(':'),

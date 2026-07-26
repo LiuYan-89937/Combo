@@ -551,7 +551,13 @@ class SchedulerContractBuilder:
         worker = SchedulerWorker(runtime)
         return RuntimeContribution(
             services={"scheduler_store": store, "scheduler_runtime": runtime},
-            tool_runtime_resources={"scheduler_runtime": runtime},
+            tool_runtime_resources={
+                "scheduler_runtime": runtime,
+                "runtime_execution_config": {
+                    "user_config": {},
+                    "runtime_request": {},
+                },
+            },
             background_workers=[worker],
         )
 

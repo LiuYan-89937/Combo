@@ -431,7 +431,7 @@ const mainAgentContextRows = computed(() => {
     { label: t('collaboration.context.agent'), value: agentName(session.main_agent_package_id) },
     {
       label: t('collaboration.context.session'),
-      value: String(session.main_agent_package_session_id || session.main_factory_session_id || t('collaboration.context.notCreated')),
+      value: String(session.main_agent_package_session_id || t('collaboration.context.notCreated')),
     },
     {
       label: t('collaboration.context.model'),
@@ -546,7 +546,6 @@ async function updateMainAgent(value: string) {
   await store.updateSession({
     main_agent_package_id: value || SYSTEM_CHAT_PACKAGE_ID,
     main_agent_package_session_id: null,
-    main_factory_session_id: null,
   })
 }
 

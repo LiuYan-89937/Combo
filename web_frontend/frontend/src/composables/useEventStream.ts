@@ -52,7 +52,7 @@ async function restoreActiveConversation(runtimeStore: ReturnType<typeof useRunt
   }
   if (
     runtimeStore.activeFactorySessionId
-    && ['chat', 'create_agent', 'evolve_agent'].includes(String(runtimeStore.currentMode || ''))
+    && ['create_agent', 'evolve_agent'].includes(String(runtimeStore.currentMode || ''))
   ) {
     await postCommand(switchSessionCommand(runtimeStore.activeFactorySessionId, runtimeStore.currentMode))
   }

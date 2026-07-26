@@ -173,7 +173,6 @@ export const useCollaborationStore = defineStore('collaboration', () => {
     title?: string
     main_agent_package_id?: string
     main_agent_package_session_id?: string | null
-    main_factory_session_id?: string | null
     approval_mode?: CollaborationApprovalMode
     execution_config?: CollaborationSessionView['execution_config']
     status?: CollaborationSessionView['status']
@@ -331,7 +330,6 @@ export const useCollaborationStore = defineStore('collaboration', () => {
   async function deleteSession(collaborationId: string): Promise<{
     main_agent_package_id?: string | null
     main_agent_package_session_id?: string | null
-    main_factory_session_id?: string | null
   } | null> {
     saving.value = true
     error.value = null
@@ -347,7 +345,6 @@ export const useCollaborationStore = defineStore('collaboration', () => {
       return {
         main_agent_package_id: response.main_agent_package_id,
         main_agent_package_session_id: response.main_agent_package_session_id,
-        main_factory_session_id: response.main_factory_session_id,
       }
     } catch (exc) {
       error.value = errorMessage(exc)

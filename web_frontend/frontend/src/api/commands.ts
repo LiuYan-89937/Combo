@@ -194,12 +194,28 @@ export function runAgentEvolutionCommand(
 }
 
 function runtimePayload(payload: Record<string, unknown>, runtimeOptions?: RuntimeMainModelOptions): Record<string, unknown> {
+  const runtimeConfig = runtimeExecutionConfig(runtimeOptions, payload.user_config)
+  if (!runtimeConfig) return payload
+  const { user_config: _payloadUserConfig, ...payloadWithoutUserConfig } = payload
+  return {
+    ...payloadWithoutUserConfig,
+    ...runtimeConfig,
+  }
+}
+
+export function runtimeExecutionConfig(
+  runtimeOptions?: RuntimeMainModelOptions,
+  baseUserConfig?: unknown,
+): {
+  runtime_request?: Record<string, unknown>
+  user_config?: Record<string, unknown>
+} | null {
   const profileId = String(runtimeOptions?.mainModelProfileId || '').trim()
   const reasoningIntensity = runtimeOptions?.reasoningIntensity
   const requestTimeoutSeconds = runtimeOptions?.requestTimeoutSeconds
   const maxRetries = runtimeOptions?.maxRetries
-  const payloadUserConfig = payload.user_config && typeof payload.user_config === 'object'
-    ? payload.user_config as Record<string, unknown>
+  const payloadUserConfig = baseUserConfig && typeof baseUserConfig === 'object'
+    ? baseUserConfig as Record<string, unknown>
     : null
   const extraUserConfig = runtimeOptions?.userConfig && typeof runtimeOptions.userConfig === 'object'
     ? runtimeOptions.userConfig
@@ -209,9 +225,8 @@ function runtimePayload(payload: Record<string, unknown>, runtimeOptions?: Runti
     || typeof maxRetries === 'number'
   )
   const hasUserConfig = Boolean(profileId || reasoningIntensity != null || extraUserConfig || payloadUserConfig)
-  if (!hasRuntimeRequest && !hasUserConfig) return payload
+  if (!hasRuntimeRequest && !hasUserConfig) return null
   return {
-    ...payload,
     ...(hasRuntimeRequest
       ? {
           runtime_request: {

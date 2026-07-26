@@ -312,9 +312,8 @@ export const useRuntimeStore = defineStore('runtime', {
         this._upsertFactorySession(payload?.session)
         this._restoreSessionSnapshot(payload)
       } else if (type === 'session_empty') {
-        const mode = event.mode === 'create_agent' || event.mode === 'evolve_agent'
-          ? event.mode
-          : 'chat'
+        if (event.mode !== 'create_agent' && event.mode !== 'evolve_agent') return
+        const mode = event.mode
         const packageId = mode === 'evolve_agent'
           ? String(payload?.package_id || '').trim() || null
           : null
@@ -333,10 +332,11 @@ export const useRuntimeStore = defineStore('runtime', {
         this.sessions = payload?.sessions
           ? payload.sessions.filter(isStandaloneFactorySession)
           : this.sessions.filter((session: any) => !deletedSessionIds.has(session.session_id))
-        if (deletedCurrentSession) {
-          const emptyConversationMode = this.currentMode === 'create_agent' || this.currentMode === 'evolve_agent'
-            ? this.currentMode
-            : 'chat'
+        if (
+          deletedCurrentSession
+          && (this.currentMode === 'create_agent' || this.currentMode === 'evolve_agent')
+        ) {
+          const emptyConversationMode = this.currentMode
           const evolutionPackageId = emptyConversationMode === 'evolve_agent'
             ? this.selectedAgentPackage?.package_id || null
             : null
@@ -1131,7 +1131,7 @@ export const useRuntimeStore = defineStore('runtime', {
       this.workspaceEntries = []
     },
 
-    enterFactoryConversation(mode: 'chat' | 'create_agent' | 'evolve_agent', packageId: string | null = null) {
+    enterFactoryConversation(mode: 'create_agent' | 'evolve_agent', packageId: string | null = null) {
       if (mode !== 'evolve_agent') this._clearAgentPackageSelectionIntent()
       const scope = conversationScopeForMode(mode, {
         package_id: packageId,
@@ -1151,18 +1151,6 @@ export const useRuntimeStore = defineStore('runtime', {
       sessionId: string | null,
       collaborationTaskId: string | null = null,
     ) {
-      if (packageId === 'factory_chat') {
-        this._clearAgentPackageSelectionIntent()
-        const scope = conversationScopeForMode('chat', {
-          session_id: sessionId,
-          collaboration_id: collaborationId,
-        })
-        if (scope) this._switchConversationScope(scope)
-        this.currentMode = 'chat'
-        this.activeFactorySessionId = sessionId
-        this.activeAgentSessionId = null
-        return
-      }
       this._switchConversationScope(agentPackageConversationScope(packageId, sessionId, {
         collaborationId,
         collaborationTaskId,
@@ -1175,14 +1163,14 @@ export const useRuntimeStore = defineStore('runtime', {
     showEmptyCollaborationConversation() {
       this._clearAgentPackageSelectionIntent()
       this._resetConversationScope(emptyCollaborationConversationScope())
-      this.currentMode = 'chat'
+      this.currentMode = 'agent_package'
       this.activeFactorySessionId = null
       this.activeAgentSessionId = null
     },
 
     expectFactorySession(
       sessionId: string,
-      mode: 'chat' | 'create_agent' | 'evolve_agent',
+      mode: 'create_agent' | 'evolve_agent',
       collaborationId: string | null = null,
     ) {
       if (mode !== 'evolve_agent') this._clearAgentPackageSelectionIntent()
@@ -1218,7 +1206,7 @@ export const useRuntimeStore = defineStore('runtime', {
     },
 
     showEmptyFactoryConversation(
-      mode: 'chat' | 'create_agent' | 'evolve_agent',
+      mode: 'create_agent' | 'evolve_agent',
       packageId: string | null = null,
       collaborationId: string | null = null,
     ) {
@@ -1685,7 +1673,7 @@ function activeRequestViewFromPayload(value: unknown): ActiveRequestView | null 
 }
 
 function normalizeFactoryMode(value: unknown): FactoryMode | null {
-  if (value === 'chat' || value === 'create_agent' || value === 'evolve_agent' || value === 'agent_package') {
+  if (value === 'create_agent' || value === 'evolve_agent' || value === 'agent_package' || value === 'agent_group') {
     return value
   }
   return null

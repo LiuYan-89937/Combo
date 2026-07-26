@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from threading import RLock
 from typing import Any
@@ -27,6 +28,24 @@ from agent_factory.scheduler_system import SchedulerRuntime
 
 
 @dataclass(slots=True)
+class RuntimeCommandContext:
+    session_record: Any | None
+    mode: FactoryMode | None
+
+
+_NAVIGATION_COMMAND_TYPES = frozenset(
+    {
+        "start_session",
+        "switch_session",
+        "new_session",
+        "delete_session",
+        "set_mode",
+        "select_agent_package",
+    }
+)
+
+
+@dataclass(slots=True)
 class FactoryRuntimeAdapter(
     RuntimeSessionCommandMixin,
     RuntimeAgentPackageCommandMixin,
@@ -38,8 +57,13 @@ class FactoryRuntimeAdapter(
     checkpointer: Any = None
     checkpointer_handle: Any = None
     options: FactoryBridgeOptions = field(default_factory=FactoryBridgeOptions)
-    session_record: Any | None = None
-    mode: FactoryMode | None = None
+    _session_record: Any | None = None
+    _mode: FactoryMode | None = None
+    _command_context: ContextVar[RuntimeCommandContext | None] = field(
+        default_factory=lambda: ContextVar("factory_runtime_command_context", default=None),
+    )
+    _navigation_lock: RLock = field(default_factory=RLock)
+    _state_lock: RLock = field(default_factory=RLock)
     pending_agent_package_runs: dict[tuple[str, str], PendingAgentPackageRun] = field(default_factory=dict)
     pending_agent_package_runs_lock: RLock = field(default_factory=RLock)
     pending_agent_group_runs: dict[str, PendingAgentPackageRun] = field(default_factory=dict)
@@ -71,7 +95,47 @@ class FactoryRuntimeAdapter(
             )
         self.agent_package_runtime.set_emit(self.emit)
 
+    @property
+    def session_record(self) -> Any | None:
+        context = self._command_context.get()
+        return context.session_record if context is not None else self._session_record
+
+    @session_record.setter
+    def session_record(self, value: Any | None) -> None:
+        context = self._command_context.get()
+        if context is not None:
+            context.session_record = value
+            return
+        with self._state_lock:
+            self._session_record = value
+
+    @property
+    def mode(self) -> FactoryMode | None:
+        context = self._command_context.get()
+        return context.mode if context is not None else self._mode
+
+    @mode.setter
+    def mode(self, value: FactoryMode | None) -> None:
+        context = self._command_context.get()
+        if context is not None:
+            context.mode = value
+            return
+        with self._state_lock:
+            self._mode = value
+
     def handle(self, command: FactoryFrontendCommand) -> bool:
+        if command.type in _NAVIGATION_COMMAND_TYPES:
+            with self._navigation_lock:
+                return self._handle_with_command_context(command)
+        return self._handle_with_command_context(command)
+
+    def _handle_with_command_context(self, command: FactoryFrontendCommand) -> bool:
+        with self._state_lock:
+            context = RuntimeCommandContext(
+                session_record=self._session_record,
+                mode=self._mode,
+            )
+        token = self._command_context.set(context)
         try:
             if command.type == "shutdown":
                 if self.agent_package_runtime is not None:
@@ -94,7 +158,30 @@ class FactoryRuntimeAdapter(
                     message=f"{type(exc).__name__}: {exc}",
                 )
             )
+        finally:
+            self._commit_command_context(command, context)
+            self._command_context.reset(token)
         return True
+
+    def _commit_command_context(
+        self,
+        command: FactoryFrontendCommand,
+        context: RuntimeCommandContext,
+    ) -> None:
+        context_session_id = _record_session_id(context.session_record)
+        with self._state_lock:
+            current_session_id = _record_session_id(self._session_record)
+            if command.type in _NAVIGATION_COMMAND_TYPES:
+                self._session_record = context.session_record
+                self._mode = context.mode
+                return
+            if context_session_id and context_session_id == current_session_id:
+                self._session_record = context.session_record
+                self._mode = context.mode
+
+
+def _record_session_id(record: Any | None) -> str:
+    return str(getattr(record, "session_id", "") or "").strip()
 
 
 _COMMAND_HANDLERS: dict[str, str] = {

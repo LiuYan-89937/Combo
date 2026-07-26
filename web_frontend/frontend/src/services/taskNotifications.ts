@@ -23,7 +23,7 @@ export type TaskNotificationStatus = 'completed' | 'failed' | 'cancelled' | 'ski
 export type TaskNotificationTarget =
   | {
       kind: 'conversation'
-      mode: 'chat' | 'create_agent' | 'evolve_agent' | 'agent_package'
+      mode: 'create_agent' | 'evolve_agent' | 'agent_package'
       sessionId: string | null
       packageId: string | null
       collaborationId?: string | null

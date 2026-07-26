@@ -1,7 +1,6 @@
 {
   "version": "factory_frontend.v1",
   "modes": [
-    "chat",
     "create_agent",
     "evolve_agent",
     "agent_package",
