@@ -25,13 +25,6 @@
       "max_read_chars": 20000,
       "chunk_size": 800,
       "chunk_overlap": 120
-    },
-    "prompt_guidance": {
-      "enabled": true,
-      "max_sources": 12,
-      "max_description_chars": 160,
-      "default_search_mode": "auto",
-      "default_top_k": 5
     }
   }
 }

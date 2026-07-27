@@ -31,9 +31,7 @@
       embedded
       :agent-package="agentStore.selectedPackage"
       :instance="agentStore.selectedPackageInstance"
-      :context-config-saving="contextConfigSaving"
       class="right-panel-body"
-      @save-context-config="handleSaveContextConfig"
       @package-updated="agentStore.addPackage"
     />
 
@@ -61,7 +59,6 @@ import { useRoute } from 'vue-router'
 import { NButton, NEmpty, NIcon, NTabPane, NTabs } from 'naive-ui'
 import { ChevronForward } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
-import { useCommand } from '@/composables/useCommand'
 import AgentPackageDetailDrawer from '@/components/agent/AgentPackageDetailDrawer.vue'
 import { useAgentStore } from '@/stores/agent'
 import { RIGHT_SIDEBAR_WIDTH, useUiStore } from '@/stores/ui'
@@ -75,12 +72,10 @@ const MAIN_CONTENT_MIN_WIDTH = 520
 
 const uiStore = useUiStore()
 const agentStore = useAgentStore()
-const commands = useCommand()
 const route = useRoute()
 const { t } = useI18n()
 const allowedTabs = new Set(['workspace', 'sessions', 'status'])
 const isResizing = ref(false)
-const contextConfigSaving = ref(false)
 const viewportWidth = ref(RIGHT_SIDEBAR_WIDTH.max + MAIN_CONTENT_MIN_WIDTH)
 let resizeStartX = 0
 let resizeStartWidth = RIGHT_SIDEBAR_WIDTH.default
@@ -93,17 +88,6 @@ const displayedRightSidebarWidth = computed(() => {
 const isCollaborationRoute = computed(() => route.name === 'Collaboration')
 const isAgentGroupRoute = computed(() => route.name === 'AgentGroup')
 const isPublishedRoute = computed(() => route.name === 'Agents')
-
-async function handleSaveContextConfig(payload: { context_window_tokens: number | null; compression_threshold_tokens: number | null }) {
-  const packageId = agentStore.selectedPackageId
-  if (!packageId || contextConfigSaving.value) return
-  contextConfigSaving.value = true
-  try {
-    await commands.updateAgentPackageContextConfig(packageId, payload)
-  } finally {
-    contextConfigSaving.value = false
-  }
-}
 
 watch(
   () => uiStore.activeRightSidebarTab,

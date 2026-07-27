@@ -5,8 +5,13 @@ from typing import Any
 
 from langchain_core.messages import BaseMessage, HumanMessage
 
-from agent_factory.models import get_compression_model, get_main_model, get_task_model
 from agent_factory.models.usage import normalize_usage_metadata
+from agent_factory.model_pool.schema import (
+    DEFAULT_MODEL_COMPRESSION_TRIGGER_TOKENS,
+    DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS,
+)
+from agent_factory.context_system.token_estimation import estimate_messages_tokens
+
 
 @dataclass(frozen=True, slots=True)
 class TokenCountResult:
@@ -16,27 +21,46 @@ class TokenCountResult:
     model_role: str | None = None
 
 
-def context_window_tokens_from_profile(*, services: Any | None = None) -> int | None:
-    settings = _chat_model_settings_for_role(_model_role_from_services(services))
-    return settings.max_input_tokens if settings is not None else None
+@dataclass(frozen=True, slots=True)
+class ModelContextLimits:
+    context_window_tokens: int
+    compression_trigger_tokens: int
 
 
-def compression_threshold_tokens_from_profile(*, services: Any | None = None) -> int | None:
-    settings = _chat_model_settings_for_role(_model_role_from_services(services))
-    return settings.context_compression_threshold_tokens if settings is not None else None
-
-
-def effective_compression_threshold(
+def model_context_limits(
     *,
-    configured_threshold: int | None,
-    context_window_tokens: int | None,
-) -> int | None:
-    if configured_threshold is None:
-        return None
-    threshold = int(configured_threshold)
-    if context_window_tokens is None:
-        return threshold
-    return min(threshold, int(context_window_tokens))
+    services: Any | None = None,
+    state: Any | None = None,
+    model_role: str | None = None,
+) -> ModelContextLimits:
+    role = model_role or _model_role_from_services(services)
+    service = getattr(services, "model_operation_service", None) if services is not None else None
+    resolver = getattr(service, "context_limits_for_role", None)
+    if callable(resolver):
+        try:
+            limits = resolver(role, state=state)
+        except (LookupError, RuntimeError, ValueError):
+            limits = None
+        if isinstance(limits, dict):
+            return _normalized_model_context_limits(limits)
+    try:
+        from agent_factory.model_pool.resolver import resolve_available_chat_model
+
+        resolved = resolve_available_chat_model(role)
+    except Exception:
+        resolved = None
+    if resolved is None and role == "task":
+        try:
+            resolved = resolve_available_chat_model("main")
+        except Exception:
+            resolved = None
+    settings = resolved.settings if resolved is not None else None
+    return _normalized_model_context_limits(
+        {
+            "max_input_tokens": getattr(settings, "max_input_tokens", None),
+            "compression_trigger_tokens": getattr(settings, "compression_trigger_tokens", None),
+        }
+    )
 
 
 def count_messages_tokens(
@@ -47,46 +71,16 @@ def count_messages_tokens(
     model_role: str | None = None,
     tools: list[Any] | None = None,
 ) -> TokenCountResult:
-    selected_model = model
-    if selected_model is None:
-        model_role = model_role or _model_role_from_services(services)
-        selected_model = _model_for_role(model_role, services=services)
-    if selected_model is None:
-        return TokenCountResult(
-            token_count=None,
-            method="unavailable",
-            error="model tokenizer is unavailable",
-            model_role=model_role,
-        )
+    del model
+    model_role = model_role or _model_role_from_services(services)
     normalized = [message for message in messages if isinstance(message, BaseMessage)]
     if not normalized:
         normalized = [HumanMessage(content=str(message)) for message in messages if str(message)]
-    counter = getattr(selected_model, "get_num_tokens_from_messages", None)
-    if not callable(counter):
-        return TokenCountResult(
-            token_count=None,
-            method="unavailable",
-            error="model does not expose get_num_tokens_from_messages",
-            model_role=model_role,
-        )
-    try:
-        method = "model_tokenizer_with_tools" if tools else "model_tokenizer"
-        return TokenCountResult(
-            token_count=int(counter(normalized, tools=tools)),
-            method=method,
-            model_role=model_role,
-        )
-    except TypeError:
-        try:
-            return TokenCountResult(
-                token_count=int(counter(normalized)),
-                method="model_tokenizer",
-                model_role=model_role,
-            )
-        except Exception as exc:
-            return _count_error(exc, model_role=model_role)
-    except Exception as exc:
-        return _count_error(exc, model_role=model_role)
+    return TokenCountResult(
+        token_count=estimate_messages_tokens(normalized),
+        method="text_estimation_messages_only" if tools else "text_estimation",
+        model_role=model_role,
+    )
 
 
 def count_text_tokens(
@@ -121,22 +115,47 @@ def context_window_payload(
     model_role: str | None = None,
     source: str,
 ) -> dict[str, Any]:
+    window = context_window_tokens
     payload: dict[str, Any] = {
         "node_id": node_id,
         "source": source,
         "token_count": token_count,
         "token_count_method": token_count_method,
-        "context_window_tokens": context_window_tokens,
+        "context_window_tokens": window,
         "compression_threshold_tokens": compression_threshold_tokens,
         "model_role": model_role,
     }
-    if token_count is not None and context_window_tokens:
-        payload["window_usage_ratio"] = min(float(token_count) / float(context_window_tokens), 1.0)
+    if token_count is not None and window:
+        payload["window_usage_ratio"] = min(float(token_count) / float(window), 1.0)
     if token_count is not None and compression_threshold_tokens:
         payload["compression_usage_ratio"] = min(float(token_count) / float(compression_threshold_tokens), 1.0)
     if error:
         payload["error"] = error
     return payload
+
+
+def _normalized_model_context_limits(values: dict[str, Any]) -> ModelContextLimits:
+    window = _positive_int(values.get("max_input_tokens")) or DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS
+    trigger = (
+        _positive_int(values.get("compression_trigger_tokens"))
+        or DEFAULT_MODEL_COMPRESSION_TRIGGER_TOKENS
+    )
+    if trigger > window:
+        raise ValueError("active model compression trigger exceeds its context window")
+    return ModelContextLimits(
+        context_window_tokens=window,
+        compression_trigger_tokens=trigger,
+    )
+
+
+def _positive_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def token_count_from_usage_metadata(usage: Any) -> int | None:
@@ -188,43 +207,6 @@ def _model_role_from_services(services: Any | None) -> str:
         if role:
             return str(role)
     return "main"
-
-
-def _model_for_role(role: str | None, *, services: Any | None = None) -> Any | None:
-    service = getattr(services, "model_operation_service", None) if services is not None else None
-    resolver = getattr(service, "model_for_role", None)
-    if callable(resolver):
-        model = resolver(role)
-        if model is not None:
-            return model
-    if role == "task":
-        return get_task_model()
-    if role == "compression":
-        return get_compression_model()
-    return get_main_model()
-
-
-def _chat_model_settings_for_role(role: str | None) -> Any | None:
-    from agent_factory.models.chat_model import (
-        get_compression_model_settings,
-        get_main_model_settings,
-        get_task_model_settings,
-    )
-
-    if role == "task":
-        return get_task_model_settings()
-    if role == "compression":
-        return get_compression_model_settings()
-    return get_main_model_settings()
-
-
-def _count_error(exc: Exception, *, model_role: str | None) -> TokenCountResult:
-    return TokenCountResult(
-        token_count=None,
-        method="unavailable",
-        error=f"{type(exc).__name__}: {exc}",
-        model_role=model_role,
-    )
 
 
 def _token_int(value: Any) -> int | None:

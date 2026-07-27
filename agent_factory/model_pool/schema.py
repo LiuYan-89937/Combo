@@ -16,7 +16,7 @@ UTC = timezone.utc
 ModelPoolProfileKind = Literal["chat", "embedding", "image_generation"]
 ModelBindingRole = Literal["main", "task", "compression"]
 ModelPoolDefaultRole = Literal["main", "task", "compression", "embedding", "image_generation"]
-ModelBindingSource = Literal["local_registry", "local_default"]
+ModelBindingSource = Literal["model_pool", "runtime"]
 ModelPoolModality = Literal["text", "image", "audio"]
 ModelToolCapability = Literal["image_input", "image_output", "image_edit", "audio_input"]
 ModelSelectionSource = Literal["auto", "manual"]
@@ -29,6 +29,8 @@ LocalInferenceEngine = Literal[
 ]
 ModelArtifactSource = Literal["local_storage", "external_endpoint"]
 ModelContextExtensionMethod = Literal["yarn"]
+DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS = 256 * 1024
+DEFAULT_MODEL_COMPRESSION_TRIGGER_TOKENS = 200_000
 
 _ID_RE = re.compile(r"^[a-z][a-z0-9_.-]{1,127}$")
 _TOOL_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -162,6 +164,18 @@ class ModelPoolLimits(BaseModel):
     max_output_tokens: int | None = Field(default=None, ge=1)
     timeout_seconds: float | None = Field(default=None, gt=0)
     context_compression_threshold_tokens: int | None = Field(default=None, ge=1000)
+
+    @model_validator(mode="after")
+    def _compression_fits_context_window(self) -> "ModelPoolLimits":
+        if (
+            self.max_input_tokens is not None
+            and self.context_compression_threshold_tokens is not None
+            and self.context_compression_threshold_tokens > self.max_input_tokens
+        ):
+            raise ValueError(
+                "context_compression_threshold_tokens must not exceed max_input_tokens"
+            )
+        return self
 
 
 class LlamaCppMtpConfig(BaseModel):
@@ -532,7 +546,7 @@ class ModelProfileBinding(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     profile_id: str | None = None
-    source: ModelBindingSource = "local_registry"
+    source: ModelBindingSource = "model_pool"
     selection_source: ModelSelectionSource = "auto"
     reason: str = ""
     required_capabilities: dict[str, Any] = Field(default_factory=dict)
@@ -545,10 +559,8 @@ class ModelProfileBinding(BaseModel):
 
     @model_validator(mode="after")
     def _source_requirements(self) -> "ModelProfileBinding":
-        if self.source == "local_registry" and not self.profile_id:
-            raise ValueError("local_registry bindings require profile_id")
-        if self.source == "local_default" and self.profile_id:
-            raise ValueError("local_default bindings must not define profile_id")
+        if self.source == "runtime" and self.profile_id:
+            raise ValueError("runtime bindings must not define profile_id")
         return self
 
 
@@ -556,7 +568,7 @@ class ModelToolBinding(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     profile_id: str | None = None
-    source: ModelBindingSource = "local_registry"
+    source: ModelBindingSource = "model_pool"
     capability: ModelToolCapability
     required: bool = True
     selection_source: ModelSelectionSource = "auto"
@@ -572,10 +584,8 @@ class ModelToolBinding(BaseModel):
 
     @model_validator(mode="after")
     def _source_requirements(self) -> "ModelToolBinding":
-        if self.source == "local_registry" and not self.profile_id:
-            raise ValueError("local_registry bindings require profile_id")
-        if self.source == "local_default" and self.profile_id:
-            raise ValueError("local_default bindings must not define profile_id")
+        if self.source == "runtime" and self.profile_id:
+            raise ValueError("runtime bindings must not define profile_id")
         return self
 
 

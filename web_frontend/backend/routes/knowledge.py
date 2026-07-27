@@ -4,13 +4,12 @@ import json
 from pathlib import PurePosixPath
 import shutil
 from typing import Any
-from uuid import uuid4
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from agent_factory.document_processing import accepted_file_extensions, document_processing_capabilities
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import SYSTEM_CHAT_PACKAGE_ID
-from agent_factory.knowledge_system.identifiers import build_source_id
+from agent_factory.knowledge_system.identifiers import new_source_id
 from agent_factory.paths import factory_artifact_path
 from web_frontend.backend.runtime_bridge import RuntimeBridge
 from web_frontend.backend.routes.utils import optional_package, optional_resource_mode, resource_command
@@ -65,7 +64,7 @@ def create_knowledge_router(runtime_bridge: RuntimeBridge) -> APIRouter:
             )
         resolved_package_id = package_id or str(source_payload.get("package_id") or "").strip() or SYSTEM_CHAT_PACKAGE_ID
         display_name = str(source_payload.get("display_name") or "uploaded_source").strip()
-        source_id = build_source_id(display_name, fallback="uploaded_source", suffix=uuid4().hex[:10])
+        source_id = new_source_id()
         upload_root = _knowledge_upload_root(resolved_package_id, source_id)
         if upload_root.exists():
             shutil.rmtree(upload_root)

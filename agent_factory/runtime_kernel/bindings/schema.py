@@ -4,6 +4,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from agent_factory.tooling.builtins.aliases import canonical_builtin_tool_ids
 
 ServiceKind = Literal[
     "model_service",
@@ -72,6 +73,11 @@ class ToolAccessBindingPayload(BaseModel):
 
     allowed_tool_ids: list[str] = Field(default_factory=list)
     approval_policy: str = "allow_below_high"
+
+    @field_validator("allowed_tool_ids")
+    @classmethod
+    def _canonicalize_builtin_tool_ids(cls, value: list[str]) -> list[str]:
+        return canonical_builtin_tool_ids(value)
 
 
 class ModelOperationWriteTarget(BaseModel):

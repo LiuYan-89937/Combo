@@ -29,6 +29,11 @@ from agent_factory.scheduler_system import (
 )
 from agent_factory.scheduler_system.events import SchedulerEventPayload
 from agent_factory.scheduler_system.management import manage_scheduler_runtime
+from agent_factory.scheduler_system.execution_config import (
+    scheduler_run_max_retries,
+    scheduler_run_timeout_seconds,
+    scheduler_run_user_config,
+)
 from agent_factory.scheduler_system.seeds import apply_scheduler_seed_contract
 from agent_factory.knowledge_system.events import KNOWLEDGE_EVENT_TYPES
 from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
@@ -59,7 +64,7 @@ class CompiledPackageRuntime:
 class PackageRuntimeCore:
     """Shared AgentPackage runtime compile/stream core.
 
-    The core has no transport opinion. Docker stdio bridges and host
+    The core has no transport opinion. Local stdio bridges and host
     SystemPackage handles can both feed commands into it and receive standard
     frontend events from the supplied emitter.
     """
@@ -195,7 +200,15 @@ class PackageRuntimeCore:
                 )
                 return 1
         cancel_token = self._register_cancel_token(request_id, command_type)
-        normalizer.emit_run_started({"command": command_type, "attachment_count": _attachment_count(payload)})
+        run_started_payload: dict[str, Any] = {
+            "command": command_type,
+            "attachment_count": _attachment_count(payload),
+        }
+        if command_type in {"run_message", "resume_interrupt"}:
+            run_started_payload["runtime_request"] = RuntimeRequestPolicy.from_payload(
+                payload.get("runtime_request")
+            ).as_payload()
+        normalizer.emit_run_started(run_started_payload)
         try:
             if command_type == "list_sessions":
                 return self._list_sessions(normalizer)
@@ -350,9 +363,9 @@ class PackageRuntimeCore:
             agent_config=compiled.runtime_config["agent_config"],
             session_config=session_config,
         )
-        run_context.state.execution.timeout_seconds = RuntimeRequestPolicy.from_payload(
-            payload.get("runtime_request")
-        ).timeout_seconds
+        request_policy = RuntimeRequestPolicy.from_payload(payload.get("runtime_request"))
+        run_context.state.execution.timeout_seconds = request_policy.timeout_seconds
+        run_context.state.execution.max_retries = request_policy.max_retries
         normalizer.session_id = run_context.session_id
         if _emit_pending_checkpoint_interrupt(normalizer, compiled.compiled_app, run_context.thread_id):
             return 0
@@ -472,9 +485,9 @@ class PackageRuntimeCore:
             session_id=session_id,
             session_config=session_config,
         )
-        run_context.state.execution.timeout_seconds = RuntimeRequestPolicy.from_payload(
-            payload.get("runtime_request")
-        ).timeout_seconds
+        request_policy = RuntimeRequestPolicy.from_payload(payload.get("runtime_request"))
+        run_context.state.execution.timeout_seconds = request_policy.timeout_seconds
+        run_context.state.execution.max_retries = request_policy.max_retries
         final_state = None
         stop_requested = False
         stream_iter = facade.instance.controller.stream_resume(
@@ -630,9 +643,20 @@ class PackageRuntimeCore:
             run_context = runtime.facade.prepare_run_context(
                 runtime.compiled.compiled_app,
                 user_input=message,
-                user_config=runtime.compiled.runtime_config["user_config"],
+                user_config=scheduler_run_user_config(
+                    job,
+                    runtime.compiled.runtime_config["user_config"],
+                ),
                 agent_config=runtime.compiled.runtime_config["agent_config"],
                 session_config=session_config,
+            )
+            run_context.state.execution.max_retries = scheduler_run_max_retries(
+                job,
+                run_context.state.execution.max_retries,
+            )
+            run_context.state.execution.timeout_seconds = scheduler_run_timeout_seconds(
+                job,
+                run_context.state.execution.timeout_seconds,
             )
             normalizer.session_id = run_context.session_id
             final_state = None

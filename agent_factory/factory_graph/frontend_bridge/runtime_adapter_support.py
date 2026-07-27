@@ -174,12 +174,10 @@ def session_payload(record: Any | None, *, snapshot_mode: str | None = None) -> 
     turns = _turns_for_mode(payload, mode)
     messages = _messages_from_session_turns(turns)
     payload["mode_titles"] = {
-        "chat": display_title(_first_turn_input(payload.get("chat_turns"))),
         "create_agent": display_title(_first_turn_input(payload.get("create_agent_turns"))),
         "evolve_agent": display_title(_first_turn_input(payload.get("evolve_agent_turns"))),
     }
     payload["mode_turn_counts"] = {
-        "chat": int(payload.get("chat_turn_count") or 0),
         "create_agent": int(payload.get("create_agent_turn_count") or 0),
         "evolve_agent": int(payload.get("evolve_agent_turn_count") or 0),
     }
@@ -207,8 +205,6 @@ def _messages_from_session_turns(value: Any) -> list[dict[str, Any]]:
 
 
 def _turns_for_mode(payload: dict[str, Any], mode: str | None) -> Any:
-    if mode == "chat":
-        return payload.get("chat_turns")
     if mode == "create_agent":
         return payload.get("create_agent_turns")
     if mode == "evolve_agent":

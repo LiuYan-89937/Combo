@@ -12,7 +12,6 @@ from agent_factory.runtime_kernel.wrappers.system_context import (
     SYSTEM_CONTEXT_PREPARE_WRAPPER,
 )
 from agent_factory.runtime_kernel.wrappers.system_knowledge import (
-    KNOWLEDGE_GUIDANCE_SYSTEM_WRAPPER_ID,
     SYSTEM_KNOWLEDGE_GUIDANCE_WRAPPER,
 )
 from agent_factory.runtime_kernel.wrappers.system_render import (
@@ -60,7 +59,7 @@ DEFAULT_SYSTEM_WRAPPER_REGISTRY = SystemWrapperRegistry(
     [
         SYSTEM_RENDER_NODE_WRAPPER,
         SYSTEM_MEMORY_RETRIEVE_WRAPPER,
-        SYSTEM_KNOWLEDGE_GUIDANCE_WRAPPER,
         SYSTEM_CONTEXT_PREPARE_WRAPPER,
+        SYSTEM_KNOWLEDGE_GUIDANCE_WRAPPER,
     ]
 )

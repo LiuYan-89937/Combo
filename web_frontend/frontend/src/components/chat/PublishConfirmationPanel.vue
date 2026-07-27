@@ -12,9 +12,22 @@
       </n-tag>
     </div>
 
-    <p class="publish-message">
-      {{ messageText }}
-    </p>
+    <p class="publish-message">{{ t('publish.defaultMessage') }}</p>
+
+    <dl class="publish-details">
+      <div class="publish-detail-row">
+        <dt>{{ t('publish.workspace') }}</dt>
+        <dd :title="workspacePath">{{ workspaceDisplay }}</dd>
+      </div>
+      <div class="publish-detail-row">
+        <dt>{{ t('publish.validation') }}</dt>
+        <dd>{{ validationLabel }}</dd>
+      </div>
+      <div v-if="validationSummary" class="publish-detail-row">
+        <dt>{{ t('publish.summary') }}</dt>
+        <dd>{{ validationSummary }}</dd>
+      </div>
+    </dl>
 
     <div v-if="pendingResources.length" class="publish-resource-notice">
       <strong>发布后待配置 Resource</strong>
@@ -78,7 +91,14 @@ const revisionGuidance = ref('')
 const publishSubmitting = ref(false)
 
 const payload = computed(() => runtimeStore.publishConfirmationPayload || {})
-const messageText = computed(() => String(payload.value.message || t('publish.defaultMessage')))
+const workspacePath = computed(() => String(
+  payload.value.source_workspace || payload.value.workspace_path || '',
+).trim())
+const workspaceDisplay = computed(() => (
+  String(payload.value.workspace_id || '').trim()
+  || workspacePath.value
+  || t('publish.workspaceUnknown')
+))
 const pendingResources = computed<Array<{ resource_id: string }>>(() => {
   const values = payload.value.runtime_configuration?.pending_resources
   if (!Array.isArray(values)) return []
@@ -90,6 +110,11 @@ const validationLabel = computed(() => {
   const scope = String(validation.validation_scope || '').trim()
   const status = String(validation.status || '').trim()
   return [scope, status].filter(Boolean).join(' / ') || t('publish.ready')
+})
+const validationSummary = computed(() => {
+  const validation = payload.value.validation
+  if (!validation || typeof validation !== 'object') return ''
+  return String(validation.summary || '').trim()
 })
 
 async function handleConfirmPublish() {
@@ -139,26 +164,16 @@ function handleContinueRevision() {
 
 <style scoped>
 .publish-confirmation-panel {
-  padding: var(--app-space-lg);
-  border: 1px solid var(--app-text);
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  padding: var(--app-space-md);
+  border: 1px solid var(--app-border);
   border-radius: var(--app-radius-lg);
   background: var(--app-surface);
   color: var(--app-text);
-  box-shadow: var(--app-shadow-md);
+  box-shadow: var(--app-shadow-sm);
   animation: app-fade-in-up 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
-  position: relative;
-}
-
-.publish-confirmation-panel::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 3px;
-  border-radius: var(--app-radius-lg) 0 0 var(--app-radius-lg);
-  background: var(--app-success);
-  animation: app-pulse-soft 1.6s ease-in-out infinite;
 }
 
 .publish-header {
@@ -177,11 +192,45 @@ function handleContinueRevision() {
 }
 
 .publish-message {
-  margin: 12px 0 0;
+  margin: 10px 0 0;
   color: var(--app-text-secondary);
   font-size: 13px;
-  line-height: 1.6;
-  white-space: pre-wrap;
+  line-height: 1.5;
+}
+
+.publish-details {
+  min-width: 0;
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface-muted);
+}
+
+.publish-detail-row {
+  display: grid;
+  grid-template-columns: minmax(64px, auto) minmax(0, 1fr);
+  gap: 12px;
+  align-items: baseline;
+}
+
+.publish-detail-row + .publish-detail-row {
+  margin-top: 6px;
+}
+
+.publish-detail-row dt {
+  color: var(--app-text-muted);
+  font-size: 12px;
+}
+
+.publish-detail-row dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--app-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .publish-resource-notice {

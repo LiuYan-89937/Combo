@@ -41,11 +41,12 @@ Model Pool 管理 chat、embedding 和 image-generation profile、artifact、默
 
 ### 运行时模型选择
 
-- AgentPackage 通过 Model Binding 声明模型来源和能力要求；
-- `local_registry` 指向明确 profile；
-- `local_default` 解析模型池中对应角色的默认 profile，主要用于受控系统包；
+- AgentPackage 通过 Model Binding 声明模型角色、来源和能力要求；
+- `model_pool` 绑定到明确的本地或外部 profile；
+- `runtime` 使用当前请求显式选择的 profile，适合 Factory Chat 等交互入口；
+- 未显式绑定时可按角色解析 Model Pool 的默认 profile；
 - 请求可通过 `model_profile_overrides.main` 覆盖本轮 main profile；
-- 绑定解析时校验 kind、enabled、artifact 和可运行性。
+- 绑定解析时统一校验 kind、enabled、artifact、能力和可运行性。
 
 当前实现的“默认模型”仍来自 ModelPoolStore 的默认 profile；Endpoint 的环境变量只负责推理服务连接，不能替代缺失的 profile 元数据。
 
@@ -137,7 +138,7 @@ Knowledge 服务注册到 RuntimeServices，不代表知识正文自动拼入 Pr
 
 Resource Contract 声明工具依赖的配置项和敏感资源。ResourceStore 按 package ID 管理值，EnvironmentResolver 在运行前解析环境与资源，ToolGateway 在调用时只向对应 entrypoint 提供所需资源。
 
-Resource 的状态可以被前端管理，但敏感值不应写入 Prompt、Trace 或 AgentPackage。容器只应获得当前包当前工具所需的最小资源集合。
+Resource 的状态可以被前端管理，但敏感值不应写入 Prompt、Trace 或 AgentPackage。运行时只应获得当前包当前工具所需的最小资源集合。
 
 ## 9. Scheduler
 
@@ -185,10 +186,10 @@ Collaboration System 和 Agent Group System 支持主 Agent、worker、任务派
 
 ## 13. 运行隔离与扩展
 
-- 普通 AgentPackage 使用 Docker Runtime；
-- 系统包可使用受信任 Host Runtime；
-- runtime、workdir、artifacts 和 extensions 使用独立挂载边界；
-- MCP 与 SkillHub 通过宿主 Gateway 向容器提供服务；
+- 普通 AgentPackage 与系统 Chat 包统一使用受宿主监督的 Native Runtime；
+- runtime、workdir、artifacts 和 extensions 按包与会话建立独立路径边界；
+- Python wheel 与 npm profile 进入内容寻址的只读共享依赖池；
+- MCP 与 SkillHub 通过宿主 Gateway 向运行时提供服务；
 - Package Tool、Builtin Tool 和扩展工具统一进入 Registry/Gateway；
 - 路径策略和 `builtin_allow_external_paths` 控制文件访问边界。
 

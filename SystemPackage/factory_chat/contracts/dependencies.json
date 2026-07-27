@@ -5,10 +5,6 @@
   "config": {
     "python_requirements": [],
     "system_packages": [],
-    "system_binaries": [
-      "bash",
-      "grep",
-      "sed"
-    ]
+    "system_binaries": []
   }
 }

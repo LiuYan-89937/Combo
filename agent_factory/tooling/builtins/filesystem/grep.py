@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import fnmatch
 import re
-from pathlib import Path
 from typing import Any
 
 from agent_factory.tooling.builtins.filesystem.common import (
@@ -12,55 +10,14 @@ from agent_factory.tooling.builtins.filesystem.common import (
     required_string,
     resolve_path,
 )
+from agent_factory.tooling.builtins.filesystem.workspace_search import (
+    is_probably_binary,
+    iter_workspace_files,
+    matches_any_pattern,
+    string_list,
+    workspace_relative_path,
+)
 from agent_factory.tooling.envelope import tool_envelope
-
-
-_SKIPPED_DIR_NAMES = {
-    ".git",
-    ".hg",
-    ".svn",
-    ".mypy_cache",
-    ".pytest_cache",
-    ".ruff_cache",
-    "__pycache__",
-    "node_modules",
-    "dist",
-    "build",
-}
-_TEXT_SUFFIXES = {
-    "",
-    ".bash",
-    ".c",
-    ".cfg",
-    ".conf",
-    ".css",
-    ".csv",
-    ".dockerfile",
-    ".env",
-    ".go",
-    ".h",
-    ".html",
-    ".ini",
-    ".java",
-    ".js",
-    ".json",
-    ".jsx",
-    ".lock",
-    ".log",
-    ".md",
-    ".mjs",
-    ".py",
-    ".rs",
-    ".sh",
-    ".sql",
-    ".toml",
-    ".ts",
-    ".tsx",
-    ".txt",
-    ".xml",
-    ".yaml",
-    ".yml",
-}
 
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -76,11 +33,15 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     pattern = required_string(arguments, "pattern")
     base_path = str(arguments.get("base_path") or ".")
-    include = arguments.get("include")
-    if include is not None and not isinstance(include, str):
-        raise ValueError("include must be a string")
+    include = string_list(arguments.get("include"), key="include")
+    exclude = string_list(arguments.get("exclude"), key="exclude")
     case_sensitive = bool(arguments.get("case_sensitive", True))
     use_regex = bool(arguments.get("regex", True))
+    context_before = _bounded_non_negative_int(arguments.get("context_before", 0), "context_before", maximum=20)
+    context_after = _bounded_non_negative_int(arguments.get("context_after", 0), "context_after", maximum=20)
+    max_file_bytes = positive_int(arguments.get("max_file_bytes", 2_000_000), "max_file_bytes")
+    if max_file_bytes > 20_000_000:
+        raise ValueError("max_file_bytes must be less than or equal to 20000000")
     max_results = positive_int(arguments.get("max_results", 100), "max_results")
     if max_results > 5000:
         raise ValueError("max_results must be less than or equal to 5000")
@@ -89,26 +50,48 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     target = resolve_path(path=base_path, root=root, allow_external=allow_external)
     if not target.exists():
         raise FileNotFoundError(str(target))
-    paths = [target] if target.is_file() else _iter_files(target)
     matches: list[dict[str, Any]] = []
     truncated = False
-    for file_path in paths:
-        if include and not fnmatch.fnmatch(file_path.name, include) and not fnmatch.fnmatch(str(file_path), include):
+    files_searched = 0
+    for file_path in iter_workspace_files(target):
+        search_root = target if target.is_dir() else target.parent
+        if include and not matches_any_pattern(file_path, search_root=search_root, patterns=include):
             continue
-        if not _looks_text(file_path):
+        if exclude and matches_any_pattern(file_path, search_root=search_root, patterns=exclude):
+            continue
+        if file_path.stat().st_size > max_file_bytes:
+            continue
+        raw = file_path.read_bytes()
+        if is_probably_binary(raw):
             continue
         try:
-            lines = file_path.read_text(encoding="utf-8").splitlines()
+            lines = raw.decode("utf-8-sig").splitlines()
         except UnicodeDecodeError:
             continue
+        files_searched += 1
         for line_number, line in enumerate(lines, start=1):
             if not matcher(line):
                 continue
             if len(matches) >= max_results:
                 truncated = True
-                return tool_envelope({"matches": matches, "truncated": truncated})
-            matches.append({"path": str(file_path), "line": line, "line_number": line_number})
-    return tool_envelope({"matches": matches, "truncated": truncated})
+                return tool_envelope({
+                    "matches": matches,
+                    "truncated": truncated,
+                    "files_searched": files_searched,
+                })
+            line_index = line_number - 1
+            matches.append({
+                "path": workspace_relative_path(file_path, workspace_root=root),
+                "line": line,
+                "line_number": line_number,
+                "before": lines[max(0, line_index - context_before):line_index],
+                "after": lines[line_index + 1:line_index + 1 + context_after],
+            })
+    return tool_envelope({
+        "matches": matches,
+        "truncated": truncated,
+        "files_searched": files_searched,
+    })
 
 
 def _compile_matcher(*, pattern: str, case_sensitive: bool, use_regex: bool):
@@ -120,16 +103,9 @@ def _compile_matcher(*, pattern: str, case_sensitive: bool, use_regex: bool):
     return lambda line: needle in (line if case_sensitive else line.lower())
 
 
-def _iter_files(root: Path) -> list[Path]:
-    return sorted(
-        (path for path in root.rglob("*") if path.is_file() and not _is_skipped(path)),
-        key=lambda item: str(item),
-    )
-
-
-def _is_skipped(path: Path) -> bool:
-    return any(part in _SKIPPED_DIR_NAMES for part in path.parts)
-
-
-def _looks_text(path: Path) -> bool:
-    return path.suffix.lower() in _TEXT_SUFFIXES
+def _bounded_non_negative_int(value: Any, key: str, *, maximum: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{key} must be an integer")
+    if value < 0 or value > maximum:
+        raise ValueError(f"{key} must be between 0 and {maximum}")
+    return value

@@ -95,6 +95,23 @@ class ModelPoolSelector:
             enabled_profile_count=len(enabled_profiles),
         )
 
+    def profile_match_issues(
+        self,
+        profile_id: str,
+        requirement: ModelSelectionRequirement,
+    ) -> list[str]:
+        profile = self.store.require_profile(profile_id)
+        if not profile.enabled:
+            return ["profile_disabled"]
+        artifact = self.store.get_artifact(profile.artifact_id)
+        if artifact is None:
+            return ["artifact_missing"]
+        if not artifact.enabled:
+            return ["artifact_disabled"]
+        if requirement.kind and profile.kind != requirement.kind:
+            return [f"kind:{requirement.kind}"]
+        return _missing_capabilities(requirement, profile)
+
     def _rank_candidates(
         self,
         requirement: ModelSelectionRequirement,

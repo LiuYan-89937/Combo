@@ -8,8 +8,8 @@ from typing import Any
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
-from agent_factory.knowledge_system.prompting import KNOWLEDGE_GUIDANCE_CONTEXT_KEY, KNOWLEDGE_TOOL_ID
 from agent_factory.models.message_layout import system_messages_first
+from agent_factory.knowledge_system.guidance import KNOWLEDGE_GUIDANCE_CONTEXT_KEY
 from agent_factory.runtime_attachments import (
     format_attachments_for_model,
     image_attachment_content_parts,
@@ -59,9 +59,11 @@ PLAN_EXECUTE_PROJECTED_HISTORY_NODES = frozenset(
 class ModelInputEnvelope:
     messages: list[Any]
     stable_prefix_digest: str
+    knowledge_guidance_digest: str
     dynamic_evidence_digest: str
     tool_surface_digest: str
     stable_system_chars: int
+    knowledge_guidance_chars: int
     dynamic_evidence_chars: int
     history_message_count: int
     tool_count: int
@@ -71,9 +73,11 @@ class ModelInputEnvelope:
     def diagnostics(self) -> dict[str, Any]:
         return {
             "stable_prefix_digest": self.stable_prefix_digest,
+            "knowledge_guidance_digest": self.knowledge_guidance_digest,
             "dynamic_evidence_digest": self.dynamic_evidence_digest,
             "tool_surface_digest": self.tool_surface_digest,
             "stable_system_chars": self.stable_system_chars,
+            "knowledge_guidance_chars": self.knowledge_guidance_chars,
             "dynamic_evidence_chars": self.dynamic_evidence_chars,
             "history_message_count": self.history_message_count,
             "tool_count": self.tool_count,
@@ -104,9 +108,8 @@ def build_runtime_model_input(
         node_id=node_id,
         include_extracted_text_for_images=not image_input_enabled,
     )
-    knowledge_guidance = _knowledge_guidance_text(state) if _has_tool(tools, KNOWLEDGE_TOOL_ID) else ""
-    dynamic_system_text = "\n\n".join(item for item in [knowledge_guidance, dynamic_evidence] if item)
     system_messages: list[Any] = [SystemMessage(content=stable_system)]
+    knowledge_guidance = _knowledge_guidance_text(state)
     if knowledge_guidance:
         system_messages.append(
             SystemMessage(
@@ -133,15 +136,24 @@ def build_runtime_model_input(
     return ModelInputEnvelope(
         messages=request_messages,
         stable_prefix_digest=_digest_text(stable_system),
-        dynamic_evidence_digest=_digest_text(dynamic_system_text),
+        knowledge_guidance_digest=_digest_text(knowledge_guidance),
+        dynamic_evidence_digest=_digest_text(dynamic_evidence),
         tool_surface_digest=_tool_surface_digest(tools),
         stable_system_chars=len(stable_system),
-        dynamic_evidence_chars=len(dynamic_system_text),
+        knowledge_guidance_chars=len(knowledge_guidance),
+        dynamic_evidence_chars=len(dynamic_evidence),
         history_message_count=len(history_messages),
         tool_count=len(tools),
         image_input_enabled=image_input_enabled,
         image_attachment_count=visual_attachment_count,
     )
+
+
+def _knowledge_guidance_text(state: Any) -> str:
+    model_context = getattr(getattr(state, "context", None), "model_context", {}) or {}
+    if not isinstance(model_context, dict):
+        return ""
+    return str(model_context.get(KNOWLEDGE_GUIDANCE_CONTEXT_KEY) or "").strip()
 
 
 def _stable_system_prompt(*, prompt_binding: dict[str, Any], state: Any, node_id: str | None = None) -> str:
@@ -172,9 +184,14 @@ def _executor_tool_policy(state: Any) -> str:
         "glob, ls, and read may be used to inspect workspace files. "
         "If read reports a missing file or the path is uncertain, inspect the parent or nearby directory with ls "
         "before retrying read with the exact file name/path. "
-        "Call bash only when the available package/runtime tools cannot accomplish the current plan step; "
+        "Call shell only when the available package/runtime tools cannot accomplish the current plan step; "
         "when doing so, include fallback_reason in the tool arguments explaining the gap. "
-        "Use write, edit, and multi_edit normally for workspace deliverables while respecting filesystem boundaries. "
+        "Use write for a simple full-content write to one file. "
+        "Use edit for every multi-file change and for structured create, replace, move, copy, or delete operations. "
+        "edit is transactional: first call action=preview with the complete operations array, inspect the returned "
+        "affected_files diff, then call action=commit with the exact transaction_id returned by that preview. "
+        "Never invent or reuse a transaction_id, and never use shell as a fallback for file creation, movement, "
+        "copying, or deletion when edit is available. "
         f"{boundary} Generated files should be written under the workspace root, for example "
         f"output/report.md or {workspace_root.rstrip('/')}/output/report.md."
     )
@@ -451,13 +468,6 @@ def _dynamic_evidence_text(
     return "\n\n".join(item for item in [plan_text, attachments_text, governance_text, context_text] if item)
 
 
-def _knowledge_guidance_text(state: Any) -> str:
-    model_context = getattr(getattr(state, "context", None), "model_context", {}) or {}
-    if not isinstance(model_context, dict):
-        return ""
-    return str(model_context.get(KNOWLEDGE_GUIDANCE_CONTEXT_KEY) or "").strip()
-
-
 def _runtime_attachments(state: Any) -> Any:
     user_config = getattr(getattr(state, "runtime_config", None), "user_config", {}) or {}
     if not isinstance(user_config, dict):
@@ -676,10 +686,6 @@ def _tool_surface_digest(tools: list[BaseTool]) -> str:
             }
         )
     return _digest_json(payload)
-
-
-def _has_tool(tools: list[BaseTool], tool_id: str) -> bool:
-    return any(str(getattr(tool, "name", "") or "") == tool_id for tool in tools)
 
 
 def _tool_args_payload(tool: BaseTool) -> Any:

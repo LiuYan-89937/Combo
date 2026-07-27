@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent_factory.knowledge_system.prompting import KNOWLEDGE_GUIDANCE_CONTEXT_KEY, knowledge_prompt_guidance
+from agent_factory.knowledge_system.guidance import KNOWLEDGE_GUIDANCE_CONTEXT_KEY, knowledge_guidance_text
 from agent_factory.knowledge_system.runtime import KnowledgeRuntime
 from agent_factory.runtime_kernel.nodes.base import NodeExecutionContext
 from agent_factory.runtime_kernel.state import RuntimeState
@@ -21,13 +21,7 @@ class KnowledgeGuidanceSystemWrapper:
         runtime = getattr(context.services, "knowledge_runtime", None)
         if not isinstance(runtime, KnowledgeRuntime):
             return state, {}
-        guidance = knowledge_prompt_guidance(
-            runtime.list_sources(),
-            config=runtime.config.prompt_guidance,
-        )
-        current = str(state.context.model_context.get(KNOWLEDGE_GUIDANCE_CONTEXT_KEY) or "")
-        if guidance == current:
-            return state, {}
+        guidance = knowledge_guidance_text(runtime)
         updated = state.model_copy(deep=True)
         model_context = dict(updated.context.model_context)
         if guidance:
@@ -35,7 +29,7 @@ class KnowledgeGuidanceSystemWrapper:
         else:
             model_context.pop(KNOWLEDGE_GUIDANCE_CONTEXT_KEY, None)
         updated.context.model_context = model_context
-        updated.context.assembly_log.append(f"knowledge_guidance:{context.node_id}")
+        updated.context.assembly_log.append(f"system_knowledge_guidance:{context.node_id}")
         return updated, {"context": updated.context.model_dump(mode="json")}
 
 

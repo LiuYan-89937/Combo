@@ -34,7 +34,7 @@ See [Application Scenarios](ApplicationScenarios.md) for task-pattern mapping an
 
 ## Agent Architecture
 
-![FastAgentFactory Agent architecture](assets/diagrams/fastagentfactory-agent-architecture.png)
+![FastAgentFactory Agent architecture](assets/diagrams/fastagentfactory-agent-architecture-native.png)
 
 The architecture separates user experience, the Factory control plane, Agent runtime, tool/resource gateways, and local AI infrastructure. Sessions, workspaces, tool output, resources, and collaboration tasks have explicit isolation boundaries. See [Agent Architecture](AgentArchitecture.md).
 
@@ -71,7 +71,7 @@ The architecture separates user experience, the Factory control plane, Agent run
 
 ### Privacy, Permissions, and Observability
 
-- Execute Agent workloads in controlled Docker runtimes.
+- Execute Agent workloads as supervised native subprocesses with isolated session workspaces and dependency environments.
 - Limit files to the active workspace boundary.
 - Encrypt resource values and inject them only into authorized packages.
 - Audit traces, tool calls, model usage, task state, token consumption, and artifacts.

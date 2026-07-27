@@ -71,7 +71,6 @@ cleanup() {
         stop_process_tree "${BACKEND_PID}"
         wait "${BACKEND_PID}" 2>/dev/null || true
     fi
-    web_stop_managed_runtime_containers
     web_stop_inference_ssh_tunnel
     exit "${exit_code}"
 }
@@ -133,8 +132,6 @@ web_start_inference_ssh_tunnel
 web_sync_python_dependencies
 web_sync_frontend_dependencies
 web_ensure_builtin_web_search_mcp
-web_ensure_runtime_image
-web_stop_managed_runtime_containers
 web_require_command "curl" "Install curl first."
 web_require_command "pgrep" "Install procps first."
 web_require_command "tee" "Install coreutils first."

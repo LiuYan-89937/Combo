@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from agent_factory.runtime_defaults import DEFAULT_BUILTIN_WORKSPACE_ROOT
+from agent_factory.tooling.builtins.process.runtime import host_shell_display_name
 from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolSpec
 
 
@@ -23,6 +24,8 @@ _PROCESS_OUTPUT_SCHEMA = {
         "process_id": _STRING,
         "status": {"type": "string", "enum": _PROCESS_STATUS_VALUES},
         "command": _STRING,
+        "shell": _STRING,
+        "shell_executable": _STRING,
         "cwd": _STRING,
         "exit_code": {"type": ["integer", "null"]},
         "stdout": _STRING,
@@ -35,6 +38,8 @@ _PROCESS_OUTPUT_SCHEMA = {
         "process_id",
         "status",
         "command",
+        "shell",
+        "shell_executable",
         "cwd",
         "exit_code",
         "stdout",
@@ -49,13 +54,21 @@ _PROCESS_OUTPUT_SCHEMA = {
 
 PROCESS_TOOL_SPECS: list[ToolSpec] = [
     ToolSpec(
-        id="bash",
-        description="在 workspace 边界内启动 Bash 命令，支持前台等待或后台运行；wait 超时只返回状态，不自动终止进程。",
-        entrypoint="agent_factory.tooling.builtins.process.bash:run",
+        id="shell",
+        description=(
+            f"在 workspace 边界内通过当前平台的 {host_shell_display_name()} 启动命令，"
+            "支持前台等待或后台运行；wait 超时只返回状态，不自动终止进程。"
+        ),
+        entrypoint="agent_factory.tooling.builtins.process.shell:run",
         input_schema={
             "type": "object",
             "properties": {
-                "command": {"type": "string", "description": "要执行的 Bash 命令文本。"},
+                "command": {
+                    "type": "string",
+                    "description": (
+                        f"要交给当前平台 {host_shell_display_name()} 执行的命令文本。"
+                    ),
+                },
                 "cwd": {"type": "string", "default": ".", "description": _CWD_BOUNDARY_DESCRIPTION},
                 "mode": {
                     "type": "string",
@@ -79,7 +92,10 @@ PROCESS_TOOL_SPECS: list[ToolSpec] = [
                 },
                 "fallback_reason": {
                     "type": "string",
-                    "description": "executor 节点调用时必填：说明为什么当前可用的 package/runtime 工具无法完成此计划步骤，必须退回 Bash。",
+                    "description": (
+                        "executor 节点调用时必填：说明为什么当前可用的 package/runtime "
+                        "工具无法完成此计划步骤，必须退回平台 Shell。"
+                    ),
                 },
             },
             "required": ["command"],
@@ -88,17 +104,17 @@ PROCESS_TOOL_SPECS: list[ToolSpec] = [
         output_schema=_PROCESS_OUTPUT_SCHEMA,
         resources=_PROCESS_RESOURCE,
         risk_level="high",
-        risk_evaluator=ToolRiskEvaluatorConfig(hard=f"{_PROCESS_MODULE}.bash:evaluate_risk"),
+        risk_evaluator=ToolRiskEvaluatorConfig(hard=f"{_PROCESS_MODULE}.shell:evaluate_risk"),
         concurrent=False,
     ),
     ToolSpec(
-        id="bash_status",
-        description="查看由 bash 工具启动的进程状态和已收集输出。",
-        entrypoint="agent_factory.tooling.builtins.process.bash_status:run",
+        id="shell_status",
+        description="查看由 shell 工具启动的进程状态和已收集输出。",
+        entrypoint="agent_factory.tooling.builtins.process.shell_status:run",
         input_schema={
             "type": "object",
             "properties": {
-                "process_id": {"type": "string", "description": "bash 返回的 process_id。"},
+                "process_id": {"type": "string", "description": "shell 返回的 process_id。"},
                 "max_output_chars": {
                     "type": "integer",
                     "minimum": 1,
@@ -113,23 +129,23 @@ PROCESS_TOOL_SPECS: list[ToolSpec] = [
         output_schema=_PROCESS_OUTPUT_SCHEMA,
         resources=_PROCESS_RESOURCE,
         risk_level="low",
-        risk_evaluator=ToolRiskEvaluatorConfig(hard=f"{_PROCESS_MODULE}.bash_status:evaluate_risk"),
+        risk_evaluator=ToolRiskEvaluatorConfig(hard=f"{_PROCESS_MODULE}.shell_status:evaluate_risk"),
         concurrent=True,
     ),
     ToolSpec(
-        id="bash_stop",
-        description="终止由 bash 工具启动的进程，并返回最终状态和输出。",
-        entrypoint="agent_factory.tooling.builtins.process.bash_stop:run",
+        id="shell_stop",
+        description="终止由 shell 工具启动的进程树，并返回最终状态和输出。",
+        entrypoint="agent_factory.tooling.builtins.process.shell_stop:run",
         input_schema={
             "type": "object",
             "properties": {
-                "process_id": {"type": "string", "description": "bash 返回的 process_id。"},
+                "process_id": {"type": "string", "description": "shell 返回的 process_id。"},
                 "grace_seconds": {
                     "type": "integer",
                     "minimum": 0,
                     "maximum": 300,
                     "default": 2,
-                    "description": "SIGTERM 后等待多少秒再强制终止。",
+                    "description": "请求进程树终止后等待多少秒再强制终止。",
                 },
                 "max_output_chars": {
                     "type": "integer",
@@ -145,7 +161,7 @@ PROCESS_TOOL_SPECS: list[ToolSpec] = [
         output_schema=_PROCESS_OUTPUT_SCHEMA,
         resources=_PROCESS_RESOURCE,
         risk_level="medium",
-        risk_evaluator=ToolRiskEvaluatorConfig(hard=f"{_PROCESS_MODULE}.bash_stop:evaluate_risk"),
+        risk_evaluator=ToolRiskEvaluatorConfig(hard=f"{_PROCESS_MODULE}.shell_stop:evaluate_risk"),
         concurrent=False,
     ),
 ]

@@ -3,10 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shutil
 import subprocess
+import sys
+import tarfile
 import tempfile
 from typing import Any
 from urllib.request import Request, urlopen
@@ -17,9 +19,19 @@ from agent_factory.tooling.skills import parse_skill_directory
 
 
 SKILLHUB_INSTALL_URL_ENV = "AGENTFACTORY_SKILLHUB_INSTALL_URL"
+SKILLHUB_KIT_URL_ENV = "AGENTFACTORY_SKILLHUB_KIT_URL"
 SKILLHUB_AUTO_INSTALL_ENV = "AGENTFACTORY_SKILLHUB_AUTO_INSTALL"
 DEFAULT_SKILLHUB_INSTALL_URL = "https://skillhub-1388575217.cos.ap-guangzhou.myqcloud.com/install/install.sh"
+DEFAULT_SKILLHUB_KIT_URL = "https://skillhub-1388575217.cos.ap-guangzhou.myqcloud.com/install/latest.tar.gz"
+DEFAULT_SKILLHUB_SELF_UPDATE_URL = "https://skillhub-1388575217.cos.ap-guangzhou.myqcloud.com/version.json"
 SKILLHUB_COMMAND = "skillhub"
+SKILLHUB_KIT_REQUIRED_FILES = (
+    "skills_store_cli.py",
+    "skills_upgrade.py",
+    "version.json",
+    "metadata.json",
+)
+SKILLHUB_KIT_FILE_SIZE_LIMIT = 10 * 1024 * 1024
 SEARCH_RESULT_LIMIT = 10
 RAW_OUTPUT_PREVIEW_CHARS = 1200
 SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
@@ -47,10 +59,10 @@ class SkillHubService:
         self.command = command
 
     def status(self) -> dict[str, Any]:
-        cli_path = shutil.which(self.command)
+        cli_path = resolve_skillhub_cli(self.command)
         version = ""
         if cli_path:
-            result = _run_command([self.command, "--version"], timeout_seconds=15)
+            result = _run_skillhub_command(cli_path, ["--version"], timeout_seconds=15)
             version = result.combined_output
         return {
             "action": "status",
@@ -69,8 +81,12 @@ class SkillHubService:
 
     def search(self, query: str, *, timeout_seconds: int = 60) -> dict[str, Any]:
         query = normalize_skillhub_search_query(query)
-        self._require_cli()
-        result = _run_command([self.command, "search", query], timeout_seconds=timeout_seconds)
+        cli_path = self._require_cli()
+        result = _run_skillhub_command(
+            cli_path,
+            ["search", query],
+            timeout_seconds=timeout_seconds,
+        )
         if result.returncode != 0:
             raise RuntimeError(result.combined_output or f"skillhub search failed with exit code {result.returncode}")
         raw_output = result.combined_output
@@ -80,7 +96,7 @@ class SkillHubService:
             "status": "ok",
             "message": f"SkillHUB search completed. {len(items)} candidates returned.",
             "cli_available": True,
-            "cli_path": shutil.which(self.command),
+            "cli_path": cli_path,
             "cli_version": self.status().get("cli_version") or "",
             "extension_root": str(self.extension_root),
             "skills_dir": str(self.skills_dir),
@@ -95,7 +111,7 @@ class SkillHubService:
         skill = str(skill or "").strip()
         if not skill:
             raise ValueError("skillhub install requires skill")
-        self._require_cli()
+        cli_path = self._require_cli()
         self.skills_dir.mkdir(parents=True, exist_ok=True)
         before = _skill_dir_snapshots(self.skills_dir)
         requested = _install_name_candidates(skill)
@@ -103,8 +119,9 @@ class SkillHubService:
         failures: list[str] = []
         installed_name = requested[0]
         for candidate in requested:
-            result = _run_command(
-                [self.command, "install", candidate, "--dir", str(self.skills_dir)],
+            result = _run_skillhub_command(
+                cli_path,
+                ["install", candidate, "--dir", str(self.skills_dir)],
                 timeout_seconds=timeout_seconds,
             )
             if result.returncode == 0:
@@ -121,7 +138,7 @@ class SkillHubService:
             "status": "ok",
             "message": f"Skill installed and enabled: {enabled_skill.skill_id}",
             "cli_available": True,
-            "cli_path": shutil.which(self.command),
+            "cli_path": cli_path,
             "cli_version": self.status().get("cli_version") or "",
             "extension_root": str(self.extension_root),
             "skills_dir": str(self.skills_dir),
@@ -140,6 +157,7 @@ class SkillHubService:
         skill_id = str(skill or "").strip()
         if not skill_id:
             raise ValueError("skillhub remove requires skill")
+        cli_path = resolve_skillhub_cli(self.command)
         config = _load_enabled_skills(self.extension_root)
         targets = [item for item in config.skills if item.skill_id == skill_id]
         remaining = [item for item in config.skills if item.skill_id != skill_id]
@@ -164,8 +182,8 @@ class SkillHubService:
             "action": "remove",
             "status": "ok",
             "message": f"Skill removed: {skill_id}" if removed else f"Skill was not installed: {skill_id}",
-            "cli_available": bool(shutil.which(self.command)),
-            "cli_path": shutil.which(self.command),
+            "cli_available": bool(cli_path),
+            "cli_path": cli_path,
             "cli_version": self.status().get("cli_version") or "",
             "extension_root": str(self.extension_root),
             "skills_dir": str(self.skills_dir),
@@ -200,9 +218,10 @@ class SkillHubService:
             "mode": "direct",
         }
 
-    def _require_cli(self) -> None:
-        if shutil.which(self.command):
-            return
+    def _require_cli(self) -> str:
+        cli_path = resolve_skillhub_cli(self.command)
+        if cli_path:
+            return cli_path
         raise RuntimeError("SkillHUB CLI is not installed. Start the web backend once or install skillhub globally.")
 
     def _resolve_installed_skill(self, requested: str, before: dict[str, float]) -> Path:
@@ -255,9 +274,9 @@ class SkillHubService:
 
 
 def ensure_global_skillhub_cli(*, auto_install: bool = True, timeout_seconds: int = 180) -> dict[str, Any]:
-    cli_path = shutil.which(SKILLHUB_COMMAND)
+    cli_path = resolve_skillhub_cli()
     if cli_path:
-        version = _run_command([SKILLHUB_COMMAND, "--version"], timeout_seconds=15).combined_output
+        version = _run_skillhub_command(cli_path, ["--version"], timeout_seconds=15).combined_output
         return {
             "status": "ok",
             "cli_available": True,
@@ -273,24 +292,60 @@ def ensure_global_skillhub_cli(*, auto_install: bool = True, timeout_seconds: in
             "cli_version": "",
             "installed": False,
         }
-    script = _download_install_script(timeout_seconds=timeout_seconds)
-    try:
-        result = _run_command(["bash", str(script), "--cli-only"], timeout_seconds=timeout_seconds)
-        if result.returncode != 0:
-            raise RuntimeError(result.combined_output or f"SkillHUB installer exited with {result.returncode}")
-    finally:
+    if os.name == "nt":
+        _install_windows_skillhub_cli(timeout_seconds=timeout_seconds)
+    else:
+        script = _download_install_script(timeout_seconds=timeout_seconds)
         try:
-            script.unlink()
-        except FileNotFoundError:
-            pass
-    cli_path = shutil.which(SKILLHUB_COMMAND)
+            result = _run_command(["bash", str(script), "--cli-only"], timeout_seconds=timeout_seconds)
+            if result.returncode != 0:
+                raise RuntimeError(result.combined_output or f"SkillHUB installer exited with {result.returncode}")
+        finally:
+            try:
+                script.unlink()
+            except FileNotFoundError:
+                pass
+    cli_path = resolve_skillhub_cli()
     return {
         "status": "ok" if cli_path else "missing",
         "cli_available": bool(cli_path),
         "cli_path": cli_path,
-        "cli_version": _run_command([SKILLHUB_COMMAND, "--version"], timeout_seconds=15).combined_output if cli_path else "",
+        "cli_version": (
+            _run_skillhub_command(cli_path, ["--version"], timeout_seconds=15).combined_output
+            if cli_path
+            else ""
+        ),
         "installed": bool(cli_path),
     }
+
+
+def resolve_skillhub_cli(command: str = SKILLHUB_COMMAND) -> str | None:
+    requested = str(command or "").strip()
+    if not requested:
+        return None
+    discovered = shutil.which(requested)
+    if discovered:
+        return str(Path(discovered).expanduser().resolve())
+    explicit = Path(requested).expanduser()
+    if explicit.is_absolute() or Path(requested).parent != Path("."):
+        return str(explicit.resolve()) if _is_executable_file(explicit) else None
+    if requested != SKILLHUB_COMMAND:
+        return None
+    wrapper_names = (
+        (f"{SKILLHUB_COMMAND}.exe", f"{SKILLHUB_COMMAND}.cmd")
+        if os.name == "nt"
+        else (SKILLHUB_COMMAND,)
+    )
+    for wrapper_name in wrapper_names:
+        candidate = Path.home() / ".local" / "bin" / wrapper_name
+        if _is_executable_file(candidate):
+            return str(candidate.resolve())
+    python_cli = Path.home() / ".skillhub" / "skills_store_cli.py"
+    return str(python_cli.resolve()) if python_cli.is_file() else None
+
+
+def _is_executable_file(path: Path) -> bool:
+    return path.is_file() and os.access(path, os.X_OK)
 
 
 def _load_enabled_skills(extension_root: Path) -> EnabledSkillsConfig:
@@ -342,6 +397,96 @@ def _run_command(command: list[str], *, timeout_seconds: int) -> SkillHubCommand
         stdout=process.stdout or "",
         stderr=process.stderr or "",
     )
+
+
+def _run_skillhub_command(
+    cli_path: str,
+    arguments: list[str],
+    *,
+    timeout_seconds: int,
+) -> SkillHubCommandResult:
+    path = Path(cli_path)
+    command = (
+        [sys.executable, str(path), *arguments]
+        if path.suffix.lower() == ".py"
+        else [cli_path, *arguments]
+    )
+    return _run_command(command, timeout_seconds=timeout_seconds)
+
+
+def _install_windows_skillhub_cli(*, timeout_seconds: int) -> None:
+    kit_url = os.getenv(SKILLHUB_KIT_URL_ENV, DEFAULT_SKILLHUB_KIT_URL).strip()
+    if not kit_url:
+        raise RuntimeError("SkillHUB kit URL is empty")
+    install_root = Path.home() / ".skillhub"
+    with tempfile.TemporaryDirectory(prefix="agentfactory-skillhub-kit-") as temporary_directory:
+        archive_path = Path(temporary_directory) / "skillhub-kit.tar.gz"
+        request = Request(kit_url, headers={"User-Agent": "FastAgentFactory/SkillHUB"})
+        with urlopen(request, timeout=timeout_seconds) as response:
+            with archive_path.open("wb") as archive_file:
+                shutil.copyfileobj(response, archive_file)
+        with tarfile.open(archive_path, mode="r:gz") as archive:
+            files = _read_skillhub_kit_files(archive)
+    install_root.mkdir(parents=True, exist_ok=True)
+    for name, content in files.items():
+        _atomic_write_bytes(install_root / name, content)
+    config_path = install_root / "config.json"
+    if not config_path.exists():
+        metadata = json.loads(files["metadata.json"].decode("utf-8"))
+        self_update_url = (
+            str(metadata.get("self_update_manifest_url") or "").strip()
+            if isinstance(metadata, dict)
+            else ""
+        )
+        _atomic_write_bytes(
+            config_path,
+            (
+                json.dumps(
+                    {"self_update_url": self_update_url or DEFAULT_SKILLHUB_SELF_UPDATE_URL},
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n"
+            ).encode("utf-8"),
+        )
+
+
+def _read_skillhub_kit_files(archive: tarfile.TarFile) -> dict[str, bytes]:
+    members: dict[PurePosixPath, tarfile.TarInfo] = {}
+    for member in archive.getmembers():
+        path = PurePosixPath(member.name)
+        if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+            raise RuntimeError(f"SkillHUB kit contains an unsafe path: {member.name}")
+        members[path] = member
+    cli_roots = [
+        path.parent
+        for path, member in members.items()
+        if path.name == "skills_store_cli.py" and member.isfile()
+    ]
+    if len(cli_roots) != 1:
+        raise RuntimeError("SkillHUB kit must contain exactly one skills_store_cli.py")
+    cli_root = cli_roots[0]
+    files: dict[str, bytes] = {}
+    for name in SKILLHUB_KIT_REQUIRED_FILES:
+        member = members.get(cli_root / name)
+        if member is None or not member.isfile():
+            raise RuntimeError(f"SkillHUB kit is missing required file: {name}")
+        if member.size < 0 or member.size > SKILLHUB_KIT_FILE_SIZE_LIMIT:
+            raise RuntimeError(f"SkillHUB kit file has an invalid size: {name}")
+        source = archive.extractfile(member)
+        if source is None:
+            raise RuntimeError(f"SkillHUB kit file cannot be read: {name}")
+        content = source.read(SKILLHUB_KIT_FILE_SIZE_LIMIT + 1)
+        if len(content) > SKILLHUB_KIT_FILE_SIZE_LIMIT:
+            raise RuntimeError(f"SkillHUB kit file exceeds the size limit: {name}")
+        files[name] = content
+    return files
+
+
+def _atomic_write_bytes(path: Path, content: bytes) -> None:
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_bytes(content)
+    temporary.replace(path)
 
 
 def _download_install_script(*, timeout_seconds: int) -> Path:

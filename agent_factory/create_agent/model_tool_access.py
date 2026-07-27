@@ -39,4 +39,4 @@ def model_bindings_ready(package_root: str | Path) -> bool:
     if contract is None:
         return False
     main = contract.config.bindings.get("main")
-    return bool(main and (main.source == "local_default" or str(main.profile_id or "").strip()))
+    return bool(main and str(main.profile_id or "").strip())

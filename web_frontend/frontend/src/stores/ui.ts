@@ -70,7 +70,6 @@ export const useUiStore = defineStore('ui', () => {
   // ========== 布局 ==========
   const leftSidebarCollapsed = ref(false)
   const rightSidebarCollapsed = ref(false)
-  const rightSidebarAvailable = ref(true)
   const leftSidebarWidth = ref(280)
   const rightSidebarWidth = ref(
     readStoredNumber(
@@ -81,7 +80,6 @@ export const useUiStore = defineStore('ui', () => {
     )
   )
   const activeRightSidebarTab = ref<RightSidebarTab>('workspace')
-  let rightSidebarCollapsedBeforeConstraint = rightSidebarCollapsed.value
 
   // ========== 弹窗/抽屉 ==========
   const settingsDrawerOpen = ref(false)
@@ -154,25 +152,12 @@ export const useUiStore = defineStore('ui', () => {
   }
 
   function toggleRightSidebar(): void {
-    if (!rightSidebarAvailable.value) return
     rightSidebarCollapsed.value = !rightSidebarCollapsed.value
   }
 
   function openRightSidebar(tab: RightSidebarTab = activeRightSidebarTab.value): void {
-    if (!rightSidebarAvailable.value) return
     rightSidebarCollapsed.value = false
     activeRightSidebarTab.value = tab
-  }
-
-  function setRightSidebarAvailable(available: boolean): void {
-    if (rightSidebarAvailable.value === available) return
-    if (!available) {
-      rightSidebarCollapsedBeforeConstraint = rightSidebarCollapsed.value
-      rightSidebarCollapsed.value = true
-    } else {
-      rightSidebarCollapsed.value = rightSidebarCollapsedBeforeConstraint
-    }
-    rightSidebarAvailable.value = available
   }
 
   function setRightSidebarTab(tab: RightSidebarTab): void {
@@ -253,7 +238,6 @@ export const useUiStore = defineStore('ui', () => {
     locale,
     leftSidebarCollapsed,
     rightSidebarCollapsed,
-    rightSidebarAvailable,
     leftSidebarWidth,
     rightSidebarWidth,
     activeRightSidebarTab,
@@ -271,7 +255,6 @@ export const useUiStore = defineStore('ui', () => {
     toggleLeftSidebar,
     toggleRightSidebar,
     openRightSidebar,
-    setRightSidebarAvailable,
     setRightSidebarTab,
     setRightSidebarWidth,
     setThemeMode,

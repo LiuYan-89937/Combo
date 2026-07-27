@@ -1,4 +1,5 @@
 import type { FactoryFrontendCommand, FactoryFrontendEvent } from '@/types/protocol'
+import { backendUrl } from './backendUrl'
 
 interface EventResponse {
   event: FactoryFrontendEvent
@@ -31,9 +32,9 @@ export function requestFormEvent(
   formData: FormData,
   onUploadProgress?: (percent: number) => void,
 ): Promise<FactoryFrontendEvent> {
-  return new Promise((resolve, reject) => {
+  return backendUrl(url).then((requestUrl) => new Promise((resolve, reject) => {
     const request = new XMLHttpRequest()
-    request.open('POST', url)
+    request.open('POST', requestUrl)
     request.upload.addEventListener('progress', (event) => {
       if (!event.lengthComputable || event.total <= 0) return
       onUploadProgress?.(Math.round((event.loaded / event.total) * 100))
@@ -53,11 +54,11 @@ export function requestFormEvent(
     request.addEventListener('error', () => reject(new Error('Knowledge upload request failed')))
     request.addEventListener('abort', () => reject(new Error('Knowledge upload request was cancelled')))
     request.send(formData)
-  })
+  }))
 }
 
 export async function requestBlob(url: string, init: RequestInit = {}): Promise<BlobResponse> {
-  const response = await fetch(url, init)
+  const response = await fetch(await backendUrl(url), init)
   if (!response.ok) {
     const text = await response.text()
     throw new Error(text || `HTTP ${response.status}`)
@@ -69,7 +70,7 @@ export async function requestBlob(url: string, init: RequestInit = {}): Promise<
 }
 
 export async function requestJson<T>(url: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(url, {
+  const response = await fetch(await backendUrl(url), {
     ...init,
     headers: {
       'Content-Type': 'application/json',

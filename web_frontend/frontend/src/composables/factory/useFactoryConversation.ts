@@ -1,19 +1,21 @@
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useRoute } from 'vue-router'
-import { modelPoolApi, type LocalModelProfile } from '@/api/modelPool'
+import {
+  isAvailableChatModelProfile,
+  modelPoolApi,
+  type ModelPoolProfile,
+} from '@/api/modelPool'
 import { useAgentStore } from '@/stores/agent'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useUiStore } from '@/stores/ui'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { useRuntimePreferencesStore } from '@/stores/runtimePreferences'
 import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
 import type { FactoryMode, RuntimeAttachmentInput, TranscriptAttachmentView } from '@/types/protocol'
-import { REASONING_INTENSITY_MAX } from '@/utils/reasoning'
-import { enabledChatProfiles, runtimeMainModelOptions as buildRuntimeMainModelOptions } from '@/utils/modelProfileOptions'
 import { isAgentSessionsLanding } from '@/utils/agentSessionRoute'
-
-const MAIN_MODEL_PROFILE_STORAGE_KEY = 'fastagentfactory.runtimeMainModelProfileId'
-const REASONING_INTENSITY_STORAGE_KEY = 'fastagentfactory.runtimeReasoningIntensity'
+import { SYSTEM_CHAT_PACKAGE_ID } from '@/utils/resourceScope'
 
 export function useFactoryConversation() {
   const route = useRoute()
@@ -21,17 +23,19 @@ export function useFactoryConversation() {
   const agentStore = useAgentStore()
   const uiStore = useUiStore()
   const workspaceStore = useWorkspaceStore()
+  const runtimePreferences = useRuntimePreferencesStore()
   const commands = useCommand()
   const { t } = useI18n()
-  const chatModelProfiles = ref<LocalModelProfile[]>([])
-  const defaultMainModelProfileId = ref('')
-  const selectedMainModelProfileId = ref(localStorage.getItem(MAIN_MODEL_PROFILE_STORAGE_KEY) || '')
-  const effectiveMainModelProfileId = computed(() => (
-    selectedMainModelProfileId.value.trim() || defaultMainModelProfileId.value.trim()
-  ))
-  const reasoningIntensity = ref<number | null>(loadReasoningIntensity())
+  const chatModelProfiles = ref<ModelPoolProfile[]>([])
+  const {
+    mainModelProfileId: selectedMainModelProfileId,
+    reasoningIntensity,
+  } = storeToRefs(runtimePreferences)
 
   const isAgentChatActive = computed(() => Boolean(agentStore.activeChatPackageId))
+  const requiresRuntimeMainModel = computed(() => (
+    !agentStore.activeChatPackageId || agentStore.activeChatPackageId === SYSTEM_CHAT_PACKAGE_ID
+  ))
   const isAgentSessionLanding = computed(() => (
     route.name === 'Factory' && isAgentSessionsLanding(route.query)
   ))
@@ -40,7 +44,7 @@ export function useFactoryConversation() {
   const currentFactoryMessageMode = computed<FactoryMode>(() => {
     if (isManufacturingRoute.value) return 'create_agent'
     if (isEvolutionRoute.value) return 'evolve_agent'
-    return 'chat'
+    return 'agent_package'
   })
   const activeChatPackageTitle = computed(() => {
     const pkg = agentStore.activeChatPackage
@@ -57,13 +61,15 @@ export function useFactoryConversation() {
     label: pkg.agent_name || pkg.name || pkg.package_id,
     value: pkg.package_id,
   })))
-  const runtimeMainModelOptions = computed(() => {
-    return buildRuntimeMainModelOptions(
-      chatModelProfiles.value,
-      defaultMainModelProfileId.value,
-      t('chat.defaultMainModel'),
-    )
-  })
+  const runtimeMainModelOptions = computed(() => [
+    ...(isAgentChatActive.value && chatModelProfiles.value.length > 0
+      ? [{ label: t('chat.defaultMainModel'), value: '' }]
+      : []),
+    ...chatModelProfiles.value.map((profile) => ({
+      label: profile.display_name || profile.served_model_name || profile.profile_id,
+      value: profile.profile_id,
+    })),
+  ])
   const inputPlaceholder = computed(() => (
     isAgentChatActive.value
       ? t('factory.sendToAgentPlaceholder', { name: activeChatPackageTitle.value })
@@ -80,6 +86,8 @@ export function useFactoryConversation() {
   const inputDisabled = computed(() => (
     runtimeStore.isInputLocked
     || runtimeStore.isPublishConfirmationPending
+    || chatModelProfiles.value.length === 0
+    || (requiresRuntimeMainModel.value && !selectedMainModelProfileId.value)
     || (isAgentSessionLanding.value && !isAgentChatActive.value)
     || (isEvolutionRoute.value && !selectedEvolutionPackageId.value)
   ))
@@ -111,17 +119,22 @@ export function useFactoryConversation() {
 
   async function loadRuntimeMainModelProfiles() {
     try {
-      const [response, defaultResponse] = await Promise.all([
+      const [response, roleBindingResponse] = await Promise.all([
         modelPoolApi.profiles(),
         modelPoolApi.defaults(),
       ])
-      chatModelProfiles.value = enabledChatProfiles(response.profiles)
-      defaultMainModelProfileId.value = defaultResponse.defaults.main || ''
+      chatModelProfiles.value = response.profiles.filter(isAvailableChatModelProfile)
+      const configuredMainProfileId = roleBindingResponse.defaults.main
+      if (chatModelProfiles.value.some((profile) => profile.profile_id === selectedMainModelProfileId.value)) {
+        return
+      }
       if (
-        selectedMainModelProfileId.value
-        && !chatModelProfiles.value.some((profile) => profile.profile_id === selectedMainModelProfileId.value)
+        configuredMainProfileId
+        && chatModelProfiles.value.some((profile) => profile.profile_id === configuredMainProfileId)
       ) {
-        setSelectedMainModelProfileId('')
+        setSelectedMainModelProfileId(configuredMainProfileId)
+      } else if (!chatModelProfiles.value.some((profile) => profile.profile_id === selectedMainModelProfileId.value)) {
+        await selectRecommendedRuntimeMainModel()
       }
     } catch (error) {
       uiStore.addNotification({
@@ -133,36 +146,63 @@ export function useFactoryConversation() {
     }
   }
 
+  async function selectRecommendedRuntimeMainModel() {
+    if (chatModelProfiles.value.length === 0) {
+      setSelectedMainModelProfileId('')
+      return
+    }
+    const selection = await modelPoolApi.select({
+      requirements: [{
+        role: 'main',
+        purpose: 'Factory runtime main conversation model',
+        kind: 'chat',
+        input_modalities: ['text'],
+        output_modalities: ['text'],
+        tool_calling: true,
+        structured_output_methods: ['json_mode', 'function_calling'],
+        optimize_for: 'balanced',
+      }],
+    })
+    const profileId = String(
+      selection.recommendations.find(item => item.role === 'main')?.profile_id || ''
+    ).trim()
+    setSelectedMainModelProfileId(
+      chatModelProfiles.value.some(profile => profile.profile_id === profileId) ? profileId : ''
+    )
+  }
+
   function setSelectedMainModelProfileId(profileId: string) {
-    selectedMainModelProfileId.value = profileId
-    if (profileId) {
-      localStorage.setItem(MAIN_MODEL_PROFILE_STORAGE_KEY, profileId)
-    } else {
-      localStorage.removeItem(MAIN_MODEL_PROFILE_STORAGE_KEY)
+    runtimePreferences.setMainModelProfileId(profileId)
+    const profile = chatModelProfiles.value.find((item) => item.profile_id === profileId)
+    if (profile?.capabilities.reasoning_supported === false) {
+      runtimePreferences.setReasoningIntensity(null)
     }
   }
 
   function runtimeModelOptions() {
-    const profileId = effectiveMainModelProfileId.value
-    if (!profileId && reasoningIntensity.value === null) return undefined
+    const profileId = selectedMainModelProfileId.value.trim()
     return {
       ...(profileId ? { mainModelProfileId: profileId } : {}),
       ...(reasoningIntensity.value !== null ? { reasoningIntensity: reasoningIntensity.value } : {}),
+      requestTimeoutSeconds: runtimePreferences.requestTimeoutSeconds,
+      maxRetries: runtimePreferences.maxRetries,
     }
   }
 
   function setReasoningIntensity(value: number | null) {
-    if (value === null) {
-      reasoningIntensity.value = null
-      localStorage.removeItem(REASONING_INTENSITY_STORAGE_KEY)
-      return
-    }
-    const normalized = Math.max(0, Math.min(REASONING_INTENSITY_MAX, Math.round(value)))
-    reasoningIntensity.value = normalized
-    localStorage.setItem(REASONING_INTENSITY_STORAGE_KEY, String(normalized))
+    runtimePreferences.setReasoningIntensity(value)
   }
 
   function sendMessage(message: string, attachments: RuntimeAttachmentInput[]): boolean {
+    if (chatModelProfiles.value.length === 0) {
+      uiStore.addNotification({
+        type: 'warning',
+        title: t('chat.modelRequiredTitle'),
+        message: t('chat.modelRequiredMessage'),
+        duration: 4000,
+      })
+      return false
+    }
     const payloadAttachments = attachments.length > 0 ? attachments : undefined
     const visibleAttachments = attachmentViews(attachments)
     const packageId = agentStore.activeChatPackageId
@@ -182,6 +222,16 @@ export function useFactoryConversation() {
         ...runtimeSelectionMetadata(),
       }, visibleAttachments)
       return true
+    }
+
+    if (requiresRuntimeMainModel.value && !selectedMainModelProfileId.value.trim()) {
+      uiStore.addNotification({
+        type: 'warning',
+        title: t('chat.modelRequiredTitle'),
+        message: t('chat.modelRequiredMessage'),
+        duration: 4000,
+      })
+      return false
     }
 
     const mode = currentFactoryMessageMode.value
@@ -218,7 +268,7 @@ export function useFactoryConversation() {
   }
 
   function runtimeSelectionMetadata(): Record<string, string | number> {
-    const profileId = effectiveMainModelProfileId.value
+    const profileId = selectedMainModelProfileId.value.trim()
     return {
       ...(profileId ? { model_profile_id: profileId } : {}),
       ...(reasoningIntensity.value !== null ? { reasoning_intensity: reasoningIntensity.value } : {}),
@@ -253,12 +303,13 @@ export function useFactoryConversation() {
       }
       return
     }
-    if (route.name === 'Factory') {
-      agentStore.leaveAgentChat()
-      runtimeStore.enterFactoryConversation('chat')
-      commands.startSession(true, 'chat')
-    }
   }
+
+  watch(isAgentChatActive, (active) => {
+    if (!active && !selectedMainModelProfileId.value && chatModelProfiles.value.length > 0) {
+      void selectRecommendedRuntimeMainModel()
+    }
+  })
 
   return {
     isAgentChatActive,
@@ -276,19 +327,11 @@ export function useFactoryConversation() {
     loadRuntimeMainModelProfiles,
     runtimeMainModelOptions,
     reasoningIntensity,
-    effectiveMainModelProfileId,
     selectedMainModelProfileId,
     sendMessage,
     setSelectedMainModelProfileId,
     setReasoningIntensity,
   }
-}
-
-function loadReasoningIntensity(): number | null {
-  const stored = localStorage.getItem(REASONING_INTENSITY_STORAGE_KEY)
-  if (stored === null) return null
-  const value = Number(stored)
-  return Number.isInteger(value) && value >= 0 && value <= REASONING_INTENSITY_MAX ? value : null
 }
 
 function attachmentViews(attachments: RuntimeAttachmentInput[]): TranscriptAttachmentView[] {

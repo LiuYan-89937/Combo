@@ -163,11 +163,23 @@ def migrate_legacy_instance_checkpoints(checkpoint_path: Path) -> int:
     return migrated
 
 
-def close_shared_sqlite_checkpointers() -> None:
+def close_shared_sqlite_checkpointers(*, under_root: Path | None = None) -> None:
+    resolved_root = under_root.expanduser().resolve() if under_root is not None else None
     with _CHECKPOINTER_REGISTRY_LOCK:
-        shared_checkpointers = list(_SQLITE_CHECKPOINTERS.values())
-        _SQLITE_CHECKPOINTERS.clear()
-        _PERSISTENT_CHECKPOINTER_IDS.clear()
+        if resolved_root is None:
+            selected_paths = list(_SQLITE_CHECKPOINTERS)
+        else:
+            selected_paths = [
+                path
+                for path in _SQLITE_CHECKPOINTERS
+                if path == resolved_root or path.is_relative_to(resolved_root)
+            ]
+        shared_checkpointers = [
+            _SQLITE_CHECKPOINTERS.pop(path)
+            for path in selected_paths
+        ]
+        for shared in shared_checkpointers:
+            _PERSISTENT_CHECKPOINTER_IDS.discard(id(shared.saver))
     for shared in shared_checkpointers:
         shared.connection.close()
 

@@ -1,11 +1,13 @@
 import * as commands from '@/api/commands'
 import { withPendingInterruptContext } from '@/composables/commands/interruptContext'
 import { useRuntimeStore } from '@/stores/runtime'
+import { useRuntimePreferencesStore } from '@/stores/runtimePreferences'
 import type { FactoryMode, RuntimeAttachmentInput } from '@/types/protocol'
 import { useCommandTransport } from './transport'
 
 export function useRuntimeCommands() {
   const runtimeStore = useRuntimeStore()
+  const runtimePreferences = useRuntimePreferencesStore()
   const transport = useCommandTransport()
 
   const startSession = (resumeLatest = false, mode?: FactoryMode | null, packageId?: string | null) => {
@@ -17,7 +19,7 @@ export function useRuntimeCommands() {
   }
 
   const switchSession = (sessionId: string, mode?: FactoryMode | null, collaborationId?: string | null) => {
-    if (mode === 'chat' || mode === 'create_agent' || mode === 'evolve_agent') {
+    if (mode === 'create_agent' || mode === 'evolve_agent') {
       runtimeStore.expectFactorySession(sessionId, mode, collaborationId || null)
     }
     transport.sendRuntimeCommand(commands.switchSessionCommand(sessionId, mode, collaborationId))
@@ -62,6 +64,10 @@ export function useRuntimeCommands() {
     const command = commands.resumeInterruptCommand(
       withPendingInterruptContext(runtimeStore, payload),
       runtimeStore.activeAgentSessionId || runtimeStore.activeFactorySessionId,
+      {
+        requestTimeoutSeconds: runtimePreferences.requestTimeoutSeconds,
+        maxRetries: runtimePreferences.maxRetries,
+      },
     )
     transport.sendRuntimeCommand(command)
     return command

@@ -17,9 +17,10 @@ def build_model_pool_select_tool_spec() -> ToolSpec:
             "Select runnable model profiles from the local model pool for the AgentPackage being manufactured. "
             "This is the first capability-assembly step after task analysis: run it before inherited MCP "
             "candidate evaluation, SkillHub search/install, and package tool authoring. Pass requirements for main/task/compression models and "
-            "tool_requirements for local multimodal model capabilities. Structural capabilities are hard constraints; each result also includes "
-            "a ranked candidates list with every profile description. Inspect those descriptions against the requested purpose before choosing the final "
-            "profile id; the first candidate is only the deterministic capability-based default. The tool returns local profile ids only."
+            "tool_requirements for auxiliary image/audio model tools. Structural capabilities are hard constraints; each result also includes "
+            "a ranked candidates list with every profile description. Inspect those descriptions against the requested purpose before choosing "
+            "the final profile id; the first candidate is only the deterministic capability-based default. Never write provider credentials "
+            "into the package."
         ),
         entrypoint="agent_factory.create_agent.model_pool_tool:run",
         input_schema={
@@ -32,7 +33,7 @@ def build_model_pool_select_tool_spec() -> ToolSpec:
                         "properties": {
                             "role": {"type": "string", "enum": ["main", "task", "compression"]},
                             "purpose": {"type": "string"},
-                            "kind": {"type": "string", "enum": ["chat"]},
+                            "kind": {"type": "string", "enum": ["chat", "image_generation"]},
                             "input_modalities": {
                                 "type": "array",
                                 "items": {"type": "string", "enum": ["text", "image", "audio"]},
@@ -51,7 +52,7 @@ def build_model_pool_select_tool_spec() -> ToolSpec:
                             "excluded_profile_ids": {"type": "array", "items": {"type": "string"}},
                             "optimize_for": {
                                 "type": "string",
-                                "enum": ["balanced", "quality", "latency", "context"],
+                                "enum": ["balanced", "quality", "cost", "latency", "context"],
                             },
                             "max_candidates": {"type": "integer", "minimum": 1, "maximum": 20},
                         },
@@ -67,14 +68,14 @@ def build_model_pool_select_tool_spec() -> ToolSpec:
                             "tool_id": {"type": "string"},
                             "capability": {
                                 "type": "string",
-                                "enum": ["image_input", "image_output", "image_edit", "audio_input"],
+                                "enum": ["image_input", "image_output", "image_edit", "audio_input", "audio_output"],
                             },
                             "purpose": {"type": "string"},
                             "min_context_window_tokens": {"type": "integer", "minimum": 1},
                             "excluded_profile_ids": {"type": "array", "items": {"type": "string"}},
                             "optimize_for": {
                                 "type": "string",
-                                "enum": ["balanced", "quality", "latency", "context"],
+                                "enum": ["balanced", "quality", "cost", "latency", "context"],
                             },
                             "max_candidates": {"type": "integer", "minimum": 1, "maximum": 20},
                         },
@@ -129,5 +130,5 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
     return ToolRiskResult(
         action="allow",
         risk_level="low",
-        reasons=["model_pool_select is read-only and returns local profile ids"],
+        reasons=["model_pool_select is read-only and returns profile ids without secrets"],
     ).model_dump(mode="json")

@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from agent_factory.tooling.builtins.aliases import canonical_builtin_tool_id
+
 
 SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
@@ -26,8 +28,13 @@ class SkillScriptRef(BaseModel):
     path: str
     script_ref: str
     resolved_path: str
-    execution_tool: Literal["bash"] = "bash"
+    execution_tool: Literal["shell"] = "shell"
     size_bytes: int = 0
+
+    @field_validator("execution_tool", mode="before")
+    @classmethod
+    def _canonicalize_execution_tool(cls, value: Any) -> str:
+        return canonical_builtin_tool_id(str(value or "shell"))
 
 
 class SkillMetadata(BaseModel):

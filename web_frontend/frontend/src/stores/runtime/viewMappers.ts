@@ -139,7 +139,7 @@ export function schedulerRunNoticeView(event: FactoryFrontendEvent): SchedulerRu
   const conversation = execution.conversation && typeof execution.conversation === 'object' ? execution.conversation : {}
   const agentSession = execution.agent_session && typeof execution.agent_session === 'object' ? execution.agent_session : {}
   const sessionId = String(conversation.session_id || agentSession.session_id || '').trim() || null
-  const factorySessionId = conversation.mode === 'chat' && conversation.session_id ? String(conversation.session_id) : null
+  const factorySessionId = null
   const packageId = String(payload.package_id || execution.package_id || '').trim() || null
   const packageName = String(payload.package_name || execution.package_name || '').trim() || null
   const title = String(payload.task_content || '').trim()

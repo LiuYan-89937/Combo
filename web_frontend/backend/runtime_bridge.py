@@ -80,6 +80,7 @@ class RuntimeBridge:
         self.event_observers: set[Callable[[dict[str, Any]], None]] = set()
         self._background_threads: dict[str, threading.Thread] = {}
         self._active_requests: dict[str, dict[str, Any]] = {}
+        self._deleting_session_ids: set[str] = set()
         self._background_lock = threading.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._event_pipeline = RuntimeEventPipeline(
@@ -123,6 +124,7 @@ class RuntimeBridge:
         with self._background_lock:
             self._background_threads.clear()
             self._active_requests.clear()
+            self._deleting_session_ids.clear()
         logger.info("Runtime service stopped")
 
     async def send_frontend_command(self, command: FactoryFrontendCommand) -> None:
@@ -134,6 +136,9 @@ class RuntimeBridge:
             self._start_background(command)
             return
 
+        if command.type in {"delete_session", "delete_agent_package_session"}:
+            await self._cancel_and_join_deleted_session_requests(command)
+            return
         await asyncio.to_thread(self._handle_command, command)
 
     async def send_and_wait(
@@ -218,8 +223,11 @@ class RuntimeBridge:
 
     def _start_background(self, command: FactoryFrontendCommand) -> None:
         request_id = command.request_id or f"{command.type}-{id(command)}"
+        dispatch_event = None
         with self._background_lock:
             session_id = _command_session_id(command)
+            if session_id and session_id in self._deleting_session_ids:
+                raise RuntimeError(f"session is being deleted: {session_id}")
             predecessors = [
                 thread
                 for active_request_id, thread in self._background_threads.items()
@@ -230,6 +238,7 @@ class RuntimeBridge:
             ]
             request = _active_request_from_command(command, request_id)
             request["payload"]["dispatch_state"] = "queued" if predecessors else "running"
+            request["payload"]["queue_position"] = len(predecessors)
             self._active_requests[request_id] = request
             thread = threading.Thread(
                 target=self._run_background_command,
@@ -238,7 +247,56 @@ class RuntimeBridge:
                 daemon=True,
             )
             self._background_threads[request_id] = thread
-            thread.start()
+            if predecessors:
+                dispatch_event = _runtime_request_dispatch_event(
+                    command=command,
+                    request_id=request_id,
+                    event_type="runtime_request_queued",
+                    dispatch_state="queued",
+                    queue_position=len(predecessors),
+                )
+        if dispatch_event is not None:
+            self._emit_from_runtime(dispatch_event)
+        thread.start()
+
+    async def _cancel_and_join_deleted_session_requests(
+        self,
+        command: FactoryFrontendCommand,
+    ) -> None:
+        session_id = _deleted_session_id(command)
+        if not session_id:
+            await asyncio.to_thread(self._handle_command, command)
+            return
+        with self._background_lock:
+            self._deleting_session_ids.add(session_id)
+            active = [
+                (request_id, thread)
+                for request_id, thread in self._background_threads.items()
+                if _active_request_session_id(self._active_requests.get(request_id)) == session_id
+            ]
+        try:
+            for request_id, _thread in active:
+                cancel_command = self._resolve_cancel_command(
+                    FactoryFrontendCommand(
+                        type="cancel_runtime_request",
+                        request_id=f"{command.request_id or uuid.uuid4().hex}:cancel:{request_id}",
+                        session_id=session_id,
+                        mode=command.mode,
+                        payload={
+                            "target_request_id": request_id,
+                            "reason": "session_deleted",
+                        },
+                    )
+                )
+                await asyncio.to_thread(self._handle_command, cancel_command)
+            if active:
+                await asyncio.gather(
+                    *(asyncio.to_thread(thread.join) for _request_id, thread in active)
+                )
+            await asyncio.to_thread(self._handle_command, command)
+        finally:
+            with self._background_lock:
+                self._deleting_session_ids.discard(session_id)
 
     def _run_background_command(
         self,
@@ -254,6 +312,16 @@ class RuntimeBridge:
                 if active_request is None or active_request.get("payload", {}).get("cancel_requested_at"):
                     return
                 active_request["payload"]["dispatch_state"] = "running"
+                active_request["payload"]["queue_position"] = 0
+            self._emit_from_runtime(
+                _runtime_request_dispatch_event(
+                    command=command,
+                    request_id=request_id,
+                    event_type="runtime_request_dispatched",
+                    dispatch_state="running",
+                    queue_position=0,
+                )
+            )
             self._handle_command(command)
         except Exception as exc:
             logger.exception("Runtime command failed in background: %s", command.type)
@@ -477,8 +545,52 @@ def _active_request_from_command(command: FactoryFrontendCommand, request_id: st
     }
 
 
+def _runtime_request_dispatch_event(
+    *,
+    command: FactoryFrontendCommand,
+    request_id: str,
+    event_type: str,
+    dispatch_state: str,
+    queue_position: int,
+):
+    command_payload = dict(command.payload or {})
+    session_id = _command_session_id(command)
+    payload = {
+        key: command_payload[key]
+        for key in (
+            "package_id",
+            "collaboration_id",
+            "collaboration_task_id",
+            "factory_session_id",
+        )
+        if command_payload.get(key) is not None
+    }
+    payload.update(
+        {
+            "command_type": command.type,
+            "dispatch_state": dispatch_state,
+            "queue_position": queue_position,
+            "session_id": session_id or None,
+        }
+    )
+    return event(
+        event_type,
+        request_id=request_id,
+        session_id=session_id or None,
+        mode=command.mode or COMMAND_MODE_HINTS.get(command.type),
+        producer_type="factory_bridge",
+        payload=payload,
+    )
+
+
 def _command_session_id(command: FactoryFrontendCommand) -> str:
     return str(command.session_id or command.payload.get("session_id") or "").strip()
+
+
+def _deleted_session_id(command: FactoryFrontendCommand) -> str:
+    if command.type == "delete_agent_package_session":
+        return str(command.payload.get("session_id") or command.session_id or "").strip()
+    return _command_session_id(command)
 
 
 def _active_request_session_id(request: dict[str, Any] | None) -> str:

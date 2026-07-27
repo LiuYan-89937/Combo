@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pathlib import PurePosixPath
+from pathlib import PurePath, PurePosixPath, PureWindowsPath
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -12,6 +12,7 @@ from agent_factory.model_pool.schema import ModelBindingRole, ModelProfileBindin
 from agent_factory.scheduler_system.schema import SchedulerContractConfig, SchedulerSeedContractConfig
 from agent_factory.trace_system.schema import TraceContractConfig
 from agent_factory.tooling.approval_policy import ToolApprovalPolicyConfig
+from agent_factory.tooling.builtins.aliases import canonical_builtin_tool_ids
 from agent_factory.runtime_defaults import (
     DEFAULT_BUILTIN_ALLOW_EXTERNAL_PATHS,
     DEFAULT_BUILTIN_WORKSPACE_ROOT,
@@ -124,27 +125,24 @@ class ToolsContractConfig(BaseModel):
     @classmethod
     def _builtin_tool_ids_are_not_empty(cls, value: list[str]) -> list[str]:
         ids: list[str] = []
-        seen: set[str] = set()
         for item in value:
             tool_id = str(item).strip()
             if not tool_id:
                 raise ValueError("builtin_tool_ids must not contain empty ids")
-            if tool_id not in seen:
-                ids.append(tool_id)
-                seen.add(tool_id)
-        return ids
+            ids.append(tool_id)
+        return canonical_builtin_tool_ids(ids)
 
     @field_validator("builtin_workspace_root")
     @classmethod
-    def _builtin_workspace_root_is_sandbox_absolute(cls, value: str) -> str:
+    def _builtin_workspace_root_is_absolute(cls, value: str) -> str:
         root = str(value).strip()
         if not root:
             raise ValueError("builtin_workspace_root must not be empty")
-        path = PurePosixPath(root)
-        if not path.is_absolute():
-            raise ValueError("builtin_workspace_root must be an absolute sandbox path")
-        if path == PurePosixPath("/"):
-            raise ValueError("builtin_workspace_root must not be the container root")
+        path = _cross_platform_absolute_path(root)
+        if path is None:
+            raise ValueError("builtin_workspace_root must be an absolute workspace path")
+        if path == type(path)(path.anchor):
+            raise ValueError("builtin_workspace_root must not be a filesystem root")
         return root
 
     @field_validator("instance_extension_root")
@@ -466,3 +464,11 @@ def _validate_package_relative_path(value: str, *, field_name: str) -> str:
     if any(part in {"", ".", ".."} for part in path.parts):
         raise ValueError(f"{field_name} must not contain empty, current, or parent segments")
     return value
+
+
+def _cross_platform_absolute_path(value: str) -> PurePath | None:
+    for path_type in (PurePosixPath, PureWindowsPath):
+        path = path_type(value)
+        if path.is_absolute():
+            return path
+    return None

@@ -1,4 +1,5 @@
 import type { WorkspaceContextInput, WorkspaceRequestContext, WorkspaceScope } from './resourceTypes'
+import { resolvedBackendUrl } from './backendUrl'
 import { requestEvent, requestJson, withQuery } from './http'
 
 export const workspaceApi = {
@@ -9,7 +10,11 @@ export const workspaceApi = {
   file: (scope: WorkspaceScope, path: string, context?: WorkspaceContextInput, maxChars?: number) =>
     requestEvent(withQuery('/api/workspace/file', { scope, path, ...workspaceQuery(context), max_chars: maxChars })),
   rawUrl: (scope: WorkspaceScope, path: string, context?: WorkspaceContextInput) =>
-    withQuery('/api/workspace/raw', { scope, path, ...workspaceQuery(context) }),
+    resolvedBackendUrl(withQuery('/api/workspace/raw', { scope, path, ...workspaceQuery(context) })),
+  nativePath: (scope: WorkspaceScope, path: string, context?: WorkspaceContextInput) =>
+    requestJson<{ native_path: string; kind: 'file' | 'directory' }>(
+      withQuery('/api/workspace/native-path', { scope, path, ...workspaceQuery(context) }),
+    ),
   deleteFile: (scope: WorkspaceScope, path: string, context?: WorkspaceContextInput) =>
     requestJson<{ deleted: boolean; path: string }>(
       withQuery('/api/workspace/file', { scope, path, ...workspaceQuery(context) }),

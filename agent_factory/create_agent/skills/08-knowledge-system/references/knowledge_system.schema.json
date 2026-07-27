@@ -33,9 +33,6 @@
         },
         "limits": {
           "$ref": "#/$defs/KnowledgeLimits"
-        },
-        "prompt_guidance": {
-          "$ref": "#/$defs/KnowledgePromptGuidanceConfig"
         }
       },
       "title": "KnowledgeContractConfig",
@@ -94,48 +91,6 @@
         }
       },
       "title": "KnowledgeLimits",
-      "type": "object"
-    },
-    "KnowledgePromptGuidanceConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "enabled": {
-          "default": true,
-          "title": "Enabled",
-          "type": "boolean"
-        },
-        "max_sources": {
-          "default": 12,
-          "maximum": 100,
-          "minimum": 1,
-          "title": "Max Sources",
-          "type": "integer"
-        },
-        "max_description_chars": {
-          "default": 160,
-          "maximum": 1000,
-          "minimum": 20,
-          "title": "Max Description Chars",
-          "type": "integer"
-        },
-        "default_search_mode": {
-          "default": "auto",
-          "enum": [
-            "auto",
-            "hybrid"
-          ],
-          "title": "Default Search Mode",
-          "type": "string"
-        },
-        "default_top_k": {
-          "default": 5,
-          "maximum": 100,
-          "minimum": 1,
-          "title": "Default Top K",
-          "type": "integer"
-        }
-      },
-      "title": "KnowledgePromptGuidanceConfig",
       "type": "object"
     },
     "KnowledgeRagStoreConfig": {

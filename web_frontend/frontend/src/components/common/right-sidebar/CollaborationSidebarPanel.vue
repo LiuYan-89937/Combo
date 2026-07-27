@@ -419,12 +419,11 @@ const mainAgentContextRows = computed(() => {
   const session = store.activeSession
   if (!session) return []
   const configuredProfileId = String(session.execution_config?.model_profile_id || '').trim()
-  const profile = modelPoolStore.profile(configuredProfileId) || modelPoolStore.defaultProfile('main')
+  const profile = modelPoolStore.profile(configuredProfileId)
   const reasoning = session.execution_config?.reasoning_intensity
   const context = runtimeStore.contextWindow
   const contextLimit = context?.contextWindowTokens ?? profile?.limits.max_input_tokens
   const compressionThreshold = context?.compressionThresholdTokens
-    ?? profile?.limits.context_compression_threshold_tokens
   const contextUsage = context?.tokenCount != null || contextLimit != null
     ? `${formatContextTokens(context?.tokenCount)} / ${formatContextTokens(contextLimit)}`
     : t('common.unknown')
@@ -432,7 +431,7 @@ const mainAgentContextRows = computed(() => {
     { label: t('collaboration.context.agent'), value: agentName(session.main_agent_package_id) },
     {
       label: t('collaboration.context.session'),
-      value: String(session.main_agent_package_session_id || session.main_factory_session_id || t('collaboration.context.notCreated')),
+      value: String(session.main_agent_package_session_id || t('collaboration.context.notCreated')),
     },
     {
       label: t('collaboration.context.model'),
@@ -547,7 +546,6 @@ async function updateMainAgent(value: string) {
   await store.updateSession({
     main_agent_package_id: value || SYSTEM_CHAT_PACKAGE_ID,
     main_agent_package_session_id: null,
-    main_factory_session_id: null,
   })
 }
 

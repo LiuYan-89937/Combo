@@ -196,6 +196,15 @@ export const useRuntimeStore = defineStore('runtime', {
       return state.activeRequestId !== null && state.runStatus === 'running'
     },
 
+    queuedRequestCount: (state): number => {
+      return Object.values(state.activeRequests).filter((request) => (
+        !request.background
+        && request.status === 'running'
+        && request.payload?.dispatch_state === 'queued'
+        && (!state.activeConversationScope || request.conversationScope === state.activeConversationScope)
+      )).length
+    },
+
     // 获取可见的模型流（用于主 transcript）
     visibleModelStreams: (state): ModelStream[] => {
       return Object.values(state.modelStreams).filter((s) => s.visibleToUser)
@@ -312,9 +321,8 @@ export const useRuntimeStore = defineStore('runtime', {
         this._upsertFactorySession(payload?.session)
         this._restoreSessionSnapshot(payload)
       } else if (type === 'session_empty') {
-        const mode = event.mode === 'create_agent' || event.mode === 'evolve_agent'
-          ? event.mode
-          : 'chat'
+        if (event.mode !== 'create_agent' && event.mode !== 'evolve_agent') return
+        const mode = event.mode
         const packageId = mode === 'evolve_agent'
           ? String(payload?.package_id || '').trim() || null
           : null
@@ -333,10 +341,11 @@ export const useRuntimeStore = defineStore('runtime', {
         this.sessions = payload?.sessions
           ? payload.sessions.filter(isStandaloneFactorySession)
           : this.sessions.filter((session: any) => !deletedSessionIds.has(session.session_id))
-        if (deletedCurrentSession) {
-          const emptyConversationMode = this.currentMode === 'create_agent' || this.currentMode === 'evolve_agent'
-            ? this.currentMode
-            : 'chat'
+        if (
+          deletedCurrentSession
+          && (this.currentMode === 'create_agent' || this.currentMode === 'evolve_agent')
+        ) {
+          const emptyConversationMode = this.currentMode
           const evolutionPackageId = emptyConversationMode === 'evolve_agent'
             ? this.selectedAgentPackage?.package_id || null
             : null
@@ -345,6 +354,13 @@ export const useRuntimeStore = defineStore('runtime', {
         this._deleteConversationScopesForSessions(deletion.sessionIds)
       } else if (type === 'mode_changed') {
         this._handleModeChanged(event)
+      }
+
+      // Runtime request dispatch
+      else if (type === 'runtime_request_queued') {
+        this._handleRuntimeRequestQueued(event)
+      } else if (type === 'runtime_request_dispatched') {
+        this._handleRuntimeRequestDispatched(event)
       }
 
       // Agent packages
@@ -561,7 +577,11 @@ export const useRuntimeStore = defineStore('runtime', {
         this.activeRequests[request.requestId] = request
       })
 
-      const foregroundRequests = activeRequests.filter((request) => !request.background && request.status === 'running')
+      const foregroundRequests = activeRequests.filter((request) => (
+        !request.background
+        && request.status === 'running'
+        && request.payload?.dispatch_state !== 'queued'
+      ))
       if (foregroundRequests.length === 0) return
 
       const currentActive = this.activeRequestId ? this.activeRequests[this.activeRequestId] : null
@@ -596,6 +616,7 @@ export const useRuntimeStore = defineStore('runtime', {
         return
       }
       this._registerActiveRequest(event, 'running')
+      this._setRequestDispatchState(event.request_id, 'running', event.payload)
       // 清空当前 run 的临时状态
       this.activeRequestId = event.request_id || null
       this.currentRunId = event.run_id || null
@@ -992,6 +1013,61 @@ export const useRuntimeStore = defineStore('runtime', {
       }
     },
 
+    _handleRuntimeRequestQueued(event: FactoryFrontendEvent) {
+      this._registerActiveRequest(event, 'running')
+      this._setRequestDispatchState(event.request_id, 'queued', event.payload)
+    },
+
+    _handleRuntimeRequestDispatched(event: FactoryFrontendEvent) {
+      this._registerActiveRequest(event, 'running')
+      this._setRequestDispatchState(event.request_id, 'running', event.payload)
+      if (isSchedulerRequest(event.request_id)) return
+      this.activeRequestId = event.request_id || this.activeRequestId
+      this.runStatus = 'running'
+      this.pendingInterrupt = null
+    },
+
+    _setRequestDispatchState(
+      requestId: string | null | undefined,
+      dispatchState: 'queued' | 'running' | 'completed' | 'cancelled' | 'failed' | 'stopped',
+      payload: Record<string, any> = {},
+    ) {
+      if (!requestId) return
+      const request = this.activeRequests[requestId]
+      if (request) {
+        request.payload = {
+          ...(request.payload || {}),
+          ...payload,
+          dispatch_state: dispatchState,
+        }
+      }
+      const turn = this.conversationTurns.find((item) => item.requestId === requestId)
+      if (turn) {
+        turn.metadata = {
+          ...(turn.metadata || {}),
+          ...payload,
+          dispatch_state: dispatchState,
+        }
+        if (turn.userMessage) {
+          turn.userMessage.metadata = {
+            ...(turn.userMessage.metadata || {}),
+            ...payload,
+            request_id: requestId,
+            dispatch_state: dispatchState,
+          }
+        }
+      }
+      this.transcript
+        .filter((item) => item.metadata?.request_id === requestId)
+        .forEach((item) => {
+          item.metadata = {
+            ...(item.metadata || {}),
+            ...payload,
+            dispatch_state: dispatchState,
+          }
+        })
+    },
+
     _resolveRequestScopeForEvent(event: FactoryFrontendEvent): string | null {
       const requestId = event.request_id || null
       const payloadScope = scopeFromEventPayload(event)
@@ -1008,6 +1084,14 @@ export const useRuntimeStore = defineStore('runtime', {
 
     _completeActiveRequest(event: FactoryFrontendEvent, status: RunStatus) {
       this._registerActiveRequest(event, status)
+      const dispatchState = status === 'cancelled'
+        ? 'cancelled'
+        : status === 'failed'
+          ? 'failed'
+          : status === 'stopped'
+            ? 'stopped'
+            : 'completed'
+      this._setRequestDispatchState(event.request_id, dispatchState, event.payload)
     },
 
     _restoreSessionSnapshot(payload: Record<string, any> | undefined) {
@@ -1131,7 +1215,7 @@ export const useRuntimeStore = defineStore('runtime', {
       this.workspaceEntries = []
     },
 
-    enterFactoryConversation(mode: 'chat' | 'create_agent' | 'evolve_agent', packageId: string | null = null) {
+    enterFactoryConversation(mode: 'create_agent' | 'evolve_agent', packageId: string | null = null) {
       if (mode !== 'evolve_agent') this._clearAgentPackageSelectionIntent()
       const scope = conversationScopeForMode(mode, {
         package_id: packageId,
@@ -1151,18 +1235,6 @@ export const useRuntimeStore = defineStore('runtime', {
       sessionId: string | null,
       collaborationTaskId: string | null = null,
     ) {
-      if (packageId === 'factory_chat') {
-        this._clearAgentPackageSelectionIntent()
-        const scope = conversationScopeForMode('chat', {
-          session_id: sessionId,
-          collaboration_id: collaborationId,
-        })
-        if (scope) this._switchConversationScope(scope)
-        this.currentMode = 'chat'
-        this.activeFactorySessionId = sessionId
-        this.activeAgentSessionId = null
-        return
-      }
       this._switchConversationScope(agentPackageConversationScope(packageId, sessionId, {
         collaborationId,
         collaborationTaskId,
@@ -1175,14 +1247,14 @@ export const useRuntimeStore = defineStore('runtime', {
     showEmptyCollaborationConversation() {
       this._clearAgentPackageSelectionIntent()
       this._resetConversationScope(emptyCollaborationConversationScope())
-      this.currentMode = 'chat'
+      this.currentMode = 'agent_package'
       this.activeFactorySessionId = null
       this.activeAgentSessionId = null
     },
 
     expectFactorySession(
       sessionId: string,
-      mode: 'chat' | 'create_agent' | 'evolve_agent',
+      mode: 'create_agent' | 'evolve_agent',
       collaborationId: string | null = null,
     ) {
       if (mode !== 'evolve_agent') this._clearAgentPackageSelectionIntent()
@@ -1218,7 +1290,7 @@ export const useRuntimeStore = defineStore('runtime', {
     },
 
     showEmptyFactoryConversation(
-      mode: 'chat' | 'create_agent' | 'evolve_agent',
+      mode: 'create_agent' | 'evolve_agent',
       packageId: string | null = null,
       collaborationId: string | null = null,
     ) {
@@ -1504,6 +1576,7 @@ export const useRuntimeStore = defineStore('runtime', {
       this.activeRequestId = null
       this.runStatus = 'idle'
       this.pendingInterrupt = null
+      this.createAgentPublishReady = null
       this.currentRunId = null
       this.nodes = {}
       this.stages = {}
@@ -1545,6 +1618,13 @@ export const useRuntimeStore = defineStore('runtime', {
       }
       const timestamp = new Date().toISOString()
       const messageId = `user-${Date.now()}`
+      const queued = Boolean(this.activeRequestId && this.runStatus === 'running')
+      const dispatchState = queued ? 'queued' : 'running'
+      const messageMetadata = {
+        ...metadata,
+        request_id: requestId,
+        dispatch_state: dispatchState,
+      }
       const item: TranscriptItem = {
         id: messageId,
         role: 'user',
@@ -1560,7 +1640,7 @@ export const useRuntimeStore = defineStore('runtime', {
           ...attachments.map((attachment, index) => attachmentPart(`${messageId}:attachment:${index}`, attachment, timestamp)),
         ],
         attachments,
-        metadata,
+        metadata: messageMetadata,
       }
       this.transcript.push(item)
       const turn = ensureConversationTurn(this, requestId, timestamp)
@@ -1568,12 +1648,14 @@ export const useRuntimeStore = defineStore('runtime', {
       turn.status = 'running'
       turn.metadata = {
         ...turn.metadata,
-        ...metadata,
+        ...messageMetadata,
       }
       if (requestId) {
-        this.activeRequestId = requestId
-        this.runStatus = 'running'
-        this.pendingInterrupt = null
+        if (!queued) {
+          this.activeRequestId = requestId
+          this.runStatus = 'running'
+          this.pendingInterrupt = null
+        }
         this.activeRequests[requestId] = {
           requestId,
           status: 'running',
@@ -1584,7 +1666,10 @@ export const useRuntimeStore = defineStore('runtime', {
           source: 'user',
           startedAt: timestamp,
           completedAt: null,
-          payload: { ...metadata },
+          payload: {
+            ...messageMetadata,
+            queue_position: queued ? this.queuedRequestCount + 1 : 0,
+          },
         }
       }
     },
@@ -1684,7 +1769,7 @@ function activeRequestViewFromPayload(value: unknown): ActiveRequestView | null 
 }
 
 function normalizeFactoryMode(value: unknown): FactoryMode | null {
-  if (value === 'chat' || value === 'create_agent' || value === 'evolve_agent' || value === 'agent_package') {
+  if (value === 'create_agent' || value === 'evolve_agent' || value === 'agent_package' || value === 'agent_group') {
     return value
   }
   return null

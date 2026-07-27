@@ -38,10 +38,10 @@
         </main>
 
         <!-- 右侧边栏 -->
-        <AppRightSidebar v-if="uiStore.rightSidebarAvailable && !uiStore.rightSidebarCollapsed" />
+        <AppRightSidebar v-if="rightSidebarAvailable && !uiStore.rightSidebarCollapsed" />
 
         <n-button
-          v-if="uiStore.rightSidebarAvailable && uiStore.rightSidebarCollapsed"
+          v-if="rightSidebarAvailable && uiStore.rightSidebarCollapsed"
           class="sidebar-restore right"
           size="small"
           :title="t('layout.expandRightSidebar')"
@@ -58,7 +58,7 @@
     <!-- 全局通知 -->
     <n-notification-provider>
       <AppNotifications />
-      <SchedulerRunNotifier />
+      <TaskNotificationManager />
     </n-notification-provider>
 
     <!-- 设置抽屉 -->
@@ -75,9 +75,9 @@
 </template>
 
 <script setup lang="ts">
-import { watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { computed } from 'vue'
 import { NButton, NIcon } from 'naive-ui'
+import { useRoute } from 'vue-router'
 import { ChevronBack, ChevronForward } from '@/components/icons'
 import { useUiStore } from '@/stores/ui'
 import { useI18n } from '@/composables/useI18n'
@@ -86,7 +86,7 @@ import AppSidebar from '@/components/common/AppSidebar.vue'
 import AppRightSidebar from '@/components/common/AppRightSidebar.vue'
 import AppLoadingBar from '@/components/common/AppLoadingBar.vue'
 import AppNotifications from '@/components/common/AppNotifications.vue'
-import SchedulerRunNotifier from '@/components/scheduler/SchedulerRunNotifier.vue'
+import TaskNotificationManager from '@/components/common/TaskNotificationManager.vue'
 import SettingsDrawer from '@/components/common/SettingsDrawer.vue'
 import DebugDrawer from '@/components/common/DebugDrawer.vue'
 import SchedulerActivityDrawer from '@/components/scheduler/SchedulerActivityDrawer.vue'
@@ -95,12 +95,7 @@ import EventStreamManager from '@/components/common/EventStreamManager.vue'
 const uiStore = useUiStore()
 const route = useRoute()
 const { t } = useI18n()
-
-watch(
-  () => route.meta.rightSidebarAvailable,
-  (available) => uiStore.setRightSidebarAvailable(available !== false),
-  { immediate: true },
-)
+const rightSidebarAvailable = computed(() => route.meta.rightSidebarAvailable !== false)
 </script>
 
 <style scoped>

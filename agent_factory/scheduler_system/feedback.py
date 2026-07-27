@@ -5,7 +5,11 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage
 
-from agent_factory.models import get_task_model
+from agent_factory.model_pool.runtime_override import (
+    main_model_profile_id_from_user_config,
+    resolve_runtime_main_chat_model,
+    resolve_runtime_reasoning_model,
+)
 from agent_factory.prompts import PromptId, get_prompt, output_json_schema
 from agent_factory.scheduler_system.schema import (
     SchedulerExecutionReport,
@@ -29,9 +33,16 @@ def summarize_scheduler_feedback(
     report: SchedulerExecutionReport,
     completed_count: int,
 ) -> SchedulerFeedbackSummaryDecision:
-    model = get_task_model()
-    if model is None:
-        raise SchedulerFeedbackError("task model is not configured for scheduler feedback")
+    user_config = dict(job.runtime_config.user_config)
+    profile_id = main_model_profile_id_from_user_config(user_config)
+    if not profile_id:
+        raise SchedulerFeedbackError("scheduler main model profile is not selected")
+    resolved = resolve_runtime_main_chat_model(profile_id)
+    model, _settings = resolve_runtime_reasoning_model(
+        resolved.model,
+        resolved.settings,
+        {"user_config": user_config},
+    )
     structured_model = model.with_structured_output(SchedulerFeedbackSummaryDecision, method="json_mode").with_config(
         tags=["nostream", "scheduler-feedback"]
     )

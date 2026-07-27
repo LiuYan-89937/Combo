@@ -377,7 +377,7 @@ def extensions_summary(package_id: str, *, package: LoadedAgentPackage | None = 
     )
     return {
         "host_root": str(host_root),
-        "container_root": "/runtime/extensions",
+        "runtime_root": str(host_root),
     }
 
 
@@ -551,6 +551,7 @@ def _builtin_permission_tools(package: LoadedAgentPackage) -> list[dict[str, Any
         return []
     configured_ids = [str(item) for item in config.get("builtin_tool_ids") or [] if str(item).strip()]
     try:
+        from agent_factory.tooling.builtins.aliases import canonical_builtin_tool_ids
         from agent_factory.tooling.builtins.registry import (
             get_always_available_system_tool_ids,
             get_builtin_tool_specs,
@@ -560,7 +561,7 @@ def _builtin_permission_tools(package: LoadedAgentPackage) -> list[dict[str, Any
         return []
     always_available = get_always_available_system_tool_ids()
     read_only_ids = get_read_only_system_tool_ids()
-    allowed_ids = set(configured_ids)
+    allowed_ids = set(canonical_builtin_tool_ids(configured_ids))
     specs = get_builtin_tool_specs()
     if allowed_ids:
         specs = [spec for spec in specs if spec.id in allowed_ids or spec.id in always_available]

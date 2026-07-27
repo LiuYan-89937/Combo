@@ -7,6 +7,42 @@ export type ModelUsageGroupBy = 'model' | 'provider' | 'agent'
 
 export type LocalModelDefaults = Record<LocalModelDefaultRole, string | null>
 
+export interface ModelSelectionRequirement {
+  role: 'main' | 'task' | 'compression'
+  purpose?: string
+  kind?: LocalModelKind
+  input_modalities?: string[]
+  output_modalities?: string[]
+  tool_calling?: boolean
+  structured_output_methods?: string[]
+  reasoning_required?: boolean
+  min_context_window_tokens?: number
+  excluded_profile_ids?: string[]
+  optimize_for?: 'balanced' | 'quality' | 'latency' | 'context'
+  max_candidates?: number
+}
+
+export interface ModelSelectionRequest {
+  requirements?: ModelSelectionRequirement[]
+  tool_requirements?: Array<Record<string, unknown>>
+}
+
+export interface ModelSelectionResult {
+  status: 'completed' | 'blocked'
+  recommendations: Array<{
+    role: 'main' | 'task' | 'compression'
+    profile_id: string
+    display_name: string
+    model_name: string
+    score: number
+    reason: string
+  }>
+  tool_recommendations: Array<Record<string, unknown>>
+  unmatched: Array<Record<string, unknown>>
+  profile_count: number
+  enabled_profile_count: number
+}
+
 export interface LocalEngine {
   engine: LocalInferenceEngine
   display_name: string
@@ -248,6 +284,19 @@ export interface LocalImageGenerationProfile extends LocalModelProfileBase {
 }
 
 export type LocalModelProfile = LocalChatModelProfile | LocalEmbeddingModelProfile | LocalImageGenerationProfile
+export type ModelPoolProfile = LocalModelProfile
+
+export function isAvailableChatModelProfile(
+  profile: LocalModelProfile,
+): profile is LocalChatModelProfile {
+  if (profile.kind !== 'chat' || !profile.enabled) return false
+  const artifact = profile.artifact
+  if (!artifact?.enabled || artifact.kind !== 'chat') return false
+  if (artifact.source === 'local_storage') {
+    return Boolean(artifact.local_path?.trim())
+  }
+  return Boolean(artifact.external_model_id?.trim())
+}
 
 export type LocalModelRuntimePhase = 'idle' | 'starting' | 'loading' | 'ready' | 'stopping' | 'failed'
 
@@ -406,6 +455,11 @@ export const modelPoolApi = {
       method: 'DELETE',
     }),
   profiles: () => requestJson<{ profiles: LocalModelProfile[] }>('/api/model-pool/profiles'),
+  select: (payload: ModelSelectionRequest) =>
+    requestJson<ModelSelectionResult>('/api/model-pool/select', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   estimateMemory: (payload: Record<string, unknown>) =>
     requestJson<{ estimate: InferenceMemoryEstimate }>('/api/model-pool/memory-estimate', {
       method: 'POST',

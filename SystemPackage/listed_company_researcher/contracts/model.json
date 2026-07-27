@@ -5,7 +5,7 @@
   "config": {
     "bindings": {
       "main": {
-        "source": "local_default",
+        "source": "model_pool",
         "reason": "使用当前启用的本地 AMD Radeon 推理配置完成中文研究规划、工具调用和报告综合。",
         "required_capabilities": {
           "input_modalities": ["text"],

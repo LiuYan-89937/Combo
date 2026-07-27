@@ -5,15 +5,23 @@ import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import router from './router'
 import App from './App.vue'
+import { useStartupStore } from './stores/startup'
 
 // Naive UI
 import naive from 'naive-ui'
 
-const app = createApp(App)
-const pinia = createPinia()
+async function bootstrap() {
+  const app = createApp(App)
+  const pinia = createPinia()
 
-app.use(pinia)
-app.use(router)
-app.use(naive)
+  app.use(pinia)
+  app.use(router)
+  app.use(naive)
 
-app.mount('#app')
+  app.mount('#app')
+  await useStartupStore(pinia).initialize()
+}
+
+void bootstrap().catch((error) => {
+  console.error('Application initialization failed:', error)
+})

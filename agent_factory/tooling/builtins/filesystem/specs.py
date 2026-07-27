@@ -7,6 +7,104 @@ from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolSpec
 _STRING = {"type": "string"}
 _INTEGER = {"type": "integer"}
 _BOOLEAN = {"type": "boolean"}
+_CHANGE_SUMMARY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "before_bytes": _INTEGER,
+        "after_bytes": _INTEGER,
+        "before_lines": _INTEGER,
+        "after_lines": _INTEGER,
+        "added_lines": _INTEGER,
+        "removed_lines": _INTEGER,
+    },
+    "required": [
+        "before_bytes",
+        "after_bytes",
+        "before_lines",
+        "after_lines",
+        "added_lines",
+        "removed_lines",
+    ],
+    "additionalProperties": False,
+}
+_FILE_HASH_SCHEMA = {
+    "type": "string",
+    "pattern": "^[0-9a-fA-F]{64}$",
+    "description": "可选的文件 SHA-256；用于在生成预览前校验调用方读取到的版本。",
+}
+_TRANSACTION_OPERATION_SCHEMA = {
+    "oneOf": [
+        {
+            "type": "object",
+            "properties": {
+                "type": {"const": "create"},
+                "path": _STRING,
+                "content": _STRING,
+                "expected_hash": _FILE_HASH_SCHEMA,
+            },
+            "required": ["type", "path", "content"],
+            "additionalProperties": False,
+        },
+        {
+            "type": "object",
+            "properties": {
+                "type": {"const": "write"},
+                "path": _STRING,
+                "content": _STRING,
+                "expected_hash": _FILE_HASH_SCHEMA,
+            },
+            "required": ["type", "path", "content"],
+            "additionalProperties": False,
+        },
+        {
+            "type": "object",
+            "properties": {
+                "type": {"const": "replace"},
+                "path": _STRING,
+                "old_text": _STRING,
+                "new_text": _STRING,
+                "replace_all": {"type": "boolean", "default": False},
+                "expected_hash": _FILE_HASH_SCHEMA,
+            },
+            "required": ["type", "path", "old_text", "new_text"],
+            "additionalProperties": False,
+        },
+        {
+            "type": "object",
+            "properties": {
+                "type": {"enum": ["move", "copy"]},
+                "source_path": _STRING,
+                "destination_path": _STRING,
+                "overwrite": {"type": "boolean", "default": False},
+                "expected_hash": _FILE_HASH_SCHEMA,
+            },
+            "required": ["type", "source_path", "destination_path"],
+            "additionalProperties": False,
+        },
+        {
+            "type": "object",
+            "properties": {
+                "type": {"const": "delete"},
+                "path": _STRING,
+                "expected_hash": _FILE_HASH_SCHEMA,
+            },
+            "required": ["type", "path"],
+            "additionalProperties": False,
+        },
+    ],
+}
+_AFFECTED_FILE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "path": _STRING,
+        "change_type": {"type": "string", "enum": ["created", "modified", "deleted"]},
+        "before_hash": {"type": ["string", "null"]},
+        "after_hash": {"type": ["string", "null"]},
+        "change_summary": _CHANGE_SUMMARY_SCHEMA,
+    },
+    "required": ["path", "change_type", "before_hash", "after_hash", "change_summary"],
+    "additionalProperties": False,
+}
 _FILESYSTEM_RESOURCE = {"filesystem": "filesystem"}
 _FS_MODULE = "agent_factory.tooling.builtins.filesystem"
 _PATH_BOUNDARY_DESCRIPTION = (
@@ -101,8 +199,9 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
                 "bytes_written": _INTEGER,
                 "before_hash": {"type": ["string", "null"]},
                 "after_hash": _STRING,
+                "change_summary": _CHANGE_SUMMARY_SCHEMA,
             },
-            "required": ["path", "created", "bytes_written", "before_hash", "after_hash"],
+            "required": ["path", "created", "bytes_written", "before_hash", "after_hash", "change_summary"],
             "additionalProperties": False,
         },
         resources=_FILESYSTEM_RESOURCE,
@@ -112,87 +211,79 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
     ),
     ToolSpec(
         id="edit",
-        description="对 workspace 边界内的单个文件执行一次有针对性的文本替换。",
+        description=(
+            "对 workspace 内多个文件执行事务式变更。支持 create、write、replace、move、copy、delete；"
+            "必须先用 action=preview 验证所有路径和文件快照并生成结构化 diff，"
+            "再使用预览返回的 transaction_id 调用 action=commit。"
+            "提交前会重新验证 SHA-256 和文件状态；任一步失败时回滚整批变更。"
+        ),
+        schema_error_guidance=(
+            "事务式 edit 仅接受两种调用："
+            "action=preview 时提供非空 operations；"
+            "action=commit 时只提供真实 preview 返回的 transaction_id。"
+            "不要继续使用旧的 path/old_text/new_text 顶层参数。"
+        ),
         entrypoint="agent_factory.tooling.builtins.filesystem.edit:run",
         input_schema={
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": _WRITE_PATH_DESCRIPTION},
-                "old_text": {"type": "string", "description": "需要被替换的原文本。"},
-                "new_text": {"type": "string", "description": "替换后的文本。"},
-                "replace_all": {"type": "boolean", "default": False, "description": "是否替换全部匹配项。"},
-            },
-            "required": ["path", "old_text", "new_text"],
-            "additionalProperties": False,
+            "oneOf": [
+                {
+                    "type": "object",
+                    "properties": {
+                        "action": {"const": "preview"},
+                        "operations": {
+                            "type": "array",
+                            "minItems": 1,
+                            "items": _TRANSACTION_OPERATION_SCHEMA,
+                            "description": (
+                                "按数组顺序应用到虚拟工作区；同一路径可在一次事务中连续变更。"
+                                f"{_PATH_BOUNDARY_DESCRIPTION}"
+                            ),
+                        },
+                    },
+                    "required": ["action", "operations"],
+                    "additionalProperties": False,
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "action": {"const": "commit"},
+                        "transaction_id": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "必须使用 edit preview 实际返回且仍在有效期内的事务 ID。",
+                        },
+                    },
+                    "required": ["action", "transaction_id"],
+                    "additionalProperties": False,
+                },
+            ],
         },
         output_schema={
             "type": "object",
             "properties": {
-                "path": _STRING,
-                "replacements": _INTEGER,
-                "before_hash": _STRING,
-                "after_hash": _STRING,
+                "transaction_id": _STRING,
+                "status": {"type": "string", "enum": ["preview_ready", "committed"]},
+                "created_at": _STRING,
+                "expires_at": _STRING,
+                "operations_count": _INTEGER,
+                "affected_files": {
+                    "type": "array",
+                    "items": _AFFECTED_FILE_SCHEMA,
+                },
             },
-            "required": ["path", "replacements", "before_hash", "after_hash"],
+            "required": [
+                "transaction_id",
+                "status",
+                "created_at",
+                "expires_at",
+                "operations_count",
+                "affected_files",
+            ],
             "additionalProperties": False,
         },
         resources=_FILESYSTEM_RESOURCE,
         risk_level="medium",
         risk_evaluator=ToolRiskEvaluatorConfig(hard=f"{_FS_MODULE}.edit:evaluate_risk"),
-        concurrent=False,
-    ),
-    ToolSpec(
-        id="multi_edit",
-        description="在 workspace 边界内的单个文件中原子执行多次文本替换。",
-        entrypoint="agent_factory.tooling.builtins.filesystem.multi_edit:run",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": _WRITE_PATH_DESCRIPTION},
-                "edits": {
-                    "type": "array",
-                    "minItems": 1,
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "old_text": _STRING,
-                            "new_text": _STRING,
-                            "replace_all": {"type": "boolean", "default": False},
-                        },
-                        "required": ["old_text", "new_text"],
-                        "additionalProperties": False,
-                    },
-                },
-            },
-            "required": ["path", "edits"],
-            "additionalProperties": False,
-        },
-        output_schema={
-            "type": "object",
-            "properties": {
-                "path": _STRING,
-                "replacements": _INTEGER,
-                "edit_results": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "index": _INTEGER,
-                            "replacements": _INTEGER,
-                        },
-                        "required": ["index", "replacements"],
-                        "additionalProperties": False,
-                    },
-                },
-                "before_hash": _STRING,
-                "after_hash": _STRING,
-            },
-            "required": ["path", "replacements", "edit_results", "before_hash", "after_hash"],
-            "additionalProperties": False,
-        },
-        resources=_FILESYSTEM_RESOURCE,
-        risk_level="medium",
-        risk_evaluator=ToolRiskEvaluatorConfig(hard=f"{_FS_MODULE}.multi_edit:evaluate_risk"),
         concurrent=False,
     ),
     ToolSpec(
@@ -220,8 +311,10 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
                             "path": _STRING,
                             "name": _STRING,
                             "type": {"type": "string", "enum": ["file", "directory", "other"]},
+                            "size_bytes": {"type": ["integer", "null"]},
+                            "modified_at": _STRING,
                         },
-                        "required": ["path", "name", "type"],
+                        "required": ["path", "name", "type", "size_bytes", "modified_at"],
                         "additionalProperties": False,
                     },
                 },
@@ -244,9 +337,30 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
             "properties": {
                 "pattern": {"type": "string", "description": "搜索文本或正则。"},
                 "base_path": {"type": "string", "default": ".", "description": _BASE_PATH_DESCRIPTION},
-                "include": {"type": "string", "description": "可选文件匹配模式。"},
+                "include": {
+                    "oneOf": [
+                        {"type": "string"},
+                        {"type": "array", "items": _STRING},
+                    ],
+                    "description": "可选文件匹配模式或模式列表。",
+                },
+                "exclude": {
+                    "oneOf": [
+                        {"type": "string"},
+                        {"type": "array", "items": _STRING},
+                    ],
+                    "description": "可选排除文件模式或模式列表。",
+                },
                 "case_sensitive": {"type": "boolean", "default": True},
                 "regex": {"type": "boolean", "default": True},
+                "context_before": {"type": "integer", "minimum": 0, "maximum": 20, "default": 0},
+                "context_after": {"type": "integer", "minimum": 0, "maximum": 20, "default": 0},
+                "max_file_bytes": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 20000000,
+                    "default": 2000000,
+                },
                 "max_results": {"type": "integer", "minimum": 1, "maximum": 5000, "default": 100},
             },
             "required": ["pattern"],
@@ -263,14 +377,17 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
                             "path": _STRING,
                             "line": _STRING,
                             "line_number": _INTEGER,
+                            "before": {"type": "array", "items": _STRING},
+                            "after": {"type": "array", "items": _STRING},
                         },
-                        "required": ["path", "line", "line_number"],
+                        "required": ["path", "line", "line_number", "before", "after"],
                         "additionalProperties": False,
                     },
                 },
                 "truncated": _BOOLEAN,
+                "files_searched": _INTEGER,
             },
-            "required": ["matches", "truncated"],
+            "required": ["matches", "truncated", "files_searched"],
             "additionalProperties": False,
         },
         resources=_FILESYSTEM_RESOURCE,
@@ -303,8 +420,10 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
                             "path": _STRING,
                             "name": _STRING,
                             "type": {"type": "string", "enum": ["file", "directory", "other"]},
+                            "size_bytes": {"type": ["integer", "null"]},
+                            "modified_at": _STRING,
                         },
-                        "required": ["path", "name", "type"],
+                        "required": ["path", "name", "type", "size_bytes", "modified_at"],
                         "additionalProperties": False,
                     },
                 },

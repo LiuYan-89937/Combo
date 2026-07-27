@@ -45,6 +45,93 @@
           </div>
         </section>
 
+        <section class="settings-group">
+          <header class="group-header">
+            <div class="group-icon" aria-hidden="true">
+              <n-icon size="18"><Time /></n-icon>
+            </div>
+            <div class="group-title-block">
+              <div class="group-title">{{ t('settings.groupRuntime') }}</div>
+              <div class="group-desc">{{ t('settings.groupRuntimeDesc') }}</div>
+            </div>
+          </header>
+
+          <div class="group-body">
+            <div class="field-block">
+              <div class="field-block-head">
+                <label class="field-label">{{ t('settings.requestTimeout') }}</label>
+              </div>
+              <n-input-number
+                v-model:value="requestTimeoutSeconds"
+                class="field-input"
+                :min="0"
+                :step="30"
+                :show-button="true"
+              >
+                <template #suffix>{{ t('settings.seconds') }}</template>
+              </n-input-number>
+              <p class="field-hint">{{ t('settings.requestTimeoutHint') }}</p>
+            </div>
+
+            <div class="field-divider" aria-hidden="true"></div>
+
+            <div class="field-block">
+              <div class="field-block-head">
+                <label class="field-label">{{ t('settings.maxRetries') }}</label>
+              </div>
+              <n-input-number
+                v-model:value="maxRetries"
+                class="field-input"
+                :min="0"
+                :step="1"
+                :precision="0"
+                :show-button="true"
+              />
+              <p class="field-hint">{{ t('settings.maxRetriesHint') }}</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-group">
+          <header class="group-header">
+            <div class="group-icon" aria-hidden="true">
+              <n-icon size="18"><NotificationsOutline /></n-icon>
+            </div>
+            <div class="group-title-block">
+              <div class="group-title">{{ t('settings.groupNotifications') }}</div>
+              <div class="group-desc">{{ t('settings.groupNotificationsDesc') }}</div>
+            </div>
+          </header>
+
+          <div class="group-body">
+            <div class="field-row">
+              <div class="field-copy">
+                <label class="field-label">{{ t('settings.taskNotifications') }}</label>
+                <p class="field-hint">{{ t('settings.taskNotificationsHint') }}</p>
+              </div>
+              <n-switch
+                :value="taskNotificationPreferences.enabled"
+                @update:value="setTaskNotificationsEnabled"
+              />
+            </div>
+
+            <template v-if="taskNotificationPreferences.enabled">
+              <div class="field-divider" aria-hidden="true"></div>
+              <div
+                v-for="option in taskNotificationCategoryOptions"
+                :key="option.category"
+                class="field-row"
+              >
+                <label class="field-label">{{ option.label }}</label>
+                <n-switch
+                  :value="taskNotificationPreferences.categories[option.category]"
+                  @update:value="taskNotificationPreferences.setCategoryEnabled(option.category, $event)"
+                />
+              </div>
+            </template>
+          </div>
+        </section>
+
         <!-- 页脚：关于 -->
         <footer class="settings-footer">
           <div class="footer-title">{{ t('settings.about') }}</div>
@@ -62,14 +149,22 @@ import {
   NDrawer,
   NDrawerContent,
   NIcon,
+  NInputNumber,
   NRadioButton,
   NRadioGroup,
+  NSwitch,
 } from 'naive-ui'
-import { ColorPalette } from '@/components/icons'
+import { ColorPalette, NotificationsOutline, Time } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import { useUiStore } from '@/stores/ui'
+import { useRuntimePreferencesStore } from '@/stores/runtimePreferences'
+import {
+  useTaskNotificationPreferencesStore,
+  type TaskNotificationCategory,
+} from '@/stores/taskNotificationPreferences'
 import type { Locale } from '@/i18n'
 import type { ThemeMode } from '@/stores/ui'
+import { requestNativeTaskNotificationPermission } from '@/services/taskNotifications'
 
 const props = defineProps<{
   show: boolean
@@ -80,6 +175,8 @@ const emit = defineEmits<{
 }>()
 
 const uiStore = useUiStore()
+const runtimePreferences = useRuntimePreferencesStore()
+const taskNotificationPreferences = useTaskNotificationPreferencesStore()
 const { localeOptions, t } = useI18n()
 
 const show = computed({
@@ -102,11 +199,40 @@ const themeMode = computed({
   set: (value: ThemeMode) => uiStore.setThemeMode(value),
 })
 
+const requestTimeoutSeconds = computed({
+  get: () => runtimePreferences.requestTimeoutSeconds,
+  set: (value: number | null) => {
+    if (value !== null) runtimePreferences.setRequestTimeoutSeconds(value)
+  },
+})
+
+const maxRetries = computed({
+  get: () => runtimePreferences.maxRetries,
+  set: (value: number | null) => {
+    if (value !== null) runtimePreferences.setMaxRetries(value)
+  },
+})
+
 const themeOptions = computed<Array<{ label: string; value: ThemeMode }>>(() => [
   { label: t('settings.themeLight'), value: 'light' },
   { label: t('settings.themeDark'), value: 'dark' },
   { label: t('settings.themeAuto'), value: 'auto' },
 ])
+
+const taskNotificationCategoryOptions = computed<Array<{
+  category: TaskNotificationCategory
+  label: string
+}>>(() => [
+  { category: 'conversation', label: t('settings.notificationConversation') },
+  { category: 'collaboration', label: t('settings.notificationCollaboration') },
+  { category: 'agentGroup', label: t('settings.notificationAgentGroup') },
+  { category: 'scheduler', label: t('settings.notificationScheduler') },
+])
+
+function setTaskNotificationsEnabled(value: boolean): void {
+  taskNotificationPreferences.setEnabled(value)
+  if (value) void requestNativeTaskNotificationPermission()
+}
 </script>
 
 <style scoped>
@@ -193,6 +319,14 @@ const themeOptions = computed<Array<{ label: string; value: ThemeMode }>>(() => 
   font-size: var(--app-font-md);
   font-weight: 500;
   color: var(--app-text);
+}
+
+.field-copy {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-space-xs);
 }
 
 .field-control {

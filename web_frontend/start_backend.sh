@@ -17,7 +17,6 @@ echo "  cd web_frontend/frontend && npm run dev"
 echo ""
 
 web_sync_python_dependencies
-web_ensure_runtime_image
 
 echo ""
 echo "Starting web runtime service on http://localhost:8000"

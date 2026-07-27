@@ -1,36 +1,16 @@
 from __future__ import annotations
 
-import re
+from hashlib import sha256
+from uuid import uuid4
 
 
-SOURCE_ID_RE = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
-_INVALID_SOURCE_ID_CHARACTER_RE = re.compile(r"[^a-z0-9]+")
-_REPEATED_SEPARATOR_RE = re.compile(r"_+")
+SOURCE_ID_PREFIX = "source"
 
 
-def build_source_id(value: str, *, fallback: str, suffix: str | None = None) -> str:
-    """Build an ASCII snake_case identifier accepted by knowledge manifests."""
-    base = _source_id_fragment(value) or _source_id_fragment(fallback)
-    if not base:
-        raise ValueError("source_id fallback must contain ASCII letters or digits")
-    if not base[0].isalpha():
-        base = f"source_{base}"
-
-    suffix_fragment = _source_id_fragment(suffix or "")
-    reserved = len(suffix_fragment) + 1 if suffix_fragment else 0
-    available_base_length = 64 - reserved
-    if available_base_length < 1:
-        raise ValueError("source_id suffix is too long")
-    base = base[:available_base_length].rstrip("_")
-    source_id = f"{base}_{suffix_fragment}" if suffix_fragment else base
-    if len(source_id) < 2:
-        source_id = f"{source_id}_source"
-    if not SOURCE_ID_RE.fullmatch(source_id):
-        raise ValueError("unable to build a valid knowledge source_id")
-    return source_id
+def new_source_id() -> str:
+    return f"{SOURCE_ID_PREFIX}_{uuid4().hex}"
 
 
-def _source_id_fragment(value: str) -> str:
-    lowered = str(value or "").strip().lower()
-    cleaned = _INVALID_SOURCE_ID_CHARACTER_RE.sub("_", lowered)
-    return _REPEATED_SEPARATOR_RE.sub("_", cleaned).strip("_")
+def stable_source_id(identity: str) -> str:
+    digest = sha256(str(identity).encode("utf-8")).hexdigest()[:24]
+    return f"{SOURCE_ID_PREFIX}_{digest}"

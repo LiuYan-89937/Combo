@@ -119,7 +119,7 @@ The collaboration view presents the main agent, task state, worker activity, rec
 
 ## 13. Runtime Isolation and Extensions
 
-Docker isolates AgentPackage, MCP, and sub-agent processes. Logical ownership further separates package environments, sessions, workspaces, SQLite connections, tool outputs, and artifacts. Dependency environments are resolved by lock identity and reused safely without sharing writable runtime databases.
+AgentPackage sessions run as supervised native subprocesses. Logical ownership separates package environments, sessions, workspaces, SQLite connections, tool outputs, and artifacts. Dependency environments are resolved by lock identity and reused safely without sharing writable runtime databases. This is an application-level isolation boundary rather than a kernel security sandbox.
 
 Extensions remain declarative through package contracts and installed registries. The platform avoids package-specific branches in the core runtime.
 

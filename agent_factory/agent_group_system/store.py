@@ -1025,7 +1025,14 @@ class AgentGroupStore:
 
     def _session_view(self, row: sqlite3.Row) -> dict[str, Any]:
         """会话视图"""
-        return dict(row)
+        data = dict(row)
+        pending_approval_json = data.pop("pending_approval_json", None)
+        data["pending_approval"] = (
+            json_loads(pending_approval_json, None)
+            if pending_approval_json
+            else None
+        )
+        return data
 
     def _member_view(self, row: sqlite3.Row) -> dict[str, Any]:
         """成员视图"""
@@ -1039,14 +1046,7 @@ class AgentGroupStore:
 
     def _run_view(self, row: sqlite3.Row) -> dict[str, Any]:
         """运行记录视图"""
-        data = dict(row)
-        pending_approval_json = data.pop("pending_approval_json", None)
-        data["pending_approval"] = (
-            json_loads(pending_approval_json, None)
-            if pending_approval_json
-            else None
-        )
-        return data
+        return dict(row)
 
     def _context_version_view(self, row: sqlite3.Row) -> dict[str, Any]:
         """上下文版本视图"""

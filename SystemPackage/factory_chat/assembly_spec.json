@@ -3,7 +3,7 @@
   "agent": {
     "id": "factory_chat",
     "name": "Factory Chat",
-    "description": "FastAgentFactory system chat assistant.",
+    "description": "FastAgentFactory built-in general-purpose Agent.",
     "version": "0.1.0"
   },
   "runtime": {
@@ -45,21 +45,19 @@
             "read",
             "write",
             "edit",
-            "multi_edit",
             "glob",
             "grep",
             "ls",
-            "bash",
-            "bash_status",
-            "bash_stop",
+            "shell",
+            "shell_status",
+            "shell_stop",
             "collaboration",
             "agent_list",
             "agent_manufacture",
             "agent_search",
             "knowledge",
             "scheduler",
-            "skillhub",
-            "generate_image"
+            "skillhub"
           ],
           "approval_policy": "standard"
         }

@@ -83,7 +83,6 @@ CREATE_AGENT_BUILTIN_TOOL_IDS = {
     "read",
     "write",
     "edit",
-    "multi_edit",
     "glob",
     "grep",
     "ls",

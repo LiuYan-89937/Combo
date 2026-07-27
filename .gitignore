@@ -1,12 +1,11 @@
 .env
-.deploy/
-vendor/llama.cpp/
 .DS_Store
 .idea/
 .agentfactory/
 .agent_runtime/
 environment.lock.json
 .venv/
+docs/*
 AGENT_GROUP_*.md
 开发规范以及架构初版.md
 examples/customer_service_agent/memory/
@@ -24,3 +23,10 @@ htmlcov/
 dist/
 build/
 *.egg-info/
+vendor/
+
+# Rust/Tauri build artifacts
+src-tauri/target/
+src-tauri/gen/
+src-tauri/resources/python/
+build/python-downloads/

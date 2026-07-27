@@ -31,8 +31,8 @@ class MCPGatewayEndpoint:
         return f"http://{self.host}:{self.port}"
 
     @property
-    def docker_url(self) -> str:
-        return f"http://host.docker.internal:{self.port}"
+    def local_url(self) -> str:
+        return self.host_url
 
 
 class MCPGatewayServer:

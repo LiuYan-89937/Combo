@@ -9,9 +9,12 @@ export function useAgentSessionNavigation() {
   const agentStore = useAgentStore()
 
   async function openAgentSession(session: AgentRecentSessionView): Promise<void> {
+    const packageId = String(session.package_id || '').trim()
+    const sessionId = String(session.session_id || '').trim()
+    if (!packageId || !sessionId) return
     await router.push({
       name: 'Factory',
-      query: { package_id: session.package_id, session_id: session.session_id },
+      query: { package_id: packageId, session_id: sessionId },
     })
   }
 

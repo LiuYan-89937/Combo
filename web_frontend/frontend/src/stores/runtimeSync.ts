@@ -95,7 +95,13 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
     if (runtimeStore.selectedAgentPackage?.package_id) {
       agentStore.selectPackage(runtimeStore.selectedAgentPackage.package_id)
     }
-    agentStore.setSessions(runtimeStore.agentSessions as any)
+    const sessionPackageId = String(
+      event.payload?.package_id
+      || event.payload?.package?.package_id
+      || runtimeStore.selectedAgentPackage?.package_id
+      || '',
+    ).trim()
+    agentStore.setSessions(runtimeStore.agentSessions as any, sessionPackageId)
     if (event.event_type === 'agent_package_sessions_listed') {
       agentStore.mergeRecentSessions(
         runtimeStore.agentSessions.map((session: any) => sessionWithPackage(session, event.payload?.package_id)) as any

@@ -10,11 +10,11 @@ from typing import Any
 
 from langgraph.store.base import BaseStore
 
-from agent_factory.context_system.compression import estimate_text_tokens
+from agent_factory.context_system.token_estimation import estimate_text_tokens
 from agent_factory.knowledge_system.catalog import KnowledgeCatalog
 from agent_factory.knowledge_system.chunking import chunk_document
 from agent_factory.knowledge_system.events import KnowledgeEventSink, emit_knowledge_event, knowledge_event_payload
-from agent_factory.knowledge_system.identifiers import build_source_id
+from agent_factory.knowledge_system.identifiers import stable_source_id
 from agent_factory.knowledge_system.loaders import discover_source, json_hash, sha256_text
 from agent_factory.knowledge_system.planner import plan_knowledge_ingestion
 from agent_factory.knowledge_system.schema import (
@@ -543,7 +543,7 @@ class KnowledgeRuntime:
             metadata.setdefault("content", uri)
         if not uri:
             raise ValueError("knowledge source requires uri/path/url")
-        source_id = str(source.get("source_id") or _derive_source_id(uri)).strip()
+        source_id = str(source.get("source_id") or stable_source_id(uri)).strip()
         display_name = str(source.get("display_name") or metadata.get("display_name") or source_id).strip()
         if source_type not in _SOURCE_TYPES:
             raise ValueError(f"unsupported knowledge source_type: {source_type}")
@@ -658,11 +658,6 @@ def _capabilities_for(*, source_type: SourceType, mount_mode: MountMode) -> list
 
 def _source_hash(*, uri: str, metadata: dict[str, Any]) -> str:
     return json_hash({"uri": uri, "metadata": metadata})
-
-
-def _derive_source_id(uri: str) -> str:
-    value = Path(uri).name if "://" not in uri else uri.split("//", 1)[-1].split("/", 1)[0]
-    return build_source_id(value, fallback=f"source_{sha256_text(uri)[:8]}")
 
 
 def _dedupe_results(results: list[KnowledgeResult]) -> list[KnowledgeResult]:

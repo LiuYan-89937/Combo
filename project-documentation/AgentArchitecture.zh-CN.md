@@ -2,7 +2,7 @@
 
 # FastAgentFactory Agent 架构
 
-![FastAgentFactory Agent 系统架构](assets/diagrams/fastagentfactory-agent-architecture.png)
+![FastAgentFactory Agent 系统架构](assets/diagrams/fastagentfactory-agent-architecture-native.png)
 
 FastAgentFactory 将 Agent 的交互入口、生命周期控制、运行时执行、工具访问和本地模型推理解耦为五层。图中的箭头表示控制流或受控的数据访问关系，不表示所有模块运行在同一个进程。
 
@@ -33,7 +33,7 @@ Runtime Kernel 根据 AgentPackage 的 Assembly Spec 构建运行图。当前主
 
 推理节点为 Chat、Embedding、Image Generation 和 GPU 遥测提供统一控制接口。节点既可以与 Web 运行在同一台 Linux/ROCm 主机，也可以位于独立 AMD Radeon 主机并通过 SSH 隧道访问。
 
-Chat 推理同时保留 Official 与 AMD 两套 llama.cpp 构建。两套实现使用同一模型与 Profile，便于在一致参数下切换、测试并验证自定义 HIP Kernel。Agent 运行容器、SQLite 状态库和会话工作区属于本地基础设施，不依赖闭源 Agent 平台完成核心执行。
+Chat 推理同时保留 Official 与 AMD 两套 llama.cpp 构建。两套实现使用同一模型与 Profile，便于在一致参数下切换、测试并验证自定义 HIP Kernel。Native Agent 子进程、SQLite 状态库、共享依赖池和会话工作区属于本地基础设施，不依赖闭源 Agent 平台完成核心执行。
 
 ## 隔离边界
 

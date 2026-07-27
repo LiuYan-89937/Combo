@@ -86,6 +86,7 @@
           :placeholder="inputPlaceholder"
           :disabled="inputDisabled"
           :is-running="runtimeStore.hasActiveRun"
+          :queued-count="runtimeStore.queuedRequestCount"
           attachments-enabled
           model-selector-enabled
           :model-options="runtimeMainModelOptions"
@@ -145,6 +146,8 @@ import { useResourceContext } from '@/composables/useResourceContext'
 import { useConversationSessionNavigation } from '@/composables/useConversationSessionNavigation'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { isAgentSessionsLanding as routeIsAgentSessionsLanding } from '@/utils/agentSessionRoute'
+import { agentPackageConversationScope } from '@/stores/runtime/scopes'
+import { SYSTEM_CHAT_PACKAGE_ID } from '@/utils/resourceScope'
 
 const runtimeStore = useRuntimeStore()
 const agentStore = useAgentStore()
@@ -339,7 +342,18 @@ watch(
   () => {
     const packageId = agentStore.activeChatPackageId
     const sessionId = runtimeStore.activeAgentSessionId
-    if (route.name !== 'Factory' || !packageId || !sessionId) return
+    if (route.name !== 'Factory' || !packageId) return
+    if (
+      !sessionId
+      && agentStore.selectedSessionId === null
+      && routeQueryText(route.query.package_id) === packageId
+      && Boolean(routeQueryText(route.query.session_id))
+      && runtimeStore.currentMode === 'agent_package'
+    ) {
+      void router.replace({ name: 'Factory', query: { package_id: packageId, new: '1' } })
+      return
+    }
+    if (!sessionId) return
     if (routeQueryText(route.query.package_id) !== packageId || routeQueryText(route.query.new) !== '1') return
     if (
       routeQueryText(route.query.session_id) === sessionId
@@ -365,7 +379,13 @@ async function openRoutedAgentSession(version: number): Promise<boolean> {
   }
   const packageId = routeQueryText(route.query.package_id)
   const sessionId = routeQueryText(route.query.session_id)
-  if (!packageId) return false
+  if (!packageId) {
+    await router.replace({
+      name: 'Factory',
+      query: { package_id: SYSTEM_CHAT_PACKAGE_ID },
+    })
+    return true
+  }
   activateAgentWorkspace()
   if (!sessionId && routeQueryText(route.query.new) === '1') {
     if (
@@ -396,14 +416,19 @@ async function openRoutedAgentSession(version: number): Promise<boolean> {
     })
     return true
   }
+  const collaborationId = routeQueryText(route.query.collaboration_id)
+  const collaborationTaskId = routeQueryText(route.query.collaboration_task_id)
+  const routedConversationScope = agentPackageConversationScope(packageId, sessionId, {
+    collaborationId,
+    collaborationTaskId,
+  })
   if (
     agentStore.activeChatPackageId === packageId
     && agentStore.selectedSessionId === sessionId
     && runtimeStore.activeAgentSessionId === sessionId
     && runtimeStore.currentMode === 'agent_package'
+    && runtimeStore.activeConversationScope === routedConversationScope
   ) return true
-  const collaborationId = routeQueryText(route.query.collaboration_id)
-  const collaborationTaskId = routeQueryText(route.query.collaboration_task_id)
   agentStore.enterAgentChat(packageId, sessionId)
   if (collaborationId) {
     runtimeStore.enterCollaborationConversation(

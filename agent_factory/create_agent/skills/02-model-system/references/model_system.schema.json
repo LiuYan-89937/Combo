@@ -138,17 +138,13 @@
           "properties": {
             "profile_id": {
               "title": "Profile Id",
-              "anyOf": [
-                {"type": "string"},
-                {"type": "null"}
-              ],
-              "default": null
+              "type": "string"
             },
             "source": {
-              "default": "local_registry",
+              "default": "model_pool",
               "enum": [
-                "local_registry",
-                "local_default"
+                "model_pool",
+                "env"
               ],
               "title": "Source",
               "type": "string"
@@ -250,21 +246,13 @@
           "properties": {
             "profile_id": {
               "title": "Profile Id",
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
+              "type": "string"
             },
             "source": {
-              "default": "local_registry",
+              "default": "model_pool",
               "enum": [
-                "local_registry",
-                "local_default"
+                "model_pool",
+                "env"
               ],
               "title": "Source",
               "type": "string"
@@ -274,7 +262,8 @@
                 "image_input",
                 "image_output",
                 "image_edit",
-                "audio_input"
+                "audio_input",
+                "audio_output"
               ],
               "title": "Capability",
               "type": "string"

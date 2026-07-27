@@ -8,11 +8,18 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 ContextSourceId = Literal["cross_session_memory"]
 ContextCandidateKind = Literal["memory"]
 ContextEventStatus = Literal["started", "completed", "failed", "skipped"]
+DEFAULT_COMPRESSION_TRIGGER_TOKEN_THRESHOLD = 200000
+
+
 class CompressionPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
-    trigger_token_threshold: int | None = Field(default=None, ge=1000)
+    trigger_token_threshold: int = Field(
+        default=DEFAULT_COMPRESSION_TRIGGER_TOKEN_THRESHOLD,
+        ge=1000,
+        description="Legacy package value retained for contract compatibility; runtime uses the active model profile.",
+    )
     keep_recent_messages: int = Field(default=12, ge=2, le=128)
 
 

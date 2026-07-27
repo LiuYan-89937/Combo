@@ -24,7 +24,6 @@ from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import (
     PendingAgentPackageRun,
     PendingCreateAgentRun,
     PendingEvolutionRun,
-    SYSTEM_CHAT_PACKAGE_ID,
 )
 from agent_factory.runtime_attachments import (
     AttachmentImportError,
@@ -319,7 +318,6 @@ class RuntimeAgentPackageCommandMixin:
                 frontend_mode="agent_group",
                 frontend_session_id=package_session_id,
                 extra_payload=group_payload,
-                sync_system_chat_session=False,
             )
             self._persist_agent_package_stream_result(
                 package_id=package_id,
@@ -372,6 +370,7 @@ class RuntimeAgentPackageCommandMixin:
                 session_id=session_id,
                 request_id=command.request_id,
                 user_config=_runtime_user_config(command),
+                runtime_request=_runtime_request(command),
                 require_ready=require_ready,
                 attachments=command.payload.get("attachments"),
             )
@@ -532,13 +531,12 @@ class RuntimeAgentPackageCommandMixin:
                 session_id=pending.session_id,
                 resume_payload=command.payload,
                 request_id=command.request_id,
+                runtime_request=_runtime_request(command),
             )
             result = self._consume_agent_package_stream(
                 package_id=pending.package_id,
                 run=run,
                 normalizer=pending.normalizer,
-                frontend_mode=pending.normalizer.mode if pending.normalizer.mode == "chat" else None,
-                frontend_session_id=pending.normalizer.session_id if pending.normalizer.mode == "chat" else None,
             )
             self._persist_agent_package_stream_result(
                 package_id=pending.package_id,
@@ -546,14 +544,6 @@ class RuntimeAgentPackageCommandMixin:
                 result=result,
                 request_id=result.terminal_event.request_id if result.terminal_event else command.request_id,
             )
-            if pending.normalizer.mode == "chat":
-                self._finish_system_chat_turn(
-                    request_id=result.terminal_event.request_id if result.terminal_event else command.request_id,
-                    final_answer=result.final_answer,
-                    reasoning_content=result.reasoning_content,
-                    status=result.status,
-                    tool_activities=result.tool_activities,
-                )
         except Exception as exc:
             pending.normalizer.emit_run_failed(exc)
 
@@ -581,7 +571,6 @@ class RuntimeAgentPackageCommandMixin:
                 frontend_mode="agent_group",
                 frontend_session_id=pending.session_id,
                 extra_payload=group_payload,
-                sync_system_chat_session=False,
             )
             self._persist_agent_package_stream_result(
                 package_id=pending.package_id,
@@ -726,7 +715,7 @@ class RuntimeAgentPackageCommandMixin:
                 status="stopped",
             )
             return True
-        if mode not in {"chat", "create_agent", "evolve_agent"} or not session_id:
+        if mode not in {"create_agent", "evolve_agent"} or not session_id:
             return False
         current_record = self.session_manager.load(session_id)
         if not _factory_record_has_request(current_record, mode, target_request_id):
@@ -741,22 +730,6 @@ class RuntimeAgentPackageCommandMixin:
         )
         if self.session_record is not None and self.session_record.session_id == session_id:
             self.session_record = record
-        if mode != "chat" or self.agent_package_runtime is None:
-            return True
-        agent_session_id = str(getattr(record, "chat_agent_package_session_id", "") or "").strip()
-        if not agent_session_id:
-            return True
-        agent_session = self.agent_package_runtime.load_session(SYSTEM_CHAT_PACKAGE_ID, agent_session_id)
-        if not _session_payload_has_request(agent_session, target_request_id):
-            return True
-        self.agent_package_runtime.finish_session_turn(
-            SYSTEM_CHAT_PACKAGE_ID,
-            session_id=agent_session_id,
-            request_id=target_request_id,
-            final_answer=final_answer,
-            reasoning_content=reasoning_content,
-            status="stopped",
-        )
         return True
 
     def _consume_agent_package_stream(
@@ -768,7 +741,6 @@ class RuntimeAgentPackageCommandMixin:
         frontend_mode: FactoryMode | None = None,
         frontend_session_id: str | None = None,
         extra_payload: dict[str, Any] | None = None,
-        sync_system_chat_session: bool = True,
     ) -> RuntimeStreamConsumeResult:
         normalizer.default_payload = {**normalizer.default_payload, "package_id": package_id}
         final_state = None
@@ -783,18 +755,7 @@ class RuntimeAgentPackageCommandMixin:
                 agent_session_id = item.session_id
                 if agent_session_id:
                     run.session["session_id"] = agent_session_id
-                    if frontend_mode == "chat" and sync_system_chat_session:
-                        self._remember_system_chat_agent_session_id(agent_session_id)
-                if item.event_type == "run_completed" and frontend_mode == "chat" and sync_system_chat_session:
-                    self._sync_system_chat_session_summary(item)
                 if item.event_type in INTERRUPT_TERMINAL_EVENT_TYPES:
-                    if frontend_mode == "chat" and sync_system_chat_session:
-                        self._finish_system_chat_turn(
-                            request_id=item.request_id,
-                            final_answer=visible_output.content,
-                            reasoning_content=visible_output.reasoning_content,
-                            status="interrupted",
-                        )
                     session_id = str(agent_session_id or (run.session or {}).get("session_id") or "")
                     if not session_id:
                         raise RuntimeError("agent package interrupt missing session_id")
@@ -830,18 +791,6 @@ class RuntimeAgentPackageCommandMixin:
                     )
                 )
                 if item.event_type in INTERRUPT_TERMINAL_EVENT_TYPES or item.event_type in RUN_TERMINAL_EVENT_TYPES:
-                    if (
-                        item.event_type in RUN_TERMINAL_EVENT_TYPES
-                        and item.event_type != "run_completed"
-                        and frontend_mode == "chat"
-                        and sync_system_chat_session
-                    ):
-                        self._finish_system_chat_turn(
-                            request_id=item.request_id,
-                            final_answer=visible_output.content,
-                            reasoning_content=visible_output.reasoning_content,
-                            status=runtime_stream_status(item),
-                        )
                     terminal_event = item
                 continue
             if stream_mode == "stderr":
@@ -948,60 +897,6 @@ class RuntimeAgentPackageCommandMixin:
             tool_activities=result.tool_activities,
         )
 
-    def _run_chat(self, command: FactoryFrontendCommand, message: str) -> None:
-        display_user_input = str(command.payload.get("display_user_input") or "").strip() or message
-        agent_session_id = self._planned_system_chat_agent_session_id()
-        normalizer = RuntimeEventNormalizer(
-            emit=self.emit,
-            request_id=command.request_id,
-            session_id=self._session_id(),
-            mode="chat",
-            graph_id="factory_chat_package",
-            producer_type="factory_runtime",
-        )
-        try:
-            self._commit_system_chat_request(
-                display_user_input,
-                request_id=command.request_id,
-                attachments=transcript_attachment_views(command.payload.get("attachments")),
-            )
-            run = self.agent_package_runtime.stream(
-                SYSTEM_CHAT_PACKAGE_ID,
-                user_input=message,
-                display_user_input=display_user_input,
-                session_id=agent_session_id,
-                request_id=command.request_id,
-                user_config=_runtime_user_config(command),
-                attachments=command.payload.get("attachments"),
-                visible_in_agent_session_list=True,
-            )
-            result = self._consume_agent_package_stream(
-                package_id=SYSTEM_CHAT_PACKAGE_ID,
-                run=run,
-                normalizer=normalizer,
-                frontend_mode="chat",
-                frontend_session_id=self._session_id(),
-            )
-            self._persist_agent_package_stream_result(
-                package_id=SYSTEM_CHAT_PACKAGE_ID,
-                run=run,
-                result=result,
-                request_id=result.terminal_event.request_id if result.terminal_event else command.request_id,
-            )
-            self._finish_system_chat_turn(
-                request_id=result.terminal_event.request_id if result.terminal_event else command.request_id,
-                final_answer=result.final_answer,
-                reasoning_content=result.reasoning_content,
-                status=result.status,
-                tool_activities=result.tool_activities,
-            )
-        except AttachmentImportError as exc:
-            _emit_attachment_import_failed(normalizer, exc)
-            self._finish_system_chat_turn(request_id=command.request_id, final_answer=None, status="failed")
-        except Exception as exc:
-            normalizer.emit_run_failed(exc)
-            self._finish_system_chat_turn(request_id=command.request_id, final_answer=None, status="failed")
-
     def _run_create_agent(self, command: FactoryFrontendCommand, message: str) -> None:
         agent_session_id = self._planned_host_create_agent_session_id()
         normalizer = RuntimeEventNormalizer(
@@ -1034,80 +929,6 @@ class RuntimeAgentPackageCommandMixin:
             normalizer.emit_run_failed(exc)
             self._finish_host_create_agent_turn(request_id=command.request_id, final_answer=None, status="failed")
 
-    def _sync_system_chat_session_summary(self, item: FactoryFrontendEvent) -> None:
-        if self.session_record is None:
-            return
-        agent_session = item.payload.get("agent_session") if isinstance(item.payload, dict) else None
-        if isinstance(agent_session, dict):
-            self.session_record.chat_agent_package_session_id = str(
-                agent_session.get("session_id") or self.session_record.chat_agent_package_session_id or ""
-            ) or None
-            try:
-                self.session_record.chat_turn_count = int(
-                    agent_session.get("turn_count")
-                    or self.session_record.chat_turn_count
-                )
-            except (TypeError, ValueError):
-                pass
-            turns = agent_session.get("turns")
-            if isinstance(turns, list):
-                self.session_record = self.session_manager.replace_turns_from_agent_session(
-                    self.session_record.session_id,
-                    "chat",
-                    [turn for turn in turns if isinstance(turn, dict)],
-                )
-                return
-        self.session_manager.save(self.session_record)
-
-    def _planned_system_chat_agent_session_id(self) -> str | None:
-        return self.session_record.chat_agent_package_session_id if self.session_record is not None else None
-
-    def _commit_system_chat_request(
-        self,
-        first_user_input: str,
-        *,
-        request_id: str | None = None,
-        attachments: Any = None,
-    ) -> None:
-        self._remember_factory_first_user_input(first_user_input)
-        self.session_record = self.session_manager.start_turn(
-            self.session_record.session_id,
-            "chat",
-            request_id=request_id,
-            user_input=first_user_input,
-            attachments=attachments,
-        )
-
-    def _finish_system_chat_turn(
-        self,
-        *,
-        request_id: str | None,
-        final_answer: str | None,
-        status: str,
-        reasoning_content: str | None = None,
-        tool_activities: list[dict[str, Any]] | None = None,
-        trace_ref: dict[str, str] | None = None,
-    ) -> None:
-        if self.session_record is None:
-            return
-        self.session_record = self.session_manager.finish_turn(
-            self.session_record.session_id,
-            "chat",
-            request_id=request_id,
-            final_answer=final_answer,
-            reasoning_content=reasoning_content,
-            status=status,
-            tool_activities=tool_activities,
-            trace_ref=trace_ref,
-        )
-
-    def _remember_system_chat_agent_session_id(self, session_id: str) -> None:
-        if self.session_record is None:
-            self.start_session(FactoryFrontendCommand(type="start_session"))
-        if self.session_record.chat_agent_package_session_id != session_id:
-            self.session_record.chat_agent_package_session_id = session_id
-            self.session_manager.save(self.session_record)
-
     def _planned_host_create_agent_session_id(self) -> str:
         if self.session_record is not None and self.session_record.create_agent_session_id:
             return self.session_record.create_agent_session_id
@@ -1135,7 +956,10 @@ class RuntimeAgentPackageCommandMixin:
 
     def _remember_factory_first_user_input(self, first_user_input: str) -> None:
         if self.session_record is None:
-            self.start_session(FactoryFrontendCommand(type="start_session"))
+            mode = self.mode if self.mode in {"create_agent", "evolve_agent"} else None
+            if mode is None:
+                raise RuntimeError("factory session mode is not selected")
+            self.start_session(FactoryFrontendCommand(type="start_session", mode=mode))
         self.session_record = self.session_manager.remember_first_user_input(
             self.session_record.session_id,
             first_user_input,
@@ -1255,7 +1079,6 @@ class RuntimeAgentPackageCommandMixin:
 
 def _factory_record_has_request(record: Any, mode: str, request_id: str) -> bool:
     turns_by_mode = {
-        "chat": getattr(record, "chat_turns", ()),
         "create_agent": getattr(record, "create_agent_turns", ()),
         "evolve_agent": getattr(record, "evolve_agent_turns", ()),
     }
@@ -1297,6 +1120,12 @@ def _runtime_user_config(command: FactoryFrontendCommand) -> dict[str, Any]:
     payload = command.payload if isinstance(command.payload, dict) else {}
     user_config = payload.get("user_config")
     return dict(user_config) if isinstance(user_config, dict) else {}
+
+
+def _runtime_request(command: FactoryFrontendCommand) -> dict[str, Any] | None:
+    payload = command.payload if isinstance(command.payload, dict) else {}
+    runtime_request = payload.get("runtime_request")
+    return dict(runtime_request) if isinstance(runtime_request, dict) else None
 
 
 def _resume_payload_text(payload: Any) -> str:

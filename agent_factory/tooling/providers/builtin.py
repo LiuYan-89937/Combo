@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 import os
 
+from agent_factory.tooling.builtins.aliases import canonical_builtin_tool_ids
 from agent_factory.tooling.builtins.registry import (
     get_always_available_system_tool_ids,
     get_builtin_tool_ids,
@@ -23,7 +24,7 @@ class BuiltinToolProvider:
     provider_id = "builtin"
 
     def __init__(self, *, tool_ids: Iterable[str] | None = None) -> None:
-        self._tool_ids = set(tool_ids or [])
+        self._tool_ids = set(canonical_builtin_tool_ids(tool_ids or []))
 
     def discover(self, context: ToolProviderContext) -> ToolProviderResult:
         known_ids = set(get_builtin_tool_ids())

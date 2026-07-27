@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
-import fcntl
 import hashlib
 import json
 from pathlib import Path, PurePosixPath
@@ -15,9 +14,9 @@ import zipfile
 
 from packaging.utils import InvalidWheelFilename, canonicalize_name, parse_wheel_filename
 
+from agent_factory.file_lock import exclusive_file_lock
 from agent_factory.paths import factory_artifact_path
 
-from .python_requirements import PythonRequirementError, normalize_python_requirements
 from .versions import DEPENDENCY_POOL_VERSION
 
 
@@ -50,133 +49,6 @@ class DependencyPool:
     def __init__(self, root: Path | None = None) -> None:
         self.root = (root or factory_artifact_path("dependency_pool")).resolve()
 
-    def resolve(
-        self,
-        *,
-        docker: str,
-        base_image: str,
-        architecture: str,
-        python_requirements: list[str],
-        system_packages: list[str],
-        npm_requirements: list[str],
-        timeout_seconds: int | None,
-    ) -> DependencyPoolResolution:
-        self.root.mkdir(parents=True, exist_ok=True)
-        try:
-            normalized_python_requirements = normalize_python_requirements(python_requirements)
-        except PythonRequirementError as exc:
-            raise DependencyPoolError("unsupported", str(exc)) from exc
-        profile_request = {
-            "runtime_compatibility": self._runtime_compatibility(
-                docker=docker,
-                base_image=base_image,
-                architecture=architecture,
-                timeout_seconds=timeout_seconds,
-            ),
-            "python_requirements": normalized_python_requirements,
-            "system_packages": _normalized_values(system_packages),
-            "npm_requirements": _normalized_values(npm_requirements),
-        }
-        profile_key = _fingerprint(profile_request)
-        with self._profile_lock(profile_key):
-            existing = self._read_profile(profile_key)
-            if existing is not None and self.references_available(existing.to_lock_payload()):
-                return DependencyPoolResolution(
-                    python_entries=existing.python_entries,
-                    system_entries=existing.system_entries,
-                    npm_profile=existing.npm_profile,
-                    profile_key=profile_key,
-                    cache_status="profile_hit",
-                )
-            python_entries = self._resolve_python(
-                docker=docker,
-                base_image=base_image,
-                requirements=normalized_python_requirements,
-                timeout_seconds=timeout_seconds,
-            )
-            system_entries = self._resolve_system(
-                docker=docker,
-                base_image=base_image,
-                packages=_normalized_values(system_packages),
-                timeout_seconds=timeout_seconds,
-            )
-            npm_profile = self._resolve_npm(
-                docker=docker,
-                base_image=base_image,
-                requirements=_normalized_values(npm_requirements),
-                timeout_seconds=timeout_seconds,
-            )
-            resolution = DependencyPoolResolution(
-                python_entries=python_entries,
-                system_entries=system_entries,
-                npm_profile=npm_profile,
-                profile_key=profile_key,
-                cache_status="resolved",
-            )
-            with self._exclusive_lock():
-                self._write_profile(profile_key, resolution, request=profile_request)
-            return resolution
-
-    def _runtime_compatibility(
-        self,
-        *,
-        docker: str,
-        base_image: str,
-        architecture: str,
-        timeout_seconds: int | None,
-    ) -> dict[str, str]:
-        cache_key = _fingerprint({"image": base_image, "architecture": architecture})
-        cache_path = self.root / "runtime_compatibility" / f"{cache_key}.json"
-        if cache_path.is_file():
-            try:
-                cached = json.loads(cache_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                cached = None
-            if isinstance(cached, dict) and all(isinstance(key, str) and isinstance(value, str) for key, value in cached.items()):
-                return cached
-        probe = (
-            "import json, pathlib, platform, sys, sysconfig; "
-            "os_release = {}; "
-            "path = pathlib.Path('/etc/os-release'); "
-            "lines = path.read_text(encoding='utf-8').splitlines() if path.is_file() else []; "
-            "os_release.update(line.split('=', 1) for line in lines if '=' in line); "
-            "print(json.dumps({"
-            "'architecture': platform.machine().lower(), "
-            "'implementation': platform.python_implementation().lower(), "
-            "'python_version': platform.python_version(), "
-            "'python_cache_tag': str(sys.implementation.cache_tag or ''), "
-            "'python_platform': sysconfig.get_platform(), "
-            "'libc': ':'.join(platform.libc_ver()), "
-            "'os_id': os_release.get('ID', '').strip('\\\"'), "
-            "'os_version_id': os_release.get('VERSION_ID', '').strip('\\\"')"
-            "}, sort_keys=True))"
-        )
-        try:
-            completed = subprocess.run(
-                [docker, "run", "--rm", base_image, "python", "-c", probe],
-                capture_output=True,
-                text=True,
-                timeout=timeout_seconds,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise DependencyPoolError("build_failed", "runtime compatibility probe timed out") from exc
-        if completed.returncode != 0:
-            detail = (completed.stderr or completed.stdout or "runtime compatibility probe failed").strip()
-            raise DependencyPoolError("build_failed", detail[-4000:])
-        try:
-            value = json.loads(completed.stdout)
-        except json.JSONDecodeError as exc:
-            raise DependencyPoolError("build_failed", "runtime compatibility probe returned invalid JSON") from exc
-        if not isinstance(value, dict) or not all(isinstance(key, str) and isinstance(item, str) for key, item in value.items()):
-            raise DependencyPoolError("build_failed", "runtime compatibility probe returned an invalid payload")
-        value["architecture"] = architecture or value.get("architecture", "")
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = cache_path.with_name(f".{cache_path.name}.{uuid4().hex}.tmp")
-        temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        temporary.replace(cache_path)
-        return value
-
     def references_available(self, payload: object) -> bool:
         if not isinstance(payload, dict) or payload.get("version") != DEPENDENCY_POOL_VERSION:
             return False
@@ -190,189 +62,9 @@ class DependencyPool:
                 if key == "python_entries" and not self._entry_exists(entry.get("artifact_path")):
                     return False
         npm_profile = payload.get("npm_profile")
-        return npm_profile is None or (isinstance(npm_profile, dict) and self._entry_exists(npm_profile.get("path")))
-
-    def _resolve_python(
-        self,
-        *,
-        docker: str,
-        base_image: str,
-        requirements: list[str],
-        timeout_seconds: int | None,
-    ) -> list[dict[str, str]]:
-        if not requirements:
-            return []
-        try:
-            requirements = normalize_python_requirements(requirements)
-        except PythonRequirementError as exc:
-            raise DependencyPoolError("unsupported", str(exc)) from exc
-        pip_cache = self.root / "python" / "download_cache"
-        pip_cache.mkdir(parents=True, exist_ok=True)
-        with self._staging_directory() as staging:
-            wheel_output = staging / "wheels"
-            wheel_output.mkdir()
-            wheelhouse = staging / "wheelhouse"
-            wheelhouse.mkdir()
-            self._materialize_python_wheelhouse(wheelhouse)
-            self._run(
-                [
-                    docker,
-                    "run",
-                    "--rm",
-                    "--network",
-                    "host",
-                    "-v",
-                    f"{staging}:/dependency_staging:rw",
-                    "-v",
-                    f"{pip_cache}:/root/.cache/pip:rw",
-                    base_image,
-                    "python",
-                    "-m",
-                    "pip",
-                    "wheel",
-                    "--disable-pip-version-check",
-                    "--prefer-binary",
-                    "--find-links",
-                    "/dependency_staging/wheelhouse",
-                    "--wheel-dir",
-                    "/dependency_staging/wheels",
-                    *requirements,
-                ],
-                timeout_seconds=timeout_seconds,
-                action="resolve and build Python dependency wheels",
-            )
-            wheels = sorted(path for path in wheel_output.iterdir() if path.is_file() and path.suffix == ".whl")
-            unsupported = sorted(path.name for path in wheel_output.iterdir() if path.is_file() and path.suffix != ".whl")
-            if unsupported:
-                raise DependencyPoolError(
-                    "build_failed",
-                    "Python dependency build returned non-wheel artifacts: " + ", ".join(unsupported),
-                )
-            if not wheels:
-                raise DependencyPoolError("build_failed", "Python dependency resolution returned no wheel artifacts")
-            return [self._store_wheel(wheel) for wheel in wheels]
-
-    def _resolve_system(
-        self,
-        *,
-        docker: str,
-        base_image: str,
-        packages: list[str],
-        timeout_seconds: int | None,
-    ) -> list[dict[str, str]]:
-        if not packages:
-            return []
-        _assert_installable_requirements(packages, ecosystem="system")
-        with self._cache_lock("system"):
-            return self._resolve_system_locked(
-                docker=docker,
-                base_image=base_image,
-                packages=packages,
-                timeout_seconds=timeout_seconds,
-            )
-
-    def _resolve_system_locked(
-        self,
-        *,
-        docker: str,
-        base_image: str,
-        packages: list[str],
-        timeout_seconds: int | None,
-    ) -> list[dict[str, str]]:
-        script = (
-            "set -eu\n"
-            "mkdir -p /var/cache/apt/archives/partial\n"
-            "apt-get update\n"
-            "apt-get install --download-only -y --no-install-recommends \"$@\"\n"
-            "find /var/cache/apt/archives -maxdepth 1 -type f -name '*.deb' -exec cp {} /dependency_staging/ \\;\n"
+        return npm_profile is None or (
+            isinstance(npm_profile, dict) and self._entry_exists(npm_profile.get("path"))
         )
-        archive_cache = self.root / "system" / "archive_cache"
-        archive_cache.mkdir(parents=True, exist_ok=True)
-        with self._staging_directory() as staging:
-            self._run(
-                [
-                    docker,
-                    "run",
-                    "--rm",
-                    "--network",
-                    "host",
-                    "-v",
-                    f"{staging}:/dependency_staging:rw",
-                    "-v",
-                    f"{archive_cache}:/var/cache/apt/archives:rw",
-                    base_image,
-                    "bash",
-                    "-c",
-                    script,
-                    "dependency-pool",
-                    *packages,
-                ],
-                timeout_seconds=timeout_seconds,
-                action="download system dependency artifacts",
-            )
-            archives = sorted(path for path in staging.iterdir() if path.is_file() and path.suffix == ".deb")
-            if not archives:
-                raise DependencyPoolError("build_failed", "system dependency resolution returned no Debian package artifacts")
-            return [self._store_file(archive, directory="system/debs") for archive in archives]
-
-    def _resolve_npm(
-        self,
-        *,
-        docker: str,
-        base_image: str,
-        requirements: list[str],
-        timeout_seconds: int | None,
-    ) -> dict[str, str] | None:
-        if not requirements:
-            return None
-        _assert_installable_requirements(requirements, ecosystem="npm")
-        npm_root = self.root / "npm"
-        cache_root = npm_root / "cache"
-        cache_root.mkdir(parents=True, exist_ok=True)
-        with self._staging_directory() as staging:
-            project = staging / "project"
-            project.mkdir()
-            (project / "package.json").write_text(
-                json.dumps({"private": True}, indent=2) + "\n",
-                encoding="utf-8",
-            )
-            self._run(
-                [
-                    docker,
-                    "run",
-                    "--rm",
-                    "--network",
-                    "host",
-                    "-v",
-                    f"{staging}:/dependency_staging:rw",
-                    "-v",
-                    f"{cache_root}:/dependency_pool/npm/cache:rw",
-                    base_image,
-                    "npm",
-                    "install",
-                    "--omit=dev",
-                    "--ignore-scripts",
-                    "--cache",
-                    "/dependency_pool/npm/cache",
-                    "--prefix",
-                    "/dependency_staging/project",
-                    *requirements,
-                ],
-                timeout_seconds=timeout_seconds,
-                action="resolve npm dependency artifacts",
-            )
-            lock_path = project / "package-lock.json"
-            node_modules = project / "node_modules"
-            if not lock_path.is_file() or not node_modules.is_dir():
-                raise DependencyPoolError("build_failed", "npm dependency resolution did not produce a package lock and node_modules")
-            profile_hash = _sha256_file(lock_path)
-            relative = PurePosixPath("npm") / "profiles" / profile_hash
-            target = self.root / relative
-            with self._exclusive_lock():
-                if not target.exists():
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    project.replace(target)
-            return {"path": relative.as_posix(), "sha256": profile_hash}
 
     def _store_wheel(self, wheel: Path) -> dict[str, str]:
         with self._exclusive_lock():
@@ -589,35 +281,20 @@ class DependencyPool:
     @contextmanager
     def _exclusive_lock(self) -> Iterator[None]:
         lock_path = self.root / ".pool.lock"
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with lock_path.open("a+") as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        with exclusive_file_lock(lock_path):
+            yield
 
     @contextmanager
     def _profile_lock(self, profile_key: str) -> Iterator[None]:
         lock_path = self.root / "profiles" / ".locks" / f"{profile_key}.lock"
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with lock_path.open("a+") as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        with exclusive_file_lock(lock_path):
+            yield
 
     @contextmanager
     def _cache_lock(self, ecosystem: str) -> Iterator[None]:
         lock_path = self.root / ".cache_locks" / f"{ecosystem}.lock"
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with lock_path.open("a+") as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        with exclusive_file_lock(lock_path):
+            yield
 
     @contextmanager
     def _staging_directory(self) -> Iterator[Path]:

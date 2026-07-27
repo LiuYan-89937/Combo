@@ -26,7 +26,7 @@ from agent_factory.context_system.token_counter import context_window_payload
 from agent_factory.model_pool.runtime_override import (
     RUNTIME_MAIN_MODEL_PROFILE_ID_KEY,
     RUNTIME_REASONING_INTENSITY_KEY,
-    effective_main_model_profile_id_from_user_config,
+    main_model_profile_id_from_user_config,
     runtime_reasoning_intensity_from_user_config,
 )
 from agent_factory.paths import factory_artifact_path, project_root
@@ -129,7 +129,7 @@ class CreateAgentRuntime:
             scope=attachment_scope,
         )
         user_input = attachment_result.message
-        runtime_main_model_profile_id = effective_main_model_profile_id_from_user_config(user_config)
+        runtime_main_model_profile_id = main_model_profile_id_from_user_config(user_config)
         runtime_reasoning_intensity = runtime_reasoning_intensity_from_user_config(user_config)
         return CreateAgentStreamRun(
             session_id=resolved_session_id,
@@ -962,12 +962,16 @@ def _is_model_cache_chunk(chunk: Any) -> bool:
 
 
 def _context_window_payload_from_model_cache(payload: dict[str, Any], *, node_id: str) -> dict[str, Any]:
+    from agent_factory.context_system.token_counter import model_context_limits
+
     provider_cache = payload.get("provider_cache") if isinstance(payload.get("provider_cache"), dict) else {}
+    limits = model_context_limits(model_role="main")
     return context_window_payload(
         node_id=node_id,
         token_count=_positive_int(provider_cache.get("input_tokens")),
         token_count_method="provider_usage.input_tokens",
-        compression_threshold_tokens=None,
+        compression_threshold_tokens=limits.compression_trigger_tokens,
+        context_window_tokens=limits.context_window_tokens,
         model_role="main",
         source="create_agent.model_cache_metrics",
     )

@@ -32,7 +32,7 @@ Factory 可以从自然语言需求制造新的 AgentPackage，也可以基于�
 
 ## Agent 架构图
 
-![FastAgentFactory Agent 系统架构](assets/diagrams/fastagentfactory-agent-architecture.png)
+![FastAgentFactory Agent 系统架构](assets/diagrams/fastagentfactory-agent-architecture-native.png)
 
 完整分层、组件职责和隔离边界见 [Agent 架构说明](AgentArchitecture.zh-CN.md)。
 
@@ -68,7 +68,7 @@ Factory 可以从自然语言需求制造新的 AgentPackage，也可以基于�
 
 ### 权限、隐私和可观测性
 
-- Agent 运行于逻辑隔离或独立 Docker Runtime。
+- Agent 统一运行于受宿主监督的 Native Runtime，并按包与会话隔离工作区、状态和依赖引用。
 - 文件系统限制在当前工作区边界内。
 - Resource 值加密存储并按 Package 注入。
 - Trace、工具调用、模型用量、任务状态和交付物可审计。
@@ -119,7 +119,7 @@ MTP 会同时改变两套实现的 Decode 调度，因此不把 MTP 自身的调
 - 普通性能测试记录 Prefill、Decode、MTP、显存、功耗和 KV 前缀复用。
 - 并发测试记录 QPS、聚合 TPS、错误率、TTFT P95 和请求延迟 P95。
 - 算子分析使用 rocprof 与 GGML 图 Trace 归因，不把 Profiler 时间冒充正常服务性能。
-- Agent Runtime 的容器、SQLite 连接、会话和工具输出采用明确隔离边界。
+- Agent Runtime 子进程、SQLite 连接、会话工作区和工具输出采用明确隔离边界。
 
 ## 开源组件、模型和数据说明
 

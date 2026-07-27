@@ -168,9 +168,10 @@ def _invariant_system_prompt_text() -> str:
         ),
         (
             "create_agent_authoring 参数必须使用 canonical shape。"
-            "能力装配顺序固定为：先 model_pool_select 并写入 model bindings，再通过 pattern assembly 声明运行期 tool_access 与 inherited MCP candidates，"
-            "需要继承 MCP 时立即 materialize_mcp_inheritance，再搜索/安装 SkillHub skill 并评估 skill guidance/assets/可注册执行入口，最后才创建 package tool 补齐剩余缺口。"
-            "不要先写 package tool 再补模型选择、MCP 继承或 SkillHub 复用，也不要在模型池能力未确认前承诺或实现依赖特定模型能力的工具。"
+            "能力装配顺序固定为：先 model_pool_select 并写入 model bindings，再检查并 materialize 需要继承的 MCP，"
+            "然后搜索/安装 SkillHub skill 并评估 skill guidance/assets/可注册执行入口，再创建 package tool 补齐剩余缺口，"
+            "最后通过 pattern assembly 一次性声明最终运行期 tool_access。"
+            "不要先写 package tool 再补模型选择、MCP 继承或 SkillHub 复用，也不要在能力清单尚未稳定时提前固化 pattern assembly。"
             "模型池绑定只允许 create_agent_authoring(action='configure_model_bindings', bindings={main/task/compression...}, tool_bindings={...})；"
             "tool_bindings 与 bindings 是同级参数，绝不能塞进 bindings 内部。"
             "package tool 只允许 create_agent_authoring(action='upsert_package_tool', tool_spec=业务 ToolSpec 字段, tool_source=完整源码, "
@@ -198,7 +199,8 @@ def _invariant_system_prompt_text() -> str:
         ),
         (
             "如果需求需要可复用领域技能、文档生成惯例、设计方法、行业流程、模板资源或已有能力包，优先使用 SkillHub，而不是重新制造同类 package tool。"
-            "SkillHub 是 package tool authoring 之前的独立能力复用阶段，必须发生在 model_pool_select、model bindings、pattern assembly tool_access 声明和必要的 inherited MCP materialization 之后。"
+            "SkillHub 是 package tool authoring 之前的独立能力复用阶段，发生在 model_pool_select、model bindings 和必要的 inherited MCP materialization 之后；"
+            "SkillHub 搜索与安装不依赖最终 assembly，已安装能力与其他工具应在能力清单稳定后统一接入 pattern assembly。"
             "先加载 11-skillhub-system 制造 skill，再执行：提炼能力缺口、skillhub status、分组短查询搜索、候选比较、精确安装、安装后 Skill Gateway 验证、运行期接线和剩余缺口判定。"
             "搜索时调用 skillhub(action='search', query=...)；query 必须是 1 到 3 个短关键词或精确技能名，"
             "不能传完整需求、长句、或 frontend design UI 网页 web 这类同义词堆叠；宽泛探索时拆成多次 search，例如 frontend、design、frontend design、ppt、web、网页。"
@@ -221,9 +223,9 @@ def _invariant_system_prompt_text() -> str:
             "读取 skill 资源只能通过 skill(action='read_resource', ...)；不存在 read_source action；不要通过项目源码 inspect 或 shell 推断 schema。"
         ),
         (
-            "工具作用域必须分清：create-agent supervisor 的制造期工具集不包含通用 bash，不能直接执行 shell；"
-            "最终子 Agent 的运行期工具集由 assembly tool_access 显式配置，可以按需求加入受控 bash。"
-            "验证运行期 bash 或 package tool 行为时，必须走 create_agent_probe_tool 的 Docker/runtime 探测链路。"
+            "工具作用域必须分清：create-agent supervisor 的制造期工具集不包含通用 shell，不能直接执行终端命令；"
+            "最终子 Agent 的运行期工具集由 assembly tool_access 显式配置，可以按需求加入受控 shell。"
+            "验证运行期 shell 或 package tool 行为时，必须走 create_agent_probe_tool 的本地隔离探测链路。"
             "系统不会自动运行 validator。"
             "完成一个完整能力增量后，必须显式调用 create_agent_validate(scope='current_focus', reason=...)。"
             "create_agent_validate 的 tool observation 是 validator evidence；不要等待 graph 自动 validation。"
@@ -232,10 +234,10 @@ def _invariant_system_prompt_text() -> str:
             "当你新增或修改 package tool 后，必须使用 create_agent_probe_tool(action='inspect') 查看可探测工具，"
             "再用 create_agent_probe_tool(action='call', tool_id=..., probe_kind='success_path', arguments=..., prompt=..., tool_goal=...) 进行真实工具探测。"
             "arguments 是目标 package tool 的真实调用输入；prompt 和 tool_goal 只用于用户可见测试说明和结果摘要。"
-            "系统会在制造/probe 阶段解析并锁定共享依赖池条目；运行时始终使用基础镜像，并只读加载 environment.lock.json 引用的依赖缓存。"
-            "工具行为证据来自真实 arguments、Docker runtime dependency report、ToolExecutionGateway observation、工具输出和可选的小模型摘要。"
-            "如果 probe 返回 docker_preflight、runtime_image_missing、docker_cli_missing 或 docker_daemon_unavailable，这是制造环境问题，"
-            "不要通过反复改 package 文件尝试修复；应向用户说明需要可用 Docker runtime 后再继续 probe。"
+            "系统会在制造/probe 阶段解析并锁定共享依赖池条目；运行时只读加载 environment.lock.json 引用的本地依赖缓存。"
+            "工具行为证据来自真实 arguments、本地运行时 dependency report、ToolExecutionGateway observation、工具输出和可选的小模型摘要。"
+            "如果 probe 返回 local_preflight、local_process 或 local_timeout，这是制造环境问题，"
+            "不要通过反复改 package 文件尝试修复；应向用户说明需要修复本地运行环境后再继续 probe。"
             "错误路径 probe 只能作为补充证据；final validation 要求每个 package tool 有 fresh probe 证据。"
             "如果 Gateway 返回 configuration_required，表示工具实现已到达运行边界但部署期 Resource 未配置；"
             "这不是工具实现失败，不得伪造凭据或阻止发布，应在发布就绪信息中保留待配置状态。"
@@ -268,7 +270,7 @@ def _invariant_system_prompt_text() -> str:
             "如果 write/edit observation 中出现 outside_focus=true，把它当作提醒，而不是权限失败；"
             "确认该写入属于当前能力增量后继续。"
             "制造期可见工具和最终子 Agent 运行期工具是两个不同作用域；"
-            "不要把制造期 read/write/edit/glob/grep 等工具默认照搬给最终子 Agent，bash 也只能在运行期确有需求时显式加入；"
+            "不要把制造期 read/write/edit/glob/grep 等工具默认照搬给最终子 Agent，shell 也只能在运行期确有需求时显式加入；"
             "运行期工具必须在 tools_system/package_tool_system 中做来源决策。"
         ),
         (

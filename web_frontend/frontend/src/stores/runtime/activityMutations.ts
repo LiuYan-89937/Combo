@@ -18,17 +18,25 @@ type ActivityMutationState = Pick<
 
 export function applyContextActivityEvent(state: ActivityMutationState, event: FactoryFrontendEvent) {
   const type = event.event_type
-  if (type === 'context_prepare_started' || type.includes('compression_started')) {
+  if (type === 'context_prepare_started') {
+    state.contextActivity = { status: 'idle' }
+  } else if (type === 'context_compression_started') {
     state.contextActivity.status = 'running'
-  } else if (type.includes('completed') || type === 'context_window_updated') {
+    state.contextActivity.eventType = type
+    state.contextActivity.payload = event.payload
+  } else if (type === 'context_compression_completed') {
     state.contextActivity.status = 'completed'
-  } else if (type.includes('failed')) {
+    state.contextActivity.eventType = type
+    state.contextActivity.payload = event.payload
+  } else if (type === 'context_compression_failed') {
     state.contextActivity.status = 'failed'
-  } else if (type.includes('skipped')) {
+    state.contextActivity.eventType = type
+    state.contextActivity.payload = event.payload
+  } else if (type === 'context_compression_skipped') {
     state.contextActivity.status = 'skipped'
+    state.contextActivity.eventType = type
+    state.contextActivity.payload = event.payload
   }
-  state.contextActivity.eventType = type
-  state.contextActivity.payload = event.payload
   if (type === 'context_window_updated') {
     state.contextWindow = contextWindowView(event)
   }

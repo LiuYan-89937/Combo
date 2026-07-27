@@ -29,7 +29,6 @@ from agent_factory.factory_graph.frontend_bridge.runtime_events import (
     RUN_TERMINAL_EVENT_TYPES,
     runtime_stream_status,
 )
-from agent_factory.factory_graph.session import FactorySessionManager
 
 
 SHARE_FILES_DIR = "share_files"
@@ -171,7 +170,6 @@ class CollaborationOrchestrator:
                 session_id=str(session.get("main_agent_package_session_id") or "").strip() or None,
             )
         package_id = str(session.get("main_agent_package_id") or SYSTEM_CHAT_PACKAGE_ID).strip() or SYSTEM_CHAT_PACKAGE_ID
-        factory_session_id = str(session.get("main_factory_session_id") or "").strip()
         package_session_id = self._main_agent_package_session_id(session, package_id=package_id)
         request_id = f"collab-main-{collaboration_id[:8]}-{uuid4().hex[:8]}"
         self.store.record_message(
@@ -217,15 +215,6 @@ class CollaborationOrchestrator:
         main_session_id = str((run.session or {}).get("session_id") or "").strip()
         if main_session_id and main_session_id != str(session.get("main_agent_package_session_id") or ""):
             self.store.update_session(collaboration_id, {"main_agent_package_session_id": main_session_id})
-        if main_session_id and package_id == SYSTEM_CHAT_PACKAGE_ID and factory_session_id:
-            initial_factory_record = _sync_factory_chat_session_from_agent_session(
-                factory_session_id=factory_session_id,
-                request_id=request_id,
-                user_input=user_message,
-                agent_session=run.session or {},
-            )
-            self.runtime.emit_factory_session_updated(session_record=initial_factory_record, mode="chat")
-
         output = VisibleAssistantOutputAccumulator()
         status = "failed"
         message = ""
@@ -237,7 +226,6 @@ class CollaborationOrchestrator:
                 _main_agent_frontend_event(
                     item,
                     package_id=package_id,
-                    factory_session_id=factory_session_id,
                     collaboration_id=collaboration_id,
                 )
             )
@@ -261,14 +249,6 @@ class CollaborationOrchestrator:
                 status=status,
                 tool_activities=output.tool_activities,
             )
-            if package_id == SYSTEM_CHAT_PACKAGE_ID and factory_session_id:
-                factory_record = _sync_factory_chat_session_from_agent_session(
-                    factory_session_id=factory_session_id,
-                    request_id=request_id,
-                    user_input=user_message,
-                    agent_session=self.runtime.load_session(package_id, main_session_id),
-                )
-                self.runtime.emit_factory_session_updated(session_record=factory_record, mode="chat")
         if status in SUCCESSFUL_MAIN_AGENT_CONTINUATION_STATUSES:
             summary = (
                 "主 Agent 已进入子任务等待状态。"
@@ -308,16 +288,6 @@ class CollaborationOrchestrator:
     def main_agent_busy_reason(self, collaboration_id: str) -> str | None:
         session = self.store.get_session(collaboration_id)
         package_id = str(session.get("main_agent_package_id") or SYSTEM_CHAT_PACKAGE_ID).strip() or SYSTEM_CHAT_PACKAGE_ID
-        factory_session_id = str(session.get("main_factory_session_id") or "").strip()
-        if package_id == SYSTEM_CHAT_PACKAGE_ID and factory_session_id:
-            try:
-                factory_record = FactorySessionManager.from_env().load(factory_session_id)
-            except Exception:
-                factory_record = None
-            if factory_record is not None:
-                factory_status = _latest_turn_status(factory_record.chat_turns)
-                if factory_status in ACTIVE_MAIN_AGENT_TURN_STATUSES:
-                    return f"factory chat turn is {factory_status}"
         package_session_id = self._main_agent_package_session_id(session, package_id=package_id)
         if not package_session_id:
             return None
@@ -331,23 +301,7 @@ class CollaborationOrchestrator:
         return None
 
     def _main_agent_package_session_id(self, session: dict[str, Any], *, package_id: str) -> str | None:
-        if package_id != SYSTEM_CHAT_PACKAGE_ID:
-            return str(session.get("main_agent_package_session_id") or "").strip() or None
-        factory_session_id = str(session.get("main_factory_session_id") or "").strip()
-        if factory_session_id:
-            try:
-                record = FactorySessionManager.from_env().load(factory_session_id)
-                linked_session_id = str(record.chat_agent_package_session_id or "").strip()
-                if linked_session_id:
-                    stored_session_id = str(session.get("main_agent_package_session_id") or "").strip()
-                    if linked_session_id != stored_session_id:
-                        self.store.update_session(
-                            str(session.get("collaboration_id") or ""),
-                            {"main_agent_package_session_id": linked_session_id},
-                        )
-                    return linked_session_id
-            except Exception:
-                pass
+        del package_id
         return str(session.get("main_agent_package_session_id") or "").strip() or None
 
     def start_task(self, collaboration_id: str, task_id: str) -> CollaborationRunTaskResult:
@@ -1028,34 +982,10 @@ def _main_agent_continuation_message(results: list[CollaborationRunTaskResult]) 
     return "\n".join(lines)
 
 
-def _sync_factory_chat_session_from_agent_session(
-    *,
-    factory_session_id: str,
-    request_id: str,
-    user_input: str,
-    agent_session: dict[str, Any],
-) -> Any:
-    manager = FactorySessionManager.from_env()
-    record = manager.remember_first_user_input(factory_session_id, user_input)
-    agent_session_id = str(agent_session.get("session_id") or "").strip()
-    if agent_session_id and record.chat_agent_package_session_id != agent_session_id:
-        record.chat_agent_package_session_id = agent_session_id
-        manager.save(record)
-    turns = agent_session.get("turns")
-    if isinstance(turns, list):
-        return manager.replace_turns_from_agent_session(
-            factory_session_id,
-            "chat",
-            [turn for turn in turns if isinstance(turn, dict)],
-        )
-    return manager.start_turn(factory_session_id, "chat", request_id=request_id, user_input=user_input)
-
-
 def _main_agent_frontend_event(
     item: FactoryFrontendEvent,
     *,
     package_id: str,
-    factory_session_id: str | None,
     collaboration_id: str,
 ) -> FactoryFrontendEvent:
     payload = item.payload if isinstance(item.payload, dict) else {}
@@ -1066,10 +996,6 @@ def _main_agent_frontend_event(
             "collaboration_id": collaboration_id,
         }
     }
-    if package_id == SYSTEM_CHAT_PACKAGE_ID:
-        updates["mode"] = "chat"
-        if factory_session_id:
-            updates["session_id"] = factory_session_id
     return item.model_copy(update=updates)
 
 

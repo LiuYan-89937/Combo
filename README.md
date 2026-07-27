@@ -4,7 +4,7 @@
 
 FastAgentFactory is a fully local, manufacturable, and evolvable personal AI assistant platform. It unifies long-running conversations, cross-session memory, local knowledge bases, document workflows, web search, scheduling, email, image generation, and multi-agent collaboration in an auditable AgentPackage runtime. Users can manufacture, validate, publish, run, and evolve specialized agents from natural-language requirements.
 
-The platform supports both local and split-host deployment. On a Linux workstation with an AMD Radeon GPU, the Web application and ROCm inference node can run on the same host. When the GPU is remote, the control host connects to loopback-only inference services through SSH tunnels. Chat inference uses GGUF models with llama.cpp on ROCm, embeddings use SentenceTransformers with PyTorch HIP, and AgentPackage, MCP, and sub-agent workloads run in isolated Docker environments.
+The platform supports both local and split-host deployment. On a Linux workstation with an AMD Radeon GPU, the Web application and ROCm inference node can run on the same host. When the GPU is remote, the control host connects to loopback-only inference services through SSH tunnels. Chat inference uses GGUF models with llama.cpp on ROCm, embeddings use SentenceTransformers with PyTorch HIP, and AgentPackage sessions run as supervised native subprocesses with isolated workspaces and shared immutable dependency pools.
 
 ![FastAgentFactory project poster](supplementary-materials/poster/fastagentfactory-project-poster.png)
 
@@ -48,7 +48,7 @@ Control host
 │ FastAgentFactory Backend :8000                             │
 │   ├─ AgentPackage / RuntimeKernel / RAG / Memory / Tools    │
 │   ├─ Model Pool / Benchmark / Trace / Workspace            │
-│   └─ Docker Agent Runtime                                  │
+│   └─ Native Agent Runtime / isolated session workspaces    │
 │                                                            │
 │ Direct loopback or SSH tunnels                             │
 │   18003 -> inference :8003  Chat API                       │
@@ -92,7 +92,6 @@ The default deployment activates FLUX together with Chat and Embedding, waits fo
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/)
 - Node.js 18+ and npm
-- Docker Engine or Docker Desktop
 
 ### AMD ROCm Inference Host
 
@@ -142,7 +141,7 @@ Override runtime or model directories in `.env` only when the defaults in `deplo
 ./deploy.sh up
 ```
 
-The command validates the target, prepares the ROCm build environment, synchronizes the bundled native inference sources, builds Official and AMD llama.cpp implementations, downloads and validates configured models, creates model profiles, starts the inference services, prepares local Python/frontend/Docker dependencies, and launches the Web application.
+The command validates the target, prepares the ROCm build environment, synchronizes the bundled native inference sources, builds Official and AMD llama.cpp implementations, downloads and validates configured models, creates model profiles, starts the inference services, prepares local Python/frontend/native runtime dependencies, and launches the Web application.
 
 Open:
 
@@ -162,7 +161,7 @@ After a successful bootstrap, the regular local startup path is:
 ./start.sh
 ```
 
-`start.sh` reconnects the configured endpoints, validates dependencies, checks the Docker runtime, and starts the frontend and backend. It does not rebuild llama.cpp or redownload models.
+`start.sh` reconnects the configured endpoints, validates dependencies, prepares the native Agent runtime, and starts the frontend and backend. It does not rebuild llama.cpp or redownload models.
 
 ## Deployment Commands
 
@@ -255,7 +254,7 @@ Important runtime boundaries:
 
 - Model services bind to loopback addresses.
 - Resource secrets are encrypted using `AGENTFACTORY_RESOURCE_MASTER_KEY`.
-- Docker isolates AgentPackage, MCP, and sub-agent execution from the host.
+- AgentPackage sessions use supervised native subprocesses, per-session workspaces, and content-addressed dependency pools. This is logical runtime isolation, not a kernel security sandbox.
 - Model files and benchmark runtime data remain outside the source tree.
 - Never commit SSH keys, email authorization codes, API keys, or decrypted resources.
 

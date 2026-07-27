@@ -6,10 +6,12 @@
         :key="`${reference.source_kind}:${reference.name}:${index}`"
         class="attachment-item context-reference-item"
       >
-        <n-icon size="18">
-          <Document v-if="reference.source_kind === 'workspace_file'" />
-          <Text v-else />
-        </n-icon>
+        <ResourceIcon
+          :name="reference.name"
+          :mime-type="reference.mime_type"
+          :kind="reference.source_kind === 'workspace_file' ? 'file' : 'text'"
+          :size="18"
+        />
         <span class="attachment-name">{{ reference.name }}</span>
         <n-text depth="3" class="reference-kind">{{ referenceKindLabel(reference.source_kind) }}</n-text>
         <n-button text size="small" @click="referenceStore.remove(index, normalizedReferenceScope)">
@@ -25,12 +27,12 @@
         :key="index"
         class="attachment-item"
       >
-        <n-icon size="18">
-          <ImageOutline v-if="isImageAttachment(attachment)" />
-          <Document v-else-if="attachment.kind === 'file'" />
-          <Link v-else-if="attachment.kind === 'url'" />
-          <Text v-else />
-        </n-icon>
+        <ResourceIcon
+          :name="attachment.name"
+          :mime-type="attachment.mime_type"
+          :kind="attachment.kind"
+          :size="18"
+        />
         <span class="attachment-name">{{ attachment.name }}</span>
         <n-button text size="small" @click="removeAttachment(index)">
           <n-icon><Close /></n-icon>
@@ -86,7 +88,9 @@
           size="small"
           :value="selectedModelProfileId || ''"
           :options="modelOptions"
-          :placeholder="t('chat.modelSelectorPlaceholder')"
+          :placeholder="modelOptions.length > 0
+            ? t('chat.modelSelectorPlaceholder')
+            : t('chat.modelPoolEmptyPlaceholder')"
           :disabled="disabled || modelOptions.length <= 1"
           filterable
           @update:value="handleModelSelect"
@@ -155,21 +159,23 @@
         </n-text>
 
         <n-button
-          v-if="!isRunning"
           type="primary"
           class="send-button"
           :disabled="!canSend"
           :aria-label="t('common.send')"
           @click="handleSend"
         >
-          {{ t('common.send') }}
+          {{ isRunning ? t('chat.queueSend') : t('common.send') }}
+          <span v-if="queuedCount > 0" class="queued-count">
+            {{ t('chat.queuedCount', { count: queuedCount }) }}
+          </span>
           <template #icon>
             <n-icon><Send /></n-icon>
           </template>
         </n-button>
 
         <n-button
-          v-else
+          v-if="isRunning"
           type="error"
           class="cancel-button"
           :aria-label="t('common.cancel')"
@@ -190,7 +196,8 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted } from 'vue'
 import { NInput, NButton, NIcon, NText, NPopover, NRadioButton, NRadioGroup, NSelect, useMessage } from 'naive-ui'
-import { AttachOutline, BulbOutline, CaretDown, Document, Link, Text, Close, CodeSlash, Send, Stop, ImageOutline } from '@/components/icons'
+import { AttachOutline, BulbOutline, CaretDown, Close, CodeSlash, Send, Stop } from '@/components/icons'
+import ResourceIcon from '@/components/common/ResourceIcon.vue'
 import { useI18n } from '@/composables/useI18n'
 import { useFileCapabilities } from '@/composables/useFileCapabilities'
 import { MAX_RUNTIME_ATTACHMENTS, extensionFromMimeType, pastedImageFiles, runtimeFileAttachmentFromFile } from '@/utils/attachments'
@@ -212,6 +219,7 @@ const props = withDefaults(
     placeholder?: string
     disabled?: boolean
     isRunning?: boolean
+    queuedCount?: number
     rows?: number
     maxRows?: number
     attachmentsEnabled?: boolean
@@ -226,6 +234,7 @@ const props = withDefaults(
     placeholder: '',
     disabled: false,
     isRunning: false,
+    queuedCount: 0,
     rows: 3,
     maxRows: 10,
     attachmentsEnabled: true,
@@ -389,10 +398,6 @@ function showAttachmentLimitReached() {
 
 function showAttachmentLimitPartial(accepted: number) {
   messageApi.warning(t('attachments.limitPartial', { accepted, max: maxAttachments }))
-}
-
-function isImageAttachment(attachment: RuntimeAttachmentInput) {
-  return attachment.kind === 'file' && attachment.mime_type?.startsWith('image/')
 }
 
 function pastedImageName(file: File, index: number) {
@@ -614,6 +619,12 @@ defineExpose({
 .cancel-button {
   border-radius: var(--app-radius-md);
   transition: transform var(--app-transition-fast);
+}
+
+.queued-count {
+  margin-left: var(--app-space-xs);
+  font-size: var(--app-font-xs);
+  opacity: 0.78;
 }
 
 .send-button:not(:disabled):active,

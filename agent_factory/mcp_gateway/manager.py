@@ -27,8 +27,8 @@ class MCPGatewayHandle:
         return self.endpoint.host_url
 
     @property
-    def docker_url(self) -> str:
-        return self.endpoint.docker_url
+    def local_url(self) -> str:
+        return self.endpoint.local_url
 
     def stop(self) -> None:
         self.server.stop()
@@ -80,7 +80,7 @@ def build_gateway_clients(config: MCPServersConfig, gateway_url: str) -> dict[st
     }
 
 
-def configured_container_gateway_url() -> str | None:
+def configured_local_gateway_url() -> str | None:
     value = os.getenv(MCP_GATEWAY_URL_ENV)
     return value.strip() if value and value.strip() else None
 

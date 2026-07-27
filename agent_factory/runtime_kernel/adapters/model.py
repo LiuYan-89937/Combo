@@ -7,15 +7,7 @@ from typing import Any, Literal, Protocol
 from langchain_core.messages import BaseMessage
 from langchain_core.tools import BaseTool
 
-from agent_factory.models import (
-    ChatModelSettings,
-    get_compression_model,
-    get_compression_model_settings,
-    get_main_model,
-    get_main_model_settings,
-    get_task_model,
-    get_task_model_settings,
-)
+from agent_factory.models import ChatModelSettings
 from agent_factory.models.content import content_to_text, strip_internal_snapshot_blocks
 from agent_factory.models.reasoning import reasoning_content_from_message
 from agent_factory.model_pool.runtime_override import (
@@ -85,10 +77,12 @@ class LangChainModelServiceAdapter:
         role: ModelRole = "main",
         model: Any | None = None,
         settings: ChatModelSettings | None = None,
+        require_runtime_profile: bool = False,
     ) -> None:
         self.model_role = role
         self._model = model
         self._settings = settings
+        self._require_runtime_profile = require_runtime_profile
 
     def generate(
         self,
@@ -135,22 +129,22 @@ class LangChainModelServiceAdapter:
             override = resolve_runtime_main_chat_model_from_state(state)
             if override is not None:
                 return override.model, override.settings
+        if self._require_runtime_profile:
+            raise RuntimeError("runtime main model profile is not selected")
         if self._model is not None and self._settings is not None:
             return self._model, self._settings
         return _configured_model_for_role(self.model_role)
 
 
 def _configured_model_for_role(role: ModelRole) -> tuple[Any, ChatModelSettings]:
-    if role == "main":
-        return get_main_model(), get_main_model_settings()
-    if role == "task":
-        task_model = get_task_model()
-        if task_model is not None:
-            return task_model, get_task_model_settings()
-        return get_main_model(), get_main_model_settings()
-    if role == "compression":
-        return get_compression_model(), get_compression_model_settings()
-    raise ValueError(f"unsupported model role: {role}")
+    from agent_factory.model_pool.resolver import resolve_available_chat_model
+
+    resolved = resolve_available_chat_model(role)
+    if resolved is None and role == "task":
+        resolved = resolve_available_chat_model("main")
+    if resolved is None:
+        raise RuntimeError(f"{role} model is not configured in the model pool")
+    return resolved.model, resolved.settings
 
 
 def _bind_tools(model: Any, tools: list[BaseTool]) -> Any:

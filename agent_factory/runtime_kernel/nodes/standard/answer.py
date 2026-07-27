@@ -109,21 +109,6 @@ class CognitiveAnswerNode:
         route_decision = result.route_decision or "model.ready_to_answer"
         if _plan_and_execute_planner_waiting_for_input(context=context, state=state):
             route_decision = "subgraph.need_more_input"
-        execution_patch: dict[str, Any] = {
-            "current_node": context.node_id,
-            "route_decision": route_decision,
-        }
-        if state.execution.pending_wait is not None:
-            wait = state.execution.pending_wait
-            execution_patch.update(
-                {
-                    "route_decision": "execution.finished",
-                    "pending_wait": None,
-                    "finished": True,
-                    "finish_status": wait.status,
-                    "finish_message": wait.message or wait.reason,
-                }
-            )
         return {
             "messages": [response_message],
             **_context_token_budget_patch(result.metadata, context.node_id),
@@ -132,7 +117,10 @@ class CognitiveAnswerNode:
                 "reasoning_content": reasoning_content,
                 "final_answer": final_answer,
             },
-            "execution": execution_patch,
+            "execution": {
+                "current_node": context.node_id,
+                "route_decision": route_decision,
+            },
         }
 
 

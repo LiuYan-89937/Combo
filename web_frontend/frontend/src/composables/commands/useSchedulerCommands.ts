@@ -1,9 +1,12 @@
 import { schedulerApi } from '@/api/scheduler'
+import { runtimeExecutionConfig } from '@/api/commands'
 import type { SchedulerJobInput } from '@/api/resourceTypes'
+import { useRuntimePreferencesStore } from '@/stores/runtimePreferences'
 import { useCommandTransport } from './transport'
 
 export function useSchedulerCommands() {
   const transport = useCommandTransport()
+  const runtimePreferences = useRuntimePreferencesStore()
 
   const refreshSchedulerOptions = (packageId?: string) => {
     return transport.applyEventRequest(schedulerApi.options(packageId))
@@ -14,7 +17,16 @@ export function useSchedulerCommands() {
   }
 
   const createSchedulerJob = (job: SchedulerJobInput, packageId?: string) => {
-    return transport.applyEventRequest(schedulerApi.createJob(job, packageId))
+    const runtimeConfig = runtimeExecutionConfig({
+      mainModelProfileId: runtimePreferences.mainModelProfileId,
+      reasoningIntensity: runtimePreferences.reasoningIntensity,
+      requestTimeoutSeconds: runtimePreferences.requestTimeoutSeconds,
+      maxRetries: runtimePreferences.maxRetries,
+    })
+    return transport.applyEventRequest(schedulerApi.createJob({
+      ...job,
+      ...(runtimeConfig ? { runtime_config: runtimeConfig } : {}),
+    }, packageId))
   }
 
   const pauseJob = (jobId: string, packageId?: string) => {

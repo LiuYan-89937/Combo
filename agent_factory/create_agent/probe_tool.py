@@ -18,7 +18,7 @@ from agent_factory.environment_system import EnvironmentResolutionError, Environ
 from agent_factory.create_agent.validation_state import package_digest, package_fingerprint, package_tool_digest
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.factory_graph.frontend_bridge.agent_package_paths import manufacturing_probe_runtime_workspace
-from agent_factory.factory_graph.frontend_bridge.agent_runtime_launcher import AgentRuntimeLaunchError, DockerAgentRuntimeLauncher
+from agent_factory.native_runtime import AgentRuntimeLaunchError, NativeAgentRuntimeLauncher
 from agent_factory.models import get_task_model
 from agent_factory.resource_system import ResourceStore, ResourceStoreError
 from agent_factory.runtime_contracts import AgentPackageLoader, ResourcesContract
@@ -49,7 +49,7 @@ def build_create_agent_probe_tool_spec() -> ToolSpec:
         id=CREATE_AGENT_PROBE_TOOL_ID,
         description=(
             "Inspect package-owned tools generated in this create-agent workspace, then probe one generated tool by "
-            "executing it inside the Docker runtime image through ToolExecutionGateway. Calls require explicit "
+            "executing it in the local isolated runtime through ToolExecutionGateway. Calls require explicit "
             "arguments; prompt is user-facing context only. Final validation requires fresh probe evidence; "
             "a resource_required observation is recorded as configuration_required and does not classify the "
             "tool implementation as failed."
@@ -84,7 +84,7 @@ def build_create_agent_probe_tool_spec() -> ToolSpec:
                 "timeout_seconds": {
                     "type": "integer",
                     "minimum": 1,
-                    "description": "Total Docker probe deadline in seconds. Estimate from dependency size, network conditions, and expected tool execution time.",
+                    "description": "Total local runtime probe deadline in seconds. Estimate from dependency size, network conditions, and expected tool execution time.",
                 },
             },
             "allOf": [
@@ -341,7 +341,7 @@ def _run_direct_probe(
             "errors": errors,
         }
     try:
-        docker_result = _run_docker_probe(
+        local_result = _run_local_probe(
             workspace=workspace,
             spec=spec,
             arguments=resolved_arguments,
@@ -356,32 +356,32 @@ def _run_direct_probe(
             "status": "failed",
             "observation": {},
             "events": [],
-            "errors": [*errors, f"docker package tool probe failed before execution: {type(exc).__name__}: {exc}"],
+            "errors": [*errors, f"local package tool probe failed before execution: {type(exc).__name__}: {exc}"],
         }
-    observation_payload = docker_result.get("observation") if isinstance(docker_result.get("observation"), dict) else {}
-    docker_errors = [str(item) for item in docker_result.get("errors", []) if item]
-    dependency_report = docker_result.get("dependency_report") if isinstance(docker_result.get("dependency_report"), dict) else {}
+    observation_payload = local_result.get("observation") if isinstance(local_result.get("observation"), dict) else {}
+    local_errors = [str(item) for item in local_result.get("errors", []) if item]
+    dependency_report = local_result.get("dependency_report") if isinstance(local_result.get("dependency_report"), dict) else {}
     events.append(
         {
             "event_type": "tool_completed" if observation_payload.get("status") == "completed" else "tool_failed",
             "tool_id": spec.id,
             "arguments": resolved_arguments,
-            "runtime": "docker",
-            "runtime_paths": _json_preview(docker_result.get("runtime_paths", {}), limit=2000),
+            "runtime": "local",
+            "runtime_paths": _json_preview(local_result.get("runtime_paths", {}), limit=2000),
             "dependency_report": _json_preview(dependency_report, limit=4000),
             "observation": _json_preview(observation_payload, limit=8000),
-            "captured_stdout": _one_line(str(docker_result.get("captured_stdout") or ""), 1000),
-            "captured_stderr": _one_line(str(docker_result.get("captured_stderr") or ""), 1000),
+            "captured_stdout": _one_line(str(local_result.get("captured_stdout") or ""), 1000),
+            "captured_stderr": _one_line(str(local_result.get("captured_stderr") or ""), 1000),
         }
     )
     status = str(observation_payload.get("status") or "").strip()
     message = str(observation_payload.get("message") or "").strip()
     _emit_probe_progress(
-        f"Docker 工具 observation：{spec.id} {status or docker_result.get('status') or '-'}" + (f" - {_one_line(message, 220)}" if message else ""),
+        f"本地隔离工具 observation：{spec.id} {status or local_result.get('status') or '-'}" + (f" - {_one_line(message, 220)}" if message else ""),
         {
             "tool_id": spec.id,
             "status": status,
-            "docker_status": docker_result.get("status"),
+            "local_status": local_result.get("status"),
             "dependency_status": dependency_report.get("status"),
         },
     )
@@ -390,20 +390,20 @@ def _run_direct_probe(
         "tool_goal": tool_goal,
         "requested_probe_kind": requested_probe_kind if requested_probe_kind in {"success_path", "error_path"} else "auto",
         "arguments": resolved_arguments,
-        "status": "completed" if observation_payload.get("status") == "completed" and not errors and not docker_errors else "failed",
+        "status": "completed" if observation_payload.get("status") == "completed" and not errors and not local_errors else "failed",
         "observation": observation_payload,
         "dependency_report": dependency_report,
-        "runtime_paths": docker_result.get("runtime_paths") if isinstance(docker_result.get("runtime_paths"), dict) else {},
-        "infrastructure_error": docker_result.get("infrastructure_error") if isinstance(docker_result.get("infrastructure_error"), dict) else {},
-        "phase": str(docker_result.get("phase") or ""),
-        "captured_stdout": str(docker_result.get("captured_stdout") or ""),
-        "captured_stderr": str(docker_result.get("captured_stderr") or ""),
+        "runtime_paths": local_result.get("runtime_paths") if isinstance(local_result.get("runtime_paths"), dict) else {},
+        "infrastructure_error": local_result.get("infrastructure_error") if isinstance(local_result.get("infrastructure_error"), dict) else {},
+        "phase": str(local_result.get("phase") or ""),
+        "captured_stdout": str(local_result.get("captured_stdout") or ""),
+        "captured_stderr": str(local_result.get("captured_stderr") or ""),
         "events": _json_preview(events, limit=10000),
-        "errors": [*errors, *docker_errors],
+        "errors": [*errors, *local_errors],
     }
 
 
-def _run_docker_probe(
+def _run_local_probe(
     *,
     workspace: CreateAgentWorkspace,
     spec: ToolSpec,
@@ -430,7 +430,7 @@ def _run_docker_probe(
     workdir_root = runtime_workspace.workdir
     extension_root = runtime_workspace.extensions
     try:
-        plan = DockerAgentRuntimeLauncher().prepare(
+        plan = NativeAgentRuntimeLauncher().prepare(
             package=package,
             runtime_root=runtime_root,
             artifacts_root=artifacts_root,
@@ -441,7 +441,7 @@ def _run_docker_probe(
     except AgentRuntimeLaunchError as exc:
         return {
             "status": "failed",
-            "phase": "docker_preflight",
+            "phase": "local_preflight",
             "observation": {},
             "errors": [str(exc)],
             "infrastructure_error": exc.payload,
@@ -449,7 +449,7 @@ def _run_docker_probe(
             "captured_stderr": "",
             "dependency_report": {},
         }
-    command = plan.command_for_python_module("agent_factory.create_agent.docker_probe_runner")
+    command = plan.command_for_python_module("agent_factory.create_agent.local_probe_runner")
     request = json.dumps(
         {
             "tool_id": spec.id,
@@ -459,8 +459,8 @@ def _run_docker_probe(
         ensure_ascii=False,
     )
     _emit_probe_progress(
-        f"Docker probe 启动：{spec.id} image={plan.image}",
-        {"tool_id": spec.id, "image": plan.image, "network": plan.network},
+        f"本地隔离探测启动：{spec.id}",
+        {"tool_id": spec.id, "runtime": "local"},
     )
     try:
         completed = subprocess.run(
@@ -474,14 +474,14 @@ def _run_docker_probe(
     except subprocess.TimeoutExpired as exc:
         return {
             "status": "failed",
-            "phase": "docker_timeout",
+            "phase": "local_timeout",
             "observation": {},
-            "errors": [f"docker probe timed out after {timeout_seconds:g}s"],
+            "errors": [f"local probe timed out after {timeout_seconds:g}s"],
             "captured_stdout": exc.stdout or "",
             "captured_stderr": exc.stderr or "",
             "dependency_report": {},
         }
-    payload = _parse_docker_probe_output(
+    payload = _parse_local_probe_output(
         stdout=completed.stdout,
         stderr=completed.stderr,
         returncode=completed.returncode,
@@ -493,7 +493,7 @@ def _run_docker_probe(
         "extension_root": str(extension_root),
     }
     if completed.returncode != 0 and not payload.get("errors"):
-        payload["errors"] = [f"docker probe exited with code {completed.returncode}"]
+        payload["errors"] = [f"local probe exited with code {completed.returncode}"]
     return payload
 
 
@@ -519,7 +519,7 @@ def _configured_probe_resources(workspace: CreateAgentWorkspace, spec: ToolSpec)
     return values
 
 
-def _parse_docker_probe_output(*, stdout: str, stderr: str, returncode: int) -> dict[str, Any]:
+def _parse_local_probe_output(*, stdout: str, stderr: str, returncode: int) -> dict[str, Any]:
     lines = [line.strip() for line in str(stdout or "").splitlines() if line.strip()]
     for line in reversed(lines):
         try:
@@ -532,12 +532,12 @@ def _parse_docker_probe_output(*, stdout: str, stderr: str, returncode: int) -> 
             return payload
     stderr_text = str(stderr or "").strip()
     stdout_text = str(stdout or "").strip()
-    detail = stderr_text or stdout_text or f"docker probe exited with code {returncode} before emitting JSON"
+    detail = stderr_text or stdout_text or f"local probe exited with code {returncode} before emitting JSON"
     return {
         "status": "failed",
-        "phase": "docker_process",
+        "phase": "local_process",
         "observation": {},
-        "errors": [f"docker probe process failed before emitting JSON: {detail}"],
+        "errors": [f"local probe process failed before emitting JSON: {detail}"],
         "captured_stdout": stdout,
         "captured_stderr": stderr,
         "dependency_report": {},
@@ -570,7 +570,7 @@ def _emit_probe_progress(message: str, payload: dict[str, Any] | None = None) ->
 def _probe_transcript(*, direct_probe: dict[str, Any], record: PackageToolProbeRecord) -> list[str]:
     lines = [f"业务测试 prompt：{direct_probe.get('prompt') or record.prompt}"]
     lines.append(
-        "Docker runtime 调用工具："
+        "本地隔离运行时调用工具："
         f"{record.tool_id} args={_one_line(json.dumps(record.arguments, ensure_ascii=False, sort_keys=True), 240)}"
     )
     dependency_report = direct_probe.get("dependency_report") if isinstance(direct_probe.get("dependency_report"), dict) else {}
@@ -579,7 +579,7 @@ def _probe_transcript(*, direct_probe: dict[str, Any], record: PackageToolProbeR
     infrastructure_error = direct_probe.get("infrastructure_error") if isinstance(direct_probe.get("infrastructure_error"), dict) else {}
     if infrastructure_error:
         lines.append(
-            "Docker 环境："
+            "本地隔离环境："
             f"{infrastructure_error.get('why') or '-'} - {_one_line(str(infrastructure_error.get('message') or ''), 240)}"
         )
     observation = direct_probe.get("observation") if isinstance(direct_probe.get("observation"), dict) else {}

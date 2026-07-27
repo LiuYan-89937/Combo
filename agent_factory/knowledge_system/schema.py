@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import re
 from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-
-from agent_factory.knowledge_system.identifiers import SOURCE_ID_RE
 
 
 SourceType = Literal[
@@ -25,7 +24,6 @@ IngestionPhase = Literal["discover", "load", "normalize", "chunk", "embed", "ind
 IngestionStatus = Literal["queued", "running", "completed", "failed", "cancelled"]
 SplitterKind = Literal["auto", "recursive", "markdown", "code", "json"]
 VectorStoreBackend = Literal["sqlite", "memory", "postgres", "redis", "mongodb"]
-KnowledgeSearchMode = Literal["auto", "hybrid"]
 KnowledgeAction = Literal[
     "list_sources",
     "describe_source",
@@ -38,6 +36,9 @@ KnowledgeAction = Literal[
     "reindex",
     "remove_source",
 ]
+
+SOURCE_ID_RE = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
+
 
 class KnowledgeLimits(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -154,14 +155,12 @@ class KnowledgeRagStoreConfig(BaseModel):
         return self
 
 
-class KnowledgePromptGuidanceConfig(BaseModel):
+class KnowledgeGuidanceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
-    max_sources: int = Field(default=12, ge=1, le=100)
-    max_description_chars: int = Field(default=160, ge=20, le=1000)
-    default_search_mode: KnowledgeSearchMode = "auto"
-    default_top_k: int = Field(default=5, ge=1, le=100)
+    max_sources: int = Field(default=24, ge=1, le=200)
+    max_description_chars: int = Field(default=160, ge=40, le=1000)
 
 
 class KnowledgeContractConfig(BaseModel):
@@ -173,7 +172,7 @@ class KnowledgeContractConfig(BaseModel):
     default_mount_mode: MountMode = "index_only"
     rag_store: KnowledgeRagStoreConfig = Field(default_factory=KnowledgeRagStoreConfig)
     limits: KnowledgeLimits = Field(default_factory=KnowledgeLimits)
-    prompt_guidance: KnowledgePromptGuidanceConfig = Field(default_factory=KnowledgePromptGuidanceConfig)
+    guidance: KnowledgeGuidanceConfig = Field(default_factory=KnowledgeGuidanceConfig)
 
     @field_validator("root", "catalog_path")
     @classmethod

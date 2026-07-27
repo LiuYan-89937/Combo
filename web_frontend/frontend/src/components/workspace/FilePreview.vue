@@ -2,10 +2,13 @@
   <div class="file-preview-container">
     <div class="preview-header">
       <div class="file-info">
-        <n-text strong class="file-name" :title="file.name">{{ file.name }}</n-text>
-        <n-text depth="3" class="file-meta">
-          {{ formatFileSize(file.sizeBytes) }} · {{ previewLabel }}
-        </n-text>
+        <ResourceIcon :name="file.name" :mime-type="file.mimeType" :size="28" />
+        <span class="file-info-copy">
+          <n-text strong class="file-name" :title="file.name">{{ file.name }}</n-text>
+          <n-text depth="3" class="file-meta">
+            {{ formatFileSize(file.sizeBytes) }} · {{ previewLabel }}
+          </n-text>
+        </span>
       </div>
       <div class="preview-actions">
         <n-button size="small" @click="addToReferences">
@@ -18,7 +21,13 @@
           <template #icon>
             <n-icon><Download /></n-icon>
           </template>
-          {{ t('common.download') }}
+          {{ desktopFileActionsAvailable ? t('workspace.saveAs') : t('common.download') }}
+        </n-button>
+        <n-button v-if="desktopFileActionsAvailable" size="small" @click="handleReveal">
+          <template #icon>
+            <n-icon><FolderOpenOutline /></n-icon>
+          </template>
+          {{ t('workspace.revealInFileManager') }}
         </n-button>
         <n-popconfirm @positive-click="handleDelete">
           <template #trigger>
@@ -45,8 +54,13 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { NButton, NIcon, NPopconfirm, NText } from 'naive-ui'
-import { AddCircleOutline, Close, Download, TrashOutline } from '@/components/icons'
+import { AddCircleOutline, Close, Download, FolderOpenOutline, TrashOutline } from '@/components/icons'
 import { workspaceApi } from '@/api/workspace'
+import {
+  desktopWorkspaceFileActionsAvailable,
+  revealWorkspaceEntry,
+  saveWorkspaceFileAs,
+} from '@/api/desktopWorkspaceFiles'
 import { useI18n } from '@/composables/useI18n'
 import type { WorkspaceRequestContext, WorkspaceScope } from '@/api/resourceTypes'
 import type { WorkspaceFileView } from '@/types/protocol'
@@ -54,6 +68,7 @@ import { useContextReferenceStore } from '@/stores/contextReferences'
 import { workspaceFileContextReference } from '@/utils/contextReferences'
 import { useMessage } from 'naive-ui'
 import FilePreviewContent from './FilePreviewContent.vue'
+import ResourceIcon from '@/components/common/ResourceIcon.vue'
 import { fileExtension, filePreviewKind } from '@/utils/filePreview'
 
 const props = defineProps<{
@@ -68,6 +83,7 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const message = useMessage()
 const referenceStore = useContextReferenceStore()
+const desktopFileActionsAvailable = desktopWorkspaceFileActionsAvailable()
 const extension = computed(() => fileExtension(props.file))
 const previewKind = computed(() => filePreviewKind(props.file))
 const previewLabel = computed(() => {
@@ -107,7 +123,24 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-function handleDownload() {
+async function handleDownload() {
+  if (desktopFileActionsAvailable && props.file.path) {
+    try {
+      const scope = (props.file.scope || 'workdir') as WorkspaceScope
+      const destination = await saveWorkspaceFileAs(
+        scope,
+        props.file.path,
+        workspaceContext.value,
+      )
+      if (destination) {
+        message.success(t('workspace.fileSavedAs', { path: destination }))
+      }
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : String(error))
+    }
+    return
+  }
+
   if (rawFileUrl.value) {
     const anchor = document.createElement('a')
     anchor.href = rawFileUrl.value
@@ -125,6 +158,16 @@ function handleDownload() {
   anchor.download = props.file.name
   anchor.click()
   URL.revokeObjectURL(url)
+}
+
+async function handleReveal() {
+  if (!props.file.path) return
+  try {
+    const scope = (props.file.scope || 'workdir') as WorkspaceScope
+    await revealWorkspaceEntry(scope, props.file.path, workspaceContext.value)
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : String(error))
+  }
 }
 
 async function handleDelete() {
@@ -185,6 +228,13 @@ function handleClose() {
 .file-info {
   min-width: 0;
   display: flex;
+  align-items: center;
+  gap: var(--app-space-sm);
+}
+
+.file-info-copy {
+  display: flex;
+  min-width: 0;
   flex-direction: column;
   gap: 4px;
 }

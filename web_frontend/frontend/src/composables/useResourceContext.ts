@@ -33,9 +33,6 @@ export function useResourceContext() {
   const createAgentSessionId = computed(() => (
     String(activeFactorySession.value?.create_agent_session_id || '').trim() || null
   ))
-  const chatAgentPackageSessionId = computed(() => (
-    String(activeFactorySession.value?.chat_agent_package_session_id || runtimeStore.activeAgentSessionId || '').trim() || null
-  ))
   const workspaceContext = computed<WorkspaceRequestContext>(() => {
     if (route.name === 'AgentGroup' && agentGroupStore.activeGroup?.group_id) {
       return { resourceMode: 'agent_group', groupId: agentGroupStore.activeGroup.group_id }
@@ -64,8 +61,7 @@ export function useResourceContext() {
     return {
       resourceMode: 'package',
       packageId: SYSTEM_CHAT_PACKAGE_ID,
-      packageSessionId: chatAgentPackageSessionId.value,
-      factorySessionId: runtimeStore.activeFactorySessionId,
+      packageSessionId: runtimeStore.activeAgentSessionId,
     }
   })
   const workspaceContextKey = computed(() => [
@@ -78,8 +74,15 @@ export function useResourceContext() {
     workspaceContext.value.groupId || '',
   ].join(':'))
   const workspaceDefaultScope = computed<WorkspaceScope>(() => 'workdir')
+  const workspaceAvailable = computed(() => (
+    workspaceContext.value.resourceMode !== 'package'
+    || Boolean(workspaceContext.value.packageSessionId)
+  ))
   const packageIdForApi = computed(() => packageId.value || SYSTEM_CHAT_PACKAGE_ID)
-  const isAgentContext = computed(() => Boolean(packageId.value))
+  const isAgentSessionContext = computed(() => (
+    runtimeStore.currentMode === 'agent_package'
+    && Boolean(agentStore.activeChatPackageId)
+  ))
   const label = computed(() => {
     if (workspaceContext.value.resourceMode === 'agent_group') return agentGroupStore.activeGroup?.title || 'Agent Group'
     if (runtimeStore.currentMode === 'create_agent') return t('resource.manufacturing')
@@ -93,10 +96,11 @@ export function useResourceContext() {
     packageId,
     packageIdForApi,
     packageInfo,
-    isAgentContext,
+    isAgentSessionContext,
     label,
     workspaceContext,
     workspaceContextKey,
     workspaceDefaultScope,
+    workspaceAvailable,
   }
 }

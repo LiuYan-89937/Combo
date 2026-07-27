@@ -41,19 +41,17 @@ python3 --version
 uv --version
 node --version
 npm --version
-docker info
 ```
 
 Minimum environment:
 
 - Python 3.11+
 - Node.js 18+
-- Docker Engine or Docker Desktop
 - OpenSSH and `rsync`
 - An SSH key or ssh-agent identity for split-host deployment
 - Free local ports `3000`, `8000`, `18002`, `18003`, `18004`, and `18005` when image generation is enabled
 
-Docker hosts AgentPackage, MCP, and sub-agent isolation. It does not host llama.cpp or PyTorch ROCm inference.
+AgentPackage sessions use a supervised Native Runtime and do not require Docker. Session workspaces, runtime state, tool outputs, and dependency environments remain logically isolated.
 
 ### 2.2 AMD ROCm Inference Host
 
@@ -141,7 +139,7 @@ The workflow is idempotent and performs these stages:
 10. Start inference control, Chat, Embedding, and configured Image services.
 11. Wait for real readiness, including model runtime metadata and MTP slot state when enabled.
 12. Generate local endpoint settings and the resource encryption key.
-13. Prepare Python, frontend, and Docker Agent runtime dependencies.
+13. Prepare Python, frontend, and Native Agent runtime dependencies.
 14. Start the backend and frontend unless `--no-web` was selected.
 
 Validated model files are reused on later runs. Partial downloads resume instead of restarting.
@@ -281,9 +279,9 @@ The downloader resumes from the partial size and accepts the file only after con
 
 Inspect context size, slots, KV cache types, GPU layers, YaRN scaling, MTP, image residency, and current VRAM use. Capacity is calculated per slot; increasing total context without adjusting compression and VRAM estimation is not valid.
 
-### Docker Is Unavailable
+### Native Agent Runtime Initialization Fails
 
-Start Docker Engine or Docker Desktop and rerun `./start.sh`. Model inference is independent, but AgentPackage, MCP, and sub-agent isolation requires Docker on the Web host.
+Check Python, uv, package dependency declarations, and session-workspace permissions, then rerun `./start.sh`. The AgentPackage runtime does not require Docker.
 
 ## 12. Static Checks
 

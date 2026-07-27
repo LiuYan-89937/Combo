@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import shutil
-import subprocess
+import platform
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,13 +10,9 @@ from typing import Any
 
 from agent_factory.agent_runtime_bridge.dependencies import load_dependencies_contract
 
-from .pool import DependencyPool, DependencyPoolError, DependencyPoolResolution
+from .pool import DependencyPoolError, DependencyPoolResolution
 from .python_requirements import PythonRequirementError, normalize_python_requirements
-from .runtime_image import (
-    RuntimeImageResolutionError,
-    configured_runtime_image_id,
-    resolve_runtime_image,
-)
+from agent_factory.native_runtime.dependency_pool import NativeDependencyPool
 from .versions import DEPENDENCY_POOL_VERSION, ENVIRONMENT_LOCK_VERSION
 
 
@@ -31,33 +26,34 @@ class EnvironmentResolutionError(RuntimeError):
 
 
 class EnvironmentResolver:
-    """Resolves AgentPackage dependency declarations into shared-pool references."""
+    """Resolves AgentPackage dependency declarations into local shared-pool references."""
 
-    def __init__(self, pool: DependencyPool | None = None) -> None:
-        self.pool = pool or DependencyPool()
+    def __init__(self, pool: NativeDependencyPool | None = None) -> None:
+        self.pool = pool or NativeDependencyPool()
 
     def ensure(
         self,
         package_root: str | Path,
         *,
         on_progress: EnvironmentProgress | None = None,
-        verify_runtime_image: bool = False,
     ) -> dict[str, Any]:
         root = Path(package_root).expanduser().resolve()
         _notify(on_progress, "checking_contract", package_root=str(root))
         contract = load_dependencies_contract(root)
         config = contract.config
-        base_image = str(config.base_image or "agentfactory-runtime-python:3.12").strip()
-        if not _has_materializable_dependencies(enabled=contract.enabled, config=config):
-            base_digest = self._base_image_identity(
-                base_image,
-                verify_runtime_image=verify_runtime_image,
+        base_image = str(config.base_image or "local-python").strip()
+        if contract.enabled and config.system_packages:
+            raise EnvironmentResolutionError(
+                "local_system_dependencies_unsupported",
+                "Local runtime does not install operating-system packages. Declare required host capabilities "
+                "through system_binaries and verification_commands instead.",
             )
+        if not _has_materializable_dependencies(enabled=contract.enabled, config=config):
             request = _dependency_request(
                 enabled=contract.enabled,
                 base_image=base_image,
-                base_digest=base_digest,
-                architecture="",
+                base_digest="",
+                architecture=_local_architecture(),
                 config=config,
             )
             request_fingerprint = _fingerprint(request)
@@ -72,8 +68,8 @@ class EnvironmentResolver:
                     "status": "ready",
                     "request_fingerprint": request_fingerprint,
                     "image": base_image,
-                    "image_digest": base_digest,
-                    "platform": {"os": "linux", "architecture": ""},
+                    "image_digest": "",
+                    "platform": _local_platform(),
                     "requirements": request,
                     "pool": DependencyPoolResolution([], [], None).to_lock_payload(),
                     "verified_at": _now(),
@@ -81,30 +77,18 @@ class EnvironmentResolver:
             )
             _notify(on_progress, "ready", cache_status="lock_created", dependency_count=0)
             return result
-        docker = shutil.which("docker")
-        if not docker:
-            raise EnvironmentResolutionError("docker_unavailable", "Docker CLI is required to resolve package dependencies")
-        _notify(on_progress, "checking_runtime", base_image=base_image)
-        architecture = _docker_architecture(docker)
+        _notify(on_progress, "checking_runtime", runtime="local")
+        architecture = _local_architecture()
         allowed = set(config.platform_architectures)
         if allowed and architecture not in allowed:
             raise EnvironmentResolutionError(
                 "platform_mismatch",
-                f"package requires architectures {sorted(allowed)}, current Docker architecture is {architecture}",
+                f"package requires architectures {sorted(allowed)}, current local architecture is {architecture}",
             )
-        base_image = str(config.base_image or "agentfactory-runtime-python:3.12").strip()
-        try:
-            base_digest = resolve_runtime_image(
-                docker,
-                base_image,
-                pinned_image=base_image if verify_runtime_image else None,
-            ).resolved
-        except RuntimeImageResolutionError as exc:
-            raise EnvironmentResolutionError(exc.status, str(exc)) from exc
         request = _dependency_request(
             enabled=contract.enabled,
             base_image=base_image,
-            base_digest=base_digest,
+            base_digest="",
             architecture=architecture,
             config=config,
         )
@@ -125,12 +109,8 @@ class EnvironmentResolver:
             dependency_count=_dependency_count(request),
         )
         try:
-            resolution = self.pool.resolve(
-                docker=docker,
-                base_image=base_digest,
-                architecture=architecture,
+            resolution = self.pool.resolve_native(
                 python_requirements=request["python_requirements"],
-                system_packages=request["system_packages"],
                 npm_requirements=request["npm_requirements"],
                 timeout_seconds=config.install_timeout_seconds,
             )
@@ -150,8 +130,8 @@ class EnvironmentResolver:
             "status": "ready",
             "request_fingerprint": request_fingerprint,
             "image": base_image,
-            "image_digest": base_digest,
-            "platform": {"os": "linux", "architecture": architecture},
+            "image_digest": "",
+            "platform": _local_platform(),
             "requirements": request,
             "pool": resolution.to_lock_payload(),
             "verified_at": _now(),
@@ -164,29 +144,6 @@ class EnvironmentResolver:
             dependency_count=_dependency_count(request),
         )
         return result
-
-    @staticmethod
-    def _base_image_identity(
-        base_image: str,
-        *,
-        verify_runtime_image: bool,
-    ) -> str:
-        if not verify_runtime_image:
-            return configured_runtime_image_id(base_image) or ""
-        docker = shutil.which("docker")
-        if not docker:
-            raise EnvironmentResolutionError(
-                "docker_unavailable",
-                "Docker CLI is required to verify the Agent runtime image",
-            )
-        try:
-            return resolve_runtime_image(
-                docker,
-                base_image,
-                pinned_image=base_image,
-            ).resolved
-        except RuntimeImageResolutionError as exc:
-            raise EnvironmentResolutionError(exc.status, str(exc)) from exc
 
     def read_lock(self, package_root: str | Path) -> dict[str, Any]:
         root = Path(package_root).expanduser().resolve()
@@ -290,18 +247,13 @@ def _fingerprint(value: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _docker_architecture(docker: str) -> str:
-    completed = subprocess.run(
-        [docker, "version", "--format", "{{.Server.Arch}}"],
-        capture_output=True,
-        text=True,
-        timeout=10,
-        check=False,
-    )
-    if completed.returncode != 0:
-        raise EnvironmentResolutionError("docker_unavailable", (completed.stderr or "Docker daemon is unavailable").strip())
-    value = completed.stdout.strip().lower()
+def _local_architecture() -> str:
+    value = platform.machine().strip().lower()
     return {"aarch64": "arm64", "x86_64": "amd64"}.get(value, value)
+
+
+def _local_platform() -> dict[str, str]:
+    return {"os": platform.system().lower(), "architecture": _local_architecture()}
 
 
 def _now() -> str:

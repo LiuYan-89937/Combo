@@ -37,11 +37,13 @@
     </a>
 
     <div v-else-if="part.type === 'attachment'" class="message-attachment-chip" :title="part.attachment.name">
-      <n-icon size="15" class="message-attachment-icon">
-        <Document v-if="part.attachment.kind === 'file'" />
-        <Link v-else-if="part.attachment.kind === 'url'" />
-        <Text v-else />
-      </n-icon>
+      <ResourceIcon
+        :name="part.attachment.name"
+        :mime-type="part.attachment.mime_type"
+        :kind="part.attachment.kind"
+        :size="18"
+        class="message-attachment-icon"
+      />
       <span class="message-attachment-name">{{ part.attachment.name }}</span>
       <span class="message-attachment-kind">{{ attachmentKindLabel(part.attachment) }}</span>
     </div>
@@ -72,6 +74,12 @@
       <div v-else class="tool-empty">{{ t('tool.noPayload') }}</div>
     </details>
 
+    <ToolExecutionCard
+      v-else-if="part.type === 'tool_execution'"
+      :part="part"
+      :workspace-context="workspaceContext"
+    />
+
     <a
       v-else-if="part.type === 'artifact' && artifactImageUrl"
       class="message-image-card"
@@ -83,10 +91,20 @@
       <span>{{ part.name }}</span>
     </a>
 
-    <div v-else-if="part.type === 'artifact'" class="artifact-part">
-      <strong>{{ part.name }}</strong>
-      <span v-if="part.mimeType">{{ part.mimeType }}</span>
-    </div>
+    <a
+      v-else-if="part.type === 'artifact'"
+      class="artifact-part"
+      :href="artifactFileUrl || undefined"
+      :target="artifactFileUrl ? '_blank' : undefined"
+      :rel="artifactFileUrl ? 'noopener noreferrer' : undefined"
+      @click="preventUnavailableArtifact"
+    >
+      <ResourceIcon :name="part.name" :mime-type="part.mimeType" :size="24" />
+      <span class="artifact-copy">
+        <strong>{{ part.name }}</strong>
+        <small v-if="artifactMeta">{{ artifactMeta }}</small>
+      </span>
+    </a>
 
     <div v-else-if="part.type === 'error'" class="error-part">
       {{ part.message }}
@@ -100,8 +118,8 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { NIcon } from 'naive-ui'
-import { Document, Link, Text } from '@/components/icons'
+import ResourceIcon from '@/components/common/ResourceIcon.vue'
+import ToolExecutionCard from '@/components/chat/ToolExecutionCard.vue'
 import { useI18n } from '@/composables/useI18n'
 import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
 import type { ChatMessagePart, TranscriptAttachmentView } from '@/types/protocol'
@@ -150,6 +168,17 @@ const artifactImageUrl = computed(() => {
   if (!isImageResource(props.part.path, props.part.mimeType)) return ''
   return resolveMessageImageUrl(props.part.path) || ''
 })
+const artifactFileUrl = computed(() => {
+  if (props.part.type !== 'artifact' || !props.part.path) return ''
+  return resolveMessageImageUrl(props.part.path) || ''
+})
+const artifactMeta = computed(() => {
+  if (props.part.type !== 'artifact') return ''
+  return [
+    props.part.mimeType,
+    typeof props.part.sizeBytes === 'number' ? formatFileSize(props.part.sizeBytes) : null,
+  ].filter(Boolean).join(' · ')
+})
 const toolName = computed(() => (
   props.part.type === 'tool_call' || props.part.type === 'tool_result'
     ? props.part.toolName || 'tool'
@@ -197,6 +226,16 @@ function resolveMessageImageUrl(source: string): string | null {
   return workspaceResourceUrl(source, props.workspaceContext)
 }
 
+function preventUnavailableArtifact(event: MouseEvent) {
+  if (!artifactFileUrl.value) event.preventDefault()
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
 function valueString(value: unknown): string {
   if (value == null || value === '') return ''
   return typeof value === 'string' ? value : JSON.stringify(value, null, 2) || String(value)
@@ -209,9 +248,15 @@ function markdownWithMentions(content: string): string {
     .filter(Boolean)
     .sort((left, right) => right.length - left.length)
   if (!names.length) return content
-  const alternatives = names.map(escapeRegExp).join('|')
-  const mentionPattern = new RegExp(`@(${alternatives})(?=$|[\\s，。！？、,.!?;:])`, 'gu')
-  return content.replace(mentionPattern, (_match, name: string) => `[@${name}](#agent-mention)`)
+
+  try {
+    const alternatives = names.map(escapeRegExp).join('|')
+    const mentionPattern = new RegExp(`@(${alternatives})(?=$|[\\s，。！？、,.!?;:])`, 'gu')
+    return content.replace(mentionPattern, (_match, name: string) => `[@${name}](#agent-mention)`)
+  } catch (error) {
+    console.warn('Failed to create mention pattern:', error)
+    return content
+  }
 }
 
 function escapeRegExp(value: string): string {
@@ -370,6 +415,31 @@ details[open] > summary .summary-chevron {
 .error-part,
 .status-part {
   padding: var(--app-space-sm) var(--app-space-md);
+}
+
+.artifact-part {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: var(--app-space-sm);
+  color: var(--app-text);
+  text-decoration: none;
+}
+
+.artifact-copy {
+  display: grid;
+  min-width: 0;
+}
+
+.artifact-copy strong,
+.artifact-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-copy small {
+  color: var(--app-text-muted);
 }
 
 .inline-tool-part {

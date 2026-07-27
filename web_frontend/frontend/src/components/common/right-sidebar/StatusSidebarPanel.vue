@@ -25,6 +25,38 @@
         </div>
       </div>
       <n-empty v-else :description="t('status.noContext')" size="small" />
+      <div
+        v-if="compressionActivityText"
+        class="compression-activity"
+        :class="compressionActivityClass"
+        role="status"
+        aria-live="polite"
+      >
+        <span v-if="runtimeStore.contextActivity.status === 'running'" class="compression-pulse"></span>
+        <span>{{ compressionActivityText }}</span>
+      </div>
+    </section>
+
+    <section v-if="activeRuntimeRequest" class="status-section">
+      <div class="section-heading">
+        <div class="section-title compact">{{ t('status.currentRequest') }}</div>
+        <n-tag size="small" type="info" :bordered="false">
+          {{ t('status.requestRunning') }}
+        </n-tag>
+      </div>
+      <div class="request-status">
+        <div class="request-status-row">
+          <span>{{ t('status.requestElapsed') }}</span>
+          <strong>{{ t('status.seconds', { count: requestElapsedSeconds }) }}</strong>
+        </div>
+        <div class="request-status-row">
+          <span>{{ t('status.requestTimeout') }}</span>
+          <strong>{{ requestTimeoutText }}</strong>
+        </div>
+        <div v-if="requestTimeoutSeconds !== null && requestTimeoutSeconds > 0" class="request-progress" aria-hidden="true">
+          <div class="request-progress-fill" :style="{ width: requestProgressWidth }"></div>
+        </div>
+      </div>
     </section>
 
     <section class="status-section">
@@ -135,17 +167,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NButton, NEmpty, NIcon, NInput, NPopconfirm, NSpin, NTag } from 'naive-ui'
 import { RefreshOutline, SearchOutline, TrashOutline } from '@/components/icons'
 import { memoryApi, type MemoryContextItemView } from '@/api/memory'
-import type { LocalModelDefaultRole, LocalModelProfile } from '@/api/modelPool'
 import { useI18n } from '@/composables/useI18n'
 import { useResourceContext } from '@/composables/useResourceContext'
-import { useModelPoolStore } from '@/stores/modelPool'
 import { useRuntimeStore } from '@/stores/runtime'
 import PlanPanel from '@/components/plan/PlanPanel.vue'
-import type { ContextWindowView, ToolActivity } from '@/types/protocol'
+import type { ToolActivity } from '@/types/protocol'
 import { toolActivityDisplayStatus, type ToolActivityDisplayStatus } from '@/utils/toolActivityState'
 import {
   contextWindowPercentLabel,
@@ -153,10 +183,10 @@ import {
   contextWindowThresholdLabel,
   contextWindowUsageLabel,
   contextWindowUsagePercent,
+  formatCompactTokenCount,
 } from '@/utils/contextWindowMeter'
 
 const runtimeStore = useRuntimeStore()
-const modelPoolStore = useModelPoolStore()
 const resourceContext = useResourceContext()
 const { t } = useI18n()
 const memoryQuery = ref('')
@@ -164,63 +194,44 @@ const memoryItems = ref<MemoryContextItemView[]>([])
 const memoryLoading = ref(false)
 const memoryError = ref('')
 const deletingMemoryIds = ref<Record<string, boolean>>({})
+const requestClock = ref(Date.now())
 let memoryRequestSerial = 0
+let requestClockTimer: number | null = null
 
-const configuredContextWindow = computed(() => {
-  const role = activeModelRole(runtimeStore.contextWindow?.modelRole)
-  const profile = activeChatProfile(role)
-  const packageContext = resourceContext.packageInfo.value?.context_contract
-  const packageWindow = packageContext?.context_window_tokens_source === 'package'
-    ? positiveTokenLimit(packageContext.context_window_tokens_custom ?? packageContext.context_window_tokens)
-    : null
-  const packageThreshold = packageContext?.compression_threshold_tokens_source === 'package'
-    ? positiveTokenLimit(
-        packageContext.compression_threshold_tokens_custom
-          ?? packageContext.compression_threshold_tokens,
-      )
-    : null
-  return {
-    contextWindowTokens: packageWindow
-      ?? positiveTokenLimit(profile?.limits.max_input_tokens)
-      ?? positiveTokenLimit(packageContext?.context_window_tokens),
-    compressionThresholdTokens: packageThreshold
-      ?? positiveTokenLimit(profile?.limits.context_compression_threshold_tokens)
-      ?? positiveTokenLimit(packageContext?.compression_threshold_tokens),
-    source: packageWindow !== null || packageThreshold !== null
-      ? 'package_context_contract'
-      : profile ? 'model_pool_profile' : null,
-    modelRole: role,
-    updatedAt: '',
-  }
+const activeRuntimeRequest = computed(() => {
+  const requestId = runtimeStore.activeRequestId
+  if (!requestId) return null
+  const request = runtimeStore.activeRequests[requestId]
+  if (!request || request.background || request.status !== 'running') return null
+  return request
 })
-const contextWindow = computed<ContextWindowView | null>(() => {
-  const live = runtimeStore.contextWindow
-  const configured = configuredContextWindow.value
-  const contextWindowTokens = configured.contextWindowTokens ?? live?.contextWindowTokens ?? null
-  const configuredThreshold = configured.compressionThresholdTokens ?? live?.compressionThresholdTokens ?? null
-  const compressionThresholdTokens = (
-    contextWindowTokens !== null && configuredThreshold !== null
-      ? Math.min(configuredThreshold, contextWindowTokens)
-      : configuredThreshold
-  )
-  if (!live && contextWindowTokens === null && compressionThresholdTokens === null) return null
-  return {
-    tokenCount: live?.tokenCount ?? null,
-    contextWindowTokens,
-    compressionThresholdTokens,
-    tokenCountMethod: live?.tokenCountMethod ?? null,
-    source: live?.source ?? configured.source,
-    modelRole: live?.modelRole ?? configured.modelRole,
-    nodeId: live?.nodeId ?? null,
-    updatedAt: live?.updatedAt || configured.updatedAt,
-    payload: {
-      ...(live?.payload || {}),
-      context_window_tokens: contextWindowTokens,
-      compression_threshold_tokens: compressionThresholdTokens,
-      configuration_source: configured.source,
-    },
-  }
+const requestRuntimeNode = computed(() => runtimeStore.nodes.runtime_request || null)
+const requestTimeoutSeconds = computed<number | null>(() => {
+  const heartbeatTimeout = nonNegativeNumber(requestRuntimeNode.value?.payload?.timeout_seconds)
+  if (heartbeatTimeout !== null) return heartbeatTimeout
+  return nonNegativeNumber(activeRuntimeRequest.value?.payload?.runtime_request?.timeout_seconds)
 })
+const requestElapsedSeconds = computed(() => {
+  const heartbeatElapsed = nonNegativeNumber(requestRuntimeNode.value?.payload?.elapsed_seconds) || 0
+  const startedAt = Date.parse(activeRuntimeRequest.value?.startedAt || '')
+  const localElapsed = Number.isFinite(startedAt)
+    ? Math.max(0, Math.floor((requestClock.value - startedAt) / 1000))
+    : 0
+  return Math.floor(Math.max(heartbeatElapsed, localElapsed))
+})
+const requestTimeoutText = computed(() => {
+  const timeout = requestTimeoutSeconds.value
+  if (timeout === null) return t('status.requestTimeoutPending')
+  if (timeout === 0) return t('status.requestNoTimeout')
+  return t('status.seconds', { count: timeout })
+})
+const requestProgressWidth = computed(() => {
+  const timeout = requestTimeoutSeconds.value
+  if (timeout === null || timeout <= 0) return '0%'
+  return `${Math.min(100, (requestElapsedSeconds.value / timeout) * 100)}%`
+})
+
+const contextWindow = computed(() => runtimeStore.contextWindow)
 const contextWindowPercent = computed(() => (
   contextWindow.value ? contextWindowUsagePercent(contextWindow.value) : null
 ))
@@ -246,6 +257,33 @@ const contextThresholdMarker = computed(() => {
   const percent = contextWindowThresholdPercent(contextWindow.value)
   return percent === null ? '' : `${percent}%`
 })
+const compressionActivityText = computed(() => {
+  const activity = runtimeStore.contextActivity
+  const payload = activity.payload || {}
+  if (activity.status === 'running') {
+    return t('status.contextCompressionRunning', {
+      before: formatCompactTokenCount(optionalNumber(payload.token_estimate_before)),
+    })
+  }
+  if (activity.status === 'completed') {
+    return t('status.contextCompressionCompleted', {
+      before: formatCompactTokenCount(optionalNumber(payload.token_estimate_before)),
+      after: formatCompactTokenCount(optionalNumber(payload.token_estimate_after)),
+      count: Number(payload.original_message_count || 0) - Number(payload.compressed_message_count || 0),
+    })
+  }
+  if (activity.status === 'failed') {
+    return t('status.contextCompressionFailed', {
+      reason: String(payload.error || t('common.unknown')),
+    })
+  }
+  return ''
+})
+const compressionActivityClass = computed(() => ({
+  running: runtimeStore.contextActivity.status === 'running',
+  completed: runtimeStore.contextActivity.status === 'completed',
+  failed: runtimeStore.contextActivity.status === 'failed',
+}))
 const memoryActivityText = computed(() => {
   const activity = runtimeStore.memoryActivity
   const payload = activity.payload || {}
@@ -332,6 +370,16 @@ function percentLabel(value: unknown): string {
   return `${Math.round(numericScore(value) * 100)}%`
 }
 
+function nonNegativeNumber(value: unknown): number | null {
+  const numberValue = Number(value)
+  return Number.isFinite(numberValue) && numberValue >= 0 ? numberValue : null
+}
+
+function optionalNumber(value: unknown): number | null {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
 function memoryKindLabel(kind: string): string {
   if (kind === 'preference') return t('status.memoryKind.preference')
   if (kind === 'decision') return t('status.memoryKind.decision')
@@ -347,29 +395,27 @@ function formatMemoryTime(value: string): string {
   return date.toLocaleString()
 }
 
-function activeModelRole(value: string | null | undefined): Exclude<LocalModelDefaultRole, 'embedding'> {
-  if (value === 'task' || value === 'compression') return value
-  return 'main'
-}
-
-function activeChatProfile(role: Exclude<LocalModelDefaultRole, 'embedding'>): LocalModelProfile | null {
-  const binding = resourceContext.packageInfo.value?.model_contract?.bindings?.[role]
-  const explicitProfileId = String(binding?.profile_id || '').trim()
-  const profile = explicitProfileId
-    ? modelPoolStore.profile(explicitProfileId)
-    : modelPoolStore.defaultProfile(role)
-  return profile?.kind === 'chat' ? profile : null
-}
-
-function positiveTokenLimit(value: unknown): number | null {
-  const number = Number(value)
-  return Number.isFinite(number) && number > 0 ? Math.floor(number) : null
-}
-
 onMounted(() => {
-  void modelPoolStore.ensureLoaded().catch(() => undefined)
   refreshMemory()
 })
+
+onBeforeUnmount(() => {
+  stopRequestClock()
+})
+
+watch(
+  activeRuntimeRequest,
+  (request) => {
+    requestClock.value = Date.now()
+    stopRequestClock()
+    if (request) {
+      requestClockTimer = window.setInterval(() => {
+        requestClock.value = Date.now()
+      }, 1000)
+    }
+  },
+  { immediate: true },
+)
 
 watch(
   () => resourceContext.packageIdForApi.value,
@@ -394,6 +440,12 @@ function memoryActivityFingerprint(activity: { eventType?: string, payload?: Rec
     payload.duration_ms || '',
     payload.updated_at || '',
   ].join(':')
+}
+
+function stopRequestClock() {
+  if (requestClockTimer === null) return
+  window.clearInterval(requestClockTimer)
+  requestClockTimer = null
 }
 
 function toolStatusLabel(tool: ToolActivity): string {
@@ -539,6 +591,83 @@ function toolStatusType(tool: ToolActivity): 'default' | 'success' | 'warning' |
   line-height: 16px;
   color: var(--app-text-muted);
   font-variant-numeric: tabular-nums;
+}
+
+.compression-activity {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--app-space-sm);
+  margin-top: var(--app-space-md);
+  padding: var(--app-space-sm) var(--app-space-md);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  color: var(--app-text-secondary);
+  background: var(--app-surface-muted);
+  font-size: var(--app-font-sm);
+  line-height: 1.5;
+}
+
+.compression-activity.running {
+  color: var(--app-text);
+  border-color: var(--app-border-hover);
+}
+
+.compression-activity.completed {
+  color: var(--app-success);
+  border-color: color-mix(in srgb, var(--app-success) 35%, var(--app-border));
+}
+
+.compression-activity.failed {
+  color: var(--app-error);
+  border-color: color-mix(in srgb, var(--app-error) 35%, var(--app-border));
+}
+
+.compression-pulse {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: currentColor;
+  animation: memory-pulse 1s ease-in-out infinite;
+}
+
+.request-status {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-space-sm);
+  padding: var(--app-space-md);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface-muted);
+}
+
+.request-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-space-md);
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-sm);
+}
+
+.request-status-row strong {
+  color: var(--app-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.request-progress {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--app-border);
+}
+
+.request-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--app-text);
+  transition: width 0.2s ease;
 }
 
 .memory-activity {

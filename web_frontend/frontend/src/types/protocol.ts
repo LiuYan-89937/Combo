@@ -5,7 +5,7 @@
 
 // ========== 基础类型 ==========
 
-export type FactoryMode = 'chat' | 'create_agent' | 'evolve_agent' | 'agent_package' | 'agent_group'
+export type FactoryMode = 'create_agent' | 'evolve_agent' | 'agent_package' | 'agent_group'
 
 export type RunStatus = 'idle' | 'running' | 'waiting_for_workers' | 'interrupted' | 'completed' | 'stopped' | 'cancelled' | 'failed'
 
@@ -92,6 +92,17 @@ export interface ToolResultMessagePart extends BaseChatMessagePart {
   error?: unknown
 }
 
+export interface ToolExecutionMessagePart extends BaseChatMessagePart {
+  type: 'tool_execution'
+  toolName: string
+  callId: string | null
+  arguments: unknown
+  output: unknown
+  error?: unknown
+  approvalState?: ToolActivity['approvalState']
+  artifacts: ArtifactMessagePart[]
+}
+
 export interface ArtifactMessagePart extends BaseChatMessagePart {
   type: 'artifact'
   name: string
@@ -121,6 +132,7 @@ export type ChatMessagePart =
   | ReasoningMessagePart
   | ToolCallMessagePart
   | ToolResultMessagePart
+  | ToolExecutionMessagePart
   | ArtifactMessagePart
   | AttachmentMessagePart
   | ErrorMessagePart
@@ -171,7 +183,7 @@ export interface RuntimeOptionsView {
   show_state?: boolean
   show_messages?: boolean
   context_window_tokens: number | null
-  context_window_tokens_source: 'env' | 'unset' | string
+  context_window_tokens_source: 'model_profile' | 'unset' | string
 }
 
 // ========== 对话相关 ==========

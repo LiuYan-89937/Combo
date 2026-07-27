@@ -7,7 +7,7 @@ from agent_factory.runtime_kernel.extensions.loader import (
     default_builtin_agent_extension_root,
 )
 from agent_factory.runtime_kernel.extensions.schema import AgentInstanceExtensionLoadReport
-from agent_factory.mcp_gateway import build_gateway_clients, configured_container_gateway_url
+from agent_factory.mcp_gateway import build_gateway_clients, configured_local_gateway_url
 from agent_factory.tooling.compiler import ToolCompiler
 from agent_factory.tooling.entrypoints import MCPToolClient
 from agent_factory.tooling.gateway import ToolApprovalHandler
@@ -127,4 +127,4 @@ class AgentInstanceExtensionManager:
     def _gateway_url(self) -> str | None:
         if self.mcp_gateway_url and self.mcp_gateway_url.strip():
             return self.mcp_gateway_url.strip()
-        return configured_container_gateway_url()
+        return configured_local_gateway_url()

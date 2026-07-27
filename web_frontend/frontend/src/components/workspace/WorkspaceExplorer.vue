@@ -1,4 +1,14 @@
 <template>
+  <n-dropdown
+    trigger="manual"
+    placement="bottom-start"
+    :show="contextMenuVisible"
+    :x="contextMenuX"
+    :y="contextMenuY"
+    :options="contextMenuOptions"
+    @select="handleContextMenuSelect"
+    @clickoutside="closeContextMenu"
+  />
   <div class="workspace-explorer">
     <div class="explorer-header">
       <div class="header-title">
@@ -23,6 +33,7 @@
           :class="{ selected: selectedPath === row.entry.path }"
           :style="{ paddingLeft: `${8 + row.depth * 16}px` }"
           @click="handleEntryClick(row.entry)"
+          @contextmenu.prevent="openContextMenu($event, row.entry)"
         >
           <button
             v-if="row.entry.kind === 'directory'"
@@ -34,9 +45,13 @@
           </button>
           <span v-else class="twisty-placeholder"></span>
 
-          <n-icon size="17" :color="entryIconColor(row.entry)" class="entry-icon">
-            <component :is="entryIcon(row.entry)" />
-          </n-icon>
+          <ResourceIcon
+            :name="row.entry.name"
+            :kind="row.entry.kind"
+            :expanded="row.expanded"
+            :size="18"
+            class="entry-icon"
+          />
 
           <span class="entry-name" :title="row.entry.path">{{ row.entry.name }}</span>
           <span v-if="row.entry.kind === 'file' && row.entry.sizeBytes" class="entry-size">
@@ -70,9 +85,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import {
   NButton,
+  NDropdown,
   NEmpty,
   NIcon,
   NScrollbar,
@@ -80,24 +96,26 @@ import {
   NText,
   NPopconfirm,
   useMessage,
+  type DropdownOption,
 } from 'naive-ui'
 import {
   ChevronForward,
-  CodeSlash,
-  DocumentOutline,
-  FolderOpenOutline,
-  FolderOutline,
-  ImageOutline,
   Refresh,
   AddCircleOutline,
   TrashOutline,
 } from '@/components/icons'
+import ResourceIcon from '@/components/common/ResourceIcon.vue'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
 import { workspaceEntryView } from '@/stores/runtime/viewMappers'
 import { workspaceFileView } from '@/stores/runtime/viewMappers'
 import { workspaceApi } from '@/api/workspace'
+import {
+  desktopWorkspaceFileActionsAvailable,
+  revealWorkspaceEntry,
+  saveWorkspaceFileAs,
+} from '@/api/desktopWorkspaceFiles'
 import { useContextReferenceStore } from '@/stores/contextReferences'
 import { workspaceFileContextReference } from '@/utils/contextReferences'
 import type { WorkspaceRequestContext } from '@/api/resourceTypes'
@@ -129,11 +147,47 @@ const entriesByPath = ref<Record<string, WorkspaceEntry[]>>({})
 const loadingPaths = ref<Set<string>>(new Set())
 const expandedDirs = ref<Set<string>>(new Set())
 const selectedPath = ref('')
+const contextMenuEntry = ref<WorkspaceEntry | null>(null)
+const contextMenuVisible = ref(false)
+const contextMenuX = ref(0)
+const contextMenuY = ref(0)
 const rootLoading = computed(() => loadingPaths.value.has('') && !entriesByPath.value[''])
 const requestContext = computed<WorkspaceRequestContext | string | undefined>(() => (
   props.workspaceContext || props.packageId || undefined
 ))
 const effectiveScope = computed<WorkspaceScope>(() => props.fixedScope || 'workdir')
+const contextMenuOptions = computed<DropdownOption[]>(() => {
+  const entry = contextMenuEntry.value
+  if (!entry) return []
+  const options: DropdownOption[] = [
+    {
+      label: entry.kind === 'directory' ? t('workspace.openDirectory') : t('workspace.openFile'),
+      key: 'open',
+    },
+  ]
+  if (desktopWorkspaceFileActionsAvailable()) {
+    options.push({
+      label: t('workspace.revealInFileManager'),
+      key: 'reveal',
+    })
+    if (entry.kind === 'file') {
+      options.push({
+        label: t('workspace.saveAs'),
+        key: 'save-as',
+      })
+    }
+  }
+  if (entry.kind === 'file') {
+    options.push(
+      { type: 'divider', key: 'file-actions-divider' },
+      {
+        label: t('references.addWorkspaceFile'),
+        key: 'add-reference',
+      },
+    )
+  }
+  return options
+})
 
 const visibleRows = computed<TreeRow[]>(() => {
   const rows: TreeRow[] = []
@@ -208,12 +262,63 @@ function resetTree() {
 }
 
 function handleEntryClick(entry: WorkspaceEntry) {
+  closeContextMenu()
   if (entry.kind === 'directory') {
     void toggleDirectory(entry)
     return
   }
   selectedPath.value = entry.path
   emit('selectFile', entry)
+}
+
+function openContextMenu(event: MouseEvent, entry: WorkspaceEntry) {
+  contextMenuVisible.value = false
+  contextMenuEntry.value = entry
+  contextMenuX.value = event.clientX
+  contextMenuY.value = event.clientY
+  void nextTick(() => {
+    contextMenuVisible.value = true
+  })
+}
+
+function closeContextMenu() {
+  contextMenuVisible.value = false
+}
+
+async function handleContextMenuSelect(key: string | number) {
+  const entry = contextMenuEntry.value
+  closeContextMenu()
+  if (!entry) return
+  try {
+    if (key === 'open') {
+      handleEntryClick(entry)
+      return
+    }
+    if (key === 'reveal') {
+      await revealWorkspaceEntry(
+        effectiveScope.value,
+        entry.path,
+        requestContext.value,
+      )
+      return
+    }
+    if (key === 'save-as' && entry.kind === 'file') {
+      const destination = await saveWorkspaceFileAs(
+        effectiveScope.value,
+        entry.path,
+        requestContext.value,
+      )
+      if (destination) {
+        message.success(t('workspace.fileSavedAs', { path: destination }))
+      }
+      return
+    }
+    if (key === 'add-reference' && entry.kind === 'file') {
+      await addFileReference(entry)
+    }
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : String(error))
+  }
 }
 
 async function addFileReference(entry: WorkspaceEntry) {
@@ -248,20 +353,6 @@ async function toggleDirectory(entry: WorkspaceEntry) {
   }
 }
 
-function entryIcon(entry: WorkspaceEntry) {
-  if (entry.kind === 'directory') {
-    return isExpanded(entry.path) ? FolderOpenOutline : FolderOutline
-  }
-
-  const ext = entry.name.split('.').pop()?.toLowerCase()
-  const codeExts = ['js', 'ts', 'tsx', 'jsx', 'py', 'java', 'go', 'rs', 'cpp', 'c', 'h', 'sql', 'json', 'yaml', 'yml']
-  const imageExts = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp']
-
-  if (ext && codeExts.includes(ext)) return CodeSlash
-  if (ext && imageExts.includes(ext)) return ImageOutline
-  return DocumentOutline
-}
-
 function isExpanded(path: string): boolean {
   return expandedDirs.value.has(path)
 }
@@ -274,11 +365,6 @@ function toggleExpanded(path: string): void {
     next.add(path)
   }
   expandedDirs.value = next
-}
-
-function entryIconColor(entry: WorkspaceEntry): string {
-  if (entry.kind === 'directory') return 'var(--app-text)'
-  return 'var(--app-text-muted)'
 }
 
 function formatFileSize(bytes: number): string {

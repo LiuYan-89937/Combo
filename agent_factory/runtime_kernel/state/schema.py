@@ -133,14 +133,6 @@ class PolicyState(BaseModel):
     checks: list[dict[str, Any]] = Field(default_factory=list)
 
 
-class RuntimeWaitState(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    status: str
-    reason: str
-    message: str = ""
-
-
 class ExecutionState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -150,17 +142,15 @@ class ExecutionState(BaseModel):
     route_decision: str | None = None
     turn_count: int = 0
     retry_count: int = 0
-    max_retries: int = 2
+    max_retries: int = 5
     max_subgraph_depth: int = 4
     timeout_seconds: int = 0
     interrupted: bool = False
     interrupt_payload: dict[str, Any] = Field(default_factory=dict)
     resume_payload: dict[str, Any] = Field(default_factory=dict)
     resume_token: str | None = None
-    pending_wait: RuntimeWaitState | None = None
     finished: bool = False
     finish_status: str | None = None
-    finish_message: str | None = None
     last_error: str | None = None
     last_error_location: str | None = None
 

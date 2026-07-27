@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 
 from agent_factory.context_system.schema import CompressionPolicy, ContextCompressionReport
 from agent_factory.context_system.token_counter import TokenCountResult
+from agent_factory.context_system.token_estimation import estimate_messages_tokens, estimate_text_tokens
 from agent_factory.models import get_compression_model
 from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
 
@@ -43,7 +44,7 @@ def maybe_compress_messages(
             ),
         )
     token_before = count_before.token_count
-    if policy.trigger_token_threshold is None or token_before < policy.trigger_token_threshold:
+    if token_before < policy.trigger_token_threshold:
         return (
             messages,
             ContextCompressionReport(
@@ -57,7 +58,11 @@ def maybe_compress_messages(
                 duration_ms=int((perf_counter() - started) * 1000),
             ),
         )
-    protected, compressible, recent = _partition_messages(messages, keep_recent=policy.keep_recent_messages)
+    protected, compressible, recent = _partition_messages(
+        messages,
+        keep_recent=policy.keep_recent_messages,
+        minimum_token_reduction=max(token_before - policy.trigger_token_threshold, 1),
+    )
     if not compressible:
         return (
             messages,
@@ -144,26 +149,40 @@ def _count_messages(
     return token_counter(messages)
 
 
-def estimate_messages_tokens(messages: list[Any]) -> int:
-    return sum(estimate_text_tokens(_message_text(message)) for message in messages)
-
-
-def estimate_text_tokens(text: str) -> int:
-    return max(1, len(text) // 4) if text else 0
-
-
-def _partition_messages(messages: list[Any], *, keep_recent: int) -> tuple[list[Any], list[Any], list[Any]]:
+def _partition_messages(
+    messages: list[Any],
+    *,
+    keep_recent: int,
+    minimum_token_reduction: int,
+) -> tuple[list[Any], list[Any], list[Any]]:
     normalized = list(messages)
     protected: list[Any] = []
     cursor = 0
     while cursor < len(normalized) and _is_protected_message(normalized[cursor]):
         protected.append(normalized[cursor])
         cursor += 1
-    tail_start = max(cursor, len(normalized) - keep_recent)
-    while tail_start > cursor and _is_tool_message(normalized[tail_start]):
-        tail_start -= 1
-    compressible = normalized[cursor:tail_start]
-    recent = normalized[tail_start:]
+    history_count = len(normalized) - cursor
+    if history_count <= 2:
+        return protected, [], normalized[cursor:]
+
+    maximum_recent_count = min(keep_recent, history_count - 1)
+    first_boundary = len(normalized) - maximum_recent_count
+    last_boundary = len(normalized) - 2
+    selected_boundary: int | None = None
+    for boundary in range(first_boundary, last_boundary + 1):
+        if boundary < len(normalized) and _is_tool_message(normalized[boundary]):
+            continue
+        candidate = normalized[cursor:boundary]
+        if not candidate or incomplete_tool_call_ids(candidate):
+            continue
+        selected_boundary = boundary
+        if estimate_messages_tokens(candidate) >= minimum_token_reduction:
+            break
+    if selected_boundary is None:
+        return protected, [], normalized[cursor:]
+
+    compressible = normalized[cursor:selected_boundary]
+    recent = normalized[selected_boundary:]
     return protected, compressible, recent
 
 

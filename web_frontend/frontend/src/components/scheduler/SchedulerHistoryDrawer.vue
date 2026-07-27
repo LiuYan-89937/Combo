@@ -105,6 +105,7 @@ function runStatusLabel(status: string): string {
 function formatTime(timestamp: string): string {
   if (!timestamp) return t('time.notStarted')
   const date = new Date(timestamp)
+  if (isNaN(date.getTime())) return timestamp
   return date.toLocaleString(locale.value)
 }
 </script>

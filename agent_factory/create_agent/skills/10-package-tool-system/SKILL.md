@@ -59,7 +59,7 @@ Guides adding executable package tools and their ToolSpec declarations.
 - Do not implement a tool that only tells the model to call another tool unless that other tool is visible in tool_access.
 - Create package tools only after model selection, inherited MCP decisions, and the complete `11-skillhub-system` protocol have established a concrete remaining execution gap.
 - The remaining gap must describe the missing governed runtime action; do not recreate SkillHub guidance, assets, templates, scripts, or registered skill-derived tools as package-owned code.
-- After writing or changing a package tool, use create_agent_probe_tool inspect/call with realistic package tool arguments. A call requires `timeout_seconds`, estimated to cover environment image construction and tool execution. Probe resolves and locks the Docker environment before it invokes the real ToolExecutionGateway observation. Include prompt and tool_goal as human-readable probe context.
+- After writing or changing a package tool, use create_agent_probe_tool inspect/call with realistic package tool arguments. A call requires `timeout_seconds`, estimated to cover local dependency-environment preparation and tool execution. Probe resolves and locks the local dependency environment before it invokes the real ToolExecutionGateway observation. Include prompt and tool_goal as human-readable probe context.
 - Do not create tools that require unconfirmed secrets, accounts, URLs, files, or external services.
 
 ## Boundaries

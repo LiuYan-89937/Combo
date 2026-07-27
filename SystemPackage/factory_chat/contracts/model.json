@@ -5,8 +5,8 @@
   "config": {
     "bindings": {
       "main": {
-        "source": "local_default",
-        "reason": "Use the configured default local ROCm chat profile.",
+        "source": "runtime",
+        "reason": "Resolve the main chat model from the model pool profile selected for this request.",
         "required_capabilities": {
           "input_modalities": [
             "text"
@@ -25,22 +25,18 @@
     },
     "tool_bindings": {
       "generate_image": {
-        "source": "local_default",
-        "capability": "image_output",
-        "required": false,
+        "source": "model_pool",
         "selection_source": "auto",
-        "reason": "Use the enabled default image generation profile when one is configured.",
+        "capability": "image_output",
+        "reason": "Use a compatible image generation profile from the configured model pool when available.",
         "required_capabilities": {
-          "input_modalities": [
-            "text"
-          ],
           "output_modalities": [
             "image"
           ],
           "text_to_image": true
         },
         "overrides": {},
-        "description": "调用本地 FLUX.1-dev 模型生成图片，并将结果保存为当前会话可访问的图片资产。FLUX 对英文提示词理解更稳定：当用户使用中文描述画面时，调用前必须在不改变用户意图的前提下，将主体、数量、动作、构图、风格、光照、色彩和约束忠实改写为清晰、具体的英文 prompt；只有用户明确要求画面出现中文文字时，相关文字内容才保留中文。"
+        "description": "Generate images from a text prompt with the selected image model."
       }
     }
   }

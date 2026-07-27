@@ -52,18 +52,16 @@ python3 --version
 uv --version
 node --version
 npm --version
-docker info
 ```
 
 最低要求：
 
 - Python 3.11+
 - Node.js 18+
-- Docker Engine 或 Docker Desktop 已启动
 - SSH 模式下，私钥或 ssh-agent 可以登录 AMD 推理主机
 - 本机端口 `3000`、`8000`、`18002`、`18003`、`18004` 未被占用
 
-Docker 仅用于本机 AgentPackage、MCP 和子 Agent 隔离，不承载远端模型推理。
+AgentPackage 会话使用受宿主监督的 Native Runtime，不要求 Docker。会话工作区、运行状态、工具输出与依赖环境仍保持逻辑隔离。
 
 ### 2.2 AMD ROCm 推理节点要求
 
@@ -214,7 +212,7 @@ Worker 租约以协作任务为唯一边界。同一个 AgentPackage 可以在�
 
 脚本按照以下顺序运行：
 
-1. 检查 Git、Python、uv、Node、npm、Docker 与 rsync；仅 SSH 目标检查 OpenSSH。
+1. 检查 Git、Python、uv、Node、npm 与 rsync；仅 SSH 目标检查 OpenSSH。
 2. 验证部署目标与端口；SSH 目标额外验证 Key 登录。
 3. 验证仓库自带的两套 llama.cpp、stable-diffusion.cpp 固定 revision 标记及递归子模块完整性。
 4. 上传远端控制脚本，准备缺失的普通编译工具，验证并按需修复系统 CA 信任链。
@@ -321,7 +319,7 @@ http://127.0.0.1:3000
 | `./deploy.sh up` | 按 `DEPLOY_TARGET` 幂等部署推理节点并启动 Web；SSH 目标同时建立隧道。 |
 | `./deploy.sh up --no-web` | 完成推理节点一键部署，不启动前后端。 |
 | `./deploy.sh bootstrap` | 部署并启动推理节点，不启动 Web。 |
-| `./start.sh` | 已部署环境中只启动 Web、Docker Runtime，并按连接模式直连节点或建立 SSH 隧道。 |
+| `./start.sh` | 已部署环境中只启动 Web 与 Native Agent Runtime，并按连接模式直连节点或建立 SSH 隧道。 |
 | `./deploy.sh status` | 查看推理节点软件、ROCm 和模型运行状态。 |
 | `./deploy.sh logs` | 查看推理节点最近 200 行日志。 |
 | `./deploy.sh restart` | 重启推理节点并等待模型 ready。 |
@@ -493,15 +491,15 @@ SSH 已连接但远端转发目标未监听：
 
 保存已加载 Profile 会将配置透传到推理节点并重启相应模型。
 
-### 11.6 Docker 不可用
+### 11.6 Native Agent Runtime 初始化失败
 
-启动本机 Docker Desktop 或 Docker Engine，再执行：
+检查 Python、uv、包依赖声明和会话工作区权限后再执行：
 
 ```bash
 ./start.sh
 ```
 
-远端模型服务不依赖 Docker，但 AgentPackage、MCP 和子 Agent 隔离运行依赖本机 Docker。
+AgentPackage、系统 Chat 和子 Agent 统一使用 Native Runtime，不依赖本机 Docker。
 
 ## 12. 部署与性能证据
 

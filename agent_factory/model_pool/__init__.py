@@ -12,9 +12,11 @@ from agent_factory.model_pool.providers import list_local_inference_engines
 from agent_factory.model_pool.resolver import (
     ResolvedChatModelProfile,
     ResolvedImageGenerationProfile,
+    resolve_available_chat_model,
     resolve_chat_model_binding,
     resolve_chat_model_profile,
     resolve_image_generation_binding,
+    resolve_image_generation_model_profile,
 )
 from agent_factory.model_pool.schema import (
     ExternalInferenceConfig,
@@ -86,9 +88,11 @@ __all__ = [
     "list_local_inference_engines",
     "model_pool_store_read_only",
     "record_model_usage_frontend_event",
+    "resolve_available_chat_model",
     "resolve_chat_model_binding",
     "resolve_chat_model_profile",
     "resolve_image_generation_binding",
+    "resolve_image_generation_model_profile",
     "resolve_model_pool_store_path",
     "resolve_model_root",
 ]

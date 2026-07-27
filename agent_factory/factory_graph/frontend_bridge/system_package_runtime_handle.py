@@ -154,6 +154,12 @@ class SystemPackageRuntimeHandle:
 
         self.last_used = time.monotonic()
         self._cancel_idle_shutdown()
+        request_policy = RuntimeRequestPolicy.from_payload(
+            (command.get("payload") or {}).get("runtime_request")
+            if isinstance(command.get("payload"), dict)
+            else None,
+            default=self.request_policy,
+        )
         worker = threading.Thread(
             target=run_request,
             name=f"system-package-runtime-{self.package_id}-{request_id}",
@@ -172,7 +178,7 @@ class SystemPackageRuntimeHandle:
                 if terminal_seen:
                     break
                 now = time.monotonic()
-                if request_timed_out(started_at, now, self.request_policy):
+                if request_timed_out(started_at, now, request_policy):
                     self.close()
                     yield "frontend_event", run_failed_event(
                         request_id,
@@ -180,17 +186,17 @@ class SystemPackageRuntimeHandle:
                             package_id=self.package_id,
                             request_id=request_id,
                             elapsed_seconds=now - started_at,
-                            timeout_seconds=self.request_policy.timeout_seconds,
+                            timeout_seconds=request_policy.timeout_seconds,
                         ),
                     )
                     break
-                if heartbeat_due(last_heartbeat_at, now, self.request_policy):
+                if heartbeat_due(last_heartbeat_at, now, request_policy):
                     last_heartbeat_at = now
                     yield "frontend_event", request_heartbeat_event(
                         request_id,
                         package_id=self.package_id,
                         elapsed_seconds=now - started_at,
-                        timeout_seconds=self.request_policy.timeout_seconds,
+                        timeout_seconds=request_policy.timeout_seconds,
                     )
                 with self._condition:
                     if self._request_done.get(request_id) and not self._request_events.get(request_id):

@@ -64,14 +64,6 @@ if [[ -f "${PROJECT_ENV_FILE}" ]]; then
 fi
 
 PYTHON_BIN="${PROJECT_ROOT}/.venv/bin/python"
-RUNTIME_IMAGE="${AGENTFACTORY_RUNTIME_IMAGE:-agentfactory-runtime-python:3.12}"
-export AGENTFACTORY_RUNTIME_IMAGE="${RUNTIME_IMAGE}"
-RUNTIME_DOCKERFILE="${AGENTFACTORY_RUNTIME_DOCKERFILE:-${PROJECT_ROOT}/docker/agent-runtime/Dockerfile}"
-RUNTIME_SOURCE_DIGEST_LABEL="org.fastagentfactory.runtime.source_digest"
-DOCKER_RUNTIME_MANAGED_LABEL="agentfactory.runtime.managed"
-DOCKER_RUNTIME_PROJECT_LABEL="agentfactory.runtime.project"
-AGENTFACTORY_DOCKER_PROJECT_ID="${AGENTFACTORY_DOCKER_PROJECT_ID:-${PROJECT_ROOT}}"
-export AGENTFACTORY_DOCKER_PROJECT_ID
 WEB_SEARCH_MCP_DIR="${AGENTFACTORY_WEB_SEARCH_MCP_DIR:-${PROJECT_ROOT}/.agentfactory/mcp/web_search}"
 WEB_SEARCH_MCP_REPOSITORY="${AGENTFACTORY_WEB_SEARCH_MCP_REPOSITORY:-https://github.com/LiuYan-89937/BigOpenLLMSearch.git}"
 INFERENCE_SSH_TUNNEL_PID=""
@@ -95,24 +87,6 @@ web_require_command() {
     if ! command -v "${command_name}" >/dev/null 2>&1; then
         web_fail "${command_name} not found. ${install_hint}"
     fi
-}
-
-web_stop_managed_runtime_containers() {
-    command -v docker >/dev/null 2>&1 || return 0
-    docker info >/dev/null 2>&1 || return 0
-    local container_ids=()
-    local container_id
-    while read -r container_id; do
-        [[ -n "${container_id}" ]] && container_ids+=("${container_id}")
-    done < <(
-        docker ps --quiet \
-            --filter "label=${DOCKER_RUNTIME_MANAGED_LABEL}=true" \
-            --filter "label=${DOCKER_RUNTIME_PROJECT_LABEL}=${AGENTFACTORY_DOCKER_PROJECT_ID}"
-    )
-    (( ${#container_ids[@]} > 0 )) || return 0
-    echo "Stopping ${#container_ids[@]} managed Agent runtime container(s)..."
-    docker stop --time 5 "${container_ids[@]}" >/dev/null 2>&1 \
-        || web_warn "One or more managed Agent runtime containers could not be stopped cleanly"
 }
 
 web_validate_port() {
@@ -380,8 +354,8 @@ web_sync_frontend_dependencies() {
 }
 
 web_ensure_builtin_web_search_mcp() {
-    if [[ "${AGENTFACTORY_SKIP_WEB_SEARCH_MCP_SETUP:-1}" == "1" ]]; then
-        echo "Skipping built-in web search MCP setup in local-only mode"
+    if [[ "${AGENTFACTORY_SKIP_WEB_SEARCH_MCP_SETUP:-0}" == "1" ]]; then
+        echo "Skipping built-in web search MCP setup"
         return
     fi
 
@@ -432,134 +406,6 @@ web_ensure_builtin_web_search_mcp() {
     else
         echo "Built-in web search MCP is ready"
     fi
-}
-
-web_ensure_runtime_image() {
-    if [[ "${AGENTFACTORY_SKIP_DOCKER_IMAGE_CHECK:-0}" == "1" ]]; then
-        echo "Skipping Docker runtime image check because AGENTFACTORY_SKIP_DOCKER_IMAGE_CHECK=1"
-        return
-    fi
-
-    web_require_command "docker" "Install Docker Desktop and ensure docker is on PATH: https://www.docker.com/products/docker-desktop/"
-    [[ -f "${RUNTIME_DOCKERFILE}" ]] || web_fail "runtime Dockerfile not found: ${RUNTIME_DOCKERFILE}"
-
-    echo "Checking Docker daemon..."
-    docker info >/dev/null || web_fail "Docker daemon is not available. Start Docker Desktop first, then run ./start.sh again."
-
-    echo "Checking Docker runtime image: ${RUNTIME_IMAGE}"
-    local source_digest
-    source_digest="$(web_runtime_source_digest)"
-    if docker image inspect "${RUNTIME_IMAGE}" >/dev/null 2>&1; then
-        local image_digest
-        image_digest="$(docker image inspect "${RUNTIME_IMAGE}" --format "{{ index .Config.Labels \"${RUNTIME_SOURCE_DIGEST_LABEL}\" }}" 2>/dev/null || true)"
-        if [[ "${image_digest}" == "${source_digest}" ]]; then
-            echo "Docker runtime image exists and is up to date: ${RUNTIME_IMAGE}"
-            web_export_runtime_image_id
-            return
-        fi
-        echo "Docker runtime image is stale; rebuilding ${RUNTIME_IMAGE}"
-    else
-        echo "Docker runtime image missing; building ${RUNTIME_IMAGE} from ${RUNTIME_DOCKERFILE}..."
-    fi
-
-    web_build_runtime_image "${source_digest}"
-    web_export_runtime_image_id
-}
-
-web_export_runtime_image_id() {
-    local runtime_image_id
-    runtime_image_id="$(docker image inspect "${RUNTIME_IMAGE}" --format '{{.Id}}')" \
-        || web_fail "Docker runtime image identity could not be resolved: ${RUNTIME_IMAGE}"
-    [[ -n "${runtime_image_id}" ]] || web_fail "Docker returned an empty runtime image identity: ${RUNTIME_IMAGE}"
-    export AGENTFACTORY_RUNTIME_IMAGE_ID="${runtime_image_id}"
-    echo "Pinned Docker runtime image: ${RUNTIME_IMAGE} -> ${runtime_image_id}"
-}
-
-web_runtime_source_digest() {
-    "${PYTHON_BIN}" - "${PROJECT_ROOT}" "${RUNTIME_DOCKERFILE}" <<'PY'
-from __future__ import annotations
-
-import hashlib
-import os
-from pathlib import Path
-import sys
-
-project_root = Path(sys.argv[1]).resolve()
-dockerfile = Path(sys.argv[2]).resolve()
-inputs = [
-    dockerfile,
-    project_root / "pyproject.toml",
-    project_root / "uv.lock",
-]
-roots = [
-    project_root / "agent_factory",
-    project_root / "docker" / "agent-runtime",
-]
-ignored_dirs = {"__pycache__", ".mypy_cache", ".ruff_cache"}
-ignored_suffixes = {".pyc", ".pyo"}
-
-digest = hashlib.sha256()
-
-
-def add_file(path: Path) -> None:
-    if not path.is_file() or path.suffix in ignored_suffixes:
-        return
-    rel = path.relative_to(project_root).as_posix()
-    digest.update(rel.encode("utf-8"))
-    digest.update(b"\0")
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    digest.update(b"\0")
-
-
-for path in inputs:
-    add_file(path)
-
-for root in roots:
-    if not root.exists():
-        continue
-    for current_root, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(name for name in dirnames if name not in ignored_dirs)
-        for filename in sorted(filenames):
-            add_file(Path(current_root) / filename)
-
-print(digest.hexdigest())
-PY
-}
-
-web_build_runtime_image() {
-    local source_digest="$1"
-    local build_args=()
-    local build_network="${AGENTFACTORY_DOCKER_BUILD_NETWORK:-host}"
-    if [[ -n "${AGENTFACTORY_PYTHON_BASE_IMAGE:-}" ]]; then
-        build_args+=(--build-arg "PYTHON_BASE_IMAGE=${AGENTFACTORY_PYTHON_BASE_IMAGE}")
-    fi
-    if [[ -n "${AGENTFACTORY_DEBIAN_MIRROR:-}" ]]; then
-        build_args+=(--build-arg "DEBIAN_MIRROR=${AGENTFACTORY_DEBIAN_MIRROR}")
-    fi
-    if [[ -n "${AGENTFACTORY_DEBIAN_SECURITY_MIRROR:-}" ]]; then
-        build_args+=(--build-arg "DEBIAN_SECURITY_MIRROR=${AGENTFACTORY_DEBIAN_SECURITY_MIRROR}")
-    fi
-    if [[ -n "${AGENTFACTORY_PYPI_INDEX_URL:-}" ]]; then
-        build_args+=(--build-arg "PYPI_INDEX_URL=${AGENTFACTORY_PYPI_INDEX_URL}")
-    fi
-
-    local docker_build=(
-        docker build
-        --network "${build_network}"
-        -t "${RUNTIME_IMAGE}"
-        --label "${RUNTIME_SOURCE_DIGEST_LABEL}=${source_digest}"
-    )
-    if (( ${#build_args[@]} > 0 )); then
-        docker_build+=("${build_args[@]}")
-    fi
-    docker_build+=(-f "${RUNTIME_DOCKERFILE}" .)
-
-    (
-        cd "${PROJECT_ROOT}"
-        "${docker_build[@]}"
-    )
 }
 
 web_print_port_status() {

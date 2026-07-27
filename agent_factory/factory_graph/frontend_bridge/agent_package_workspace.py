@@ -223,6 +223,19 @@ def resolve_workspace_file_from_roots(
     return target
 
 
+def resolve_workspace_entry_from_roots(
+    *,
+    roots: dict[str, Path],
+    scope: str = "workdir",
+    relative_path: str,
+) -> Path:
+    root = workspace_scope_root_from_roots(roots, scope)
+    target = safe_workspace_path(root, relative_path)
+    if not target.exists():
+        raise FileNotFoundError(f"workspace entry not found: {relative_path}")
+    return target
+
+
 def delete_workspace_file_from_roots(
     *,
     context: dict[str, Any],

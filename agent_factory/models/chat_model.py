@@ -17,12 +17,12 @@ class ChatModelSettings:
     engine: str
     model: str | None
     profile_id: str | None = None
-    source: str = "local_registry"
+    source: str = "model_pool"
     temperature: float | None = None
     timeout_seconds: float | None = None
     max_output_tokens: int | None = None
     max_input_tokens: int | None = None
-    context_compression_threshold_tokens: int | None = None
+    compression_trigger_tokens: int | None = None
     multimodal: bool = False
     tool_calling: bool = True
     strict_tool_schema: bool = False
@@ -35,6 +35,10 @@ class ChatModelSettings:
     def available(self) -> bool:
         return self.engine in {"llama_cpp_rocm", "external"} and bool(self.model and self.profile_id)
 
+    @property
+    def provider(self) -> str:
+        return "external_inference" if self.engine == "external" else "local_llama_cpp_rocm"
+
     def metadata(self) -> dict[str, Any]:
         return {
             "model_role": self.role,
@@ -42,11 +46,12 @@ class ChatModelSettings:
             "model_profile_id": self.profile_id or "",
             "model_source": self.source,
             "engine": self.engine,
-            "provider": "external_inference" if self.engine == "external" else "local_llama_cpp_rocm",
+            "provider": self.provider,
             "provider_display_name": "Local AMD ROCm",
             "provider_adapter": "local_openai_compatible",
             "transport": "local_llama_cpp",
             "max_input_tokens": self.max_input_tokens,
+            "compression_trigger_tokens": self.compression_trigger_tokens,
             "max_output_tokens": self.max_output_tokens,
             "multimodal": self.multimodal,
             "structured_output_method": self.structured_output_method or "",
@@ -122,11 +127,11 @@ def settings_from_local_profile(profile: Any, *, role: str) -> ChatModelSettings
         engine=str(profile.engine),
         model=str(profile.served_model_name),
         profile_id=str(profile.profile_id),
-        source="local_registry",
+        source="model_pool",
         timeout_seconds=profile.limits.timeout_seconds,
         max_output_tokens=profile.limits.max_output_tokens,
         max_input_tokens=profile.limits.max_input_tokens,
-        context_compression_threshold_tokens=profile.limits.context_compression_threshold_tokens,
+        compression_trigger_tokens=profile.limits.context_compression_threshold_tokens,
         multimodal="image" in capabilities.input_modalities,
         tool_calling=bool(capabilities.tool_calling),
         strict_tool_schema=bool(capabilities.strict_tool_schema),

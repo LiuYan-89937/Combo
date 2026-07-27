@@ -97,6 +97,8 @@ export interface SendMessageOptions {
 export interface RuntimeMainModelOptions {
   mainModelProfileId?: string | null
   reasoningIntensity?: number | null
+  requestTimeoutSeconds?: number | null
+  maxRetries?: number | null
   userConfig?: Record<string, unknown> | null
 }
 
@@ -192,34 +194,72 @@ export function runAgentEvolutionCommand(
 }
 
 function runtimePayload(payload: Record<string, unknown>, runtimeOptions?: RuntimeMainModelOptions): Record<string, unknown> {
+  const runtimeConfig = runtimeExecutionConfig(runtimeOptions, payload.user_config)
+  if (!runtimeConfig) return payload
+  const { user_config: _payloadUserConfig, ...payloadWithoutUserConfig } = payload
+  return {
+    ...payloadWithoutUserConfig,
+    ...runtimeConfig,
+  }
+}
+
+export function runtimeExecutionConfig(
+  runtimeOptions?: RuntimeMainModelOptions,
+  baseUserConfig?: unknown,
+): {
+  runtime_request?: Record<string, unknown>
+  user_config?: Record<string, unknown>
+} | null {
   const profileId = String(runtimeOptions?.mainModelProfileId || '').trim()
   const reasoningIntensity = runtimeOptions?.reasoningIntensity
-  const payloadUserConfig = payload.user_config && typeof payload.user_config === 'object'
-    ? payload.user_config as Record<string, unknown>
+  const requestTimeoutSeconds = runtimeOptions?.requestTimeoutSeconds
+  const maxRetries = runtimeOptions?.maxRetries
+  const payloadUserConfig = baseUserConfig && typeof baseUserConfig === 'object'
+    ? baseUserConfig as Record<string, unknown>
     : null
   const extraUserConfig = runtimeOptions?.userConfig && typeof runtimeOptions.userConfig === 'object'
     ? runtimeOptions.userConfig
     : null
-  if (!profileId && reasoningIntensity == null && !extraUserConfig && !payloadUserConfig) return payload
+  const hasRuntimeRequest = (
+    typeof requestTimeoutSeconds === 'number'
+    || typeof maxRetries === 'number'
+  )
+  const hasUserConfig = Boolean(profileId || reasoningIntensity != null || extraUserConfig || payloadUserConfig)
+  if (!hasRuntimeRequest && !hasUserConfig) return null
   return {
-    ...payload,
-    user_config: {
-      ...(payloadUserConfig || {}),
-      ...(extraUserConfig || {}),
-      ...(profileId
-        ? {
-            model_profile_overrides: {
-              ...((extraUserConfig?.model_profile_overrides && typeof extraUserConfig.model_profile_overrides === 'object')
-                ? extraUserConfig.model_profile_overrides as Record<string, unknown>
-                : {}),
-              main: profileId,
-            },
-          }
-        : {}),
-      ...(typeof reasoningIntensity === 'number'
-        ? { reasoning_intensity: reasoningIntensity }
-        : {}),
-    },
+    ...(hasRuntimeRequest
+      ? {
+          runtime_request: {
+            ...(typeof requestTimeoutSeconds === 'number'
+              ? { timeout_seconds: Math.max(0, Math.round(requestTimeoutSeconds)) }
+              : {}),
+            ...(typeof maxRetries === 'number'
+              ? { max_retries: Math.max(0, Math.round(maxRetries)) }
+              : {}),
+          },
+        }
+      : {}),
+    ...(hasUserConfig
+      ? {
+          user_config: {
+            ...(payloadUserConfig || {}),
+            ...(extraUserConfig || {}),
+            ...(profileId
+              ? {
+                  model_profile_overrides: {
+                    ...((extraUserConfig?.model_profile_overrides && typeof extraUserConfig.model_profile_overrides === 'object')
+                      ? extraUserConfig.model_profile_overrides as Record<string, unknown>
+                      : {}),
+                    main: profileId,
+                  },
+                }
+              : {}),
+            ...(typeof reasoningIntensity === 'number'
+              ? { reasoning_intensity: reasoningIntensity }
+              : {}),
+          },
+        }
+      : {}),
   }
 }
 
@@ -239,12 +279,13 @@ export interface ResumeInterruptOptions {
 export function resumeInterruptCommand(
   options: ResumeInterruptOptions,
   sessionId?: string | null,
+  runtimeOptions?: RuntimeMainModelOptions,
 ): FactoryFrontendCommand {
   const requestId = generateRequestId()
   return createCommand('resume_interrupt', {
     request_id: requestId,
     session_id: sessionId,
-    payload: options,
+    payload: runtimePayload(options, runtimeOptions),
   })
 }
 

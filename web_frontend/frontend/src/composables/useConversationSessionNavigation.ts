@@ -4,22 +4,22 @@ import { useCommand } from '@/composables/useCommand'
 import { useAgentStore } from '@/stores/agent'
 import { useRuntimeStore } from '@/stores/runtime'
 
-type FactoryConversationMode = 'chat' | 'create_agent' | 'evolve_agent'
+type FactoryConversationMode = 'create_agent' | 'evolve_agent'
 
 export function useConversationSessionNavigation() {
   const commands = useCommand()
   const agentStore = useAgentStore()
   const runtimeStore = useRuntimeStore()
   const { startNewAgentSession } = useAgentSessionNavigation()
-  const canStartNewConversationSession = computed(() => (
-    Boolean(agentStore.activeChatPackageId) || !runtimeStore.hasActiveRun
-  ))
-
-  function activeFactoryMode(): FactoryConversationMode {
+  const factoryMode = computed<FactoryConversationMode | null>(() => {
     if (runtimeStore.currentMode === 'create_agent') return 'create_agent'
     if (runtimeStore.currentMode === 'evolve_agent') return 'evolve_agent'
-    return 'chat'
-  }
+    return null
+  })
+  const canStartNewConversationSession = computed(() => (
+    Boolean(agentStore.activeChatPackageId)
+    || Boolean(factoryMode.value && !runtimeStore.hasActiveRun)
+  ))
 
   async function startNewConversationSession(): Promise<void> {
     if (!canStartNewConversationSession.value) return
@@ -28,14 +28,14 @@ export function useConversationSessionNavigation() {
       await startNewAgentSession(packageId)
       return
     }
-    const mode = activeFactoryMode()
+    const mode = factoryMode.value
+    if (!mode) return
     const evolutionPackageId = mode === 'evolve_agent' ? agentStore.selectedPackageId : null
     runtimeStore.showEmptyFactoryConversation(mode, evolutionPackageId)
     commands.newSession(mode, evolutionPackageId)
   }
 
   return {
-    activeFactoryMode,
     canStartNewConversationSession,
     startNewConversationSession,
   }

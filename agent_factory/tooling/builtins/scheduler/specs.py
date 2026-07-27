@@ -15,7 +15,10 @@ def get_scheduler_tool_specs() -> list[ToolSpec]:
             entrypoint="agent_factory.scheduler_system.tools:run",
             input_schema=_input_schema(),
             output_schema={"type": "object"},
-            resources={"scheduler_runtime": "scheduler_runtime"},
+            resources={
+                "scheduler_runtime": "scheduler_runtime",
+                "runtime_execution_config": "runtime_execution_config",
+            },
             risk_level="medium",
             risk_evaluator=ToolRiskEvaluatorConfig(
                 hard="agent_factory.scheduler_system.tools:evaluate_risk",
@@ -162,7 +165,7 @@ def _script_run_target_schema() -> dict:
                     "command": {
                         "type": "string",
                         "minLength": 1,
-                        "description": "交给 bash 工具执行的命令文本。",
+                        "description": "交给当前平台 shell 工具执行的命令文本。",
                     },
                     "cwd": {"type": "string"},
                     "mode": {"type": "string", "enum": ["foreground", "background"]},

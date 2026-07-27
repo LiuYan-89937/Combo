@@ -388,8 +388,6 @@ check_bootstrap_prerequisites() {
 check_web_prerequisites() {
     require_command node "Install Node.js 18 or newer."
     require_command npm "Install npm."
-    require_command docker "Install Docker Desktop or Docker Engine."
-    docker info >/dev/null 2>&1 || fail "Docker is installed but the daemon is not running"
 }
 
 bootstrap() {

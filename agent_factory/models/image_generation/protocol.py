@@ -13,7 +13,7 @@ class ImageGenerationSettings:
     model: str
     base_url: str
     profile_id: str = ""
-    source: str = "local_registry"
+    source: str = "model_pool"
     timeout_seconds: float | None = None
     default_options: dict[str, Any] = field(default_factory=dict)
 

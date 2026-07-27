@@ -8,7 +8,7 @@
     "npm_requirements": [],
     "system_binaries": [],
     "platform_architectures": ["amd64", "arm64"],
-    "base_image": "agentfactory-runtime-python:3.12",
+    "base_image": "local-python",
     "verification_commands": [["python", "-c", "import numpy, pandas, requests"]],
     "install_timeout_seconds": 600
   }

@@ -2,7 +2,7 @@
 
 # FastAgentFactory Agent Architecture
 
-![FastAgentFactory Agent architecture](assets/diagrams/fastagentfactory-agent-architecture.png)
+![FastAgentFactory Agent architecture](assets/diagrams/fastagentfactory-agent-architecture-native.png)
 
 ## 1. User Experience
 
@@ -39,7 +39,7 @@ The model pool manages chat, embedding, and image-generation profiles. The AMD i
 - A session owns conversation state, checkpoint state, workspace, and tool output.
 - A collaboration task owns a sub-agent session and delivery workspace.
 - Resource values are encrypted and released only to authorized package executions.
-- Docker separates Agent, MCP, and sub-agent processes from the host.
+- Native Agent subprocesses are supervised per package and session, with isolated writable workspaces and content-addressed dependency environments.
 - Model services remain on loopback and are reached directly or through SSH tunnels.
 
 The diagram is a submission-oriented architecture view. Source code and runtime contracts remain the authoritative implementation reference.

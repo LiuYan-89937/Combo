@@ -1,17 +1,12 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
 from typing import Any
 from collections.abc import Callable
 
-try:
-    import fcntl
-except ImportError:  # pragma: no cover - Windows fallback for non-production local runs.
-    fcntl = None  # type: ignore[assignment]
-
+from agent_factory.file_lock import exclusive_file_lock
 from agent_factory.tooling.skills.registry import SkillRegistry, SkillResourceFragmentNotFound
 from agent_factory.tooling.skills.schema import SkillGatewayState
 
@@ -54,27 +49,13 @@ def run_with_gateway_state_lock(resources: dict[str, Any], callback: Callable[[S
         return callback(registry)
     state_path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = state_path.with_name(f"{state_path.name}.lock")
-    with _file_lock(lock_path):
+    with exclusive_file_lock(lock_path):
         registry = registry_from_resources(resources)
         if state_path.exists():
             registry.gateway_state = SkillGatewayState.model_validate_json(state_path.read_text(encoding="utf-8"))
         result = callback(registry)
         persist_registry(resources, registry)
         return result
-
-
-@contextmanager
-def _file_lock(path: Path):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a+", encoding="utf-8") as handle:
-        if fcntl is not None:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            if fcntl is not None:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"

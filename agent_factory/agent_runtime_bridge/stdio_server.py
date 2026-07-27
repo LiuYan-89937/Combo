@@ -32,6 +32,11 @@ from agent_factory.scheduler_system import (
 )
 from agent_factory.scheduler_system.events import SchedulerEventPayload
 from agent_factory.scheduler_system.management import manage_scheduler_runtime
+from agent_factory.scheduler_system.execution_config import (
+    scheduler_run_max_retries,
+    scheduler_run_timeout_seconds,
+    scheduler_run_user_config,
+)
 from agent_factory.scheduler_system.seeds import apply_scheduler_seed_contract
 from agent_factory.knowledge_system.events import KNOWLEDGE_EVENT_TYPES
 from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
@@ -234,7 +239,7 @@ class BridgeRuntimeState:
             normalizer.runtime_event(
                 "node_started",
                 node_id="runtime_container",
-                node_label="Runtime Container",
+                node_label="Local Runtime",
                 node_kind="system",
                 payload={
                     "package_root": str(PACKAGE_ROOT),
@@ -247,7 +252,7 @@ class BridgeRuntimeState:
             normalizer.runtime_event(
                 "node_completed",
                 node_id="runtime_container",
-                node_label="Runtime Container",
+                node_label="Local Runtime",
                 node_kind="system",
                 payload={"status": "ready"},
             )
@@ -370,7 +375,7 @@ def main() -> int:
                 graph_id="agent_runtime_bridge",
                 producer_type="agent_runtime",
                 node_id="runtime_container",
-                node_label="Runtime Container",
+                node_label="Local Runtime",
                 node_kind="system",
                 payload={"status": "command_received", "command_type": command_type},
             )
@@ -465,9 +470,20 @@ def _scheduled_graph_runner(*, package: LoadedAgentPackage, compiled: Any, facad
         run_context = facade.prepare_run_context(
             compiled.compiled_app,
             user_input=message,
-            user_config=compiled.runtime_config["user_config"],
+            user_config=scheduler_run_user_config(
+                job,
+                compiled.runtime_config["user_config"],
+            ),
             agent_config=compiled.runtime_config["agent_config"],
             session_config=session_config,
+        )
+        run_context.state.execution.max_retries = scheduler_run_max_retries(
+            job,
+            run_context.state.execution.max_retries,
+        )
+        run_context.state.execution.timeout_seconds = scheduler_run_timeout_seconds(
+            job,
+            run_context.state.execution.timeout_seconds,
         )
         normalizer.session_id = run_context.session_id
         final_state = None
@@ -569,7 +585,7 @@ def _instance_status_payload(
         "package_id": resolved_package.package_root.name if resolved_package is not None else PACKAGE_ROOT.name,
         "agent_id": resolved_package.assembly_spec.agent.id if resolved_package is not None else PACKAGE_ROOT.name,
         "agent_name": resolved_package.assembly_spec.agent.name if resolved_package is not None else PACKAGE_ROOT.name,
-        "backend": "container",
+        "backend": "local",
         "status": status,
         "ready": status == "ready",
     }
@@ -635,9 +651,9 @@ def _run_message(
         agent_config=compiled.runtime_config["agent_config"],
         session_config=session_config,
     )
-    run_context.state.execution.timeout_seconds = RuntimeRequestPolicy.from_payload(
-        payload.get("runtime_request")
-    ).timeout_seconds
+    request_policy = RuntimeRequestPolicy.from_payload(payload.get("runtime_request"))
+    run_context.state.execution.timeout_seconds = request_policy.timeout_seconds
+    run_context.state.execution.max_retries = request_policy.max_retries
     normalizer.session_id = run_context.session_id
     if _emit_pending_checkpoint_interrupt(normalizer, compiled.compiled_app, run_context.thread_id):
         return 0
@@ -780,9 +796,9 @@ def _resume_interrupt(
         session_id=session_id,
         session_config=session_config,
     )
-    run_context.state.execution.timeout_seconds = RuntimeRequestPolicy.from_payload(
-        payload.get("runtime_request")
-    ).timeout_seconds
+    request_policy = RuntimeRequestPolicy.from_payload(payload.get("runtime_request"))
+    run_context.state.execution.timeout_seconds = request_policy.timeout_seconds
+    run_context.state.execution.max_retries = request_policy.max_retries
     final_state = None
     stop_requested = False
     stream_iter = facade.instance.controller.stream_resume(

@@ -10,7 +10,6 @@ import asyncio
 import logging
 import sys
 from pathlib import Path
-from uuid import uuid4
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,12 +23,6 @@ from agent_factory.runtime_kernel.persistence import close_shared_sqlite_checkpo
 from agent_factory.collaboration_system import CollaborationService
 from agent_factory.agent_group_system import AgentGroupService
 from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import AgentPackageRuntimeManager
-from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendCommand
-from agent_factory.factory_graph.session import (
-    FactorySessionManager,
-    record_has_any_source,
-    without_mode_source,
-)
 from agent_factory.tooling.skillhub import ensure_global_skillhub_cli
 from web_frontend.backend.routes.agent_packages import create_agent_package_router
 from web_frontend.backend.routes.agent_group import create_agent_group_router
@@ -47,6 +40,7 @@ from web_frontend.backend.routes.tips import create_tip_router
 from web_frontend.backend.routes.workspace import create_workspace_router
 from web_frontend.backend.runtime_bridge import RuntimeBridge
 from web_frontend.backend.event_loop_watchdog import EventLoopWatchdog
+from web_frontend.backend.parent_process_watchdog import start_parent_process_watchdog
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -57,11 +51,6 @@ runtime_bridge = RuntimeBridge()
 event_loop_watchdog = EventLoopWatchdog(logger)
 collaboration_service = CollaborationService(
     runtime_factory=lambda: _agent_package_runtime(runtime_bridge),
-    factory_session_deleter=lambda session_id, owned_chat_session_ids: _delete_collaboration_factory_session(
-        runtime_bridge,
-        session_id,
-        owned_chat_session_ids,
-    ),
     logger=logger,
 )
 agent_group_service = AgentGroupService(
@@ -70,54 +59,6 @@ agent_group_service = AgentGroupService(
 )
 local_inference_runtime_manager = LocalInferenceRuntimeManager()
 benchmark_service = BenchmarkService(local_inference_runtime_manager)
-
-
-def _delete_collaboration_factory_session(
-    bridge: RuntimeBridge,
-    session_id: str,
-    owned_chat_session_ids: list[str],
-) -> dict[str, object]:
-    clean_session_id = str(session_id or "").strip()
-    if not clean_session_id:
-        return {"session_id": "", "deleted": False, "missing": True}
-    manager = FactorySessionManager.from_env()
-    try:
-        record = manager.load(clean_session_id)
-    except FileNotFoundError:
-        return {"session_id": clean_session_id, "deleted": False, "missing": True}
-    linked_session_id = str(record.chat_agent_package_session_id or "").strip()
-    owned = {str(item or "").strip() for item in owned_chat_session_ids if str(item or "").strip()}
-    if linked_session_id and linked_session_id not in owned:
-        raise ValueError(
-            "factory session chat ownership does not match the collaboration main Agent session"
-        )
-    adapter = bridge.adapter
-    retained = record_has_any_source(without_mode_source(record, "chat"))
-    if adapter is None:
-        updated = without_mode_source(record, "chat")
-        if retained:
-            manager.save(updated)
-        else:
-            manager.delete(clean_session_id)
-        return {
-            "session_id": record.session_id,
-            "deleted": not retained,
-            "detached_chat": True,
-        }
-    adapter.delete_session(
-        FactoryFrontendCommand(
-            type="delete_session",
-            request_id=f"collaboration-delete-{uuid4().hex}",
-            session_id=clean_session_id,
-            mode="chat",
-        )
-    )
-    return {
-        "session_id": clean_session_id,
-        "deleted": not retained,
-        "detached_chat": True,
-    }
-
 
 def _observe_agent_group_runtime_event(event_payload: dict) -> None:
     """Persist group runtime events, then dispatch the next member turn when a lane frees."""
@@ -175,14 +116,22 @@ async def _ensure_skillhub_cli() -> None:
             result.get("cli_version") or "",
         )
         return
-    logger.warning("SkillHUB CLI is not available; set AGENTFACTORY_SKILLHUB_AUTO_INSTALL=true or install it manually.")
+    logger.warning(
+        "%s",
+        result.get("message")
+        or "SkillHUB CLI is not available; install a native SkillHUB CLI distribution to enable it.",
+    )
 
 
 @app.on_event("startup")
 async def startup_event():
+    start_parent_process_watchdog()
     event_loop_watchdog.start(asyncio.get_running_loop())
-    await _ensure_skillhub_cli()
     await runtime_bridge.start()
+    app.state.skillhub_cli_install_task = asyncio.create_task(
+        _ensure_skillhub_cli(),
+        name="skillhub-cli-install",
+    )
     recovered_group_commits = agent_group_service.recover_workspace_transactions()
     if recovered_group_commits:
         logger.info("Recovered %s pending agent-group workspace commits", len(recovered_group_commits))

@@ -428,10 +428,7 @@ class AgentGroupService:
             )
             return
         if event_type == "tool_approval_requested":
-            self.store.set_pending_approval(
-                group_run_id,
-                event_payload,
-            )
+            self.store.set_pending_approval(group_run_id, event_payload)
             return
         status = {
             "run_completed": "completed",

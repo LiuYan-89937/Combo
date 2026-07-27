@@ -11,6 +11,7 @@ from agent_factory.factory_graph.frontend_bridge.agent_package_workspace import 
     list_workspace_entries_from_roots,
     delete_workspace_file_from_roots,
     read_workspace_file_from_roots,
+    resolve_workspace_entry_from_roots,
     resolve_workspace_file_from_roots,
     workspace_roots_payload,
 )
@@ -30,17 +31,6 @@ class FrontendWorkspaceTarget:
     @property
     def available(self) -> bool:
         return self.unavailable_reason is None
-
-    def unavailable_reason_for_scope(self, scope: str) -> str | None:
-        if self.unavailable_reason is not None:
-            return self.unavailable_reason
-        if (
-            self.resource_mode == "package"
-            and scope == "workdir"
-            and not str(self.context.get("package_session_id") or "").strip()
-        ):
-            return "package workdir is not available before the first conversation turn"
-        return None
 
 
 class FrontendWorkspaceService:
@@ -63,15 +53,8 @@ class FrontendWorkspaceService:
         session_record: Any | None = None,
     ) -> dict[str, Any]:
         target = self._target(payload, session_record=session_record)
-        unavailable_reason = target.unavailable_reason_for_scope(scope)
-        if unavailable_reason is not None:
-            return _empty_workspace_payload(
-                target,
-                reason=unavailable_reason,
-                scope=scope,
-                path=relative_path,
-                entries=[],
-            )
+        if not target.available:
+            return _empty_workspace_payload(target, scope=scope, path=relative_path, entries=[])
         return list_workspace_entries_from_roots(
             context=target.context,
             roots=target.roots,
@@ -89,9 +72,8 @@ class FrontendWorkspaceService:
         session_record: Any | None = None,
     ) -> dict[str, Any]:
         target = self._target(payload, session_record=session_record)
-        unavailable_reason = target.unavailable_reason_for_scope(scope)
-        if unavailable_reason is not None:
-            raise FileNotFoundError(unavailable_reason)
+        if not target.available:
+            raise FileNotFoundError(target.unavailable_reason or "workspace is not available")
         return read_workspace_file_from_roots(
             context=target.context,
             roots=target.roots,
@@ -109,10 +91,26 @@ class FrontendWorkspaceService:
         session_record: Any | None = None,
     ) -> Path:
         target = self._target(payload, session_record=session_record)
-        unavailable_reason = target.unavailable_reason_for_scope(scope)
-        if unavailable_reason is not None:
-            raise FileNotFoundError(unavailable_reason)
+        if not target.available:
+            raise FileNotFoundError(target.unavailable_reason or "workspace is not available")
         return resolve_workspace_file_from_roots(
+            roots=target.roots,
+            scope=scope,
+            relative_path=relative_path,
+        )
+
+    def resolve_entry(
+        self,
+        payload: dict[str, Any],
+        *,
+        scope: str = "workdir",
+        relative_path: str,
+        session_record: Any | None = None,
+    ) -> Path:
+        target = self._target(payload, session_record=session_record)
+        if not target.available:
+            raise FileNotFoundError(target.unavailable_reason or "workspace is not available")
+        return resolve_workspace_entry_from_roots(
             roots=target.roots,
             scope=scope,
             relative_path=relative_path,
@@ -127,9 +125,8 @@ class FrontendWorkspaceService:
         session_record: Any | None = None,
     ) -> dict[str, Any]:
         target = self._target(payload, session_record=session_record)
-        unavailable_reason = target.unavailable_reason_for_scope(scope)
-        if unavailable_reason is not None:
-            raise FileNotFoundError(unavailable_reason)
+        if not target.available:
+            raise FileNotFoundError(target.unavailable_reason or "workspace is not available")
         return delete_workspace_file_from_roots(
             context=target.context,
             roots=target.roots,
@@ -152,14 +149,25 @@ class FrontendWorkspaceService:
     def _package_target(self, payload: dict[str, Any]) -> FrontendWorkspaceTarget:
         package_id = str(payload.get("package_id") or "").strip() or SYSTEM_CHAT_PACKAGE_ID
         package_session_id = self._package_session_id(payload)
-        runtime_roots = self.agent_package_runtime.workspace_root_paths(package_id, session_id=package_session_id)
+        context = {
+            "resource_mode": "package",
+            "package_id": package_id,
+            **({"package_session_id": package_session_id} if package_session_id else {}),
+        }
+        if not package_session_id:
+            return FrontendWorkspaceTarget(
+                resource_mode="package",
+                context=context,
+                roots={},
+                unavailable_reason="select or create a session before opening its workspace",
+            )
+        runtime_roots = self.agent_package_runtime.workspace_root_paths(
+            package_id,
+            session_id=package_session_id,
+        )
         return FrontendWorkspaceTarget(
             resource_mode="package",
-            context={
-                "resource_mode": "package",
-                "package_id": package_id,
-                **({"package_session_id": package_session_id} if package_session_id else {}),
-            },
+            context=context,
             roots={"workdir": runtime_roots["workdir"]},
         )
 
@@ -288,13 +296,7 @@ class FrontendWorkspaceService:
             return None
 
     def _package_session_id(self, payload: dict[str, Any]) -> str:
-        explicit = str(payload.get("package_session_id") or payload.get("agent_session_id") or "").strip()
-        if explicit:
-            return explicit
-        record = self._session_record(payload, session_record=None)
-        if record is None:
-            return ""
-        return str(getattr(record, "chat_agent_package_session_id", "") or "").strip()
+        return str(payload.get("package_session_id") or payload.get("agent_session_id") or "").strip()
 
 
 def _resource_mode(payload: dict[str, Any]) -> str:
@@ -318,16 +320,11 @@ def _factory_session_context(payload: dict[str, Any], record: Any | None) -> dic
     return {"factory_session_id": factory_session_id} if factory_session_id else {}
 
 
-def _empty_workspace_payload(
-    target: FrontendWorkspaceTarget,
-    *,
-    reason: str | None = None,
-    **extra: Any,
-) -> dict[str, Any]:
+def _empty_workspace_payload(target: FrontendWorkspaceTarget, **extra: Any) -> dict[str, Any]:
     return {
         **target.context,
         "available": False,
-        "reason": reason or target.unavailable_reason,
+        "reason": target.unavailable_reason,
         "roots": [],
         **extra,
     }

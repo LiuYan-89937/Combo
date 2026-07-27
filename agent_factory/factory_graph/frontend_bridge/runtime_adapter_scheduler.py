@@ -137,87 +137,27 @@ class RuntimeSchedulerCommandMixin:
         payload = dict(job.target.payload)
         message = str(payload.get("message") or "").strip()
         request_id = f"scheduler-{_run.run_id}"
-        target_scope = str(payload.get("target_scope") or "").strip() or "chat"
-        if target_scope == "agent_package":
-            return self._run_scheduled_agent_package(job=job, run=_run, message=message, request_id=request_id)
-        if target_scope != "chat":
+        target_scope = str(payload.get("target_scope") or "").strip() or "agent_package"
+        if target_scope != "agent_package":
             return {"status": "failed", "error": f"unsupported scheduler graph target_scope: {target_scope}"}
-        package_id = SYSTEM_CHAT_PACKAGE_ID
-        agent_session_id = scheduler_run_session_id(
-            job,
-            _run,
-            namespace=f"agent_package:{package_id}",
-        )
-        normalizer = RuntimeEventNormalizer(
-            emit=self.emit,
+        package_id = str(payload.get("package_id") or "").strip() or SYSTEM_CHAT_PACKAGE_ID
+        return self._run_scheduled_agent_package(
+            job=job,
+            run=_run,
+            message=message,
             request_id=request_id,
-            session_id=agent_session_id,
-            mode="agent_package",
-            graph_id="scheduled_factory_chat",
-            producer_type="factory_runtime",
+            package_id=package_id,
         )
-        try:
-            self.agent_package_runtime.ensure_session(
-                package_id,
-                session_id=agent_session_id,
-                first_user_input=message,
-                session_kind="scheduler",
-                visible_in_agent_session_list=False,
-            )
-            run = self.agent_package_runtime.stream(
-                package_id,
-                user_input=message,
-                session_id=agent_session_id,
-                request_id=request_id,
-                session_kind="scheduler",
-                visible_in_agent_session_list=False,
-            )
-            consume_result = self._consume_agent_package_stream(
-                package_id=package_id,
-                run=run,
-                normalizer=normalizer,
-                frontend_mode="agent_package",
-                frontend_session_id=None,
-                sync_system_chat_session=False,
-            )
-        except AttachmentImportError as exc:
-            payload = attachment_import_error_payload(exc)
-            normalizer.runtime_event(
-                "run_failed",
-                span_id=normalizer.run_span_id,
-                severity="error",
-                message=payload["message"],
-                payload=payload,
-            )
-            return {"status": "failed", "error": payload["message"], "payload": payload}
-        except Exception as exc:
-            normalizer.emit_run_failed(exc)
-            return {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
-        if consume_result.status == "failed":
-            return _scheduled_failure_result(consume_result, fallback="factory scheduled chat run failed")
-        if consume_result.status == "interrupted":
-            return {
-                "status": "interrupted",
-                "request_id": request_id,
-                "target_scope": "chat",
-                "package_id": package_id,
-                "agent_session": run.session,
-                "output_summary": "factory scheduled chat run requested user input",
-            }
-        return {
-            "status": "completed",
-            "request_id": request_id,
-            "target_scope": "chat",
-            "package_id": package_id,
-            "agent_session": run.session,
-            "output_summary": "factory scheduled chat run completed",
-        }
 
-    def _run_scheduled_agent_package(self, *, job: Any, run: Any, message: str, request_id: str) -> dict[str, Any]:
-        payload = dict(job.target.payload)
-        package_id = str(payload.get("package_id") or "").strip()
-        if not package_id:
-            return {"status": "failed", "error": "scheduled agent package run requires package_id"}
+    def _run_scheduled_agent_package(
+        self,
+        *,
+        job: Any,
+        run: Any,
+        message: str,
+        request_id: str,
+        package_id: str,
+    ) -> dict[str, Any]:
         session_id = scheduler_run_session_id(job, run, namespace=f"agent_package:{package_id}")
         package_name = package_id
         try:
@@ -246,6 +186,8 @@ class RuntimeSchedulerCommandMixin:
                 user_input=message,
                 session_id=session_id,
                 request_id=request_id,
+                user_config=dict(job.runtime_config.user_config),
+                runtime_request=dict(job.runtime_config.runtime_request),
                 session_kind="scheduler",
                 visible_in_agent_session_list=False,
             )
@@ -323,7 +265,13 @@ class RuntimeSchedulerCommandMixin:
     def _factory_tool_runtime_resources(self) -> dict[str, Any]:
         if self.scheduler_runtime is None:
             return {}
-        return {"scheduler_runtime": self.scheduler_runtime}
+        return {
+            "scheduler_runtime": self.scheduler_runtime,
+            "runtime_execution_config": {
+                "user_config": {},
+                "runtime_request": {},
+            },
+        }
 
 def _scheduled_failure_result(result: Any, *, fallback: str) -> dict[str, Any]:
     terminal_event = getattr(result, "terminal_event", None)

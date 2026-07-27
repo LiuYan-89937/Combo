@@ -4,10 +4,6 @@ interface RecentAgentSessionsResponse {
   sessions: any[]
 }
 
-interface AgentPackageContextConfigResponse {
-  package: any
-}
-
 interface AgentPackageConfigurationResponse {
   package: any
 }
@@ -50,17 +46,6 @@ export const agentPackagesApi = {
     requestEvent(`/api/agent-packages/${encodeURIComponent(packageId)}`, { method: 'DELETE' }),
   exportArchive: (packageId: string) =>
     requestBlob(`/api/agent-packages/${encodeURIComponent(packageId)}/export`),
-  updateContextConfig: (
-    packageId: string,
-    payload: { context_window_tokens?: number | null; compression_threshold_tokens?: number | null },
-  ) =>
-    requestJson<AgentPackageContextConfigResponse>(
-      `/api/agent-packages/${encodeURIComponent(packageId)}/context-config`,
-      {
-        method: 'PATCH',
-        body: JSON.stringify(payload),
-      }
-    ),
   updateToolDescription: (
     packageId: string,
     toolKind: 'model_tool' | 'package_tool',

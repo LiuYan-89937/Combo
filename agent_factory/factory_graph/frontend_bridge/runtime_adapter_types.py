@@ -5,22 +5,17 @@ from dataclasses import dataclass
 
 from agent_factory.factory_graph.frontend_bridge.event_normalizer import RuntimeEventNormalizer
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent
+from agent_factory.builtin_packages import DEFAULT_AGENT_PACKAGE_ID
 
 
 Emit = Callable[[FactoryFrontendEvent], None]
-SYSTEM_CHAT_PACKAGE_ID = "factory_chat"
+SYSTEM_CHAT_PACKAGE_ID = DEFAULT_AGENT_PACKAGE_ID
 
 
 @dataclass(slots=True)
 class FactoryBridgeOptions:
     show_state: bool = False
     show_messages: bool = True
-    context_window_tokens: int | None = None
-    context_window_tokens_source: str = "unset"
-
-    @classmethod
-    def defaults(cls) -> "FactoryBridgeOptions":
-        return cls()
 
 
 @dataclass(slots=True)

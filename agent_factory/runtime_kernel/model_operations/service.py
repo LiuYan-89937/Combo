@@ -26,10 +26,8 @@ from agent_factory.model_pool.runtime_override import (
 )
 from agent_factory.context_system.events import emit_context_event
 from agent_factory.context_system.token_counter import (
-    count_messages_tokens,
     context_window_payload,
-    context_window_tokens_from_profile,
-    effective_compression_threshold,
+    model_context_limits,
     provider_token_budget_payload,
     token_count_from_usage_metadata,
 )
@@ -53,11 +51,13 @@ class ModelOperationService:
         model: Any | None = None,
         settings: Any | None = None,
         models_by_role: Mapping[str, tuple[Any, Any]] | None = None,
+        require_runtime_profile: bool = False,
     ) -> None:
         self.model_role = role
         self._model = model
         self._settings = settings
         self._models_by_role = dict(models_by_role or {})
+        self._require_runtime_profile = require_runtime_profile
 
     def text(
         self,
@@ -99,16 +99,6 @@ class ModelOperationService:
             tools=tool_list,
             node_id=node_id,
             image_input_enabled=bool(metadata.get("multimodal")),
-        )
-        _emit_context_window(
-            state=state,
-            services=services,
-            node_id=node_id,
-            model=model,
-            model_role=effective_model_role,
-            messages=envelope.messages,
-            tools=tool_list,
-            source="model_operation.before_call",
         )
         trace_span_id = _start_trace_span(
             state=state,
@@ -270,16 +260,6 @@ class ModelOperationService:
             payload={"schema_name": output_model.__name__, **operation_context, "model_input": input_diagnostics},
         )
         for attempt in range(1, attempts + 1):
-            _emit_context_window(
-                state=state,
-                services=services,
-                node_id=node_id,
-                model=model,
-                model_role=effective_model_role,
-                messages=request_messages,
-                tools=[],
-                source="model_operation.before_structured_call",
-            )
             _emit(
                 emit_event,
                 "model_call_started",
@@ -389,7 +369,7 @@ class ModelOperationService:
 
     def _resolve_model(self, role: ModelRole | None = None, *, state: Any | None = None) -> tuple[Any, dict[str, Any]]:
         requested_role = role or self.model_role
-        if requested_role == "main" and state is not None:
+        if state is not None and (requested_role == "main" or self._require_runtime_profile):
             override = resolve_runtime_main_chat_model_from_state(state)
             if override is not None:
                 return self._apply_runtime_reasoning(
@@ -403,6 +383,8 @@ class ModelOperationService:
                     model_role="main",
                     requested_model_role=requested_role,
                 )
+        if self._require_runtime_profile:
+            raise RuntimeError("runtime main model profile is not selected")
         if self._models_by_role:
             item = self._models_by_role.get(requested_role)
             resolved_role = requested_role
@@ -513,6 +495,19 @@ class ModelOperationService:
         except RuntimeError:
             return None
         return model
+
+    def context_limits_for_role(
+        self,
+        role: str | None = None,
+        *,
+        state: Any | None = None,
+    ) -> dict[str, int | None]:
+        requested_role = role if role in {"main", "task", "compression"} else self.model_role
+        _model, metadata = self._resolve_model(requested_role, state=state)  # type: ignore[arg-type]
+        return {
+            "max_input_tokens": metadata.get("max_input_tokens"),
+            "compression_trigger_tokens": metadata.get("compression_trigger_tokens"),
+        }
 
 
 def _emit(emit_event, event_type: str, payload: dict[str, Any]) -> None:
@@ -758,9 +753,11 @@ def _structured_input_diagnostics(
     else:
         diagnostics = {
             "stable_prefix_digest": "",
+            "knowledge_guidance_digest": "",
             "dynamic_evidence_digest": "",
             "tool_surface_digest": "",
             "stable_system_chars": 0,
+            "knowledge_guidance_chars": 0,
             "dynamic_evidence_chars": 0,
             "history_message_count": _base_message_count(request_messages),
             "tool_count": tool_count,
@@ -892,41 +889,6 @@ def _structured_retry_instruction(
     )
 
 
-def _emit_context_window(
-    *,
-    state: Any,
-    services: Any | None,
-    node_id: str | None,
-    model: Any,
-    model_role: str,
-    messages: list[Any],
-    tools: list[BaseTool],
-    source: str,
-) -> None:
-    if services is None or node_id is None:
-        return
-    threshold = _compression_threshold(services=services, node_id=node_id)
-    result = count_messages_tokens(messages, services=services, model=model, model_role=model_role, tools=tools)
-    if result.token_count is None:
-        return
-    emit_context_event(
-        services=services,
-        state=state,
-        event_type="context_window_updated",
-        node_id=node_id,
-        payload=context_window_payload(
-            node_id=node_id,
-            token_count=result.token_count,
-            token_count_method=result.method,
-            compression_threshold_tokens=threshold,
-            context_window_tokens=_context_window_tokens(services),
-            error=result.error,
-            model_role=result.model_role or model_role,
-            source=source,
-        ),
-    )
-
-
 def _emit_provider_usage_context_window(
     *,
     state: Any,
@@ -940,6 +902,7 @@ def _emit_provider_usage_context_window(
     token_count = token_count_from_usage_metadata(getattr(response, "usage_metadata", None))
     if token_count is None:
         return
+    limits = model_context_limits(services=services, state=state, model_role=model_role)
     emit_context_event(
         services=services,
         state=state,
@@ -949,40 +912,9 @@ def _emit_provider_usage_context_window(
             node_id=node_id,
             token_count=token_count,
             token_count_method="provider_usage",
-            compression_threshold_tokens=_compression_threshold(services=services, node_id=node_id),
-            context_window_tokens=_context_window_tokens(services),
+            compression_threshold_tokens=limits.compression_trigger_tokens,
+            context_window_tokens=limits.context_window_tokens,
             model_role=model_role,
             source="model_operation.provider_usage",
         ),
     )
-
-
-def _compression_threshold(*, services: Any, node_id: str) -> int | None:
-    runtime = getattr(services, "context_system", None)
-    if runtime is None or not hasattr(runtime, "policy_for_node"):
-        return None
-    try:
-        configured = int(runtime.policy_for_node(node_id).compression.trigger_token_threshold)
-    except Exception:
-        return None
-    return effective_compression_threshold(
-        configured_threshold=configured,
-        context_window_tokens=_context_window_tokens(services),
-    )
-
-
-def _context_window_tokens(services: Any | None) -> int | None:
-    resources = getattr(services, "runtime_resources", None)
-    if not isinstance(resources, dict):
-        return context_window_tokens_from_profile(services=services)
-    value = resources.get("context_window_tokens")
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return context_window_tokens_from_profile(services=services)
-    return parsed if parsed > 0 else context_window_tokens_from_profile(services=services)
-
-
-def _model_role(services: Any) -> str:
-    service = getattr(services, "model_operation_service", None)
-    return str(getattr(service, "model_role", None) or "main")

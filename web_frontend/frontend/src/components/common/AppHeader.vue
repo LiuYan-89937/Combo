@@ -128,7 +128,7 @@ import { useI18n } from '@/composables/useI18n'
 import { useAgentStore } from '@/stores/agent'
 import { useUiStore } from '@/stores/ui'
 import { useRuntimeStore } from '@/stores/runtime'
-import { isAgentSessionsLanding } from '@/utils/agentSessionRoute'
+import { isAgentPackageRoute, isBuiltinChatRoute } from '@/utils/agentSessionRoute'
 
 const route = useRoute()
 const { t } = useI18n()
@@ -142,7 +142,7 @@ const schedulerRunning = computed(() => runtimeStore.schedulerRunNotices.some((n
 const isAgentConversation = computed(() => (
   route.name === 'Factory'
   && runtimeStore.currentMode === 'agent_package'
-  && (Boolean(agentStore.activeChatPackageId) || isAgentSessionsLanding(route.query))
+  && isAgentPackageRoute(route.query)
 ))
 
 const activeAgentName = computed(() => {
@@ -176,6 +176,7 @@ const currentRouteName = computed(() => {
   if (route.name === 'Evolution') return t('route.evolution')
   if (isConversationRoute && runtimeStore.currentMode === 'evolve_agent') return t('route.evolution')
   if (isConversationRoute && runtimeStore.currentMode === 'create_agent') return t('route.manufacturing')
+  if (route.name === 'Factory' && isBuiltinChatRoute(route.query)) return t('route.chat')
   if (isConversationRoute && runtimeStore.currentMode === 'agent_package') return t('mode.agentPackageRoute')
   return t(routeTitleKey(route.name))
 })

@@ -273,14 +273,9 @@ class ContextContractBuilder:
 
     def build(self, contract: ContextContract, context: RuntimeBuildContext) -> RuntimeContribution:
         sources = default_context_sources()
-        resources: dict[str, Any] = {}
-        if contract.config.context_window_tokens is not None:
-            resources["context_window_tokens"] = contract.config.context_window_tokens
-            resources["context_window_tokens_source"] = "package"
         return RuntimeContribution(
             services={"context_system": ContextSystemRuntime(config=contract.config, sources=sources)},
             system_wrappers=[CONTEXT_PREPARE_SYSTEM_WRAPPER_ID],
-            resources=resources,
         )
 
 
@@ -374,8 +369,11 @@ class ModelContractBuilder:
         resolved_profiles = {
             role: resolve_chat_model_binding(binding, role=role)
             for role, binding in contract.config.bindings.items()
+            if binding.source != "runtime"
         }
-        resolved_main = resolved_profiles["main"]
+        runtime_main_profile_required = main_binding.source == "runtime"
+        if not runtime_main_profile_required and "main" not in resolved_profiles:
+            raise ValueError("model_contract.v1 main binding could not be resolved")
         models_by_role = {
             role: (resolved.model, resolved.settings)
             for role, resolved in resolved_profiles.items()
@@ -385,7 +383,7 @@ class ModelContractBuilder:
         for tool_id, binding in contract.config.tool_bindings.items():
             if binding.capability in {"image_output", "image_edit"}:
                 if not isinstance(artifact_store, ArtifactStore):
-                    raise ValueError("image generation model tools require an artifact contract")
+                    raise ValueError("image generation model tools require artifact_store from artifact contract")
                 resolved_image = resolve_image_generation_binding(
                     binding,
                     artifact_store=artifact_store,
@@ -412,7 +410,7 @@ class ModelContractBuilder:
                 "capability": binding.capability,
                 "description": binding.description,
                 "profile_id": resolved.profile_id,
-                "engine": resolved.settings.engine,
+                "provider": resolved.settings.provider,
                 "model_name": resolved.settings.model or "",
                 "model_source": resolved.settings.source,
                 "model": resolved.model,
@@ -424,12 +422,14 @@ class ModelContractBuilder:
             services={
                 "model_service": LangChainModelServiceAdapter(
                     role="main",
-                    model=resolved_main.model,
-                    settings=resolved_main.settings,
+                    model=(resolved_profiles["main"].model if "main" in resolved_profiles else None),
+                    settings=(resolved_profiles["main"].settings if "main" in resolved_profiles else None),
+                    require_runtime_profile=runtime_main_profile_required,
                 ),
                 "model_operation_service": ModelOperationService(
                     role="main",
                     models_by_role=models_by_role,
+                    require_runtime_profile=runtime_main_profile_required,
                 ),
             },
             tool_runtime_resources=(
@@ -551,7 +551,13 @@ class SchedulerContractBuilder:
         worker = SchedulerWorker(runtime)
         return RuntimeContribution(
             services={"scheduler_store": store, "scheduler_runtime": runtime},
-            tool_runtime_resources={"scheduler_runtime": runtime},
+            tool_runtime_resources={
+                "scheduler_runtime": runtime,
+                "runtime_execution_config": {
+                    "user_config": {},
+                    "runtime_request": {},
+                },
+            },
             background_workers=[worker],
         )
 

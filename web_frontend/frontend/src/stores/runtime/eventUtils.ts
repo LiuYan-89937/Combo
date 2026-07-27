@@ -10,6 +10,7 @@ const REQUEST_SCOPED_PREFIXES = [
   'plan_',
   'context_',
   'interrupt_',
+  'runtime_request_',
   'runtime_paused',
   'runtime_resumed',
 ]

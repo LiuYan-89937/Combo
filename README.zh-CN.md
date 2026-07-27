@@ -4,7 +4,7 @@
 
 FastAgentFactory 是一套完全本地化、可制造、可进化的个人智能助手平台。它把日常对话、跨会话记忆、本地知识库、文档处理、网页检索、定时任务、邮件、图片生成和多 Agent 协作统一到可审计的 AgentPackage 运行体系中，并提供从自然语言需求到 Agent 制造、发布、运行和持续进化的完整生命周期。
 
-平台支持两种部署拓扑：AMD GPU 与 Web 运行在同一台 Linux/ROCm 主机时直接连接本地推理节点；GPU 位于独立主机时，通过 SSH 隧道访问只监听回环地址的推理服务。Chat 使用 GGUF 与 llama.cpp ROCm，Embedding 使用 SentenceTransformers 与 PyTorch HIP，AgentPackage、MCP 和子 Agent 使用 Docker 隔离运行。仓库同时保留 Official 与 AMD 两套 llama.cpp 源码，用于在一致模型和配置下开发、验证 AMD HIP Kernel。
+平台支持两种部署拓扑：AMD GPU 与 Web 运行在同一台 Linux/ROCm 主机时直接连接本地推理节点；GPU 位于独立主机时，通过 SSH 隧道访问只监听回环地址的推理服务。Chat 使用 GGUF 与 llama.cpp ROCm，Embedding 使用 SentenceTransformers 与 PyTorch HIP；AgentPackage 会话由宿主监督的 Native Runtime 子进程执行，并通过独立工作区和只读共享依赖池实现逻辑隔离。仓库同时保留 Official 与 AMD 两套 llama.cpp 源码，用于在一致模型和配置下开发、验证 AMD HIP Kernel。
 
 ![FastAgentFactory 项目海报](supplementary-materials/poster/fastagentfactory-project-poster.png)
 
@@ -51,7 +51,7 @@ FastAgentFactory 将个人智能助手定义为一个长期运行、理解用户
 │ FastAgentFactory Backend :8000                             │
 │   ├─ AgentPackage / RuntimeKernel / RAG / Memory / Tools    │
 │   ├─ Model Pool / Benchmark / Trace / Workspace            │
-│   └─ Docker Agent Runtime                                  │
+│   └─ Native Agent Runtime / 独立会话工作区                 │
 │                                                            │
 │ SSH Tunnel                                                 │
 │   18003 -> remote 8003  Chat OpenAI API                    │
@@ -96,9 +96,7 @@ Chat GGUF 约 23.5 GB，视觉投影器约 0.9 GB，另需 Embedding、llama.cpp
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/)
 - Node.js 18+ 与 npm
-- Docker Engine 或 Docker Desktop
-
-Docker 用于 AgentPackage、MCP 和子 Agent 的隔离运行，不用于 llama.cpp 或 PyTorch ROCm 模型推理。
+AgentPackage Native Runtime 不要求 Docker。不同包可以复用内容寻址的依赖池，但会话工作区、运行目录、工具输出和进程生命周期彼此隔离；该边界不等同于内核级安全沙箱。
 
 ### AMD ROCm 推理节点
 
@@ -174,7 +172,7 @@ SSH_KEY=
 11. 幂等同步 Chat、Embedding、Image Generation 的推理节点 Profile 和 Web 端 external Profile，并清理不属于当前部署清单的旧模型与推理配置。
 12. 激活配置指定的 llama.cpp 实现并启动推理节点，等待 Chat、Embedding 与已启用的 Image Generation 都进入 `ready`。
 13. 从统一的 `.env` 派生本机节点连接参数并按需生成资源加密密钥；SSH 模式使用隧道，本机模式直连回环端口。
-14. 准备本机 Python/前端依赖和 Docker Agent Runtime，启动前后端。
+14. 准备本机 Python、前端依赖和 Native Agent Runtime，启动前后端。
 
 模型下载支持续传。已校验文件会通过旁路校验标记直接复用，重复执行不会重新下载 20 GB 以上的 GGUF。
 
@@ -228,7 +226,7 @@ http://localhost:3000
 - 建立并验证 Chat、Embedding、Image、Telemetry 四条 SSH 转发。
 - 使用 uv 同步本机 Python Web 依赖。
 - 使用 npm 准备前端依赖。
-- 检查并构建 Docker Agent Runtime。
+- 准备 Native Agent Runtime 与共享依赖池。
 - 启动后端 `:8000` 和前端 `:3000`。
 
 它不会重新构建 llama.cpp 或下载模型；这些操作统一由 `deploy.sh` 管理。
@@ -463,9 +461,9 @@ GGUF 使用 `curl --continue-at -` 续传；完成后必须通过 SHA256 才会�
 
 然后在模型配置中降低 Context、并发或 KV Cache 精度，或减少 GPU Layers。修改已加载 Profile 会触发远端重启并应用新参数。
 
-### 本机 Docker 不可用
+### Native Agent Runtime 初始化失败
 
-启动 Docker Desktop 或 Docker Engine 后重新运行 `./start.sh`。模型推理节点不依赖 Docker，但 MCP、AgentPackage 和子 Agent 的隔离运行依赖 Web 主机上的 Docker。
+检查本机 Python、uv、包依赖声明和会话工作区权限后重新运行 `./start.sh`。AgentPackage 使用宿主子进程和共享依赖池，不会因本机缺少 Docker 而无法启动。
 
 ## 静态检查
 

@@ -13,6 +13,7 @@ from agent_factory.tooling.entrypoints import MCPToolClient
 from agent_factory.tooling.output_store import TOOL_OUTPUT_STORE_RESOURCE, ToolOutputStore
 from agent_factory.tooling.providers import MCPToolCatalogClient
 from agent_factory.tooling.skillhub import SKILLHUB_RUNTIME_RESOURCE, build_skillhub_runtime_resource
+from agent_factory.tooling.builtins.aliases import canonical_builtin_tool_ids
 from agent_factory.tooling.builtins.registry import (
     get_always_available_system_tool_ids,
     get_builtin_protected_tool_ids,
@@ -60,7 +61,7 @@ def get_factory_tools(
     runtime_resources: Mapping[str, Any] | None = None,
     tool_runtime_resources: Mapping[str, Any] | None = None,
 ) -> list[BaseTool]:
-    selected_ids = set(tool_ids or [])
+    selected_ids = set(canonical_builtin_tool_ids(tool_ids or []))
     base_runtime_resources = dict(runtime_resources or {})
     base_tool_runtime_resources = dict(tool_runtime_resources or {})
     specs, effective_mcp_clients, discovered_runtime_resources = _collect_factory_tool_specs(
@@ -106,7 +107,7 @@ def get_factory_tool_specs(
     extension_root: str | Path | None = None,
     mcp_catalog_clients: Mapping[str, MCPToolCatalogClient] | None = None,
 ) -> list[ToolSpec]:
-    selected_ids = set(tool_ids or [])
+    selected_ids = set(canonical_builtin_tool_ids(tool_ids or []))
     specs, _mcp_clients, _runtime_resources = _collect_factory_tool_specs(
         selected_ids=selected_ids,
         include_extensions=include_extensions,

@@ -6,7 +6,7 @@ from agent_factory.skillhub_gateway.manager import (
     SKILLHUB_GATEWAY_PORT_ENV,
     SKILLHUB_GATEWAY_URL_ENV,
     HostSkillHubGatewayManager,
-    configured_container_skillhub_gateway_url,
+    configured_local_skillhub_gateway_url,
 )
 from agent_factory.skillhub_gateway.server import SkillHubGatewayEndpoint, SkillHubGatewayServer
 
@@ -19,5 +19,5 @@ __all__ = [
     "SKILLHUB_GATEWAY_BIND_HOST_ENV",
     "SKILLHUB_GATEWAY_PORT_ENV",
     "SKILLHUB_GATEWAY_URL_ENV",
-    "configured_container_skillhub_gateway_url",
+    "configured_local_skillhub_gateway_url",
 ]

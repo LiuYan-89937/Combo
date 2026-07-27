@@ -107,6 +107,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { storeToRefs } from 'pinia'
 import {
   NEmpty,
   NScrollbar,
@@ -115,6 +116,7 @@ import { useCollaborationStore } from '@/stores/collaboration'
 import { useModelPoolStore } from '@/stores/modelPool'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useUiStore } from '@/stores/ui'
+import { useRuntimePreferencesStore } from '@/stores/runtimePreferences'
 import { useI18n } from '@/composables/useI18n'
 import { useCollaborationRuntime } from '@/composables/collaboration/useCollaborationRuntime'
 import MessageInput from '@/components/chat/MessageInput.vue'
@@ -122,17 +124,22 @@ import MessageItem from '@/components/chat/MessageItem.vue'
 import PublishConfirmationPanel from '@/components/chat/PublishConfirmationPanel.vue'
 import ToolApprovalPanel from '@/components/chat/ToolApprovalPanel.vue'
 import type { CollaborationRuntimeStatus } from '@/api/collaboration'
+import { isAvailableChatModelProfile } from '@/api/modelPool'
 import type { RuntimeAttachmentInput, TranscriptItem } from '@/types/protocol'
 import { useContextReferenceStore } from '@/stores/contextReferences'
 import { messageContextReference } from '@/utils/contextReferences'
 import TipPanel from '@/components/chat/TipPanel.vue'
 import type { TipMessageContext } from '@/stores/tips'
-import { runtimeMainModelOptions } from '@/utils/modelProfileOptions'
 
 const store = useCollaborationStore()
 const runtimeStore = useRuntimeStore()
 const modelPoolStore = useModelPoolStore()
 const uiStore = useUiStore()
+const runtimePreferences = useRuntimePreferencesStore()
+const {
+  mainModelProfileId: selectedModelProfileId,
+  reasoningIntensity,
+} = storeToRefs(runtimePreferences)
 const { t } = useI18n()
 const scrollbarRef = ref()
 const inputRef = ref()
@@ -142,19 +149,25 @@ const messageWorkspaceContext = computed(() => ({
   resourceMode: 'collaboration' as const,
   collaborationId: store.activeSession?.collaboration_id || null,
 }))
-const selectedModelProfileId = computed(() => store.activeSession?.execution_config?.model_profile_id || '')
-const reasoningIntensity = computed(() => store.activeSession?.execution_config?.reasoning_intensity ?? null)
 const selectedModelProfile = computed(() => (
-  modelPoolStore.profile(selectedModelProfileId.value) || modelPoolStore.defaultProfile('main')
+  modelPoolStore.profile(selectedModelProfileId.value)
 ))
-const reasoningControlEnabled = computed(() => selectedModelProfile.value?.capabilities.reasoning_supported === true)
-const modelOptions = computed(() => {
-  return runtimeMainModelOptions(
-    modelPoolStore.profiles,
-    modelPoolStore.defaults.main,
-    t('chat.defaultMainModel'),
-  )
-})
+const availableChatModelProfiles = computed(() => (
+  modelPoolStore.profiles.filter(isAvailableChatModelProfile)
+))
+const reasoningControlEnabled = computed(() => (
+  selectedModelProfile.value?.capabilities.reasoning_supported !== false
+))
+const modelOptions = computed(() => [
+  ...(availableChatModelProfiles.value.length > 0
+    ? [{ label: t('chat.defaultMainModel'), value: '' }]
+    : []),
+  ...availableChatModelProfiles.value
+    .map(profile => ({
+      label: profile.display_name || profile.served_model_name || profile.profile_id,
+      value: profile.profile_id,
+    })),
+])
 const tipScopeId = computed(() => store.activeSession?.collaboration_id || '')
 const collaborationStatistics = computed(() => store.activeSession?.statistics || null)
 const {
@@ -200,18 +213,33 @@ onMounted(() => {
   void modelPoolStore.ensureLoaded()
 })
 
+watch(
+  [() => modelPoolStore.loaded, availableChatModelProfiles],
+  ([loaded, profiles]) => {
+    if (loaded && profiles.length === 0) {
+      runtimePreferences.setMainModelProfileId('')
+    }
+  },
+  { immediate: true },
+)
+
 function updateModelProfile(value: string) {
-  const nextProfile = modelPoolStore.profile(value) || modelPoolStore.defaultProfile('main')
+  const nextProfile = modelPoolStore.profile(value)
+  runtimePreferences.setMainModelProfileId(value)
+  if (nextProfile?.capabilities.reasoning_supported === false) {
+    runtimePreferences.setReasoningIntensity(null)
+  }
   void store.updateSession({
     execution_config: {
       ...(store.activeSession?.execution_config || {}),
       model_profile_id: value || null,
-      ...(nextProfile?.capabilities.reasoning_supported === true ? {} : { reasoning_intensity: null }),
+      ...(nextProfile?.capabilities.reasoning_supported === false ? { reasoning_intensity: null } : {}),
     },
   })
 }
 
 function updateReasoningIntensity(value: number | null) {
+  runtimePreferences.setReasoningIntensity(value)
   void store.updateSession({
     execution_config: {
       ...(store.activeSession?.execution_config || {}),
@@ -221,6 +249,15 @@ function updateReasoningIntensity(value: number | null) {
 }
 
 async function sendMessage(message: string, attachments: RuntimeAttachmentInput[]) {
+  if (availableChatModelProfiles.value.length === 0) {
+    uiStore.addNotification({
+      type: 'warning',
+      title: t('chat.modelRequiredTitle'),
+      message: t('chat.modelRequiredMessage'),
+      duration: 4000,
+    })
+    return
+  }
   if (!await sendMainAgentMessage(message, attachments)) return
   if (store.activeSession?.status === 'draft') {
     await store.updateSession({ status: 'running' })

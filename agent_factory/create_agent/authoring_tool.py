@@ -48,7 +48,7 @@ CREATE_AGENT_AUTHORING_TOOL_ID = "create_agent_authoring"
 DEFAULT_INHERITED_RUNTIME_TOOL_IDS = ("knowledge", "scheduler")
 DEFAULT_CASUAL_REACT_TOOL_IDS = ("glob", "ls", "read")
 DEFAULT_EXECUTOR_READ_TOOL_IDS = ("glob", "ls", "read")
-DEFAULT_EXECUTOR_FALLBACK_TOOL_IDS = ("bash", "write", "edit")
+DEFAULT_EXECUTOR_FALLBACK_TOOL_IDS = ("shell", "write", "edit")
 CREATE_AGENT_AUTHORING_ACTIONS = {
     "configure_model_bindings",
     "configure_dependencies",
@@ -189,13 +189,13 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                 "contract_key": {"type": "string", "enum": sorted(RESETTABLE_CONTRACT_KEYS)},
                 "bindings": {
                     "type": "object",
-                    "description": "Local model bindings keyed by runtime role. Use source=local_registry with profile_id.",
+                    "description": "Model bindings keyed by runtime role. Use source=model_pool with profile_id or source=env without a profile_id.",
                     "properties": {
                         role: {
                             "type": "object",
                             "properties": {
                                 "profile_id": {"type": "string"},
-                                "source": {"type": "string", "enum": ["local_registry"]},
+                                "source": {"type": "string", "enum": ["model_pool", "env"]},
                                 "selection_source": {"type": "string", "enum": ["auto", "manual"]},
                                 "reason": {"type": "string"},
                                 "required_capabilities": {"type": "object", "additionalProperties": True},
@@ -239,10 +239,10 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                         "type": "object",
                         "properties": {
                             "profile_id": {"type": "string"},
-                            "source": {"type": "string", "enum": ["local_registry"]},
+                            "source": {"type": "string", "enum": ["model_pool", "env"]},
                             "capability": {
                                 "type": "string",
-                                "enum": ["image_input", "image_output", "image_edit", "audio_input"],
+                                "enum": ["image_input", "image_output", "image_edit", "audio_input", "audio_output"],
                             },
                             "selection_source": {"type": "string", "enum": ["auto", "manual"]},
                             "reason": {"type": "string"},

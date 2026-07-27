@@ -10,7 +10,6 @@ from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
 from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import AgentPackageRuntimeManager
-from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import SYSTEM_CHAT_PACKAGE_ID
 from web_frontend.backend.runtime_bridge import RuntimeBridge
 from web_frontend.backend.routes.utils import send_and_wait
 
@@ -43,25 +42,7 @@ def create_agent_package_router(runtime_bridge: RuntimeBridge, logger: logging.L
     @router.get("/recent-sessions")
     def list_recent_agent_package_sessions(limit: int = Query(default=5, ge=1, le=20)):
         runtime = AgentPackageRuntimeManager()
-        sessions: list[dict[str, Any]] = []
-        for package in runtime.list_packages():
-            package_id = str(package.get("package_id") or "").strip()
-            if not package_id or package_id == SYSTEM_CHAT_PACKAGE_ID:
-                continue
-            package_name = str(package.get("agent_name") or package.get("name") or package_id)
-            try:
-                package_sessions = runtime.list_sessions(package_id)
-            except Exception as exc:
-                logger.warning("Failed to list sessions for package %s: %s", package_id, exc)
-                continue
-            for session in package_sessions:
-                item = dict(session)
-                item["package_id"] = package_id
-                item["package_name"] = package_name
-                item["agent_name"] = package_name
-                sessions.append(item)
-        sessions.sort(key=session_updated_sort_key, reverse=True)
-        return {"sessions": sessions[:limit]}
+        return {"sessions": runtime.list_recent_sessions(limit=limit)}
 
     @router.post("/{package_id}/initialize")
     async def initialize_agent_package(package_id: str):
@@ -111,19 +92,6 @@ def create_agent_package_router(runtime_bridge: RuntimeBridge, logger: logging.L
             headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quoted_filename}"},
             background=BackgroundTask(unlink_file, archive_path),
         )
-
-    @router.patch("/{package_id}/context-config")
-    def update_agent_package_context_config(package_id: str, payload: dict[str, Any]):
-        try:
-            summary = AgentPackageRuntimeManager().update_context_config(
-                package_id,
-                _validated_context_config_payload(payload),
-            )
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"package": summary}
 
     @router.patch("/{package_id}/tool-descriptions/{tool_kind}/{tool_id}")
     def update_agent_package_tool_description(
@@ -225,31 +193,9 @@ def create_agent_package_router(runtime_bridge: RuntimeBridge, logger: logging.L
     return router
 
 
-def session_updated_sort_key(session: dict[str, Any]) -> str:
-    return str(session.get("updated_at") or session.get("created_at") or "")
-
-
 def _is_initialize_status_event(item: dict[str, Any], *, package_id: str) -> bool:
     payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
     return str(payload.get("package_id") or "").strip() == package_id
-
-
-def _validated_context_config_payload(payload: dict[str, Any]) -> dict[str, int | None]:
-    result: dict[str, int | None] = {}
-    for key in ("context_window_tokens", "compression_threshold_tokens"):
-        if key not in payload:
-            continue
-        value = payload.get(key)
-        if value is None:
-            result[key] = None
-            continue
-        if isinstance(value, bool) or not isinstance(value, int):
-            raise ValueError(f"{key} must be an integer or null")
-        minimum = 1000
-        if value < minimum:
-            raise ValueError(f"{key} must be greater than or equal to {minimum}")
-        result[key] = value
-    return result
 
 
 def _validated_memory_write_interval(payload: dict[str, Any]) -> int:

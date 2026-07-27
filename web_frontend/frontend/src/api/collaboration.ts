@@ -80,7 +80,6 @@ export interface CollaborationSessionView {
   title: string
   main_agent_package_id: string
   main_agent_package_session_id?: string | null
-  main_factory_session_id?: string | null
   approval_mode: CollaborationApprovalMode
   execution_config?: {
     model_profile_id?: string | null
@@ -142,7 +141,7 @@ export const collaborationApi = {
   }),
   session: (collaborationId: string) =>
     requestJson<{ session: CollaborationSessionView }>(`/api/collaboration/sessions/${encodeURIComponent(collaborationId)}`),
-  updateSession: (collaborationId: string, payload: Partial<Pick<CollaborationSessionView, 'title' | 'main_agent_package_id' | 'main_agent_package_session_id' | 'main_factory_session_id' | 'approval_mode' | 'execution_config' | 'status'>>) =>
+  updateSession: (collaborationId: string, payload: Partial<Pick<CollaborationSessionView, 'title' | 'main_agent_package_id' | 'main_agent_package_session_id' | 'approval_mode' | 'execution_config' | 'status'>>) =>
     requestJson<{ session: CollaborationSessionView }>(`/api/collaboration/sessions/${encodeURIComponent(collaborationId)}`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
@@ -158,7 +157,6 @@ export const collaborationApi = {
       deleted: boolean
       main_agent_package_id?: string | null
       main_agent_package_session_id?: string | null
-      main_factory_session_id?: string | null
       sessions: CollaborationSessionView[]
     }>(`/api/collaboration/sessions/${encodeURIComponent(collaborationId)}`, {
       method: 'DELETE',

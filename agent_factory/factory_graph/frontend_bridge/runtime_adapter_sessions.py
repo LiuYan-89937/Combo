@@ -7,7 +7,6 @@ from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontend
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import session_payload
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import (
     PendingAgentPackageRun,
-    SYSTEM_CHAT_PACKAGE_ID,
 )
 from agent_factory.factory_graph.session import (
     COLLABORATION_MAIN_FACTORY_SESSION_KIND,
@@ -18,13 +17,16 @@ from agent_factory.factory_graph.session import (
 from agent_factory.runtime_attachments import has_attachment_payload
 
 
-MESSAGE_MODES = {"chat", "create_agent", "evolve_agent"}
-SESSION_MODES = {"chat", "create_agent", "evolve_agent"}
+MESSAGE_MODES = {"create_agent", "evolve_agent"}
+SESSION_MODES = {"create_agent", "evolve_agent"}
 
 
 class RuntimeSessionCommandMixin:
     def start_session(self, command: FactoryFrontendCommand) -> None:
         requested_mode = _session_mode(command.mode)
+        if command.mode is not None and requested_mode is None:
+            self._emit_error(command, f"unsupported factory session mode: {command.mode}")
+            return
         requested_evolution_package_id = _command_evolution_package_id(command, requested_mode)
         presentation_context = _factory_session_presentation_context(command)
         if command.session_id:
@@ -40,7 +42,7 @@ class RuntimeSessionCommandMixin:
             if not self._session_source_available(self.session_record, self.mode):
                 self.session_record = previous_record
                 self.mode = previous_mode
-                self._emit_missing_session_source(command, requested_mode or "chat")
+                self._emit_missing_session_source(command, requested_mode or "factory")
                 return
             if requested_mode is not None and requested_mode != self.session_record.current_mode:
                 self.session_record = self.session_manager.set_mode(self.session_record.session_id, requested_mode)
@@ -105,6 +107,9 @@ class RuntimeSessionCommandMixin:
             self._emit_error(command, "switch_session requires session_id")
             return
         requested_mode = _session_mode(command.mode)
+        if command.mode is not None and requested_mode is None:
+            self._emit_error(command, f"unsupported factory session mode: {command.mode}")
+            return
         previous_record = self.session_record
         previous_mode = self.mode
         self.session_record = self.session_manager.load(command.session_id)
@@ -118,7 +123,7 @@ class RuntimeSessionCommandMixin:
         if not self._session_source_available(self.session_record, self.mode):
             self.session_record = previous_record
             self.mode = previous_mode
-            self._emit_missing_session_source(command, requested_mode or "chat")
+            self._emit_missing_session_source(command, requested_mode or "factory")
             return
         if requested_mode is not None and requested_mode != self.session_record.current_mode:
             self.session_record = self.session_manager.set_mode(self.session_record.session_id, requested_mode)
@@ -131,6 +136,9 @@ class RuntimeSessionCommandMixin:
 
     def new_session(self, command: FactoryFrontendCommand) -> None:
         self.mode = _session_mode(command.mode)
+        if self.mode is None:
+            self._emit_error(command, "new_session requires create_agent or evolve_agent mode")
+            return
         self.session_record = self.session_manager.create(
             mode=self.mode,
             **(_factory_session_presentation_context(command) or {}),
@@ -161,6 +169,7 @@ class RuntimeSessionCommandMixin:
             or record.current_mode
         )
         linked_artifacts = self._delete_linked_session_artifacts(record, mode=delete_mode)
+        recent_agent_sessions = _recent_agent_sessions_from_linked_artifacts(linked_artifacts)
         affected_session_ids = self._delete_or_detach_logical_session(record, mode=delete_mode)
         deleted_active = (
             self.session_record is not None
@@ -183,51 +192,53 @@ class RuntimeSessionCommandMixin:
                     "deleted": True,
                     "deleted_active": deleted_active,
                     "linked_artifacts": linked_artifacts,
+                    "recent_agent_sessions": recent_agent_sessions,
                     "sessions": self._session_payloads_for_client(),
                 },
             )
         )
 
     def set_mode(self, command: FactoryFrontendCommand) -> None:
-        self._ensure_session(command)
-        if command.mode == "agent_package":
-            self._emit_error(command, "use list_agent_packages/select_agent_package to enter agent package mode")
+        mode = _session_mode(command.mode)
+        if mode is None:
+            self._emit_error(command, f"unsupported factory session mode: {command.mode}")
             return
-        self._apply_mode(command, command.mode)
+        if not self._ensure_session(command, mode=mode):
+            return
+        self._apply_mode(command, mode)
 
     def send_message(self, command: FactoryFrontendCommand) -> None:
-        self._ensure_session(command)
+        requested_mode = _session_mode(command.mode) or _session_mode(self.mode)
+        if requested_mode is None:
+            self._emit_error(command, "send_message requires create_agent or evolve_agent mode")
+            return
+        if not self._ensure_session(command, mode=requested_mode):
+            return
         if command.mode in MESSAGE_MODES and command.mode != self.mode:
             self._apply_mode(command, command.mode)
-        if self.mode not in {"chat", "create_agent", "evolve_agent"}:
-            self._emit_error(command, "enter /chat, /create-agent, or /evolve-agent before sending messages")
+        if self.mode not in {"create_agent", "evolve_agent"}:
+            self._emit_error(command, "enter /create-agent or /evolve-agent before sending messages")
             return
         message = (command.message or "").strip()
         if not message and not has_attachment_payload(command.payload.get("attachments")):
             self._emit_error(command, "send_message requires message")
             return
-        chat_session_id = self._planned_system_chat_agent_session_id() if self.mode == "chat" else None
         interrupt_pending = (
-            (self.mode == "chat" and chat_session_id is not None and self._has_pending_agent_package_run(
-                SYSTEM_CHAT_PACKAGE_ID,
-                chat_session_id,
-            ))
-            or (self.mode == "create_agent" and self.pending_create_agent_run is not None)
+            (self.mode == "create_agent" and self.pending_create_agent_run is not None)
             or (self.mode == "evolve_agent" and self.pending_evolution_run is not None)
         )
         if interrupt_pending:
             self._emit_error(command, "cannot send a new message while an interrupt is pending")
             return
-        if self.mode == "chat":
-            self._run_chat(command, message)
-        elif self.mode == "create_agent":
+        if self.mode == "create_agent":
             self._run_create_agent(command, message)
         else:
             self._run_evolve_agent(command, message)
 
     def _apply_mode(self, command: FactoryFrontendCommand, mode: str | None) -> None:
         if self.session_record is None:
-            self._ensure_session(command)
+            if not self._ensure_session(command, mode=_session_mode(mode)):
+                return
         self.mode = mode
         self.session_record = self.session_manager.set_mode(self.session_record.session_id, self.mode)
         self._restore_session_mode_context()
@@ -239,7 +250,6 @@ class RuntimeSessionCommandMixin:
                 mode=self.mode,
                 payload={
                     "mode": self.mode,
-                    **({"package_id": SYSTEM_CHAT_PACKAGE_ID} if self.mode == "chat" else {}),
                     **({"graph_id": "create_agent_react"} if self.mode == "create_agent" else {}),
                 },
             )
@@ -361,10 +371,6 @@ class RuntimeSessionCommandMixin:
 
     def _delete_linked_session_artifacts(self, record, *, mode: str | None = None) -> dict[str, object]:
         artifacts: dict[str, object] = {}
-        chat_session_id = str(getattr(record, "chat_agent_package_session_id", "") or "").strip()
-        if (mode in {None, "chat"}) and chat_session_id and self.agent_package_runtime is not None:
-            artifacts["chat"] = self.agent_package_runtime.delete_session(SYSTEM_CHAT_PACKAGE_ID, chat_session_id)
-
         create_session_id = str(getattr(record, "create_agent_session_id", "") or "").strip()
         if (mode in {None, "create_agent"}) and create_session_id and self.create_agent_runtime is not None:
             artifacts["create_agent"] = self.create_agent_runtime.delete_session_artifacts(create_session_id)
@@ -378,9 +384,25 @@ class RuntimeSessionCommandMixin:
             )
         return artifacts
 
-    def _ensure_session(self, command: FactoryFrontendCommand) -> None:
+    def _ensure_session(
+        self,
+        command: FactoryFrontendCommand,
+        *,
+        mode: str | None = None,
+    ) -> bool:
         if self.session_record is None:
-            self.start_session(FactoryFrontendCommand(type="start_session", request_id=command.request_id))
+            resolved_mode = _session_mode(mode) or _session_mode(command.mode) or _session_mode(self.mode)
+            if resolved_mode is None:
+                self._emit_error(command, "factory session requires create_agent or evolve_agent mode")
+                return False
+            self.start_session(
+                FactoryFrontendCommand(
+                    type="start_session",
+                    request_id=command.request_id,
+                    mode=resolved_mode,
+                )
+            )
+        return self.session_record is not None
 
     def _latest_session_for_start(
         self,
@@ -426,17 +448,7 @@ class RuntimeSessionCommandMixin:
         snapshot = payload.get("snapshot") if isinstance(payload.get("snapshot"), dict) else {}
         messages = list(snapshot.get("messages") or []) if isinstance(snapshot, dict) else []
         linked_agent_session = self._linked_agent_session_payload()
-        if self.mode == "chat" and linked_agent_session is not None:
-            messages = _messages_from_agent_session(linked_agent_session)
-            linked_turns = _turns_from_agent_session(linked_agent_session)
-            self._sync_factory_turns_from_linked_session(linked_agent_session)
-            snapshot = {
-                **snapshot,
-                "turns": linked_turns,
-                "messages": messages,
-                "agent_session": linked_agent_session,
-            }
-        elif not messages and linked_agent_session is not None:
+        if not messages and linked_agent_session is not None:
             messages = _messages_from_agent_session(linked_agent_session)
             linked_turns = _turns_from_agent_session(linked_agent_session)
             self._sync_factory_turns_from_linked_session(linked_agent_session)
@@ -453,57 +465,15 @@ class RuntimeSessionCommandMixin:
         return [session_payload(item) for item in self._client_session_records()]
 
     def _client_session_records(self) -> list[Any]:
-        records = self.session_manager.list_sessions()
-        chat_sessions = self._chat_agent_sessions_by_id()
-        canonical_chat_records = _canonical_chat_records(records, chat_sessions)
-        views: list[Any] = []
-        for record in records:
-            view = record
-            chat_session_id = _chat_agent_session_id(record)
-            if chat_session_id:
-                chat_session = chat_sessions.get(chat_session_id)
-                canonical = canonical_chat_records.get(chat_session_id)
-                if chat_session is None or canonical is None or canonical.session_id != record.session_id:
-                    view = without_mode_source(record, "chat")
-                else:
-                    view = _with_chat_session_summary(record, chat_session)
-            if _client_record_has_source(view):
-                views.append(view)
-        return sorted(views, key=lambda item: item.updated_at, reverse=True)
-
-    def _chat_agent_sessions_by_id(self) -> dict[str, dict[str, Any]]:
-        if self.agent_package_runtime is None:
-            return {}
-        try:
-            sessions = self.agent_package_runtime.list_sessions(
-                SYSTEM_CHAT_PACKAGE_ID,
-                include_internal=True,
-            )
-        except Exception:
-            return {}
-        result: dict[str, dict[str, Any]] = {}
-        for item in sessions:
-            if not isinstance(item, dict):
-                continue
-            if item.get("visible_in_agent_session_list") is False:
-                continue
-            session_id = str(item.get("session_id") or "").strip()
-            if session_id:
-                result[session_id] = item
-        return result
+        return [
+            record
+            for record in self.session_manager.list_sessions()
+            if _client_record_has_source(record)
+        ]
 
     def _session_source_available(self, record: Any, mode: str | None) -> bool:
-        if mode != "chat":
-            return True
-        chat_session_id = _chat_agent_session_id(record)
-        if not chat_session_id:
-            return not record_has_mode_source(record, "chat")
-        if self.agent_package_runtime is None:
-            return False
-        try:
-            return self.agent_package_runtime.session_exists(SYSTEM_CHAT_PACKAGE_ID, chat_session_id)
-        except Exception:
-            return False
+        del record, mode
+        return True
 
     def _emit_missing_session_source(self, command: FactoryFrontendCommand, mode: str) -> None:
         self._emit_error(command, f"{mode} session source is no longer available")
@@ -530,14 +500,6 @@ class RuntimeSessionCommandMixin:
         return affected
 
     def _logical_session_records(self, record: Any, *, mode: str | None) -> list[Any]:
-        if mode == "chat":
-            chat_session_id = _chat_agent_session_id(record)
-            if chat_session_id:
-                return [
-                    item
-                    for item in self.session_manager.list_sessions()
-                    if _chat_agent_session_id(item) == chat_session_id
-                ]
         if mode == "create_agent":
             create_session_id = _create_agent_session_id(record)
             if create_session_id:
@@ -551,16 +513,6 @@ class RuntimeSessionCommandMixin:
     def _linked_agent_session_payload(self) -> dict[str, object] | None:
         if self.session_record is None:
             return None
-        if self.mode == "chat":
-            if self.agent_package_runtime is None or not self.session_record.chat_agent_package_session_id:
-                return None
-            try:
-                return self.agent_package_runtime.load_session(
-                    SYSTEM_CHAT_PACKAGE_ID,
-                    self.session_record.chat_agent_package_session_id,
-                )
-            except Exception:
-                return None
         if self.mode != "create_agent" or self.create_agent_runtime is None or not self.session_record.create_agent_session_id:
             return None
         try:
@@ -569,7 +521,7 @@ class RuntimeSessionCommandMixin:
             return None
 
     def _sync_factory_turns_from_linked_session(self, linked_agent_session: dict[str, object]) -> None:
-        if self.session_record is None or self.mode not in {"chat", "create_agent"}:
+        if self.session_record is None or self.mode != "create_agent":
             return
         turns = linked_agent_session.get("turns")
         if not isinstance(turns, list):
@@ -632,57 +584,17 @@ def _factory_session_presentation_context(command: FactoryFrontendCommand) -> di
     }
 
 
-def _canonical_chat_records(records: list[Any], chat_sessions: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    canonical: dict[str, Any] = {}
-    for record in records:
-        chat_session_id = _chat_agent_session_id(record)
-        if not chat_session_id or chat_session_id not in chat_sessions:
-            continue
-        existing = canonical.get(chat_session_id)
-        if existing is None or _record_order_key(record) > _record_order_key(existing):
-            canonical[chat_session_id] = record
-    return canonical
-
-
-def _with_chat_session_summary(record: Any, chat_session: dict[str, Any]) -> Any:
-    view = record.model_copy(deep=True)
-    view.chat_agent_package_session_id = str(chat_session.get("session_id") or view.chat_agent_package_session_id or "") or None
-    try:
-        view.chat_turn_count = int(chat_session.get("turn_count") or 0)
-    except (TypeError, ValueError):
-        pass
-    first_user_input = _normalized_optional(chat_session.get("first_user_input"))
-    display_title = _normalized_optional(chat_session.get("display_title"))
-    if first_user_input and not view.first_user_input:
-        view.first_user_input = first_user_input
-    if display_title:
-        view.display_title = display_title
-    elif first_user_input and not view.display_title:
-        view.display_title = first_user_input
-    updated_at = _normalized_optional(chat_session.get("updated_at"))
-    if updated_at:
-        view.updated_at = updated_at
-    return view
-
-
 def _client_record_has_source(record: Any) -> bool:
     return (
-        _client_record_matches_mode(record, "chat")
-        or _client_record_matches_mode(record, "create_agent")
+        _client_record_matches_mode(record, "create_agent")
         or _client_record_matches_mode(record, "evolve_agent")
     )
 
 
 def _client_record_matches_mode(record: Any, mode: str) -> bool:
-    if mode == "chat":
-        return bool(_chat_agent_session_id(record))
     if mode == "create_agent":
         return record_has_mode_source(record, "create_agent")
     return bool(getattr(record, "evolve_agent_turn_count", 0) or getattr(record, "evolve_agent_turns", []))
-
-
-def _chat_agent_session_id(record: Any) -> str:
-    return str(getattr(record, "chat_agent_package_session_id", "") or "").strip()
 
 
 def _create_agent_session_id(record: Any) -> str:
@@ -698,6 +610,16 @@ def _record_order_key(record: Any) -> tuple[str, str]:
         str(getattr(record, "updated_at", "") or ""),
         str(getattr(record, "session_id", "") or ""),
     )
+
+
+def _recent_agent_sessions_from_linked_artifacts(artifacts: dict[str, object]) -> list[dict[str, Any]] | None:
+    for artifact in artifacts.values():
+        if not isinstance(artifact, dict):
+            continue
+        sessions = artifact.get("recent_agent_sessions")
+        if isinstance(sessions, list):
+            return [dict(session) for session in sessions if isinstance(session, dict)]
+    return None
 
 
 def _turn_request_ids(turns: object) -> list[str]:
@@ -767,7 +689,7 @@ def _pending_evolution_matches(pending: object, target: _InterruptResumeTarget) 
 
 
 def _pending_agent_package_matches(pending: object, target: _InterruptResumeTarget) -> bool:
-    if target.mode and target.mode not in {"agent_package", "chat", "agent_group"}:
+    if target.mode and target.mode not in {"agent_package", "agent_group"}:
         return False
     if target.package_id and target.package_id != _normalized_optional(getattr(pending, "package_id", None)):
         return False

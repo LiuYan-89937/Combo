@@ -48,6 +48,26 @@ def build_chat_turn_messages(
             )
         )
 
+    for activity_index, activity in enumerate(tool_activities or []):
+        if not isinstance(activity, dict):
+            continue
+        activity_key = _tool_activity_key(activity, fallback=str(activity_index))
+        activity_timestamp = str(activity.get("createdAt") or activity.get("timestamp") or updated_at)
+        messages.append(
+            _chat_message(
+                message_id=f"turn-{turn_id}-tool-{activity_key}",
+                role="assistant",
+                timestamp=activity_timestamp,
+                status=_tool_message_status(activity),
+                parts=_tool_parts(turn_id=turn_id, updated_at=updated_at, activity=activity),
+                metadata={
+                    "tool_activity": True,
+                    "tool_call_id": activity.get("toolCallId") or activity.get("tool_call_id"),
+                    "tool_name": activity.get("toolName") or activity.get("tool_name") or activity.get("name"),
+                },
+            )
+        )
+
     assistant_parts: list[dict[str, Any]] = []
     reasoning_text = str(reasoning_content or "").strip()
     if reasoning_text:
@@ -69,9 +89,6 @@ def build_chat_turn_messages(
                 status=_part_status(status),
             )
         )
-    for activity in tool_activities or []:
-        if isinstance(activity, dict):
-            assistant_parts.extend(_tool_parts(turn_id=turn_id, updated_at=updated_at, activity=activity))
     if assistant_parts:
         messages.append(
             _chat_message(
@@ -148,7 +165,7 @@ def _attachment_part(*, part_id: str, attachment: dict[str, Any], timestamp: str
 
 
 def _tool_parts(*, turn_id: str, updated_at: str, activity: dict[str, Any]) -> list[dict[str, Any]]:
-    activity_key = str(activity.get("activityKey") or activity.get("tool_call_id") or activity.get("toolCallId") or uuid4().hex)
+    activity_key = _tool_activity_key(activity, fallback=uuid4().hex)
     tool_name = str(activity.get("toolName") or activity.get("tool_name") or activity.get("name") or "tool_call")
     call_id = activity.get("toolCallId") or activity.get("tool_call_id")
     payload = activity.get("payload") if isinstance(activity.get("payload"), dict) else activity
@@ -189,6 +206,24 @@ def _tool_parts(*, turn_id: str, updated_at: str, activity: dict[str, Any]) -> l
                 )
             )
     return parts
+
+
+def _tool_activity_key(activity: dict[str, Any], *, fallback: str) -> str:
+    return str(
+        activity.get("activityKey")
+        or activity.get("tool_call_id")
+        or activity.get("toolCallId")
+        or fallback
+    )
+
+
+def _tool_message_status(activity: dict[str, Any]) -> str:
+    status = str(activity.get("status") or "")
+    if status == "failed":
+        return "failed"
+    if status in {"proposed", "approval", "started", "running", "streaming"}:
+        return "streaming"
+    return "completed"
 
 
 def _artifact_parts(*, activity_key: str, output: Any, timestamp: str) -> list[dict[str, Any]]:

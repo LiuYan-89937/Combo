@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from agent_factory.context_system.compression import estimate_text_tokens
+from agent_factory.context_system.token_estimation import estimate_text_tokens
 from agent_factory.context_system.schema import ContextCandidate, ContextQuery
 
 

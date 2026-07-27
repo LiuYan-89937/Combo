@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path, PurePosixPath
 import shutil
@@ -15,8 +16,14 @@ from uuid import uuid4
 from agent_factory.knowledge_system import KnowledgeIngestionWorker, KnowledgeRuntime, build_knowledge_runtime
 from agent_factory.knowledge_system.schema import KnowledgeContractConfig
 from agent_factory.agent_registry import refresh_agent_registry_index
-from agent_factory.collaboration_system.store import CollaborationStore, SYSTEM_CHAT_PACKAGE_ID
+from agent_factory.collaboration_system.store import CollaborationStore
 from agent_factory.runtime_contracts import ContextContract, LoadedAgentPackage, MemoryContract
+from agent_factory.model_pool.resolver import (
+    resolve_available_chat_model,
+    resolve_chat_model_binding,
+)
+from agent_factory.model_pool.schema import ModelProfileBinding
+from agent_factory.context_system.token_counter import model_context_limits
 from agent_factory.runtime_kernel.session import AgentSessionConfig, AgentSessionManager
 from agent_factory.runtime_kernel.persistence import delete_sqlite_checkpoint_thread
 from agent_factory.mcp_gateway import HostMCPGatewayManager
@@ -25,7 +32,7 @@ from agent_factory.package_runtime import host_runtime_package_view
 from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
 from agent_factory.paths import project_root
 from agent_factory.resource_system import ResourceStore, migrate_package_resources
-from agent_factory.environment_system import EnvironmentResolutionError, EnvironmentResolver
+from agent_factory.environment_system import EnvironmentResolver
 from agent_factory.runtime_contracts import ResourcesContract
 from agent_factory.runtime_attachments import (
     ATTACHMENT_INPUT_DIR,
@@ -34,14 +41,6 @@ from agent_factory.runtime_attachments import (
     time_named_attachment_scope,
 )
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent, event
-from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import session_payload
-from agent_factory.factory_graph.frontend_bridge.agent_runtime_launcher import (
-    AgentRuntimeLaunchError,
-    DEFAULT_RUNTIME_IMAGE,
-    DockerAgentRuntimeLauncher,
-    runtime_container_path,
-    shutdown_shared_runtime,
-)
 from agent_factory.factory_graph.frontend_bridge.agent_package_repository import (
     AgentPackageRepository,
 )
@@ -75,15 +74,16 @@ from agent_factory.factory_graph.frontend_bridge.agent_package_workspace import 
     AgentPackageWorkspaceService,
     workspace_roots,
 )
-from agent_factory.factory_graph.frontend_bridge.container_runtime_handle import AgentRuntimeContainerHandle
 from agent_factory.factory_graph.frontend_bridge.runtime_events import node_event, run_failed_event
 from agent_factory.factory_graph.frontend_bridge.system_package_runtime_handle import SystemPackageRuntimeHandle
+from agent_factory.native_runtime import AgentRuntimeLaunchError, NativeAgentRuntimeHandle, NativeAgentRuntimeLauncher
 
 
 DEFAULT_AGENT_RUNTIME_IDLE_TIMEOUT_SECONDS = 1800
 DEFAULT_AGENT_RUNTIME_INITIALIZE_TIMEOUT_SECONDS = 120
 DEFAULT_AGENT_RUNTIME_BRIDGE_STARTUP_TIMEOUT_SECONDS = 30
 Emit = Callable[[FactoryFrontendEvent], None]
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,7 +117,7 @@ class AgentPackageRuntimeManager:
         package_root: str | Path | None = None,
         system_package_root: str | Path | None = None,
         repository: AgentPackageRepository | None = None,
-        launcher: DockerAgentRuntimeLauncher | None = None,
+        launcher: NativeAgentRuntimeLauncher | None = None,
         emit: Emit | None = None,
     ) -> None:
         configured_root = package_root or os.getenv("AGENTFACTORY_PACKAGE_ROOT")
@@ -126,7 +126,7 @@ class AgentPackageRuntimeManager:
             package_root=configured_root,
             system_package_root=configured_system_root,
         )
-        self.launcher = launcher or DockerAgentRuntimeLauncher()
+        self.launcher = launcher or NativeAgentRuntimeLauncher()
         self.workspace = AgentPackageWorkspaceService()
         self.extensions = AgentPackageExtensionService()
         self.idle_timeout_seconds = _env_int(
@@ -142,11 +142,11 @@ class AgentPackageRuntimeManager:
             "AGENTFACTORY_AGENT_RUNTIME_BRIDGE_STARTUP_TIMEOUT_SECONDS",
             DEFAULT_AGENT_RUNTIME_BRIDGE_STARTUP_TIMEOUT_SECONDS,
         )
-        self._containers: dict[str, AgentRuntimeContainerHandle] = {}
+        self._containers: dict[str, NativeAgentRuntimeHandle] = {}
         self._system_handles: dict[str, SystemPackageRuntimeHandle] = {}
         self._knowledge_handles: dict[str, KnowledgeRuntimeHandle] = {}
         self._runtime_handle_lock = threading.RLock()
-        self._package_initialization_locks: dict[str, threading.RLock] = {}
+        self._package_initialization_locks: dict[str, threading.Lock] = {}
         self._instance_status_overrides: dict[str, dict[str, Any]] = {}
         self._mcp_gateways = HostMCPGatewayManager()
         self._skillhub_gateways = HostSkillHubGatewayManager()
@@ -170,20 +170,11 @@ class AgentPackageRuntimeManager:
     def emit_collaboration_session_updated(self, *, collaboration_id: str, session: dict[str, Any]) -> None:
         if self._emit is None:
             return
-        session_id = str(
-            session.get("main_factory_session_id")
-            or session.get("main_agent_package_session_id")
-            or ""
-        ) or None
-        mode = (
-            "chat"
-            if str(session.get("main_agent_package_id") or "") == SYSTEM_CHAT_PACKAGE_ID
-            else "agent_package"
-        )
+        session_id = str(session.get("main_agent_package_session_id") or "") or None
         common = {
             "request_id": None,
             "session_id": session_id,
-            "mode": mode,
+            "mode": "agent_package",
             "graph_id": "collaboration",
             "producer_type": "collaboration_service",
         }
@@ -202,25 +193,6 @@ class AgentPackageRuntimeManager:
                     "collaboration_id": collaboration_id,
                     "runtime_status": session.get("runtime_status"),
                     "runtime_status_payload": session.get("runtime_status_payload") or {},
-                },
-            )
-        )
-
-    def emit_factory_session_updated(self, *, session_record: Any, mode: str = "chat") -> None:
-        if self._emit is None:
-            return
-        payload = session_payload(session_record, snapshot_mode=mode)
-        self._emit(
-            event(
-                "session_switched",
-                request_id=None,
-                session_id=str(payload.get("session_id") or ""),
-                mode=mode,
-                producer_type="collaboration_service",
-                payload={
-                    "session_id": payload.get("session_id"),
-                    "session": payload,
-                    "force_restore": True,
                 },
             )
         )
@@ -292,7 +264,7 @@ class AgentPackageRuntimeManager:
 
     def package_instance_status(self, package_id: str) -> dict[str, Any]:
         package = self.load_package(package_id)
-        backend = "host" if _is_host_system_package(package) else "container"
+        backend = "host" if _is_host_system_package(package) else "local"
         handles = self._runtime_handles_for_package(package_id, backend=backend)
         running = any(bool(getattr(handle, "is_running", False)) for handle in handles)
         active_request_count = sum(int(getattr(handle, "active_request_count", 0)) for handle in handles)
@@ -349,6 +321,14 @@ class AgentPackageRuntimeManager:
         finally:
             initialization_lock.release()
 
+    def _package_initialization_lock(self, package_id: str) -> threading.Lock:
+        with self._runtime_handle_lock:
+            lock = self._package_initialization_locks.get(package_id)
+            if lock is None:
+                lock = threading.Lock()
+                self._package_initialization_locks[package_id] = lock
+            return lock
+
     def _initialize_package_locked(
         self,
         package_id: str,
@@ -388,7 +368,6 @@ class AgentPackageRuntimeManager:
                     stage=stage,
                     detail=detail,
                 ),
-                verify_runtime_image=True,
             )
             environment_prepared = True
             self._environment_preparation_errors.pop(package_id, None)
@@ -433,14 +412,6 @@ class AgentPackageRuntimeManager:
             )
             raise
         return latest_status or self.package_instance_status(package_id)
-
-    def _package_initialization_lock(self, package_id: str) -> threading.RLock:
-        with self._runtime_handle_lock:
-            lock = self._package_initialization_locks.get(package_id)
-            if lock is None:
-                lock = threading.RLock()
-                self._package_initialization_locks[package_id] = lock
-            return lock
 
     def _package_runtime_is_initialized(
         self,
@@ -536,42 +507,6 @@ class AgentPackageRuntimeManager:
     def package_summary(self, package_id: str) -> dict[str, Any]:
         return self._package_summary(self._manifest_path(package_id))
 
-    def update_context_config(
-        self,
-        package_id: str,
-        payload: dict[str, Any],
-    ) -> dict[str, Any]:
-        package_dir = self.repository.package_dir(package_id)
-        contract_path = package_dir / "contracts" / "context.json"
-        if not contract_path.is_file():
-            raise FileNotFoundError(f"context contract not found: {package_id}")
-        document = _read_json_object(contract_path)
-        config = document.setdefault("config", {})
-        if not isinstance(config, dict):
-            raise ValueError("context contract config must be an object")
-        if "context_window_tokens" in payload:
-            if payload["context_window_tokens"] is None:
-                config.pop("context_window_tokens", None)
-            else:
-                config["context_window_tokens"] = payload["context_window_tokens"]
-        if "compression_threshold_tokens" in payload:
-            default_policy = config.setdefault("default_policy", {})
-            if not isinstance(default_policy, dict):
-                raise ValueError("context default_policy must be an object")
-            compression = default_policy.setdefault("compression", {})
-            if not isinstance(compression, dict):
-                raise ValueError("context compression policy must be an object")
-            if payload["compression_threshold_tokens"] is None:
-                compression.pop("trigger_token_threshold", None)
-            else:
-                compression["trigger_token_threshold"] = payload["compression_threshold_tokens"]
-        ContextContract.model_validate(document)
-        contract_path.write_text(
-            json.dumps(document, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        return self.package_summary(package_id)
-
     def update_tool_description(
         self,
         package_id: str,
@@ -622,17 +557,30 @@ class AgentPackageRuntimeManager:
     def export_package_archive(self, package_id: str) -> Path:
         return self.repository.export_user_package_archive(package_id)
 
-    def list_sessions(
-        self,
-        package_id: str,
-        *,
-        include_internal: bool = False,
-    ) -> list[dict[str, Any]]:
+    def list_sessions(self, package_id: str) -> list[dict[str, Any]]:
         package = self.load_package(package_id)
-        return self._list_sessions_for_loaded_package(
-            package,
-            include_internal=include_internal,
-        )
+        return self._list_sessions_for_loaded_package(package_id, package)
+
+    def list_recent_sessions(self, *, limit: int = 5) -> list[dict[str, Any]]:
+        sessions: list[dict[str, Any]] = []
+        for package in self.list_packages():
+            package_id = str(package.get("package_id") or "").strip()
+            if not package_id:
+                continue
+            package_name = str(package.get("agent_name") or package.get("name") or package_id)
+            try:
+                package_sessions = self.list_sessions(package_id)
+            except Exception as exc:
+                logger.warning("Failed to list sessions for package %s: %s", package_id, exc)
+                continue
+            for session in package_sessions:
+                item = dict(session)
+                item["package_id"] = package_id
+                item["package_name"] = package_name
+                item["agent_name"] = package_name
+                sessions.append(item)
+        sessions.sort(key=_session_updated_sort_key, reverse=True)
+        return sessions[: max(1, limit)]
 
     def load_session(self, package_id: str, session_id: str) -> dict[str, Any]:
         package = self.load_package(package_id)
@@ -648,7 +596,6 @@ class AgentPackageRuntimeManager:
         package_id: str,
         session_id: str,
         *,
-        delete_workdir: bool = False,
         unlink_collaboration: bool = True,
     ) -> dict[str, Any]:
         package = self.load_package(package_id)
@@ -660,7 +607,7 @@ class AgentPackageRuntimeManager:
         manager = self._session_manager_for_package(package_id, package)
         record = manager.load_optional(session_id)
         if record is None:
-            deleted_workdir = _delete_agent_session_workdir(package_id, session_id) if delete_workdir else False
+            deleted_workdir = _delete_agent_session_workdir(package_id, session_id)
             collaboration_unlink = (
                 CollaborationStore().unlink_runtime_session(
                     package_id=package_id,
@@ -679,7 +626,8 @@ class AgentPackageRuntimeManager:
                 "deleted_workdir": deleted_workdir,
                 "collaboration_unlink": collaboration_unlink,
                 "cancelled_active_request_count": cancelled_active_request_count,
-                "sessions": self._list_sessions_for_loaded_package(package),
+                "sessions": self._list_sessions_for_loaded_package(package_id, package),
+                "recent_agent_sessions": self.list_recent_sessions(),
             }
         deleted_checkpoint_count = _delete_agent_session_checkpoint(
             package_id=package_id,
@@ -687,11 +635,7 @@ class AgentPackageRuntimeManager:
             session_id=record.session_id,
             thread_id=record.thread_id,
         )
-        deleted_workdir = (
-            _delete_agent_session_workdir(package_id, record.session_id)
-            if delete_workdir
-            else False
-        )
+        deleted_workdir = _delete_agent_session_workdir(package_id, record.session_id)
         result = manager.delete(record.session_id)
         collaboration_unlink = (
             CollaborationStore().unlink_runtime_session(
@@ -710,7 +654,8 @@ class AgentPackageRuntimeManager:
             "deleted_workdir": deleted_workdir,
             "collaboration_unlink": collaboration_unlink,
             "cancelled_active_request_count": cancelled_active_request_count,
-            "sessions": self._list_sessions_for_loaded_package(package),
+            "sessions": self._list_sessions_for_loaded_package(package_id, package),
+            "recent_agent_sessions": self.list_recent_sessions(),
         }
 
     def delete_collaboration_sessions(
@@ -774,7 +719,6 @@ class AgentPackageRuntimeManager:
                 result = self.delete_session(
                     package_id,
                     session_id,
-                    delete_workdir=True,
                     unlink_collaboration=False,
                 )
                 cleanups.append({**targets[(package_id, session_id)], **result})
@@ -984,7 +928,7 @@ class AgentPackageRuntimeManager:
                 event(
                     event_type,
                     request_id=None,
-                    mode="chat" if package_id == SYSTEM_CHAT_PACKAGE_ID else "agent_package",
+                    mode="agent_package",
                     graph_id="knowledge_ingestion",
                     producer_type="knowledge_runtime",
                     payload={"package_id": package_id, **payload},
@@ -1097,6 +1041,7 @@ class AgentPackageRuntimeManager:
         session_id: str | None = None,
         request_id: str | None = None,
         user_config: dict[str, Any] | None = None,
+        runtime_request: dict[str, Any] | None = None,
         attachments: Any = None,
         message_metadata: dict[str, Any] | None = None,
         require_ready: bool = False,
@@ -1157,6 +1102,10 @@ class AgentPackageRuntimeManager:
             message_metadata=message_metadata,
             status="running",
         )
+        request_policy = RuntimeRequestPolicy.from_payload(
+            runtime_request,
+            default=self.request_policy,
+        )
         command = {
             "type": "run_message",
             "request_id": resolved_request_id,
@@ -1165,7 +1114,7 @@ class AgentPackageRuntimeManager:
                 "session_id": session.session_id,
                 "user_config": dict(user_config or {}),
                 "attachments": attachment_result.attachments,
-                "runtime_request": self.request_policy.as_payload(),
+                "runtime_request": request_policy.as_payload(),
                 "runtime_workspace": runtime_workspace,
             },
         }
@@ -1194,10 +1143,7 @@ class AgentPackageRuntimeManager:
         if _is_host_system_package(package):
             runtime_workdir = str(workdir_root)
         else:
-            try:
-                runtime_workdir = str(runtime_container_path(workdir_root))
-            except ValueError:
-                runtime_workdir = "/workdir"
+            runtime_workdir = str(workdir_root.resolve())
         runtime_path_root = str(PurePosixPath(runtime_workdir) / ATTACHMENT_INPUT_DIR / attachment_scope)
         return import_runtime_attachments(
             user_input,
@@ -1215,19 +1161,24 @@ class AgentPackageRuntimeManager:
         session_id: str,
         resume_payload: dict[str, Any] | None = None,
         request_id: str | None = None,
+        runtime_request: dict[str, Any] | None = None,
         workdir_root: Path | None = None,
     ) -> AgentPackageStreamRun:
         package = self.load_package(package_id)
         session = self._session_manager_for_package(package_id, package).load(session_id)
         resolved_workdir_root = workdir_root or self.workdir_for_session(package_id, session.session_id)
         runtime_workspace = _runtime_workspace_payload(package_id, resolved_workdir_root)
+        request_policy = RuntimeRequestPolicy.from_payload(
+            runtime_request,
+            default=self.request_policy,
+        )
         command = {
             "type": "resume_interrupt",
             "request_id": request_id or uuid4().hex,
             "payload": {
                 "session_id": session_id,
                 "resume_payload": resume_payload or {},
-                "runtime_request": self.request_policy.as_payload(),
+                "runtime_request": request_policy.as_payload(),
                 "runtime_workspace": runtime_workspace,
             },
         }
@@ -1275,7 +1226,7 @@ class AgentPackageRuntimeManager:
         try:
             package = self.repository.load_manifest(manifest_path)
             report = _read_json_object(manifest_path.parent / "package_report.json")
-            sessions = self._list_sessions_for_loaded_package(package)
+            sessions = self._list_sessions_for_loaded_package(package_id, package)
             detail = _package_detail_summary(self, package_id=package_id, package=package)
             return {
                 "package_id": package_id,
@@ -1336,17 +1287,16 @@ class AgentPackageRuntimeManager:
 
     def _list_sessions_for_loaded_package(
         self,
+        package_id: str,
         package: LoadedAgentPackage,
-        *,
-        include_internal: bool = False,
     ) -> list[dict[str, Any]]:
-        manager = self._session_manager_for_package(package.package_root.name, package)
+        manager = self._session_manager_for_package(package_id, package)
         return [
-            record.model_dump(mode="json")
-            for record in manager.list_sessions(
-                agent_id=package.assembly_spec.agent.id,
-                include_internal=include_internal,
-            )
+            {
+                **record.model_dump(mode="json"),
+                "package_id": package_id,
+            }
+            for record in manager.list_sessions(agent_id=package.assembly_spec.agent.id)
         ]
 
     def close_all(self) -> None:
@@ -1358,7 +1308,6 @@ class AgentPackageRuntimeManager:
             self._close_system(runtime_key)
         self._mcp_gateways.close_all()
         self._skillhub_gateways.close_all()
-        shutdown_shared_runtime()
 
     def cancel_active_requests(
         self,
@@ -1474,67 +1423,26 @@ class AgentPackageRuntimeManager:
                 node_id="runtime_container",
                 payload={
                     "package_id": package_id,
-                    "backend": "container",
+                    "backend": "local",
                     "status": "preflight",
                     "status_key": "runtime_initialization",
                 },
             )
         try:
-            with self._package_initialization_lock(package_id):
-                if not self._has_reusable_container(runtime_key, package):
-                    EnvironmentResolver().ensure(
-                        package.package_root,
-                        verify_runtime_image=True,
-                    )
-                    self._environment_preparation_errors.pop(package_id, None)
-                handle = self._container(
-                    package_id,
-                    package,
-                    runtime_key=runtime_key,
-                    workdir_root=workdir_root,
+            handle = self._container(
+                package_id,
+                package,
+                runtime_key=runtime_key,
+                workdir_root=workdir_root,
+            )
+            if handle.startup_payload is not None:
+                yield "frontend_event", node_event(
+                    request_id,
+                    "node_completed",
+                    node_id="runtime_container",
+                    payload=handle.startup_payload,
                 )
-                startup_payload = handle.startup_payload
                 handle.startup_payload = None
-            if startup_payload is not None:
-                yield "frontend_event", node_event(
-                    request_id,
-                    "node_completed",
-                    node_id="runtime_container",
-                    payload=startup_payload,
-                )
-            elif will_start:
-                yield "frontend_event", node_event(
-                    request_id,
-                    "node_completed",
-                    node_id="runtime_container",
-                    payload={
-                        "package_id": package_id,
-                        "backend": "container",
-                        "status": "ready",
-                        "reused": True,
-                    },
-                )
-        except EnvironmentResolutionError as exc:
-            self._environment_preparation_errors[package_id] = f"{type(exc).__name__}: {exc}"
-            failure_payload = {
-                "where": "agent_runtime.environment",
-                "why": exc.status,
-                "message": str(exc),
-                "suggested_action": (
-                    "Make the Docker runtime image and dependency pool available, then "
-                    "send the message again."
-                ),
-            }
-            if will_start:
-                yield "frontend_event", node_event(
-                    request_id,
-                    "node_failed",
-                    node_id="runtime_container",
-                    payload=failure_payload,
-                    severity="error",
-                )
-            yield "frontend_event", run_failed_event(request_id, failure_payload)
-            return
         except AgentRuntimeLaunchError as exc:
             if will_start:
                 yield "frontend_event", node_event(
@@ -1549,9 +1457,9 @@ class AgentPackageRuntimeManager:
         except Exception as exc:
             failure_payload = {
                 "where": "agent_runtime.launch",
-                "why": "container_start_failed",
+                "why": "local_runtime_start_failed",
                 "message": f"{type(exc).__name__}: {exc}",
-                "suggested_action": "Check Docker Desktop, runtime image, and sandbox contract.",
+                "suggested_action": "Check the local runtime, dependency lock, and runtime contract.",
             }
             if will_start:
                 yield "frontend_event", node_event(
@@ -1595,7 +1503,7 @@ class AgentPackageRuntimeManager:
         detail: dict[str, Any] | None = None,
         error: str | None = None,
     ) -> dict[str, Any]:
-        backend = "host" if _is_host_system_package(package) else "container"
+        backend = "host" if _is_host_system_package(package) else "local"
         payload: dict[str, Any] = {
             "package_id": package_id,
             "agent_id": package.assembly_spec.agent.id,
@@ -1657,7 +1565,7 @@ class AgentPackageRuntimeManager:
         *,
         runtime_key: str,
         workdir_root: Path | None = None,
-    ) -> "AgentRuntimeContainerHandle":
+    ) -> "NativeAgentRuntimeHandle":
         fingerprint = _runtime_fingerprint(package_id, package)
         with self._runtime_handle_lock:
             existing = self._containers.get(runtime_key)
@@ -1686,7 +1594,7 @@ class AgentPackageRuntimeManager:
         fingerprint: str,
         runtime_instance_id: str,
         workdir_root: Path | None,
-    ) -> "AgentRuntimeContainerHandle":
+    ) -> "NativeAgentRuntimeHandle":
         """Create the package's single logical runtime bridge."""
         workspace = _package_runtime_workspace(package_id).ensure()
         runtime_root = workspace.root
@@ -1706,29 +1614,28 @@ class AgentPackageRuntimeManager:
             workdir_root=workdir_root,
             runtime_instance_id=runtime_instance_id,
             extension_root=extension_root,
-            mcp_gateway_url=mcp_gateway.docker_url if mcp_gateway is not None else None,
-            skillhub_gateway_url=skillhub_gateway.docker_url,
+            mcp_gateway_url=mcp_gateway.host_url if mcp_gateway is not None else None,
+            skillhub_gateway_url=skillhub_gateway.host_url,
         )
-        handle = AgentRuntimeContainerHandle(
+
+        handle = NativeAgentRuntimeHandle(
             package_id=package_id,
             package_fingerprint=fingerprint,
             idle_timeout_seconds=self.idle_timeout_seconds,
             request_policy=self.request_policy,
             bridge_startup_timeout_seconds=self.bridge_startup_timeout_seconds,
             command=plan.command,
+            environment=plan.environment,
             emit=self._emit,
         )
         handle.startup_payload = {
             "package_id": package_id,
             "status": "running",
             "pid": handle.process.pid,
-            "image": plan.image,
-            "network": plan.network,
-            "mount_count": plan.mount_count,
+            "runtime_type": "local",
             "extension_root": str(plan.extension_root),
             "preflight": plan.preflight,
             "isolation": plan.isolation,
-            "shared_container_id": plan.shared_container_id,
         }
         return handle
 
@@ -1961,25 +1868,6 @@ def _hash_tree(digest: "hashlib._Hash", root: Path) -> None:
         digest.update(str(stat.st_size).encode("ascii"))
 
 
-def _runtime_image_identity() -> str:
-    image = DEFAULT_RUNTIME_IMAGE
-    docker = shutil.which("docker")
-    if docker is None:
-        return f"image:{image}"
-    try:
-        result = subprocess.run(
-            [docker, "image", "inspect", image, "--format", "{{.Id}}"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-        )
-    except Exception:
-        return f"image:{image}"
-    identity = result.stdout.strip() if result.returncode == 0 else image
-    return f"image:{image}:{identity}"
-
-
 def _env_int(name: str, default: int) -> int:
     value = os.getenv(name)
     if not value:
@@ -2057,26 +1945,21 @@ def _model_contract_summary(package: LoadedAgentPackage) -> dict[str, Any]:
 
 def _context_contract_summary(package_root: Path) -> dict[str, Any]:
     contract_path = package_root / "contracts" / "context.json"
-    from agent_factory.models.chat_model import get_main_model_settings
-
-    profile = get_main_model_settings()
-    profile_window = profile.max_input_tokens
-    profile_threshold = profile.context_compression_threshold_tokens
-    effective_profile_threshold = (
-        min(profile_threshold, profile_window)
-        if isinstance(profile_threshold, int) and isinstance(profile_window, int)
-        else profile_threshold
+    resolved = _resolved_main_model_for_package(package_root)
+    settings = resolved.settings if resolved is not None else None
+    fallback_limits = model_context_limits(model_role="main")
+    context_window = getattr(settings, "max_input_tokens", None) or fallback_limits.context_window_tokens
+    compression_threshold = (
+        getattr(settings, "compression_trigger_tokens", None)
+        or fallback_limits.compression_trigger_tokens
     )
     base = {
         "version": "",
-        "context_window_tokens": profile_window,
-        "context_window_tokens_source": "profile" if profile_window is not None else "unset",
-        "context_window_tokens_profile_id": profile.profile_id,
-        "context_window_tokens_custom": None,
-        "compression_threshold_tokens": effective_profile_threshold,
-        "compression_threshold_tokens_source": "profile" if profile_threshold is not None else "unset",
-        "compression_threshold_tokens_profile_id": profile.profile_id,
-        "compression_threshold_tokens_custom": None,
+        "context_window_tokens": context_window,
+        "context_window_tokens_source": "model_profile",
+        "compression_threshold_tokens": compression_threshold,
+        "compression_threshold_tokens_source": "model_profile",
+        "model_profile_id": getattr(settings, "profile_id", None),
     }
     if not contract_path.is_file():
         return base
@@ -2085,26 +1968,30 @@ def _context_contract_summary(package_root: Path) -> dict[str, Any]:
         validated = ContextContract.model_validate(document)
     except Exception as exc:
         return {**base, "error": f"{type(exc).__name__}: {exc}"}
-    config = document.get("config") if isinstance(document.get("config"), dict) else {}
-    custom_window = config.get("context_window_tokens")
-    window = custom_window if isinstance(custom_window, int) and custom_window > 0 else profile_window
-    compression = {}
-    default_policy = config.get("default_policy") if isinstance(config.get("default_policy"), dict) else {}
-    if isinstance(default_policy, dict):
-        compression = default_policy.get("compression") if isinstance(default_policy.get("compression"), dict) else {}
-    custom_threshold = compression.get("trigger_token_threshold") if isinstance(compression, dict) else None
-    threshold = custom_threshold if isinstance(custom_threshold, int) and custom_threshold > 0 else profile_threshold
-    effective_threshold = min(threshold, window) if isinstance(window, int) and window > 0 else threshold
     return {
         **base,
         "version": validated.version,
-        "context_window_tokens": window,
-        "context_window_tokens_source": "package" if isinstance(custom_window, int) and custom_window > 0 else base["context_window_tokens_source"],
-        "context_window_tokens_custom": custom_window if isinstance(custom_window, int) and custom_window > 0 else None,
-        "compression_threshold_tokens": effective_threshold,
-        "compression_threshold_tokens_source": "package" if isinstance(custom_threshold, int) and custom_threshold > 0 else base["compression_threshold_tokens_source"],
-        "compression_threshold_tokens_custom": custom_threshold if isinstance(custom_threshold, int) and custom_threshold > 0 else None,
     }
+
+
+def _resolved_main_model_for_package(package_root: Path):
+    contract_path = package_root / "contracts" / "model.json"
+    if contract_path.is_file():
+        try:
+            document = _read_json_object(contract_path)
+            config = document.get("config") if isinstance(document.get("config"), dict) else {}
+            bindings = config.get("bindings") if isinstance(config.get("bindings"), dict) else {}
+            main = bindings.get("main")
+            if isinstance(main, dict):
+                binding = ModelProfileBinding.model_validate(main)
+                if binding.source != "runtime":
+                    return resolve_chat_model_binding(binding, role="main")
+        except Exception:
+            pass
+    try:
+        return resolve_available_chat_model("main")
+    except Exception:
+        return None
 
 
 def _memory_contract_summary(package_root: Path) -> dict[str, Any]:
@@ -2291,6 +2178,10 @@ def _public_knowledge_source(source: dict[str, Any], *, document_count: int | No
         "document_count": document_count if document_count is not None else metadata.get("document_count"),
         "sample_titles": metadata.get("sample_titles") if isinstance(metadata.get("sample_titles"), list) else [],
     }
+
+
+def _session_updated_sort_key(session: dict[str, Any]) -> str:
+    return str(session.get("updated_at") or session.get("created_at") or "")
 
 
 def _normalized_source_payload(payload: dict[str, Any]) -> dict[str, Any]:
