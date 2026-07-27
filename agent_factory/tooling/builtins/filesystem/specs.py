@@ -166,44 +166,74 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
     ToolSpec(
         id="write",
         description=(
-            "在 workspace 边界内创建或覆盖指定文件内容。"
-            "调用 write 时必须把要写入文件的完整正文放入 content 参数；"
-            "不要先在 assistant 消息里输出正文后只传 path，也不要假设 write 会自动读取上一段回复内容。"
+            "在 workspace 边界内创建或覆盖指定文本文件。小文件可直接提供 path 和完整 content；"
+            "大文件使用 action=start 获取 write_id，按顺序多次 action=append，最后 action=commit 原子替换目标。"
+            "commit 会复核开始时的目标快照，失败不会留下半写目标；放弃时调用 action=abort。"
+            "工具不会自动读取 assistant 消息中的正文。"
         ),
         schema_error_guidance=(
-            "write 调用必须同时提供 path 和 content。content 必须是要写入目标文件的完整文本内容；"
-            "如果你刚刚在消息中生成了报告或文档，请重新调用 write，并把那份完整内容放进 content 字段。"
+            "小文件调用必须同时提供 path 和 content。大文件只接受以下顺序："
+            "action=start 提供 path；action=append 提供真实 write_id 和 content；"
+            "action=commit 或 action=abort 提供真实 write_id。不要编造或跨 workspace 复用 write_id。"
         ),
         entrypoint="agent_factory.tooling.builtins.filesystem.write:run",
         input_schema={
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": _WRITE_PATH_DESCRIPTION},
-                "content": {
-                    "type": "string",
-                    "description": (
-                        "要写入文件的完整正文内容。长报告、Markdown 文档、代码或配置都必须完整放在这里；"
-                        "工具不会自动使用 assistant 刚刚输出过的文本。"
-                    ),
+            "oneOf": [
+                {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": _WRITE_PATH_DESCRIPTION},
+                        "content": {"type": "string", "description": "要写入文件的完整正文内容。"},
+                        "create_dirs": {"type": "boolean", "default": True},
+                    },
+                    "required": ["path", "content"],
+                    "additionalProperties": False,
                 },
-                "create_dirs": {"type": "boolean", "default": True, "description": "是否创建缺失父目录；默认创建。"},
-            },
-            "required": ["path", "content"],
-            "additionalProperties": False,
+                {
+                    "type": "object",
+                    "properties": {
+                        "action": {"const": "start"},
+                        "path": {"type": "string", "description": _WRITE_PATH_DESCRIPTION},
+                        "expected_hash": {
+                            "type": "string",
+                            "description": "可选的当前目标 SHA-256；不匹配时拒绝开始。",
+                        },
+                        "create_dirs": {"type": "boolean", "default": True},
+                    },
+                    "required": ["action", "path"],
+                    "additionalProperties": False,
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "action": {"const": "append"},
+                        "write_id": {"type": "string"},
+                        "content": {"type": "string", "description": "本次按顺序追加到暂存文件的文本块。"},
+                    },
+                    "required": ["action", "write_id", "content"],
+                    "additionalProperties": False,
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "action": {"const": "commit"},
+                        "write_id": {"type": "string"},
+                    },
+                    "required": ["action", "write_id"],
+                    "additionalProperties": False,
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "action": {"const": "abort"},
+                        "write_id": {"type": "string"},
+                    },
+                    "required": ["action", "write_id"],
+                    "additionalProperties": False,
+                },
+            ],
         },
-        output_schema={
-            "type": "object",
-            "properties": {
-                "path": _STRING,
-                "created": _BOOLEAN,
-                "bytes_written": _INTEGER,
-                "before_hash": {"type": ["string", "null"]},
-                "after_hash": _STRING,
-                "change_summary": _CHANGE_SUMMARY_SCHEMA,
-            },
-            "required": ["path", "created", "bytes_written", "before_hash", "after_hash", "change_summary"],
-            "additionalProperties": False,
-        },
+        output_schema={"type": "object"},
         resources=_FILESYSTEM_RESOURCE,
         risk_level="medium",
         risk_evaluator=ToolRiskEvaluatorConfig(hard=f"{_FS_MODULE}.write:evaluate_risk"),

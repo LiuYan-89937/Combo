@@ -21,6 +21,7 @@ from agent_factory.runtime_render.schema import default_model_message_visible_to
 
 
 FACTORY_TOOLS_NODE = "factory_tools"
+PROGRESS_TOOL_ID = "report_progress"
 RUNTIME_TOOL_EXECUTION_NODES = {FACTORY_TOOLS_NODE, "tool_exec"}
 INTERNAL_MODEL_MESSAGE_NODES = {"intent_gate"}
 NODE_EVENT_TYPES: set[str] = {
@@ -105,6 +106,7 @@ class RuntimeEventNormalizer:
     default_payload: dict[str, Any] = field(default_factory=dict)
     runtime_pattern_id: str | None = None
     visible_assistant_output: VisibleAssistantMessage = field(default_factory=VisibleAssistantMessage)
+    has_agent_progress: bool = False
 
     def runtime_event(
         self,
@@ -148,6 +150,17 @@ class RuntimeEventNormalizer:
             payload=event_payload,
         )
         self.emit(item)
+        if (
+            event_type == "model_call_started"
+            and event_payload.get("visible_to_user") is not False
+            and not self.has_agent_progress
+        ):
+            self._emit_assistant_progress(
+                source="runtime",
+                stage="model_waiting",
+                summary="正在等待模型响应。",
+                status="running",
+            )
         return item
 
     def emit_run_started(self, payload: dict[str, Any]) -> None:
@@ -155,6 +168,12 @@ class RuntimeEventNormalizer:
             "run_started",
             span_id=self.run_span_id,
             payload={"run_id": self.run_id, **payload},
+        )
+        self._emit_assistant_progress(
+            source="runtime",
+            stage="runtime_preparation",
+            summary="正在准备任务上下文。",
+            status="running",
         )
 
     def emit_run_completed(self, payload: dict[str, Any]) -> None:
@@ -220,6 +239,9 @@ class RuntimeEventNormalizer:
             return
         if chunk.get("type") == "tool_activity":
             self._emit_custom_tool_activity(chunk.get("payload") or {})
+            return
+        if chunk.get("type") == "assistant_progress":
+            self._emit_agent_progress(chunk.get("payload") or {})
             return
         if chunk.get("type") == "memory_event":
             self._emit_memory_event(chunk.get("payload") or {})
@@ -517,6 +539,8 @@ class RuntimeEventNormalizer:
             item_payload = _compact_tool_activity_payload(
                 {key: value for key, value in json_safe(item).items() if key != "event_type"}
             )
+            if _tool_id_from_payload(item_payload) == PROGRESS_TOOL_ID:
+                continue
             if event_type == "tool_call_proposed" and not self._remember_tool_proposal(item_payload):
                 continue
             tool_span_id = uuid.uuid4().hex
@@ -528,6 +552,50 @@ class RuntimeEventNormalizer:
                 parent_span_id=self._stage_span_or_run(self.current_stage_id),
                 payload=item_payload,
             )
+
+    def _emit_agent_progress(self, payload: Any) -> None:
+        if not isinstance(payload, dict):
+            return
+        summary = str(payload.get("summary") or "").strip()
+        stage = str(payload.get("stage") or "").strip()
+        status = str(payload.get("status") or "running").strip()
+        replace_key = str(payload.get("replace_key") or "current_agent_progress").strip()
+        if not summary or not stage or status not in {"running", "completed", "blocked"} or not replace_key:
+            return
+        self.has_agent_progress = True
+        self._emit_assistant_progress(
+            source="agent",
+            stage=stage,
+            summary=summary,
+            status=status,
+            replace_key=replace_key,
+            progress_id=str(payload.get("progress_id") or uuid.uuid4().hex),
+        )
+
+    def _emit_assistant_progress(
+        self,
+        *,
+        source: str,
+        stage: str,
+        summary: str,
+        status: str,
+        replace_key: str = "current_agent_progress",
+        progress_id: str | None = None,
+    ) -> None:
+        self.runtime_event(
+            "assistant_progress",
+            stage_id=self.current_stage_id,
+            span_id=uuid.uuid4().hex,
+            parent_span_id=self.run_span_id,
+            payload={
+                "progress_id": progress_id or uuid.uuid4().hex,
+                "source": source,
+                "stage": stage,
+                "summary": summary,
+                "status": status,
+                "replace_key": replace_key,
+            },
+        )
 
     def emit_model_activity_from_patch(self, node_id: str, stage_id: str | None, patch: dict[str, Any]) -> None:
         for item in patch.get("model_activity", []) or []:
@@ -1201,6 +1269,8 @@ class RuntimeEventNormalizer:
         for message in patch.get("messages", []) or []:
             if message.get("type") != "ToolMessage":
                 continue
+            if str(message.get("name") or "").strip() == PROGRESS_TOOL_ID:
+                continue
             tool_span_id = uuid.uuid4().hex
             event_type = _tool_message_event_type(message)
             payload = _frontend_tool_message_event_payload(message)
@@ -1239,6 +1309,8 @@ class RuntimeEventNormalizer:
                 continue
             for tool_call in message.get("tool_calls", []) or []:
                 if not isinstance(tool_call, dict):
+                    continue
+                if str(tool_call.get("name") or "").strip() == PROGRESS_TOOL_ID:
                     continue
                 tool_span_id = uuid.uuid4().hex
                 payload = {
@@ -1312,6 +1384,10 @@ def _canonical_tool_event_type(event_type: str) -> str:
         "tool_contract_invalid": "tool_contract_invalid",
         "tool_failed": "tool_call_failed",
     }.get(event_type, event_type)
+
+
+def _tool_id_from_payload(payload: dict[str, Any]) -> str:
+    return str(payload.get("tool_id") or payload.get("tool_name") or payload.get("name") or "").strip()
 
 
 def _tool_message_event_type(message: dict[str, Any]) -> FactoryFrontendEventType:

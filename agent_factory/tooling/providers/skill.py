@@ -7,6 +7,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_factory.tooling.providers.base import (
+    PromptFragment,
     RuntimeDependency,
     ToolProviderContext,
     ToolProviderResult,
@@ -85,8 +86,9 @@ class SkillProvider:
         payload = registry.to_resource_payload()
         if payload["skills"]:
             result.runtime_resources["skills"] = payload
-            result.tool_specs.append(build_skill_tool_spec(registry))
+            result.tool_specs.append(build_skill_tool_spec())
             result.system_tool_ids.append(SKILL_TOOL_ID)
+            result.prompt_fragments.append(_enabled_skills_prompt_fragment(registry))
         return result
 
 
@@ -121,3 +123,27 @@ def _read_json(path: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError(f"JSON file must contain an object: {path}")
     return payload
+
+
+def _enabled_skills_prompt_fragment(registry: SkillRegistry) -> PromptFragment:
+    skill_lines = [
+        f"- {skill.name}: {' '.join(skill.metadata.description.split())}"
+        for skill in registry.packages()
+    ]
+    return PromptFragment(
+        fragment_id="enabled_skills",
+        source="skill",
+        content="\n".join(
+            [
+                "Enabled Skill reminder (lazy-loaded):",
+                "The following Skills are assembled for this Agent:",
+                *skill_lines,
+                (
+                    "When the current task matches an enabled Skill, do not ignore it merely because its body is "
+                    "not yet in context. Call the skill tool with action=load, the exact Skill name, an appropriate "
+                    "current_system identifier, and a concrete reason before doing the substantive work. "
+                    "Only load Skills relevant to the current task."
+                ),
+            ]
+        ),
+    )

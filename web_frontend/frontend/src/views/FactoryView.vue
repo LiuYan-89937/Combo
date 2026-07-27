@@ -18,7 +18,7 @@
         <n-scrollbar ref="scrollbarRef" class="messages-scrollbar">
           <div class="messages-list">
             <n-empty
-              v-if="runtimeStore.transcript.length === 0 && !hasActiveStreams"
+              v-if="timelineItems.length === 0 && !hasActiveStreams"
               :description="emptyDescription"
               class="chat-empty"
             >
@@ -36,7 +36,8 @@
               <MessageItem
                 :message="item.message"
                 :streaming="isMessageStreaming(item.message.streamId)"
-                quoteable
+                :thinking="item.kind === 'progress' && item.message.status === 'streaming'"
+                :quoteable="item.kind === 'message'"
                 :tip-context="tipContextFor(item.message)"
                 :workspace-context="messageWorkspaceContext"
                 @quote="addMessageReference"

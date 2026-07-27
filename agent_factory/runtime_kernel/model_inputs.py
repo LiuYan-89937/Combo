@@ -20,6 +20,7 @@ from agent_factory.runtime_defaults import (
     DEFAULT_BUILTIN_WORKSPACE_ROOT,
 )
 from agent_factory.runtime_kernel.planning import is_plan_and_execute_pattern_id
+from agent_factory.runtime_kernel.prompt_fragments import runtime_prompt_fragments_from_state
 from agent_factory.runtime_kernel.tool_governance import tool_governance_prompt
 
 
@@ -29,7 +30,10 @@ RUNTIME_REACT_PROTOCOL = (
     "When tools are available and useful, call them with the model's native tool_call mechanism only. "
     "After a ToolMessage observation, continue from that observation and do not invent hidden tool results. "
     "When inspecting workspace files, if read reports a missing file or the path is uncertain, call ls on "
-    "the parent or nearby directory before retrying read with the exact file name/path."
+    "the parent or nearby directory before retrying read with the exact file name/path. "
+    "For complex or time-consuming tasks, use report_progress before substantive work and when a meaningful "
+    "stage completes, the plan changes, or work becomes blocked. Keep each progress summary brief and user-facing; "
+    "do not expose hidden reasoning, narrate every minor action, or use progress updates as the final answer."
 )
 EXECUTOR_TOOL_POLICY = "Executor tool policy: execute the current plan step with package/domain tools first."
 FINAL_ANSWER_TOOL_POLICY = (
@@ -164,6 +168,7 @@ def _stable_system_prompt(*, prompt_binding: dict[str, Any], state: Any, node_id
     if node_id == PLAN_EXECUTE_FINAL_ANSWER_NODE_ID:
         parts.append(FINAL_ANSWER_TOOL_POLICY)
     parts.append(RUNTIME_REACT_PROTOCOL)
+    parts.extend(runtime_prompt_fragments_from_state(state))
     return "\n\n".join(parts)
 
 
@@ -186,7 +191,9 @@ def _executor_tool_policy(state: Any) -> str:
         "before retrying read with the exact file name/path. "
         "Call shell only when the available package/runtime tools cannot accomplish the current plan step; "
         "when doing so, include fallback_reason in the tool arguments explaining the gap. "
-        "Use write for a simple full-content write to one file. "
+        "Use write with path and content for a simple full-content write to one file. "
+        "For a large file that should not be sent in one tool call, use write action=start, append ordered chunks "
+        "with the returned write_id, and finish with action=commit; use action=abort if the write is abandoned. "
         "Use edit for every multi-file change and for structured create, replace, move, copy, or delete operations. "
         "edit is transactional: first call action=preview with the complete operations array, inspect the returned "
         "affected_files diff, then call action=commit with the exact transaction_id returned by that preview. "

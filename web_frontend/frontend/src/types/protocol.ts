@@ -341,6 +341,9 @@ export interface TimelineItem {
   id: string
   eventType: string
   timestamp: string
+  requestId: string | null
+  runId: string | null
+  sequence: number
   spanId: string | null
   parentSpanId: string | null
   stageId: string | null

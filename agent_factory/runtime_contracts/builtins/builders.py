@@ -42,6 +42,7 @@ from agent_factory.runtime_contracts.schema import (
 )
 from agent_factory.runtime_kernel.adapters import InMemoryToolRegistry, LangChainModelServiceAdapter
 from agent_factory.runtime_kernel.extensions.manager import AgentInstanceExtensionManager
+from agent_factory.runtime_kernel.prompt_fragments import RUNTIME_PROMPT_FRAGMENTS_SESSION_KEY
 from agent_factory.runtime_kernel.model_operations import ModelOperationService
 from agent_factory.runtime_kernel.node_providers import NodeProviderRegistry
 from agent_factory.runtime_kernel.persistence import (
@@ -126,6 +127,7 @@ class ToolsContractBuilder:
         tool_runtime_resources.setdefault("workspace_root", str(context.package_root))
         mcp_clients = {}
         system_tool_ids: set[str] = set()
+        prompt_fragments: list[dict[str, Any]] = []
         instance_extension_root = context.instance_extension_root or resolve_package_runtime_path(
             context,
             config.instance_extension_root,
@@ -160,11 +162,19 @@ class ToolsContractBuilder:
             specs.extend(builtin_result.tool_specs)
             system_tool_ids.update(builtin_result.system_tool_ids)
             runtime_resources.update(builtin_result.runtime_resources)
+            prompt_fragments.extend(
+                fragment.model_dump(mode="json")
+                for fragment in builtin_result.prompt_fragments
+            )
         if config.package_tools_enabled:
             package_result = PackageToolProvider().discover(provider_context)
             specs.extend(package_result.tool_specs)
             system_tool_ids.update(package_result.system_tool_ids)
             runtime_resources.update(package_result.runtime_resources)
+            prompt_fragments.extend(
+                fragment.model_dump(mode="json")
+                for fragment in package_result.prompt_fragments
+            )
         if config.instance_extensions_enabled:
             manager = AgentInstanceExtensionManager(
                 extension_root=instance_extension_root,
@@ -175,6 +185,10 @@ class ToolsContractBuilder:
             specs.extend(extension_result.tool_specs)
             system_tool_ids.update(extension_result.system_tool_ids)
             runtime_resources.update(extension_result.runtime_resources)
+            prompt_fragments.extend(
+                fragment.model_dump(mode="json")
+                for fragment in extension_result.prompt_fragments
+            )
             mcp_clients = manager.mcp_tool_clients()
         if TOOL_OUTPUT_STORE_RESOURCE in tool_runtime_resources and not any(spec.id == "tool_output" for spec in specs):
             tool_output_spec = get_tool_output_tool_specs()[0]
@@ -210,12 +224,15 @@ class ToolsContractBuilder:
             model_tools=compiled_tools,
             system_tool_ids=system_tool_ids,
         )
+        session_config = {
+            "builtin_workspace_root": config.builtin_workspace_root,
+            "builtin_allow_external_paths": config.builtin_allow_external_paths,
+        }
+        if prompt_fragments:
+            session_config[RUNTIME_PROMPT_FRAGMENTS_SESSION_KEY] = prompt_fragments
         return RuntimeContribution(
             services={"tool_registry": runtime_registry},
-            session_config={
-                "builtin_workspace_root": config.builtin_workspace_root,
-                "builtin_allow_external_paths": config.builtin_allow_external_paths,
-            },
+            session_config=session_config,
         )
 
 
