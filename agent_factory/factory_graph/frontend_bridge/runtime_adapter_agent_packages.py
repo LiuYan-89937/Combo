@@ -587,11 +587,18 @@ class RuntimeAgentPackageCommandMixin:
         if pending is None:
             self._emit_error(command, "no pending create-agent interrupt to resume")
             return
+        factory_session_id = str(pending.factory_session_id or self._session_id() or "").strip()
+        factory_session = self.session_manager.load_if_exists(factory_session_id) if factory_session_id else None
+        if factory_session is None:
+            self._emit_error(command, "pending create-agent interrupt factory session is unavailable")
+            return
+        self.session_record = factory_session
+        self.mode = "create_agent"
         resume_text = _resume_payload_text(command.payload)
         normalizer = RuntimeEventNormalizer(
             emit=self.emit,
             request_id=command.request_id,
-            session_id=self._session_id(),
+            session_id=factory_session_id,
             mode="create_agent",
             graph_id="create_agent_react",
             producer_type="factory_runtime",
@@ -620,10 +627,16 @@ class RuntimeAgentPackageCommandMixin:
         if pending is None:
             self._emit_error(command, "no pending evolution interrupt to resume")
             return
+        factory_session = self.session_manager.load_if_exists(pending.session_id)
+        if factory_session is None:
+            self._emit_error(command, "pending evolution interrupt factory session is unavailable")
+            return
+        self.session_record = factory_session
+        self.mode = "evolve_agent"
         normalizer = RuntimeEventNormalizer(
             emit=self.emit,
             request_id=command.request_id,
-            session_id=self._session_id(),
+            session_id=pending.session_id,
             mode="evolve_agent",
             graph_id="agent_evolution",
             producer_type="factory_runtime",
@@ -1028,6 +1041,7 @@ class RuntimeAgentPackageCommandMixin:
                 )
                 self.pending_create_agent_run = PendingCreateAgentRun(
                     session_id=run.session_id,
+                    factory_session_id=self._session_id(),
                     request_id=item.request_id,
                     interrupt_id=_interrupt_id_from_event(item),
                     interrupt_event_id=item.event_id,

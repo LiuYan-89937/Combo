@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
 from agent_factory.create_agent.publish_tool import confirm_and_publish
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
+from agent_factory.environment_system import EnvironmentResolutionError
 from agent_factory.resource_system import ResourceStore
 from agent_factory.runtime_contracts import AgentPackageLoader, ResourcesContract
 
@@ -17,7 +19,8 @@ def create_create_agent_router() -> APIRouter:
     async def publish_create_agent_workspace(workspace_id: str, payload: dict[str, Any] | None = None):
         confirmation = _confirmation_text(payload)
         try:
-            result = confirm_and_publish(
+            result = await asyncio.to_thread(
+                confirm_and_publish,
                 workspace=CreateAgentWorkspace.for_session(workspace_id),
                 confirmation=confirmation,
             )
@@ -25,6 +28,11 @@ def create_create_agent_router() -> APIRouter:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except EnvironmentResolutionError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"status": exc.status, "message": str(exc)},
+            ) from exc
         return {"published": result}
 
     @router.put("/workspaces/{workspace_id}/resources/{resource_id}")

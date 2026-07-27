@@ -65,17 +65,11 @@ class EnvironmentResolver:
                 return existing
             result = self._write_lock(
                 root,
-                {
-                    "version": ENVIRONMENT_LOCK_VERSION,
-                    "status": "ready",
-                    "request_fingerprint": request_fingerprint,
-                    "image": base_image,
-                    "image_digest": "",
-                    "platform": _local_platform(),
-                    "requirements": request,
-                    "pool": DependencyPoolResolution([], [], None).to_lock_payload(),
-                    "verified_at": _now(),
-                },
+                _empty_dependency_lock_payload(
+                    base_image=base_image,
+                    request=request,
+                    request_fingerprint=request_fingerprint,
+                ),
             )
             _notify(on_progress, "ready", cache_status="lock_created", dependency_count=0)
             return result
@@ -159,6 +153,69 @@ class EnvironmentResolver:
             )
         return value
 
+    def require_ready(self, package_root: str | Path) -> dict[str, Any]:
+        """Validate the current dependency lock without installing anything."""
+        root = Path(package_root).expanduser().resolve()
+        contract = load_dependencies_contract(root)
+        config = contract.config
+        base_image = str(config.base_image or "local-python").strip()
+        if contract.enabled and config.system_packages:
+            raise EnvironmentResolutionError(
+                "local_system_dependencies_unsupported",
+                "Local runtime does not install operating-system packages. Declare required host capabilities "
+                "through system_binaries and verification_commands instead.",
+            )
+        if not _has_materializable_dependencies(enabled=contract.enabled, config=config):
+            request = _dependency_request(
+                enabled=contract.enabled,
+                base_image=base_image,
+                base_digest="",
+                architecture=_local_architecture(),
+                config=config,
+            )
+            request_fingerprint = _fingerprint(request)
+            value = self._read_lock_payload(root)
+            return (
+                value
+                if self._is_reusable_lock(value, request_fingerprint)
+                else _empty_dependency_lock_payload(
+                    base_image=base_image,
+                    request=request,
+                    request_fingerprint=request_fingerprint,
+                )
+            )
+        architecture = _local_architecture()
+        allowed = set(config.platform_architectures)
+        if allowed and architecture not in allowed:
+            raise EnvironmentResolutionError(
+                "platform_mismatch",
+                f"package requires architectures {sorted(allowed)}, current local architecture is {architecture}",
+            )
+        request = _dependency_request(
+            enabled=contract.enabled,
+            base_image=base_image,
+            base_digest="",
+            architecture=architecture,
+            config=config,
+        )
+        request_fingerprint = _fingerprint(request)
+        value = self._read_lock_payload(root)
+        if not self._is_reusable_lock(value, request_fingerprint):
+            raise EnvironmentResolutionError(
+                "environment_not_prepared",
+                "package dependencies are not prepared for the current contract; run a successful tool probe "
+                "or dependency preparation before final validation and publish",
+            )
+        return value
+
+    def materialize_lock_without_installation(self, package_root: str | Path) -> dict[str, Any]:
+        """Write a lock only when the dependency contract requires no installation."""
+        root = Path(package_root).expanduser().resolve()
+        contract = load_dependencies_contract(root)
+        if _has_materializable_dependencies(enabled=contract.enabled, config=contract.config):
+            return self.require_ready(root)
+        return self.ensure(root)
+
     def _is_reusable_lock(self, value: dict[str, Any] | None, request_fingerprint: str) -> bool:
         return bool(
             self._is_ready_lock(value)
@@ -239,6 +296,25 @@ def _dependency_count(request: dict[str, Any]) -> int:
         len(request.get(key) or [])
         for key in ("python_requirements", "system_packages", "npm_requirements")
     )
+
+
+def _empty_dependency_lock_payload(
+    *,
+    base_image: str,
+    request: dict[str, Any],
+    request_fingerprint: str,
+) -> dict[str, Any]:
+    return {
+        "version": ENVIRONMENT_LOCK_VERSION,
+        "status": "ready",
+        "request_fingerprint": request_fingerprint,
+        "image": base_image,
+        "image_digest": "",
+        "platform": _local_platform(),
+        "requirements": request,
+        "pool": DependencyPoolResolution([], [], None).to_lock_payload(),
+        "verified_at": _now(),
+    }
 
 
 def _notify(callback: EnvironmentProgress | None, stage: str, **payload: Any) -> None:
