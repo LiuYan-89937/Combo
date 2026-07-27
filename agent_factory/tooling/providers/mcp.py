@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
 import re
 from typing import Any, Iterable, Literal, Mapping, Protocol
 
@@ -12,6 +13,8 @@ from agent_factory.tooling.providers.base import (
     ToolProviderResult,
     diagnostic,
 )
+from agent_factory.tooling.mcp_schema import normalize_mcp_schema
+from agent_factory.tooling.schema_compiler import compile_json_schema
 from agent_factory.tooling.spec import (
     ToolDescriptionContextConfig,
     ToolLoopPolicyConfig,
@@ -39,6 +42,12 @@ class MCPDiscoveredTool(BaseModel):
 class MCPToolCatalogClient(Protocol):
     def list_tools(self) -> Iterable[MCPDiscoveredTool | dict[str, Any]]:
         ...
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedMCPTool:
+    spec: ToolSpec
+    repairs: tuple[dict[str, Any], ...]
 
 
 class MCPServerConfig(BaseModel):
@@ -149,7 +158,7 @@ class MCPToolProvider:
                 )
                 continue
             try:
-                discovered = [MCPDiscoveredTool.model_validate(item) for item in client.list_tools()]
+                discovered = list(client.list_tools())
             except Exception as exc:
                 level = "error" if server.required else "warning"
                 result.diagnostics.append(
@@ -162,11 +171,25 @@ class MCPToolProvider:
                     )
                 )
                 continue
-            for tool in discovered:
+            for discovered_tool in discovered:
+                tool_name = _discovered_tool_name(discovered_tool)
                 try:
-                    spec = _tool_spec_from_mcp_tool(server, tool)
-                    result.tool_specs.append(spec)
-                    result.system_tool_ids.append(spec.id)
+                    tool = MCPDiscoveredTool.model_validate(discovered_tool)
+                    tool_name = tool.name
+                    prepared = prepare_mcp_tool(server, tool)
+                    result.tool_specs.append(prepared.spec)
+                    result.system_tool_ids.append(prepared.spec.id)
+                    if prepared.repairs:
+                        result.diagnostics.append(
+                            diagnostic(
+                                self.provider_id,
+                                "warning",
+                                "normalized non-standard MCP JSON Schema shorthand",
+                                server_id=server.server_id,
+                                tool_name=tool_name,
+                                repairs=list(prepared.repairs),
+                            )
+                        )
                 except Exception as exc:
                     result.diagnostics.append(
                         diagnostic(
@@ -174,11 +197,52 @@ class MCPToolProvider:
                             "error",
                             "failed to convert MCP tool to ToolSpec",
                             server_id=server.server_id,
-                            tool_name=tool.name,
+                            tool_name=tool_name,
                             error=f"{type(exc).__name__}: {exc}",
                         )
                     )
         return result
+
+
+def _discovered_tool_name(tool: MCPDiscoveredTool | dict[str, Any] | Any) -> str:
+    if isinstance(tool, MCPDiscoveredTool):
+        return tool.name
+    if isinstance(tool, dict):
+        return str(tool.get("name") or "unknown")
+    return str(getattr(tool, "name", "") or "unknown")
+
+
+def prepare_mcp_tool(server: MCPServerConfig, tool: MCPDiscoveredTool) -> PreparedMCPTool:
+    normalized_input = normalize_mcp_schema(
+        tool.input_schema or {"type": "object", "additionalProperties": True}
+    )
+    normalized_output = normalize_mcp_schema(
+        tool.output_schema or {"type": "object", "additionalProperties": True}
+    )
+    normalized_tool = tool.model_copy(
+        update={
+            "input_schema": normalized_input.schema,
+            "output_schema": normalized_output.schema,
+        }
+    )
+    spec = _tool_spec_from_mcp_tool(server, normalized_tool)
+    _validate_mcp_tool_schemas(spec)
+    repairs = tuple(
+        [
+            {"schema": "input", **repair.as_dict()}
+            for repair in normalized_input.repairs
+        ]
+        + [
+            {"schema": "output", **repair.as_dict()}
+            for repair in normalized_output.repairs
+        ]
+    )
+    return PreparedMCPTool(spec=spec, repairs=repairs)
+
+
+def _validate_mcp_tool_schemas(spec: ToolSpec) -> None:
+    compile_json_schema(schema=spec.input_schema, model_name=f"{spec.id}_mcp_input")
+    compile_json_schema(schema=spec.output_schema, model_name=f"{spec.id}_mcp_output")
 
 
 def _tool_spec_from_mcp_tool(server: MCPServerConfig, tool: MCPDiscoveredTool) -> ToolSpec:

@@ -19,6 +19,7 @@ _EXPORT_MODULES: dict[str, str] = {
     "MCPServersConfig": "agent_factory.tooling.providers.mcp",
     "MCPToolCatalogClient": "agent_factory.tooling.providers.mcp",
     "MCPToolProvider": "agent_factory.tooling.providers.mcp",
+    "PreparedMCPTool": "agent_factory.tooling.providers.mcp",
     "PackageToolProvider": "agent_factory.tooling.providers.package",
     "PromptFragment": "agent_factory.tooling.providers.base",
     "ProviderDiagnostic": "agent_factory.tooling.providers.base",
@@ -29,6 +30,7 @@ _EXPORT_MODULES: dict[str, str] = {
     "ToolProvider": "agent_factory.tooling.providers.base",
     "ToolProviderContext": "agent_factory.tooling.providers.base",
     "ToolProviderResult": "agent_factory.tooling.providers.base",
+    "prepare_mcp_tool": "agent_factory.tooling.providers.mcp",
 }
 
 
@@ -58,6 +60,8 @@ if TYPE_CHECKING:
         MCPServersConfig,
         MCPToolCatalogClient,
         MCPToolProvider,
+        PreparedMCPTool,
+        prepare_mcp_tool,
     )
     from agent_factory.tooling.providers.package import PackageToolProvider
     from agent_factory.tooling.providers.skill import EnabledSkillConfig, EnabledSkillsConfig, SkillProvider

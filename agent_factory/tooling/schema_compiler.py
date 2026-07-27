@@ -69,8 +69,13 @@ def _pydantic_model_from_schema(schema: dict[str, Any], model_name: str) -> type
     if not isinstance(properties, dict):
         raise ToolSchemaError("object schema properties must be a JSON object")
     for field_name, field_schema in properties.items():
+        if isinstance(field_schema, bool):
+            annotation = Any
+            default = ... if field_name in required else None
+            fields[field_name] = (annotation, Field(default))
+            continue
         if not isinstance(field_schema, dict):
-            raise ToolSchemaError(f"field schema must be an object: {field_name}")
+            raise ToolSchemaError(f"field schema must be an object or boolean: {field_name}")
         annotation = _annotation_for_schema(field_schema, f"{model_name}_{field_name}")
         default = ... if field_name in required else field_schema.get("default", None)
         description = field_schema.get("description")

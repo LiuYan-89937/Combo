@@ -321,6 +321,8 @@
     <McpConfigModal
       v-model:show="showMcpModal"
       :item="editingMcp"
+      :edit-config="editingMcpConfig"
+      :edit-config-loading="editingMcpConfigLoading"
       :busy="busyKey === 'mcp:install'"
       :stopping="mcpInstallStopping"
       :install-result="mcpInstallDisplayResult"
@@ -371,6 +373,8 @@ const {
   activePermissionModeLabel,
   busyKey,
   editingMcp,
+  editingMcpConfig,
+  editingMcpConfigLoading,
   editingSkill,
   extensionKey,
   extensionStore,

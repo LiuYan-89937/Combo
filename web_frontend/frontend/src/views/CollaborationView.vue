@@ -124,7 +124,10 @@ import MessageItem from '@/components/chat/MessageItem.vue'
 import PublishConfirmationPanel from '@/components/chat/PublishConfirmationPanel.vue'
 import ToolApprovalPanel from '@/components/chat/ToolApprovalPanel.vue'
 import type { CollaborationRuntimeStatus } from '@/api/collaboration'
-import { isAvailableChatModelProfile } from '@/api/modelPool'
+import {
+  isAvailableChatModelProfile,
+  resolveRuntimeMainModelProfileId,
+} from '@/api/modelPool'
 import type { RuntimeAttachmentInput, TranscriptItem } from '@/types/protocol'
 import { useContextReferenceStore } from '@/stores/contextReferences'
 import { messageContextReference } from '@/utils/contextReferences'
@@ -158,16 +161,17 @@ const availableChatModelProfiles = computed(() => (
 const reasoningControlEnabled = computed(() => (
   selectedModelProfile.value?.capabilities.reasoning_supported !== false
 ))
-const modelOptions = computed(() => [
-  ...(availableChatModelProfiles.value.length > 0
-    ? [{ label: t('chat.defaultMainModel'), value: '' }]
-    : []),
-  ...availableChatModelProfiles.value
+const modelOptions = computed(() => (
+  availableChatModelProfiles.value
     .map(profile => ({
       label: profile.display_name || profile.model_name || profile.profile_id,
       value: profile.profile_id,
-    })),
-])
+    }))
+))
+const availableChatModelProfileIds = computed(() => (
+  availableChatModelProfiles.value.map(profile => profile.profile_id).join('\n')
+))
+let modelSelectionSyncVersion = 0
 const tipScopeId = computed(() => store.activeSession?.collaboration_id || '')
 const collaborationStatistics = computed(() => store.activeSession?.statistics || null)
 const {
@@ -214,11 +218,18 @@ onMounted(() => {
 })
 
 watch(
-  [() => modelPoolStore.loaded, availableChatModelProfiles],
-  ([loaded, profiles]) => {
-    if (loaded && profiles.length === 0) {
-      runtimePreferences.setMainModelProfileId('')
-    }
+  [() => modelPoolStore.loaded, availableChatModelProfileIds],
+  ([loaded]) => {
+    if (!loaded) return
+    const syncVersion = ++modelSelectionSyncVersion
+    void resolveRuntimeMainModelProfileId(
+      availableChatModelProfiles.value,
+      selectedModelProfileId.value,
+    ).then((profileId) => {
+      if (syncVersion === modelSelectionSyncVersion) {
+        runtimePreferences.setMainModelProfileId(profileId)
+      }
+    })
   },
   { immediate: true },
 )

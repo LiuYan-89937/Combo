@@ -93,6 +93,48 @@ export function isAvailableChatModelProfile(profile: ModelPoolProfile): boolean 
   )
 }
 
+export async function resolveRuntimeMainModelProfileId(
+  profiles: ModelPoolProfile[],
+  preferredProfileId?: string | null,
+): Promise<string> {
+  const availableProfiles = profiles.filter(isAvailableChatModelProfile)
+  if (availableProfiles.length === 0) return ''
+
+  const availableIds = new Set(availableProfiles.map(profile => profile.profile_id))
+  const preferredId = String(preferredProfileId || '').trim()
+  if (availableIds.has(preferredId)) return preferredId
+
+  try {
+    const roleBindings = await modelPoolApi.roleBindings()
+    const configuredId = String(roleBindings.bindings.main || '').trim()
+    if (availableIds.has(configuredId)) return configuredId
+  } catch {
+    // The loaded profiles remain usable even if optional role bindings are unavailable.
+  }
+
+  try {
+    const selection = await modelPoolApi.select({
+      requirements: [{
+        role: 'main',
+        purpose: 'Runtime main conversation model',
+        kind: 'chat',
+        input_modalities: ['text'],
+        output_modalities: ['text'],
+        tool_calling: true,
+        structured_output_methods: ['json_mode', 'function_calling'],
+        optimize_for: 'balanced',
+      }],
+    })
+    const recommendedId = String(
+      selection.recommendations.find(item => item.role === 'main')?.profile_id || ''
+    ).trim()
+    if (availableIds.has(recommendedId)) return recommendedId
+  } catch {
+    // Fall back to the first available profile when recommendation is unavailable.
+  }
+  return availableProfiles[0].profile_id
+}
+
 export interface ModelUsageTotals {
   call_count: number
   input_tokens: number

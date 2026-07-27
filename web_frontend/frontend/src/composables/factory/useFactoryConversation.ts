@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import {
   isAvailableChatModelProfile,
   modelPoolApi,
+  resolveRuntimeMainModelProfileId,
   type ModelPoolProfile,
 } from '@/api/modelPool'
 import { useAgentStore } from '@/stores/agent'
@@ -61,15 +62,12 @@ export function useFactoryConversation() {
     label: pkg.agent_name || pkg.name || pkg.package_id,
     value: pkg.package_id,
   })))
-  const runtimeMainModelOptions = computed(() => [
-    ...(isAgentChatActive.value && chatModelProfiles.value.length > 0
-      ? [{ label: t('chat.defaultMainModel'), value: '' }]
-      : []),
-    ...chatModelProfiles.value.map((profile) => ({
+  const runtimeMainModelOptions = computed(() => (
+    chatModelProfiles.value.map((profile) => ({
       label: profile.display_name || profile.model_name || profile.profile_id,
       value: profile.profile_id,
-    })),
-  ])
+    }))
+  ))
   const inputPlaceholder = computed(() => (
     isAgentChatActive.value
       ? t('factory.sendToAgentPlaceholder', { name: activeChatPackageTitle.value })
@@ -119,23 +117,13 @@ export function useFactoryConversation() {
 
   async function loadRuntimeMainModelProfiles() {
     try {
-      const [response, roleBindingResponse] = await Promise.all([
-        modelPoolApi.profiles(),
-        modelPoolApi.roleBindings(),
-      ])
+      const response = await modelPoolApi.profiles()
       chatModelProfiles.value = response.profiles.filter(isAvailableChatModelProfile)
-      const configuredMainProfileId = roleBindingResponse.bindings.main
-      if (chatModelProfiles.value.some((profile) => profile.profile_id === selectedMainModelProfileId.value)) {
-        return
-      }
-      if (
-        configuredMainProfileId
-        && chatModelProfiles.value.some((profile) => profile.profile_id === configuredMainProfileId)
-      ) {
-        setSelectedMainModelProfileId(configuredMainProfileId)
-      } else if (!chatModelProfiles.value.some((profile) => profile.profile_id === selectedMainModelProfileId.value)) {
-        await selectRecommendedRuntimeMainModel()
-      }
+      const profileId = await resolveRuntimeMainModelProfileId(
+        chatModelProfiles.value,
+        selectedMainModelProfileId.value,
+      )
+      setSelectedMainModelProfileId(profileId)
     } catch (error) {
       uiStore.addNotification({
         type: 'warning',
@@ -144,31 +132,6 @@ export function useFactoryConversation() {
         duration: 3000,
       })
     }
-  }
-
-  async function selectRecommendedRuntimeMainModel() {
-    if (chatModelProfiles.value.length === 0) {
-      setSelectedMainModelProfileId('')
-      return
-    }
-    const selection = await modelPoolApi.select({
-      requirements: [{
-        role: 'main',
-        purpose: 'Factory runtime main conversation model',
-        kind: 'chat',
-        input_modalities: ['text'],
-        output_modalities: ['text'],
-        tool_calling: true,
-        structured_output_methods: ['json_mode', 'function_calling'],
-        optimize_for: 'balanced',
-      }],
-    })
-    const profileId = String(
-      selection.recommendations.find(item => item.role === 'main')?.profile_id || ''
-    ).trim()
-    setSelectedMainModelProfileId(
-      chatModelProfiles.value.some(profile => profile.profile_id === profileId) ? profileId : ''
-    )
   }
 
   function setSelectedMainModelProfileId(profileId: string) {
@@ -307,7 +270,8 @@ export function useFactoryConversation() {
 
   watch(isAgentChatActive, (active) => {
     if (!active && !selectedMainModelProfileId.value && chatModelProfiles.value.length > 0) {
-      void selectRecommendedRuntimeMainModel()
+      void resolveRuntimeMainModelProfileId(chatModelProfiles.value)
+        .then(setSelectedMainModelProfileId)
     }
   })
 
