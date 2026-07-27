@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import mimetypes
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -11,6 +12,7 @@ from agent_factory.models.image_generation.protocol import (
     GeneratedAsset,
     ImageGenerationRequest,
     ImageGenerationSettings,
+    ImageInput,
 )
 
 
@@ -60,6 +62,22 @@ class ImageGenerationService:
                 )
             )
         return assets
+
+
+def image_input_from_path(path: str | Path, *, attachment_id: str | None = None) -> ImageInput:
+    target = Path(path).expanduser().resolve()
+    if not target.is_file():
+        raise ValueError(f"image input file does not exist: {path}")
+    mime_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+    if not mime_type.startswith("image/"):
+        raise ValueError(f"image input is not an image: {path}")
+    return ImageInput(
+        source=str(target),
+        mime_type=mime_type,
+        data=target.read_bytes(),
+        filename=target.name,
+        attachment_id=attachment_id,
+    )
 
 
 def _metadata_text(metadata: dict[str, Any], *keys: str) -> str | None:

@@ -4,7 +4,7 @@ from agent_factory.models.image_generation.protocol import (
     ImageGenerationSettings,
     ImageInput,
 )
-from agent_factory.models.image_generation.service import ImageGenerationService
+from agent_factory.models.image_generation.service import ImageGenerationService, image_input_from_path
 
 __all__ = [
     "GeneratedAsset",
@@ -12,4 +12,5 @@ __all__ = [
     "ImageGenerationService",
     "ImageGenerationSettings",
     "ImageInput",
+    "image_input_from_path",
 ]
