@@ -47,6 +47,7 @@ import {
   selectDesktopDirectory,
 } from '@/api/desktopDialogs'
 import { useI18n } from '@/composables/useI18n'
+import { requiredTextRule } from '@/utils/formValidation'
 
 const props = defineProps<{
   show: boolean
@@ -88,7 +89,7 @@ const sourceOptions = computed(() => {
 })
 
 const rules = computed<FormRules>(() => ({
-  path: [{ required: true, message: t('extensions.validateSkillPath'), trigger: 'blur' }],
+  path: [requiredTextRule(t('extensions.validateSkillPath'))],
 }))
 
 function emptyForm(): SkillFormData {

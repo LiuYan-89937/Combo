@@ -380,12 +380,17 @@
     </section>
 
     <n-modal v-model:show="artifactModalOpen" preset="dialog" :title="t('localModel.artifactEditor')">
-      <n-form label-placement="top">
-        <n-form-item :label="t('localModel.displayName')"><n-input v-model:value="artifactForm.display_name" /></n-form-item>
-        <n-form-item :label="t('localModel.kind')">
+      <n-form
+        ref="artifactFormRef"
+        :model="artifactForm"
+        :rules="artifactRules"
+        label-placement="top"
+      >
+        <n-form-item :label="t('localModel.displayName')" path="display_name"><n-input v-model:value="artifactForm.display_name" /></n-form-item>
+        <n-form-item :label="t('localModel.kind')" path="kind">
           <n-select v-model:value="artifactForm.kind" :options="kindOptions" @update:value="syncArtifactKind" />
         </n-form-item>
-        <n-form-item v-if="externalInference" :label="t('localModel.remoteModel')">
+        <n-form-item v-if="externalInference" :label="t('localModel.remoteModel')" path="external_model_id">
           <n-select
             v-model:value="artifactForm.external_model_id"
             :options="remoteModelOptions"
@@ -404,7 +409,7 @@
           </div>
           <code>{{ formatBytes(selectedRemoteModel.size_bytes) }}</code>
         </div>
-        <n-form-item v-if="!externalInference" :label="t('localModel.detectedDirectory')">
+        <n-form-item v-if="!externalInference" :label="t('localModel.detectedDirectory')" path="local_path">
           <n-select
             v-model:value="artifactForm.local_path"
             :options="modelDirectoryOptions"
@@ -457,8 +462,13 @@
     </n-modal>
 
     <n-modal v-model:show="profileModalOpen" preset="dialog" :title="t('localModel.profileEditor')" style="width: min(760px, 92vw)">
-      <n-form label-placement="top">
-        <n-form-item :label="t('localModel.displayName')"><n-input v-model:value="profileForm.display_name" /></n-form-item>
+      <n-form
+        ref="profileFormRef"
+        :model="profileForm"
+        :rules="profileRules"
+        label-placement="top"
+      >
+        <n-form-item :label="t('localModel.displayName')" path="display_name"><n-input v-model:value="profileForm.display_name" /></n-form-item>
         <n-form-item :label="t('common.description')">
           <n-input
             v-model:value="profileForm.description"
@@ -467,10 +477,10 @@
             placeholder="说明模型适合的场景、语言、提示词要求和能力边界，供制造链选择模型时参考"
           />
         </n-form-item>
-        <n-form-item :label="t('localModel.artifact')">
+        <n-form-item :label="t('localModel.artifact')" path="artifact_id">
           <n-select v-model:value="profileForm.artifact_id" :options="artifactOptions" @update:value="syncProfileKind" />
         </n-form-item>
-        <n-form-item :label="t('localModel.servedModelName')"><n-input v-model:value="profileForm.served_model_name" /></n-form-item>
+        <n-form-item :label="t('localModel.servedModelName')" path="served_model_name"><n-input v-model:value="profileForm.served_model_name" /></n-form-item>
         <div class="form-grid">
           <n-form-item v-if="profileForm.kind === 'chat'" :label="t('localModel.gpuLayers')">
             <n-input-number v-model:value="profileForm.gpu_layers" :min="0" />
@@ -572,13 +582,19 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { use } from 'echarts/core'
 import { BarChart, LineChart } from 'echarts/charts'
 import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import VChart from 'vue-echarts'
-import { useDialog, useMessage, type DataTableColumns } from 'naive-ui'
+import {
+  useDialog,
+  useMessage,
+  type DataTableColumns,
+  type FormInst,
+  type FormRules,
+} from 'naive-ui'
 import { storeToRefs } from 'pinia'
 import { useI18n } from '@/composables/useI18n'
 import { useModelPoolStore } from '@/stores/modelPool'
@@ -608,6 +624,11 @@ import {
   type ModelUsageGroupBy,
   type ModelUsageSummary,
 } from '@/api/modelPool'
+import {
+  requiredTextRule,
+  requiredValueRule,
+  validateForm,
+} from '@/utils/formValidation'
 
 use([BarChart, CanvasRenderer, GridComponent, LegendComponent, LineChart, TooltipComponent])
 
@@ -626,6 +647,8 @@ const rocm = ref<RocmRuntimeInfo | null>(null)
 const modelStorage = ref<LocalModelStorage | null>(null)
 const artifactModalOpen = ref(false)
 const profileModalOpen = ref(false)
+const artifactFormRef = ref<FormInst | null>(null)
+const profileFormRef = ref<FormInst | null>(null)
 const artifactEditing = ref<LocalModelArtifact | null>(null)
 const profileEditing = ref<LocalModelProfile | null>(null)
 const memoryEstimate = ref<InferenceMemoryEstimate | null>(null)
@@ -659,7 +682,6 @@ const profileForm = reactive({
   default_width: 1024, default_height: 1024, default_steps: 20, default_cfg_scale: 1.0,
   default_sampler: 'euler', residency_policy: 'coexist_if_fit' as 'coexist_if_fit' | 'exclusive',
 })
-
 const kindOptions = computed(() => [
   { label: t('localModel.chat'), value: 'chat' },
   { label: t('localModel.embedding'), value: 'embedding' },
@@ -675,6 +697,21 @@ const artifactOptions = computed(() => artifacts.value.map((item) => ({
 })))
 const cacheTypeOptions = ['f16', 'bf16', 'q8_0', 'q4_0'].map((value) => ({ label: value.toUpperCase(), value }))
 const externalInference = computed(() => modelStorage.value?.inference_mode === 'external')
+const artifactRules = computed<FormRules>(() => ({
+  display_name: [requiredTextRule(t('validation.required'))],
+  kind: [requiredValueRule(t('validation.selectionRequired'))],
+  external_model_id: externalInference.value
+    ? [requiredValueRule(t('validation.selectionRequired'))]
+    : [],
+  local_path: externalInference.value
+    ? []
+    : [requiredValueRule(t('validation.selectionRequired'))],
+}))
+const profileRules = computed<FormRules>(() => ({
+  display_name: [requiredTextRule(t('validation.required'))],
+  artifact_id: [requiredValueRule(t('validation.selectionRequired'))],
+  served_model_name: [requiredTextRule(t('validation.required'))],
+}))
 const remoteModelOptions = computed(() => (modelStorage.value?.remote_models || [])
   .filter((item) => item.kind === artifactForm.kind)
   .map((item) => ({
@@ -816,9 +853,11 @@ function openArtifact(item?: LocalModelArtifact): void {
   artifactForm.yarn_max_context_tokens = item?.context_extension?.max_context_tokens ?? null
   artifactForm.enabled = item?.enabled ?? true
   artifactModalOpen.value = true
+  void nextTick(() => artifactFormRef.value?.restoreValidation())
 }
 
 async function saveArtifact(): Promise<void> {
+  if (!await validateForm(artifactFormRef.value)) return
   saving.value = true
   try {
     const payload: LocalModelArtifactWritePayload = {
@@ -897,6 +936,7 @@ function openProfile(item?: LocalModelProfile): void {
   profileForm.enabled = item?.enabled ?? true
   memoryEstimate.value = remoteModel?.memory_estimate || null
   profileModalOpen.value = true
+  void nextTick(() => profileFormRef.value?.restoreValidation())
 }
 
 function syncProfileKind(artifactId: string): void {
@@ -971,6 +1011,7 @@ function openProfileEmptyAction(): void {
 }
 
 async function saveProfile(): Promise<void> {
+  if (!await validateForm(profileFormRef.value)) return
   saving.value = true
   try {
     const isChat = profileForm.kind === 'chat'

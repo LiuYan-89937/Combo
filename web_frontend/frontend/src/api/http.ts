@@ -15,6 +15,25 @@ export interface BlobResponse {
   filename: string | null
 }
 
+export interface ApiValidationIssue {
+  path: string
+  message: string
+}
+
+export class ApiError extends Error {
+  readonly status: number
+  readonly detail: unknown
+  readonly validationIssues: ApiValidationIssue[]
+
+  constructor(status: number, detail: unknown, validationIssues: ApiValidationIssue[]) {
+    super(apiErrorSummary(status, detail, validationIssues))
+    this.name = 'ApiError'
+    this.status = status
+    this.detail = detail
+    this.validationIssues = validationIssues
+  }
+}
+
 export async function postCommand(command: FactoryFrontendCommand): Promise<CommandResponse> {
   return requestJson<CommandResponse>('/api/commands', {
     method: 'POST',
@@ -41,7 +60,7 @@ export function requestFormEvent(
     })
     request.addEventListener('load', () => {
       if (request.status < 200 || request.status >= 300) {
-        reject(new Error(request.responseText || `HTTP ${request.status}`))
+        reject(apiErrorFromText(request.status, request.responseText))
         return
       }
       try {
@@ -60,8 +79,7 @@ export function requestFormEvent(
 export async function requestBlob(url: string, init: RequestInit = {}): Promise<BlobResponse> {
   const response = await fetch(await backendUrl(url), init)
   if (!response.ok) {
-    const text = await response.text()
-    throw new Error(text || `HTTP ${response.status}`)
+    throw await apiErrorFromResponse(response)
   }
   return {
     blob: await response.blob(),
@@ -78,8 +96,7 @@ export async function requestJson<T>(url: string, init: RequestInit = {}): Promi
     },
   })
   if (!response.ok) {
-    const text = await response.text()
-    throw new Error(text || `HTTP ${response.status}`)
+    throw await apiErrorFromResponse(response)
   }
   return response.json() as Promise<T>
 }
@@ -101,4 +118,72 @@ function filenameFromDisposition(disposition: string | null): string | null {
   if (utf8Match?.[1]) return decodeURIComponent(utf8Match[1])
   const asciiMatch = disposition.match(/filename="?([^";]+)"?/i)
   return asciiMatch?.[1] || null
+}
+
+async function apiErrorFromResponse(response: Response): Promise<ApiError> {
+  return apiErrorFromText(response.status, await response.text())
+}
+
+function apiErrorFromText(status: number, text: string): ApiError {
+  const payload = parseErrorPayload(text)
+  const detail = errorDetail(payload)
+  return new ApiError(status, detail, validationIssues(detail))
+}
+
+function parseErrorPayload(text: string): unknown {
+  if (!text.trim()) return null
+  try {
+    return JSON.parse(text)
+  } catch {
+    return text.trim()
+  }
+}
+
+function errorDetail(payload: unknown): unknown {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload
+  return 'detail' in payload ? (payload as { detail?: unknown }).detail : payload
+}
+
+function validationIssues(detail: unknown): ApiValidationIssue[] {
+  if (Array.isArray(detail)) {
+    return detail.flatMap((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return []
+      const record = item as Record<string, unknown>
+      const location = Array.isArray(record.loc) ? record.loc.map(String) : []
+      return [{
+        path: location.filter(part => part !== 'body').join('.'),
+        message: typeof record.msg === 'string' ? record.msg : 'Invalid value',
+      }]
+    })
+  }
+  if (typeof detail !== 'string' || !detail.includes('ValidationError')) return []
+  const lines = detail.split(/\r?\n/)
+  return lines.flatMap((line, index) => {
+    const path = line.trim()
+    const message = lines[index + 1]?.trim() || ''
+    if (!path || !message || !/^(Value error|Field required|Input should)/i.test(message)) return []
+    return [{ path, message: message.replace(/\s*\[type=.*$/, '') }]
+  })
+}
+
+function apiErrorSummary(
+  status: number,
+  detail: unknown,
+  issues: ApiValidationIssue[],
+): string {
+  if (issues.length) {
+    const fields = [...new Set(issues.map(issue => issue.path).filter(Boolean))]
+    return fields.length
+      ? `Invalid submitted fields: ${fields.join(', ')}`
+      : 'Submitted data is invalid'
+  }
+  if (typeof detail === 'string' && detail.includes('ValidationError')) {
+    return 'Submitted data is invalid'
+  }
+  if (typeof detail === 'string' && detail.trim()) return detail.trim()
+  if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+    const message = (detail as Record<string, unknown>).message
+    if (typeof message === 'string' && message.trim()) return message.trim()
+  }
+  return `HTTP ${status}`
 }

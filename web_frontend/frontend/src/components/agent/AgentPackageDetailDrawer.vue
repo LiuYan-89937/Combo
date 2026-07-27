@@ -67,6 +67,7 @@
                   :model-value="resourceDrafts[resource.resource_id]"
                   :schema="resource.value_schema"
                   :secret-fields="resource.secret_fields"
+                  :show-validation="Boolean(resourceValidationVisible[resource.resource_id])"
                   class="resource-input"
                   @update:model-value="resourceDrafts[resource.resource_id] = $event"
                 />
@@ -82,7 +83,7 @@
                   size="tiny"
                   type="primary"
                   :loading="resourceSavingId === resource.resource_id"
-                  :disabled="!resourceStoreReady || !resourceDraftComplete(resource.value_schema, resourceDrafts[resource.resource_id])"
+                  :disabled="!resourceStoreReady"
                   @click="saveResource(resource)"
                 >
                   {{ resource.configured ? '覆盖' : '保存' }}
@@ -477,6 +478,7 @@ const resourceItems = ref<AgentPackageResourceDescriptorView[]>([])
 const resourceStoreReady = ref(false)
 const resourceDrafts = ref<Record<string, unknown>>({})
 const resourceErrors = ref<Record<string, string>>({})
+const resourceValidationVisible = ref<Record<string, boolean>>({})
 const resourceLoadError = ref('')
 const resourceSavingId = ref('')
 let resourceRequestId = 0
@@ -548,6 +550,7 @@ watch(
       resourceStoreReady.value = false
       resourceDrafts.value = {}
       resourceErrors.value = {}
+      resourceValidationVisible.value = {}
       resourceLoadError.value = ''
       return
     }
@@ -577,11 +580,17 @@ async function loadResources(packageId: string): Promise<void> {
     payload.resources.map(item => [item.resource_id, createResourceDraft(item.value_schema, item.value)]),
   )
   resourceErrors.value = {}
+  resourceValidationVisible.value = {}
 }
 
 async function saveResource(resource: AgentPackageResourceDescriptorView) {
   const packageId = props.agentPackage?.package_id
   if (!packageId) return
+  resourceValidationVisible.value = {
+    ...resourceValidationVisible.value,
+    [resource.resource_id]: true,
+  }
+  if (!resourceDraftComplete(resource.value_schema, resourceDrafts.value[resource.resource_id])) return
   resourceSavingId.value = resource.resource_id
   resourceErrors.value = { ...resourceErrors.value, [resource.resource_id]: '' }
   try {

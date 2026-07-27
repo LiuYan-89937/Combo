@@ -1,5 +1,10 @@
 <template>
-  <header class="app-header">
+  <header
+    class="app-header"
+    :class="{ 'is-windows-desktop': isWindowsDesktop }"
+    @mousedown="handleWindowDrag"
+    @dblclick="handleHeaderDoubleClick"
+  >
     <div class="header-left">
       <div class="brand">
         <img
@@ -112,12 +117,41 @@
         </n-icon>
       </n-button>
 
+      <div v-if="isWindowsDesktop" class="window-controls" aria-label="Window controls">
+        <button
+          class="window-control"
+          type="button"
+          :title="t('header.minimizeWindow')"
+          :aria-label="t('header.minimizeWindow')"
+          @click="minimizeDesktopWindow"
+        >
+          <span class="window-minimize-icon" aria-hidden="true"></span>
+        </button>
+        <button
+          class="window-control"
+          type="button"
+          :title="t('header.maximizeWindow')"
+          :aria-label="t('header.maximizeWindow')"
+          @click="toggleMaximizeDesktopWindow"
+        >
+          <span class="window-maximize-icon" aria-hidden="true"></span>
+        </button>
+        <button
+          class="window-control window-close"
+          type="button"
+          :title="t('header.closeWindow')"
+          :aria-label="t('header.closeWindow')"
+          @click="closeDesktopWindow"
+        >
+          <span class="window-close-icon" aria-hidden="true"></span>
+        </button>
+      </div>
     </div>
   </header>
 </template>
 
 <script setup lang="ts">
-import { computed, watchEffect } from 'vue'
+import { computed, onMounted, ref, watchEffect } from 'vue'
 import { useRoute } from 'vue-router'
 import { NBadge, NButton, NDropdown, NIcon, NTag, NBreadcrumb, NBreadcrumbItem } from 'naive-ui'
 import { Bug, CaretDown, PersonCircleOutline, Settings, Time } from '@/components/icons'
@@ -129,6 +163,13 @@ import { useAgentStore } from '@/stores/agent'
 import { useUiStore } from '@/stores/ui'
 import { useRuntimeStore } from '@/stores/runtime'
 import { isAgentPackageRoute, isBuiltinChatRoute } from '@/utils/agentSessionRoute'
+import {
+  closeDesktopWindow,
+  desktopPlatform,
+  minimizeDesktopWindow,
+  startDesktopWindowDrag,
+  toggleMaximizeDesktopWindow,
+} from '@/api/desktopWindow'
 
 const route = useRoute()
 const { t } = useI18n()
@@ -138,6 +179,7 @@ const agentStore = useAgentStore()
 const { openPackageAgentChat } = useAgentSessionNavigation()
 const schedulerUnreadCount = computed(() => runtimeStore.schedulerRunNotices.filter((notice) => notice.unread).length)
 const schedulerRunning = computed(() => runtimeStore.schedulerRunNotices.some((notice) => ['scheduled', 'pending', 'running'].includes(notice.status)))
+const isWindowsDesktop = ref(false)
 
 const isAgentConversation = computed(() => (
   route.name === 'Factory'
@@ -164,6 +206,27 @@ function switchAgentPackage(packageId: string | number) {
   const normalizedPackageId = String(packageId || '').trim()
   if (!normalizedPackageId || normalizedPackageId === agentStore.activeChatPackageId) return
   void openPackageAgentChat(normalizedPackageId)
+}
+
+onMounted(async () => {
+  isWindowsDesktop.value = await desktopPlatform() === 'windows'
+})
+
+function handleWindowDrag(event: MouseEvent): void {
+  if (
+    !isWindowsDesktop.value
+    || event.button !== 0
+    || (event.target as HTMLElement).closest('button, a, input, textarea, select, [role="button"], .n-dropdown')
+  ) return
+  void startDesktopWindowDrag()
+}
+
+function handleHeaderDoubleClick(event: MouseEvent): void {
+  if (
+    !isWindowsDesktop.value
+    || (event.target as HTMLElement).closest('button, a, input, textarea, select, [role="button"], .n-dropdown')
+  ) return
+  void toggleMaximizeDesktopWindow()
 }
 
 const headerCenterStyle = computed(() => ({
@@ -256,6 +319,11 @@ watchEffect(() => {
   transition: background var(--app-transition-base);
 }
 
+.app-header.is-windows-desktop {
+  padding-right: 0;
+  user-select: none;
+}
+
 /* 不支持 backdrop-filter 时降级 */
 @supports not (backdrop-filter: blur(1px)) {
   .app-header {
@@ -273,6 +341,10 @@ watchEffect(() => {
 
 .header-right {
   gap: var(--app-space-sm);
+}
+
+.is-windows-desktop .header-right {
+  align-self: stretch;
 }
 
 .header-center {
@@ -481,6 +553,78 @@ watchEffect(() => {
 
 .header-icon-btn:active {
   transform: scale(0.92);
+}
+
+.window-controls {
+  align-self: stretch;
+  display: flex;
+  margin-left: var(--app-space-xs);
+}
+
+.window-control {
+  width: 46px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  display: grid;
+  place-items: center;
+  color: var(--app-text-secondary);
+  background: transparent;
+  cursor: default;
+  transition: color var(--app-transition-fast), background-color var(--app-transition-fast);
+}
+
+.window-control:hover {
+  color: var(--app-text-strong);
+  background: var(--app-surface-muted);
+}
+
+.window-control.window-close:hover {
+  color: #fff;
+  background: #c42b1c;
+}
+
+.window-minimize-icon,
+.window-maximize-icon,
+.window-close-icon {
+  position: relative;
+  width: 10px;
+  height: 10px;
+  pointer-events: none;
+}
+
+.window-minimize-icon::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 1px;
+  height: 1px;
+  background: currentColor;
+}
+
+.window-maximize-icon {
+  box-sizing: border-box;
+  border: 1px solid currentColor;
+}
+
+.window-close-icon::before,
+.window-close-icon::after {
+  content: '';
+  position: absolute;
+  top: 4.5px;
+  left: -1px;
+  width: 12px;
+  height: 1px;
+  background: currentColor;
+}
+
+.window-close-icon::before {
+  transform: rotate(45deg);
+}
+
+.window-close-icon::after {
+  transform: rotate(-45deg);
 }
 
 /* 中等屏隐藏 breadcrumb 只保留 tag */

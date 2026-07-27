@@ -1,6 +1,11 @@
 <template>
   <div v-if="fields" class="resource-schema-form">
-    <label v-for="field in fields" :key="field.name" class="resource-field">
+    <label
+      v-for="field in fields"
+      :key="field.name"
+      class="resource-field"
+      :class="{ 'resource-field-invalid': fieldInvalid(field) }"
+    >
       <span class="resource-field-label">
         {{ field.schema.title || field.name }}
         <span v-if="field.required" class="required-mark">*</span>
@@ -11,6 +16,7 @@
         :options="enumOptions(field.schema.enum)"
         clearable
         size="small"
+        :status="fieldInvalid(field) ? 'error' : undefined"
         :placeholder="fieldPlaceholder(field)"
         @update:value="setFieldValue(field.name, $event)"
       />
@@ -19,6 +25,7 @@
         :model-value="fieldValue(field.name)"
         :schema="schemaRecord(field.schema)"
         :secret-fields="childSecretFields(field.name)"
+        :show-validation="showValidation"
         class="nested-resource-form"
         @update:model-value="setFieldValue(field.name, $event)"
       />
@@ -30,6 +37,7 @@
         :precision="field.schema.type === 'integer' ? 0 : undefined"
         :show-button="false"
         size="small"
+        :status="fieldInvalid(field) ? 'error' : undefined"
         :placeholder="fieldPlaceholder(field)"
         @update:value="setFieldValue(field.name, $event)"
       />
@@ -42,6 +50,7 @@
         filterable
         clearable
         size="small"
+        :status="fieldInvalid(field) ? 'error' : undefined"
         :placeholder="fieldPlaceholder(field)"
         @update:value="setFieldValue(field.name, $event)"
       />
@@ -61,9 +70,13 @@
         :minlength="field.schema.minLength"
         :maxlength="field.schema.maxLength"
         size="small"
+        :status="fieldInvalid(field) ? 'error' : undefined"
         :placeholder="fieldPlaceholder(field)"
         @update:value="setFieldValue(field.name, $event)"
       />
+      <span v-if="fieldInvalid(field)" class="resource-field-error">
+        {{ t('validation.required') }}
+      </span>
       <span v-if="field.schema.description" class="resource-field-description">
         {{ field.schema.description }}
       </span>
@@ -75,15 +88,21 @@
     type="textarea"
     :autosize="{ minRows: 3, maxRows: 8 }"
     size="small"
+    :status="rawValueInvalid ? 'error' : undefined"
     placeholder="填写符合 Resource Schema 的 JSON 值"
     @update:value="emit('update:modelValue', $event)"
   />
+  <span v-if="rawValueInvalid" class="resource-field-error">
+    {{ t('validation.required') }}
+  </span>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue'
 import { NInput, NInputNumber, NSelect, NSwitch } from 'naive-ui'
+import { useI18n } from '@/composables/useI18n'
 import {
+  resourceFieldComplete,
   resourceSchemaFields,
   type ResourceJsonSchema,
   type ResourceSchemaField,
@@ -93,8 +112,10 @@ const props = withDefaults(defineProps<{
   modelValue: unknown
   schema: Record<string, unknown>
   secretFields?: string[]
+  showValidation?: boolean
 }>(), {
   secretFields: () => [],
+  showValidation: false,
 })
 
 const emit = defineEmits<{
@@ -103,6 +124,8 @@ const emit = defineEmits<{
 
 const fields = computed(() => resourceSchemaFields(props.schema))
 const rawValue = computed(() => typeof props.modelValue === 'string' ? props.modelValue : '')
+const rawValueInvalid = computed(() => props.showValidation && !fields.value && rawValue.value.trim().length === 0)
+const { t } = useI18n()
 
 function fieldValue(name: string): unknown {
   return draftObject()[name] ?? null
@@ -169,6 +192,12 @@ function fieldPlaceholder(field: ResourceSchemaField): string {
   if (isStringArray(field.schema)) return `输入${field.schema.title || field.name}后按回车添加`
   return field.required ? `填写 ${field.schema.title || field.name}` : `可选：${field.schema.title || field.name}`
 }
+
+function fieldInvalid(field: ResourceSchemaField): boolean {
+  return props.showValidation
+    && field.required
+    && !resourceFieldComplete(field.schema, fieldValue(field.name))
+}
 </script>
 
 <style scoped>
@@ -195,6 +224,11 @@ function fieldPlaceholder(field: ResourceSchemaField): string {
 .resource-field-description,
 .boolean-field {
   color: var(--app-text-muted);
+  font-size: var(--app-font-xs);
+}
+
+.resource-field-error {
+  color: var(--n-color-error, #d03050);
   font-size: var(--app-font-xs);
 }
 

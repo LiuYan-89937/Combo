@@ -75,6 +75,11 @@ fn restart_backend(app: tauri::AppHandle, state: tauri::State<AppState>) -> Resu
     Ok(())
 }
 
+#[tauri::command]
+fn desktop_platform() -> &'static str {
+    std::env::consts::OS
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(
@@ -116,6 +121,7 @@ fn main() {
             backend_status,
             backend_url,
             restart_backend,
+            desktop_platform,
             reveal_in_file_manager,
             save_file_as,
             select_directory,

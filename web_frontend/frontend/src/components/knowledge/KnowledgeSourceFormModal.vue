@@ -18,7 +18,13 @@
         <n-input v-model:value="formData.display_name" :placeholder="t('knowledge.displayNamePlaceholder')" />
       </n-form-item>
 
-      <n-form-item v-if="usesUpload" :label="t('knowledge.fileContent')">
+      <n-form-item
+        v-if="usesUpload"
+        :label="t('knowledge.fileContent')"
+        required
+        :validation-status="uploadValidationError ? 'error' : undefined"
+        :feedback="uploadValidationError ? t('knowledge.validateFiles') : undefined"
+      >
         <div class="upload-field">
           <n-alert v-if="capabilitiesError" type="error" :title="t('knowledge.capabilitiesUnavailable')">
             {{ capabilitiesError }}
@@ -127,7 +133,7 @@
     <template #footer>
       <n-space justify="end">
         <n-button :disabled="submitting" @click="show = false">{{ t('common.cancel') }}</n-button>
-        <n-button type="primary" :disabled="!canSubmit" :loading="submitting" @click="handleSubmit">
+        <n-button type="primary" :loading="submitting" @click="handleSubmit">
           {{ t('common.add') }}
         </n-button>
       </n-space>
@@ -158,6 +164,7 @@ import type { KnowledgeSourceInput, KnowledgeUploadFile } from '@/api/resourceTy
 import type { FileFormatGroupCapabilities } from '@/api/files'
 import { useI18n } from '@/composables/useI18n'
 import { useFileCapabilities } from '@/composables/useFileCapabilities'
+import { requiredTextRule, validateForm } from '@/utils/formValidation'
 import type { I18nKey } from '@/i18n'
 
 type SourceKind = 'folder' | 'file' | 'url' | 'note'
@@ -208,6 +215,7 @@ const {
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const folderInputRef = ref<HTMLInputElement | null>(null)
 const selectedFiles = ref<KnowledgeUploadFile[]>([])
+const uploadValidationVisible = ref(false)
 const rejectedFileNames = ref<string[]>([])
 const formData = ref({
   kind: DEFAULT_SOURCE_KIND,
@@ -242,20 +250,19 @@ const knowledgeFormatGroups = computed(() => (
   capabilities.value?.format_groups.filter((group) => group.knowledge_extensions.length > 0) || []
 ))
 const uploadTitle = computed(() => (formData.value.kind === 'folder' ? t('knowledge.dropFolder') : t('knowledge.dropFile')))
-const canSubmit = computed(() => {
-  if (!formData.value.display_name.trim()) return false
-  if (usesUpload.value) return selectedFiles.value.length > 0
-  if (formData.value.kind === 'url') return isValidUrl(formData.value.uri)
-  if (formData.value.kind === 'note') return formData.value.content.trim().length > 0
-  return true
-})
+const uploadValidationError = computed(() => (
+  uploadValidationVisible.value
+  && usesUpload.value
+  && selectedFiles.value.length === 0
+))
 
 const rules = computed<FormRules>(() => ({
   display_name: [
-    { required: true, message: t('knowledge.validateDisplayName'), trigger: 'blur' },
+    requiredTextRule(t('knowledge.validateDisplayName')),
   ],
   uri: [
     {
+      required: formData.value.kind === 'url',
       validator: (_rule, value) => {
         if (formData.value.kind !== 'url') return true
         return isValidUrl(value) ? true : new Error(t('knowledge.validateUrl'))
@@ -265,6 +272,7 @@ const rules = computed<FormRules>(() => ({
   ],
   content: [
     {
+      required: formData.value.kind === 'note',
       validator: () => {
         if (formData.value.kind !== 'note') return true
         return formData.value.content.trim() ? true : new Error(t('knowledge.validateNote'))
@@ -275,6 +283,7 @@ const rules = computed<FormRules>(() => ({
 }))
 
 function handleKindChange() {
+  uploadValidationVisible.value = false
   selectedFiles.value = []
   rejectedFileNames.value = []
   formData.value.uri = ''
@@ -378,12 +387,12 @@ function readDirectoryEntries(entry: FileSystemDirectoryEntryLike): Promise<File
   })
 }
 
-function handleSubmit() {
-  if (!canSubmit.value || submitting.value) return
-  formRef.value?.validate((errors) => {
-    if (errors) return
-    emit('submit', buildSourceInput())
-  })
+async function handleSubmit() {
+  if (submitting.value) return
+  uploadValidationVisible.value = true
+  const valid = await validateForm(formRef.value)
+  if (!valid || uploadValidationError.value) return
+  emit('submit', buildSourceInput())
 }
 
 watch(show, (visible) => {
@@ -450,6 +459,7 @@ function resetForm() {
     chunkSize: 800,
     chunkOverlap: 120,
   }
+  uploadValidationVisible.value = false
   selectedFiles.value = []
   rejectedFileNames.value = []
 }

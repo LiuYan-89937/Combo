@@ -94,11 +94,11 @@
 
     <!-- 创建群聊对话框 -->
     <n-modal v-model:show="showCreateDialog" preset="card" title="创建群聊" style="width: 500px">
-      <n-form ref="createFormRef" :model="createForm">
-        <n-form-item label="群聊名称" path="title" required>
+      <n-form ref="createFormRef" :model="createForm" :rules="createFormRules">
+        <n-form-item label="群聊名称" path="title">
           <n-input v-model:value="createForm.title" placeholder="输入群聊名称" />
         </n-form-item>
-        <n-form-item label="选择成员" required>
+        <n-form-item label="选择成员" path="member_package_ids">
           <n-select
             v-model:value="createForm.member_package_ids"
             :options="agentOptions"
@@ -118,19 +118,22 @@
 
     <!-- 添加成员对话框 -->
     <n-modal v-model:show="showAddMemberDialog" preset="card" title="添加成员" style="width: 400px">
-      <n-select
-        v-model:value="selectedPackageId"
-        :options="availableAgentOptions"
-        filterable
-        placeholder="选择 Agent"
-      />
+      <n-form ref="addMemberFormRef" :model="addMemberForm" :rules="addMemberFormRules">
+        <n-form-item label="选择 Agent" path="package_id">
+          <n-select
+            v-model:value="addMemberForm.package_id"
+            :options="availableAgentOptions"
+            filterable
+            placeholder="选择 Agent"
+          />
+        </n-form-item>
+      </n-form>
       <template #footer>
         <div style="display: flex; justify-content: flex-end; gap: 12px">
           <n-button @click="showAddMemberDialog = false">取消</n-button>
           <n-button
             type="primary"
             :loading="store.saving"
-            :disabled="!selectedPackageId"
             @click="handleAddMember"
           >
             添加
@@ -156,6 +159,8 @@ import {
   NPopconfirm,
   NSelect,
   NTag,
+  type FormInst,
+  type FormRules,
 } from 'naive-ui'
 import { TrashOutline, CloseOutline } from '@vicons/ionicons5'
 import { useAgentGroupStore } from '@/stores/agentGroup'
@@ -167,6 +172,11 @@ import { useRuntimeStore } from '@/stores/runtime'
 import { useWorkspaceStore } from '@/stores/workspace'
 import type { WorkspaceEntry } from '@/types/protocol'
 import { useI18n } from '@/composables/useI18n'
+import {
+  requiredArrayRule,
+  requiredTextRule,
+  validateForm,
+} from '@/utils/formValidation'
 
 const store = useAgentGroupStore()
 const resourceContext = useResourceContext()
@@ -179,12 +189,22 @@ const workspaceContext = computed(() => resourceContext.workspaceContext.value)
 // State
 const showCreateDialog = ref(false)
 const showAddMemberDialog = ref(false)
-const createFormRef = ref()
+const createFormRef = ref<FormInst | null>(null)
+const addMemberFormRef = ref<FormInst | null>(null)
 const createForm = ref({
   title: '',
   member_package_ids: [] as string[],
 })
-const selectedPackageId = ref<string>()
+const addMemberForm = ref({
+  package_id: null as string | null,
+})
+const createFormRules = computed<FormRules>(() => ({
+  title: [requiredTextRule(t('validation.required'))],
+  member_package_ids: [requiredArrayRule(t('validation.selectionRequired'))],
+}))
+const addMemberFormRules = computed<FormRules>(() => ({
+  package_id: [requiredTextRule(t('validation.selectionRequired'), 'change')],
+}))
 
 // Computed
 const agentOptions = computed(() => {
@@ -208,11 +228,13 @@ const statusTagType = (status: string) => {
 
 // Methods
 const handleCreate = async () => {
-  if (!createForm.value.title.trim()) return
-  if (createForm.value.member_package_ids.length === 0) return
+  if (!await validateForm(createFormRef.value)) return
 
   try {
-    await store.createGroup(createForm.value)
+    await store.createGroup({
+      ...createForm.value,
+      title: createForm.value.title.trim(),
+    })
     showCreateDialog.value = false
     createForm.value = { title: '', member_package_ids: [] }
   } catch (e) {
@@ -229,12 +251,14 @@ const handleDeleteGroup = async (groupId: string) => {
 }
 
 const handleAddMember = async () => {
-  if (!selectedPackageId.value) return
+  if (!await validateForm(addMemberFormRef.value)) return
+  const packageId = addMemberForm.value.package_id
+  if (!packageId) return
 
   try {
-    await store.addMember(selectedPackageId.value)
+    await store.addMember(packageId)
     showAddMemberDialog.value = false
-    selectedPackageId.value = undefined
+    addMemberForm.value.package_id = null
   } catch (e) {
     console.error('Failed to add member:', e)
   }

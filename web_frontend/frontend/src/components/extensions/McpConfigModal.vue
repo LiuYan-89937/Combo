@@ -175,6 +175,7 @@ import type { FormInst, FormRules } from 'naive-ui'
 import type { McpServerConfig } from '@/api/resourceTypes'
 import type { ExtensionItemView } from '@/types/protocol'
 import { useI18n } from '@/composables/useI18n'
+import { requiredTextRule } from '@/utils/formValidation'
 import McpTestResultDetails from './McpTestResultDetails.vue'
 import {
   mcpConfigArgsText,
@@ -231,9 +232,19 @@ const riskOptions = computed(() => [
   { label: t('permissions.risk.high'), value: 'high' },
 ])
 const rules = computed<FormRules>(() => ({
-  display_name: [{ required: true, message: t('extensions.validateName'), trigger: 'blur' }],
-  command: [{ validator: () => formData.value.transport !== 'stdio' || Boolean(formData.value.command.trim()), message: t('extensions.validateCommand'), trigger: 'blur' }],
-  url: [{ validator: () => formData.value.transport === 'stdio' || /^https?:\/\//.test(formData.value.url.trim()), message: t('extensions.validateUrl'), trigger: 'blur' }],
+  display_name: [requiredTextRule(t('extensions.validateName'))],
+  command: [{
+    required: formData.value.transport === 'stdio',
+    validator: () => formData.value.transport !== 'stdio' || Boolean(formData.value.command.trim()),
+    message: t('extensions.validateCommand'),
+    trigger: ['input', 'blur'],
+  }],
+  url: [{
+    required: formData.value.transport !== 'stdio',
+    validator: () => formData.value.transport === 'stdio' || /^https?:\/\//.test(formData.value.url.trim()),
+    message: t('extensions.validateUrl'),
+    trigger: ['input', 'blur'],
+  }],
 }))
 
 function emptyForm() {

@@ -9,6 +9,7 @@
       <n-notification-provider>
         <n-dialog-provider>
           <n-loading-bar-provider>
+            <AppHeader v-if="!startupStore.ready" />
             <AppContent v-if="startupStore.ready" />
             <SelectionReferenceMenu v-if="startupStore.ready" />
             <n-modal
@@ -55,6 +56,7 @@ import { useStartupStore } from '@/stores/startup'
 import { getPalette, type AppPalette } from '@/theme/palette'
 import { applyPaletteToRoot } from '@/theme/cssVariables'
 import AppContent from '@/layouts/AppContent.vue'
+import AppHeader from '@/components/common/AppHeader.vue'
 import SelectionReferenceMenu from '@/components/chat/SelectionReferenceMenu.vue'
 
 const route = useRoute()

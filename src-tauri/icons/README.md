@@ -1,6 +1,9 @@
 # Application Icons
 
-Place your application icons here:
+Application icons are generated from the FastAgentFactory brand source by
+`scripts/generate_icons.py`. The generated artwork uses a pure-white rounded
+tile with a transparent safety margin so Windows and older macOS releases do
+not render it as a hard-edged square.
 
 - `32x32.png` - 32x32 PNG icon
 - `128x128.png` - 128x128 PNG icon
@@ -8,8 +11,8 @@ Place your application icons here:
 - `icon.icns` - macOS icon bundle
 - `icon.ico` - Windows icon
 
-You can generate these from a single source image using tools like:
-- `tauri icon` command (requires Tauri CLI)
-- Online generators like https://icon.kitchen/
+Regenerate all platform assets with:
 
-For now, Tauri will use default icons during development.
+```bash
+python3 scripts/generate_icons.py
+```
