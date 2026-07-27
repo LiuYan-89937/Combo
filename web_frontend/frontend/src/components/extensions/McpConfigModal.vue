@@ -12,90 +12,94 @@
       </n-radio-group>
     </div>
 
-    <section v-if="mode === 'import' && !item" class="import-panel">
-      <n-text depth="3">{{ t('extensions.mcpImportHint') }}</n-text>
-      <n-input
-        v-model:value="importText"
-        type="textarea"
-        :rows="10"
-        :placeholder="t('extensions.mcpImportPlaceholder')"
-      />
-      <n-space justify="end">
-        <n-button @click="parseImport">{{ t('extensions.parseConfig') }}</n-button>
-      </n-space>
-      <n-alert v-if="importErrors.length" type="error" :title="t('extensions.configInvalid')">
-        <div v-for="error in importErrors" :key="error">{{ error }}</div>
-      </n-alert>
-      <div v-if="importedServers.length" class="preview-list">
-        <n-text strong>{{ t('extensions.parsePreview') }}</n-text>
-        <div v-for="server in importedServers" :key="server.server_id" class="preview-card">
-          <div class="preview-heading">
-            <n-text strong>{{ server.display_name }}</n-text>
-            <n-tag size="small" :bordered="false">{{ server.transport }}</n-tag>
-          </div>
-          <n-text depth="3" class="preview-command">{{ serverCommand(server) }}</n-text>
-          <div class="preview-meta">
-            <span v-if="server.transport === 'stdio'">
-              {{ t('extensions.envKeys') }}：{{ recordKeys(server.env) || '—' }}
-            </span>
-            <span v-else>
-              {{ t('extensions.headers') }}：{{ recordKeys(server.headers) || '—' }}
-            </span>
+    <n-spin :show="Boolean(item && editConfigLoading)">
+      <section v-if="mode === 'import'" class="import-panel">
+        <n-text depth="3">
+          {{ item ? t('extensions.mcpEditJsonHint') : t('extensions.mcpImportHint') }}
+        </n-text>
+        <n-input
+          v-model:value="importText"
+          type="textarea"
+          :rows="14"
+          :placeholder="t('extensions.mcpImportPlaceholder')"
+        />
+        <n-space v-if="!item" justify="end">
+          <n-button @click="parseImport">{{ t('extensions.parseConfig') }}</n-button>
+        </n-space>
+        <n-alert v-if="importErrors.length" type="error" :title="t('extensions.configInvalid')">
+          <div v-for="error in importErrors" :key="error">{{ error }}</div>
+        </n-alert>
+        <div v-if="!item && importedServers.length" class="preview-list">
+          <n-text strong>{{ t('extensions.parsePreview') }}</n-text>
+          <div v-for="server in importedServers" :key="server.server_id" class="preview-card">
+            <div class="preview-heading">
+              <n-text strong>{{ server.display_name }}</n-text>
+              <n-tag size="small" :bordered="false">{{ server.transport }}</n-tag>
+            </div>
+            <n-text depth="3" class="preview-command">{{ serverCommand(server) }}</n-text>
+            <div class="preview-meta">
+              <span v-if="server.transport === 'stdio'">
+                {{ t('extensions.envKeys') }}：{{ recordKeys(server.env) || '—' }}
+              </span>
+              <span v-else>
+                {{ t('extensions.headers') }}：{{ recordKeys(server.headers) || '—' }}
+              </span>
+            </div>
           </div>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <n-form v-else ref="formRef" :model="formData" :rules="rules" label-placement="top">
-      <n-grid :cols="2" :x-gap="16">
-        <n-form-item-gi :label="t('common.name')" path="display_name">
-          <n-input v-model:value="formData.display_name" :placeholder="t('extensions.serverName')" />
-        </n-form-item-gi>
-        <n-form-item-gi :label="t('extensions.transport')">
-          <n-select v-model:value="formData.transport" :options="transportOptions" />
-        </n-form-item-gi>
-      </n-grid>
+      <n-form v-else ref="formRef" :model="formData" :rules="rules" label-placement="top">
+        <n-grid :cols="2" :x-gap="16">
+          <n-form-item-gi :label="t('common.name')" path="display_name">
+            <n-input v-model:value="formData.display_name" :placeholder="t('extensions.serverName')" />
+          </n-form-item-gi>
+          <n-form-item-gi :label="t('extensions.transport')">
+            <n-select v-model:value="formData.transport" :options="transportOptions" />
+          </n-form-item-gi>
+        </n-grid>
 
-      <n-form-item :label="t('common.description')">
-        <n-input v-model:value="formData.description" type="textarea" :rows="2" />
-      </n-form-item>
+        <n-form-item :label="t('common.description')">
+          <n-input v-model:value="formData.description" type="textarea" :rows="2" />
+        </n-form-item>
 
-      <template v-if="formData.transport === 'stdio'">
-        <n-form-item :label="t('extensions.command')" path="command">
-          <n-input v-model:value="formData.command" placeholder="npx" />
-        </n-form-item>
-        <n-form-item :label="t('extensions.arguments')">
-          <n-input v-model:value="formData.args" placeholder="-y @modelcontextprotocol/server-filesystem" />
-        </n-form-item>
-        <n-form-item :label="t('extensions.cwd')">
-          <n-input v-model:value="formData.cwd" :placeholder="t('extensions.cwdPlaceholder')" />
-        </n-form-item>
-        <n-form-item :label="t('extensions.env')">
-          <n-input v-model:value="formData.env" type="textarea" :rows="3" placeholder="KEY=value" />
-        </n-form-item>
-      </template>
+        <template v-if="formData.transport === 'stdio'">
+          <n-form-item :label="t('extensions.command')" path="command">
+            <n-input v-model:value="formData.command" placeholder="npx" />
+          </n-form-item>
+          <n-form-item :label="t('extensions.arguments')">
+            <n-input v-model:value="formData.args" placeholder="-y @modelcontextprotocol/server-filesystem" />
+          </n-form-item>
+          <n-form-item :label="t('extensions.cwd')">
+            <n-input v-model:value="formData.cwd" :placeholder="t('extensions.cwdPlaceholder')" />
+          </n-form-item>
+          <n-form-item :label="t('extensions.env')">
+            <n-input v-model:value="formData.env" type="textarea" :rows="3" placeholder="KEY=value" />
+          </n-form-item>
+        </template>
 
-      <template v-else>
-        <n-form-item label="URL" path="url">
-          <n-input v-model:value="formData.url" placeholder="https://example.com/mcp" />
-        </n-form-item>
-        <n-form-item :label="t('extensions.headers')">
-          <n-input v-model:value="formData.headers" type="textarea" :rows="3" placeholder="Authorization=Bearer ..." />
-        </n-form-item>
-      </template>
+        <template v-else>
+          <n-form-item label="URL" path="url">
+            <n-input v-model:value="formData.url" placeholder="https://example.com/mcp" />
+          </n-form-item>
+          <n-form-item :label="t('extensions.headers')">
+            <n-input v-model:value="formData.headers" type="textarea" :rows="3" placeholder="Authorization=Bearer ..." />
+          </n-form-item>
+        </template>
 
-      <n-grid :cols="2" :x-gap="16">
-        <n-form-item-gi :label="t('extensions.toolCallTimeoutSeconds')">
-          <n-input-number v-model:value="formData.timeout_seconds" :min="1" />
-        </n-form-item-gi>
-        <n-form-item-gi :label="t('permissions.riskLevel')">
-          <n-select v-model:value="formData.risk_level_default" :options="riskOptions" />
-        </n-form-item-gi>
-      </n-grid>
-      <n-form-item :label="t('scheduler.enabled')">
-        <n-switch v-model:value="formData.enabled" />
-      </n-form-item>
-    </n-form>
+        <n-grid :cols="2" :x-gap="16">
+          <n-form-item-gi :label="t('extensions.toolCallTimeoutSeconds')">
+            <n-input-number v-model:value="formData.timeout_seconds" :min="1" />
+          </n-form-item-gi>
+          <n-form-item-gi :label="t('permissions.riskLevel')">
+            <n-select v-model:value="formData.risk_level_default" :options="riskOptions" />
+          </n-form-item-gi>
+        </n-grid>
+        <n-form-item :label="t('scheduler.enabled')">
+          <n-switch v-model:value="formData.enabled" />
+        </n-form-item>
+      </n-form>
+    </n-spin>
 
     <n-alert
       v-if="installResult"
@@ -132,8 +136,13 @@
             {{ stopping ? t('extensions.mcpInstallStopping') : t('extensions.stopMcpInstall') }}
           </n-button>
           <n-button v-else @click="show = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :loading="busy" :disabled="busy" @click="handleSubmit">
-            {{ t('extensions.testAndAdd') }}
+          <n-button
+            type="primary"
+            :loading="busy"
+            :disabled="busy || Boolean(item && editConfigLoading)"
+            @click="handleSubmit"
+          >
+            {{ item ? t('extensions.testAndSave') : t('extensions.testAndAdd') }}
           </n-button>
         </n-space>
       </n-space>
@@ -157,6 +166,7 @@ import {
   NRadioGroup,
   NSelect,
   NSpace,
+  NSpin,
   NSwitch,
   NTag,
   NText,
@@ -175,6 +185,8 @@ import {
 const props = withDefaults(defineProps<{
   show: boolean
   item?: ExtensionItemView | null
+  editConfig?: Record<string, unknown> | null
+  editConfigLoading?: boolean
   busy?: boolean
   stopping?: boolean
   installResult?: any | null
@@ -182,6 +194,8 @@ const props = withDefaults(defineProps<{
   busy: false,
   stopping: false,
   installResult: null,
+  editConfig: null,
+  editConfigLoading: false,
 })
 
 const emit = defineEmits<{
@@ -248,13 +262,22 @@ function loadForm(item: ExtensionItemView | null | undefined) {
 
 watch(() => props.show, (visible) => {
   if (!visible) return
-  mode.value = props.item ? 'manual' : 'import'
+  mode.value = 'import'
   importText.value = ''
   importErrors.value = []
   importedServers.value = []
   loadForm(props.item)
+  loadEditConfig()
 })
 watch(() => props.item, item => { if (props.show) loadForm(item) })
+watch(() => props.editConfig, () => {
+  if (props.show && props.item) loadEditConfig()
+})
+
+function loadEditConfig() {
+  if (!props.item || !props.editConfig) return
+  importText.value = JSON.stringify(props.editConfig, null, 2)
+}
 
 function parseImport() {
   const result = parseMcpConfigText(importText.value)
@@ -263,7 +286,12 @@ function parseImport() {
 }
 
 function handleSubmit() {
-  if (mode.value === 'import' && !props.item) {
+  if (mode.value === 'import' && props.item) {
+    const server = parseEditedServer()
+    if (server) emit('submit', [server])
+    return
+  }
+  if (mode.value === 'import') {
     parseImport()
     if (!importedServers.value.length || importErrors.value.length) return
     emit('submit', importedServers.value)
@@ -273,6 +301,24 @@ function handleSubmit() {
     if (errors) return
     emit('submit', [manualServer()])
   })
+}
+
+function parseEditedServer(): McpServerConfig | null {
+  importErrors.value = []
+  let decoded: unknown
+  try {
+    decoded = JSON.parse(importText.value)
+  } catch (error) {
+    importErrors.value = [`JSON 解析失败：${error instanceof Error ? error.message : String(error)}`]
+    return null
+  }
+  if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) {
+    importErrors.value = [t('extensions.mcpEditJsonObjectRequired')]
+    return null
+  }
+  const server = { ...(decoded as Record<string, unknown>) }
+  server.server_id = String(props.item?.payload?.server_id || server.server_id || '')
+  return server as unknown as McpServerConfig
 }
 
 function manualServer(): McpServerConfig {

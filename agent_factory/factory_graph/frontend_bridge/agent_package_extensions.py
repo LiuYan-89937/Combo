@@ -39,8 +39,10 @@ from agent_factory.tooling.mcp_runtime import (
 from agent_factory.tooling.providers import (
     EnabledSkillConfig,
     EnabledSkillsConfig,
+    MCPDiscoveredTool,
     MCPServerConfig,
     MCPServersConfig,
+    prepare_mcp_tool,
 )
 from agent_factory.tooling.skills import parse_skill_directory
 from agent_factory.tooling.skillhub.service import SkillHubService
@@ -219,6 +221,22 @@ def _manage_extension_root(
 
     if action == "list":
         return ExtensionManageResult(summary())
+    if action == "get_mcp_config":
+        server_id = _required_config_id(payload, "server_id")
+        server = _find_mcp_server(
+            extension_root,
+            server_id,
+            package=package,
+            system_owner=system_owner,
+        )
+        if server is None:
+            raise ValueError(f"MCP server is not configured: {server_id}")
+        return ExtensionManageResult(
+            {
+                "server_config": server.model_dump(mode="json"),
+                **summary(),
+            }
+        )
     if action == "upsert_mcp":
         server = _mcp_server_for_upsert(
             extension_root,
@@ -1028,7 +1046,7 @@ def _test_mcp_server(
     if client is None:
         return {"status": "failed", "message": "MCP server is disabled or unavailable", "tool_count": 0, "tools": []}
     try:
-        tools = [tool.model_dump(mode="json") for tool in client.list_tools()]
+        discovered_tools = list(client.list_tools())
     except BaseException as exc:
         if _exception_contains(exc, MCPRuntimeCancelled):
             failure = _mcp_test_failure(
@@ -1044,18 +1062,54 @@ def _test_mcp_server(
             stderr=client.stderr_logs(),
             sensitive_values=[*server.env.values(), *server.headers.values()],
         )
+    tools: list[dict[str, str]] = []
+    details: list[str] = []
+    skipped_tools: list[dict[str, str]] = []
+    for discovered_tool in discovered_tools:
+        tool_name = str(
+            discovered_tool.get("name")
+            if isinstance(discovered_tool, dict)
+            else getattr(discovered_tool, "name", "")
+        ).strip() or "unknown"
+        try:
+            tool = MCPDiscoveredTool.model_validate(discovered_tool)
+            tool_name = tool.name
+            prepared = prepare_mcp_tool(server, tool)
+        except Exception as exc:
+            message = f"{type(exc).__name__}: {exc}"
+            skipped_tools.append({"name": tool_name, "message": message})
+            details.append(f"{tool_name}: {message}")
+            continue
+        tools.append({"name": tool.name, "description": tool.description})
+        for repair in prepared.repairs:
+            details.append(
+                f"{tool.name}: normalized {repair['schema']} schema at "
+                f"{repair['path']} from {repair['original']!r}"
+            )
+    if discovered_tools and not tools:
+        return {
+            "status": "failed",
+            "message": "The MCP server connected, but none of its tools have usable schemas.",
+            "preflight": preflight,
+            "tool_count": 0,
+            "tools": [],
+            "skipped_tool_count": len(skipped_tools),
+            "skipped_tools": skipped_tools,
+            "details": details,
+        }
+    skipped_count = len(skipped_tools)
+    message = f"Discovered {len(tools)} usable tools."
+    if skipped_count:
+        message = f"{message} Skipped {skipped_count} tool(s) with incompatible schemas."
     return {
         "status": "ok",
-        "message": f"Discovered {len(tools)} tools.",
+        "message": message,
         "preflight": preflight,
         "tool_count": len(tools),
-        "tools": [
-            {
-                "name": str(tool.get("name") or "tool"),
-                "description": str(tool.get("description") or ""),
-            }
-            for tool in tools
-        ],
+        "tools": tools,
+        "skipped_tool_count": skipped_count,
+        "skipped_tools": skipped_tools,
+        "details": details,
     }
 
 

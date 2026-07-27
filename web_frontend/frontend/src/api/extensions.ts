@@ -5,6 +5,8 @@ import { requestEvent, withQuery } from './http'
 
 export const extensionsApi = {
   list: (context?: WorkspaceContextInput) => requestEvent(withQuery('/api/extensions', packageResourceContextPayload(context))),
+  getMcpConfig: (serverId: string, context?: WorkspaceContextInput) =>
+    requestEvent(withQuery(`/api/extensions/mcp/${encodeURIComponent(serverId)}`, packageResourceContextPayload(context))),
   saveMcp: (server: McpServerConfig, context?: WorkspaceContextInput) =>
     requestEvent('/api/extensions/mcp', {
       method: 'POST',
