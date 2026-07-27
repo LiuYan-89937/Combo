@@ -84,6 +84,15 @@ export interface ModelPoolProfile {
   credential?: ModelPoolCredential | null
 }
 
+export function isAvailableChatModelProfile(profile: ModelPoolProfile): boolean {
+  return (
+    profile.kind === 'chat'
+    && profile.enabled
+    && profile.credential?.enabled !== false
+    && profile.credential?.has_api_key === true
+  )
+}
+
 export interface ModelUsageTotals {
   call_count: number
   input_tokens: number

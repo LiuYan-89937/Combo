@@ -1,7 +1,11 @@
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRoute } from 'vue-router'
-import { modelPoolApi, type ModelPoolProfile } from '@/api/modelPool'
+import {
+  isAvailableChatModelProfile,
+  modelPoolApi,
+  type ModelPoolProfile,
+} from '@/api/modelPool'
 import { useAgentStore } from '@/stores/agent'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useUiStore } from '@/stores/ui'
@@ -58,7 +62,9 @@ export function useFactoryConversation() {
     value: pkg.package_id,
   })))
   const runtimeMainModelOptions = computed(() => [
-    ...(isAgentChatActive.value ? [{ label: t('chat.defaultMainModel'), value: '' }] : []),
+    ...(isAgentChatActive.value && chatModelProfiles.value.length > 0
+      ? [{ label: t('chat.defaultMainModel'), value: '' }]
+      : []),
     ...chatModelProfiles.value.map((profile) => ({
       label: profile.display_name || profile.model_name || profile.profile_id,
       value: profile.profile_id,
@@ -80,6 +86,7 @@ export function useFactoryConversation() {
   const inputDisabled = computed(() => (
     runtimeStore.isInputLocked
     || runtimeStore.isPublishConfirmationPending
+    || chatModelProfiles.value.length === 0
     || (requiresRuntimeMainModel.value && !selectedMainModelProfileId.value)
     || (isAgentSessionLanding.value && !isAgentChatActive.value)
     || (isEvolutionRoute.value && !selectedEvolutionPackageId.value)
@@ -116,12 +123,7 @@ export function useFactoryConversation() {
         modelPoolApi.profiles(),
         modelPoolApi.roleBindings(),
       ])
-      chatModelProfiles.value = response.profiles.filter((profile) => (
-        profile.kind === 'chat'
-        && profile.enabled
-        && profile.credential?.enabled !== false
-        && profile.credential?.has_api_key === true
-      ))
+      chatModelProfiles.value = response.profiles.filter(isAvailableChatModelProfile)
       const configuredMainProfileId = roleBindingResponse.bindings.main
       if (chatModelProfiles.value.some((profile) => profile.profile_id === selectedMainModelProfileId.value)) {
         return
@@ -192,6 +194,15 @@ export function useFactoryConversation() {
   }
 
   function sendMessage(message: string, attachments: RuntimeAttachmentInput[]): boolean {
+    if (chatModelProfiles.value.length === 0) {
+      uiStore.addNotification({
+        type: 'warning',
+        title: t('chat.modelRequiredTitle'),
+        message: t('chat.modelRequiredMessage'),
+        duration: 4000,
+      })
+      return false
+    }
     const payloadAttachments = attachments.length > 0 ? attachments : undefined
     const visibleAttachments = attachmentViews(attachments)
     const packageId = agentStore.activeChatPackageId

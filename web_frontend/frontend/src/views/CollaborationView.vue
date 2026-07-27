@@ -124,6 +124,7 @@ import MessageItem from '@/components/chat/MessageItem.vue'
 import PublishConfirmationPanel from '@/components/chat/PublishConfirmationPanel.vue'
 import ToolApprovalPanel from '@/components/chat/ToolApprovalPanel.vue'
 import type { CollaborationRuntimeStatus } from '@/api/collaboration'
+import { isAvailableChatModelProfile } from '@/api/modelPool'
 import type { RuntimeAttachmentInput, TranscriptItem } from '@/types/protocol'
 import { useContextReferenceStore } from '@/stores/contextReferences'
 import { messageContextReference } from '@/utils/contextReferences'
@@ -151,13 +152,17 @@ const messageWorkspaceContext = computed(() => ({
 const selectedModelProfile = computed(() => (
   modelPoolStore.profile(selectedModelProfileId.value)
 ))
+const availableChatModelProfiles = computed(() => (
+  modelPoolStore.profiles.filter(isAvailableChatModelProfile)
+))
 const reasoningControlEnabled = computed(() => (
   selectedModelProfile.value?.capabilities.reasoning_supported !== false
 ))
 const modelOptions = computed(() => [
-  { label: t('chat.defaultMainModel'), value: '' },
-  ...modelPoolStore.profiles
-    .filter(profile => profile.kind === 'chat' && profile.enabled && profile.credential?.enabled !== false)
+  ...(availableChatModelProfiles.value.length > 0
+    ? [{ label: t('chat.defaultMainModel'), value: '' }]
+    : []),
+  ...availableChatModelProfiles.value
     .map(profile => ({
       label: profile.display_name || profile.model_name || profile.profile_id,
       value: profile.profile_id,
@@ -208,6 +213,16 @@ onMounted(() => {
   void modelPoolStore.ensureLoaded()
 })
 
+watch(
+  [() => modelPoolStore.loaded, availableChatModelProfiles],
+  ([loaded, profiles]) => {
+    if (loaded && profiles.length === 0) {
+      runtimePreferences.setMainModelProfileId('')
+    }
+  },
+  { immediate: true },
+)
+
 function updateModelProfile(value: string) {
   const nextProfile = modelPoolStore.profile(value)
   runtimePreferences.setMainModelProfileId(value)
@@ -234,6 +249,15 @@ function updateReasoningIntensity(value: number | null) {
 }
 
 async function sendMessage(message: string, attachments: RuntimeAttachmentInput[]) {
+  if (availableChatModelProfiles.value.length === 0) {
+    uiStore.addNotification({
+      type: 'warning',
+      title: t('chat.modelRequiredTitle'),
+      message: t('chat.modelRequiredMessage'),
+      duration: 4000,
+    })
+    return
+  }
   if (!await sendMainAgentMessage(message, attachments)) return
   if (store.activeSession?.status === 'draft') {
     await store.updateSession({ status: 'running' })

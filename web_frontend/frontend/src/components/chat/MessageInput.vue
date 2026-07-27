@@ -88,7 +88,9 @@
           size="small"
           :value="selectedModelProfileId || ''"
           :options="modelOptions"
-          :placeholder="t('chat.modelSelectorPlaceholder')"
+          :placeholder="modelOptions.length > 0
+            ? t('chat.modelSelectorPlaceholder')
+            : t('chat.modelPoolEmptyPlaceholder')"
           :disabled="disabled || modelOptions.length <= 1"
           filterable
           @update:value="handleModelSelect"

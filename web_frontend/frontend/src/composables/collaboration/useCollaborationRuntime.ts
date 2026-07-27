@@ -4,6 +4,8 @@ import { useAgentStore } from '@/stores/agent'
 import { SYSTEM_CHAT_PACKAGE_ID, useCollaborationStore } from '@/stores/collaboration'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useRuntimePreferencesStore } from '@/stores/runtimePreferences'
+import { useModelPoolStore } from '@/stores/modelPool'
+import { isAvailableChatModelProfile } from '@/api/modelPool'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useCommand } from '@/composables/useCommand'
 import { useFactoryMessageProjection } from '@/composables/factory/useFactoryMessageProjection'
@@ -18,6 +20,7 @@ export function useCollaborationRuntime() {
   const collaborationStore = useCollaborationStore()
   const runtimeStore = useRuntimeStore()
   const runtimePreferences = useRuntimePreferencesStore()
+  const modelPoolStore = useModelPoolStore()
   const agentStore = useAgentStore()
   const workspaceStore = useWorkspaceStore()
   const commands = useCommand()
@@ -49,6 +52,7 @@ export function useCollaborationRuntime() {
   const isMainAgentRunning = computed(() => Boolean(mainAgentActiveRequestId.value))
   const inputDisabled = computed(() => (
     !collaborationStore.activeSession ||
+    !modelPoolStore.profiles.some(isAvailableChatModelProfile) ||
     runtimeStore.isInputLocked ||
     runtimeStore.isPublishConfirmationPending
   ))

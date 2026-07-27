@@ -42,6 +42,7 @@ const zhCN = {
 
   'chat.inputPlaceholder': '输入消息...',
   'chat.modelSelectorPlaceholder': '主模型',
+  'chat.modelPoolEmptyPlaceholder': '请至模型池添加模型',
   'chat.defaultMainModel': '默认模型',
   'chat.modelRequiredTitle': '需要配置主模型',
   'chat.modelRequiredMessage': '请先在模型池中配置并启用一个可用的对话模型。',
@@ -973,6 +974,7 @@ const enUS: Record<MessageKey, string> = {
 
   'chat.inputPlaceholder': 'Enter a message...',
   'chat.modelSelectorPlaceholder': 'Main model',
+  'chat.modelPoolEmptyPlaceholder': 'Add a model in the model pool',
   'chat.defaultMainModel': 'Default model',
   'chat.modelRequiredTitle': 'Main model required',
   'chat.modelRequiredMessage': 'Configure and enable an available chat model in the model pool first.',
