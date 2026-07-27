@@ -1,298 +1,308 @@
 # FastAgentFactory
 
-FastAgentFactory 是一个本地优先、桌面优先的 Agent 工厂。它把模型配置、Agent 制造与进化、知识库、MCP/Skill、工具权限、工作区、定时任务、长期记忆和多 Agent 协作放在同一个应用中。
+本地优先、跨平台的 AI Agent 制造与运行工作台。
 
-![FastAgentFactory 对话工作台](readme-assets/images/chat.png)
+FastAgentFactory 将模型配置、Agent 制造与进化、会话工作区、工具审批、MCP、Skill、知识库、长期记忆、定时任务和多 Agent 协作整合在一个桌面应用中。安装包内置 Python 后端与运行依赖，日常使用不要求单独安装 Python、Node.js 或 Docker。
 
-## 核心能力
-
-| 能力 | 说明 |
-| --- | --- |
-| Factory Chat | 内置系统对话包，支持流式回复、工具调用、附件、图片输入和图片生成。 |
-| Agent 制造 | 从自然语言目标生成可验证、可发布的 AgentPackage。 |
-| Agent 进化 | 在独立上下文中修改已有 AgentPackage，并重新验证和发布。 |
-| 已发布 Agent | 为每个 Agent 提供独立会话、工作区、知识库、记忆、定时任务和扩展。 |
-| 多 Agent 协作 | 由主 Agent 拆分任务、声明依赖、调度子 Agent、验收和汇总交付物。 |
-| 模型池 | 管理文本模型、图片模型、供应商凭证、能力标签、上下文限制和用量。 |
-| 知识库 | 导入文件或目录，完成解析、分块、索引、检索和上下文挂载。 |
-| 扩展系统 | 添加本地或远程 MCP、Skill 和 SkillHUB 能力，并配置工具风险策略。 |
-| 可观察运行时 | 查看事件流、工具调用、审批、trace、checkpoint、工作区文件和产物。 |
-
-## 当前架构
-
-```text
-Tauri 2 Desktop
-├── Vue 3 + TypeScript + Vite
-├── Rust process supervisor
-│   ├── 分配动态本地端口
-│   ├── 启动 Python sidecar
-│   └── 应用退出时终止后端
-└── Python FastAPI + Agent Runtime
-    ├── RuntimeKernel / LangGraph
-    ├── 本地依赖池
-    ├── 独立运行工作区
-    ├── Model Pool
-    └── MCP / Skill / Knowledge / Memory
-```
-
-桌面版不依赖 Docker。AgentPackage 使用本地子进程、独立工作区和依赖环境进行逻辑隔离。该边界用于依赖复用、路径约束和运行状态隔离，不应被描述为虚拟机或内核级安全沙箱；不可信代码仍应在受控主机上运行。
-
-前端不会假设后端固定监听 `8000`。Tauri 启动时分配空闲回环端口，前端通过 Tauri command 获取实际地址，并在 `/health` 就绪前显示初始化界面，之后才建立 SSE 事件流。
-
-## 桌面版安装
+## 安装
 
 ### macOS
 
-1. 下载与处理器架构匹配的 `.dmg`。
-2. 打开安装包，将 FastAgentFactory 拖入 `Applications`。
-3. 首次启动后进入「模型池」配置凭证和模型。
+1. 下载与 Mac 处理器架构匹配的 `.dmg`。
+2. 打开镜像，将 FastAgentFactory 拖入 `Applications`。
+3. 启动应用。
 
-安装包已经包含 Python 后端及运行依赖，不要求用户额外安装 Python、Node.js 或 Docker。只有当你主动添加以 `npx`、`uvx` 等命令启动的本地 MCP 时，才需要安装对应的外部命令；远程 Streamable HTTP/SSE MCP 不需要这些本地运行器。
+### Windows
 
-Windows 和 Linux 代码路径已纳入跨平台结构，但发行包仍应分别在对应系统上完成构建和验收。不要用 macOS 构建成功代替其他平台验证。
+1. 下载 Windows x64 的 NSIS `.exe` 安装程序。
+2. 完成安装并启动 FastAgentFactory。
 
-## 首次配置
+当前 Windows 正式构建目标为 `x86_64-pc-windows-msvc`。Windows ARM64 设备只有在系统支持 x64 应用仿真时才能运行该安装包；它不是原生 ARM64 发行版。
 
-### 1. 配置模型池
+安装包已经包含前端、Python 后端和基础运行依赖。只有在添加需要 `npx`、`uvx` 或其他本地命令的 MCP 时，才需要自行安装对应命令。
 
-进入「模型池」，依次添加：
+## 首次使用
 
-1. 供应商凭证：Base URL、API Key。
-2. 模型 Profile：模型名、输入输出模态、工具调用、结构化输出、推理和上下文限制。
-3. 使用「测试连接」确认该 Profile 可调用。
+### 1. 添加模型
 
-![模型池](readme-assets/images/model-pool.png)
+打开「模型池」，依次完成：
 
-Factory Chat、Agent 制造、Agent 进化以及平台内部的任务/压缩调用均从模型池或当前请求选择模型，不再读取主模型、任务模型、压缩模型和图片模型的 env 配置。
+1. 添加供应商凭证，填写 Base URL 和 API Key。
+2. 添加模型 Profile，填写模型名并选择工具调用、结构化输出、推理和输入模态等能力。
+3. 点击「测试连接」确认模型可用。
+4. 回到对话输入框选择模型。
 
-没有符合能力要求的文本模型时，系统对话输入区会保持禁用并提示先配置模型。图片模型是可选能力；没有匹配的图片 Profile 不影响普通文本对话。
+应用不再从 `.env` 读取主模型配置。没有可用文本模型时，输入框不会提供虚假的“默认模型”，而是提示先到模型池添加模型。
 
-### 2. 初始化系统 Agent
+上下文窗口以当前模型 Profile 为准；未填写时默认 `256K`，压缩阈值未填写时默认 `200K`。请求总超时默认 `300` 秒，节点最大重试次数默认 `5` 次，均可在右上角设置中调整。
 
-进入「已发布 Agent」并初始化 **Factory Chat**。首次初始化需要准备本地运行目录和依赖环境，耗时可能高于后续启动。
+### 2. 开始闲聊
 
-应用刚启动时，前端会等待后端健康检查。此时显示“正在初始化”，不会提前连接事件流。
+「闲聊」是内置的系统 Agent，使用方式与其他 Agent 一致，但在侧边栏保留独立入口。
 
-### 3. 按需添加 MCP
+你可以：
 
-系统不再预装网页搜索 MCP，也不会自动启动 SearXNG 或 Docker 容器。进入「扩展管理」可以添加：
+- 直接发送文本问题。
+- 上传文档、图片或文本附件。
+- 让 Agent 使用工作区读写文件。
+- 查看推理内容、工具调用和审批状态。
+- 在回复过程中继续发送消息，后续消息会进入队列。
+- 在聊天记录中点击附件，直接在对应会话工作区预览。
+
+附件原文件会保存到当前会话工作区；解析出的文本进入模型上下文，图片则可以发送给支持图片输入的模型。
+
+### 3. 配置通知
+
+在右上角设置中可以分别控制：
+
+- 对话回复完成
+- 多 Agent 协作完成
+- Agent 群聊任务完成
+- 定时任务完成
+
+应用位于后台时使用 macOS 或 Windows 原生通知；当前任务正在前台显示时不会重复提醒。
+
+## 制造 Agent
+
+进入「Agent 制造」，描述你需要的 Agent。建议同时说明：
+
+- Agent 的用途和目标用户
+- 需要接收的输入
+- 期望输出和文件格式
+- 可以使用的工具、Skill 或知识
+- 必须遵守的限制
+- 可验证的验收标准
+
+制造过程会生成结构化 AgentPackage，并完成工具编译、依赖准备和 probe。Probe 异步运行，可以查看当前阶段、耗时、日志和失败原因，不会长时间占住整个应用。
+
+制造完成后确认发布，即可在「已发布 Agent」中看到新 Agent。
+
+## 运行已发布 Agent
+
+进入「已发布 Agent」，选择目标 Agent 并创建会话。
+
+- 发送第一条消息时会自动初始化 Agent。
+- 也可以提前点击「初始化」预热依赖和运行环境。
+- 每个会话拥有独立工作区、checkpoint、trace 和附件目录。
+- 同一个 Agent 可以创建多个互不混淆的会话。
+- 工具产生的文件会出现在右侧工作区。
+- 工作区文件可以预览、在系统文件管理器中打开或另存为。
+- 删除会话时会停止仍在运行的请求，并清理对应会话工作区和运行记录。
+
+首次初始化可能需要构建 Python wheel 或准备 npm 依赖，因此会比后续启动更慢。相同依赖会进入本地共享依赖池，之后可由其他 Agent 复用。
+
+## 进化 Agent
+
+进入「Agent 进化」，选择已有 AgentPackage 并描述需要改变的行为。
+
+进化适合：
+
+- 增加或替换工具
+- 安装新的 Skill
+- 调整提示词和输出格式
+- 修改依赖
+- 修复已有 Agent 的行为问题
+
+进化会话与普通运行会话分离。修改完成后需要重新验证并发布，已发布版本才会更新。
+
+## 多 Agent 协作
+
+进入「多 Agent 协作」，选择主 Agent 并创建协作任务。
+
+主 Agent 可以：
+
+1. 根据任务选择合适的已发布 Agent。
+2. 拆分带依赖关系的子任务。
+3. 调度子 Agent 执行。
+4. 检查子 Agent 的工作区和交付结果。
+5. 要求修改或继续后续任务。
+6. 汇总最终结果。
+
+协作使用与普通对话相同的模型、工具、依赖和会话运行逻辑。子 Agent 会话仍可单独打开查看。
+
+## Agent 群聊
+
+Agent 群聊适合让多个 Agent 在同一讨论中协作。可以通过 `@` 指定需要回复的 Agent，也可以观察成员任务和运行状态。
+
+群聊成员仍使用各自的 AgentPackage、扩展和运行工作区，不会因为处于同一群聊而合并私有文件。
+
+## 知识库
+
+进入「知识库」添加：
+
+- 单个文件
+- 文件夹
+- URL
+- 文本笔记
+
+系统会根据文件类型完成解析、分块和索引。知识源可以绑定到闲聊或指定 AgentPackage，不同 Agent 不会默认共享私有知识。
+
+## MCP 与 Skill
+
+进入「扩展管理」配置扩展。
+
+### 添加 MCP
+
+支持三种连接方式：
 
 - `stdio`：本地命令，例如 `npx`、`uvx` 或自有可执行文件。
 - `streamable_http`：远程 Streamable HTTP MCP。
 - `sse`：远程 SSE MCP。
 
-例如 Tavily 官方远程 MCP：
+应用不预装搜索 MCP，也不会启动 SearXNG 或 Docker 容器。你可以导入 MCP JSON，并在原始配置基础上继续编辑。添加前建议先执行连接测试。
 
-```json
-{
-  "mcpServers": {
-    "tavily": {
-      "transport": "streamable_http",
-      "url": "https://mcp.tavily.com/mcp/",
-      "headers": {
-        "Authorization": "Bearer tvly-你的API密钥"
-      },
-      "timeout_seconds": 60,
-      "risk_level_default": "medium",
-      "enabled": true
-    }
-  }
-}
+MCP Header 和环境变量保存在本机扩展配置中，不要提交或分享包含真实 Token 的配置。
+
+### 安装本地 Skill
+
+点击安装 Skill，直接从文件系统选择 Skill 文件夹。启用后的 Skill 会绑定到当前目标 Agent。
+
+已装配 Skill 的名称会进入 Agent 系统提示词，Skill 正文仍按需加载，避免无条件占用上下文。
+
+### 使用 SkillHUB
+
+后端启动后会在后台检查并准备 SkillHUB CLI，不阻塞应用初始化。自动准备失败不会影响其他功能，错误会写入后端日志；此时可以在扩展管理中查看状态并重试。
+
+通过 SkillHUB 安装的 Skill 只写入当前目标 Agent 的扩展目录。
+
+## 定时任务
+
+进入「定时任务」可以创建：
+
+- Agent 对话任务
+- 脚本任务
+- 工具调用任务
+
+支持 Cron、固定间隔和指定时间。任务使用保存时的目标和运行配置，并继承全局请求超时与最大重试设置。任务结束后可以发送应用内或系统通知。
+
+## 会话与上下文
+
+- 模型用量只在供应商返回真实 usage 后更新，不使用请求前的不完整本地估算覆盖前端显示。
+- 达到当前模型的压缩阈值后，系统先压缩历史上下文，再继续处理排队消息。
+- 压缩不会改变原始聊天记录的展示顺序。
+- 工具调用、工具结果和回复正文会按实际发生顺序恢复，不会在刷新后全部堆到最后一条消息下。
+- 中途切换输入框模型只影响下一次发起的请求，不会修改已经运行中的模型调用。
+
+## 数据、工作区与日志
+
+用户数据默认位于：
+
+```text
+macOS:
+~/Library/Application Support/com.fastagentfactory.app/.agentfactory/
+
+Windows:
+%LOCALAPPDATA%\com.fastagentfactory.app\.agentfactory\
 ```
 
-在「添加 MCP 服务器」的导入模式粘贴配置，然后执行“测试并添加”。MCP Header 当前保存在本机扩展配置中，不要提交、分享或截图暴露真实密钥。
+后端日志：
 
-## 推荐工作流
+```text
+<应用数据目录>/.agentfactory/logs/backend.log
+```
 
-### 制造 Agent
+重新安装或升级应用不会主动覆盖已有模型配置、Agent 包、会话和工作区。只有主动清理应用数据或手动删除上述目录时，这些内容才会消失。
 
-进入「Agent 制造」，描述用途、输入、输出、工具边界和验收标准。制造流程会分析需求并装配模型、工具、Skill、知识库和运行契约。
+如果出现 `Failed to fetch`、后端初始化超时或发布失败，优先查看 `backend.log` 中对应时间的完整异常。
 
-![Agent 制造](readme-assets/images/agent-authoring.png)
+## 架构简介
 
-AgentPackage 保存模型 `profile_id` 和能力要求，不保存模型池中的真实 API Key。
+```text
+Tauri 桌面应用
+├── Vue 3 前端
+├── Rust 桌面进程：单实例、后端生命周期、原生通知与文件操作
+└── Python FastAPI + Agent Runtime：模型、工具、会话、工作区与扩展
+```
 
-### 运行 Agent
+应用启动时由 Rust 进程分配动态本地端口并启动 Python 后端，前端等待 `/health` 就绪后再连接 SSE 事件流。应用退出时会终止对应后端进程树。
 
-进入「已发布 Agent」，选择并初始化 Agent。每个会话拥有独立工作区，可以接收附件、调用工具、生成文件并展示结构化产物。
-
-![已发布 Agent](readme-assets/images/agent-marketplace.png)
-
-初始化用于准备本地运行环境并启动 Agent bridge，不再创建 Docker 容器。普通对话发送第一条消息时会自动初始化；手动“初始化”只用于提前预热。多 Agent 协作在调度子 Agent 前也会自动完成初始化。
-
-AgentPackage 在 `contracts/dependencies.json` 声明依赖，初始化时解析为 `environment.lock.json`：
-
-- Python 依赖构建为 wheel，按内容哈希保存到共享依赖池。
-- npm 依赖按锁文件哈希保存为共享 `node_modules` profile。
-- 每个本地 Agent 子进程只通过自己的 `PYTHONPATH`、`NODE_PATH` 和环境锁引用声明过的依赖。
-- 不同 Agent 可以复用相同依赖文件，但会话工作区、运行目录、扩展目录和进程生命周期彼此独立。
-- 操作系统包不会由应用自动安装；需要的系统命令必须作为宿主机能力声明并在初始化时验证。
-
-该机制提供依赖与工作区的逻辑隔离和缓存复用，不提供 Docker/虚拟机级内核隔离。
-
-### 进化 Agent
-
-进入「Agent 进化」，选择目标 AgentPackage 并描述需要改变的行为。进化会话与普通运行会话分离。
-
-![Agent 进化](readme-assets/images/agent-evolution.png)
-
-### 多 Agent 协作
-
-主 Agent 可以检索合适的已发布 Agent，创建带依赖关系的任务，并在子 Agent 交付后继续验收或推进。
-
-![多 Agent 协作](readme-assets/images/collaboration.png)
-
-### 知识库与扩展
-
-知识源按系统对话或 AgentPackage 上下文隔离。扩展也可以按目标范围安装和启用。
-
-![知识库](readme-assets/images/knowledge-base.png)
-
-![扩展管理](readme-assets/images/extensions.png)
-
-## 数据与安全边界
-
-- 桌面生产环境将用户状态写入系统应用数据目录，不把仓库中的 `.agentfactory` 历史数据打入安装包。
-- 开发模式默认使用仓库下的 `.agentfactory/` 和 `.agent_runtime/`。
-- 模型池凭证保存在本地模型池存储中；AgentPackage 只引用 Profile。
-- MCP `env` 和 `headers` 属于本地扩展配置，当前不等同于模型池加密凭证。
-- 工作区路径限制属于应用层逻辑隔离，不是恶意代码安全沙箱。
-- 高风险工具应保留人工确认，不建议对未知 MCP 长期使用全部自动放行。
-- 删除会话时会清理与该会话关联的 checkpoint、trace 和运行记录。
+桌面版不依赖 Docker。Agent 使用本地子进程、独立工作区、环境锁和共享依赖池进行逻辑隔离。该机制不等同于虚拟机或内核级安全沙箱，不应在未受控主机上运行来源不明的高风险代码。
 
 ## 本地开发
 
-### 环境要求
+环境要求：
 
 - Python `>= 3.11`
 - [uv](https://docs.astral.sh/uv/)
 - Node.js `>= 18`
 - npm
 - Rust stable
-- Tauri 2 CLI
+- Tauri CLI 2
 
-### 安装依赖
+安装依赖：
 
 ```bash
 uv sync --extra web
-
-cd web_frontend/frontend
-npm install
+npm --prefix web_frontend/frontend ci
 ```
 
-### Web 开发模式
-
-分别启动后端和前端：
+Web 开发需要分别运行后端和前端：
 
 ```bash
 uv run --extra web python web_frontend/backend/event_api_server.py
 ```
 
 ```bash
-cd web_frontend/frontend
-npm run dev
+npm --prefix web_frontend/frontend run dev
 ```
 
-开发服务器地址以终端输出为准，后端健康检查为 `/health`。
-
-### Tauri 开发模式
+Tauri 开发：
 
 ```bash
 cd src-tauri
 cargo tauri dev
 ```
 
-开发模式优先使用仓库 `.venv/bin/python`。生产模式使用 `src-tauri/resources/python` 中的内置 Python。
+## 打包
 
-## 构建桌面安装包
-
-macOS 在 macOS 主机执行：
+### macOS
 
 ```bash
 ./scripts/package_macos.sh
 ```
 
-Windows 在 PowerShell 中执行。Windows ARM64 主机仍生成通用的 Windows x64
-安装包。主机需要 Visual Studio 2022 Build Tools 的 C++ workload、x64/ARM64
-编译工具和推荐的 Windows SDK；脚本会导入 x64 MSVC 环境，并下载、校验相同架构的内置 Python：
+产物：
+
+```text
+src-tauri/target/release/bundle/dmg/FastAgentFactory_<version>_<arch>.dmg
+```
+
+### Windows
+
+Windows 构建机需要 Rust、Node.js、Visual Studio 2022 Build Tools、Desktop development with C++ workload、x64 MSVC 工具链和 Windows SDK。
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\package_windows.ps1
 ```
 
-构建产物分别位于：
+脚本只生成 x64 NSIS `.exe`，不生成 MSI：
 
 ```text
-src-tauri/target/release/bundle/dmg/
-src-tauri/target/x86_64-pc-windows-msvc/release/bundle/
+src-tauri\target\x86_64-pc-windows-msvc\release\bundle\nsis\*.exe
 ```
 
-macOS 脚本会准备前端与内置 Python、构建 `.app`、执行严格的 ad-hoc
-签名校验，再生成并校验 DMG。Windows 脚本固定校验内置 Python 归档的
-SHA-256，并使用 `x86_64-pc-windows-msvc` 同架构构建 Tauri 安装包。
-两个脚本都不会启动应用或运行 Agent 业务示例。
+完整 Windows 构建日志位于：
 
-### 跨平台终端
-
-运行期统一暴露 `shell`、`shell_status` 和 `shell_stop` 工具。macOS/Linux 后端使用
-PATH 中的 Bash，Windows 后端优先使用 PowerShell 7（`pwsh`），并回退到系统自带的
-Windows PowerShell。后台命令由同一平台后端负责整棵进程树的查询与终止。
-
-旧 AgentPackage 中的 `bash`、`bash_status` 和 `bash_stop` 契约会在加载时统一迁移到
-新的 `shell` 能力，不会注册或维护第二套执行实现。
-
-## 静态检查
-
-本项目不应通过运行特化 Agent 示例来代替常规构建检查。按变更范围选择：
-
-```bash
-# Python 语法
-python3 -m compileall -q agent_factory web_frontend/backend
-
-# Rust
-cd src-tauri
-cargo fmt --check
-cargo check
-
-# 前端生产构建
-cd web_frontend/frontend
-npx vite build
-
-# Diff 格式
-git diff --check
+```text
+build\logs\windows-package.log
 ```
-
-当前仓库的旧版 `vue-tsc` 与部分较新 Node.js/TypeScript 组合存在 `supportedTSExtensions` 兼容问题。该错误发生在项目类型检查开始前；升级工具链前，应将 `npx vite build` 与 Python/Rust 检查结果分别记录，不要把工具链错误误判为业务代码错误。
 
 ## 目录结构
 
 ```text
 FastAgentFactory/
-├── agent_factory/                 Python Agent 运行时与平台能力
-├── SystemPackage/                 内置系统 AgentPackage
+├── agent_factory/          Python Agent 运行时
+├── SystemPackage/          内置系统 AgentPackage
 ├── web_frontend/
-│   ├── backend/                   FastAPI 后端
-│   └── frontend/                  Vue 前端
-├── src-tauri/                     Tauri/Rust 桌面壳与打包配置
-├── scripts/                       Python 运行时、图标和构建准备脚本
-└── readme-assets/                 README 图片
+│   ├── backend/            FastAPI 后端
+│   └── frontend/           Vue 前端
+├── src-tauri/              Tauri/Rust 桌面应用
+└── scripts/                桌面安装包构建脚本
 ```
 
-## 主要 API
+## 安全提示
 
-- `/api/commands`：前端命令入口。
-- `/api/model-pool`：凭证、模型 Profile、选择、连接测试和用量。
-- `/api/agent-packages`：AgentPackage、实例和会话。
-- `/api/workspace`：工作区文件与产物。
-- `/api/knowledge`：知识源、索引和检索。
-- `/api/extensions`：MCP、Skill 和权限。
-- `/api/memory`：长期记忆。
-- `/api/scheduler`：定时任务。
-- `/api/collaboration`：多 Agent 协作。
-- `/health`：后端健康检查。
-
-普通请求使用 HTTP；流式回复、工具审批、状态和运行事件使用 SSE。
-
-## 项目定位
-
-FastAgentFactory 面向本地开发、个人工作流和团队内部 Agent 工程实验。它提供的是完整的 Agent 生命周期工作台，而不是只封装一次模型请求的聊天界面。
+- 本地逻辑隔离不等同于安全沙箱。
+- 未知 MCP 和高风险工具应保留人工批准。
+- 不要将模型凭证、MCP Token、应用数据目录或用户工作区提交到 Git。
+- 使用来源不明的 AgentPackage 前，应检查依赖、工具权限、脚本和网络访问范围。
