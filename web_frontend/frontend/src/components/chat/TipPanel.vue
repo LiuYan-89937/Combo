@@ -187,7 +187,6 @@ function animatePanelFromOrigin() {
 .tip-panel-header { display: flex; justify-content: space-between; align-items: center; min-height: 48px; padding: 7px 10px 7px var(--app-space-md); }
 .tip-panel-header > div { display: flex; align-items: center; gap: var(--app-space-xs); }
 .tip-panel-header strong { font-size: 13px; font-weight: 600; letter-spacing: .01em; }
-.tip-panel-header :deep(.n-button) { background: color-mix(in srgb, var(--app-surface-muted) 72%, transparent); }
 .tip-panel-body { flex: 1; min-height: 0; overflow: auto; padding: var(--app-space-xs) var(--app-space-lg) var(--app-space-md); }
 .tip-panel-empty { flex: 1; display: grid; place-items: center; padding: var(--app-space-xl); color: var(--app-text-muted); text-align: center; }
 .tip-source { margin: 0 0 var(--app-space-lg); padding: var(--app-space-sm) var(--app-space-md); border: 0; border-radius: 14px; background: color-mix(in srgb, var(--app-surface-muted) 62%, transparent); color: var(--app-text-muted); font-size: 12px; line-height: 1.55; white-space: pre-wrap; }

@@ -100,7 +100,14 @@ function createThemeOverrides(p: AppPalette): GlobalThemeOverrides {
       textColor1: p.text,
       textColor2: p.textSecondary,
       textColor3: p.textMuted,
+      textColorDisabled: p.controlDisabledText,
       placeholderColor: p.textPlaceholder,
+      placeholderColorDisabled: p.controlDisabledText,
+      inputColor: p.surface,
+      inputColorDisabled: p.controlDisabledSurface,
+      buttonColor2: p.controlSurface,
+      buttonColor2Hover: p.controlSurfaceHover,
+      buttonColor2Pressed: p.controlSurfacePressed,
       primaryColor: p.primary,
       primaryColorHover: p.primaryHover,
       primaryColorPressed: p.primaryPressed,
@@ -119,59 +126,84 @@ function createThemeOverrides(p: AppPalette): GlobalThemeOverrides {
       errorColorPressed: p.errorPressed,
     },
     Button: {
-      color: p.transparent,
-      colorHover: p.surfaceMuted,
-      colorPressed: p.surfacePressed,
-      colorFocus: p.surfaceMuted,
-      colorDisabled: p.surfaceMuted,
+      color: p.controlSurface,
+      colorHover: p.controlSurfaceHover,
+      colorPressed: p.controlSurfacePressed,
+      colorFocus: p.controlSurfaceHover,
+      colorDisabled: p.controlDisabledSurface,
+      colorSecondary: p.controlSurface,
+      colorSecondaryHover: p.controlSurfaceHover,
+      colorSecondaryPressed: p.controlSurfacePressed,
+      colorTertiary: p.controlSurface,
+      colorTertiaryHover: p.controlSurfaceHover,
+      colorTertiaryPressed: p.controlSurfacePressed,
+      colorQuaternary: p.transparent,
+      colorQuaternaryHover: p.controlSurfaceHover,
+      colorQuaternaryPressed: p.controlSurfacePressed,
       textColor: p.text,
       textColorHover: p.textStrong,
       textColorPressed: p.textStrong,
       textColorFocus: p.textStrong,
-      textColorDisabled: p.textDisabled,
+      textColorDisabled: p.controlDisabledText,
       textColorText: p.text,
       textColorTextHover: p.textStrong,
       textColorTextPressed: p.textStrong,
       textColorTextFocus: p.textStrong,
-      textColorTextDisabled: p.textDisabled,
+      textColorTextDisabled: p.controlDisabledText,
       textColorGhost: p.text,
       textColorGhostHover: p.textStrong,
       textColorGhostPressed: p.textStrong,
       textColorGhostFocus: p.textStrong,
-      textColorGhostDisabled: p.textDisabled,
+      textColorGhostDisabled: p.controlDisabledText,
       border: `1px solid ${p.border}`,
       borderHover: `1px solid ${p.borderHover}`,
       borderPressed: `1px solid ${p.textStrong}`,
       borderFocus: `1px solid ${p.textStrong}`,
-      borderDisabled: `1px solid ${p.border}`,
+      borderDisabled: `1px solid ${p.controlDisabledBorder}`,
       textColorPrimary: p.textInverse,
       textColorHoverPrimary: p.textInverse,
       textColorPressedPrimary: p.textInverse,
       textColorFocusPrimary: p.textInverse,
-      textColorDisabledPrimary: p.textInverse,
+      textColorDisabledPrimary: p.controlDisabledText,
       textColorTextPrimary: p.text,
       textColorTextHoverPrimary: p.textStrong,
       textColorTextPressedPrimary: p.textStrong,
       textColorTextFocusPrimary: p.textStrong,
-      textColorTextDisabledPrimary: p.textDisabled,
+      textColorTextDisabledPrimary: p.controlDisabledText,
       colorPrimary: p.primary,
       colorHoverPrimary: p.primaryHover,
       colorPressedPrimary: p.primaryPressed,
       colorFocusPrimary: p.primaryHover,
-      colorDisabledPrimary: p.borderHover,
+      colorDisabledPrimary: p.controlDisabledSurface,
       borderPrimary: `1px solid ${p.primary}`,
       borderHoverPrimary: `1px solid ${p.primaryHover}`,
       borderPressedPrimary: `1px solid ${p.primaryPressed}`,
       borderFocusPrimary: `1px solid ${p.primaryHover}`,
-      borderDisabledPrimary: `1px solid ${p.borderHover}`,
+      borderDisabledPrimary: `1px solid ${p.controlDisabledBorder}`,
+      colorDisabledInfo: p.controlDisabledSurface,
+      colorDisabledSuccess: p.controlDisabledSurface,
+      colorDisabledWarning: p.controlDisabledSurface,
+      colorDisabledError: p.controlDisabledSurface,
+      textColorDisabledInfo: p.controlDisabledText,
+      textColorDisabledSuccess: p.controlDisabledText,
+      textColorDisabledWarning: p.controlDisabledText,
+      textColorDisabledError: p.controlDisabledText,
+      borderDisabledInfo: `1px solid ${p.controlDisabledBorder}`,
+      borderDisabledSuccess: `1px solid ${p.controlDisabledBorder}`,
+      borderDisabledWarning: `1px solid ${p.controlDisabledBorder}`,
+      borderDisabledError: `1px solid ${p.controlDisabledBorder}`,
     },
     Input: {
       color: p.surface,
+      colorDisabled: p.controlDisabledSurface,
       colorFocus: p.surface,
       textColor: p.text,
+      textColorDisabled: p.controlDisabledText,
       placeholderColor: p.textPlaceholder,
+      placeholderColorDisabled: p.controlDisabledText,
       border: `1px solid ${p.border}`,
       borderHover: `1px solid ${p.borderHover}`,
+      borderDisabled: `1px solid ${p.controlDisabledBorder}`,
       borderFocus: `1px solid ${p.borderFocus}`,
       boxShadowFocus: `0 0 0 2px ${p.focusShadow}`,
     },
@@ -630,30 +662,4 @@ html {
   border-radius: var(--app-radius-sm) !important;
 }
 
-/* Naive UI 按钮颜色覆盖 */
-.n-button {
-  color: var(--n-text-color);
-  background-color: var(--n-color);
-}
-
-.n-button:not(.n-button--disabled):focus {
-  color: var(--n-text-color-focus);
-  background-color: var(--n-color-focus);
-}
-
-.n-button:not(.n-button--disabled):hover {
-  color: var(--n-text-color-hover);
-  background-color: var(--n-color-hover);
-}
-
-.n-button:not(.n-button--disabled):active,
-.n-button.n-button--pressed {
-  color: var(--n-text-color-pressed);
-  background-color: var(--n-color-pressed);
-}
-
-.n-button.n-button--disabled {
-  color: var(--n-text-color-disabled);
-  background-color: var(--n-color-disabled);
-}
 </style>

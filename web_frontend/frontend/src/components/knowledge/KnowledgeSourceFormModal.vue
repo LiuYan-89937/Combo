@@ -163,6 +163,8 @@ import type { I18nKey } from '@/i18n'
 type SourceKind = 'folder' | 'file' | 'url' | 'note'
 type SplitterKind = 'recursive' | 'markdown' | 'code' | 'json'
 
+const DEFAULT_SOURCE_KIND: SourceKind = 'file'
+
 interface FileSystemEntryLike {
   isFile: boolean
   isDirectory: boolean
@@ -208,7 +210,7 @@ const folderInputRef = ref<HTMLInputElement | null>(null)
 const selectedFiles = ref<KnowledgeUploadFile[]>([])
 const rejectedFileNames = ref<string[]>([])
 const formData = ref({
-  kind: 'folder' as SourceKind,
+  kind: DEFAULT_SOURCE_KIND,
   display_name: '',
   uri: '',
   content: '',
@@ -221,8 +223,8 @@ const chunking = ref({
 })
 
 const kindOptions = computed(() => [
-  { label: t('knowledge.uploadFolder'), value: 'folder' },
   { label: t('knowledge.uploadFile'), value: 'file' },
+  { label: t('knowledge.uploadFolder'), value: 'folder' },
   { label: 'URL', value: 'url' },
   { label: t('knowledge.note'), value: 'note' },
 ])
@@ -437,7 +439,7 @@ function buildSourceInput(): KnowledgeSourceInput {
 
 function resetForm() {
   formData.value = {
-    kind: 'folder',
+    kind: DEFAULT_SOURCE_KIND,
     display_name: '',
     uri: '',
     content: '',
