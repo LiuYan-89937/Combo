@@ -33,6 +33,7 @@ class PendingAgentPackageRun:
 @dataclass(slots=True)
 class PendingCreateAgentRun:
     session_id: str
+    factory_session_id: str | None = None
     request_id: str | None = None
     interrupt_id: str | None = None
     interrupt_event_id: str | None = None

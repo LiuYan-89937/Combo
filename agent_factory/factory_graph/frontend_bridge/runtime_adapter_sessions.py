@@ -469,20 +469,21 @@ class RuntimeSessionCommandMixin:
         return str(self.session_record.session_id)
 
     def _session_payload(self) -> dict[str, object]:
-        payload = session_payload(self.session_record, snapshot_mode=self.mode)
-        snapshot = payload.get("snapshot") if isinstance(payload.get("snapshot"), dict) else {}
-        messages = list(snapshot.get("messages") or []) if isinstance(snapshot, dict) else []
         linked_agent_session = self._linked_agent_session_payload()
-        if not messages and linked_agent_session is not None:
-            messages = _messages_from_agent_session(linked_agent_session)
+        if linked_agent_session is not None:
             linked_turns = _turns_from_agent_session(linked_agent_session)
             self._sync_factory_turns_from_linked_session(linked_agent_session)
+            payload = session_payload(self.session_record, snapshot_mode=self.mode)
+            snapshot = payload.get("snapshot") if isinstance(payload.get("snapshot"), dict) else {}
             snapshot = {
                 **snapshot,
                 "turns": linked_turns,
-                "messages": messages,
+                "messages": _messages_from_agent_session(linked_agent_session),
                 "agent_session": linked_agent_session,
             }
+        else:
+            payload = session_payload(self.session_record, snapshot_mode=self.mode)
+            snapshot = payload.get("snapshot") if isinstance(payload.get("snapshot"), dict) else {}
         payload["snapshot"] = snapshot
         return payload
 

@@ -90,7 +90,9 @@ def publish_workspace(
     if staging.exists():
         shutil.rmtree(staging)
     _copy_publishable_package(workspace.root, staging)
-    EnvironmentResolver().ensure(staging)
+    environment_resolver = EnvironmentResolver()
+    environment_resolver.materialize_lock_without_installation(staging)
+    environment_resolver.require_ready(staging)
     _assert_runtime_ready(staging)
     _prune_transient_paths(staging)
 

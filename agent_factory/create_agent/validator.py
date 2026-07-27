@@ -22,6 +22,7 @@ from agent_factory.create_agent.models import (
     PackageValidationIssue,
     PackageValidationReport,
 )
+from agent_factory.environment_system import EnvironmentResolutionError, EnvironmentResolver
 from agent_factory.runtime_contracts import AgentPackageLoader, RuntimeBuildPlanner
 from agent_factory.runtime_contracts.builtins import default_runtime_contract_registry
 from agent_factory.runtime_contracts.schema import (
@@ -171,10 +172,54 @@ class CreateAgentPackageValidator:
         semantic_report = _semantic_completeness_report(root, package, scope=scope, changed_files=changed)
         if semantic_report is not None:
             return semantic_report
+        environment_report = _environment_readiness_report(
+            root,
+            scope=scope,
+            changed_files=changed,
+        )
+        if environment_report is not None:
+            return environment_report
         probe_report = _package_tool_probe_report(root, package, scope=scope, changed_files=changed)
         if probe_report is not None:
             return probe_report
         return _passed(root, scope=scope, changed_files=changed, summary="Package static validation passed.")
+
+
+def _environment_readiness_report(
+    root: Path,
+    *,
+    scope: ValidationScope,
+    changed_files: list[str],
+) -> PackageValidationReport | None:
+    try:
+        EnvironmentResolver().require_ready(root)
+    except EnvironmentResolutionError as exc:
+        return _issues_report(
+            root,
+            [
+                PackageValidationIssue(
+                    where="dependencies.environment_lock",
+                    summary="package dependency environment is not prepared",
+                    message=str(exc),
+                    path="environment.lock.json",
+                    expected=(
+                        "environment.lock.json matches contracts/dependencies.json and all referenced "
+                        "dependency-pool artifacts are available"
+                    ),
+                    actual=exc.status,
+                    repair_hint=(
+                        "Run a successful asynchronous package-tool probe for the current dependency "
+                        "contract, then rerun full_static validation."
+                    ),
+                    target_files=["contracts/dependencies.json", "environment.lock.json"],
+                    recommended_skill="10-package-tool-system",
+                )
+            ],
+            scope=scope,
+            changed_files=changed_files,
+            summary="Package dependency environment is not publish-ready.",
+        )
+    return None
 
 
 def _static_validation_compiler() -> AgentAssemblyCompiler:

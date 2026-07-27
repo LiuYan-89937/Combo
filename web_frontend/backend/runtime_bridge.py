@@ -82,6 +82,7 @@ class RuntimeBridge:
         self._background_commands: dict[str, FactoryFrontendCommand] = {}
         self._active_requests: dict[str, dict[str, Any]] = {}
         self._deleting_session_ids: set[str] = set()
+        self._session_cleanup_tasks: set[asyncio.Task[None]] = set()
         self._background_lock = threading.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._event_pipeline = RuntimeEventPipeline(
@@ -127,6 +128,7 @@ class RuntimeBridge:
             self._background_commands.clear()
             self._active_requests.clear()
             self._deleting_session_ids.clear()
+        self._session_cleanup_tasks.clear()
         logger.info("Runtime service stopped")
 
     async def send_frontend_command(self, command: FactoryFrontendCommand) -> None:
@@ -134,6 +136,25 @@ class RuntimeBridge:
             raise RuntimeError("Runtime service not started")
 
         command = self._resolve_cancel_command(command)
+        command_session_id = _command_session_id(command)
+        with self._background_lock:
+            session_is_deleting = bool(
+                command_session_id and command_session_id in self._deleting_session_ids
+            )
+        if session_is_deleting and command.type in {
+            "delete_session",
+            "delete_agent_package_session",
+        }:
+            self._emit_from_runtime(
+                _logical_session_deletion_event(command, session_id=command_session_id)
+            )
+            return
+        if session_is_deleting and command.type not in {
+            "cancel_runtime_request",
+            "delete_session",
+            "delete_agent_package_session",
+        }:
+            raise RuntimeError(f"session is being deleted: {command_session_id}")
         if _is_long_running_command(command):
             self._start_background(command)
             return
@@ -280,6 +301,25 @@ class RuntimeBridge:
                     or _active_request_session_id(self._active_requests.get(request_id)) == session_id
                 )
             ]
+        self._emit_from_runtime(_logical_session_deletion_event(command, session_id=session_id))
+        cleanup_task = asyncio.create_task(
+            self._finish_deleted_session_cleanup(
+                command=command,
+                session_id=session_id,
+                active=active,
+            ),
+            name=f"session-cleanup-{session_id}",
+        )
+        self._session_cleanup_tasks.add(cleanup_task)
+        cleanup_task.add_done_callback(self._session_cleanup_tasks.discard)
+
+    async def _finish_deleted_session_cleanup(
+        self,
+        *,
+        command: FactoryFrontendCommand,
+        session_id: str,
+        active: list[tuple[str, threading.Thread]],
+    ) -> None:
         try:
             for request_id, _thread in active:
                 cancel_command = self._resolve_cancel_command(
@@ -289,6 +329,7 @@ class RuntimeBridge:
                         session_id=session_id,
                         mode=command.mode,
                         payload={
+                            **dict(command.payload or {}),
                             "target_request_id": request_id,
                             "reason": "session_deleted",
                         },
@@ -299,7 +340,12 @@ class RuntimeBridge:
                 await asyncio.gather(
                     *(asyncio.to_thread(thread.join) for _request_id, thread in active)
                 )
-            await asyncio.to_thread(self._handle_command, command)
+            cleanup_command = command.model_copy(
+                update={"request_id": f"{command.request_id or uuid.uuid4().hex}:cleanup"}
+            )
+            await asyncio.to_thread(self._handle_command, cleanup_command)
+        except Exception:
+            logger.exception("Deferred session cleanup failed: %s", session_id)
         finally:
             with self._background_lock:
                 self._deleting_session_ids.discard(session_id)
@@ -390,8 +436,43 @@ class RuntimeBridge:
             logger.warning("Ignored non-object runtime event: %r", event_payload)
             return
 
+        event_payload = self._filter_deleting_sessions_from_event(event_payload)
+        event_session_id = _runtime_event_session_id(event_payload)
+        event_type = str(event_payload.get("event_type") or "")
+        with self._background_lock:
+            session_is_deleting = bool(
+                event_session_id and event_session_id in self._deleting_session_ids
+            )
+        if session_is_deleting and event_type not in {
+            "session_deleted",
+            "agent_package_session_deleted",
+        }:
+            self._observe_runtime_event(event_payload)
+            return
+
         self._observe_runtime_event(event_payload)
         self._event_pipeline.submit(event_payload)
+
+    def _filter_deleting_sessions_from_event(
+        self,
+        event_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        payload = event_payload.get("payload")
+        if not isinstance(payload, dict) or not isinstance(payload.get("sessions"), list):
+            return event_payload
+        with self._background_lock:
+            deleting_session_ids = set(self._deleting_session_ids)
+        if not deleting_session_ids:
+            return event_payload
+        sessions = [
+            item
+            for item in payload["sessions"]
+            if not (
+                isinstance(item, dict)
+                and str(item.get("session_id") or "").strip() in deleting_session_ids
+            )
+        ]
+        return {**event_payload, "payload": {**payload, "sessions": sessions}}
 
     def _prepare_runtime_event(self, event_payload: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -485,6 +566,17 @@ class RuntimeBridge:
         if not request_id:
             return
         event_type = str(event_payload.get("event_type") or "")
+        if event_type in {"tool_approval_resolved", "runtime_resumed"}:
+            payload = event_payload.get("payload")
+            detail = payload if isinstance(payload, dict) else {}
+            original_request_id = str(
+                detail.get("pending_request_id")
+                or detail.get("original_request_id")
+                or ""
+            ).strip()
+            if original_request_id:
+                with self._background_lock:
+                    self._active_requests.pop(original_request_id, None)
         if event_type in TERMINAL_REQUEST_EVENTS:
             with self._background_lock:
                 self._active_requests.pop(request_id, None)
@@ -600,6 +692,47 @@ def _deleted_session_id(command: FactoryFrontendCommand) -> str:
     if command.type == "delete_agent_package_session":
         return str(command.payload.get("session_id") or command.session_id or "").strip()
     return _command_session_id(command)
+
+
+def _logical_session_deletion_event(
+    command: FactoryFrontendCommand,
+    *,
+    session_id: str,
+):
+    package_id = str(command.payload.get("package_id") or "").strip()
+    event_type = (
+        "agent_package_session_deleted"
+        if command.type == "delete_agent_package_session"
+        else "session_deleted"
+    )
+    return event(
+        event_type,
+        request_id=command.request_id,
+        session_id=None,
+        mode=command.mode or COMMAND_MODE_HINTS.get(command.type),
+        producer_type="factory_bridge",
+        payload={
+            "session_id": session_id,
+            "session_ids": [session_id],
+            "package_id": package_id or None,
+            "deleted": True,
+            "cleanup_pending": True,
+        },
+    )
+
+
+def _runtime_event_session_id(event_payload: dict[str, Any]) -> str:
+    payload = event_payload.get("payload")
+    event_detail = payload if isinstance(payload, dict) else {}
+    session = event_detail.get("session")
+    session_detail = session if isinstance(session, dict) else {}
+    return str(
+        event_payload.get("session_id")
+        or event_detail.get("session_id")
+        or event_detail.get("factory_session_id")
+        or session_detail.get("session_id")
+        or ""
+    ).strip()
 
 
 def _active_request_session_id(request: dict[str, Any] | None) -> str:

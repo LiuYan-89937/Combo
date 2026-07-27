@@ -9,7 +9,8 @@ from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.tooling.package_tool_spec import package_tool_directory_path
 
 ValidationScope = str
-PACKAGE_TOOL_DIGEST_KIND = "package_tool_surface.v1"
+PACKAGE_TOOL_DIGEST_KIND = "package_tool_surface.v2"
+PACKAGE_TOOL_SHARED_DEPENDENCY_PATHS = {"contracts/dependencies.json"}
 
 
 def package_fingerprint(root: Path) -> dict[str, str]:
@@ -34,7 +35,11 @@ def package_tool_fingerprint(root: Path, tool_id: str, *, fingerprint: dict[str,
         return {}
     package_files = fingerprint if fingerprint is not None else package_fingerprint(root)
     prefix = f"{package_tool_directory_path(tool_id)}/"
-    return {path: digest for path, digest in package_files.items() if path.startswith(prefix)}
+    return {
+        path: digest
+        for path, digest in package_files.items()
+        if path.startswith(prefix) or path in PACKAGE_TOOL_SHARED_DEPENDENCY_PATHS
+    }
 
 
 def package_tool_digest(root: Path, tool_id: str, *, fingerprint: dict[str, str] | None = None) -> str:

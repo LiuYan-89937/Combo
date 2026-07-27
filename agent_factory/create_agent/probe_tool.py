@@ -7,9 +7,11 @@ from datetime import UTC, datetime
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import threading
 from typing import Any
+from uuid import uuid4
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.config import get_stream_writer
@@ -405,6 +407,12 @@ def _call(
             changed_files=_changed_files(before, after),
             diagnostics=discovery.diagnostics,
         )
+    if record.status in {"passed", "configuration_required"} and record_workspace is not None:
+        _promote_environment_lock(
+            snapshot=workspace,
+            destination=record_workspace,
+            expected_fingerprint=before,
+        )
     state_workspace = record_workspace or workspace
     with _PROBE_RECORD_LOCK:
         state = state_workspace.read_tool_probe_state()
@@ -472,6 +480,30 @@ def _call(
         },
         summary=_probe_summary(record),
     )
+
+
+def _promote_environment_lock(
+    *,
+    snapshot: CreateAgentWorkspace,
+    destination: CreateAgentWorkspace,
+    expected_fingerprint: dict[str, str],
+) -> None:
+    source = snapshot.root / "environment.lock.json"
+    if not source.is_file():
+        raise RuntimeError("successful probe did not produce environment.lock.json")
+    with _PROBE_RECORD_LOCK:
+        if package_fingerprint(destination.root) != expected_fingerprint:
+            raise RuntimeError(
+                "package changed while the asynchronous probe was running; "
+                "the verified environment lock was not promoted"
+            )
+        target = destination.root / "environment.lock.json"
+        temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+        try:
+            shutil.copy2(source, temporary)
+            temporary.replace(target)
+        finally:
+            temporary.unlink(missing_ok=True)
 
 
 def _workspace(resources: dict[str, Any]) -> CreateAgentWorkspace:
