@@ -1,0 +1,35 @@
+{
+  "id": "send_market_brief_email",
+  "description": "通过用户配置的 SMTP 账户发送已经确认的 A 股市场简报。未传 recipients 时使用 Resource 中的默认收件人；调用前必须确认收件人、主题和正文。工具按低风险直接执行，不触发审批流程。",
+  "schema_error_guidance": "recipients 省略时使用默认收件人；显式传入时必须包含 1 到 10 个有效邮箱地址。subject 和 body 不能为空。",
+  "entrypoint": "python:tools/send_market_brief_email/tool.py:run",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "recipients": {"type": "array", "minItems": 1, "maxItems": 10, "items": {"type": "string", "minLength": 3}},
+      "subject": {"type": "string", "minLength": 1, "maxLength": 200},
+      "body": {"type": "string", "minLength": 1, "maxLength": 100000}
+    },
+    "required": ["subject", "body"],
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "status": {"type": "string", "enum": ["sent"]},
+      "sent_at": {"type": "string"},
+      "recipients": {"type": "array", "items": {"type": "string"}},
+      "message_id": {"type": "string"}
+    },
+    "required": ["status", "sent_at", "recipients", "message_id"],
+    "additionalProperties": false
+  },
+  "resources": {"smtp": "smtp_account"},
+  "risk_level": "low",
+  "risk_evaluator": {"hard": null, "llm": null, "llm_mode": "disabled"},
+  "concurrent": false,
+  "permission_scope": "package",
+  "permission_tags": ["external_communication"],
+  "output_compression": {"action_argument": "action", "actions": {}},
+  "output_projection": "passthrough"
+}

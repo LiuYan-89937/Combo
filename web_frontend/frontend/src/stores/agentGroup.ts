@@ -39,14 +39,13 @@ export const useAgentGroupStore = defineStore('agentGroup', () => {
   const error = ref<string | null>(null)
   // Runtime events are transient projections. Persisted group messages remain the source of truth.
   const liveMessages = ref<Record<string, TranscriptItem>>({})
-  const pendingApprovals = ref<Record<string, FactoryFrontendEvent>>({})
   const bufferedRuntimeEvents = ref<Record<string, FactoryFrontendEvent[]>>({})
 
   // ===== Computed =====
   const members = computed(() => activeGroup.value?.members || [])
   const messages = computed(() => activeGroup.value?.messages || [])
   const runs = computed(() => activeGroup.value?.runs || [])
-  const activeRuns = computed(() => runs.value.filter(r => ['queued', 'running', 'awaiting_approval'].includes(r.status)))
+  const activeRuns = computed(() => runs.value.filter(r => ['queued', 'running', 'awaiting_approval', 'cancelling'].includes(r.status)))
   const completedRuns = computed(() => runs.value.filter(r => ['completed', 'failed', 'cancelled'].includes(r.status)))
   const transcript = computed<TranscriptItem[]>(() => {
     const persisted = messages.value.map(message => messageToTranscript(
@@ -60,7 +59,10 @@ export const useAgentGroupStore = defineStore('agentGroup', () => {
       .sort((left, right) => left.timestamp.localeCompare(right.timestamp))
     return [...persisted, ...live]
   })
-  const approvalRequests = computed(() => Object.values(pendingApprovals.value))
+  const approvalRequests = computed<FactoryFrontendEvent[]>(() => runs.value
+    .filter(run => run.status === 'awaiting_approval')
+    .map(run => run.pending_approval)
+    .filter((item): item is FactoryFrontendEvent => Boolean(item)))
 
   // 动态参与者列表（按 package_id 聚合 runs）
   const participants = computed<DynamicParticipantView[]>(() => {
@@ -86,7 +88,7 @@ export const useAgentGroupStore = defineStore('agentGroup', () => {
       const participant = participantMap.get(run.speaker_package_id)
       if (participant) {
         participant.run_count++
-        if (['queued', 'running', 'awaiting_approval'].includes(run.status)) {
+        if (['queued', 'running', 'awaiting_approval', 'cancelling'].includes(run.status)) {
           participant.active_run_count++
         }
         if (!participant.statuses.includes(run.status)) {
@@ -300,7 +302,6 @@ export const useAgentGroupStore = defineStore('agentGroup', () => {
     try {
       const { group } = await agentGroupApi.resumeRun(activeGroup.value.group_id, runId, payload)
       replaceActive(group)
-      delete pendingApprovals.value[runId]
     } catch (e) {
       error.value = errorMessage(e)
       throw e
@@ -341,12 +342,21 @@ export const useAgentGroupStore = defineStore('agentGroup', () => {
     const run = activeGroup.value.runs.find(item => item.group_run_id === groupRunId)
     const display = speakerMetadata(run?.speaker_package_id)
     if (event.event_type === 'run_started') {
-      patchRun(groupRunId, { status: 'running', request_id: event.request_id || undefined })
+      if (run?.status === 'cancelling' || run?.status === 'cancelled') return
+      patchRun(groupRunId, {
+        status: 'running',
+        request_id: event.request_id || undefined,
+        pending_approval: null,
+      })
       return
     }
     if (event.event_type === 'tool_approval_requested') {
-      patchRun(groupRunId, { status: 'awaiting_approval', request_id: event.request_id || undefined })
-      pendingApprovals.value[groupRunId] = event
+      if (run?.status === 'cancelling' || run?.status === 'cancelled') return
+      patchRun(groupRunId, {
+        status: 'awaiting_approval',
+        request_id: event.request_id || undefined,
+        pending_approval: event,
+      })
     }
     if (event.event_type === 'message_part_delta' || event.event_type === 'message_part_completed') {
       const messageId = String(payload.message_id || payload.stream_id || '').trim()
@@ -388,8 +398,10 @@ export const useAgentGroupStore = defineStore('agentGroup', () => {
       return
     }
     if (['run_completed', 'run_failed', 'run_cancelled'].includes(event.event_type)) {
-      patchRun(groupRunId, { status: event.event_type === 'run_completed' ? 'completed' : event.event_type === 'run_cancelled' ? 'cancelled' : 'failed' })
-      delete pendingApprovals.value[groupRunId]
+      patchRun(groupRunId, {
+        status: event.event_type === 'run_completed' ? 'completed' : event.event_type === 'run_cancelled' ? 'cancelled' : 'failed',
+        pending_approval: null,
+      })
       void loadGroup(groupId).finally(() => {
         const remaining = { ...liveMessages.value }
         for (const [id, message] of Object.entries(remaining)) {

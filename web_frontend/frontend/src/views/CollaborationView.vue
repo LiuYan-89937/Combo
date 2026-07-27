@@ -164,7 +164,7 @@ const modelOptions = computed(() => [
     : []),
   ...availableChatModelProfiles.value
     .map(profile => ({
-      label: profile.display_name || profile.model_name || profile.profile_id,
+      label: profile.display_name || profile.served_model_name || profile.profile_id,
       value: profile.profile_id,
     })),
 ])

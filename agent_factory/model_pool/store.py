@@ -5,14 +5,13 @@ from contextlib import contextmanager
 import json
 import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from agent_factory.model_pool.config import model_pool_store_read_only, resolve_model_pool_store_path
 from agent_factory.model_pool.schema import (
-    ModelBindingRole,
-    ModelPoolCredential,
+    LocalModelArtifact,
+    ModelPoolDefaultRole,
     ModelPoolProfile,
-    provider_default_capabilities,
     utc_now_text,
 )
 from agent_factory.sqlite_runtime import connect_sqlite, initialize_sqlite_store
@@ -22,6 +21,13 @@ class ModelPoolStoreError(RuntimeError):
     pass
 
 
+_DEFAULT_PROFILE_ROLES: tuple[ModelPoolDefaultRole, ...] = (
+    "main",
+    "task",
+    "compression",
+    "embedding",
+    "image_generation",
+)
 SQLITE_BUSY_TIMEOUT_MS = 10000
 
 
@@ -37,7 +43,7 @@ class ModelPoolStore:
         self.read_only = model_pool_store_read_only() if read_only is None else read_only
         if self.read_only:
             if not self.path.is_file():
-                raise ModelPoolStoreError(f"model pool store is not initialized: {self.path}")
+                raise ModelPoolStoreError(f"local model registry is not initialized: {self.path}")
         elif setup:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             initialize_sqlite_store(
@@ -47,137 +53,139 @@ class ModelPoolStore:
                 wal=True,
             )
         elif not self.path.is_file():
-            raise ModelPoolStoreError(f"model pool store is not initialized: {self.path}")
+            raise ModelPoolStoreError(f"local model registry is not initialized: {self.path}")
 
-    def upsert_credential(self, credential: ModelPoolCredential) -> ModelPoolCredential:
-        existing = self.get_credential(credential.credential_id)
-        if not credential.enabled or not credential.api_key:
-            assigned = [
-                (profile.profile_id, self.roles_for_profile(profile.profile_id))
-                for profile in self.list_profiles(credential_id=credential.credential_id)
-            ]
-            assigned = [(profile_id, roles) for profile_id, roles in assigned if roles]
-            if assigned:
-                role_labels = ", ".join(
-                    f"{profile_id} ({'/'.join(roles)})"
-                    for profile_id, roles in assigned
-                )
-                raise ModelPoolStoreError(
-                    f"credential is used by assigned model roles and must remain enabled with an API key: {role_labels}"
-                )
-        now = utc_now_text()
-        credential = credential.model_copy(
+    def upsert_artifact(self, artifact: LocalModelArtifact) -> LocalModelArtifact:
+        existing = self.get_artifact(artifact.artifact_id)
+        if existing is not None and existing.kind != artifact.kind:
+            raise ModelPoolStoreError("artifact kind cannot be changed after registration")
+        artifact = artifact.model_copy(
             update={
-                "created_at": existing.created_at if existing else credential.created_at,
-                "updated_at": now,
+                "created_at": existing.created_at if existing else artifact.created_at,
+                "updated_at": utc_now_text(),
             }
         )
         with self._connect(write=True) as conn:
             conn.execute(
                 """
-                insert into model_credentials (
-                  credential_id, provider, display_name, base_url, api_key,
-                  enabled, payload_json, created_at, updated_at
-                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                on conflict(credential_id) do update set
-                  provider=excluded.provider,
+                insert into local_model_artifacts (
+                  artifact_id, kind, display_name, local_path, enabled,
+                  payload_json, created_at, updated_at
+                ) values (?, ?, ?, ?, ?, ?, ?, ?)
+                on conflict(artifact_id) do update set
+                  kind=excluded.kind,
                   display_name=excluded.display_name,
-                  base_url=excluded.base_url,
-                  api_key=excluded.api_key,
+                  local_path=excluded.local_path,
                   enabled=excluded.enabled,
                   payload_json=excluded.payload_json,
                   updated_at=excluded.updated_at
                 """,
-                _credential_row(credential),
+                (
+                    artifact.artifact_id,
+                    artifact.kind,
+                    artifact.display_name,
+                    artifact.local_path or "",
+                    1 if artifact.enabled else 0,
+                    artifact.model_dump_json(),
+                    artifact.created_at,
+                    artifact.updated_at,
+                ),
             )
-        return credential
+        return artifact
 
-    def patch_credential(self, credential_id: str, payload: dict[str, Any]) -> ModelPoolCredential:
-        existing = self.require_credential(credential_id)
-        update = dict(payload)
-        if "api_key" not in update:
-            update["api_key"] = existing.api_key
-        candidate = ModelPoolCredential.model_validate({**existing.model_dump(mode="json"), **update})
-        return self.upsert_credential(candidate)
+    def patch_artifact(self, artifact_id: str, payload: dict[str, Any]) -> LocalModelArtifact:
+        existing = self.require_artifact(artifact_id)
+        candidate = LocalModelArtifact.model_validate({**existing.model_dump(mode="json"), **dict(payload)})
+        return self.upsert_artifact(candidate)
 
-    def get_credential(self, credential_id: str) -> ModelPoolCredential | None:
+    def get_artifact(self, artifact_id: str) -> LocalModelArtifact | None:
         with self._connect() as conn:
             row = conn.execute(
-                "select payload_json from model_credentials where credential_id = ?",
-                (credential_id,),
+                "select payload_json from local_model_artifacts where artifact_id = ?",
+                (artifact_id,),
             ).fetchone()
-        return ModelPoolCredential.model_validate_json(str(row["payload_json"])) if row else None
+        return LocalModelArtifact.model_validate_json(str(row["payload_json"])) if row else None
 
-    def require_credential(self, credential_id: str) -> ModelPoolCredential:
-        credential = self.get_credential(credential_id)
-        if credential is None:
-            raise ModelPoolStoreError(f"unknown model pool credential: {credential_id}")
-        return credential
+    def require_artifact(self, artifact_id: str) -> LocalModelArtifact:
+        artifact = self.get_artifact(artifact_id)
+        if artifact is None:
+            raise ModelPoolStoreError(f"unknown local model artifact: {artifact_id}")
+        return artifact
 
-    def list_credentials(self) -> list[ModelPoolCredential]:
+    def list_artifacts(
+        self,
+        *,
+        kind: str | None = None,
+        enabled: bool | None = None,
+    ) -> list[LocalModelArtifact]:
+        clauses: list[str] = []
+        args: list[Any] = []
+        if kind:
+            clauses.append("kind = ?")
+            args.append(kind)
+        if enabled is not None:
+            clauses.append("enabled = ?")
+            args.append(1 if enabled else 0)
+        query = "select payload_json from local_model_artifacts"
+        if clauses:
+            query += " where " + " and ".join(clauses)
+        query += " order by updated_at desc, artifact_id asc"
         with self._connect() as conn:
-            rows = conn.execute(
-                "select payload_json from model_credentials order by updated_at desc, credential_id asc"
-            ).fetchall()
-        return [ModelPoolCredential.model_validate_json(str(row["payload_json"])) for row in rows]
+            rows = conn.execute(query, args).fetchall()
+        return [LocalModelArtifact.model_validate_json(str(row["payload_json"])) for row in rows]
 
-    def delete_credential(self, credential_id: str) -> bool:
-        if self.list_profiles(credential_id=credential_id):
-            raise ModelPoolStoreError(f"credential is still used by model profiles: {credential_id}")
+    def delete_artifact(self, artifact_id: str) -> bool:
+        if self.list_profiles(artifact_id=artifact_id):
+            raise ModelPoolStoreError(f"artifact is still used by model profiles: {artifact_id}")
         with self._connect(write=True) as conn:
-            cursor = conn.execute("delete from model_credentials where credential_id = ?", (credential_id,))
+            cursor = conn.execute("delete from local_model_artifacts where artifact_id = ?", (artifact_id,))
         return cursor.rowcount > 0
 
     def upsert_profile(self, profile: ModelPoolProfile) -> ModelPoolProfile:
-        credential = self.require_credential(profile.credential_id)
-        if credential.provider != profile.provider:
+        artifact = self.require_artifact(profile.artifact_id)
+        if artifact.kind != profile.kind:
             raise ModelPoolStoreError(
-                f"profile provider {profile.provider!r} must match credential provider {credential.provider!r}"
+                f"profile kind {profile.kind!r} must match artifact kind {artifact.kind!r}"
             )
         existing = self.get_profile(profile.profile_id)
-        if not profile.enabled:
-            assigned_roles = self.roles_for_profile(profile.profile_id)
-            if assigned_roles:
-                raise ModelPoolStoreError(
-                    f"model profile is assigned to roles {', '.join(assigned_roles)} and cannot be disabled: "
-                    f"{profile.profile_id}"
-                )
-        now = utc_now_text()
-        capabilities = profile.capabilities
-        if (
-            profile.kind == "chat"
-            and not capabilities.structured_output_methods
-        ) or (
-            profile.kind == "image_generation"
-            and "image" not in capabilities.output_modalities
-        ):
-            capabilities = provider_default_capabilities(profile.provider, kind=profile.kind)
+        if existing is not None and existing.kind != profile.kind:
+            raise ModelPoolStoreError("profile kind cannot be changed after registration")
         profile = profile.model_copy(
             update={
-                "capabilities": capabilities,
                 "created_at": existing.created_at if existing else profile.created_at,
-                "updated_at": now,
+                "updated_at": utc_now_text(),
             },
             deep=True,
         )
         with self._connect(write=True) as conn:
             conn.execute(
                 """
-                insert into model_pool_profiles (
-                  profile_id, credential_id, kind, provider, model_name, display_name,
-                  enabled, payload_json, created_at, updated_at
+                insert into local_model_profiles (
+                  profile_id, artifact_id, kind, engine, served_model_name,
+                  display_name, enabled, payload_json, created_at, updated_at
                 ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 on conflict(profile_id) do update set
-                  credential_id=excluded.credential_id,
+                  artifact_id=excluded.artifact_id,
                   kind=excluded.kind,
-                  provider=excluded.provider,
-                  model_name=excluded.model_name,
+                  engine=excluded.engine,
+                  served_model_name=excluded.served_model_name,
                   display_name=excluded.display_name,
                   enabled=excluded.enabled,
                   payload_json=excluded.payload_json,
                   updated_at=excluded.updated_at
                 """,
-                _profile_row(profile),
+                (
+                    profile.profile_id,
+                    profile.artifact_id,
+                    profile.kind,
+                    profile.engine,
+                    profile.served_model_name,
+                    profile.display_name,
+                    1 if profile.enabled else 0,
+                    profile.model_dump_json(),
+                    profile.created_at,
+                    profile.updated_at,
+                ),
             )
         return profile
 
@@ -186,10 +194,20 @@ class ModelPoolStore:
         candidate = ModelPoolProfile.model_validate({**existing.model_dump(mode="json"), **dict(payload)})
         return self.upsert_profile(candidate)
 
+    def disable_other_profiles(self, kind: str, active_profile_id: str) -> list[str]:
+        normalized_kind = self._validate_profile_kind(kind)
+        disabled: list[str] = []
+        for profile in self.list_profiles(kind=normalized_kind, enabled=True):
+            if profile.profile_id == active_profile_id:
+                continue
+            self.upsert_profile(profile.model_copy(update={"enabled": False}, deep=True))
+            disabled.append(profile.profile_id)
+        return disabled
+
     def get_profile(self, profile_id: str) -> ModelPoolProfile | None:
         with self._connect() as conn:
             row = conn.execute(
-                "select payload_json from model_pool_profiles where profile_id = ?",
+                "select payload_json from local_model_profiles where profile_id = ?",
                 (profile_id,),
             ).fetchone()
         return ModelPoolProfile.model_validate_json(str(row["payload_json"])) if row else None
@@ -197,14 +215,14 @@ class ModelPoolStore:
     def require_profile(self, profile_id: str) -> ModelPoolProfile:
         profile = self.get_profile(profile_id)
         if profile is None:
-            raise ModelPoolStoreError(f"unknown model pool profile: {profile_id}")
+            raise ModelPoolStoreError(f"unknown local model profile: {profile_id}")
         return profile
 
     def list_profiles(
         self,
         *,
         kind: str | None = None,
-        credential_id: str | None = None,
+        artifact_id: str | None = None,
         enabled: bool | None = None,
     ) -> list[ModelPoolProfile]:
         clauses: list[str] = []
@@ -212,13 +230,13 @@ class ModelPoolStore:
         if kind:
             clauses.append("kind = ?")
             args.append(kind)
-        if credential_id:
-            clauses.append("credential_id = ?")
-            args.append(credential_id)
+        if artifact_id:
+            clauses.append("artifact_id = ?")
+            args.append(artifact_id)
         if enabled is not None:
             clauses.append("enabled = ?")
             args.append(1 if enabled else 0)
-        query = "select payload_json from model_pool_profiles"
+        query = "select payload_json from local_model_profiles"
         if clauses:
             query += " where " + " and ".join(clauses)
         query += " order by updated_at desc, profile_id asc"
@@ -227,97 +245,216 @@ class ModelPoolStore:
         return [ModelPoolProfile.model_validate_json(str(row["payload_json"])) for row in rows]
 
     def delete_profile(self, profile_id: str) -> bool:
-        assigned_roles = self.roles_for_profile(profile_id)
-        if assigned_roles:
-            raise ModelPoolStoreError(
-                f"model profile is assigned to roles {', '.join(assigned_roles)}: {profile_id}"
-            )
         with self._connect(write=True) as conn:
-            cursor = conn.execute("delete from model_pool_profiles where profile_id = ?", (profile_id,))
+            conn.execute("delete from local_model_default_profiles where profile_id = ?", (profile_id,))
+            conn.execute("delete from local_model_active_profiles where profile_id = ?", (profile_id,))
+            cursor = conn.execute("delete from local_model_profiles where profile_id = ?", (profile_id,))
         return cursor.rowcount > 0
 
-    def role_bindings(self) -> dict[ModelBindingRole, str | None]:
-        result: dict[ModelBindingRole, str | None] = {
-            "main": None,
-            "task": None,
-            "compression": None,
-        }
-        try:
-            with self._connect() as conn:
-                rows = conn.execute(
-                    "select role, profile_id from model_role_bindings order by role"
-                ).fetchall()
-        except sqlite3.OperationalError as exc:
-            if "no such table" not in str(exc).lower():
-                raise
-            return result
-        for row in rows:
-            role = str(row["role"])
-            if role in result:
-                result[role] = str(row["profile_id"])
-        return result
-
-    def role_binding(self, role: ModelBindingRole) -> str | None:
-        return self.role_bindings()[role]
-
-    def save_role_bindings(
+    def prune_catalog(
         self,
-        bindings: dict[ModelBindingRole, str | None],
-    ) -> dict[ModelBindingRole, str | None]:
-        normalized: dict[ModelBindingRole, str | None] = {}
-        for role in ("main", "task", "compression"):
-            profile_id = bindings.get(role)
-            if profile_id is None:
-                normalized[role] = None
-                continue
-            profile = self.require_profile(profile_id)
-            if profile.kind != "chat":
-                raise ModelPoolStoreError(f"{role} role requires a chat model profile: {profile_id}")
-            if not profile.enabled:
-                raise ModelPoolStoreError(f"{role} role requires an enabled model profile: {profile_id}")
-            credential = self.require_credential(profile.credential_id)
-            if not credential.enabled or not credential.api_key:
-                raise ModelPoolStoreError(
-                    f"{role} role requires an enabled credential with an API key: {profile_id}"
-                )
-            normalized[role] = profile_id
-        now = utc_now_text()
-        with self._connect(write=True) as conn:
-            for role, profile_id in normalized.items():
-                if profile_id is None:
-                    conn.execute("delete from model_role_bindings where role = ?", (role,))
-                    continue
-                conn.execute(
-                    """
-                    insert into model_role_bindings (role, profile_id, updated_at)
-                    values (?, ?, ?)
-                    on conflict(role) do update set
-                      profile_id=excluded.profile_id,
-                      updated_at=excluded.updated_at
-                    """,
-                    (role, profile_id, now),
-                )
-        return self.role_bindings()
+        *,
+        kinds: set[str],
+        keep_profile_ids: set[str],
+        keep_artifact_ids: set[str],
+    ) -> dict[str, list[str]]:
+        normalized_kinds = {self._validate_profile_kind(kind) for kind in kinds}
+        normalized_profile_ids = {str(value).strip() for value in keep_profile_ids if str(value).strip()}
+        normalized_artifact_ids = {str(value).strip() for value in keep_artifact_ids if str(value).strip()}
+        if not normalized_kinds:
+            raise ModelPoolStoreError("catalog pruning requires at least one model kind")
 
-    def roles_for_profile(self, profile_id: str) -> list[str]:
-        with self._connect() as conn:
-            rows = conn.execute(
-                "select role from model_role_bindings where profile_id = ? order by role",
-                (profile_id,),
+        with self._connect(write=True) as conn:
+            kept_profiles = conn.execute(
+                "select profile_id, artifact_id, kind from local_model_profiles"
             ).fetchall()
-        return [str(row["role"]) for row in rows]
+            kept_by_id = {str(row["profile_id"]): row for row in kept_profiles}
+            missing_profiles = sorted(normalized_profile_ids - set(kept_by_id))
+            if missing_profiles:
+                raise ModelPoolStoreError(
+                    "catalog pruning cannot keep unknown profiles: " + ", ".join(missing_profiles)
+                )
+            for profile_id in normalized_profile_ids:
+                row = kept_by_id[profile_id]
+                if str(row["kind"]) not in normalized_kinds:
+                    raise ModelPoolStoreError(
+                        f"kept profile kind is outside the pruning scope: {profile_id}"
+                    )
+                if str(row["artifact_id"]) not in normalized_artifact_ids:
+                    raise ModelPoolStoreError(
+                        f"kept profile references an artifact outside the retained catalog: {profile_id}"
+                    )
+
+            removed_profiles = sorted(
+                str(row["profile_id"])
+                for row in kept_profiles
+                if str(row["kind"]) in normalized_kinds
+                and str(row["profile_id"]) not in normalized_profile_ids
+            )
+            if removed_profiles:
+                placeholders = ", ".join("?" for _ in removed_profiles)
+                conn.execute(
+                    f"delete from local_model_default_profiles where profile_id in ({placeholders})",
+                    removed_profiles,
+                )
+                conn.execute(
+                    f"delete from local_model_active_profiles where profile_id in ({placeholders})",
+                    removed_profiles,
+                )
+                conn.execute(
+                    f"delete from local_model_profiles where profile_id in ({placeholders})",
+                    removed_profiles,
+                )
+
+            artifact_rows = conn.execute(
+                "select artifact_id, kind from local_model_artifacts"
+            ).fetchall()
+            removed_artifacts: list[str] = []
+            for row in artifact_rows:
+                artifact_id = str(row["artifact_id"])
+                if str(row["kind"]) not in normalized_kinds or artifact_id in normalized_artifact_ids:
+                    continue
+                referenced = conn.execute(
+                    "select 1 from local_model_profiles where artifact_id = ? limit 1",
+                    (artifact_id,),
+                ).fetchone()
+                if referenced is None:
+                    conn.execute(
+                        "delete from local_model_artifacts where artifact_id = ?",
+                        (artifact_id,),
+                    )
+                    removed_artifacts.append(artifact_id)
+
+        return {
+            "profiles": removed_profiles,
+            "artifacts": sorted(removed_artifacts),
+        }
+
+    def active_profile_id(self, kind: str) -> str | None:
+        normalized_kind = self._validate_profile_kind(kind)
+        with self._connect() as conn:
+            row = conn.execute(
+                "select profile_id from local_model_active_profiles where kind = ?",
+                (normalized_kind,),
+            ).fetchone()
+        return str(row["profile_id"]) if row else None
+
+    def set_active_profile_id(self, kind: str, profile_id: str | None) -> str | None:
+        normalized_kind = self._validate_profile_kind(kind)
+        normalized_profile_id = str(profile_id or "").strip()
+        with self._connect(write=True) as conn:
+            if not normalized_profile_id:
+                conn.execute("delete from local_model_active_profiles where kind = ?", (normalized_kind,))
+                return None
+            profile = self.require_profile(normalized_profile_id)
+            if profile.kind != normalized_kind or not profile.enabled:
+                raise ModelPoolStoreError(
+                    f"active {normalized_kind} runtime requires an enabled matching profile"
+                )
+            conn.execute(
+                """
+                insert into local_model_active_profiles (kind, profile_id, updated_at)
+                values (?, ?, ?)
+                on conflict(kind) do update set
+                  profile_id=excluded.profile_id,
+                  updated_at=excluded.updated_at
+                """,
+                (normalized_kind, profile.profile_id, utc_now_text()),
+            )
+        return normalized_profile_id
+
+    @staticmethod
+    def _validate_profile_kind(kind: str) -> str:
+        normalized = str(kind or "").strip().lower()
+        if normalized not in {"chat", "embedding", "image_generation"}:
+            raise ModelPoolStoreError(f"unsupported local model profile kind: {kind}")
+        return normalized
+
+    def default_profile_ids(self) -> dict[ModelPoolDefaultRole, str | None]:
+        return {role: self.resolve_default_profile_id(role) for role in _DEFAULT_PROFILE_ROLES}
+
+    def resolve_default_profile_id(self, role: str) -> str | None:
+        normalized_role = self._validate_default_role(role)
+        with self._connect() as conn:
+            row = conn.execute(
+                "select profile_id from local_model_default_profiles where role = ?",
+                (normalized_role,),
+            ).fetchone()
+        if row:
+            profile = self.get_profile(str(row["profile_id"]))
+            if profile is not None and self._profile_can_be_default(profile, normalized_role):
+                return profile.profile_id
+
+        kind = normalized_role if normalized_role in {"embedding", "image_generation"} else "chat"
+        candidates = sorted(
+            self.list_profiles(kind=kind, enabled=True),
+            key=lambda profile: (profile.created_at, profile.profile_id),
+        )
+        for profile in candidates:
+            if self._profile_can_be_default(profile, normalized_role):
+                return profile.profile_id
+        return None
+
+    def set_default_profile_id(
+        self,
+        role: str,
+        profile_id: str | None,
+    ) -> str | None:
+        normalized_role = self._validate_default_role(role)
+        normalized_profile_id = str(profile_id or "").strip()
+        if not normalized_profile_id:
+            with self._connect(write=True) as conn:
+                conn.execute("delete from local_model_default_profiles where role = ?", (normalized_role,))
+            return self.resolve_default_profile_id(normalized_role)
+
+        profile = self.require_profile(normalized_profile_id)
+        if not self._profile_can_be_default(profile, normalized_role):
+            expected_kind = normalized_role if normalized_role in {"embedding", "image_generation"} else "chat"
+            raise ModelPoolStoreError(
+                f"default role {normalized_role!r} requires an enabled {expected_kind} profile and artifact"
+            )
+        with self._connect(write=True) as conn:
+            conn.execute(
+                """
+                insert into local_model_default_profiles (role, profile_id, updated_at)
+                values (?, ?, ?)
+                on conflict(role) do update set
+                  profile_id=excluded.profile_id,
+                  updated_at=excluded.updated_at
+                """,
+                (normalized_role, profile.profile_id, utc_now_text()),
+            )
+        return profile.profile_id
+
+    @staticmethod
+    def _validate_default_role(role: str) -> ModelPoolDefaultRole:
+        normalized = str(role or "").strip().lower()
+        if normalized not in _DEFAULT_PROFILE_ROLES:
+            raise ModelPoolStoreError(f"unsupported default model role: {role}")
+        return cast(ModelPoolDefaultRole, normalized)
+
+    def _profile_can_be_default(
+        self,
+        profile: ModelPoolProfile,
+        role: ModelPoolDefaultRole,
+    ) -> bool:
+        expected_kind = role if role in {"embedding", "image_generation"} else "chat"
+        if profile.kind != expected_kind or not profile.enabled:
+            return False
+        artifact = self.get_artifact(profile.artifact_id)
+        return artifact is not None and artifact.enabled
 
     def public_profiles(self) -> list[dict[str, Any]]:
-        credentials = {credential.credential_id: credential for credential in self.list_credentials()}
+        artifacts = {artifact.artifact_id: artifact for artifact in self.list_artifacts()}
         return [
-            profile.to_public(credentials.get(profile.credential_id)).model_dump(mode="json")
+            profile.to_public(artifacts.get(profile.artifact_id)).model_dump(mode="json")
             for profile in self.list_profiles()
         ]
 
     @contextmanager
     def _connect(self, *, write: bool = False) -> Iterator[sqlite3.Connection]:
         if write and self.read_only:
-            raise ModelPoolStoreError("model pool store is read-only")
+            raise ModelPoolStoreError("local model registry is read-only")
         conn = (
             connect_sqlite(
                 f"{self.path.as_uri()}?mode=ro",
@@ -343,69 +480,128 @@ class ModelPoolStore:
         with self._connect(write=True) as conn:
             conn.executescript(
                 """
-                create table if not exists model_credentials (
-                  credential_id text primary key,
-                  provider text not null,
-                  display_name text not null,
-                  base_url text not null,
-                  api_key text,
-                  enabled integer not null,
-                  payload_json text not null,
-                  created_at text not null,
-                  updated_at text not null
-                );
-                create index if not exists idx_model_credentials_provider on model_credentials(provider);
-
-                create table if not exists model_pool_profiles (
-                  profile_id text primary key,
-                  credential_id text not null,
+                create table if not exists local_model_artifacts (
+                  artifact_id text primary key,
                   kind text not null,
-                  provider text not null,
-                  model_name text not null,
+                  display_name text not null,
+                  local_path text not null,
+                  enabled integer not null,
+                  payload_json text not null,
+                  created_at text not null,
+                  updated_at text not null
+                );
+                create index if not exists idx_local_model_artifacts_kind
+                  on local_model_artifacts(kind);
+
+                create table if not exists local_model_profiles (
+                  profile_id text primary key,
+                  artifact_id text not null,
+                  kind text not null,
+                  engine text not null,
+                  served_model_name text not null,
                   display_name text not null,
                   enabled integer not null,
                   payload_json text not null,
                   created_at text not null,
                   updated_at text not null
                 );
-                create index if not exists idx_model_pool_profiles_credential on model_pool_profiles(credential_id);
-                create index if not exists idx_model_pool_profiles_kind on model_pool_profiles(kind);
-                create index if not exists idx_model_pool_profiles_enabled on model_pool_profiles(enabled);
+                create index if not exists idx_local_model_profiles_artifact
+                  on local_model_profiles(artifact_id);
+                create index if not exists idx_local_model_profiles_kind
+                  on local_model_profiles(kind);
+                create index if not exists idx_local_model_profiles_enabled
+                  on local_model_profiles(enabled);
 
-                create table if not exists model_role_bindings (
-                  role text primary key check (role in ('main', 'task', 'compression')),
+                create table if not exists local_model_default_profiles (
+                  role text primary key,
                   profile_id text not null,
                   updated_at text not null
                 );
-                create index if not exists idx_model_role_bindings_profile on model_role_bindings(profile_id);
+                create index if not exists idx_local_model_default_profiles_profile
+                  on local_model_default_profiles(profile_id);
+
+                create table if not exists local_model_active_profiles (
+                  kind text primary key,
+                  profile_id text not null,
+                  updated_at text not null
+                );
+                create index if not exists idx_local_model_active_profiles_profile
+                  on local_model_active_profiles(profile_id);
                 """
             )
-
-
-def _credential_row(credential: ModelPoolCredential) -> tuple[Any, ...]:
-    return (
-        credential.credential_id,
-        credential.provider,
-        credential.display_name,
-        credential.base_url,
-        credential.api_key,
-        1 if credential.enabled else 0,
-        credential.model_dump_json(),
-        credential.created_at,
-        credential.updated_at,
-    )
-
-
-def _profile_row(profile: ModelPoolProfile) -> tuple[Any, ...]:
-    return (
-        profile.profile_id,
-        profile.credential_id,
-        profile.kind,
-        profile.provider,
-        profile.model_name,
-        profile.display_name,
-        1 if profile.enabled else 0,
-        json.dumps(profile.model_dump(mode="json"), ensure_ascii=False, sort_keys=True),
-        profile.created_at,
-        profile.updated_at,
-    )
+            legacy_rows = conn.execute(
+                "select profile_id from local_model_profiles where kind = 'chat' and engine = 'vllm_rocm'"
+            ).fetchall()
+            legacy_profile_ids = [str(row["profile_id"]) for row in legacy_rows]
+            if legacy_profile_ids:
+                placeholders = ", ".join("?" for _ in legacy_profile_ids)
+                conn.execute(
+                    f"delete from local_model_default_profiles where profile_id in ({placeholders})",
+                    legacy_profile_ids,
+                )
+                conn.execute(
+                    f"delete from local_model_active_profiles where profile_id in ({placeholders})",
+                    legacy_profile_ids,
+                )
+                conn.execute(
+                    f"delete from local_model_profiles where profile_id in ({placeholders})",
+                    legacy_profile_ids,
+                )
+            legacy_artifact_rows = conn.execute(
+                "select artifact_id, payload_json from local_model_artifacts where kind = 'chat'"
+            ).fetchall()
+            for row in legacy_artifact_rows:
+                try:
+                    payload = json.loads(str(row["payload_json"]))
+                except json.JSONDecodeError:
+                    continue
+                if (
+                    str(payload.get("source") or "local_storage") == "external_endpoint"
+                    or str(payload.get("model_format") or "").strip().lower() == "llama_cpp"
+                ):
+                    continue
+                artifact_id = str(row["artifact_id"])
+                referenced = conn.execute(
+                    "select 1 from local_model_profiles where artifact_id = ? limit 1",
+                    (artifact_id,),
+                ).fetchone()
+                if referenced is None:
+                    conn.execute(
+                        "delete from local_model_artifacts where artifact_id = ?",
+                        (artifact_id,),
+                    )
+            artifact_rows = conn.execute(
+                "select artifact_id, payload_json from local_model_artifacts"
+            ).fetchall()
+            for row in artifact_rows:
+                try:
+                    payload = json.loads(str(row["payload_json"]))
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(payload, dict) or "tokenizer_path" not in payload:
+                    continue
+                payload.pop("tokenizer_path", None)
+                conn.execute(
+                    "update local_model_artifacts set payload_json = ? where artifact_id = ?",
+                    (json.dumps(payload, ensure_ascii=False), str(row["artifact_id"])),
+                )
+            embedding_rows = conn.execute(
+                "select profile_id, engine, payload_json from local_model_profiles where kind = 'embedding'"
+            ).fetchall()
+            for row in embedding_rows:
+                if str(row["engine"]) == "external":
+                    continue
+                try:
+                    payload = json.loads(str(row["payload_json"]))
+                except json.JSONDecodeError:
+                    continue
+                inference = payload.get("inference") if isinstance(payload, dict) else None
+                if not isinstance(inference, dict) or set(inference) == {"trust_remote_code"}:
+                    continue
+                payload["inference"] = {
+                    "trust_remote_code": bool(inference.get("trust_remote_code")),
+                }
+                conn.execute(
+                    "update local_model_profiles set payload_json = ? where profile_id = ?",
+                    (json.dumps(payload, ensure_ascii=False), str(row["profile_id"])),
+                )

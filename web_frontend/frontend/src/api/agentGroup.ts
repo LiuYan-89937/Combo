@@ -5,12 +5,12 @@
  */
 
 import { requestJson } from './http'
-import type { ContextReferenceInput } from '@/types/protocol'
+import type { ContextReferenceInput, FactoryFrontendEvent } from '@/types/protocol'
 
 // ===== 类型定义 =====
 
 export type GroupStatus = 'draft' | 'active' | 'archived'
-export type MemberRunStatus = 'queued' | 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled'
+export type MemberRunStatus = 'queued' | 'running' | 'awaiting_approval' | 'cancelling' | 'completed' | 'failed' | 'cancelled'
 export type MessageSpeakerType = 'user' | 'agent' | 'system'
 export type MessageKind = 'user_message' | 'agent_response' | 'tool_call' | 'tool_result' | 'approval_request' | 'system_notice' | 'progress'
 
@@ -48,6 +48,7 @@ export interface AgentGroupMemberRunView {
   base_workspace_revision: number
   response_message_id?: string
   request_id?: string
+  pending_approval?: FactoryFrontendEvent | null
   created_at: string
   updated_at: string
 }

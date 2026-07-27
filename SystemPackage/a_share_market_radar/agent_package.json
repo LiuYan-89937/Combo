@@ -1,0 +1,32 @@
+{
+  "version": "agent_package.v0",
+  "factory_run_id": "system.a_share_market_radar",
+  "agent": {
+    "id": "a_share_market_radar",
+    "name": "A 股盘面雷达",
+    "description": "聚合 A 股市场宽度、成交额和领涨个股，生成可保存并经用户确认发送的市场简报。",
+    "version": "0.1.1"
+  },
+  "runtime": {
+    "system_package": true,
+    "execution_backend": "container",
+    "pattern_id": "react_agent"
+  },
+  "assembly_spec_path": "assembly_spec.json",
+  "contracts": {
+    "context": "contracts/context.json",
+    "dependencies": "contracts/dependencies.json",
+    "knowledge": "contracts/knowledge.json",
+    "memory": "contracts/memory.json",
+    "model": "contracts/model.json",
+    "resources": "contracts/resources.json",
+    "scheduler": "contracts/scheduler.json",
+    "session": "contracts/session.json",
+    "state": "contracts/state.json",
+    "tools": "contracts/tools.json"
+  },
+  "tools": [
+    "tools/get_a_share_market_snapshot/manifest.json",
+    "tools/send_market_brief_email/manifest.json"
+  ]
+}

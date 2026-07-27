@@ -1,28 +1,34 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
-import hashlib
+from datetime import datetime, timezone
+from pathlib import Path
 import re
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from agent_factory.model_pool.providers import (
-    ensure_provider_supported,
-    image_generation_provider_capabilities,
-    provider_supports_kind,
-)
-from agent_factory.models.capabilities import resolve_provider_profile
 from agent_factory.models.protocol import ModelReasoningSettings, StructuredOutputMethod
 
 
-ModelPoolProfileKind = Literal["chat", "image_generation"]
+UTC = timezone.utc
+
+
+ModelPoolProfileKind = Literal["chat", "embedding", "image_generation"]
 ModelBindingRole = Literal["main", "task", "compression"]
+ModelPoolDefaultRole = Literal["main", "task", "compression", "embedding", "image_generation"]
 ModelBindingSource = Literal["model_pool", "runtime"]
 ModelPoolModality = Literal["text", "image", "audio"]
-ModelToolCapability = Literal["image_input", "image_output", "image_edit", "audio_input", "audio_output"]
+ModelToolCapability = Literal["image_input", "image_output", "image_edit", "audio_input"]
 ModelSelectionSource = Literal["auto", "manual"]
-ModelSelectionOptimizeFor = Literal["balanced", "quality", "cost", "latency", "context"]
+ModelSelectionOptimizeFor = Literal["balanced", "quality", "latency", "context"]
+LocalInferenceEngine = Literal[
+    "llama_cpp_rocm",
+    "transformers_rocm",
+    "stable_diffusion_cpp_rocm",
+    "external",
+]
+ModelArtifactSource = Literal["local_storage", "external_endpoint"]
+ModelContextExtensionMethod = Literal["yarn"]
 DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS = 256 * 1024
 DEFAULT_MODEL_COMPRESSION_TRIGGER_TOKENS = 200_000
 
@@ -34,6 +40,89 @@ def utc_now_text() -> str:
     return datetime.now(UTC).isoformat()
 
 
+class ModelContextExtensionCapability(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    method: ModelContextExtensionMethod
+    max_context_tokens: int = Field(ge=1)
+
+
+class LocalModelArtifact(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    artifact_id: str
+    display_name: str
+    kind: ModelPoolProfileKind
+    source: ModelArtifactSource = "local_storage"
+    local_path: str | None = None
+    external_model_id: str | None = None
+    model_format: str = "transformers"
+    revision: str = ""
+    checksum: str = ""
+    license: str = ""
+    native_context_tokens: int | None = Field(default=None, ge=1)
+    context_extension: ModelContextExtensionCapability | None = None
+    enabled: bool = True
+    created_at: str = Field(default_factory=utc_now_text)
+    updated_at: str = Field(default_factory=utc_now_text)
+
+    @field_validator("artifact_id")
+    @classmethod
+    def _artifact_id(cls, value: str) -> str:
+        return validate_pool_id(value, field_name="artifact_id")
+
+    @field_validator("display_name", "model_format")
+    @classmethod
+    def _required_text(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("value must not be empty")
+        return text
+
+    @field_validator("local_path")
+    @classmethod
+    def _local_path(cls, value: str | None) -> str | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        path = Path(text).expanduser()
+        if not path.is_absolute():
+            raise ValueError("local_path must be an absolute path")
+        return str(path)
+
+    @field_validator("external_model_id")
+    @classmethod
+    def _external_model_id(cls, value: str | None) -> str | None:
+        return str(value or "").strip() or None
+
+    @model_validator(mode="after")
+    def _source_location(self) -> "LocalModelArtifact":
+        if self.source == "local_storage" and not self.local_path:
+            raise ValueError("local storage artifacts require local_path")
+        if self.source == "external_endpoint" and not self.external_model_id:
+            raise ValueError("external endpoint artifacts require external_model_id")
+        if self.kind != "chat" and (self.native_context_tokens is not None or self.context_extension is not None):
+            raise ValueError("context capabilities are only valid for chat model artifacts")
+        if self.context_extension is not None:
+            if self.native_context_tokens is None:
+                raise ValueError("context extension requires native_context_tokens")
+            if self.context_extension.max_context_tokens <= self.native_context_tokens:
+                raise ValueError("extended context limit must exceed native context length")
+        return self
+
+    @field_validator("revision", "checksum", "license")
+    @classmethod
+    def _optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return str(value).strip()
+
+    def resolved_path(self) -> Path:
+        if not self.local_path:
+            raise ValueError("external endpoint artifacts do not have a local model path")
+        return Path(self.local_path).expanduser().resolve()
+
+
 class ModelPoolCapabilities(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -42,7 +131,9 @@ class ModelPoolCapabilities(BaseModel):
     tool_calling: bool = True
     streaming_tool_calls: bool = False
     strict_tool_schema: bool = False
-    structured_output_methods: list[StructuredOutputMethod] = Field(default_factory=lambda: ["json_mode"])
+    structured_output_methods: list[StructuredOutputMethod] = Field(
+        default_factory=lambda: ["function_calling", "json_mode"]
+    )
     reasoning_supported: bool = False
     reasoning_efforts: list[str] = Field(default_factory=list)
     reasoning_content: bool = False
@@ -50,13 +141,12 @@ class ModelPoolCapabilities(BaseModel):
     text_to_image: bool = False
     image_to_image: bool = False
     image_edit: bool = False
-    multi_image_reference: bool = False
     batch_generation: bool = False
     async_job: bool = False
 
     @field_validator("input_modalities", "output_modalities", "structured_output_methods", "reasoning_efforts")
     @classmethod
-    def _stable_non_empty_strings(cls, value: list[str]) -> list[str]:
+    def _stable_strings(cls, value: list[str]) -> list[str]:
         result: list[str] = []
         seen: set[str] = set()
         for item in value:
@@ -71,99 +161,141 @@ class ModelPoolLimits(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     max_input_tokens: int | None = Field(default=None, ge=1)
-    compression_trigger_tokens: int | None = Field(default=None, ge=1)
     max_output_tokens: int | None = Field(default=None, ge=1)
     timeout_seconds: float | None = Field(default=None, gt=0)
-    requests_per_minute: int | None = Field(default=None, ge=1)
-    tokens_per_minute: int | None = Field(default=None, ge=1)
+    context_compression_threshold_tokens: int | None = Field(default=None, ge=1000)
 
     @model_validator(mode="after")
     def _compression_fits_context_window(self) -> "ModelPoolLimits":
         if (
             self.max_input_tokens is not None
-            and self.compression_trigger_tokens is not None
-            and self.compression_trigger_tokens > self.max_input_tokens
+            and self.context_compression_threshold_tokens is not None
+            and self.context_compression_threshold_tokens > self.max_input_tokens
         ):
-            raise ValueError("compression_trigger_tokens must not exceed max_input_tokens")
+            raise ValueError(
+                "context_compression_threshold_tokens must not exceed max_input_tokens"
+            )
         return self
 
 
-class ModelPoolPricing(BaseModel):
+class LlamaCppMtpConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    currency: str = "CNY"
-    input_per_1m_tokens: float | None = Field(default=None, ge=0)
-    output_per_1m_tokens: float | None = Field(default=None, ge=0)
-    cache_hit_per_1m_tokens: float | None = Field(default=None, ge=0)
-    reasoning_per_1m_tokens: float | None = Field(default=None, ge=0)
-    image_input_unit_price: float | None = Field(default=None, ge=0)
-    image_output_unit_price: float | None = Field(default=None, ge=0)
-    image_edit_unit_price: float | None = Field(default=None, ge=0)
+    method: Literal["mtp"] = "mtp"
+    max_draft_tokens: int = Field(default=3, ge=1, le=32)
+    min_draft_tokens: int = Field(default=0, ge=0, le=32)
+    min_acceptance_probability: float = Field(default=0.0, ge=0.0, le=1.0)
+    backend_sampling: bool = True
+
+    @model_validator(mode="after")
+    def _draft_range(self) -> "LlamaCppMtpConfig":
+        if self.min_draft_tokens > self.max_draft_tokens:
+            raise ValueError("min_draft_tokens must not exceed max_draft_tokens")
+        return self
 
 
-class ModelPoolCredential(BaseModel):
+class LlamaCppSpeculativeDecodingDisabledConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    credential_id: str
-    display_name: str
-    provider: str
-    base_url: str
-    api_key: str | None = None
-    enabled: bool = True
-    created_at: str = Field(default_factory=utc_now_text)
-    updated_at: str = Field(default_factory=utc_now_text)
+    method: Literal["disabled"] = "disabled"
 
-    @field_validator("credential_id")
-    @classmethod
-    def _credential_id(cls, value: str) -> str:
-        return validate_pool_id(value, field_name="credential_id")
 
-    @field_validator("provider")
-    @classmethod
-    def _provider(cls, value: str) -> str:
-        provider = str(value or "").strip().lower()
-        return ensure_provider_supported(provider)
+LlamaCppSpeculativeDecodingConfig = Annotated[
+    LlamaCppSpeculativeDecodingDisabledConfig | LlamaCppMtpConfig,
+    Field(discriminator="method"),
+]
 
-    @field_validator("display_name", "base_url")
+
+class LlamaCppInferenceConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    gpu_layers: int = Field(default=99, ge=0)
+    parallel_slots: int = Field(default=1, ge=1)
+    cache_type_k: str = "f16"
+    cache_type_v: str = "f16"
+    flash_attention: bool = True
+    mmproj_path: str | None = None
+    speculative_decoding: LlamaCppSpeculativeDecodingConfig = Field(
+        default_factory=LlamaCppSpeculativeDecodingDisabledConfig
+    )
+
+    @field_validator("cache_type_k", "cache_type_v")
     @classmethod
-    def _required_text(cls, value: str) -> str:
-        text = str(value or "").strip()
-        if not text:
-            raise ValueError("value must not be empty")
+    def _cache_type(cls, value: str) -> str:
+        text = str(value or "").strip().lower()
+        supported = {"f16", "bf16", "q8_0", "q4_0"}
+        if text not in supported:
+            raise ValueError(f"cache type must be one of: {', '.join(sorted(supported))}")
         return text
 
-    @property
-    def api_key_fingerprint(self) -> str:
-        return api_key_fingerprint(self.api_key)
-
-    def to_public(self) -> "ModelPoolCredentialPublic":
-        return ModelPoolCredentialPublic(
-            credential_id=self.credential_id,
-            display_name=self.display_name,
-            provider=self.provider,
-            base_url=self.base_url,
-            api_key_masked=mask_api_key(self.api_key),
-            api_key_fingerprint=self.api_key_fingerprint,
-            has_api_key=bool(self.api_key),
-            enabled=self.enabled,
-            created_at=self.created_at,
-            updated_at=self.updated_at,
-        )
+    @field_validator("mmproj_path")
+    @classmethod
+    def _mmproj_path(cls, value: str | None) -> str | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        path = Path(text).expanduser()
+        if not path.is_absolute():
+            raise ValueError("mmproj_path must be an absolute path")
+        return str(path)
 
 
-class ModelPoolCredentialPublic(BaseModel):
+class TransformersInferenceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    credential_id: str
-    display_name: str
-    provider: str
-    base_url: str
-    api_key_masked: str = ""
-    api_key_fingerprint: str = ""
-    has_api_key: bool = False
-    enabled: bool = True
-    created_at: str = ""
-    updated_at: str = ""
+    trust_remote_code: bool = False
+
+
+class StableDiffusionCppInferenceConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    vae_path: str
+    clip_l_path: str
+    t5xxl_path: str
+    diffusion_flash_attention: bool = True
+    eager_load: bool = True
+    clip_on_cpu: bool = True
+    vae_tiling: bool = True
+    offload_to_cpu: bool = False
+    max_vram_gib: float | None = Field(default=None, gt=0)
+    stream_layers: int | None = Field(default=None, ge=1)
+    default_width: int = Field(default=1024, ge=64, le=4096, multiple_of=64)
+    default_height: int = Field(default=1024, ge=64, le=4096, multiple_of=64)
+    default_steps: int = Field(default=20, ge=1, le=200)
+    default_cfg_scale: float = Field(default=1.0, ge=0, le=30)
+    default_sampler: str = "euler"
+    residency_policy: Literal["coexist_if_fit", "exclusive"] = "coexist_if_fit"
+
+    @field_validator("vae_path", "clip_l_path", "t5xxl_path")
+    @classmethod
+    def _required_absolute_path(cls, value: str) -> str:
+        path = Path(str(value or "").strip()).expanduser()
+        if not path.is_absolute():
+            raise ValueError("stable-diffusion.cpp component paths must be absolute")
+        return str(path)
+
+    @field_validator("default_sampler")
+    @classmethod
+    def _sampler(cls, value: str) -> str:
+        text = str(value or "").strip().lower()
+        if not text:
+            raise ValueError("default_sampler is required")
+        return text
+
+
+class ExternalInferenceConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    external: Literal[True] = True
+    remote_inference: LlamaCppInferenceConfig | TransformersInferenceConfig | StableDiffusionCppInferenceConfig | None = None
+
+
+LocalInferenceConfig = (
+    LlamaCppInferenceConfig
+    | TransformersInferenceConfig
+    | StableDiffusionCppInferenceConfig
+    | ExternalInferenceConfig
+)
 
 
 class ModelPoolProfile(BaseModel):
@@ -173,29 +305,25 @@ class ModelPoolProfile(BaseModel):
     display_name: str
     description: str = ""
     kind: ModelPoolProfileKind = "chat"
-    provider: str
-    credential_id: str
-    model_name: str
+    artifact_id: str
+    engine: LocalInferenceEngine
+    served_model_name: str
     enabled: bool = True
     capabilities: ModelPoolCapabilities = Field(default_factory=ModelPoolCapabilities)
     limits: ModelPoolLimits = Field(default_factory=ModelPoolLimits)
-    pricing: ModelPoolPricing = Field(default_factory=ModelPoolPricing)
+    inference: LocalInferenceConfig
+    embedding_dimensions: int | None = Field(default=None, ge=1)
+    normalize_embeddings: bool = True
     notes: str = ""
     created_at: str = Field(default_factory=utc_now_text)
     updated_at: str = Field(default_factory=utc_now_text)
 
-    @field_validator("profile_id", "credential_id")
+    @field_validator("profile_id", "artifact_id")
     @classmethod
     def _ids(cls, value: str) -> str:
         return validate_pool_id(value, field_name="id")
 
-    @field_validator("provider")
-    @classmethod
-    def _provider(cls, value: str) -> str:
-        provider = str(value or "").strip().lower()
-        return ensure_provider_supported(provider)
-
-    @field_validator("display_name", "model_name")
+    @field_validator("display_name", "served_model_name")
     @classmethod
     def _required_text(cls, value: str) -> str:
         text = str(value or "").strip()
@@ -204,48 +332,56 @@ class ModelPoolProfile(BaseModel):
         return text
 
     @model_validator(mode="after")
-    def _provider_matches_kind(self) -> "ModelPoolProfile":
-        if not provider_supports_kind(self.provider, self.kind):
-            raise ValueError(f"provider {self.provider!r} does not support model kind {self.kind}")
-        if self.kind == "chat" and (
-            self.limits.max_input_tokens is None
-            or self.limits.compression_trigger_tokens is None
-        ):
-            values = self.limits.model_dump(mode="python")
-            context_window = self.limits.max_input_tokens or DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS
-            values["max_input_tokens"] = context_window
-            values["compression_trigger_tokens"] = (
-                self.limits.compression_trigger_tokens
-                or min(DEFAULT_MODEL_COMPRESSION_TRIGGER_TOKENS, context_window)
-            )
-            self.limits = ModelPoolLimits.model_validate(values)
+    def _engine_matches_kind(self) -> "ModelPoolProfile":
+        if self.kind == "chat":
+            if self.engine == "llama_cpp_rocm" and not isinstance(self.inference, LlamaCppInferenceConfig):
+                raise ValueError("chat profiles require llama.cpp inference settings")
+            if self.engine == "external" and not isinstance(self.inference, ExternalInferenceConfig):
+                raise ValueError("external chat profiles require external inference settings")
+            if self.engine not in {"llama_cpp_rocm", "external"}:
+                raise ValueError("unsupported chat inference engine")
+            if (
+                self.engine == "llama_cpp_rocm"
+                and "image" in self.capabilities.input_modalities
+                and isinstance(self.inference, LlamaCppInferenceConfig)
+                and not self.inference.mmproj_path
+            ):
+                raise ValueError("image input requires a llama.cpp mmproj_path")
+        if self.kind == "embedding":
+            if self.engine == "transformers_rocm" and not isinstance(self.inference, TransformersInferenceConfig):
+                raise ValueError("embedding profiles require Transformers inference settings")
+            if self.engine == "external" and not isinstance(self.inference, ExternalInferenceConfig):
+                raise ValueError("external embedding profiles require external inference settings")
+            if self.engine not in {"transformers_rocm", "external"}:
+                raise ValueError("unsupported embedding inference engine")
+            if self.embedding_dimensions is None:
+                raise ValueError("embedding profiles require embedding_dimensions")
+        if self.kind == "image_generation":
+            if self.engine == "stable_diffusion_cpp_rocm" and not isinstance(
+                self.inference, StableDiffusionCppInferenceConfig
+            ):
+                raise ValueError("image generation profiles require stable-diffusion.cpp settings")
+            if self.engine == "external" and not isinstance(self.inference, ExternalInferenceConfig):
+                raise ValueError("external image generation profiles require external inference settings")
+            if self.engine not in {"stable_diffusion_cpp_rocm", "external"}:
+                raise ValueError("unsupported image generation inference engine")
+            if "image" not in self.capabilities.output_modalities or not self.capabilities.text_to_image:
+                raise ValueError("image generation profiles require image output and text_to_image capability")
         return self
 
-    def to_public(self, credential: ModelPoolCredential | None = None) -> "ModelPoolProfilePublic":
+    @property
+    def model_name(self) -> str:
+        return self.served_model_name
+
+    def to_public(self, artifact: LocalModelArtifact | None = None) -> "ModelPoolProfilePublic":
         return ModelPoolProfilePublic(
             **self.model_dump(mode="json"),
-            credential=credential.to_public() if credential is not None else None,
+            artifact=artifact,
         )
 
 
-class ModelPoolProfilePublic(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    profile_id: str
-    display_name: str
-    description: str = ""
-    kind: ModelPoolProfileKind = "chat"
-    provider: str
-    credential_id: str
-    model_name: str
-    enabled: bool = True
-    capabilities: ModelPoolCapabilities = Field(default_factory=ModelPoolCapabilities)
-    limits: ModelPoolLimits = Field(default_factory=ModelPoolLimits)
-    pricing: ModelPoolPricing = Field(default_factory=ModelPoolPricing)
-    notes: str = ""
-    created_at: str = ""
-    updated_at: str = ""
-    credential: ModelPoolCredentialPublic | None = None
+class ModelPoolProfilePublic(ModelPoolProfile):
+    artifact: LocalModelArtifact | None = None
 
 
 class ModelSelectionRequirement(BaseModel):
@@ -289,7 +425,7 @@ class ModelSelectionCandidate(BaseModel):
     profile_id: str
     display_name: str
     description: str = ""
-    provider: str
+    engine: LocalInferenceEngine
     model_name: str
     score: float
     reason: str = ""
@@ -303,7 +439,7 @@ class ModelSelectionRecommendation(BaseModel):
     profile_id: str
     display_name: str
     description: str = ""
-    provider: str
+    engine: LocalInferenceEngine
     model_name: str
     score: float
     selection_source: ModelSelectionSource = "auto"
@@ -332,26 +468,25 @@ class ModelToolSelectionRequirement(BaseModel):
             raise ValueError("tool_id must be snake_case")
         return tool_id
 
-    @field_validator("excluded_profile_ids")
-    @classmethod
-    def _stable_profile_ids(cls, value: list[str]) -> list[str]:
-        result: list[str] = []
-        seen: set[str] = set()
-        for item in value:
-            text = str(item or "").strip().lower()
-            if text and text not in seen:
-                result.append(text)
-                seen.add(text)
-        return result
-
     def as_model_requirement(self) -> ModelSelectionRequirement:
-        inputs, outputs = modality_requirement_for_tool_capability(self.capability)
+        if self.capability in {"image_output", "image_edit"}:
+            return ModelSelectionRequirement(
+                role="task",
+                purpose=self.purpose,
+                kind="image_generation",
+                input_modalities=["text"],
+                output_modalities=["image"],
+                excluded_profile_ids=self.excluded_profile_ids,
+                optimize_for=self.optimize_for,
+                max_candidates=self.max_candidates,
+            )
+        modality = "image" if self.capability == "image_input" else "audio"
         return ModelSelectionRequirement(
             role="task",
             purpose=self.purpose,
-            kind=model_kind_requirement_for_tool_capability(self.capability),
-            input_modalities=inputs,
-            output_modalities=outputs,
+            kind="chat",
+            input_modalities=[modality],
+            output_modalities=["text"],
             min_context_window_tokens=self.min_context_window_tokens,
             excluded_profile_ids=self.excluded_profile_ids,
             optimize_for=self.optimize_for,
@@ -367,7 +502,7 @@ class ModelToolSelectionRecommendation(BaseModel):
     profile_id: str
     display_name: str
     description: str = ""
-    provider: str
+    engine: LocalInferenceEngine
     model_name: str
     score: float
     selection_source: ModelSelectionSource = "auto"
@@ -393,95 +528,6 @@ class ModelSelectionResult(BaseModel):
     unmatched: list[dict[str, Any]] = Field(default_factory=list)
     profile_count: int = 0
     enabled_profile_count: int = 0
-
-
-def modality_requirement_for_tool_capability(
-    capability: ModelToolCapability,
-) -> tuple[list[ModelPoolModality], list[ModelPoolModality]]:
-    if capability == "image_input":
-        return ["image"], ["text"]
-    if capability == "image_output":
-        return ["text"], ["image"]
-    if capability == "image_edit":
-        return ["image"], ["image"]
-    if capability == "audio_input":
-        return ["audio"], ["text"]
-    if capability == "audio_output":
-        return ["text"], ["audio"]
-    raise ValueError(f"unsupported model tool capability: {capability}")
-
-
-def model_kind_requirement_for_tool_capability(capability: ModelToolCapability) -> ModelPoolProfileKind:
-    if capability in {"image_output", "image_edit"}:
-        return "image_generation"
-    return "chat"
-
-
-def validate_pool_id(value: str, *, field_name: str) -> str:
-    text = str(value or "").strip().lower()
-    if not _ID_RE.fullmatch(text):
-        raise ValueError(f"{field_name} must start with a lowercase letter and contain lowercase letters, digits, _, ., or -")
-    return text
-
-
-def mask_api_key(value: str | None) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    if len(text) <= 8:
-        return "****"
-    return f"{text[:4]}...{text[-4:]}"
-
-
-def api_key_fingerprint(value: str | None) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
-
-
-def provider_default_capabilities(provider: str, *, kind: ModelPoolProfileKind = "chat") -> ModelPoolCapabilities:
-    if kind == "image_generation":
-        capabilities = image_generation_provider_capabilities(provider)
-        return ModelPoolCapabilities(
-            input_modalities=["text", "image"] if capabilities.get("image_to_image") or capabilities.get("image_edit") else ["text"],
-            output_modalities=["image"],
-            tool_calling=False,
-            streaming_tool_calls=False,
-            strict_tool_schema=False,
-            structured_output_methods=[],
-            reasoning_supported=False,
-            reasoning_efforts=[],
-            reasoning_content=False,
-            cache_usage=False,
-            text_to_image=capabilities.get("text_to_image", False),
-            image_to_image=capabilities.get("image_to_image", False),
-            image_edit=capabilities.get("image_edit", False),
-            multi_image_reference=capabilities.get("multi_image_reference", False),
-            batch_generation=capabilities.get("batch_generation", False),
-            async_job=capabilities.get("async_job", False),
-        )
-    profile = resolve_provider_profile(provider)
-    capabilities = profile.capabilities
-    input_modalities = ["text"]
-    for modality, support in (
-        ("image", capabilities.image_input),
-        ("audio", capabilities.audio_input),
-    ):
-        if support != "unsupported":
-            input_modalities.append(modality)
-    return ModelPoolCapabilities(
-        input_modalities=input_modalities,
-        output_modalities=["text"],
-        tool_calling=capabilities.tool_calling != "unsupported",
-        streaming_tool_calls=capabilities.streaming_tool_calls != "unsupported",
-        strict_tool_schema=capabilities.strict_tool_schema != "unsupported",
-        structured_output_methods=list(capabilities.structured_output_methods),
-        reasoning_supported=capabilities.reasoning != "unsupported",
-        reasoning_efforts=list(capabilities.reasoning_efforts),
-        reasoning_content=capabilities.reasoning_content != "unsupported",
-        cache_usage=capabilities.cache_usage != "unsupported",
-    )
 
 
 class ModelBindingRuntimeOverrides(BaseModel):
@@ -512,11 +558,9 @@ class ModelProfileBinding(BaseModel):
         return validate_pool_id(value, field_name="profile_id") if value is not None else None
 
     @model_validator(mode="after")
-    def _validate_source(self) -> "ModelProfileBinding":
-        if self.source == "model_pool" and self.selection_source == "manual" and not self.profile_id:
-            raise ValueError("profile_id is required for manually selected model_pool bindings")
+    def _source_requirements(self) -> "ModelProfileBinding":
         if self.source == "runtime" and self.profile_id:
-            raise ValueError(f"profile_id must be omitted for {self.source} bindings")
+            raise ValueError("runtime bindings must not define profile_id")
         return self
 
 
@@ -526,6 +570,7 @@ class ModelToolBinding(BaseModel):
     profile_id: str | None = None
     source: ModelBindingSource = "model_pool"
     capability: ModelToolCapability
+    required: bool = True
     selection_source: ModelSelectionSource = "auto"
     reason: str = ""
     required_capabilities: dict[str, Any] = Field(default_factory=dict)
@@ -538,14 +583,16 @@ class ModelToolBinding(BaseModel):
         return validate_pool_id(value, field_name="profile_id") if value is not None else None
 
     @model_validator(mode="after")
-    def _validate_source(self) -> "ModelToolBinding":
-        if self.source == "model_pool" and self.selection_source == "manual" and not self.profile_id:
-            raise ValueError("profile_id is required for manually selected model_pool bindings")
+    def _source_requirements(self) -> "ModelToolBinding":
         if self.source == "runtime" and self.profile_id:
-            raise ValueError(f"profile_id must be omitted for {self.source} bindings")
+            raise ValueError("runtime bindings must not define profile_id")
         return self
 
-    @field_validator("description")
-    @classmethod
-    def _description(cls, value: str) -> str:
-        return str(value or "").strip()
+
+def validate_pool_id(value: str, *, field_name: str) -> str:
+    text = str(value or "").strip().lower()
+    if not _ID_RE.fullmatch(text):
+        raise ValueError(
+            f"{field_name} must start with a lowercase letter and contain lowercase letters, digits, _, ., or -"
+        )
+    return text

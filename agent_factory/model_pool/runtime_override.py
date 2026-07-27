@@ -4,7 +4,11 @@ from typing import Any
 
 from agent_factory.model_pool.resolver import ResolvedChatModelProfile, resolve_chat_model_profile
 from agent_factory.model_pool.schema import ModelProfileBinding
-from agent_factory.models.chat_model import ChatModelSettings, create_chat_model_from_settings
+from agent_factory.models.chat_model import (
+    ChatModelSettings,
+    create_chat_model_from_settings,
+    get_main_model_settings,
+)
 from agent_factory.models.reasoning import (
     RUNTIME_REASONING_INTENSITY_MAX,
     apply_reasoning_intensity,
@@ -24,6 +28,13 @@ def main_model_profile_id_from_user_config(user_config: Any) -> str | None:
         return None
     profile_id = str(overrides.get("main") or "").strip()
     return profile_id or None
+
+
+def effective_main_model_profile_id_from_user_config(user_config: Any) -> str | None:
+    explicit_profile_id = main_model_profile_id_from_user_config(user_config)
+    if explicit_profile_id:
+        return explicit_profile_id
+    return get_main_model_settings().profile_id
 
 
 def runtime_main_model_profile_id_from_state(state: Any) -> str | None:

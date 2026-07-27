@@ -2,6 +2,7 @@ import { h } from 'vue'
 import { NIcon } from 'naive-ui'
 import type { MenuOption } from 'naive-ui'
 import {
+  BarChart,
   Build,
   Chatbubbles,
   ChatbubbleEllipses,
@@ -82,6 +83,11 @@ export function sidebarMenuOptions(t: Translate): MenuOption[] {
           label: t('route.modelPool'),
           key: '/model-pool',
           icon: renderIcon(Layers),
+        },
+        {
+          label: t('route.benchmarks'),
+          key: '/benchmarks',
+          icon: renderIcon(BarChart),
         },
       ],
     },

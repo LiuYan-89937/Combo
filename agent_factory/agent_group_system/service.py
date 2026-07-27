@@ -226,7 +226,7 @@ class AgentGroupService:
         group = self.ensure_member_sessions(group_id, runtime)
         capacity = max(0, _max_parallel_group_runs() - sum(
             1 for run in group.get("runs", [])
-            if str(run.get("status") or "") in {"running", "awaiting_approval"}
+            if str(run.get("status") or "") in {"running", "awaiting_approval", "cancelling"}
         ))
         if capacity == 0:
             return []
@@ -234,7 +234,7 @@ class AgentGroupService:
         active_packages = {
             str(run.get("speaker_package_id") or "")
             for run in group.get("runs", [])
-            if str(run.get("status") or "") in {"running", "awaiting_approval"}
+            if str(run.get("status") or "") in {"running", "awaiting_approval", "cancelling"}
         }
         for run in self.store.list_queued_runs(group_id):
             source_message = self.store.get_message(str(run.get("message_id") or ""))
@@ -368,6 +368,19 @@ class AgentGroupService:
         """更新 run 状态"""
         self.store.update_run(group_run_id, payload)
 
+    def transition_run_status(
+        self,
+        group_run_id: str,
+        *,
+        expected_statuses: set[str],
+        status: str,
+    ) -> bool:
+        return self.store.transition_run_status(
+            group_run_id,
+            expected_statuses=expected_statuses,
+            status=status,
+        )
+
     def list_queued_runs(self, group_id: str) -> list[dict[str, Any]]:
         """列出待执行的 runs"""
         return self.store.list_queued_runs(group_id)
@@ -375,7 +388,18 @@ class AgentGroupService:
     def cancel_run(self, group_run_id: str) -> None:
         """取消运行"""
         self.logger.info(f"Cancelling run: {group_run_id}")
-        self.store.cancel_run(group_run_id)
+        run = self.store.get_run(group_run_id)
+        if run is None:
+            return
+        if not self.store.cancel_run(group_run_id):
+            return
+        self.store.record_agent_message(
+            str(run.get("group_id") or ""),
+            group_run_id,
+            "system_notice",
+            "成员运行已停止。",
+            event_ref=f"user-cancelled:{group_run_id}",
+        )
 
     def retry_run(self, group_run_id: str) -> None:
         self.store.requeue_run(group_run_id)
@@ -392,7 +416,11 @@ class AgentGroupService:
             return
         event_type = str(event_payload.get("event_type") or "")
         if event_type == "run_started":
-            self.store.update_run(group_run_id, {"status": "running"})
+            self.store.transition_run_status(
+                group_run_id,
+                expected_statuses={"queued", "running"},
+                status="running",
+            )
             self.store.mark_member_context_consumed(
                 group_id,
                 str(run.get("speaker_package_id") or ""),
@@ -400,7 +428,7 @@ class AgentGroupService:
             )
             return
         if event_type == "tool_approval_requested":
-            self.store.update_run(group_run_id, {"status": "awaiting_approval"})
+            self.store.set_pending_approval(group_run_id, event_payload)
             return
         status = {
             "run_completed": "completed",
@@ -409,7 +437,10 @@ class AgentGroupService:
         }.get(event_type)
         if status is None:
             return
-        self.store.update_run(group_run_id, {"status": status})
+        self.store.update_run(
+            group_run_id,
+            {"status": status, "pending_approval": None},
+        )
         if status != "completed":
             if status == "failed":
                 detail = str(event_payload.get("message") or payload.get("message") or "成员运行失败。")

@@ -1,0 +1,205 @@
+{
+  "schema_version": "0.1",
+  "agent": {
+    "id": "listed_company_researcher",
+    "name": "A 股上市公司研究员",
+    "description": "围绕单家 A 股上市公司执行行情、财务、趋势和用户挂载资料的证据化深度研究。",
+    "version": "0.1.1"
+  },
+  "runtime": {
+    "pattern_id": "plan_and_execute",
+    "compiled_pattern_id": null,
+    "user_config": {},
+    "agent_config": {
+      "agent_id": "listed_company_researcher",
+      "activation": {
+        "workflow_goal": "围绕用户指定的 A 股上市公司完成可追溯、区分事实与判断的研究报告。",
+        "start_when": "用户要求研究、比较或复盘一只明确的 A 股股票，且任务需要多个数据或文档步骤。",
+        "ask_when_missing": "缺少六位股票代码、研究目标或用户要求依据但尚未挂载的私有资料时先询问。"
+      }
+    }
+  },
+  "graph_overrides": {"node_wrappers": []},
+  "bindings": {
+    "services": [],
+    "node_bindings": [
+      {
+        "binding_id": "planner_prompt",
+        "binding_type": "prompt",
+        "target": {"node_id": "planner", "impl": "cognitive.answer"},
+        "payload": {
+          "prompt_id": "planner_prompt",
+          "template": "你是 A 股上市公司研究任务规划器。只用 runtime_plan 建立精简、可验证的步骤，通常覆盖研究目标确认、公开行情与财务数据、用户挂载资料检索、交叉核验、风险与缺失信息、最终报告。不得调用研究工具，不得提前给结论。任务只允许涉及中国 A 股；缺少六位股票代码或必要资料时标记需要询问，不能猜测。",
+          "variables": []
+        }
+      },
+      {
+        "binding_id": "planner_tool_access",
+        "binding_type": "tool_access",
+        "target": {"node_id": "planner", "impl": "cognitive.answer"},
+        "payload": {"allowed_tool_ids": ["runtime_plan"], "approval_policy": "allow_all"}
+      },
+      {
+        "binding_id": "planner_model_operation",
+        "binding_type": "model_operation",
+        "target": {"node_id": "planner", "impl": "cognitive.answer"},
+        "payload": {
+          "operation": "tool_bound_chat",
+          "model_role": "main",
+          "output_schema": {"type": "object", "additionalProperties": true},
+          "write_target": {"section": "context"},
+          "max_attempts": 3,
+          "prompt_id": "planner_prompt"
+        }
+      },
+      {
+        "binding_id": "executor_prompt",
+        "binding_type": "prompt",
+        "target": {"node_id": "executor", "impl": "cognitive.answer"},
+        "payload": {
+          "prompt_id": "executor_prompt",
+          "template": "你是 A 股上市公司研究执行器。严格执行 runtime_plan 当前步骤。进入第一个实质研究步骤时，先用 skill(action='load', name='a-share-company-research', current_system='listed_company_researcher', reason='执行 A 股上市公司证据化研究流程') 加载完整流程。公开行情、历史走势和财务事实必须调用 research_a_share_company，并保留 observed_at、source、adjustment 和 warnings。需要补充公告、新闻、行业背景或交叉核验时使用系统提供的网页搜索 MCP，并区分结构化数据、公司披露和媒体信息。协作任务提供共享材料路径时，先用 ls/glob 确认路径，再用 read 读取正文；涉及用户挂载的财报、内部研究规范或项目资料时必须先调用 knowledge search，再 open/read 命中文档，没有结果要明确说明。使用文件工具读取、编辑和保存 Workspace 交付物。scheduler 仅用于用户明确要求的后续研究任务，不得作为即时命令执行或文件读取工具。不得伪造缺失数据，不得扩展到港股、美股或自动交易，不得把分析判断写成保证收益的建议。",
+          "variables": []
+        }
+      },
+      {
+        "binding_id": "executor_tool_access",
+        "binding_type": "tool_access",
+        "target": {"node_id": "executor", "impl": "cognitive.answer"},
+        "payload": {
+          "allowed_tool_ids": ["runtime_plan", "read", "write", "edit", "multi_edit", "glob", "grep", "ls", "bash", "bash_status", "bash_stop", "skill", "knowledge", "scheduler", "skillhub", "research_a_share_company"],
+          "approval_policy": "allow_all"
+        }
+      },
+      {
+        "binding_id": "executor_model_operation",
+        "binding_type": "model_operation",
+        "target": {"node_id": "executor", "impl": "cognitive.answer"},
+        "payload": {
+          "operation": "tool_bound_chat",
+          "model_role": "main",
+          "output_schema": {"type": "object", "additionalProperties": true},
+          "write_target": {"section": "context"},
+          "max_attempts": 3,
+          "prompt_id": "executor_prompt"
+        }
+      },
+      {
+        "binding_id": "casual_react_prompt",
+        "binding_type": "prompt",
+        "target": {"node_id": "casual_react", "impl": "cognitive.answer"},
+        "payload": {
+          "prompt_id": "casual_react_prompt",
+          "template": "你是 A 股上市公司研究员。对无需完整研究流程的简短澄清直接回答；只要涉及当前股票数据就先调用 research_a_share_company。仅处理 A 股，区分事实和判断，不承诺收益。",
+          "variables": []
+        }
+      },
+      {
+        "binding_id": "casual_react_tool_access",
+        "binding_type": "tool_access",
+        "target": {"node_id": "casual_react", "impl": "cognitive.answer"},
+        "payload": {"allowed_tool_ids": ["read", "write", "edit", "multi_edit", "glob", "grep", "ls", "bash", "bash_status", "bash_stop", "skill", "knowledge", "scheduler", "skillhub", "research_a_share_company"], "approval_policy": "allow_all"}
+      },
+      {
+        "binding_id": "casual_react_model_operation",
+        "binding_type": "model_operation",
+        "target": {"node_id": "casual_react", "impl": "cognitive.answer"},
+        "payload": {
+          "operation": "tool_bound_chat",
+          "model_role": "main",
+          "output_schema": {"type": "object", "additionalProperties": true},
+          "write_target": {"section": "context"},
+          "max_attempts": 3,
+          "prompt_id": "casual_react_prompt"
+        }
+      },
+      {
+        "binding_id": "final_answer_prompt",
+        "binding_type": "prompt",
+        "target": {"node_id": "final_answer", "impl": "cognitive.answer"},
+        "payload": {
+          "prompt_id": "final_answer_prompt",
+          "template": "汇总已完成步骤，输出结构化 A 股公司研究报告：研究范围、数据时间与来源、行情与趋势事实、财务事实、用户资料证据、分析判断、风险与反面证据、缺失信息。引用用户资料时标明来源；工具 warnings 必须保留。不得生成未被工具或资料支持的数字，不得给出确定性买卖指令或收益承诺。",
+          "variables": []
+        }
+      },
+      {
+        "binding_id": "final_answer_tool_access",
+        "binding_type": "tool_access",
+        "target": {"node_id": "final_answer", "impl": "cognitive.answer"},
+        "payload": {"allowed_tool_ids": ["read", "write", "edit", "multi_edit", "glob", "grep", "ls", "bash", "bash_status", "bash_stop", "skill", "knowledge", "scheduler", "skillhub", "research_a_share_company"], "approval_policy": "allow_all"}
+      },
+      {
+        "binding_id": "final_answer_model_operation",
+        "binding_type": "model_operation",
+        "target": {"node_id": "final_answer", "impl": "cognitive.answer"},
+        "payload": {
+          "operation": "tool_bound_chat",
+          "model_role": "main",
+          "output_schema": {"type": "object", "additionalProperties": true},
+          "write_target": {"section": "context"},
+          "max_attempts": 3,
+          "prompt_id": "final_answer_prompt"
+        }
+      }
+    ],
+    "hooks": []
+  },
+  "tools": [
+    {
+      "id": "research_a_share_company",
+      "description": "通过腾讯证券获取指定六位代码 A 股公司的证券身份、当前行情和前复权历史走势，通过同花顺获取财务摘要，并计算透明的区间趋势指标。研究当前公司事实时必须调用。",
+      "schema_error_guidance": "code 必须是六位数字；history_days 必须在 30 到 1000 之间；sections 只能包含 basic、quote、history、financial。",
+      "entrypoint": "python:tools/research_a_share_company/tool.py:run",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "code": {"type": "string", "pattern": "^[0-9]{6}$"},
+          "history_days": {"type": "integer", "minimum": 30, "maximum": 1000, "default": 250},
+          "sections": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {"type": "string", "enum": ["basic", "quote", "history", "financial"]},
+            "default": ["basic", "quote", "history", "financial"]
+          }
+        },
+        "required": ["code"],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "status": {"type": "string", "enum": ["success", "partial", "error"]},
+          "code": {"type": "string"},
+          "name": {"type": "string"},
+          "observed_at": {"type": "string"},
+          "source": {"type": "string"},
+          "adjustment": {"type": "string"},
+          "basic": {"type": "array", "items": {"type": "object"}},
+          "quote": {"type": "object"},
+          "history_summary": {"type": "object"},
+          "financial": {"type": "array", "items": {"type": "object"}},
+          "warnings": {"type": "array", "items": {"type": "string"}},
+          "message": {"type": "string"}
+        },
+        "required": ["status", "code", "name", "observed_at", "source", "adjustment", "warnings"],
+        "additionalProperties": false
+      },
+      "resources": {},
+      "risk_level": "low",
+      "risk_evaluator": {"hard": null, "llm": null, "llm_mode": "disabled"},
+      "concurrent": false,
+      "permission_scope": "package",
+      "permission_tags": ["read_only"],
+      "output_compression": {"action_argument": "action", "actions": {}},
+      "output_projection": "compress"
+    }
+  ],
+  "output": {"citations_required": false, "format": "markdown"},
+  "harness": [],
+  "metadata": {
+    "provenance": {"source": "system_package", "package_id": "listed_company_researcher"},
+    "scope": "a_share_only"
+  }
+}

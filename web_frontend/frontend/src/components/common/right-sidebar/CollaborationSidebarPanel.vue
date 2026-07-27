@@ -435,7 +435,7 @@ const mainAgentContextRows = computed(() => {
     },
     {
       label: t('collaboration.context.model'),
-      value: profile?.display_name || profile?.model_name || configuredProfileId || t('chat.defaultMainModel'),
+      value: profile?.display_name || profile?.served_model_name || configuredProfileId || t('chat.defaultMainModel'),
     },
     {
       label: t('chat.reasoningIntensity'),

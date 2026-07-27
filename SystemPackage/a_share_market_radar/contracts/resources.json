@@ -1,0 +1,39 @@
+{
+  "type": "resources",
+  "version": "resources_contract.v0",
+  "enabled": true,
+  "config": {
+    "resource_descriptors": [
+      {
+        "resource_id": "smtp_account",
+        "description": "发送市场简报使用的 SMTP 账户。仅在用户明确要求发送邮件时读取。",
+        "required": false,
+        "value_schema": {
+          "type": "object",
+          "properties": {
+            "host": {"type": "string", "title": "SMTP 主机", "minLength": 1},
+            "port": {"type": "integer", "title": "SMTP 端口", "minimum": 1, "maximum": 65535},
+            "username": {"type": "string", "title": "登录账号", "minLength": 1},
+            "password": {"type": "string", "title": "授权码或密码", "minLength": 1},
+            "from_address": {"type": "string", "title": "发件邮箱", "minLength": 3},
+            "security": {"type": "string", "title": "安全协议", "enum": ["ssl", "starttls"]},
+            "default_recipients": {
+              "type": "array",
+              "title": "默认收件人",
+              "items": {"type": "string", "minLength": 3},
+              "minItems": 1,
+              "maxItems": 10,
+              "uniqueItems": true
+            }
+          },
+          "required": ["host", "port", "username", "password", "from_address", "security", "default_recipients"],
+          "additionalProperties": false
+        },
+        "default_value": {},
+        "secret_fields": ["password"],
+        "used_by": ["send_market_brief_email"],
+        "sandbox_access_expectation": "仅向已配置的 SMTP 主机建立出站 TLS 连接。"
+      }
+    ]
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "version": "agent_package.v0",
+  "factory_run_id": "system.portfolio_risk_guard",
+  "agent": {
+    "id": "portfolio_risk_guard",
+    "name": "A 股持仓风险管家",
+    "description": "读取用户提供的 A 股持仓，计算集中度、波动率、回撤、相关性和明确指定的压力情景。",
+    "version": "0.1.1"
+  },
+  "runtime": {
+    "system_package": true,
+    "execution_backend": "container",
+    "pattern_id": "plan_and_execute"
+  },
+  "assembly_spec_path": "assembly_spec.json",
+  "contracts": {
+    "context": "contracts/context.json",
+    "dependencies": "contracts/dependencies.json",
+    "knowledge": "contracts/knowledge.json",
+    "memory": "contracts/memory.json",
+    "model": "contracts/model.json",
+    "resources": "contracts/resources.json",
+    "scheduler": "contracts/scheduler.json",
+    "session": "contracts/session.json",
+    "state": "contracts/state.json",
+    "tools": "contracts/tools.json"
+  },
+  "tools": ["tools/analyze_a_share_portfolio/manifest.json"]
+}

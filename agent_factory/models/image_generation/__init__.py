@@ -1,4 +1,3 @@
-from agent_factory.models.image_generation.adapters import adapter_for_image_provider
 from agent_factory.models.image_generation.protocol import (
     GeneratedAsset,
     ImageGenerationRequest,
@@ -13,5 +12,4 @@ __all__ = [
     "ImageGenerationService",
     "ImageGenerationSettings",
     "ImageInput",
-    "adapter_for_image_provider",
 ]

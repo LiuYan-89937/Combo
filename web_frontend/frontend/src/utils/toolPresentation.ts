@@ -1,5 +1,4 @@
 import type {
-  ArtifactMessagePart,
   ChatMessagePart,
   ToolCallMessagePart,
   ToolExecutionMessagePart,

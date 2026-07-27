@@ -11,11 +11,11 @@ ImageGenerationOperation = Literal["text_to_image", "image_to_image", "edit"]
 class ImageGenerationSettings:
     provider: str
     model: str
-    api_key: str
     base_url: str
     profile_id: str = ""
     source: str = "model_pool"
     timeout_seconds: float | None = None
+    default_options: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,14 +38,12 @@ class ImageGenerationRequest:
     count: int = 1
     seed: int | None = None
     negative_prompt: str | None = None
-    response_format: str | None = None
     provider_options: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
 class GeneratedImageSource:
-    data: bytes | None = None
-    url: str | None = None
+    data: bytes
     mime_type: str = "image/png"
     provider_metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -59,9 +57,7 @@ class GeneratedAsset:
     provider: str
     model: str
     prompt: str
-    input_attachment_ids: tuple[str, ...] = ()
     provider_request_id: str | None = None
-    provider_task_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def model_payload(self) -> dict[str, Any]:
@@ -73,8 +69,6 @@ class GeneratedAsset:
             "provider": self.provider,
             "model": self.model,
             "prompt": self.prompt,
-            "input_attachment_ids": list(self.input_attachment_ids),
             "provider_request_id": self.provider_request_id,
-            "provider_task_id": self.provider_task_id,
             "metadata": dict(self.metadata),
         }

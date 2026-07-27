@@ -66,7 +66,7 @@ export function useFactoryConversation() {
       ? [{ label: t('chat.defaultMainModel'), value: '' }]
       : []),
     ...chatModelProfiles.value.map((profile) => ({
-      label: profile.display_name || profile.model_name || profile.profile_id,
+      label: profile.display_name || profile.served_model_name || profile.profile_id,
       value: profile.profile_id,
     })),
   ])
@@ -121,10 +121,10 @@ export function useFactoryConversation() {
     try {
       const [response, roleBindingResponse] = await Promise.all([
         modelPoolApi.profiles(),
-        modelPoolApi.roleBindings(),
+        modelPoolApi.defaults(),
       ])
       chatModelProfiles.value = response.profiles.filter(isAvailableChatModelProfile)
-      const configuredMainProfileId = roleBindingResponse.bindings.main
+      const configuredMainProfileId = roleBindingResponse.defaults.main
       if (chatModelProfiles.value.some((profile) => profile.profile_id === selectedMainModelProfileId.value)) {
         return
       }

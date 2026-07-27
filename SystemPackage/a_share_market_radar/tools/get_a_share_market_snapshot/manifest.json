@@ -1,0 +1,46 @@
+{
+  "id": "get_a_share_market_snapshot",
+  "description": "通过腾讯证券获取当前 A 股全市场行情快照，计算涨跌家数、成交额和领涨个股。涉及当前盘面事实时必须先调用；返回数据时间、来源和提供方诊断。",
+  "schema_error_guidance": "top_n 必须是 1 到 20 的整数。",
+  "entrypoint": "python:tools/get_a_share_market_snapshot/tool.py:run",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "top_n": {"type": "integer", "minimum": 1, "maximum": 20, "default": 10}
+    },
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "status": {"type": "string", "enum": ["success", "error"]},
+      "observed_at": {"type": "string"},
+      "source": {"type": "string"},
+      "market": {"type": "object"},
+      "top_gainers": {"type": "array", "items": {"type": "object"}},
+      "top_turnover": {"type": "array", "items": {"type": "object"}},
+      "provider_diagnostics": {
+        "type": "object",
+        "properties": {
+          "provider": {"type": "string"},
+          "hosts_used": {"type": "array", "items": {"type": "string"}},
+          "retry_count": {"type": "integer", "minimum": 0},
+          "pages_fetched": {"type": "integer", "minimum": 0}
+        },
+        "required": ["provider", "hosts_used", "retry_count", "pages_fetched"],
+        "additionalProperties": false
+      },
+      "message": {"type": "string"}
+    },
+    "required": ["status", "observed_at", "source", "provider_diagnostics"],
+    "additionalProperties": false
+  },
+  "resources": {},
+  "risk_level": "low",
+  "risk_evaluator": {"hard": null, "llm": null, "llm_mode": "disabled"},
+  "concurrent": false,
+  "permission_scope": "package",
+  "permission_tags": ["read_only"],
+  "output_compression": {"action_argument": "action", "actions": {}},
+  "output_projection": "compress"
+}
