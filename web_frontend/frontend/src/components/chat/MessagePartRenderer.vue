@@ -25,18 +25,27 @@
       {{ part.text }}
     </div>
 
-    <a
+    <button
       v-else-if="part.type === 'attachment' && attachmentImageUrl"
+      type="button"
       class="message-image-card"
-      :href="attachmentImageUrl"
-      target="_blank"
-      rel="noopener noreferrer"
+      :title="attachmentOpenable ? t('attachments.openInWorkspace') : part.attachment.name"
+      :disabled="!attachmentOpenable"
+      @click="openAttachment"
     >
       <img :src="attachmentImageUrl" :alt="part.attachment.name" />
       <span>{{ part.attachment.name }}</span>
-    </a>
+    </button>
 
-    <div v-else-if="part.type === 'attachment'" class="message-attachment-chip" :title="part.attachment.name">
+    <button
+      v-else-if="part.type === 'attachment'"
+      type="button"
+      class="message-attachment-chip"
+      :class="{ openable: attachmentOpenable }"
+      :title="attachmentOpenable ? t('attachments.openInWorkspace') : part.attachment.name"
+      :disabled="!attachmentOpenable"
+      @click="openAttachment"
+    >
       <ResourceIcon
         :name="part.attachment.name"
         :mime-type="part.attachment.mime_type"
@@ -46,7 +55,7 @@
       />
       <span class="message-attachment-name">{{ part.attachment.name }}</span>
       <span class="message-attachment-kind">{{ attachmentKindLabel(part.attachment) }}</span>
-    </div>
+    </button>
 
     <details
       v-else-if="part.type === 'tool_call' || part.type === 'tool_result'"
@@ -122,6 +131,7 @@ import ResourceIcon from '@/components/common/ResourceIcon.vue'
 import ToolExecutionCard from '@/components/chat/ToolExecutionCard.vue'
 import { useI18n } from '@/composables/useI18n'
 import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
+import { useWorkspaceFileOpener } from '@/composables/useWorkspaceFileOpener'
 import type { ChatMessagePart, TranscriptAttachmentView } from '@/types/protocol'
 import type { WorkspaceRequestContext } from '@/api/resourceTypes'
 import { isImageResource, workspaceResourceUrl } from '@/utils/workspaceResources'
@@ -135,6 +145,7 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
+const { openWorkspaceFile } = useWorkspaceFileOpener()
 const rootRef = ref<HTMLElement | null>(null)
 const { renderMarkdown } = useMarkdownRenderer(rootRef)
 
@@ -163,6 +174,10 @@ const attachmentImageUrl = computed(() => {
   if (!attachment.path || !isImageResource(attachment.name, attachment.mime_type)) return ''
   return resolveMessageImageUrl(attachment.path) || ''
 })
+const attachmentOpenable = computed(() => (
+  props.part.type === 'attachment'
+  && Boolean(props.part.attachment.path && props.workspaceContext)
+))
 const artifactImageUrl = computed(() => {
   if (props.part.type !== 'artifact' || !props.part.path) return ''
   if (!isImageResource(props.part.path, props.part.mimeType)) return ''
@@ -220,6 +235,15 @@ function attachmentKindLabel(attachment: TranscriptAttachmentView): string {
   if (attachment.kind === 'text') return t('attachments.text')
   if (attachment.source_kind === 'workspace_file') return t('attachments.workspaceFile')
   return t('attachments.localFile')
+}
+
+async function openAttachment(): Promise<void> {
+  if (props.part.type !== 'attachment' || !props.part.attachment.path) return
+  await openWorkspaceFile(
+    props.part.attachment.path,
+    props.workspaceContext,
+    props.part.attachment.workspace_scope || 'workdir',
+  )
 }
 
 function resolveMessageImageUrl(source: string): string | null {
@@ -348,6 +372,7 @@ details[open] > summary .summary-chevron {
 }
 
 .message-attachment-chip {
+  appearance: none;
   display: inline-flex;
   align-items: center;
   gap: var(--app-space-xs);
@@ -358,15 +383,31 @@ details[open] > summary .summary-chevron {
   background: var(--app-surface-muted);
   color: var(--app-text);
   font-size: 12px;
+  text-align: left;
+}
+
+.message-attachment-chip.openable {
+  cursor: pointer;
+}
+
+.message-attachment-chip.openable:hover {
+  border-color: var(--app-primary);
+  background: var(--app-surface-hover);
 }
 
 .message-image-card {
+  appearance: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
   display: inline-grid;
   gap: var(--app-space-xs);
   max-width: min(600px, 100%);
   color: var(--app-text-muted);
   font-size: 12px;
   text-decoration: none;
+  text-align: left;
 }
 
 .message-image-card img {

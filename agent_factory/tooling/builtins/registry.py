@@ -8,7 +8,6 @@ from agent_factory.tooling.builtins.collaboration.specs import get_collaboration
 from agent_factory.tooling.builtins.knowledge.specs import get_knowledge_tool_specs
 from agent_factory.tooling.builtins.network.specs import get_network_tool_specs
 from agent_factory.tooling.builtins.process.specs import get_process_tool_specs
-from agent_factory.tooling.builtins.progress.specs import get_progress_tool_specs
 from agent_factory.tooling.builtins.resource_set.specs import get_resource_set_tool_specs
 from agent_factory.tooling.builtins.scheduler.specs import get_scheduler_tool_specs
 from agent_factory.tooling.builtins.skillhub.specs import get_skillhub_tool_specs
@@ -30,7 +29,6 @@ IMPLEMENTED_BUILTIN_TOOL_IDS = {
     "knowledge",
     "skillhub",
     "tool_output",
-    "report_progress",
     "resource_set",
     "collaboration",
     "agent_list",
@@ -38,7 +36,7 @@ IMPLEMENTED_BUILTIN_TOOL_IDS = {
     "agent_search",
 }
 
-ALWAYS_AVAILABLE_SYSTEM_TOOL_IDS = {"tool_output", "report_progress"}
+ALWAYS_AVAILABLE_SYSTEM_TOOL_IDS = {"tool_output"}
 READ_ONLY_SYSTEM_TOOL_IDS = {
     "read",
     "glob",
@@ -49,7 +47,6 @@ READ_ONLY_SYSTEM_TOOL_IDS = {
     "scheduler",
     "skillhub",
     "tool_output",
-    "report_progress",
     "resource_set",
     "agent_list",
     "agent_search",
@@ -60,7 +57,6 @@ def get_builtin_tool_specs() -> list[ToolSpec]:
     catalog = [
         *get_filesystem_tool_specs(),
         *get_process_tool_specs(),
-        *get_progress_tool_specs(),
         *get_network_tool_specs(),
         *get_scheduler_tool_specs(),
         *get_knowledge_tool_specs(),

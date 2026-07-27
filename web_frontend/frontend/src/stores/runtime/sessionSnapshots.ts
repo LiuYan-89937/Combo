@@ -177,11 +177,7 @@ function conversationFromTurns(rawTurns: any[], context: TurnRestoreContext) {
     const createdAt = String(turn.created_at || context.fallbackTimestamp || new Date().toISOString())
     const updatedAt = String(turn.updated_at || createdAt)
     const turnMessages = Array.isArray(turn.messages) ? turn.messages : []
-    const toolActivities = Array.isArray(turn.tool_activities)
-      ? turn.tool_activities.filter((activity: any) => (
-          String(activity?.toolName || activity?.tool_name || activity?.tool_id || '') !== 'report_progress'
-        ))
-      : []
+    const toolActivities = Array.isArray(turn.tool_activities) ? turn.tool_activities : []
     if (turnMessages.length > 0) {
       restoreTurnMessages({
         transcript,

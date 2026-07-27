@@ -23,6 +23,7 @@ ATTACHMENT_MAX_TOTAL_BYTES_ENV = "AGENTFACTORY_ATTACHMENT_MAX_TOTAL_BYTES"
 ATTACHMENT_MAX_MODEL_CHARS_ENV = "AGENTFACTORY_ATTACHMENT_MAX_MODEL_CHARS"
 DEFAULT_ATTACHMENT_MAX_FILES = 9
 DEFAULT_ATTACHMENT_MAX_MODEL_CHARS = 24000
+CURRENT_USER_ATTACHMENT_MANIFEST_HEADER = "Attachments included with the current user message:"
 
 
 class AttachmentImportError(ValueError):
@@ -465,22 +466,10 @@ def format_attachments_for_model(
     for item in attachments:
         if not isinstance(item, dict):
             continue
-        attachment_id = str(item.get("attachment_id") or "").strip()
-        path = str(item.get("path") or item.get("runtime_path") or "").strip()
-        display_name = str(item.get("display_name") or "").strip()
-        if not attachment_id or not path:
+        parts = _model_attachment_descriptor(item)
+        if not parts:
             continue
-        parts = [
-            f"id={attachment_id}",
-            f"name={display_name or attachment_id}",
-            f"path={path}",
-        ]
         mime_type = _attachment_mime_type(item)
-        if mime_type:
-            parts.append(f"mime={mime_type}")
-        size_bytes = item.get("size_bytes")
-        if isinstance(size_bytes, int):
-            parts.append(f"size_bytes={size_bytes}")
         digest = str(item.get("sha256") or "").strip()
         if digest:
             parts.append(f"sha256={digest}")
@@ -508,6 +497,42 @@ def format_attachments_for_model(
         if isinstance(warnings, list) and warnings:
             lines.append("  parse_warnings=" + "; ".join(str(warning) for warning in warnings if str(warning).strip()))
     return "\n".join(lines) if len(lines) > 2 else ""
+
+
+def format_current_user_attachment_manifest(attachments: Any) -> str:
+    if not isinstance(attachments, list) or not attachments:
+        return ""
+    lines = [
+        CURRENT_USER_ATTACHMENT_MANIFEST_HEADER,
+        "Treat every item below as attached to this user message. Parsed content is provided separately.",
+    ]
+    for item in attachments:
+        if not isinstance(item, dict):
+            continue
+        parts = _model_attachment_descriptor(item)
+        if parts:
+            lines.append("- " + "; ".join(parts))
+    return "\n".join(lines) if len(lines) > 2 else ""
+
+
+def _model_attachment_descriptor(item: dict[str, Any]) -> list[str]:
+    attachment_id = str(item.get("attachment_id") or "").strip()
+    path = str(item.get("path") or item.get("runtime_path") or "").strip()
+    display_name = str(item.get("display_name") or "").strip()
+    if not attachment_id or not path:
+        return []
+    parts = [
+        f"id={attachment_id}",
+        f"name={display_name or attachment_id}",
+        f"path={path}",
+    ]
+    mime_type = _attachment_mime_type(item)
+    if mime_type:
+        parts.append(f"mime={mime_type}")
+    size_bytes = item.get("size_bytes")
+    if isinstance(size_bytes, int):
+        parts.append(f"size_bytes={size_bytes}")
+    return parts
 
 
 def image_attachment_content_parts(attachments: Any) -> list[dict[str, Any]]:
@@ -559,15 +584,46 @@ def transcript_attachment_views(attachments: Any) -> list[dict[str, Any]]:
         source_kind = str(item.get("source_kind") or "").strip()
         raw_kind = str(item.get("kind") or "").strip()
         mime_type = _attachment_mime_type(item)
+        workspace_path = _attachment_workspace_path(item)
         views.append(
             {
                 "kind": _attachment_view_kind(source_kind, raw_kind),
                 "name": name,
                 **({"source_kind": source_kind} if source_kind else {}),
                 **({"mime_type": mime_type} if mime_type else {}),
+                **(
+                    {"workspace_scope": "workdir", "path": workspace_path}
+                    if workspace_path
+                    else {}
+                ),
+                **({"size_bytes": item.get("size_bytes")} if item.get("size_bytes") is not None else {}),
             }
         )
     return views
+
+
+def _attachment_workspace_path(item: dict[str, Any]) -> str:
+    raw_path = str(item.get("runtime_path") or item.get("path") or "").strip()
+    if not raw_path:
+        return ""
+    normalized = raw_path.replace("\\", "/")
+    parts = [part for part in normalized.split("/") if part and part != "."]
+    if not parts or any(part == ".." for part in parts):
+        return ""
+    for index in range(len(parts) - 1):
+        if parts[index] == ".factory" and parts[index + 1] == ATTACHMENT_INPUT_DIR:
+            return str(PurePosixPath(*parts[index:]))
+    try:
+        input_files_index = parts.index(ATTACHMENT_INPUT_DIR)
+    except ValueError:
+        if normalized.startswith("/") or _looks_like_windows_absolute_path(normalized):
+            return ""
+        return str(PurePosixPath(*parts))
+    return str(PurePosixPath(*parts[input_files_index:]))
+
+
+def _looks_like_windows_absolute_path(path: str) -> bool:
+    return len(path) >= 3 and path[0].isalpha() and path[1:3] == ":/"
 
 
 def _attachment_mime_type(item: dict[str, Any]) -> str:

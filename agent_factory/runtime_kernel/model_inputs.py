@@ -11,6 +11,7 @@ from langchain_core.tools import BaseTool
 from agent_factory.models.message_layout import system_messages_first
 from agent_factory.knowledge_system.guidance import KNOWLEDGE_GUIDANCE_CONTEXT_KEY
 from agent_factory.runtime_attachments import (
+    format_current_user_attachment_manifest,
     format_attachments_for_model,
     image_attachment_content_parts,
     image_attachment_count,
@@ -30,10 +31,7 @@ RUNTIME_REACT_PROTOCOL = (
     "When tools are available and useful, call them with the model's native tool_call mechanism only. "
     "After a ToolMessage observation, continue from that observation and do not invent hidden tool results. "
     "When inspecting workspace files, if read reports a missing file or the path is uncertain, call ls on "
-    "the parent or nearby directory before retrying read with the exact file name/path. "
-    "For complex or time-consuming tasks, use report_progress before substantive work and when a meaningful "
-    "stage completes, the plan changes, or work becomes blocked. Keep each progress summary brief and user-facing; "
-    "do not expose hidden reasoning, narrate every minor action, or use progress updates as the final answer."
+    "the parent or nearby directory before retrying read with the exact file name/path."
 )
 EXECUTOR_TOOL_POLICY = "Executor tool policy: execute the current plan step with package/domain tools first."
 FINAL_ANSWER_TOOL_POLICY = (
@@ -228,54 +226,54 @@ def _history_messages(
 ) -> list[Any]:
     normalized = [message for message in messages if isinstance(message, BaseMessage)]
     if normalized and _uses_plan_and_execute_projection(state=state, node_id=node_id):
-        return _with_current_user_image_attachments(
+        return _with_current_user_attachments(
             state=state,
             messages=_plan_and_execute_history_messages(state=state, messages=normalized, node_id=node_id),
             image_input_enabled=image_input_enabled,
         )
     if normalized:
-        return _with_current_user_image_attachments(
+        return _with_current_user_attachments(
             state=state,
             messages=normalized,
             image_input_enabled=image_input_enabled,
         )
     user_input = str(getattr(getattr(state, "conversation", None), "current_user_input", "") or "").strip()
     messages_from_input = [HumanMessage(content=user_input)] if user_input else []
-    return _with_current_user_image_attachments(
+    return _with_current_user_attachments(
         state=state,
         messages=messages_from_input,
         image_input_enabled=image_input_enabled,
     )
 
 
-def _with_current_user_image_attachments(
+def _with_current_user_attachments(
     *,
     state: Any,
     messages: list[Any],
     image_input_enabled: bool,
 ) -> list[Any]:
-    if not image_input_enabled:
-        return messages
-    image_parts = image_attachment_content_parts(_runtime_attachments(state))
-    if not image_parts:
+    attachments = _runtime_attachments(state)
+    attachment_manifest = format_current_user_attachment_manifest(attachments)
+    image_parts = image_attachment_content_parts(attachments) if image_input_enabled else []
+    if not attachment_manifest and not image_parts:
         return messages
     target_index = _current_user_message_index(state=state, messages=messages)
+    user_input = str(getattr(getattr(state, "conversation", None), "current_user_input", "") or "").strip()
     if target_index is None:
-        user_input = str(getattr(getattr(state, "conversation", None), "current_user_input", "") or "").strip()
         return [
             *messages,
-            HumanMessage(content=_image_user_content_parts(user_input, image_parts)),
+            HumanMessage(content=_user_message_attachment_content(user_input, attachment_manifest, image_parts)),
         ]
     message = messages[target_index]
-    if _message_has_image_url_part(message):
-        return messages
     updated = list(messages)
     text = _message_text(message).strip()
     if not text:
-        text = str(getattr(getattr(state, "conversation", None), "current_user_input", "") or "").strip()
+        text = user_input
+    existing_image_parts = _message_image_parts(message)
+    resolved_image_parts = existing_image_parts or image_parts
     updated[target_index] = _copy_human_message_with_content(
         message,
-        _image_user_content_parts(text, image_parts),
+        _user_message_attachment_content(text, attachment_manifest, resolved_image_parts),
     )
     return updated
 
@@ -294,15 +292,27 @@ def _current_user_message_index(*, state: Any, messages: list[Any]) -> int | Non
     return fallback_index
 
 
-def _image_user_content_parts(text: str, image_parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _user_message_attachment_content(
+    text: str,
+    attachment_manifest: str,
+    image_parts: list[dict[str, Any]],
+) -> str | list[dict[str, Any]]:
+    text_content = "\n\n".join(
+        value for value in [text.strip(), attachment_manifest.strip()] if value
+    )
+    if not image_parts:
+        return text_content
     content: list[dict[str, Any]] = []
-    if text.strip():
-        content.append({"type": "text", "text": text.strip()})
+    if text_content:
+        content.append({"type": "text", "text": text_content})
     content.extend(image_parts)
     return content
 
 
-def _copy_human_message_with_content(message: Any, content: list[dict[str, Any]]) -> HumanMessage:
+def _copy_human_message_with_content(
+    message: Any,
+    content: str | list[dict[str, Any]],
+) -> HumanMessage:
     if hasattr(message, "model_copy"):
         copied = message.model_copy(update={"content": content})
         if isinstance(copied, HumanMessage):
@@ -316,14 +326,15 @@ def _copy_human_message_with_content(message: Any, content: list[dict[str, Any]]
     )
 
 
-def _message_has_image_url_part(message: Any) -> bool:
+def _message_image_parts(message: Any) -> list[dict[str, Any]]:
     content = getattr(message, "content", None)
     if not isinstance(content, list):
-        return False
+        return []
+    parts: list[dict[str, Any]] = []
     for item in content:
         if isinstance(item, dict) and str(item.get("type") or "") == "image_url":
-            return True
-    return False
+            parts.append(item)
+    return parts
 
 
 def _uses_plan_and_execute_projection(*, state: Any, node_id: str | None) -> bool:

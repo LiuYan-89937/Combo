@@ -57,24 +57,6 @@ export function errorPart(id: string, message: string, details: unknown, timesta
   }
 }
 
-export function statusPart(
-  id: string,
-  message: string,
-  options: {
-    status?: ChatMessagePartStatus
-    timestamp?: string
-  } = {},
-): ChatMessagePart {
-  return {
-    id,
-    type: 'status',
-    message,
-    status: options.status || 'completed',
-    createdAt: options.timestamp,
-    updatedAt: options.timestamp,
-  }
-}
-
 export function attachmentPart(
   id: string,
   attachment: TranscriptAttachmentView,
