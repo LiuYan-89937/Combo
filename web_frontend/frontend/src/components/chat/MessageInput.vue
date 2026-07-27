@@ -458,9 +458,9 @@ defineExpose({
 
 <style scoped>
 .message-input-container {
-  container-type: inline-size;
   display: flex;
   flex-direction: column;
+  min-inline-size: 720px;
   gap: var(--app-space-md);
   padding: var(--app-space-md);
   border: 1px solid var(--app-border);
@@ -555,7 +555,7 @@ defineExpose({
   display: flex;
   align-items: center;
   justify-content: space-between;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: var(--app-space-sm);
 }
 
@@ -563,18 +563,17 @@ defineExpose({
 .right-actions {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: var(--app-space-sm);
   min-width: 0;
-  max-width: 100%;
 }
 
 .left-actions {
-  flex: 1 1 360px;
+  flex: 1 1 auto;
 }
 
 .right-actions {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   justify-content: flex-end;
   margin-left: auto;
 }
@@ -644,44 +643,6 @@ defineExpose({
 .send-button:not(:disabled):active,
 .cancel-button:not(:disabled):active {
   transform: scale(0.96);
-}
-
-@container (max-width: 620px) {
-  .input-actions {
-    align-items: stretch;
-  }
-
-  .left-actions,
-  .right-actions {
-    flex-basis: 100%;
-    width: 100%;
-  }
-
-  .right-actions {
-    margin-left: 0;
-  }
-
-  .model-selector {
-    flex: 1 1 180px;
-    width: auto;
-  }
-}
-
-@container (max-width: 360px) {
-  .message-input-container {
-    gap: var(--app-space-sm);
-    padding: var(--app-space-sm);
-  }
-
-  .left-actions,
-  .right-actions {
-    gap: var(--app-space-xs);
-  }
-
-  .send-button,
-  .cancel-button {
-    flex: 1 1 120px;
-  }
 }
 
 .cancel-button {

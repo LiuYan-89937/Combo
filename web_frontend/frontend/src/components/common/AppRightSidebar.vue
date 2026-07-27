@@ -68,7 +68,7 @@ import SessionsSidebarPanel from './right-sidebar/SessionsSidebarPanel.vue'
 import StatusSidebarPanel from './right-sidebar/StatusSidebarPanel.vue'
 import WorkspaceSidebarPanel from './right-sidebar/WorkspaceSidebarPanel.vue'
 
-const MAIN_CONTENT_MIN_WIDTH = 520
+const MAIN_CONTENT_MIN_WIDTH = 800
 
 const uiStore = useUiStore()
 const agentStore = useAgentStore()
