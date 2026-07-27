@@ -12,7 +12,8 @@ PROGRESS_STATUSES = frozenset({"running", "completed", "blocked"})
 DEFAULT_REPLACE_KEY = "current_agent_progress"
 
 
-def run(arguments: dict[str, Any], _resources: dict[str, Any]) -> dict[str, Any]:
+def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
+    del resources
     summary = _required_text(arguments, "summary")
     stage = _required_text(arguments, "stage")
     status = str(arguments.get("status") or "running").strip()
