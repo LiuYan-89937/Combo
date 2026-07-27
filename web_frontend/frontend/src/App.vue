@@ -662,4 +662,31 @@ html {
   border-radius: var(--app-radius-sm) !important;
 }
 
+/* 将组件主题变量稳定映射到按钮状态，避免外层文本色覆盖基础态 */
+.n-button {
+  color: var(--n-text-color);
+  background-color: var(--n-color);
+}
+
+.n-button:not(.n-button--disabled):focus {
+  color: var(--n-text-color-focus);
+  background-color: var(--n-color-focus);
+}
+
+.n-button:not(.n-button--disabled):hover {
+  color: var(--n-text-color-hover);
+  background-color: var(--n-color-hover);
+}
+
+.n-button:not(.n-button--disabled):active,
+.n-button.n-button--pressed {
+  color: var(--n-text-color-pressed);
+  background-color: var(--n-color-pressed);
+}
+
+.n-button.n-button--disabled {
+  color: var(--n-text-color-disabled);
+  background-color: var(--n-color-disabled);
+}
+
 </style>
