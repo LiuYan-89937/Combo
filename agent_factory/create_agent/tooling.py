@@ -262,7 +262,6 @@ class CreateAgentToolEnvironmentBuilder:
                 provider_result.system_tool_ids = sorted(set([*provider_result.system_tool_ids, SKILL_TOOL_ID]))
                 skill_specs = [
                     build_skill_tool_spec(
-                        skill_registry,
                         persist_gateway_state=True,
                         stage_context_resource=CREATE_AGENT_STAGE_CONTEXT_RESOURCE,
                     )

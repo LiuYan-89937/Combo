@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent_factory.tooling.skills.registry import SkillRegistry
 from agent_factory.tooling.skills.skill_tool_actions import SkillToolActionRunner
 from agent_factory.tooling.skills.skill_tool_protocol import (
     SKILL_ACTIONS,
@@ -16,7 +15,6 @@ from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolSpec
 
 
 def build_skill_tool_spec(
-    registry: SkillRegistry,
     *,
     persist_gateway_state: bool = False,
     stage_context_resource: str | None = None,
@@ -28,7 +26,7 @@ def build_skill_tool_spec(
         tool_resources[stage_context_resource] = stage_context_resource
     return ToolSpec(
         id=SKILL_TOOL_ID,
-        description=_tool_description(registry),
+        description=_tool_description(),
         entrypoint="agent_factory.tooling.skills.skill_tool:run",
         input_schema=_input_schema(),
         output_schema=_output_schema(),
@@ -145,8 +143,7 @@ def _output_schema() -> dict[str, Any]:
     }
 
 
-def _tool_description(registry: SkillRegistry) -> str:
-    skill_names = [skill.name for skill in registry.packages()]
+def _tool_description() -> str:
     lines = [
         "Skill Gateway for enabled skills using progressive disclosure.",
         (
@@ -167,7 +164,5 @@ def _tool_description(registry: SkillRegistry) -> str:
             "so permission, risk approval, trace, and output validation still apply."
         ),
     ]
-    if skill_names:
-        lines.append("Enabled skills: " + ", ".join(skill_names[:40]))
     lines.append("Call action=list or action=search to inspect available skills.")
     return "\n".join(lines)

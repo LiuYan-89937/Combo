@@ -17,6 +17,12 @@ from agent_factory.tooling.builtins.filesystem.text_changes import (
     atomic_write_bytes,
     text_change_summary,
 )
+from agent_factory.tooling.builtins.filesystem.staged_write import (
+    abort_staged_write,
+    append_staged_write,
+    commit_staged_write,
+    start_staged_write,
+)
 from agent_factory.tooling.builtins.filesystem.workspace_search import workspace_relative_path
 
 
@@ -24,12 +30,44 @@ FOCUS_EVIDENCE_KEY = "focus"
 
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    action = str(arguments.get("action") or "").strip()
+    if action == "start":
+        return ToolRiskResult.model_validate(
+            path_risk_result(arguments, context, default_action="allow", sensitive_action="ask")
+        ).model_dump(mode="json")
+    if action in {"append", "abort"}:
+        return ToolRiskResult(
+            action="allow",
+            risk_level="low",
+            reasons=[f"{action} only changes or removes an uncommitted staged write"],
+            facts={"write_id": str(arguments.get("write_id") or "")},
+        ).model_dump(mode="json")
+    if action == "commit":
+        return ToolRiskResult(
+            action="ask",
+            risk_level="medium",
+            reasons=["committing a staged write atomically replaces the target workspace file"],
+            facts={"write_id": str(arguments.get("write_id") or "")},
+        ).model_dump(mode="json")
     return ToolRiskResult.model_validate(
         path_risk_result(arguments, context, default_action="ask", sensitive_action="ask")
     ).model_dump(mode="json")
 
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
+    action = str(arguments.get("action") or "").strip()
+    if action == "start":
+        return tool_envelope(start_staged_write(arguments, resources))
+    if action == "append":
+        return tool_envelope(append_staged_write(arguments, resources))
+    if action == "commit":
+        result = commit_staged_write(arguments, resources)
+        focus = result.pop(FOCUS_EVIDENCE_KEY, None)
+        return tool_envelope(result, evidence={FOCUS_EVIDENCE_KEY: focus} if focus else {})
+    if action == "abort":
+        return tool_envelope(abort_staged_write(arguments, resources))
+    if action:
+        raise ValueError("action must be start, append, commit, or abort")
     path = required_string(arguments, "path")
     content = arguments.get("content")
     if not isinstance(content, str):

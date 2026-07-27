@@ -16,7 +16,7 @@
       </div>
       <section class="conversation-panel">
         <n-empty
-          v-if="runtimeStore.transcript.length === 0 && !hasActiveStreams"
+          v-if="timelineItems.length === 0 && !hasActiveStreams"
           class="collaboration-empty"
           :description="t('collaboration.noMessages')"
           size="small"
@@ -27,7 +27,8 @@
               <MessageItem
                 :message="item.message"
                 :streaming="isMessageStreaming(item.message.streamId)"
-                quoteable
+                :thinking="item.kind === 'progress' && item.message.status === 'streaming'"
+                :quoteable="item.kind === 'message'"
                 :tip-context="tipContextFor(item.message)"
                 :workspace-context="messageWorkspaceContext"
                 @quote="addMessageReference"

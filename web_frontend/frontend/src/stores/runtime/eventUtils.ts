@@ -8,6 +8,7 @@ const REQUEST_SCOPED_PREFIXES = [
   'model_',
   'tool_',
   'plan_',
+  'assistant_',
   'context_',
   'interrupt_',
   'runtime_request_',
