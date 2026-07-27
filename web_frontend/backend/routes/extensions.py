@@ -57,6 +57,25 @@ def create_extensions_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         )
         return {"event": event}
 
+    @router.get("/mcp/{server_id}")
+    async def get_mcp_config(
+        server_id: str,
+        package_id: str | None = None,
+        resource_mode: str | None = None,
+    ):
+        event = await resource_command(
+            runtime_bridge,
+            "extensions_manage",
+            {
+                "action": "get_mcp_config",
+                "server_id": server_id,
+                **optional_package(package_id),
+                **optional_resource_mode(resource_mode),
+            },
+            {"extension_configs_listed"},
+        )
+        return {"event": event}
+
     @router.patch("/mcp/{server_id}")
     async def set_mcp_enabled(server_id: str, payload: dict[str, Any]):
         event = await resource_command(

@@ -25,6 +25,8 @@ export function useExtensionsManager() {
   const showMcpModal = ref(false)
   const showSkillModal = ref(false)
   const editingMcp = ref<ExtensionItemView | null>(null)
+  const editingMcpConfig = ref<Record<string, unknown> | null>(null)
+  const editingMcpConfigLoading = ref(false)
   const editingSkill = ref<ExtensionItemView | null>(null)
   const busyKey = ref<string | null>(null)
   const skillHubQuery = ref('')
@@ -92,6 +94,8 @@ export function useExtensionsManager() {
   function refreshCurrentExtensions() {
     extensionStore.reset()
     editingMcp.value = null
+    editingMcpConfig.value = null
+    editingMcpConfigLoading.value = false
     editingSkill.value = null
     showMcpModal.value = false
     showSkillModal.value = false
@@ -125,14 +129,32 @@ export function useExtensionsManager() {
 
   function openAddMcp(): void {
     editingMcp.value = null
+    editingMcpConfig.value = null
+    editingMcpConfigLoading.value = false
     mcpInstallResult.value = null
     showMcpModal.value = true
   }
 
-  function openEditMcp(item: ExtensionItemView): void {
+  async function openEditMcp(item: ExtensionItemView): Promise<void> {
+    const serverId = String(item.payload?.server_id || '')
+    if (!serverId) return
     editingMcp.value = item
+    editingMcpConfig.value = null
+    editingMcpConfigLoading.value = true
     mcpInstallResult.value = null
     showMcpModal.value = true
+    try {
+      const event = await commands.getMcpConfig(serverId, extensionContext.value)
+      if (String(editingMcp.value?.payload?.server_id || '') !== serverId) return
+      const config = event?.payload?.server_config
+      editingMcpConfig.value = config && typeof config === 'object' && !Array.isArray(config)
+        ? config as Record<string, unknown>
+        : null
+    } finally {
+      if (String(editingMcp.value?.payload?.server_id || '') === serverId) {
+        editingMcpConfigLoading.value = false
+      }
+    }
   }
 
   function openAddSkill(): void {
@@ -206,6 +228,7 @@ export function useExtensionsManager() {
       if (mcpInstallResult.value?.status !== 'ok') return
       showMcpModal.value = false
       editingMcp.value = null
+      editingMcpConfig.value = null
     } finally {
       mcpInstallRequestId.value = null
       mcpInstallStopping.value = false
@@ -376,6 +399,8 @@ export function useExtensionsManager() {
     activePermissionModeLabel,
     busyKey,
     editingMcp,
+    editingMcpConfig,
+    editingMcpConfigLoading,
     editingSkill,
     extensionKey,
     extensionStore,
