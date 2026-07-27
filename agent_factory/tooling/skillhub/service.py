@@ -21,6 +21,7 @@ from agent_factory.tooling.skills import parse_skill_directory
 SKILLHUB_INSTALL_URL_ENV = "AGENTFACTORY_SKILLHUB_INSTALL_URL"
 SKILLHUB_KIT_URL_ENV = "AGENTFACTORY_SKILLHUB_KIT_URL"
 SKILLHUB_AUTO_INSTALL_ENV = "AGENTFACTORY_SKILLHUB_AUTO_INSTALL"
+SKILLHUB_SKIP_SELF_UPGRADE_ENV = "SKILLHUB_SKIP_SELF_UPGRADE"
 DEFAULT_SKILLHUB_INSTALL_URL = "https://skillhub-1388575217.cos.ap-guangzhou.myqcloud.com/install/install.sh"
 DEFAULT_SKILLHUB_KIT_URL = "https://skillhub-1388575217.cos.ap-guangzhou.myqcloud.com/install/latest.tar.gz"
 DEFAULT_SKILLHUB_SELF_UPDATE_URL = "https://skillhub-1388575217.cos.ap-guangzhou.myqcloud.com/version.json"
@@ -60,10 +61,7 @@ class SkillHubService:
 
     def status(self) -> dict[str, Any]:
         cli_path = resolve_skillhub_cli(self.command)
-        version = ""
-        if cli_path:
-            result = _run_skillhub_command(cli_path, ["--version"], timeout_seconds=15)
-            version = result.combined_output
+        version = _skillhub_cli_version(cli_path) if cli_path else ""
         return {
             "action": "status",
             "status": "ok" if cli_path else "missing",
@@ -97,7 +95,7 @@ class SkillHubService:
             "message": f"SkillHUB search completed. {len(items)} candidates returned.",
             "cli_available": True,
             "cli_path": cli_path,
-            "cli_version": self.status().get("cli_version") or "",
+            "cli_version": _skillhub_cli_version(cli_path),
             "extension_root": str(self.extension_root),
             "skills_dir": str(self.skills_dir),
             "query": query,
@@ -139,7 +137,7 @@ class SkillHubService:
             "message": f"Skill installed and enabled: {enabled_skill.skill_id}",
             "cli_available": True,
             "cli_path": cli_path,
-            "cli_version": self.status().get("cli_version") or "",
+            "cli_version": _skillhub_cli_version(cli_path),
             "extension_root": str(self.extension_root),
             "skills_dir": str(self.skills_dir),
             "items": [],
@@ -184,7 +182,7 @@ class SkillHubService:
             "message": f"Skill removed: {skill_id}" if removed else f"Skill was not installed: {skill_id}",
             "cli_available": bool(cli_path),
             "cli_path": cli_path,
-            "cli_version": self.status().get("cli_version") or "",
+            "cli_version": _skillhub_cli_version(cli_path) if cli_path else "",
             "extension_root": str(self.extension_root),
             "skills_dir": str(self.skills_dir),
             "items": [],
@@ -276,12 +274,11 @@ class SkillHubService:
 def ensure_global_skillhub_cli(*, auto_install: bool = True, timeout_seconds: int = 180) -> dict[str, Any]:
     cli_path = resolve_skillhub_cli()
     if cli_path:
-        version = _run_skillhub_command(cli_path, ["--version"], timeout_seconds=15).combined_output
         return {
             "status": "ok",
             "cli_available": True,
             "cli_path": cli_path,
-            "cli_version": version,
+            "cli_version": _skillhub_cli_version(cli_path),
             "installed": False,
         }
     if not auto_install or not _auto_install_enabled():
@@ -310,11 +307,7 @@ def ensure_global_skillhub_cli(*, auto_install: bool = True, timeout_seconds: in
         "status": "ok" if cli_path else "missing",
         "cli_available": bool(cli_path),
         "cli_path": cli_path,
-        "cli_version": (
-            _run_skillhub_command(cli_path, ["--version"], timeout_seconds=15).combined_output
-            if cli_path
-            else ""
-        ),
+        "cli_version": _skillhub_cli_version(cli_path) if cli_path else "",
         "installed": bool(cli_path),
     }
 
@@ -383,14 +376,22 @@ def _can_remove_skill_path(skills_dir: Path, path: Path) -> bool:
     return target != root
 
 
-def _run_command(command: list[str], *, timeout_seconds: int) -> SkillHubCommandResult:
+def _run_command(
+    command: list[str],
+    *,
+    timeout_seconds: int,
+    environment: dict[str, str] | None = None,
+) -> SkillHubCommandResult:
     process = subprocess.run(
         command,
+        stdin=subprocess.DEVNULL,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         timeout=timeout_seconds,
         check=False,
+        env=environment,
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
     )
     return SkillHubCommandResult(
         returncode=int(process.returncode),
@@ -411,7 +412,34 @@ def _run_skillhub_command(
         if path.suffix.lower() == ".py"
         else [cli_path, *arguments]
     )
-    return _run_command(command, timeout_seconds=timeout_seconds)
+    environment = os.environ.copy()
+    environment[SKILLHUB_SKIP_SELF_UPGRADE_ENV] = "1"
+    return _run_command(
+        command,
+        timeout_seconds=timeout_seconds,
+        environment=environment,
+    )
+
+
+def _skillhub_cli_version(cli_path: str) -> str:
+    path = Path(cli_path)
+    version_path = path.parent / "version.json"
+    if version_path.is_file():
+        try:
+            payload = json.loads(version_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            payload = None
+        if isinstance(payload, dict):
+            version = str(payload.get("version") or "").strip()
+            if version:
+                return f"skillhub {version}"
+    if path.suffix.lower() == ".py":
+        return ""
+    return _run_skillhub_command(
+        cli_path,
+        ["--version"],
+        timeout_seconds=15,
+    ).combined_output
 
 
 def _install_windows_skillhub_cli(*, timeout_seconds: int) -> None:
