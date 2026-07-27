@@ -341,6 +341,7 @@ watchEffect(() => {
   gap: var(--app-space-sm);
   min-width: 0;
   user-select: none;
+  isolation: isolate;
 }
 
 .brand-logo {
@@ -364,12 +365,62 @@ watchEffect(() => {
 }
 
 .app-title {
-  font-size: var(--app-font-xl);
-  font-weight: 600;
+  position: relative;
+  padding: 2px 1px 5px;
   margin: 0;
+  color: transparent;
+  background:
+    linear-gradient(
+      112deg,
+      var(--app-text-strong) 0%,
+      var(--app-text-strong) 38%,
+      var(--app-text-secondary) 50%,
+      var(--app-text-strong) 62%,
+      var(--app-text-strong) 100%
+    );
+  background-position: 0 50%;
+  background-size: 220% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  font-family: 'Avenir Next', 'SF Pro Display', 'Helvetica Neue', Arial, sans-serif;
+  font-size: 17px;
+  font-variation-settings: 'wght' 720;
+  font-weight: 720;
+  line-height: 1;
   white-space: nowrap;
-  letter-spacing: -0.01em;
-  color: var(--app-text-strong);
+  letter-spacing: -0.055em;
+  transition:
+    background-position var(--app-transition-slow),
+    letter-spacing var(--app-transition-base);
+}
+
+.app-title::after {
+  content: '';
+  position: absolute;
+  left: 2px;
+  bottom: 0;
+  width: 34px;
+  height: 2px;
+  border-radius: var(--app-radius-pill);
+  background:
+    linear-gradient(
+      90deg,
+      var(--app-text-strong) 0 72%,
+      transparent 72% 82%,
+      var(--app-text-secondary) 82% 100%
+    );
+  transform: skewX(-24deg);
+  transform-origin: left center;
+  transition: width var(--app-transition-base);
+}
+
+.brand:hover .app-title {
+  background-position: 100% 50%;
+  letter-spacing: -0.04em;
+}
+
+.brand:hover .app-title::after {
+  width: 52px;
 }
 
 .connection-tag {
@@ -438,7 +489,7 @@ watchEffect(() => {
     display: none;
   }
   .app-title {
-    font-size: var(--app-font-lg);
+    font-size: 15px;
   }
   .brand-logo {
     width: 24px;
