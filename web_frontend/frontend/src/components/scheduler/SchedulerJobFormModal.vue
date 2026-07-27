@@ -74,6 +74,7 @@
           v-if="argumentMode === 'form' && selectedToolSchema"
           v-model="argumentDraft"
           :schema="selectedToolSchema"
+          :show-validation="argumentValidationVisible"
         />
         <n-empty
           v-else-if="argumentMode === 'form'"
@@ -122,6 +123,7 @@ import type { FormInst, FormRules } from 'naive-ui'
 import { useSchedulerStore } from '@/stores/scheduler'
 import type { SchedulerJobInput } from '@/api/resourceTypes'
 import { useI18n } from '@/composables/useI18n'
+import { requiredTextRule } from '@/utils/formValidation'
 import ResourceSchemaForm from '@/components/agent/ResourceSchemaForm.vue'
 import {
   createResourceDraft,
@@ -151,6 +153,7 @@ const formRef = ref<FormInst | null>(null)
 const argumentMode = ref<'form' | 'json'>('form')
 const argumentDraft = ref<unknown>({})
 const argumentError = ref('')
+const argumentValidationVisible = ref(false)
 const formData = ref({
   target_kind: 'graph_run' as TargetKind,
   enabled: true,
@@ -184,10 +187,11 @@ const selectedToolSchema = computed<Record<string, unknown> | null>(() => {
 })
 
 const rules = computed<FormRules>(() => ({
-  schedule_expr: [{ required: true, message: t('scheduler.validateCron'), trigger: 'blur' }],
-  task_content: [{ required: true, message: t('scheduler.validateTask'), trigger: 'blur' }],
+  schedule_expr: [requiredTextRule(t('scheduler.validateCron'))],
+  task_content: [requiredTextRule(t('scheduler.validateTask'))],
   tool_id: [
     {
+      required: formData.value.target_kind === 'tool_call',
       validator: () => formData.value.target_kind !== 'tool_call' || Boolean(formData.value.tool_id),
       message: t('scheduler.validateTool'),
       trigger: 'change',
@@ -195,9 +199,10 @@ const rules = computed<FormRules>(() => ({
   ],
   command: [
     {
+      required: formData.value.target_kind === 'script_run',
       validator: () => formData.value.target_kind !== 'script_run' || Boolean(formData.value.command.trim()),
       message: t('scheduler.validateCommand'),
-      trigger: 'blur',
+      trigger: ['input', 'blur'],
     },
   ],
 }))
@@ -263,6 +268,7 @@ function toolArguments(): Record<string, any> | null {
   const schema = selectedToolSchema.value
   if (!schema) return {}
   if (!resourceDraftComplete(schema, argumentDraft.value)) {
+    argumentValidationVisible.value = true
     argumentError.value = t('scheduler.invalidToolArguments')
     return null
   }
@@ -290,6 +296,7 @@ function parseArguments(): Record<string, any> | null {
 function handleArgumentModeChange(value: string): void {
   if (value !== 'form' && value !== 'json') return
   argumentError.value = ''
+  argumentValidationVisible.value = false
   if (value === 'json') {
     const schema = selectedToolSchema.value
     const current = schema ? resourceDraftValue(schema, argumentDraft.value) : {}
@@ -324,6 +331,7 @@ function resetForm() {
   argumentMode.value = 'form'
   argumentDraft.value = {}
   argumentError.value = ''
+  argumentValidationVisible.value = false
 }
 
 watch(
@@ -332,6 +340,7 @@ watch(
     argumentDraft.value = createResourceDraft(selectedToolSchema.value || { type: 'object', properties: {} })
     formData.value.arguments_json = '{}'
     argumentError.value = ''
+    argumentValidationVisible.value = false
   },
 )
 

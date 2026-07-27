@@ -202,17 +202,25 @@
       preset="dialog"
       :title="credentialEditing ? t('modelPool.editCredential') : t('modelPool.addCredential')"
     >
-      <n-form label-placement="top">
-        <n-form-item :label="t('modelPool.displayName')">
+      <n-form
+        ref="credentialFormRef"
+        :model="credentialForm"
+        :rules="credentialRules"
+        label-placement="top"
+      >
+        <n-form-item :label="t('modelPool.displayName')" path="display_name">
           <n-input v-model:value="credentialForm.display_name" :placeholder="t('modelPool.credentialNamePlaceholder')" />
         </n-form-item>
-        <n-form-item :label="t('modelPool.provider')">
+        <n-form-item :label="t('modelPool.provider')" path="provider">
           <n-select v-model:value="credentialForm.provider" :options="providerOptions" :placeholder="t('modelPool.providerPlaceholder')" />
         </n-form-item>
-        <n-form-item :label="t('modelPool.baseUrl')">
+        <n-form-item :label="t('modelPool.baseUrl')" path="base_url">
           <n-input v-model:value="credentialForm.base_url" :placeholder="t('modelPool.baseUrlPlaceholder')" />
         </n-form-item>
-        <n-form-item :label="credentialEditing ? t('modelPool.replaceApiKey') : t('modelPool.apiKey')">
+        <n-form-item
+          :label="credentialEditing ? t('modelPool.replaceApiKey') : t('modelPool.apiKey')"
+          path="api_key"
+        >
           <n-input v-model:value="credentialForm.api_key" type="password" show-password-on="mousedown" :placeholder="t('modelPool.apiKeyPlaceholder')" />
         </n-form-item>
       </n-form>
@@ -230,8 +238,13 @@
       :title="profileEditing ? t('modelPool.editProfile') : t('modelPool.addProfile')"
       style="width: min(720px, 92vw)"
     >
-      <n-form label-placement="top">
-        <n-form-item :label="t('modelPool.displayName')">
+      <n-form
+        ref="profileFormRef"
+        :model="profileForm"
+        :rules="profileRules"
+        label-placement="top"
+      >
+        <n-form-item :label="t('modelPool.displayName')" path="display_name">
           <n-input v-model:value="profileForm.display_name" :placeholder="t('modelPool.profileNamePlaceholder')" />
         </n-form-item>
         <n-form-item :label="t('modelPool.profileDescription')">
@@ -242,13 +255,13 @@
             :placeholder="t('modelPool.profileDescriptionPlaceholder')"
           />
         </n-form-item>
-        <n-form-item :label="t('modelPool.modelType')">
+        <n-form-item :label="t('modelPool.modelType')" path="kind">
           <n-select v-model:value="profileForm.kind" :options="modelKindOptions" />
         </n-form-item>
-        <n-form-item :label="t('modelPool.credential')">
+        <n-form-item :label="t('modelPool.credential')" path="credential_id">
           <n-select v-model:value="profileForm.credential_id" :options="credentialOptions" :placeholder="t('modelPool.credentialPlaceholder')" />
         </n-form-item>
-        <n-form-item :label="t('modelPool.modelName')">
+        <n-form-item :label="t('modelPool.modelName')" path="model_name">
           <n-input v-model:value="profileForm.model_name" :placeholder="t('modelPool.modelNamePlaceholder')" />
         </n-form-item>
         <n-form-item v-if="profileForm.kind === 'chat'" :label="t('modelPool.capabilities')">
@@ -322,7 +335,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { use } from 'echarts/core'
 import { BarChart, LineChart } from 'echarts/charts'
 import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
@@ -354,6 +367,8 @@ import {
   useDialog,
   useMessage,
   type DataTableColumns,
+  type FormInst,
+  type FormRules,
 } from 'naive-ui'
 import { Add, Pulse, Refresh } from '@/components/icons'
 import {
@@ -367,6 +382,12 @@ import {
   type ModelUsageSummary,
 } from '@/api/modelPool'
 import { useI18n } from '@/composables/useI18n'
+import {
+  requiredHttpUrlRule,
+  requiredTextRule,
+  requiredValueRule,
+  validateForm,
+} from '@/utils/formValidation'
 
 use([BarChart, CanvasRenderer, GridComponent, LegendComponent, LineChart, TooltipComponent])
 
@@ -390,6 +411,8 @@ const credentialModalOpen = ref(false)
 const profileModalOpen = ref(false)
 const credentialEditing = ref<ModelPoolCredential | null>(null)
 const profileEditing = ref<ModelPoolProfile | null>(null)
+const credentialFormRef = ref<FormInst | null>(null)
+const profileFormRef = ref<FormInst | null>(null)
 
 const credentialForm = reactive({
   display_name: '',
@@ -445,6 +468,25 @@ const usageDayOptions = computed(() => [
   { label: t('modelPool.usageLast30Days'), value: 30 },
   { label: t('modelPool.usageLast90Days'), value: 90 },
 ])
+const credentialRules = computed<FormRules>(() => ({
+  display_name: [requiredTextRule(t('validation.required'))],
+  provider: [requiredValueRule(t('validation.selectionRequired'))],
+  base_url: [
+    requiredHttpUrlRule(
+      t('validation.required'),
+      t('validation.url'),
+    ),
+  ],
+  api_key: credentialEditing.value
+    ? []
+    : [requiredTextRule(t('validation.required'))],
+}))
+const profileRules = computed<FormRules>(() => ({
+  display_name: [requiredTextRule(t('validation.required'))],
+  kind: [requiredValueRule(t('validation.selectionRequired'))],
+  credential_id: [requiredValueRule(t('modelPool.selectCredentialFirst'))],
+  model_name: [requiredTextRule(t('validation.required'))],
+}))
 const usageColumns = computed<DataTableColumns<ModelUsageGroup>>(() => [
   { title: t('modelPool.usageName'), key: 'label', minWidth: 180, ellipsis: { tooltip: true } },
   { title: t('modelPool.usageCalls'), key: 'call_count', width: 96, render: (row) => formatNumber(row.totals.call_count) },
@@ -565,9 +607,11 @@ function openCredential(item?: ModelPoolCredential): void {
   credentialForm.base_url = item?.base_url || ''
   credentialForm.api_key = ''
   credentialModalOpen.value = true
+  void nextTick(() => credentialFormRef.value?.restoreValidation())
 }
 
 async function saveCredential(): Promise<void> {
+  if (!await validateForm(credentialFormRef.value)) return
   saving.value = true
   try {
     const payload: Record<string, unknown> = {
@@ -622,9 +666,11 @@ function openProfile(item?: ModelPoolProfile): void {
   profileForm.image_edit_unit_price = item?.pricing.image_edit_unit_price ?? null
   profileForm.notes = item?.notes || ''
   profileModalOpen.value = true
+  void nextTick(() => profileFormRef.value?.restoreValidation())
 }
 
 async function saveProfile(): Promise<void> {
+  if (!await validateForm(profileFormRef.value)) return
   const credential = credentials.value.find((item) => item.credential_id === profileForm.credential_id)
   if (!credential) {
     message.error(t('modelPool.selectCredentialFirst'))

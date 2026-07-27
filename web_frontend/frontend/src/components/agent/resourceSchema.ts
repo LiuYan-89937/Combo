@@ -70,6 +70,33 @@ export function resourceDraftComplete(schema: Record<string, unknown>, draft: un
     .every(field => resourceFieldComplete(field.schema, values[field.name]))
 }
 
+export function resourceFieldComplete(schema: ResourceJsonSchema, value: unknown): boolean {
+  if (isEmptyResourceValue(value)) return false
+  if (schema.enum?.length && !schema.enum.some(item => Object.is(item, value))) return false
+  if (schema.type === 'string') {
+    if (typeof value !== 'string') return false
+    if (schema.minLength !== undefined && value.length < schema.minLength) return false
+    if (schema.maxLength !== undefined && value.length > schema.maxLength) return false
+    if (schema.pattern) {
+      try {
+        if (!new RegExp(schema.pattern).test(value)) return false
+      } catch {
+        return false
+      }
+    }
+    return true
+  }
+  if (schema.type === 'integer') return typeof value === 'number' && Number.isInteger(value) && numberInRange(schema, value)
+  if (schema.type === 'number') return typeof value === 'number' && numberInRange(schema, value)
+  if (schema.type === 'object') {
+    return resourceDraftComplete(schema as unknown as Record<string, unknown>, value)
+  }
+  if (schema.type !== 'array' || !Array.isArray(value)) return true
+  if (value.length < Math.max(1, schema.minItems || 0)) return false
+  if (schema.maxItems !== undefined && value.length > schema.maxItems) return false
+  return !schema.uniqueItems || new Set(value.map(item => JSON.stringify(item))).size === value.length
+}
+
 export function resourceDraftValue(schema: Record<string, unknown>, draft: unknown): unknown {
   const fields = resourceSchemaFields(schema)
   if (!fields) {
@@ -112,33 +139,6 @@ function isStructuredField(schema: ResourceJsonSchema): boolean {
     return Object.values(schema.properties).every(isStructuredField)
   }
   return schema.type === 'array' && schema.items?.type === 'string'
-}
-
-function resourceFieldComplete(schema: ResourceJsonSchema, value: unknown): boolean {
-  if (isEmptyResourceValue(value)) return false
-  if (schema.enum?.length && !schema.enum.some(item => Object.is(item, value))) return false
-  if (schema.type === 'string') {
-    if (typeof value !== 'string') return false
-    if (schema.minLength !== undefined && value.length < schema.minLength) return false
-    if (schema.maxLength !== undefined && value.length > schema.maxLength) return false
-    if (schema.pattern) {
-      try {
-        if (!new RegExp(schema.pattern).test(value)) return false
-      } catch {
-        return false
-      }
-    }
-    return true
-  }
-  if (schema.type === 'integer') return typeof value === 'number' && Number.isInteger(value) && numberInRange(schema, value)
-  if (schema.type === 'number') return typeof value === 'number' && numberInRange(schema, value)
-  if (schema.type === 'object') {
-    return resourceDraftComplete(schema as unknown as Record<string, unknown>, value)
-  }
-  if (schema.type !== 'array' || !Array.isArray(value)) return true
-  if (value.length < Math.max(1, schema.minItems || 0)) return false
-  if (schema.maxItems !== undefined && value.length > schema.maxItems) return false
-  return !schema.uniqueItems || new Set(value.map(item => JSON.stringify(item))).size === value.length
 }
 
 function normalizedFieldValue(schema: ResourceJsonSchema, value: unknown): unknown {

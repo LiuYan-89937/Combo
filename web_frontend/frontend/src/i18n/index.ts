@@ -39,6 +39,12 @@ const zhCN = {
   'common.noDescription': '无描述',
   'common.searchSessions': '搜索会话...',
   'common.itemCount': '{count} 项',
+  'validation.required': '此项为必填项',
+  'validation.selectionRequired': '请选择一项',
+  'validation.url': '请输入有效的 HTTP 或 HTTPS 地址',
+  'header.minimizeWindow': '最小化窗口',
+  'header.maximizeWindow': '最大化或还原窗口',
+  'header.closeWindow': '关闭窗口',
 
   'chat.inputPlaceholder': '输入消息...',
   'chat.modelSelectorPlaceholder': '主模型',
@@ -628,6 +634,7 @@ const zhCN = {
   'knowledge.validateDisplayName': '请输入显示名称',
   'knowledge.validateUrl': '请输入有效的 URL',
   'knowledge.validateNote': '请输入笔记内容',
+  'knowledge.validateFiles': '请选择至少一个文件或文件夹',
 
   'extensions.title': '扩展管理',
   'extensions.mcpServers': 'MCP 服务器',
@@ -976,6 +983,12 @@ const enUS: Record<MessageKey, string> = {
   'common.noDescription': 'No description',
   'common.searchSessions': 'Search sessions...',
   'common.itemCount': '{count} items',
+  'validation.required': 'This field is required',
+  'validation.selectionRequired': 'Select an option',
+  'validation.url': 'Enter a valid HTTP or HTTPS URL',
+  'header.minimizeWindow': 'Minimize window',
+  'header.maximizeWindow': 'Maximize or restore window',
+  'header.closeWindow': 'Close window',
 
   'chat.inputPlaceholder': 'Enter a message...',
   'chat.modelSelectorPlaceholder': 'Main model',
@@ -1565,6 +1578,7 @@ const enUS: Record<MessageKey, string> = {
   'knowledge.validateDisplayName': 'Enter a display name',
   'knowledge.validateUrl': 'Enter a valid URL',
   'knowledge.validateNote': 'Enter note content',
+  'knowledge.validateFiles': 'Select at least one file or folder',
 
   'extensions.title': 'Extensions',
   'extensions.mcpServers': 'MCP servers',

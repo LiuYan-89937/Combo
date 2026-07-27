@@ -16,6 +16,7 @@
         :model-value="drafts[request.resource_id]"
         :schema="request.value_schema || {}"
         :secret-fields="request.secret_fields || (request.secret ? [''] : [])"
+        :show-validation="validationVisible"
         @update:model-value="drafts[request.resource_id] = $event"
       />
       <div v-if="errors[request.resource_id]" class="resource-request-error">
@@ -25,7 +26,7 @@
 
     <div class="resource-request-actions">
       <n-button size="small" quaternary :disabled="saving" @click="$emit('skip')">稍后配置</n-button>
-      <n-button type="primary" size="small" :loading="saving" :disabled="!allComplete" @click="saveAll">
+      <n-button type="primary" size="small" :loading="saving" @click="saveAll">
         保存并继续
       </n-button>
     </div>
@@ -57,6 +58,7 @@ const emit = defineEmits<{ configured: [resourceIds: string[]]; skip: [] }>()
 const drafts = ref<Record<string, unknown>>({})
 const errors = ref<Record<string, string>>({})
 const saving = ref(false)
+const validationVisible = ref(false)
 
 const allComplete = computed(() => props.requests.length > 0 && props.requests.every((request) => (
   resourceDraftComplete(request.value_schema || {}, drafts.value[request.resource_id])
@@ -70,12 +72,15 @@ watch(
       createResourceDraft(request.value_schema || {}),
     ]))
     errors.value = {}
+    validationVisible.value = false
   },
   { immediate: true, deep: true },
 )
 
 async function saveAll() {
-  if (!allComplete.value || saving.value) return
+  if (saving.value) return
+  validationVisible.value = true
+  if (!allComplete.value) return
   saving.value = true
   errors.value = {}
   const saved: string[] = []
