@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# One-command startup for FastAgentFactory Web.
+# Internal Web service supervisor. Use ../deploy.sh as the public entrypoint.
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/web_frontend/lib/runtime_env.sh"
+DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${DEPLOY_DIR}/../web_frontend/lib/runtime_env.sh"
 
 web_require_project_root
 cd "${PROJECT_ROOT}"
@@ -143,7 +143,13 @@ mkdir -p "${RUNTIME_LOG_DIR}"
 BACKEND_PID=$!
 wait_for_backend_ready
 echo ""
-echo "Starting frontend development server on port 3000..."
+echo "Building frontend production assets..."
+(
+    cd "${FRONTEND_DIR}"
+    npm run build
+)
+echo ""
+echo "Starting frontend preview server on port 3000..."
 echo ""
 echo "==================================="
 echo "Application ready"
@@ -158,7 +164,7 @@ echo ""
 
 (
     cd "${FRONTEND_DIR}"
-    exec npm run dev
+    exec npm run preview
 ) > >(tee -a "${FRONTEND_LOG_PATH}") 2>&1 &
 FRONTEND_PID=$!
 

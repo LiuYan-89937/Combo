@@ -111,11 +111,6 @@ import { useI18n } from '@/composables/useI18n'
 import { workspaceEntryView } from '@/stores/runtime/viewMappers'
 import { workspaceFileView } from '@/stores/runtime/viewMappers'
 import { workspaceApi } from '@/api/workspace'
-import {
-  desktopWorkspaceFileActionsAvailable,
-  revealWorkspaceEntry,
-  saveWorkspaceFileAs,
-} from '@/api/desktopWorkspaceFiles'
 import { useContextReferenceStore } from '@/stores/contextReferences'
 import { workspaceFileContextReference } from '@/utils/contextReferences'
 import type { WorkspaceRequestContext } from '@/api/resourceTypes'
@@ -165,18 +160,6 @@ const contextMenuOptions = computed<DropdownOption[]>(() => {
       key: 'open',
     },
   ]
-  if (desktopWorkspaceFileActionsAvailable()) {
-    options.push({
-      label: t('workspace.revealInFileManager'),
-      key: 'reveal',
-    })
-    if (entry.kind === 'file') {
-      options.push({
-        label: t('workspace.saveAs'),
-        key: 'save-as',
-      })
-    }
-  }
   if (entry.kind === 'file') {
     options.push(
       { type: 'divider', key: 'file-actions-divider' },
@@ -292,25 +275,6 @@ async function handleContextMenuSelect(key: string | number) {
   try {
     if (key === 'open') {
       handleEntryClick(entry)
-      return
-    }
-    if (key === 'reveal') {
-      await revealWorkspaceEntry(
-        effectiveScope.value,
-        entry.path,
-        requestContext.value,
-      )
-      return
-    }
-    if (key === 'save-as' && entry.kind === 'file') {
-      const destination = await saveWorkspaceFileAs(
-        effectiveScope.value,
-        entry.path,
-        requestContext.value,
-      )
-      if (destination) {
-        message.success(t('workspace.fileSavedAs', { path: destination }))
-      }
       return
     }
     if (key === 'add-reference' && entry.kind === 'file') {

@@ -212,25 +212,6 @@ http://localhost:3000
 
 更换实例时只需修改 SSH Host 和 Port。持久盘路径变化时同时修改 `REMOTE_MODEL_ROOT`、`REMOTE_STATE_ROOT`、`REMOTE_LLAMA_SOURCE_ROOT`、`REMOTE_LLAMA_RUNTIME_ROOT` 和 `REMOTE_STABLE_DIFFUSION_CPP_DIR`。
 
-## 日常启动
-
-完成过 `bootstrap` 后，日常启动本机工作台也可直接运行：
-
-```bash
-./start.sh
-```
-
-`start.sh` 会：
-
-- 读取 `.env`。
-- 建立并验证 Chat、Embedding、Image、Telemetry 四条 SSH 转发。
-- 使用 uv 同步本机 Python Web 依赖。
-- 使用 npm 准备前端依赖。
-- 准备 Native Agent Runtime 与共享依赖池。
-- 启动后端 `:8000` 和前端 `:3000`。
-
-它不会重新构建 llama.cpp 或下载模型；这些操作统一由 `deploy.sh` 管理。
-
 ## 使用指南
 
 ### 网页搜索 MCP
@@ -463,14 +444,14 @@ GGUF 使用 `curl --continue-at -` 续传；完成后必须通过 SHA256 才会�
 
 ### Native Agent Runtime 初始化失败
 
-检查本机 Python、uv、包依赖声明和会话工作区权限后重新运行 `./start.sh`。AgentPackage 使用宿主子进程和共享依赖池，不会因本机缺少 Docker 而无法启动。
+检查本机 Python、uv、包依赖声明和会话工作区权限后重新运行 `./deploy.sh up`。AgentPackage 使用宿主子进程和共享依赖池，不会因本机缺少 Docker 而无法启动。
 
 ## 静态检查
 
 项目开发约定不通过部署脚本运行 Agent 业务示例。提交前执行语法和静态检查：
 
 ```bash
-bash -n deploy.sh deploy/remote_runtime.sh start.sh web_frontend/start_backend.sh
+bash -n deploy.sh deploy/start_web.sh deploy/remote_runtime.sh web_frontend/lib/runtime_env.sh
 python3 -m compileall -q agent_factory web_frontend/backend deploy
 git diff --check
 ```

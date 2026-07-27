@@ -319,7 +319,6 @@ http://127.0.0.1:3000
 | `./deploy.sh up` | 按 `DEPLOY_TARGET` 幂等部署推理节点并启动 Web；SSH 目标同时建立隧道。 |
 | `./deploy.sh up --no-web` | 完成推理节点一键部署，不启动前后端。 |
 | `./deploy.sh bootstrap` | 部署并启动推理节点，不启动 Web。 |
-| `./start.sh` | 已部署环境中只启动 Web 与 Native Agent Runtime，并按连接模式直连节点或建立 SSH 隧道。 |
 | `./deploy.sh status` | 查看推理节点软件、ROCm 和模型运行状态。 |
 | `./deploy.sh logs` | 查看推理节点最近 200 行日志。 |
 | `./deploy.sh restart` | 重启推理节点并等待模型 ready。 |
@@ -351,7 +350,7 @@ git pull --ff-only
 ```bash
 ./deploy.sh sync
 ./deploy.sh restart
-./start.sh
+./deploy.sh up
 ```
 
 部署脚本、依赖或模型配置发生变化时，重新执行完整幂等部署：
@@ -496,7 +495,7 @@ SSH 已连接但远端转发目标未监听：
 检查 Python、uv、包依赖声明和会话工作区权限后再执行：
 
 ```bash
-./start.sh
+./deploy.sh up
 ```
 
 AgentPackage、系统 Chat 和子 Agent 统一使用 Native Runtime，不依赖本机 Docker。
@@ -528,7 +527,7 @@ profile/analysis.md
 部署脚本不自动运行 Agent 业务示例。提交前执行：
 
 ```bash
-bash -n deploy.sh deploy/remote_runtime.sh start.sh web_frontend/start_backend.sh
+bash -n deploy.sh deploy/start_web.sh deploy/remote_runtime.sh web_frontend/lib/runtime_env.sh
 python3 -m compileall -q agent_factory web_frontend/backend deploy
 git diff --check
 ```

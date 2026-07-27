@@ -155,14 +155,6 @@ After the first deployment, open **Published Agents** and initialize the built-i
 
 If the first chat message is sent before Factory Chat is ready, the application starts initialization automatically and displays **Initializing runtime…**. Wait until it changes to the normal Assistant reasoning state before expecting streamed output.
 
-After a successful bootstrap, the regular local startup path is:
-
-```bash
-./start.sh
-```
-
-`start.sh` reconnects the configured endpoints, validates dependencies, prepares the native Agent runtime, and starts the frontend and backend. It does not rebuild llama.cpp or redownload models.
-
 ## Deployment Commands
 
 | Command | Purpose |
@@ -262,7 +254,7 @@ Important runtime boundaries:
 
 ```bash
 python3 -m compileall agent_factory web_frontend/backend deploy
-bash -n start.sh deploy.sh deploy/remote_runtime.sh web_frontend/lib/runtime_env.sh
+bash -n deploy.sh deploy/start_web.sh deploy/remote_runtime.sh web_frontend/lib/runtime_env.sh
 cd web_frontend/frontend && npm run type-check
 ```
 

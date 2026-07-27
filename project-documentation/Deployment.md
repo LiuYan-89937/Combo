@@ -210,7 +210,7 @@ Verify from the UI:
 | `./deploy.sh rollback-llama` | Restore the previous active implementation |
 | `./deploy.sh build-sd` | Build the image-generation server |
 
-After bootstrap, `./start.sh` is the normal Web startup command. It validates dependencies and endpoint connectivity but does not rebuild models.
+`./deploy.sh up` is the only public startup entrypoint. It reconciles the deployment idempotently and then starts the Web stack.
 
 ## 8. Updating the Project
 
@@ -281,13 +281,13 @@ Inspect context size, slots, KV cache types, GPU layers, YaRN scaling, MTP, imag
 
 ### Native Agent Runtime Initialization Fails
 
-Check Python, uv, package dependency declarations, and session-workspace permissions, then rerun `./start.sh`. The AgentPackage runtime does not require Docker.
+Check Python, uv, package dependency declarations, and session-workspace permissions, then rerun `./deploy.sh up`. The AgentPackage runtime does not require Docker.
 
 ## 12. Static Checks
 
 ```bash
 python3 -m compileall agent_factory web_frontend/backend deploy
-bash -n start.sh deploy.sh deploy/remote_runtime.sh web_frontend/lib/runtime_env.sh
+bash -n deploy.sh deploy/start_web.sh deploy/remote_runtime.sh web_frontend/lib/runtime_env.sh
 cd web_frontend/frontend && npm run type-check
 ```
 

@@ -1,13 +1,3 @@
-import { isTauri } from '@tauri-apps/api/core'
-import { getCurrentWindow } from '@tauri-apps/api/window'
-import {
-  isPermissionGranted,
-  onAction,
-  requestPermission,
-  sendNotification,
-  type Options as NativeNotificationOptions,
-} from '@tauri-apps/plugin-notification'
-import type { PluginListener } from '@tauri-apps/api/core'
 import type { Router } from 'vue-router'
 import { translate, type I18nKey } from '@/i18n'
 import { postCommand } from '@/api/http'
@@ -46,10 +36,8 @@ export interface TaskTerminalNotification {
 const SEEN_NOTIFICATION_STORAGE_KEY = 'fast-agent-factory.seenTaskNotifications'
 const MAX_SEEN_NOTIFICATION_KEYS = 256
 const MAX_NOTIFICATION_BODY_LENGTH = 240
-const NATIVE_TARGET_EXTRA_KEY = 'fastAgentFactoryTarget'
 
 let router: Router | null = null
-let nativeActionListener: PluginListener | null = null
 let initialization: Promise<void> | null = null
 const pendingNotifications: TaskTerminalNotification[] = []
 const seenKeys = readSeenKeys()
@@ -57,9 +45,9 @@ const seenKeys = readSeenKeys()
 export function initializeTaskNotifications(appRouter: Router): Promise<void> {
   router = appRouter
   if (initialization) return initialization
-  initialization = initializeNativeNotifications()
+  initialization = initializeBrowserNotifications()
     .catch((error) => {
-      console.warn('Native task notifications are unavailable:', error)
+      console.warn('Browser task notifications are unavailable:', error)
     })
     .finally(() => {
       const pending = pendingNotifications.splice(0)
@@ -69,8 +57,6 @@ export function initializeTaskNotifications(appRouter: Router): Promise<void> {
 }
 
 export function disposeTaskNotifications(): void {
-  nativeActionListener?.unregister()
-  nativeActionListener = null
   router = null
   initialization = null
 }
@@ -83,18 +69,14 @@ export function publishTaskNotification(notification: TaskTerminalNotification):
   void deliverTaskNotification(notification)
 }
 
-export async function requestNativeTaskNotificationPermission(): Promise<boolean> {
-  return ensureNativePermission(true)
+export async function requestTaskNotificationPermission(): Promise<boolean> {
+  return ensureBrowserPermission(true)
 }
 
-async function initializeNativeNotifications(): Promise<void> {
-  if (!isTauri()) return
-  nativeActionListener = await onAction((notification) => {
-    const target = targetFromNativeNotification(notification)
-    if (target) void openNotificationTarget(target)
-  })
+async function initializeBrowserNotifications(): Promise<void> {
   const preferences = useTaskNotificationPreferencesStore()
-  if (preferences.active) await ensureNativePermission(true)
+  if (!preferences.active || typeof window === 'undefined' || !('Notification' in window)) return
+  await ensureBrowserPermission(false)
 }
 
 async function deliverTaskNotification(notification: TaskTerminalNotification): Promise<void> {
@@ -107,26 +89,17 @@ async function deliverTaskNotification(notification: TaskTerminalNotification): 
   const title = notificationTitle(notification)
   const body = compactBody(notification.body) || statusFallback(notification.status)
   const focused = await isAppFocused()
-  if (focused || !isTauri()) {
+  if (focused) {
     showInAppNotification(notification, title, body)
     return
   }
 
-  if (!(await ensureNativePermission(false))) {
+  if (!(await ensureBrowserPermission(false))) {
     showInAppNotification(notification, title, body)
     return
   }
 
-  sendNotification({
-    id: stableNotificationId(notification.key),
-    title,
-    body,
-    autoCancel: true,
-    group: notification.category,
-    extra: {
-      [NATIVE_TARGET_EXTRA_KEY]: JSON.stringify(notification.target),
-    },
-  })
+  showBrowserNotification(notification, title, body)
 }
 
 function showInAppNotification(
@@ -148,22 +121,16 @@ function showInAppNotification(
   })
 }
 
-async function ensureNativePermission(requestIfMissing: boolean): Promise<boolean> {
-  if (!isTauri()) return false
-  if (await isPermissionGranted()) return true
+async function ensureBrowserPermission(requestIfMissing: boolean): Promise<boolean> {
+  if (typeof window === 'undefined' || !('Notification' in window)) return false
+  if (Notification.permission === 'granted') return true
   if (!requestIfMissing) return false
-  return (await requestPermission()) === 'granted'
+  return (await Notification.requestPermission()) === 'granted'
 }
 
 async function isAppFocused(): Promise<boolean> {
   if (typeof document === 'undefined') return false
-  if (document.visibilityState !== 'visible' || !document.hasFocus()) return false
-  if (!isTauri()) return true
-  try {
-    return await getCurrentWindow().isFocused()
-  } catch {
-    return document.hasFocus()
-  }
+  return document.visibilityState === 'visible' && document.hasFocus()
 }
 
 async function isCurrentTargetVisible(target: TaskNotificationTarget): Promise<boolean> {
@@ -228,21 +195,7 @@ async function openNotificationTarget(target: TaskNotificationTarget): Promise<v
 }
 
 async function focusApplicationWindow(): Promise<void> {
-  if (!isTauri()) return
-  const window = getCurrentWindow()
-  await window.unminimize()
-  await window.show()
-  await window.setFocus()
-}
-
-function targetFromNativeNotification(notification: NativeNotificationOptions): TaskNotificationTarget | null {
-  const serialized = notification.extra?.[NATIVE_TARGET_EXTRA_KEY]
-  if (typeof serialized !== 'string') return null
-  try {
-    return JSON.parse(serialized) as TaskNotificationTarget
-  } catch {
-    return null
-  }
+  window.focus()
 }
 
 function notificationTitle(notification: TaskTerminalNotification): string {
@@ -285,12 +238,20 @@ function compactBody(value: string | null | undefined): string {
   return `${normalized.slice(0, MAX_NOTIFICATION_BODY_LENGTH - 1)}…`
 }
 
-function stableNotificationId(value: string): number {
-  let hash = 0
-  for (let index = 0; index < value.length; index += 1) {
-    hash = ((hash << 5) - hash + value.charCodeAt(index)) | 0
+function showBrowserNotification(
+  notification: TaskTerminalNotification,
+  title: string,
+  body: string,
+): void {
+  const browserNotification = new Notification(title, {
+    body,
+    tag: notification.key,
+  })
+  browserNotification.onclick = () => {
+    browserNotification.close()
+    window.focus()
+    void openNotificationTarget(notification.target)
   }
-  return hash
 }
 
 function readSeenKeys(): Set<string> {

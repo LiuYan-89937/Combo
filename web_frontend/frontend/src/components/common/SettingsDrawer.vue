@@ -164,7 +164,7 @@ import {
 } from '@/stores/taskNotificationPreferences'
 import type { Locale } from '@/i18n'
 import type { ThemeMode } from '@/stores/ui'
-import { requestNativeTaskNotificationPermission } from '@/services/taskNotifications'
+import { requestTaskNotificationPermission } from '@/services/taskNotifications'
 
 const props = defineProps<{
   show: boolean
@@ -231,7 +231,7 @@ const taskNotificationCategoryOptions = computed<Array<{
 
 function setTaskNotificationsEnabled(value: boolean): void {
   taskNotificationPreferences.setEnabled(value)
-  if (value) void requestNativeTaskNotificationPermission()
+  if (value) void requestTaskNotificationPermission()
 }
 </script>
 

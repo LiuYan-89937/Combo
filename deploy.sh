@@ -420,7 +420,7 @@ case "${COMMAND}" in
             else
                 log "Starting the Web application with direct inference-node access"
             fi
-            exec "${PROJECT_ROOT}/start.sh"
+            exec "${PROJECT_ROOT}/deploy/start_web.sh"
         fi
         log "Inference-node deployment is ready; Web startup was skipped"
         ;;
