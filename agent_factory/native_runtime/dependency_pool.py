@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 import subprocess
 import sys
+import threading
+from typing import Any
 
 from agent_factory.environment_system.pool import (
     DependencyPool,
@@ -17,6 +20,14 @@ from agent_factory.environment_system.python_requirements import (
     PythonRequirementError,
     normalize_python_requirements,
 )
+from agent_factory.observed_process import (
+    ObservedProcessCancelled,
+    ObservedProcessInactivityTimeout,
+    run_observed_process,
+)
+
+
+DependencyProgress = Callable[[str, dict[str, Any]], None]
 
 
 class NativeDependencyPool(DependencyPool):
@@ -28,6 +39,8 @@ class NativeDependencyPool(DependencyPool):
         python_requirements: list[str],
         npm_requirements: list[str],
         timeout_seconds: int | None,
+        on_progress: DependencyProgress | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> DependencyPoolResolution:
         """
         Resolve dependencies using the local Python environment.
@@ -52,9 +65,12 @@ class NativeDependencyPool(DependencyPool):
         from agent_factory.environment_system.pool import _fingerprint
         profile_key = _fingerprint(profile_request)
 
+        _notify(on_progress, "waiting_for_dependency_profile", profile_key=profile_key)
         with self._profile_lock(profile_key):
+            _notify(on_progress, "checking_dependency_profile", profile_key=profile_key)
             existing = self._read_profile(profile_key)
             if existing is not None and self.references_available(existing.to_lock_payload()):
+                _notify(on_progress, "dependency_profile_cache_hit", profile_key=profile_key)
                 return DependencyPoolResolution(
                     python_entries=existing.python_entries,
                     system_entries=existing.system_entries,
@@ -67,6 +83,8 @@ class NativeDependencyPool(DependencyPool):
             python_entries = self._resolve_python_native(
                 requirements=normalized_python_requirements,
                 timeout_seconds=timeout_seconds,
+                on_progress=on_progress,
+                cancel_event=cancel_event,
             )
 
             # System packages not supported in native mode
@@ -76,6 +94,8 @@ class NativeDependencyPool(DependencyPool):
             npm_profile = self._resolve_npm_native(
                 requirements=_normalized_values(npm_requirements),
                 timeout_seconds=timeout_seconds,
+                on_progress=on_progress,
+                cancel_event=cancel_event,
             )
 
             resolution = DependencyPoolResolution(
@@ -89,6 +109,13 @@ class NativeDependencyPool(DependencyPool):
             with self._exclusive_lock():
                 self._write_profile(profile_key, resolution, request=profile_request)
 
+            _notify(
+                on_progress,
+                "dependency_profile_stored",
+                profile_key=profile_key,
+                python_artifact_count=len(python_entries),
+                npm_profile_ready=npm_profile is not None,
+            )
             return resolution
 
     def _native_runtime_compatibility(self) -> dict[str, str]:
@@ -125,6 +152,8 @@ class NativeDependencyPool(DependencyPool):
         *,
         requirements: list[str],
         timeout_seconds: int | None,
+        on_progress: DependencyProgress | None,
+        cancel_event: threading.Event | None,
     ) -> list[dict[str, str]]:
         """Build Python wheels using a local virtual environment."""
         if not requirements:
@@ -149,7 +178,13 @@ class NativeDependencyPool(DependencyPool):
 
             # Create temporary venv for isolation
             venv_dir = staging / "venv"
-            self._create_venv(venv_dir, timeout_seconds=timeout_seconds)
+            _notify(on_progress, "creating_python_build_environment")
+            self._create_venv(
+                venv_dir,
+                timeout_seconds=timeout_seconds,
+                on_progress=on_progress,
+                cancel_event=cancel_event,
+            )
 
             # Use venv pip to build wheels
             venv_pip = venv_dir / "bin" / "pip"
@@ -171,14 +206,25 @@ class NativeDependencyPool(DependencyPool):
                 *requirements,
             ]
 
+            _notify(
+                on_progress,
+                "building_python_wheels",
+                requirement_count=len(requirements),
+            )
             try:
-                completed = subprocess.run(
+                completed = run_observed_process(
                     command,
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout_seconds,
-                    check=False,
+                    inactivity_timeout_seconds=timeout_seconds,
+                    cancel_event=cancel_event,
+                    on_output=_output_notifier(on_progress, stage="building_python_wheels"),
                 )
+            except ObservedProcessCancelled as exc:
+                raise DependencyPoolError("cancelled", "Python wheel build was cancelled") from exc
+            except ObservedProcessInactivityTimeout as exc:
+                raise DependencyPoolError(
+                    "build_failed",
+                    f"Python wheel build produced no observable progress for {timeout_seconds}s",
+                ) from exc
             except subprocess.TimeoutExpired as exc:
                 raise DependencyPoolError(
                     "build_failed",
@@ -212,6 +258,7 @@ class NativeDependencyPool(DependencyPool):
                     "build_failed", "Python dependency resolution returned no wheel artifacts"
                 )
 
+            _notify(on_progress, "storing_python_wheels", wheel_count=len(wheels))
             return [self._store_wheel(wheel) for wheel in wheels]
 
     def _resolve_npm_native(
@@ -219,6 +266,8 @@ class NativeDependencyPool(DependencyPool):
         *,
         requirements: list[str],
         timeout_seconds: int | None,
+        on_progress: DependencyProgress | None,
+        cancel_event: threading.Event | None,
     ) -> dict[str, str] | None:
         """Resolve npm dependencies using the local npm executable."""
         if not requirements:
@@ -262,14 +311,25 @@ class NativeDependencyPool(DependencyPool):
                 *requirements,
             ]
 
+            _notify(
+                on_progress,
+                "installing_npm_dependencies",
+                requirement_count=len(requirements),
+            )
             try:
-                completed = subprocess.run(
+                completed = run_observed_process(
                     command,
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout_seconds,
-                    check=False,
+                    inactivity_timeout_seconds=timeout_seconds,
+                    cancel_event=cancel_event,
+                    on_output=_output_notifier(on_progress, stage="installing_npm_dependencies"),
                 )
+            except ObservedProcessCancelled as exc:
+                raise DependencyPoolError("cancelled", "npm dependency installation was cancelled") from exc
+            except ObservedProcessInactivityTimeout as exc:
+                raise DependencyPoolError(
+                    "build_failed",
+                    f"npm install produced no observable progress for {timeout_seconds}s",
+                ) from exc
             except subprocess.TimeoutExpired as exc:
                 raise DependencyPoolError(
                     "build_failed", f"npm install timed out after {timeout_seconds}s"
@@ -301,18 +361,34 @@ class NativeDependencyPool(DependencyPool):
 
             return {"path": relative.as_posix(), "sha256": profile_hash}
 
-    def _create_venv(self, venv_dir: Path, *, timeout_seconds: int | None) -> None:
+    def _create_venv(
+        self,
+        venv_dir: Path,
+        *,
+        timeout_seconds: int | None,
+        on_progress: DependencyProgress | None,
+        cancel_event: threading.Event | None,
+    ) -> None:
         """Create a temporary virtual environment for isolated pip operations."""
         command = [sys.executable, "-m", "venv", str(venv_dir)]
 
         try:
-            completed = subprocess.run(
+            completed = run_observed_process(
                 command,
-                capture_output=True,
-                text=True,
-                timeout=timeout_seconds,
-                check=False,
+                inactivity_timeout_seconds=timeout_seconds,
+                cancel_event=cancel_event,
+                on_output=_output_notifier(
+                    on_progress,
+                    stage="creating_python_build_environment",
+                ),
             )
+        except ObservedProcessCancelled as exc:
+            raise DependencyPoolError("cancelled", "venv creation was cancelled") from exc
+        except ObservedProcessInactivityTimeout as exc:
+            raise DependencyPoolError(
+                "build_failed",
+                f"venv creation produced no observable progress for {timeout_seconds}s",
+            ) from exc
         except subprocess.TimeoutExpired as exc:
             raise DependencyPoolError(
                 "build_failed", f"venv creation timed out after {timeout_seconds}s"
@@ -321,6 +397,38 @@ class NativeDependencyPool(DependencyPool):
         if completed.returncode != 0:
             detail = (completed.stderr or completed.stdout or "venv creation failed").strip()
             raise DependencyPoolError("build_failed", f"venv creation failed: {detail[-4000:]}")
+
+
+def _notify(
+    callback: DependencyProgress | None,
+    stage: str,
+    **detail: Any,
+) -> None:
+    if callback is not None:
+        callback(stage, detail)
+
+
+def _output_notifier(
+    callback: DependencyProgress | None,
+    *,
+    stage: str,
+) -> Callable[[str, str], None] | None:
+    if callback is None:
+        return None
+
+    def notify_output(stream: str, line: str) -> None:
+        message = line.strip()
+        if message:
+            callback(
+                "dependency_process_output",
+                {
+                    "stage": stage,
+                    "stream": stream,
+                    "message": message,
+                },
+            )
+
+    return notify_output
 
 
 def native_dependency_pool_path() -> Path:

@@ -325,7 +325,7 @@ def _package_tool_example_files() -> dict[str, tuple[type[Any], Any]]:
                 },
                 "rules": [
                     "Do not manually update agent_package.json, assembly_spec.json, contracts/tools.json, or contracts/dependencies.json for package tool registration during normal production.",
-                    "Declare external Python dependencies in python_requirements when the source imports third-party packages, and estimate install_timeout_seconds for dependency-pool resolution.",
+                    "Declare external Python dependencies in python_requirements when the source imports third-party packages, and set install_timeout_seconds as the maximum dependency-builder interval without observable output rather than as an ETA.",
                     "Remove stale package tools through create_agent_authoring(action=\"remove_package_tool\", tool_id=...).",
                     "Use resources passed to the tool entrypoint for runtime paths instead of assuming os.getcwd(); generated files should use workspace_root.",
                 ],

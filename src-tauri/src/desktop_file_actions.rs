@@ -34,6 +34,20 @@ pub fn save_file_as(source_path: String) -> Result<Option<String>, String> {
     Ok(Some(destination.to_string_lossy().into_owned()))
 }
 
+#[tauri::command]
+pub fn select_directory(initial_path: Option<String>) -> Result<Option<String>, String> {
+    let mut dialog = rfd::FileDialog::new();
+    if let Some(value) = initial_path.filter(|value| !value.trim().is_empty()) {
+        let initial = PathBuf::from(value);
+        if initial.is_dir() {
+            dialog = dialog.set_directory(initial);
+        }
+    }
+    Ok(dialog
+        .pick_folder()
+        .map(|path| path.to_string_lossy().into_owned()))
+}
+
 fn existing_path(source_path: &str) -> Result<PathBuf, String> {
     let source = PathBuf::from(source_path);
     if !source.exists() {

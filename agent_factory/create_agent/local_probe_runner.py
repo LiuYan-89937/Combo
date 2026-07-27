@@ -52,6 +52,7 @@ def _run_probe(request: dict[str, Any]) -> dict[str, Any]:
     if not tool_id:
         raise ValueError("tool_id is required")
     dependency_report = {"status": "complete", "source": "environment_lock"}
+    _emit_progress("discovering_tools", tool_id=tool_id)
     discovery = PackageToolProvider().discover(ToolProviderContext(package_root=PACKAGE_ROOT))
     specs = {spec.id: spec for spec in discovery.tool_specs}
     spec = specs.get(tool_id)
@@ -69,6 +70,7 @@ def _run_probe(request: dict[str, Any]) -> dict[str, Any]:
             "duration_ms": _duration_ms(started_at),
             "errors": [f"package tool is not available: {tool_id}"],
         }
+    _emit_progress("compiling_tool", tool_id=tool_id)
     try:
         compiler = ToolCompiler(
             package_root=PACKAGE_ROOT,
@@ -90,12 +92,19 @@ def _run_probe(request: dict[str, Any]) -> dict[str, Any]:
             "duration_ms": _duration_ms(started_at),
             "errors": [f"{type(exc).__name__}: {exc}"],
         }
+    _emit_progress("executing_tool", tool_id=tool_id)
     stdout = io.StringIO()
     stderr = io.StringIO()
     try:
         with redirect_stdout(stdout), redirect_stderr(stderr):
             observation = tool.invoke(arguments)
     except Exception as exc:
+        _emit_progress(
+            "tool_execution_finished",
+            tool_id=tool_id,
+            status="failed",
+            error_type=type(exc).__name__,
+        )
         return {
             "status": "failed",
             "phase": "tool_execution",
@@ -110,6 +119,11 @@ def _run_probe(request: dict[str, Any]) -> dict[str, Any]:
             "errors": [f"{type(exc).__name__}: {exc}"],
         }
     observation_payload = observation if isinstance(observation, dict) else {"status": "invalid_output", "message": str(observation)}
+    _emit_progress(
+        "tool_execution_finished",
+        tool_id=tool_id,
+        status=str(observation_payload.get("status") or "unknown"),
+    )
     return {
         "status": "completed" if observation_payload.get("status") == "completed" else "failed",
         "phase": "tool_execution",
@@ -158,6 +172,22 @@ def _json_safe(value: Any) -> Any:
 
 def _duration_ms(started_at: float) -> int:
     return int((time.monotonic() - started_at) * 1000)
+
+
+def _emit_progress(stage: str, **detail: Any) -> None:
+    sys.stdout.write(
+        json.dumps(
+            {
+                "type": "probe_progress",
+                "stage": stage,
+                "detail": _json_safe(detail),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+    sys.stdout.write("\n")
+    sys.stdout.flush()
 
 
 if __name__ == "__main__":

@@ -1487,7 +1487,12 @@ def _package_tool_probe_report(
                 tool_id=tool_id,
                 summary=f"package tool {tool_id} has not been probed",
                 actual="missing probe evidence",
-                repair_hint="Use create_agent_probe_tool(action='inspect'), then create_agent_probe_tool(action='call', tool_id=..., arguments=..., prompt=..., tool_goal=..., timeout_seconds=<task-appropriate-positive-seconds>) with realistic package tool arguments and human-readable probe context.",
+                repair_hint=(
+                    "Use create_agent_probe_tool(action='inspect'), then start an asynchronous "
+                    "create_agent_probe_tool(action='call', tool_id=..., arguments=..., prompt=..., "
+                    "tool_goal=..., timeout_seconds=<task-appropriate-positive-seconds>) job with realistic "
+                    "arguments. Query its job_id with action='status' until it reaches a terminal state."
+                ),
             ))
             continue
         current_tool_digest = package_tool_digest(root, tool_id, fingerprint=current_fingerprint)
@@ -1511,7 +1516,10 @@ def _package_tool_probe_report(
                 tool_id=tool_id,
                 summary=f"package tool {tool_id} probe failed",
                 actual=f"{record.observation_status} {record.contract_status}: {record.message}",
-                repair_hint="Repair the package tool using the probe observation, then run create_agent_probe_tool call again.",
+                repair_hint=(
+                    "Repair the package tool using the probe observation, then start a new asynchronous "
+                    "create_agent_probe_tool call and inspect its terminal status."
+                ),
                 details=record.model_dump(mode="json"),
             ))
             continue
@@ -1527,6 +1535,7 @@ def _package_tool_probe_report(
                 repair_hint=(
                     "Run create_agent_probe_tool(action='call', tool_id=..., probe_kind='success_path', "
                     "arguments=..., prompt=..., tool_goal=..., timeout_seconds=<task-appropriate-positive-seconds>) with realistic successful-path inputs. "
+                    "Query the returned job_id with action='status' until it reaches a terminal state. "
                     "If no successful input is available, ask the user for the missing resource instead of publishing."
                 ),
                 details=record.model_dump(mode="json"),

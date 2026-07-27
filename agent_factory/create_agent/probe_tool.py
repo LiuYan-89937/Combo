@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from contextvars import ContextVar
 from datetime import UTC, datetime
 import json
 import os
 from pathlib import Path
 import subprocess
+import threading
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -13,12 +16,14 @@ from langgraph.config import get_stream_writer
 from pydantic import BaseModel, ConfigDict
 
 from agent_factory.create_agent.models import PackageToolProbeRecord
+from agent_factory.create_agent.probe_jobs import ProbeJobProgress, probe_job_manager
 from agent_factory.create_agent.stage_sync import sync_probe_stage
 from agent_factory.environment_system import EnvironmentResolutionError, EnvironmentResolver
 from agent_factory.create_agent.validation_state import package_digest, package_fingerprint, package_tool_digest
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.factory_graph.frontend_bridge.agent_package_paths import manufacturing_probe_runtime_workspace
 from agent_factory.native_runtime import AgentRuntimeLaunchError, NativeAgentRuntimeLauncher
+from agent_factory.observed_process import ObservedProcessCancelled, run_observed_process
 from agent_factory.models import get_task_model
 from agent_factory.resource_system import ResourceStore, ResourceStoreError
 from agent_factory.runtime_contracts import AgentPackageLoader, ResourcesContract
@@ -32,6 +37,12 @@ PROBE_MODEL_TIMEOUT_SECONDS_ENV = "AGENTFACTORY_CREATE_AGENT_PROBE_MODEL_TIMEOUT
 DEFAULT_PROBE_MODEL_TIMEOUT_SECONDS = 60.0
 PROBE_EVALUATION_TIMEOUT_SECONDS_ENV = "AGENTFACTORY_CREATE_AGENT_PROBE_EVALUATION_TIMEOUT_SECONDS"
 DEFAULT_PROBE_EVALUATION_TIMEOUT_SECONDS = 8.0
+ProbeProgressSink = Callable[[str, dict[str, Any]], None]
+_PROBE_PROGRESS_SINK: ContextVar[ProbeProgressSink | None] = ContextVar(
+    "create_agent_probe_progress_sink",
+    default=None,
+)
+_PROBE_RECORD_LOCK = threading.RLock()
 
 
 class PackageToolProbeEvaluation(BaseModel):
@@ -48,9 +59,10 @@ def build_create_agent_probe_tool_spec() -> ToolSpec:
     return ToolSpec(
         id=CREATE_AGENT_PROBE_TOOL_ID,
         description=(
-            "Inspect package-owned tools generated in this create-agent workspace, then probe one generated tool by "
-            "executing it in the local isolated runtime through ToolExecutionGateway. Calls require explicit "
-            "arguments; prompt is user-facing context only. Final validation requires fresh probe evidence; "
+            "Inspect package-owned tools and manage asynchronous probe jobs that execute generated tools in the "
+            "local isolated runtime through ToolExecutionGateway. Call starts a durable background job; status, "
+            "list, and cancel observe or control it. Calls require explicit arguments; prompt is user-facing "
+            "context only. Final validation requires fresh completed probe evidence; "
             "a resource_required observation is recorded as configuration_required and does not classify the "
             "tool implementation as failed."
         ),
@@ -58,7 +70,16 @@ def build_create_agent_probe_tool_spec() -> ToolSpec:
         input_schema={
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["inspect", "call"]},
+                "action": {
+                    "type": "string",
+                    "enum": ["inspect", "call", "status", "list", "cancel"],
+                },
+                "job_id": {"type": "string"},
+                "wait_seconds": {
+                    "type": "number",
+                    "minimum": 0,
+                    "description": "Optional status wait duration. The job remains asynchronous and queryable.",
+                },
                 "tool_id": {"type": "string", "default": ""},
                 "prompt": {
                     "type": "string",
@@ -84,14 +105,18 @@ def build_create_agent_probe_tool_spec() -> ToolSpec:
                 "timeout_seconds": {
                     "type": "integer",
                     "minimum": 1,
-                    "description": "Total local runtime probe deadline in seconds. Estimate from dependency size, network conditions, and expected tool execution time.",
+                    "description": "Target tool runner deadline in seconds. Dependency preparation is an independently observable job stage.",
                 },
             },
             "allOf": [
                 {
                     "if": {"properties": {"action": {"const": "call"}}},
                     "then": {"required": ["tool_id", "arguments", "timeout_seconds"]},
-                }
+                },
+                {
+                    "if": {"properties": {"action": {"enum": ["status", "cancel"]}}},
+                    "then": {"required": ["job_id"]},
+                },
             ],
             "required": ["action"],
             "additionalProperties": False,
@@ -122,22 +147,46 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     if action == "inspect":
         return _inspect(workspace)
     if action == "call":
-        return _call(
+        return _start_call(
             workspace,
             tool_id=str(arguments.get("tool_id") or "").strip(),
             prompt=str(arguments.get("prompt") or "").strip(),
             tool_goal=str(arguments.get("tool_goal") or "").strip(),
             arguments=arguments.get("arguments") if isinstance(arguments.get("arguments"), dict) else None,
             requested_probe_kind=str(arguments.get("probe_kind") or "auto").strip(),
-            timeout_seconds=_required_positive_int(arguments, "timeout_seconds") if action == "call" else None,
+            timeout_seconds=_required_positive_int(arguments, "timeout_seconds"),
         )
+    if action == "status":
+        job = probe_job_manager.status(
+            workspace=workspace,
+            job_id=str(arguments.get("job_id") or "").strip(),
+            wait_seconds=_optional_non_negative_number(arguments.get("wait_seconds")),
+        )
+        return _probe_job_envelope(action="status", job=job)
+    if action == "list":
+        jobs = probe_job_manager.list(workspace=workspace)
+        return tool_envelope(
+            {
+                "action": "list",
+                "tools": [],
+                "probe": {"jobs": jobs},
+                "diagnostics": [],
+            },
+            summary=f"Found {len(jobs)} asynchronous probe job(s).",
+        )
+    if action == "cancel":
+        job = probe_job_manager.cancel(
+            workspace=workspace,
+            job_id=str(arguments.get("job_id") or "").strip(),
+        )
+        return _probe_job_envelope(action="cancel", job=job)
     raise ValueError(f"unsupported probe action: {action}")
 
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     del context
     action = str(arguments.get("action") or "").strip()
-    if action == "inspect":
+    if action in {"inspect", "status", "list", "cancel"}:
         return ToolRiskResult(action="allow", risk_level="low").model_dump(mode="json")
     if action == "call":
         return ToolRiskResult(
@@ -148,8 +197,118 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
     return ToolRiskResult(action="deny", risk_level="low", reasons=["unknown probe action"]).model_dump(mode="json")
 
 
+def _start_call(
+    workspace: CreateAgentWorkspace,
+    *,
+    tool_id: str,
+    prompt: str,
+    tool_goal: str,
+    arguments: dict[str, Any] | None,
+    requested_probe_kind: str,
+    timeout_seconds: int,
+) -> dict[str, Any]:
+    if not tool_id:
+        raise ValueError("tool_id is required for probe call")
+    discovery = _discover(workspace)
+    spec = next((item for item in discovery.tool_specs if item.id == tool_id), None)
+    if spec is None:
+        raise ValueError(f"package tool is not available for probe: {tool_id}")
+    request = {
+        "tool_id": tool_id,
+        "prompt": prompt,
+        "tool_goal": tool_goal,
+        "arguments": arguments,
+        "probe_kind": requested_probe_kind,
+        "timeout_seconds": timeout_seconds,
+        "package_digest": package_digest(workspace.root),
+        "concurrent": spec.concurrent,
+    }
+
+    def execute(
+        snapshot: CreateAgentWorkspace,
+        progress: ProbeJobProgress,
+        cancel_event: threading.Event,
+    ) -> dict[str, Any]:
+        token = _PROBE_PROGRESS_SINK.set(progress)
+        try:
+            return _call(
+                snapshot,
+                record_workspace=workspace,
+                tool_id=tool_id,
+                prompt=prompt,
+                tool_goal=tool_goal,
+                arguments=arguments,
+                requested_probe_kind=requested_probe_kind,
+                timeout_seconds=timeout_seconds,
+                cancel_event=cancel_event,
+            )
+        finally:
+            _PROBE_PROGRESS_SINK.reset(token)
+
+    job = probe_job_manager.submit(
+        workspace=workspace,
+        request=request,
+        execute=execute,
+    )
+    return _probe_job_envelope(action="call", job=job)
+
+
+def _probe_job_envelope(*, action: str, job: dict[str, Any]) -> dict[str, Any]:
+    return tool_envelope(
+        {
+            "action": action,
+            "tools": [],
+            "probe": {
+                "job": job,
+                "asynchronous": True,
+                "next_action": (
+                    {
+                        "tool": CREATE_AGENT_PROBE_TOOL_ID,
+                        "arguments": {
+                            "action": "status",
+                            "job_id": job.get("job_id"),
+                        },
+                    }
+                    if job.get("status") not in {"completed", "failed", "cancelled", "interrupted"}
+                    else None
+                ),
+            },
+            "diagnostics": [],
+        },
+        summary=(
+            f"Probe job {job.get('job_id')} is {job.get('status')} "
+            f"at stage {job.get('stage')}."
+        ),
+    )
+
+
+def _cancelled_probe_result(
+    *,
+    spec: ToolSpec,
+    changed_files: list[str],
+    diagnostics: list[Any] | None = None,
+) -> dict[str, Any]:
+    return tool_envelope(
+        {
+            "action": "call",
+            "tools": [_tool_summary(spec)],
+            "probe": {
+                "tool_id": spec.id,
+                "status": "cancelled",
+                "changed_files": changed_files,
+            },
+            "diagnostics": [
+                _diagnostic_payload(item)
+                for item in diagnostics or []
+            ],
+        },
+        summary=f"Package tool probe cancelled: {spec.id}.",
+    )
+
+
 def _inspect(workspace: CreateAgentWorkspace) -> dict[str, Any]:
     discovery = _discover(workspace)
+    jobs = probe_job_manager.list(workspace=workspace)
     state = workspace.read_tool_probe_state()
     latest = state.latest_by_tool()
     tools = []
@@ -181,22 +340,25 @@ def _inspect(workspace: CreateAgentWorkspace) -> dict[str, Any]:
                 "publish_gate": "A probe that only verifies error handling is not sufficient for publish readiness.",
                 "input_mode": "direct_tool_execution_with_optional_prompt_to_arguments",
                 "freshness": "tool_scoped_digest",
+                "jobs": jobs,
             },
             "diagnostics": [_diagnostic_payload(item) for item in discovery.diagnostics],
         },
-        summary=f"Discovered {len(tools)} package tool(s) for probe.",
+        summary=f"Discovered {len(tools)} package tool(s) and {len(jobs)} asynchronous probe job(s).",
     )
 
 
 def _call(
     workspace: CreateAgentWorkspace,
     *,
+    record_workspace: CreateAgentWorkspace | None = None,
     tool_id: str,
     prompt: str,
     tool_goal: str,
     arguments: dict[str, Any] | None,
     requested_probe_kind: str,
     timeout_seconds: int,
+    cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
     if not tool_id:
         raise ValueError("tool_id is required for probe call")
@@ -205,6 +367,8 @@ def _call(
     spec = specs.get(tool_id)
     if spec is None:
         raise ValueError(f"package tool is not available for probe: {tool_id}")
+    if cancel_event is not None and cancel_event.is_set():
+        return _cancelled_probe_result(spec=spec, changed_files=[])
     _emit_probe_progress(
         f"开始工具探测：目标工具 {tool_id}。",
         {"tool_id": tool_id, "prompt": prompt},
@@ -218,8 +382,15 @@ def _call(
         arguments=arguments,
         requested_probe_kind=requested_probe_kind,
         timeout_seconds=timeout_seconds,
+        cancel_event=cancel_event,
     )
     after = package_fingerprint(workspace.root)
+    if cancel_event is not None and cancel_event.is_set():
+        return _cancelled_probe_result(
+            spec=spec,
+            changed_files=_changed_files(before, after),
+            diagnostics=discovery.diagnostics,
+        )
     record = _record_from_direct_probe(
         workspace=workspace,
         spec=spec,
@@ -228,12 +399,20 @@ def _call(
         tool_goal=tool_goal,
         direct_probe=direct_probe,
     )
-    state = workspace.read_tool_probe_state()
-    state.records.append(record)
-    state = state.model_copy(update={"updated_at": datetime.now(UTC).isoformat()})
-    workspace.write_tool_probe_state(state)
+    if cancel_event is not None and cancel_event.is_set():
+        return _cancelled_probe_result(
+            spec=spec,
+            changed_files=_changed_files(before, after),
+            diagnostics=discovery.diagnostics,
+        )
+    state_workspace = record_workspace or workspace
+    with _PROBE_RECORD_LOCK:
+        state = state_workspace.read_tool_probe_state()
+        state.records.append(record)
+        state = state.model_copy(update={"updated_at": datetime.now(UTC).isoformat()})
+        state_workspace.write_tool_probe_state(state)
     sync_probe_stage(
-        workspace,
+        state_workspace,
         passed=record.status == "passed",
         success_path=record.probe_kind == "success_path" and not record.only_error_handling_verified,
     )
@@ -317,6 +496,7 @@ def _run_direct_probe(
     arguments: dict[str, Any] | None,
     requested_probe_kind: str,
     timeout_seconds: int,
+    cancel_event: threading.Event | None,
 ) -> dict[str, Any]:
     events: list[dict[str, Any]] = []
     errors: list[str] = []
@@ -346,6 +526,7 @@ def _run_direct_probe(
             spec=spec,
             arguments=resolved_arguments,
             timeout_seconds=timeout_seconds,
+            cancel_event=cancel_event,
         )
     except Exception as exc:
         return {
@@ -409,9 +590,30 @@ def _run_local_probe(
     spec: ToolSpec,
     arguments: dict[str, Any],
     timeout_seconds: int,
+    cancel_event: threading.Event | None,
 ) -> dict[str, Any]:
     try:
-        EnvironmentResolver().ensure(workspace.root)
+        _emit_probe_stage(
+            "preparing_environment",
+            "正在准备工具依赖环境。",
+            {"tool_id": spec.id},
+        )
+        EnvironmentResolver().ensure(
+            workspace.root,
+            on_progress=lambda stage, detail: _emit_probe_stage(
+                stage,
+                _environment_progress_message(stage, detail),
+                {"tool_id": spec.id, **detail},
+            ),
+            cancel_event=cancel_event,
+        )
+        if cancel_event is not None and cancel_event.is_set():
+            raise ObservedProcessCancelled("probe cancelled after environment preparation")
+        _emit_probe_stage(
+            "loading_package",
+            "依赖环境已就绪，正在加载制造包。",
+            {"tool_id": spec.id},
+        )
         package = AgentPackageLoader().load_path(workspace.package_manifest_path())
     except EnvironmentResolutionError as exc:
         return {
@@ -458,19 +660,34 @@ def _run_local_probe(
         },
         ensure_ascii=False,
     )
-    _emit_probe_progress(
+    _emit_probe_stage(
+        "starting_probe_runner",
         f"本地隔离探测启动：{spec.id}",
         {"tool_id": spec.id, "runtime": "local"},
     )
     try:
-        completed = subprocess.run(
+        completed = run_observed_process(
             command,
-            input=request,
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-            check=False,
+            input_text=request,
+            environment=plan.environment,
+            timeout_seconds=timeout_seconds,
+            cancel_event=cancel_event,
+            on_output=lambda stream, line: _observe_probe_runner_output(
+                tool_id=spec.id,
+                stream=stream,
+                line=line,
+            ),
         )
+    except ObservedProcessCancelled:
+        return {
+            "status": "failed",
+            "phase": "cancelled",
+            "observation": {},
+            "errors": ["local probe was cancelled"],
+            "captured_stdout": "",
+            "captured_stderr": "",
+            "dependency_report": {},
+        }
     except subprocess.TimeoutExpired as exc:
         return {
             "status": "failed",
@@ -545,6 +762,16 @@ def _parse_local_probe_output(*, stdout: str, stderr: str, returncode: int) -> d
 
 
 def _emit_probe_progress(message: str, payload: dict[str, Any] | None = None) -> None:
+    detail = dict(payload or {})
+    sink = _PROBE_PROGRESS_SINK.get()
+    if sink is not None:
+        try:
+            sink(
+                str(detail.get("stage") or "probe_progress"),
+                {"message": message, **detail},
+            )
+        except Exception:
+            pass
     try:
         writer = get_stream_writer()
     except Exception:
@@ -559,12 +786,67 @@ def _emit_probe_progress(message: str, payload: dict[str, Any] | None = None) ->
                     "node_label": "Package Tool Probe",
                     "node_kind": "tool_probe",
                     "message": message,
-                    "payload": dict(payload or {}),
+                    "payload": detail,
                 },
             }
         )
     except Exception:
         return
+
+
+def _emit_probe_stage(stage: str, message: str, payload: dict[str, Any] | None = None) -> None:
+    _emit_probe_progress(message, {"stage": stage, **dict(payload or {})})
+
+
+def _environment_progress_message(stage: str, detail: dict[str, Any]) -> str:
+    if stage == "dependency_process_output":
+        return str(detail.get("message") or "依赖构建仍在进行。")
+    return {
+        "checking_contract": "正在检查依赖合同。",
+        "checking_runtime": "正在检查本地运行环境。",
+        "resolving_dependencies": "正在解析共享依赖。",
+        "waiting_for_dependency_profile": "正在等待共享依赖配置。",
+        "checking_dependency_profile": "正在检查共享依赖缓存。",
+        "dependency_profile_cache_hit": "已命中共享依赖缓存。",
+        "creating_python_build_environment": "正在创建 Python 依赖构建环境。",
+        "building_python_wheels": "正在构建 Python wheel。",
+        "storing_python_wheels": "正在保存 Python wheel。",
+        "installing_npm_dependencies": "正在安装 npm 依赖。",
+        "dependency_profile_stored": "共享依赖配置已准备完成。",
+        "dependency_profile_ready": "依赖配置已就绪。",
+        "ready": "依赖环境已就绪。",
+    }.get(stage, f"依赖环境阶段：{stage}")
+
+
+def _observe_probe_runner_output(*, tool_id: str, stream: str, line: str) -> None:
+    message = line.strip()
+    if not message:
+        return
+    if stream == "stdout":
+        try:
+            payload = json.loads(message)
+        except json.JSONDecodeError:
+            return
+        if not isinstance(payload, dict) or payload.get("type") != "probe_progress":
+            return
+        stage = str(payload.get("stage") or "running_probe")
+        detail = payload.get("detail") if isinstance(payload.get("detail"), dict) else {}
+        _emit_probe_stage(
+            stage,
+            {
+                "discovering_tools": "正在发现制造包工具。",
+                "compiling_tool": "正在编译目标工具。",
+                "executing_tool": "正在执行目标工具。",
+                "tool_execution_finished": "目标工具执行结束。",
+            }.get(stage, f"工具探测阶段：{stage}"),
+            {"tool_id": tool_id, **detail},
+        )
+        return
+    _emit_probe_stage(
+        "probe_runner_output",
+        message,
+        {"tool_id": tool_id, "stream": stream},
+    )
 
 
 def _probe_transcript(*, direct_probe: dict[str, Any], record: PackageToolProbeRecord) -> list[str]:
@@ -983,6 +1265,20 @@ def _required_positive_int(arguments: dict[str, Any], key: str) -> int:
         raise ValueError(f"{key} must be a positive integer") from exc
     if parsed < 1:
         raise ValueError(f"{key} must be a positive integer")
+    return parsed
+
+
+def _optional_non_negative_number(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError("wait_seconds must be a non-negative number")
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("wait_seconds must be a non-negative number") from exc
+    if parsed < 0:
+        raise ValueError("wait_seconds must be a non-negative number")
     return parsed
 
 
