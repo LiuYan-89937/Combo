@@ -1,18 +1,18 @@
 <template>
   <div
     class="message-item"
-    :class="[`role-${message.role}`, { streaming, 'message-commentary': isCommentary }]"
+    :class="[`role-${message.role}`, { streaming }]"
     :data-reference-label="`${roleLabel} · ${formatTime(message.timestamp)}`"
     :data-tip-source-key="registeredSourceKey || undefined"
   >
-    <div v-if="!isCommentary" class="message-avatar">
+    <div class="message-avatar">
       <n-avatar :size="36" :style="avatarStyle">
         {{ avatarText }}
       </n-avatar>
     </div>
 
     <div class="message-content">
-      <div v-if="!isCommentary" class="message-header">
+      <div class="message-header">
         <n-text strong>{{ roleLabel }}</n-text>
         <n-text depth="3" style="font-size: 12px">
           {{ formatTime(message.timestamp) }}
@@ -56,6 +56,20 @@
             {{ compactSummary(collaborationReport.summary) }}
           </div>
         </div>
+        <div
+          v-else-if="thinking"
+          class="thinking-content"
+          role="status"
+          aria-live="polite"
+          :aria-label="message.content || t('roles.assistantThinking')"
+        >
+          <span class="thinking-label">{{ message.content || t('roles.assistantThinking') }}</span>
+          <span class="thinking-dots" aria-hidden="true">
+            <span class="thinking-dot"></span>
+            <span class="thinking-dot"></span>
+            <span class="thinking-dot"></span>
+          </span>
+        </div>
         <template v-else>
           <MessagePartRenderer
             v-for="part in visibleParts"
@@ -69,7 +83,7 @@
         </template>
 
         <span
-          v-if="streaming"
+          v-if="streaming && !thinking"
           class="streaming-caret"
           aria-hidden="true"
         ></span>
@@ -111,12 +125,14 @@ const props = withDefaults(
   defineProps<{
     message: TranscriptItem
     streaming?: boolean
+    thinking?: boolean
     quoteable?: boolean
     tipContext?: TipContextConfig | null
     workspaceContext?: WorkspaceRequestContext | null
   }>(),
   {
     streaming: false,
+    thinking: false,
     quoteable: false,
     tipContext: null,
     workspaceContext: null,
@@ -129,7 +145,6 @@ defineEmits<{
 
 const { locale, t } = useI18n()
 const tipStore = useTipStore()
-const isCommentary = computed(() => props.message.metadata?.phase === 'commentary')
 const registeredSourceKey = ref('')
 const messageBodyRef = ref<HTMLElement | null>(null)
 const messageTips = computed(() => registeredSourceKey.value ? tipStore.tipsForSource(registeredSourceKey.value) : [])
@@ -428,32 +443,6 @@ function stableColorIndex(value: string, size: number): number {
   transform: translateX(4px) translateY(-1px);
 }
 
-.message-item.message-commentary {
-  padding: var(--app-space-xs) var(--app-space-md);
-  background: transparent;
-  box-shadow: none;
-  animation: app-fade-in-up 0.24s ease-out both;
-}
-
-.message-item.message-commentary:hover {
-  background: transparent;
-  box-shadow: none;
-  transform: none;
-}
-
-.message-item.message-commentary.streaming {
-  animation: app-fade-in-up 0.24s ease-out both;
-}
-
-.message-item.message-commentary.streaming::before {
-  display: none;
-}
-
-.message-item.message-commentary .message-body {
-  color: var(--app-text-secondary);
-  font-size: var(--app-font-md);
-}
-
 .message-item + .message-item {
   margin-top: var(--app-space-md);
 }
@@ -566,4 +555,57 @@ function stableColorIndex(value: string, size: number): number {
   50% { opacity: 0.3; }
 }
 
+.thinking-content {
+  width: fit-content;
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 5px 12px;
+  border: 1px solid var(--app-border);
+  border-radius: 999px;
+  background: var(--app-surface-muted);
+}
+
+.thinking-label {
+  color: var(--app-text-secondary);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.thinking-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.thinking-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--app-text);
+  animation: thinking-pulse 1.05s ease-in-out infinite;
+}
+
+.thinking-dot:nth-child(2) {
+  animation-delay: 0.14s;
+}
+
+.thinking-dot:nth-child(3) {
+  animation-delay: 0.28s;
+}
+
+@keyframes thinking-pulse {
+  0%,
+  80%,
+  100% {
+    opacity: 0.32;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
 </style>
