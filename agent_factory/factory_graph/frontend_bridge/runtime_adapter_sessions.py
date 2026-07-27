@@ -161,7 +161,32 @@ class RuntimeSessionCommandMixin:
         if not session_id:
             self._emit_error(command, "delete_session requires session_id")
             return
-        record = self.session_manager.load(session_id)
+        record = self.session_manager.load_if_exists(session_id)
+        if record is None:
+            deleted_active = self.session_record is not None and self.session_record.session_id == session_id
+            if deleted_active:
+                self.session_record = None
+                self.pending_create_agent_run = None
+                self.pending_evolution_run = None
+            self.emit(
+                event(
+                    "session_deleted",
+                    request_id=command.request_id,
+                    session_id=None if deleted_active else self._session_id(),
+                    mode=self.mode,
+                    payload={
+                        "session_id": session_id,
+                        "session_ids": [session_id],
+                        "deleted": False,
+                        "already_absent": True,
+                        "deleted_active": deleted_active,
+                        "linked_artifacts": {},
+                        "recent_agent_sessions": [],
+                        "sessions": self._session_payloads_for_client(),
+                    },
+                )
+            )
+            return
         delete_mode = (
             _session_mode(command.mode)
             or _session_mode(str(command.payload.get("mode") or ""))

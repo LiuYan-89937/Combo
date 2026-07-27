@@ -79,6 +79,7 @@ class RuntimeBridge:
         self.subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
         self.event_observers: set[Callable[[dict[str, Any]], None]] = set()
         self._background_threads: dict[str, threading.Thread] = {}
+        self._background_commands: dict[str, FactoryFrontendCommand] = {}
         self._active_requests: dict[str, dict[str, Any]] = {}
         self._deleting_session_ids: set[str] = set()
         self._session_cleanup_tasks: set[asyncio.Task[None]] = set()
@@ -124,6 +125,7 @@ class RuntimeBridge:
         self._loop = None
         with self._background_lock:
             self._background_threads.clear()
+            self._background_commands.clear()
             self._active_requests.clear()
             self._deleting_session_ids.clear()
         self._session_cleanup_tasks.clear()
@@ -268,6 +270,7 @@ class RuntimeBridge:
                 daemon=True,
             )
             self._background_threads[request_id] = thread
+            self._background_commands[request_id] = command
             if predecessors:
                 dispatch_event = _runtime_request_dispatch_event(
                     command=command,
@@ -293,7 +296,10 @@ class RuntimeBridge:
             active = [
                 (request_id, thread)
                 for request_id, thread in self._background_threads.items()
-                if _active_request_session_id(self._active_requests.get(request_id)) == session_id
+                if (
+                    _command_session_id(self._background_commands.get(request_id)) == session_id
+                    or _active_request_session_id(self._active_requests.get(request_id)) == session_id
+                )
             ]
         self._emit_from_runtime(_logical_session_deletion_event(command, session_id=session_id))
         cleanup_task = asyncio.create_task(
@@ -381,6 +387,7 @@ class RuntimeBridge:
         finally:
             with self._background_lock:
                 self._background_threads.pop(request_id, None)
+                self._background_commands.pop(request_id, None)
                 self._active_requests.pop(request_id, None)
 
     def _resolve_cancel_command(self, command: FactoryFrontendCommand) -> FactoryFrontendCommand:
@@ -675,7 +682,9 @@ def _runtime_request_dispatch_event(
     )
 
 
-def _command_session_id(command: FactoryFrontendCommand) -> str:
+def _command_session_id(command: FactoryFrontendCommand | None) -> str:
+    if command is None:
+        return ""
     return str(command.session_id or command.payload.get("session_id") or "").strip()
 
 

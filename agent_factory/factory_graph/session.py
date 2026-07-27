@@ -146,6 +146,12 @@ class FactorySessionManager:
             raise FileNotFoundError(f"Factory session not found: {session_id}")
         return _normalized_record(_factory_session_record_from_json(path.read_text(encoding="utf-8")))
 
+    def load_if_exists(self, session_id: str) -> FactorySessionRecord | None:
+        path = self._path(session_id)
+        if not path.exists():
+            return None
+        return _normalized_record(_factory_session_record_from_json(path.read_text(encoding="utf-8")))
+
     def save(self, record: FactorySessionRecord) -> None:
         record.updated_at = _now()
         self._path(record.session_id).write_text(
