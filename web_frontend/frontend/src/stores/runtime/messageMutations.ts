@@ -52,6 +52,7 @@ export function applyMessagePartCompleted(state: MessageMutationState, event: Fa
   if (!messageId || !partId || !partType) return
   const content = String(event.payload?.content ?? event.payload?.text ?? '')
   const message = ensureMessage(state, event, messageId)
+  applyMessagePhase(message, event)
   const part = messagePartFromPayload(event, content, 'completed')
   upsertMessagePart(message, part, event.timestamp)
   syncTurnAssistantMessage(state, message, event)
@@ -62,6 +63,7 @@ export function applyMessageCompleted(state: MessageMutationState, event: Factor
   const messageId = messageIdFromEvent(event)
   if (!messageId) return
   const message = ensureMessage(state, event, messageId)
+  applyMessagePhase(message, event)
   message.status = event.payload?.status === 'failed' ? 'failed' : event.payload?.status === 'stopped' ? 'stopped' : 'completed'
   message.timestamp = event.timestamp
   message.parts = message.parts.map((part) => (
@@ -105,6 +107,15 @@ function upsertMessagePart(message: TranscriptItem, part: ChatMessagePart, times
   message.reasoning = messageReasoning(message)
   message.status = message.parts.some((item) => item.status === 'streaming') ? 'streaming' : 'completed'
   message.timestamp = timestamp
+}
+
+function applyMessagePhase(message: TranscriptItem, event: FactoryFrontendEvent) {
+  const phase = String(event.payload?.message_phase || '').trim()
+  if (!phase) return
+  message.metadata = {
+    ...(message.metadata || {}),
+    phase,
+  }
 }
 
 function messagePartFromPayload(

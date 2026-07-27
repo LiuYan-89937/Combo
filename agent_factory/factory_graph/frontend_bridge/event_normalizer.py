@@ -21,7 +21,6 @@ from agent_factory.runtime_render.schema import default_model_message_visible_to
 
 
 FACTORY_TOOLS_NODE = "factory_tools"
-PROGRESS_TOOL_ID = "report_progress"
 RUNTIME_TOOL_EXECUTION_NODES = {FACTORY_TOOLS_NODE, "tool_exec"}
 INTERNAL_MODEL_MESSAGE_NODES = {"intent_gate"}
 NODE_EVENT_TYPES: set[str] = {
@@ -71,6 +70,7 @@ class ModelStreamState:
     parent_span_id: str | None
     content: str = ""
     reasoning_content: str = ""
+    message_phase: str | None = None
     completed: bool = False
 
 
@@ -80,6 +80,7 @@ class VisibleAssistantMessage:
     reasoning_content: str | None = None
     stream_id: str | None = None
     node_id: str | None = None
+    message_phase: str | None = None
 
 
 @dataclass(slots=True)
@@ -106,7 +107,6 @@ class RuntimeEventNormalizer:
     default_payload: dict[str, Any] = field(default_factory=dict)
     runtime_pattern_id: str | None = None
     visible_assistant_output: VisibleAssistantMessage = field(default_factory=VisibleAssistantMessage)
-    has_agent_progress: bool = False
 
     def runtime_event(
         self,
@@ -150,17 +150,6 @@ class RuntimeEventNormalizer:
             payload=event_payload,
         )
         self.emit(item)
-        if (
-            event_type == "model_call_started"
-            and event_payload.get("visible_to_user") is not False
-            and not self.has_agent_progress
-        ):
-            self._emit_assistant_progress(
-                source="runtime",
-                stage="model_waiting",
-                summary="正在等待模型响应。",
-                status="running",
-            )
         return item
 
     def emit_run_started(self, payload: dict[str, Any]) -> None:
@@ -168,12 +157,6 @@ class RuntimeEventNormalizer:
             "run_started",
             span_id=self.run_span_id,
             payload={"run_id": self.run_id, **payload},
-        )
-        self._emit_assistant_progress(
-            source="runtime",
-            stage="runtime_preparation",
-            summary="正在准备任务上下文。",
-            status="running",
         )
 
     def emit_run_completed(self, payload: dict[str, Any]) -> None:
@@ -218,7 +201,11 @@ class RuntimeEventNormalizer:
         self._emit_tool_observations(node_id, stage_id, node_span_id, patch)
         if _patch_has_ai_message(patch) and node_id != FACTORY_TOOLS_NODE:
             if _patch_ai_message_requests_tool(patch):
-                self._discard_model_stream_for_node(node_id or "model", reason="tool_call_requested")
+                self._complete_model_stream_for_node(
+                    node_id or "model",
+                    reason="tool_call_requested",
+                    message_phase="commentary",
+                )
             else:
                 self._complete_model_stream_for_node(node_id or "model", reason="node_completed")
 
@@ -239,9 +226,6 @@ class RuntimeEventNormalizer:
             return
         if chunk.get("type") == "tool_activity":
             self._emit_custom_tool_activity(chunk.get("payload") or {})
-            return
-        if chunk.get("type") == "assistant_progress":
-            self._emit_agent_progress(chunk.get("payload") or {})
             return
         if chunk.get("type") == "memory_event":
             self._emit_memory_event(chunk.get("payload") or {})
@@ -539,8 +523,6 @@ class RuntimeEventNormalizer:
             item_payload = _compact_tool_activity_payload(
                 {key: value for key, value in json_safe(item).items() if key != "event_type"}
             )
-            if _tool_id_from_payload(item_payload) == PROGRESS_TOOL_ID:
-                continue
             if event_type == "tool_call_proposed" and not self._remember_tool_proposal(item_payload):
                 continue
             tool_span_id = uuid.uuid4().hex
@@ -552,50 +534,6 @@ class RuntimeEventNormalizer:
                 parent_span_id=self._stage_span_or_run(self.current_stage_id),
                 payload=item_payload,
             )
-
-    def _emit_agent_progress(self, payload: Any) -> None:
-        if not isinstance(payload, dict):
-            return
-        summary = str(payload.get("summary") or "").strip()
-        stage = str(payload.get("stage") or "").strip()
-        status = str(payload.get("status") or "running").strip()
-        replace_key = str(payload.get("replace_key") or "current_agent_progress").strip()
-        if not summary or not stage or status not in {"running", "completed", "blocked"} or not replace_key:
-            return
-        self.has_agent_progress = True
-        self._emit_assistant_progress(
-            source="agent",
-            stage=stage,
-            summary=summary,
-            status=status,
-            replace_key=replace_key,
-            progress_id=str(payload.get("progress_id") or uuid.uuid4().hex),
-        )
-
-    def _emit_assistant_progress(
-        self,
-        *,
-        source: str,
-        stage: str,
-        summary: str,
-        status: str,
-        replace_key: str = "current_agent_progress",
-        progress_id: str | None = None,
-    ) -> None:
-        self.runtime_event(
-            "assistant_progress",
-            stage_id=self.current_stage_id,
-            span_id=uuid.uuid4().hex,
-            parent_span_id=self.run_span_id,
-            payload={
-                "progress_id": progress_id or uuid.uuid4().hex,
-                "source": source,
-                "stage": stage,
-                "summary": summary,
-                "status": status,
-                "replace_key": replace_key,
-            },
-        )
 
     def emit_model_activity_from_patch(self, node_id: str, stage_id: str | None, patch: dict[str, Any]) -> None:
         for item in patch.get("model_activity", []) or []:
@@ -736,6 +674,11 @@ class RuntimeEventNormalizer:
                 "content": content,
                 "content_mode": "snapshot",
                 "completion_reason": "message_stream_completed",
+                **(
+                    {"message_phase": "commentary"}
+                    if content and _ai_message_requests_tool(message)
+                    else {}
+                ),
                 **({"reasoning_content": reasoning_content} if reasoning_content else {}),
             },
         )
@@ -776,7 +719,10 @@ class RuntimeEventNormalizer:
             return
         if _looks_like_tool_observation_text(text):
             return
-        if self.visible_assistant_output.content:
+        if (
+            self.visible_assistant_output.content
+            and self.visible_assistant_output.message_phase != "commentary"
+        ):
             return
         stream_id = uuid.uuid4().hex
         payload = {
@@ -817,10 +763,16 @@ class RuntimeEventNormalizer:
             payload=payload,
         )
 
-    def _complete_model_stream_for_node(self, node_id: str, *, reason: str) -> None:
+    def _complete_model_stream_for_node(
+        self,
+        node_id: str,
+        *,
+        reason: str,
+        message_phase: str | None = None,
+    ) -> None:
         for stream in list(self.model_streams.values()):
             if stream.node_id == node_id:
-                self._complete_model_stream(stream, reason=reason)
+                self._complete_model_stream(stream, reason=reason, message_phase=message_phase)
 
     def _discard_model_stream_for_node(self, node_id: str, *, reason: str) -> None:
         for stream in list(self.model_streams.values()):
@@ -998,6 +950,11 @@ class RuntimeEventNormalizer:
                         "part_status": "completed",
                         "format": "markdown",
                         "content": content,
+                        **(
+                            {"message_phase": payload["message_phase"]}
+                            if payload.get("message_phase")
+                            else {}
+                        ),
                     },
                 )
             self.runtime_event(
@@ -1011,16 +968,29 @@ class RuntimeEventNormalizer:
                     "stream_id": stream.stream_id,
                     "status": "completed",
                     "completion_reason": payload.get("completion_reason"),
+                    **(
+                        {"message_phase": payload["message_phase"]}
+                        if payload.get("message_phase")
+                        else {}
+                    ),
                 },
             )
 
-    def _complete_model_stream(self, stream: ModelStreamState, *, reason: str) -> None:
+    def _complete_model_stream(
+        self,
+        stream: ModelStreamState,
+        *,
+        reason: str,
+        message_phase: str | None = None,
+    ) -> None:
         if stream.completed:
             return
         if stream.node_id in RUNTIME_TOOL_EXECUTION_NODES or _looks_like_tool_observation_text(stream.content):
             stream.completed = True
             return
         stream.completed = True
+        if message_phase:
+            stream.message_phase = message_phase
         if stream.reasoning_content.strip():
             reasoning_payload = {
                 **_message_part_payload(stream.stream_id, "reasoning", status="completed"),
@@ -1057,6 +1027,7 @@ class RuntimeEventNormalizer:
             "completion_reason": reason,
             "completion_inferred": True,
             "visible_to_user": self._model_message_visible_to_user(stream.node_id),
+            **({"message_phase": stream.message_phase} if stream.message_phase else {}),
             **({"reasoning_content": stream.reasoning_content} if stream.reasoning_content.strip() else {}),
         }
         self._record_model_stream_event("model_message_completed", node_id=stream.node_id, payload=message_payload)
@@ -1122,6 +1093,9 @@ class RuntimeEventNormalizer:
             reasoning_content = payload.get("reasoning_content")
             if isinstance(reasoning_content, str):
                 stream.reasoning_content = reasoning_content
+            message_phase = str(payload.get("message_phase") or "").strip()
+            if message_phase:
+                stream.message_phase = message_phase
             stream.completed = True
         if payload.get("discard") or payload.get("visible_to_user") is False:
             self._forget_visible_assistant_output_for_stream(stream)
@@ -1161,6 +1135,7 @@ class RuntimeEventNormalizer:
         self.visible_assistant_output.reasoning_content = reasoning_content or None
         self.visible_assistant_output.stream_id = stream.stream_id
         self.visible_assistant_output.node_id = node_id or stream.node_id
+        self.visible_assistant_output.message_phase = str(payload.get("message_phase") or "").strip() or None
 
     def _normalize_approval_request(self, request: Any) -> dict[str, Any]:
         if not isinstance(request, dict):
@@ -1682,6 +1657,13 @@ def _patch_ai_message_requests_tool(patch: dict[str, Any]) -> bool:
         if isinstance(additional_kwargs, dict) and additional_kwargs.get("tool_calls"):
             return True
     return False
+
+
+def _ai_message_requests_tool(message: AIMessage) -> bool:
+    if getattr(message, "tool_calls", None):
+        return True
+    additional_kwargs = getattr(message, "additional_kwargs", None)
+    return isinstance(additional_kwargs, dict) and bool(additional_kwargs.get("tool_calls"))
 
 
 def _looks_like_tool_observation_text(text: str) -> bool:

@@ -31,9 +31,10 @@ RUNTIME_REACT_PROTOCOL = (
     "After a ToolMessage observation, continue from that observation and do not invent hidden tool results. "
     "When inspecting workspace files, if read reports a missing file or the path is uncertain, call ls on "
     "the parent or nearby directory before retrying read with the exact file name/path. "
-    "For complex or time-consuming tasks, use report_progress before substantive work and when a meaningful "
-    "stage completes, the plan changes, or work becomes blocked. Keep each progress summary brief and user-facing; "
-    "do not expose hidden reasoning, narrate every minor action, or use progress updates as the final answer."
+    "For complex or time-consuming tasks, ordinary assistant text before a tool call is optional. Use it only to "
+    "report a concrete approach decision, evidence that changes the next action, a verifiable milestone, or a "
+    "blocker the user should know about; otherwise call the tool without a preamble. Do not emit generic waiting "
+    "messages, narrate minor actions, expose hidden reasoning, or replace the final answer with status updates."
 )
 EXECUTOR_TOOL_POLICY = "Executor tool policy: execute the current plan step with package/domain tools first."
 FINAL_ANSWER_TOOL_POLICY = (

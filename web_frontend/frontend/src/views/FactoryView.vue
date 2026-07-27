@@ -36,7 +36,6 @@
               <MessageItem
                 :message="item.message"
                 :streaming="isMessageStreaming(item.message.streamId)"
-                :thinking="item.kind === 'progress' && item.message.status === 'streaming'"
                 :quoteable="item.kind === 'message'"
                 :tip-context="tipContextFor(item.message)"
                 :workspace-context="messageWorkspaceContext"
@@ -53,13 +52,6 @@
               @dismiss="runtimeStore.dismissSchedulerNoticeFromConversation(notice.id)"
             />
 
-            <MessageItem
-              v-for="message in thinkingMessages"
-              :key="message.id"
-              :message="message"
-              thinking
-              :workspace-context="messageWorkspaceContext"
-            />
           </div>
         </n-scrollbar>
       </div>
@@ -82,6 +74,7 @@
 
       <!-- 输入区 -->
       <div class="input-section">
+        <TransientActivityLine :label="transientActivityLabel" />
         <MessageInput
           ref="inputRef"
           :placeholder="inputPlaceholder"
@@ -133,6 +126,7 @@ import { useFactoryMessageProjection } from '@/composables/factory/useFactoryMes
 import { useCommand } from '@/composables/useCommand'
 import MessageItem from '@/components/chat/MessageItem.vue'
 import MessageInput from '@/components/chat/MessageInput.vue'
+import TransientActivityLine from '@/components/chat/TransientActivityLine.vue'
 import ToolApprovalPanel from '@/components/chat/ToolApprovalPanel.vue'
 import PublishConfirmationPanel from '@/components/chat/PublishConfirmationPanel.vue'
 import ResourceRequestPanel from '@/components/chat/ResourceRequestPanel.vue'
@@ -209,8 +203,8 @@ const {
   hasActiveStreams,
   hasApprovalRequests,
   isMessageStreaming,
-  thinkingMessages,
   timelineItems,
+  transientActivityLabel,
 } = useFactoryMessageProjection()
 
 const resourceRequests = computed(() => {

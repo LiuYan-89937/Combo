@@ -27,7 +27,6 @@
               <MessageItem
                 :message="item.message"
                 :streaming="isMessageStreaming(item.message.streamId)"
-                :thinking="item.kind === 'progress' && item.message.status === 'streaming'"
                 :quoteable="item.kind === 'message'"
                 :tip-context="tipContextFor(item.message)"
                 :workspace-context="messageWorkspaceContext"
@@ -35,13 +34,6 @@
               />
             </template>
 
-            <MessageItem
-              v-for="message in thinkingMessages"
-              :key="message.id"
-              :message="message"
-              thinking
-              :workspace-context="messageWorkspaceContext"
-            />
           </div>
         </n-scrollbar>
       </section>
@@ -83,6 +75,7 @@
       />
 
       <footer class="composer">
+        <TransientActivityLine :label="transientActivityLabel" />
         <MessageInput
           ref="inputRef"
           :placeholder="t('collaboration.inputPlaceholder')"
@@ -122,6 +115,7 @@ import { useI18n } from '@/composables/useI18n'
 import { useCollaborationRuntime } from '@/composables/collaboration/useCollaborationRuntime'
 import MessageInput from '@/components/chat/MessageInput.vue'
 import MessageItem from '@/components/chat/MessageItem.vue'
+import TransientActivityLine from '@/components/chat/TransientActivityLine.vue'
 import PublishConfirmationPanel from '@/components/chat/PublishConfirmationPanel.vue'
 import ToolApprovalPanel from '@/components/chat/ToolApprovalPanel.vue'
 import type { CollaborationRuntimeStatus } from '@/api/collaboration'
@@ -185,8 +179,8 @@ const {
   isMainAgentRunning,
   isMessageStreaming,
   sendMainAgentMessage,
-  thinkingMessages,
   timelineItems,
+  transientActivityLabel,
 } = useCollaborationRuntime()
 runtimeStore.showEmptyCollaborationConversation()
 const runtimeStatus = computed<CollaborationRuntimeStatus | null>(() => {
