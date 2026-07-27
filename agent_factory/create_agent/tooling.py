@@ -207,6 +207,7 @@ class CreateAgentToolEnvironmentBuilder:
                 SKILL_GATEWAY_STATE_FILE,
                 TASK_ANALYSIS_FILE,
                 ".factory/manufacturing_trace.json",
+                ".factory/probe_jobs",
                 ".factory/tool_outputs",
                 ".agent_runtime",
             ]

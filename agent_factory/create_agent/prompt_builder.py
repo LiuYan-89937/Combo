@@ -175,7 +175,7 @@ def _invariant_system_prompt_text() -> str:
             "模型池绑定只允许 create_agent_authoring(action='configure_model_bindings', bindings={main/task/compression...}, tool_bindings={...})；"
             "tool_bindings 与 bindings 是同级参数，绝不能塞进 bindings 内部。"
             "package tool 只允许 create_agent_authoring(action='upsert_package_tool', tool_spec=业务 ToolSpec 字段, tool_source=完整源码, "
-            "python_requirements=[...], install_timeout_seconds=<estimated positive seconds>, expose_to_nodes=[...], resource_descriptors=[...])；"
+            "python_requirements=[...], install_timeout_seconds=<positive stall interval>, expose_to_nodes=[...], resource_descriptors=[...])；"
             "tool_spec 只允许包含 id、description、input_schema、output_schema、resources、risk_level、concurrent、output_compression；"
             "不要传 entrypoint、risk_evaluator、permission_scope 或 permission_tags，这些系统字段由 create_agent_authoring 统一生成。"
             "生成的 package tool 固定写入 tools/<tool_id>/tool.py，系统会生成 entrypoint=python:tools/<tool_id>/tool.py:run；"
@@ -184,7 +184,8 @@ def _invariant_system_prompt_text() -> str:
             "不要把 output_schema、resources、risk_level、concurrent 或 output_compression 放进 input_schema。"
             "如果工具输出包含长列表、搜索候选、外部资源 id/slug/path、日志、报告或其他压缩后仍需保真的机器字段，给 tool_spec.output_compression.actions 写 action 级结构化 schema 和个性化 prompt；"
             "单链路工具把个性压缩当作唯一 action 配置；多 action 工具使用 output_compression.action_argument 和 actions 分别配置每个 action。没有 action 配置时直接走系统默认压缩。"
-            "声明 Python 或系统包依赖时，必须填写 install_timeout_seconds；根据依赖体积、平台和网络状况估算，不要假定固定时长。"
+            "声明 Python 或系统包依赖时，必须填写 install_timeout_seconds；该值表示依赖构建连续多久没有可观测输出才判定停滞，"
+            "不是安装 ETA 或总耗时承诺；只要构建持续产生进展就不得因达到该秒数而重启 probe。"
             "运行时资源只在 contracts/resources.json 声明 descriptor。先根据 task_analysis.resource_requirements 判断账户、凭据、API Key、邮箱、数据库连接、固定端点、默认收件人等部署配置，禁止把这些字段编进 tool input_schema 或源码。"
             "Resource Descriptor 必须使用 resource_id、description、required、value_schema、default_value、secret_fields、used_by、sandbox_access_expectation 的 canonical 字段；JSON Schema 必须放在 value_schema，不能写成 schema。"
             "用户要求先留空或后续补配置时，只写 descriptor 及其 value_schema，default_value 保持空对象，不得把占位账户、假密钥或假端点写入包。"
@@ -195,7 +196,10 @@ def _invariant_system_prompt_text() -> str:
             "如果用户已在当前对话中明确给出某个已声明 Resource 的完整真实值，可调用 create_agent_resource(action='put', resource_id=..., value=...) 写入加密 ResourceStore；"
             "缺字段时必须通过带 resource_requests 的 ask_user 补齐，禁止猜测或制造账号、密码、授权码、Key、端点和默认收件人。"
             "create_agent_resource 的观察结果只返回配置状态，不回显 value。"
-            "调用 create_agent_probe_tool(action='call') 时，必须填写 timeout_seconds，且应覆盖依赖初始化与目标工具实际执行的总时长。"
+            "调用 create_agent_probe_tool(action='call') 会创建异步探测作业并立即返回 job_id；"
+            "timeout_seconds 只约束目标工具运行器，不包含后台依赖环境准备。"
+            "启动后可以继续完成不依赖探测结果的制造工作，并使用 action='status' 查看阶段和最新进度；"
+            "需要等待时使用 status 的 wait_seconds，禁止通过反复修改 timeout_seconds 重启同一探测。"
         ),
         (
             "如果需求需要可复用领域技能、文档生成惯例、设计方法、行业流程、模板资源或已有能力包，优先使用 SkillHub，而不是重新制造同类 package tool。"
@@ -232,7 +236,10 @@ def _invariant_system_prompt_text() -> str:
         ),
         (
             "当你新增或修改 package tool 后，必须使用 create_agent_probe_tool(action='inspect') 查看可探测工具，"
-            "再用 create_agent_probe_tool(action='call', tool_id=..., probe_kind='success_path', arguments=..., prompt=..., tool_goal=...) 进行真实工具探测。"
+            "再用 create_agent_probe_tool(action='call', tool_id=..., probe_kind='success_path', arguments=..., prompt=..., tool_goal=...) 启动真实工具探测。"
+            "call 返回的是异步 job，不是最终探测证据；必须保存 job_id，并在完成其他独立工作后调用 action='status'。"
+            "在探测进入 completed、failed、cancelled 或 interrupted 前不得声称探测完成，也不得结束当前制造轮次；"
+            "终态到达后主动向用户汇报环境阶段、工具执行结果和下一步，不要等待用户追问。"
             "arguments 是目标 package tool 的真实调用输入；prompt 和 tool_goal 只用于用户可见测试说明和结果摘要。"
             "系统会在制造/probe 阶段解析并锁定共享依赖池条目；运行时只读加载 environment.lock.json 引用的本地依赖缓存。"
             "工具行为证据来自真实 arguments、本地运行时 dependency report、ToolExecutionGateway observation、工具输出和可选的小模型摘要。"

@@ -4,7 +4,7 @@
 mod desktop_file_actions;
 mod python_sidecar;
 
-use desktop_file_actions::{reveal_in_file_manager, save_file_as};
+use desktop_file_actions::{reveal_in_file_manager, save_file_as, select_directory};
 use python_sidecar::PythonSidecar;
 use std::sync::Mutex;
 use tauri::Manager;
@@ -118,6 +118,7 @@ fn main() {
             restart_backend,
             reveal_in_file_manager,
             save_file_as,
+            select_directory,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

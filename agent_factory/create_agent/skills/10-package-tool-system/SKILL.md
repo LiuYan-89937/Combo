@@ -55,11 +55,11 @@ Guides adding executable package tools and their ToolSpec declarations.
 - create_agent_authoring rejects package tool writes before any files are changed when third-party imports exist but `python_requirements` is empty.
 - Use installable Python distribution names in `python_requirements`; if an import name differs from the distribution name, determine the correct distribution from package documentation or validator evidence instead of guessing.
 - Python requirements are normalized by distribution name and environment marker. Submit one intentional constraint per distribution and marker; a later declaration for the same identity replaces the earlier one.
-- When declaring Python or system package dependencies, provide `install_timeout_seconds` as a task-appropriate positive estimate based on dependency size, platform, and network conditions.
+- When declaring Python or system package dependencies, provide `install_timeout_seconds` as the maximum acceptable interval without observable builder output. It is a stall guard, not an installation ETA or total deadline.
 - Do not implement a tool that only tells the model to call another tool unless that other tool is visible in tool_access.
 - Create package tools only after model selection, inherited MCP decisions, and the complete `11-skillhub-system` protocol have established a concrete remaining execution gap.
 - The remaining gap must describe the missing governed runtime action; do not recreate SkillHub guidance, assets, templates, scripts, or registered skill-derived tools as package-owned code.
-- After writing or changing a package tool, use create_agent_probe_tool inspect/call with realistic package tool arguments. A call requires `timeout_seconds`, estimated to cover local dependency-environment preparation and tool execution. Probe resolves and locks the local dependency environment before it invokes the real ToolExecutionGateway observation. Include prompt and tool_goal as human-readable probe context.
+- After writing or changing a package tool, use create_agent_probe_tool inspect/call with realistic package tool arguments. Call starts an asynchronous probe job and returns a job id. Use status to observe dependency preparation and tool execution, then report the terminal result. `timeout_seconds` limits the target tool runner only; dependency preparation has its own observable stall guard. Include prompt and tool_goal as human-readable probe context.
 - Do not create tools that require unconfirmed secrets, accounts, URLs, files, or external services.
 
 ## Boundaries

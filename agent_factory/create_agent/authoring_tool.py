@@ -144,7 +144,10 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                 "install_timeout_seconds": {
                     "type": "integer",
                     "minimum": 1,
-                    "description": "Estimated dependency-pool resolution deadline in seconds, required when declaring installable dependencies.",
+                    "description": (
+                        "Maximum dependency-builder interval without observable output or progress, in seconds. "
+                        "This is a stall guard rather than an installation ETA."
+                    ),
                 },
                 "expose_to_nodes": {"type": "array", "items": {"type": "string"}},
                 "seed": {"type": "object", "additionalProperties": True},

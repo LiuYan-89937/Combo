@@ -2,7 +2,20 @@
   <n-modal v-model:show="show" preset="card" :title="modalTitle" style="width: 560px">
     <n-form ref="formRef" :model="formData" :rules="rules">
       <n-form-item :label="t('extensions.skillPath')" path="path">
-        <n-input v-model:value="formData.path" placeholder="/path/to/skill-directory" />
+        <n-input-group>
+          <n-input
+            v-model:value="formData.path"
+            :placeholder="t('extensions.selectSkillFolderHint')"
+            readonly
+          />
+          <n-button
+            :disabled="!directoryPickerAvailable || formData.source !== 'local'"
+            :loading="selectingDirectory"
+            @click="handleSelectDirectory"
+          >
+            {{ t('extensions.selectSkillFolder') }}
+          </n-button>
+        </n-input-group>
       </n-form-item>
 
       <n-form-item :label="t('extensions.source')">
@@ -25,10 +38,14 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { NButton, NForm, NFormItem, NInput, NModal, NSelect, NSpace, NSwitch } from 'naive-ui'
+import { NButton, NForm, NFormItem, NInput, NInputGroup, NModal, NSelect, NSpace, NSwitch, useMessage } from 'naive-ui'
 import type { FormInst, FormRules } from 'naive-ui'
 import type { SkillConfig } from '@/api/resourceTypes'
 import type { ExtensionItemView } from '@/types/protocol'
+import {
+  desktopDirectoryPickerAvailable,
+  selectDesktopDirectory,
+} from '@/api/desktopDialogs'
 import { useI18n } from '@/composables/useI18n'
 
 const props = defineProps<{
@@ -56,6 +73,9 @@ const show = computed({
 const formRef = ref<FormInst | null>(null)
 const formData = ref<SkillFormData>(emptyForm())
 const { t } = useI18n()
+const message = useMessage()
+const directoryPickerAvailable = desktopDirectoryPickerAvailable()
+const selectingDirectory = ref(false)
 const modalTitle = computed(() => (props.item ? t('extensions.skillEditTitle') : t('extensions.skillAddTitle')))
 const submitText = computed(() => (props.item ? t('common.save') : t('common.add')))
 
@@ -107,6 +127,23 @@ watch(
     if (props.show) loadForm(item)
   }
 )
+
+async function handleSelectDirectory(): Promise<void> {
+  selectingDirectory.value = true
+  try {
+    const selected = await selectDesktopDirectory(formData.value.path)
+    if (selected) {
+      formData.value.path = selected
+      await formRef.value?.validate()
+    }
+  } catch (error) {
+    message.error(t('extensions.selectSkillFolderFailed', {
+      reason: error instanceof Error ? error.message : String(error),
+    }))
+  } finally {
+    selectingDirectory.value = false
+  }
+}
 
 function handleSubmit(): void {
   formRef.value?.validate((errors) => {

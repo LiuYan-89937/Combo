@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import platform
+import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -36,6 +37,7 @@ class EnvironmentResolver:
         package_root: str | Path,
         *,
         on_progress: EnvironmentProgress | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> dict[str, Any]:
         root = Path(package_root).expanduser().resolve()
         _notify(on_progress, "checking_contract", package_root=str(root))
@@ -113,6 +115,8 @@ class EnvironmentResolver:
                 python_requirements=request["python_requirements"],
                 npm_requirements=request["npm_requirements"],
                 timeout_seconds=config.install_timeout_seconds,
+                on_progress=on_progress,
+                cancel_event=cancel_event,
             )
         except DependencyPoolError as exc:
             raise EnvironmentResolutionError(exc.status, str(exc)) from exc
