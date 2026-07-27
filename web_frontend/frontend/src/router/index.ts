@@ -51,16 +51,19 @@ const routes: RouteRecordRaw[] = [
     path: '/knowledge',
     name: 'Knowledge',
     component: () => import('@/views/KnowledgeView.vue'),
+    meta: { rightSidebarAvailable: false },
   },
   {
     path: '/scheduler',
     name: 'Scheduler',
     component: () => import('@/views/SchedulerView.vue'),
+    meta: { rightSidebarAvailable: false },
   },
   {
     path: '/extensions',
     name: 'Extensions',
     component: () => import('@/views/ExtensionsView.vue'),
+    meta: { rightSidebarAvailable: false },
   },
   {
     path: '/model-pool',

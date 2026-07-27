@@ -246,7 +246,6 @@ const zhCN = {
   'attachments.textMode': '文本模式',
   'attachments.capabilitiesUnavailable': '文件能力尚未加载，请稍后重试',
   'attachments.unsupportedFiles': '不支持以下文件：{names}',
-  'attachments.characterCount': '{count} 字符',
   'attachments.messageAttachments': '消息附件',
 
   'factory.evolutionTarget': '进化对象',
@@ -1181,7 +1180,6 @@ const enUS: Record<MessageKey, string> = {
   'attachments.textMode': 'Text mode',
   'attachments.capabilitiesUnavailable': 'File capabilities are still loading. Please try again.',
   'attachments.unsupportedFiles': 'Unsupported files: {names}',
-  'attachments.characterCount': '{count} characters',
   'attachments.messageAttachments': 'Message attachments',
 
   'factory.evolutionTarget': 'Evolution target',
