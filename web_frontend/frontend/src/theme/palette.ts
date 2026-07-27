@@ -12,6 +12,14 @@ export interface AppPalette {
   surfaceActiveHover: string
   surfaceHover: string
 
+  // 操作控件
+  controlSurface: string
+  controlSurfaceHover: string
+  controlSurfacePressed: string
+  controlDisabledSurface: string
+  controlDisabledBorder: string
+  controlDisabledText: string
+
   // 玻璃效果（液态玻璃感）
   glassBackground: string
   glassBackgroundLight: string
@@ -80,6 +88,14 @@ export const lightPalette: AppPalette = {
   surfaceActiveHover: '#e5e5e5',
   surfaceHover: '#fafafa',
 
+  // 操作控件（保持白底和轻边框，避免禁用态形成灰色块）
+  controlSurface: '#ffffff',
+  controlSurfaceHover: '#f7f7f8',
+  controlSurfacePressed: '#efeff1',
+  controlDisabledSurface: '#ffffff',
+  controlDisabledBorder: 'rgba(0, 0, 0, 0.07)',
+  controlDisabledText: '#8f8f96',
+
   // 玻璃效果
   glassBackground: 'rgba(255, 255, 255, 0.72)',
   glassBackgroundLight: 'rgba(255, 255, 255, 0.88)',
@@ -147,6 +163,14 @@ export const darkPalette: AppPalette = {
   surfacePressed: '#262626',
   surfaceActiveHover: '#404040',
   surfaceHover: '#0a0a0a',
+
+  // 操作控件（暗色主题使用干净的分层底色，不用大块中灰）
+  controlSurface: '#0a0a0a',
+  controlSurfaceHover: '#141416',
+  controlSurfacePressed: '#1c1c1f',
+  controlDisabledSurface: '#0a0a0a',
+  controlDisabledBorder: 'rgba(255, 255, 255, 0.09)',
+  controlDisabledText: '#73737a',
 
   // 玻璃效果
   glassBackground: 'rgba(10, 10, 10, 0.78)',
