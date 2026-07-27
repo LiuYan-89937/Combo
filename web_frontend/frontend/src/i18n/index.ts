@@ -219,6 +219,7 @@ const zhCN = {
   'attachments.title': '添加附件',
   'attachments.localFile': '本地文件',
   'attachments.workspaceFile': '工作区文件',
+  'attachments.openInWorkspace': '在工作区中打开',
   'attachments.url': 'URL 链接',
   'attachments.text': '文本片段',
   'attachments.uploadMain': '点击或拖拽文件到此处上传',
@@ -256,7 +257,6 @@ const zhCN = {
 
   'factory.evolutionTarget': '进化对象',
   'factory.evolutionTargetPlaceholder': '选择要进化的 Agent 包',
-  'factory.sendToAgentPlaceholder': '向 {name} 发送消息...',
   'factory.selectAgentFirst': '请先选择一个子 Agent',
   'factory.createAgentPlaceholder': '描述要制造的 Agent...',
   'factory.evolveAgentPlaceholder': '描述对 {name} 的进化方向...',
@@ -1444,6 +1444,7 @@ const enUS: Record<MessageKey, string> = {
   'attachments.title': 'Add attachment',
   'attachments.localFile': 'Local file',
   'attachments.workspaceFile': 'Workspace file',
+  'attachments.openInWorkspace': 'Open in workspace',
   'attachments.url': 'URL',
   'attachments.text': 'Text snippet',
   'attachments.uploadMain': 'Click or drop a file here',
@@ -1481,7 +1482,6 @@ const enUS: Record<MessageKey, string> = {
 
   'factory.evolutionTarget': 'Evolution target',
   'factory.evolutionTargetPlaceholder': 'Select an Agent package to evolve',
-  'factory.sendToAgentPlaceholder': 'Send a message to {name}...',
   'factory.selectAgentFirst': 'Select a sub-agent first',
   'factory.createAgentPlaceholder': 'Describe the Agent to build...',
   'factory.evolveAgentPlaceholder': 'Describe how to evolve {name}...',

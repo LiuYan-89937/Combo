@@ -46,10 +46,6 @@ export function useFactoryConversation() {
     if (isEvolutionRoute.value) return 'evolve_agent'
     return 'agent_package'
   })
-  const activeChatPackageTitle = computed(() => {
-    const pkg = agentStore.activeChatPackage
-    return pkg?.agent_name || pkg?.name || t('common.unnamedAgent')
-  })
   const selectedEvolutionPackageId = computed(() => (
     isEvolutionRoute.value ? agentStore.selectedPackageId : null
   ))
@@ -71,10 +67,8 @@ export function useFactoryConversation() {
     })),
   ])
   const inputPlaceholder = computed(() => (
-    isAgentChatActive.value
-      ? t('factory.sendToAgentPlaceholder', { name: activeChatPackageTitle.value })
-      : isAgentSessionLanding.value
-        ? t('factory.selectAgentFirst')
+    isAgentSessionLanding.value
+      ? t('factory.selectAgentFirst')
       : currentFactoryMessageMode.value === 'create_agent'
         ? t('factory.createAgentPlaceholder')
         : currentFactoryMessageMode.value === 'evolve_agent'

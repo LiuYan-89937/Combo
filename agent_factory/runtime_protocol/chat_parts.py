@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any
 from uuid import uuid4
 
+from agent_factory.runtime_attachments import transcript_attachment_views
+
 
 def build_chat_turn_messages(
     *,
@@ -147,17 +149,15 @@ def _reasoning_part(*, part_id: str, text: str, timestamp: str) -> dict[str, Any
 
 
 def _attachment_part(*, part_id: str, attachment: dict[str, Any], timestamp: str) -> dict[str, Any]:
+    projected = transcript_attachment_views([attachment])
+    attachment_view = projected[0] if projected else {
+        "kind": attachment.get("kind") or "file",
+        "name": attachment.get("name") or attachment.get("display_name") or attachment.get("attachment_id") or "",
+    }
     return {
         "id": part_id,
         "type": "attachment",
-        "attachment": {
-            "kind": attachment.get("kind") or "file",
-            "name": attachment.get("name") or attachment.get("display_name") or attachment.get("attachment_id") or "",
-            **({"source_kind": attachment.get("source_kind")} if attachment.get("source_kind") else {}),
-            **({"mime_type": attachment.get("mime_type")} if attachment.get("mime_type") else {}),
-            **({"path": attachment.get("path") or attachment.get("runtime_path")} if attachment.get("path") or attachment.get("runtime_path") else {}),
-            **({"size_bytes": attachment.get("size_bytes")} if attachment.get("size_bytes") is not None else {}),
-        },
+        "attachment": attachment_view,
         "status": "completed",
         "createdAt": timestamp,
         "updatedAt": timestamp,

@@ -36,6 +36,7 @@ export interface TranscriptAttachmentView {
   name: string
   source_kind?: string
   mime_type?: string
+  workspace_scope?: WorkspaceScope
   path?: string
   size_bytes?: number
 }
@@ -341,9 +342,6 @@ export interface TimelineItem {
   id: string
   eventType: string
   timestamp: string
-  requestId: string | null
-  runId: string | null
-  sequence: number
   spanId: string | null
   parentSpanId: string | null
   stageId: string | null
