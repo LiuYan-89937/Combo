@@ -149,15 +149,6 @@
       </div>
 
       <div class="right-actions">
-        <n-text
-          v-if="inputText.length > 0"
-          depth="3"
-          class="character-count"
-          aria-live="polite"
-        >
-          {{ t('attachments.characterCount', { count: inputText.length }) }}
-        </n-text>
-
         <n-button
           type="primary"
           class="send-button"
@@ -467,6 +458,7 @@ defineExpose({
 
 <style scoped>
 .message-input-container {
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
   gap: var(--app-space-md);
@@ -499,6 +491,8 @@ defineExpose({
 .attachment-item {
   display: flex;
   align-items: center;
+  min-width: 0;
+  max-width: 100%;
   gap: var(--app-space-xs);
   padding: var(--app-space-xs) var(--app-space-sm);
   background: var(--app-surface);
@@ -514,6 +508,8 @@ defineExpose({
 }
 
 .attachment-name {
+  flex: 1 1 auto;
+  min-width: 0;
   max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -559,6 +555,7 @@ defineExpose({
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: var(--app-space-sm);
 }
 
@@ -566,17 +563,39 @@ defineExpose({
 .right-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--app-space-sm);
   min-width: 0;
+  max-width: 100%;
+}
+
+.left-actions {
+  flex: 1 1 360px;
+}
+
+.right-actions {
+  flex: 0 1 auto;
+  justify-content: flex-end;
+  margin-left: auto;
 }
 
 .model-selector {
+  flex: 0 1 180px;
+  min-width: 140px;
+  max-width: 100%;
   width: 180px;
 }
 
 .reasoning-button {
   gap: var(--app-space-xs);
+  max-width: 100%;
   white-space: nowrap;
+}
+
+.reasoning-button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .reasoning-caret {
@@ -609,14 +628,9 @@ defineExpose({
   text-align: center;
 }
 
-.character-count {
-  font-size: var(--app-font-sm);
-  font-variant-numeric: tabular-nums;
-  animation: app-fade-in 0.16s ease both;
-}
-
 .send-button,
 .cancel-button {
+  min-width: 0;
   border-radius: var(--app-radius-md);
   transition: transform var(--app-transition-fast);
 }
@@ -632,9 +646,41 @@ defineExpose({
   transform: scale(0.96);
 }
 
-@media (max-width: 768px) {
+@container (max-width: 620px) {
+  .input-actions {
+    align-items: stretch;
+  }
+
+  .left-actions,
+  .right-actions {
+    flex-basis: 100%;
+    width: 100%;
+  }
+
+  .right-actions {
+    margin-left: 0;
+  }
+
   .model-selector {
-    width: 150px;
+    flex: 1 1 180px;
+    width: auto;
+  }
+}
+
+@container (max-width: 360px) {
+  .message-input-container {
+    gap: var(--app-space-sm);
+    padding: var(--app-space-sm);
+  }
+
+  .left-actions,
+  .right-actions {
+    gap: var(--app-space-xs);
+  }
+
+  .send-button,
+  .cancel-button {
+    flex: 1 1 120px;
   }
 }
 
