@@ -42,11 +42,7 @@ class NativeDependencyPool(DependencyPool):
         on_progress: DependencyProgress | None = None,
         cancel_event: threading.Event | None = None,
     ) -> DependencyPoolResolution:
-        """
-        Resolve dependencies using the local Python environment.
-
-        System packages are not supported in native mode since we don't have apt/deb.
-        """
+        """Resolve Python and npm dependencies into the local shared pool."""
         self.root.mkdir(parents=True, exist_ok=True)
 
         try:
@@ -58,7 +54,6 @@ class NativeDependencyPool(DependencyPool):
         profile_request = {
             "runtime_compatibility": self._native_runtime_compatibility(),
             "python_requirements": normalized_python_requirements,
-            "system_packages": [],  # Not supported in native mode
             "npm_requirements": _normalized_values(npm_requirements),
         }
 
@@ -87,7 +82,6 @@ class NativeDependencyPool(DependencyPool):
                 cancel_event=cancel_event,
             )
 
-            # System packages not supported in native mode
             system_entries: list[dict[str, str]] = []
 
             # NPM resolution using local npm (if available)

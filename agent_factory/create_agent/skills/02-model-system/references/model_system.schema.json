@@ -341,13 +341,6 @@
               "title": "Python Requirements",
               "type": "array"
             },
-            "system_packages": {
-              "items": {
-                "type": "string"
-              },
-              "title": "System Packages",
-              "type": "array"
-            },
             "npm_requirements": {
               "items": {
                 "type": "string"
@@ -372,11 +365,6 @@
               },
               "title": "Platform Architectures",
               "type": "array"
-            },
-            "base_image": {
-              "default": "agentfactory-runtime-python:3.12",
-              "title": "Base Image",
-              "type": "string"
             },
             "verification_commands": {
               "items": {

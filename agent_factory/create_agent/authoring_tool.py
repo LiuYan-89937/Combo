@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import json
 from pathlib import Path
+import platform
 import shutil
 import sys
 from typing import Any
@@ -52,6 +53,7 @@ DEFAULT_EXECUTOR_FALLBACK_TOOL_IDS = ("shell", "write", "edit")
 CREATE_AGENT_AUTHORING_ACTIONS = {
     "configure_model_bindings",
     "configure_dependencies",
+    "inspect_runtime_environment",
     "reset_contract",
     "materialize_mcp_inheritance",
     "remove_package_tool",
@@ -92,7 +94,8 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
     return ToolSpec(
         id=CREATE_AGENT_AUTHORING_TOOL_ID,
         description=(
-            "Deterministically writes coherent AgentPackage authoring increments. Use this instead of manually "
+            "Inspects the local runtime and deterministically writes coherent AgentPackage authoring increments. "
+            "Use inspect_runtime_environment before choosing external dependencies, then use this tool instead of manually "
             "hand-editing cross-file contracts for identity, built-in pattern assembly, package tools, scheduler seeds, "
             "runtime resources, confirmed package knowledge files, or package state. Package knowledge is opt-in and "
             "requires authoritative, distributable source evidence; identity, persona, prompts, and tool instructions "
@@ -135,11 +138,16 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                     ),
                     "items": {"type": "string"},
                 },
-                "system_packages": {"type": "array", "items": {"type": "string"}},
                 "npm_requirements": {"type": "array", "items": {"type": "string"}},
-                "system_binaries": {"type": "array", "items": {"type": "string"}},
+                "system_binaries": {
+                    "type": "array",
+                    "description": (
+                        "Host commands required by the produced capability. With inspect_runtime_environment these are "
+                        "checked without installation; with authoring actions they are recorded as runtime capabilities."
+                    ),
+                    "items": {"type": "string"},
+                },
                 "platform_architectures": {"type": "array", "items": {"type": "string", "enum": ["amd64", "arm64"]}},
-                "base_image": {"type": "string"},
                 "verification_commands": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
                 "install_timeout_seconds": {
                     "type": "integer",
@@ -327,11 +335,9 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                     "then": {
                         "anyOf": [
                             {"required": ["python_requirements"]},
-                            {"required": ["system_packages"]},
                             {"required": ["npm_requirements"]},
                             {"required": ["system_binaries"]},
                             {"required": ["platform_architectures"]},
-                            {"required": ["base_image"]},
                             {"required": ["verification_commands"]},
                             {"required": ["install_timeout_seconds"]},
                         ]
@@ -500,7 +506,9 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     action = str(arguments.get("action") or "").strip()
     if action not in CREATE_AGENT_AUTHORING_ACTIONS:
         raise ValueError(f"unsupported create-agent authoring action: {action}")
-    if action == "set_identity":
+    if action == "inspect_runtime_environment":
+        result = _inspect_runtime_environment(arguments)
+    elif action == "set_identity":
         result = _set_identity(workspace, arguments)
     elif action == "configure_model_bindings":
         result = _configure_model_bindings(workspace, arguments)
@@ -526,7 +534,8 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         result = _materialize_mcp_inheritance(workspace)
     else:
         result = _upsert_state(workspace, arguments)
-    sync_authoring_stage(workspace, action)
+    if result["changed_files"]:
+        sync_authoring_stage(workspace, action)
     return tool_envelope(result, evidence={"authoring": result}, summary=result["summary"])
 
 
@@ -535,12 +544,56 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
     action = str(arguments.get("action") or "").strip()
     if action not in CREATE_AGENT_AUTHORING_ACTIONS:
         return ToolRiskResult(action="deny", risk_level="medium", reasons=["unknown create-agent authoring action"]).model_dump(mode="json")
+    if action == "inspect_runtime_environment":
+        return ToolRiskResult(
+            action="allow",
+            risk_level="low",
+            reasons=["runtime environment inspection is read-only and does not install host packages"],
+            facts={"action": action},
+        ).model_dump(mode="json")
     return ToolRiskResult(
         action="allow",
         risk_level="medium",
         reasons=["create-agent authoring performs controlled package-relative writes"],
         facts={"action": action},
     ).model_dump(mode="json")
+
+
+def _inspect_runtime_environment(arguments: dict[str, Any]) -> dict[str, Any]:
+    requested_binaries = _string_list(arguments.get("system_binaries"))
+    binary_capabilities: list[dict[str, Any]] = []
+    for command in requested_binaries:
+        resolved_path = shutil.which(command)
+        binary_capabilities.append({
+            "command": command,
+            "available": resolved_path is not None,
+            "resolved_path": resolved_path,
+        })
+    written = {
+        "platform": {
+            "system": platform.system().lower(),
+            "release": platform.release(),
+            "machine": platform.machine().lower(),
+        },
+        "python": {
+            "implementation": platform.python_implementation().lower(),
+            "version": platform.python_version(),
+            "executable": sys.executable,
+        },
+        "requested_host_capabilities": binary_capabilities,
+        "dependency_management": {
+            "python_requirements": "local_shared_pool",
+            "npm_requirements": "local_shared_pool",
+            "system_binaries": "host_capability_check_only",
+            "host_package_installation": "not_available",
+        },
+    }
+    return _result(
+        "inspect_runtime_environment",
+        [],
+        "Inspected the local runtime without changing the host.",
+        written=written,
+    )
 
 
 def _set_identity(workspace: CreateAgentWorkspace, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -667,7 +720,6 @@ def _upsert_package_tool(workspace: CreateAgentWorkspace, arguments: dict[str, A
         }
     ).model_dump(mode="json")
     python_requirements = _string_list(arguments.get("python_requirements"))
-    system_packages = _string_list(arguments.get("system_packages"))
     npm_requirements = _string_list(arguments.get("npm_requirements"))
     system_binaries = _string_list(arguments.get("system_binaries"))
     third_party_imports = _third_party_import_roots(source_tree)
@@ -699,11 +751,9 @@ def _upsert_package_tool(workspace: CreateAgentWorkspace, arguments: dict[str, A
     _merge_dependency_config(
         dependency_config,
         python_requirements=python_requirements,
-        system_packages=system_packages,
         npm_requirements=npm_requirements,
         system_binaries=system_binaries,
         platform_architectures=_string_list(arguments.get("platform_architectures")),
-        base_image=str(arguments.get("base_image") or "").strip(),
         verification_commands=_string_matrix(arguments.get("verification_commands")),
         install_timeout_seconds=arguments.get("install_timeout_seconds"),
     )
@@ -851,11 +901,9 @@ def _configure_dependencies(workspace: CreateAgentWorkspace, arguments: dict[str
     _merge_dependency_config(
         dependency_config,
         python_requirements=_string_list(arguments.get("python_requirements")),
-        system_packages=_string_list(arguments.get("system_packages")),
         npm_requirements=_string_list(arguments.get("npm_requirements")),
         system_binaries=_string_list(arguments.get("system_binaries")),
         platform_architectures=_string_list(arguments.get("platform_architectures")),
-        base_image=str(arguments.get("base_image") or "").strip(),
         verification_commands=_string_matrix(arguments.get("verification_commands")),
         install_timeout_seconds=arguments.get("install_timeout_seconds"),
     )
@@ -911,22 +959,19 @@ def _merge_dependency_config(
     config: dict[str, Any],
     *,
     python_requirements: list[str],
-    system_packages: list[str],
     npm_requirements: list[str],
     system_binaries: list[str],
     platform_architectures: list[str],
-    base_image: str,
     verification_commands: list[list[str]],
     install_timeout_seconds: Any,
 ) -> None:
+    config["system_packages"] = []
+    config["base_image"] = "local-python"
     requirements = merge_python_requirements(
         _dependency_list(config, "python_requirements"),
         python_requirements,
     )
     config["python_requirements"] = requirements
-    packages = _dependency_list(config, "system_packages")
-    for package in system_packages:
-        _append_unique(packages, package)
     npm_packages = _dependency_list(config, "npm_requirements")
     for requirement in npm_requirements:
         _append_unique(npm_packages, requirement)
@@ -935,15 +980,13 @@ def _merge_dependency_config(
         _append_unique(binaries, binary)
     if platform_architectures:
         config["platform_architectures"] = platform_architectures
-    if base_image:
-        config["base_image"] = base_image
     if verification_commands:
         config["verification_commands"] = verification_commands
     if install_timeout_seconds is not None:
         config["install_timeout_seconds"] = _positive_int(install_timeout_seconds, "install_timeout_seconds")
-    if (requirements or packages or npm_packages) and config.get("install_timeout_seconds") is None:
+    if (requirements or npm_packages) and config.get("install_timeout_seconds") is None:
         raise ValueError(
-            "install_timeout_seconds is required when declaring Python, system, or npm dependencies; "
+            "install_timeout_seconds is required when declaring Python or npm dependencies; "
             "estimate a task-appropriate positive number of seconds."
         )
 

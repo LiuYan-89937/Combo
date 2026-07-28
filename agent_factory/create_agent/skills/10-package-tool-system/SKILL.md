@@ -35,8 +35,9 @@ Guides adding executable package tools and their ToolSpec declarations.
 2. Read the current target package files before editing. Preserve unrelated valid scaffold content.
 3. If the requested capability does not affect this focus, leave these files as-is and move to the next useful focus yourself.
 4. Before authoring, classify stable accounts, credentials, endpoints, mailboxes, database connections, and default destinations as Resources rather than Tool inputs.
-5. When a package tool capability is ready, pass the package tool business fields, tool source, dependency list, exposure targets, and any Resource Descriptors to create_agent_authoring(action="upsert_package_tool"), then call create_agent_validate with the appropriate scope.
-5. When validation fails, repair only validator-indicated target files and paths; do not start a broad schema audit.
+5. Inspect the current platform and every required host command with create_agent_authoring(action="inspect_runtime_environment", system_binaries=[...]) before choosing dependencies.
+6. When a package tool capability is ready, pass the package tool business fields, tool source, dependency list, exposure targets, and any Resource Descriptors to create_agent_authoring(action="upsert_package_tool"), then call create_agent_validate with the appropriate scope.
+7. When validation fails, repair only validator-indicated target files and paths; do not start a broad schema audit.
 
 ## Capability Write Guidance
 - Add the complete package tool through create_agent_authoring(action="upsert_package_tool"); do not manually scatter writes across tool.py, manifest ToolSpec, agent_package.json tools index, contracts/tools.json, dependencies, and assembly tool access.
@@ -55,7 +56,9 @@ Guides adding executable package tools and their ToolSpec declarations.
 - create_agent_authoring rejects package tool writes before any files are changed when third-party imports exist but `python_requirements` is empty.
 - Use installable Python distribution names in `python_requirements`; if an import name differs from the distribution name, determine the correct distribution from package documentation or validator evidence instead of guessing.
 - Python requirements are normalized by distribution name and environment marker. Submit one intentional constraint per distribution and marker; a later declaration for the same identity replaces the earlier one.
-- When declaring Python or system package dependencies, provide `install_timeout_seconds` as the maximum acceptable interval without observable builder output. It is a stall guard, not an installation ETA or total deadline.
+- Python and npm requirements are installed into application-managed local dependency pools. Provide `install_timeout_seconds` as the maximum acceptable interval without observable builder output. It is a stall guard, not an installation ETA or total deadline.
+- Do not declare Linux distribution packages or attempt `apt`, `dnf`, `yum`, `brew`, or `winget` installation. The manufacturing runtime never mutates the host package manager.
+- Declare unavoidable host commands through `system_binaries`. If inspection reports a required command unavailable, ask the user or choose a portable implementation instead of repeatedly probing.
 - Do not implement a tool that only tells the model to call another tool unless that other tool is visible in tool_access.
 - Create package tools only after model selection, inherited MCP decisions, and the complete `11-skillhub-system` protocol have established a concrete remaining execution gap.
 - The remaining gap must describe the missing governed runtime action; do not recreate SkillHub guidance, assets, templates, scripts, or registered skill-derived tools as package-owned code.

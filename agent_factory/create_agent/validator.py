@@ -1726,8 +1726,27 @@ def _tool_dependency_issues(root: Path, package: Any, package_tools: dict[str, A
         return []
     imports_by_tool = _package_tool_external_imports(root=root, tool_ids=set(package_tools))
     issues: list[PackageValidationIssue] = []
+    if contract.config.system_packages:
+        issues.append(_contract_issue(
+            where="dependencies.system_packages",
+            summary="legacy operating-system package dependencies are not supported by the local runtime",
+            message=(
+                "contracts/dependencies.json still declares Linux/Docker-era system_packages. "
+                "The local runtime resolves application dependencies through shared Python/npm pools and only checks "
+                "explicit host commands through system_binaries."
+            ),
+            path="contracts/dependencies.json",
+            expected="system_packages is empty and required host commands are declared through system_binaries.",
+            actual=contract.config.system_packages,
+            repair_hint=(
+                "Inspect required commands with create_agent_authoring(action='inspect_runtime_environment'), then "
+                "rewrite dependencies through create_agent_authoring(action='configure_dependencies')."
+            ),
+            target_files=["contracts/dependencies.json"],
+            recommended_skill="10-package-tool-system",
+        ))
     if (
-        (contract.config.python_requirements or contract.config.system_packages or contract.config.npm_requirements)
+        (contract.config.python_requirements or contract.config.npm_requirements)
         and contract.config.install_timeout_seconds is None
     ):
         issues.append(_contract_issue(
@@ -1767,7 +1786,6 @@ def _tool_dependency_issues(root: Path, package: Any, package_tools: dict[str, A
                 "enabled": True,
                 "config": {
                     "python_requirements": ["<installable-distribution-name>"],
-                    "system_packages": [],
                     "system_binaries": [],
                 },
             },
