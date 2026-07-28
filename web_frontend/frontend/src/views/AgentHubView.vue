@@ -1,23 +1,21 @@
 <template>
   <div class="hub-view">
-    <header class="hub-header">
-      <div>
-        <h1>{{ t('agentHub.title') }}</h1>
-        <p>{{ t('agentHub.subtitle') }}</p>
-      </div>
-      <div class="identity">
-        <template v-if="auth.authenticated && auth.user">
-          <n-avatar :src="auth.user.avatar_url" round size="small">
-            {{ auth.user.github_login.slice(0, 1).toUpperCase() }}
-          </n-avatar>
-          <span>{{ auth.user.github_login }}</span>
-          <n-button quaternary size="small" @click="logout">{{ t('agentHub.logout') }}</n-button>
-        </template>
-        <n-button v-else type="primary" @click="startLogin">{{ t('agentHub.login') }}</n-button>
-      </div>
-    </header>
-
     <n-tabs v-model:value="activeTab" type="line" animated class="hub-tabs">
+      <template #suffix>
+        <div class="identity">
+          <template v-if="auth.authenticated && auth.user">
+            <n-avatar :src="auth.user.avatar_url" round size="small">
+              {{ auth.user.github_login.slice(0, 1).toUpperCase() }}
+            </n-avatar>
+            <span>{{ auth.user.github_login }}</span>
+            <n-button quaternary size="small" @click="logout">{{ t('agentHub.logout') }}</n-button>
+          </template>
+          <n-button v-else type="primary" size="small" @click="startLogin">
+            {{ t('agentHub.login') }}
+          </n-button>
+        </div>
+      </template>
+
       <n-tab-pane name="explore" :tab="t('agentHub.explore')">
         <div class="toolbar">
           <n-input
@@ -87,57 +85,114 @@
       </n-tab-pane>
 
       <n-tab-pane name="publish" :tab="t('agentHub.publish')">
-        <n-alert v-if="!auth.authenticated" type="info" class="page-alert">
-          {{ t('agentHub.loginHint') }}
-          <template #action>
-            <n-button size="small" type="primary" @click="startLogin">{{ t('agentHub.login') }}</n-button>
-          </template>
-        </n-alert>
+        <div class="publish-workspace">
+          <section class="publish-intro">
+            <div class="publish-intro-copy">
+              <div class="publish-mark">
+                <n-icon size="24"><CloudUploadOutline /></n-icon>
+              </div>
+              <div>
+                <h2>{{ t('agentHub.publishTitle') }}</h2>
+                <p>{{ t('agentHub.publishDescription') }}</p>
+              </div>
+            </div>
+            <div class="review-flow">
+              <span>{{ t('agentHub.flowUpload') }}</span>
+              <i />
+              <span>{{ t('agentHub.flowValidate') }}</span>
+              <i />
+              <span>{{ t('agentHub.flowReview') }}</span>
+              <i />
+              <span>{{ t('agentHub.flowPublished') }}</span>
+            </div>
+          </section>
 
-        <template v-else>
-          <section class="publish-section">
-            <h2>{{ t('agentHub.publishLocal') }}</h2>
-            <div class="local-package-list">
-              <div v-for="pkg in publishablePackages" :key="pkg.package_id" class="local-package">
+          <n-alert v-if="!auth.authenticated" type="info" class="login-panel">
+            {{ t('agentHub.loginHint') }}
+            <template #action>
+              <n-button size="small" type="primary" @click="startLogin">
+                {{ t('agentHub.login') }}
+              </n-button>
+            </template>
+          </n-alert>
+
+          <template v-else>
+            <section class="publish-panel">
+              <div class="section-heading">
                 <div>
-                  <strong>{{ pkg.agent_name || pkg.name || pkg.package_id }}</strong>
-                  <span>{{ pkg.package_id }}</span>
+                  <h3>{{ t('agentHub.publishLocal') }}</h3>
+                  <p>{{ t('agentHub.publishLocalHint') }}</p>
                 </div>
-                <n-button
-                  type="primary"
-                  size="small"
-                  :loading="publishingPackageId === pkg.package_id"
-                  @click="publish(pkg.package_id)"
-                >
-                  {{ t('agentHub.publishAction') }}
+              </div>
+              <div v-if="publishablePackages.length" class="local-package-grid">
+                <article v-for="pkg in publishablePackages" :key="pkg.package_id" class="local-package-card">
+                  <div class="package-card-heading">
+                    <n-avatar :style="{ background: packageColor(pkg.package_id) }" round>
+                      {{ (pkg.agent_name || pkg.name || pkg.package_id).slice(0, 1).toUpperCase() }}
+                    </n-avatar>
+                    <div class="package-card-title">
+                      <strong>{{ pkg.agent_name || pkg.name || pkg.package_id }}</strong>
+                      <span>{{ pkg.package_id }}</span>
+                    </div>
+                  </div>
+                  <p>{{ pkg.agent_description || t('common.noDescription') }}</p>
+                  <div class="package-card-footer">
+                    <span>
+                      <n-icon><ConstructOutline /></n-icon>
+                      {{ pkg.tool_count || 0 }} {{ t('agentHub.tools') }}
+                    </span>
+                    <n-button
+                      type="primary"
+                      size="small"
+                      :loading="publishingPackageId === pkg.package_id"
+                      @click="publish(pkg.package_id)"
+                    >
+                      <template #icon><n-icon><ArrowUpOutline /></n-icon></template>
+                      {{ t('agentHub.publishAction') }}
+                    </n-button>
+                  </div>
+                </article>
+              </div>
+              <n-empty
+                v-else
+                :description="t('agentHub.noPublishablePackages')"
+                class="panel-empty"
+              />
+            </section>
+
+            <section class="publish-panel">
+              <div class="section-heading">
+                <div>
+                  <h3>{{ t('agentHub.uploads') }}</h3>
+                  <p>{{ t('agentHub.uploadsHint') }}</p>
+                </div>
+                <n-button quaternary circle size="small" :loading="loadingUploads" @click="loadUploads">
+                  <template #icon><n-icon><Refresh /></n-icon></template>
                 </n-button>
               </div>
-              <n-empty v-if="publishablePackages.length === 0" :description="t('agents.empty')" />
-            </div>
-          </section>
-
-          <section class="publish-section">
-            <div class="section-heading">
-              <h2>{{ t('agentHub.uploads') }}</h2>
-              <n-button size="small" @click="loadUploads">{{ t('common.refresh') }}</n-button>
-            </div>
-            <n-empty v-if="uploads.length === 0" :description="t('agentHub.noUploads')" />
-            <div v-else class="upload-list">
-              <div v-for="upload in uploads" :key="upload.upload_id" class="upload-row">
-                <div>
-                  <strong>{{ upload.filename }}</strong>
-                  <span>{{ formatDate(upload.updated_at) }}</span>
-                </div>
-                <div class="upload-status">
-                  <n-tag :type="uploadStatusType(upload.status)" size="small">
-                    {{ upload.status }}
+              <n-empty
+                v-if="!loadingUploads && uploads.length === 0"
+                :description="t('agentHub.noUploads')"
+                class="panel-empty"
+              />
+              <div v-else class="upload-list">
+                <article v-for="upload in uploads" :key="upload.upload_id" class="upload-row">
+                  <div class="upload-file-icon">
+                    <n-icon size="20"><CubeOutline /></n-icon>
+                  </div>
+                  <div class="upload-copy">
+                    <strong>{{ upload.filename }}</strong>
+                    <span>{{ formatDate(upload.updated_at) }}</span>
+                    <span v-if="upload.error" class="upload-error">{{ upload.error.message }}</span>
+                  </div>
+                  <n-tag :type="uploadStatusType(upload.status)" size="small" round>
+                    {{ uploadStatusLabel(upload.status) }}
                   </n-tag>
-                  <span v-if="upload.error" class="upload-error">{{ upload.error.message }}</span>
-                </div>
+                </article>
               </div>
-            </div>
-          </section>
-        </template>
+            </section>
+          </template>
+        </div>
       </n-tab-pane>
     </n-tabs>
 
@@ -176,7 +231,14 @@ import {
   useMessage,
 } from 'naive-ui'
 import { open } from '@tauri-apps/plugin-shell'
-import { Refresh, Search } from '@/components/icons'
+import {
+  ArrowUpOutline,
+  CloudUploadOutline,
+  ConstructOutline,
+  CubeOutline,
+  Refresh,
+  Search,
+} from '@/components/icons'
 import {
   agentHubApi,
   type AgentHubAuthStatus,
@@ -202,6 +264,7 @@ const releases = ref<AgentHubRelease[]>([])
 const uploads = ref<AgentHubUpload[]>([])
 const auth = reactive<AgentHubAuthStatus>({ authenticated: false, user: null, hub_url: '' })
 const loadingPackages = ref(false)
+const loadingUploads = ref(false)
 const installingReleaseId = ref<string | null>(null)
 const publishingPackageId = ref<string | null>(null)
 const errorMessage = ref('')
@@ -250,10 +313,13 @@ async function loadPackages() {
 
 async function loadUploads() {
   if (!auth.authenticated) return
+  loadingUploads.value = true
   try {
     uploads.value = await agentHubApi.uploads()
   } catch (error) {
     showError(error)
+  } finally {
+    loadingUploads.value = false
   }
 }
 
@@ -414,43 +480,396 @@ function uploadStatusType(status: string): 'default' | 'success' | 'warning' | '
   if (status === 'pending_review') return 'warning'
   return 'info'
 }
+
+function uploadStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    awaiting_upload: t('agentHub.statusAwaitingUpload'),
+    queued: t('agentHub.statusQueued'),
+    validating: t('agentHub.statusValidating'),
+    pending_review: t('agentHub.statusPendingReview'),
+    published: t('agentHub.statusPublished'),
+    rejected: t('agentHub.statusRejected'),
+    failed: t('agentHub.statusFailed'),
+  }
+  return labels[status] || status
+}
 </script>
 
 <style scoped>
-.hub-view { height:100%; overflow:auto; padding:26px 30px 40px; background:var(--app-surface-muted) }
-.hub-header { display:flex; align-items:center; justify-content:space-between; gap:24px; max-width:1200px; margin:0 auto 18px }
-.hub-header h1 { margin:0; font-size:26px; color:var(--app-text-strong) }
-.hub-header p { margin:5px 0 0; color:var(--app-text-muted) }
-.identity { display:flex; align-items:center; gap:10px }
-.hub-tabs { max-width:1200px; margin:0 auto }
-.toolbar { display:flex; gap:12px; margin:12px 0 18px }
-.toolbar .n-input { max-width:560px }
-.page-alert { margin:12px 0 18px }
-.hub-empty { padding:80px 0 }
-.release-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(310px,1fr)); gap:16px }
-.release-heading { display:flex; align-items:center; gap:11px }
-.release-title { flex:1; min-width:0; display:flex; flex-direction:column }
-.release-title span,.local-package span,.upload-row span { color:var(--app-text-muted); font-size:12px }
-.description { min-height:42px; color:var(--app-text); line-height:1.5 }
-.metrics,.capabilities { display:flex; gap:10px; flex-wrap:wrap; color:var(--app-text-muted); font-size:12px }
-.capabilities { margin-top:12px }
-.card-actions { display:flex; justify-content:flex-end }
-.publish-section { background:var(--app-surface); border:1px solid var(--app-divider); border-radius:var(--app-radius-lg); padding:20px; margin:14px 0 20px }
-.publish-section h2 { margin:0 0 16px; font-size:17px }
-.section-heading { display:flex; justify-content:space-between; align-items:center }
-.local-package,.upload-row { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:13px 4px; border-bottom:1px solid var(--app-divider) }
-.local-package:last-child,.upload-row:last-child { border-bottom:0 }
-.local-package > div,.upload-row > div:first-child { display:flex; flex-direction:column; gap:3px }
-.upload-status { display:flex; align-items:flex-end; flex-direction:column; gap:4px }
-.upload-error { color:var(--app-error)!important; max-width:460px; text-align:right }
-.browser-login-card { width:min(440px,calc(100vw - 32px)) }
-.browser-login-card p { color:var(--app-text-muted) }
-.pending-row { display:flex; align-items:center; justify-content:center; gap:10px; margin-top:18px; color:var(--app-text-muted) }
-.login-error { margin:14px 0 0; color:var(--app-error)!important; font-size:12px; text-align:center }
+.hub-view {
+  height: 100%;
+  overflow: auto;
+  padding: 14px 30px 48px;
+  background: var(--app-surface);
+}
+
+.hub-tabs {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.identity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  color: var(--app-text-secondary);
+  font-size: 12px;
+}
+
+.toolbar {
+  display: flex;
+  gap: 12px;
+  margin: 20px 0;
+}
+
+.toolbar .n-input {
+  max-width: 560px;
+}
+
+.page-alert {
+  margin: 12px 0 18px;
+}
+
+.hub-empty {
+  padding: 80px 0;
+}
+
+.release-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+  gap: 16px;
+}
+
+.release-heading {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.release-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.release-title span {
+  color: var(--app-text-muted);
+  font-size: 12px;
+}
+
+.description {
+  min-height: 42px;
+  color: var(--app-text);
+  line-height: 1.5;
+}
+
+.metrics,
+.capabilities {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: var(--app-text-muted);
+  font-size: 12px;
+}
+
+.capabilities {
+  margin-top: 12px;
+}
+
+.card-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.publish-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding-top: 20px;
+}
+
+.publish-intro {
+  overflow: hidden;
+  padding: 28px;
+  border-radius: var(--app-radius-lg);
+  background: var(--app-text-strong);
+  color: var(--app-text-inverse);
+}
+
+.publish-intro-copy {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.publish-mark {
+  width: 50px;
+  height: 50px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--app-text-inverse) 20%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--app-text-inverse) 10%, transparent);
+}
+
+.publish-intro h2 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.25;
+}
+
+.publish-intro p {
+  max-width: 680px;
+  margin: 6px 0 0;
+  color: color-mix(in srgb, var(--app-text-inverse) 68%, transparent);
+  line-height: 1.6;
+}
+
+.review-flow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 26px;
+  color: color-mix(in srgb, var(--app-text-inverse) 72%, transparent);
+  font-size: 12px;
+}
+
+.review-flow span {
+  white-space: nowrap;
+}
+
+.review-flow i {
+  width: 32px;
+  height: 1px;
+  background: color-mix(in srgb, var(--app-text-inverse) 24%, transparent);
+}
+
+.login-panel {
+  border-radius: var(--app-radius-md);
+}
+
+.publish-panel {
+  padding: 24px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-lg);
+  background: var(--app-surface);
+}
+
+.section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 18px;
+}
+
+.section-heading h3 {
+  margin: 0;
+  color: var(--app-text-strong);
+  font-size: 16px;
+}
+
+.section-heading p {
+  margin: 5px 0 0;
+  color: var(--app-text-muted);
+  font-size: 12px;
+}
+
+.local-package-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  gap: 12px;
+}
+
+.local-package-card {
+  min-width: 0;
+  padding: 17px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface-muted);
+  transition:
+    border-color var(--app-transition-fast),
+    background var(--app-transition-fast);
+}
+
+.local-package-card:hover {
+  border-color: var(--app-border-hover);
+  background: var(--app-surface-hover);
+}
+
+.package-card-heading {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.package-card-title {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.package-card-title strong,
+.package-card-title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.package-card-title span,
+.upload-copy span {
+  color: var(--app-text-muted);
+  font-size: 12px;
+}
+
+.local-package-card > p {
+  min-height: 40px;
+  margin: 15px 0;
+  overflow: hidden;
+  color: var(--app-text-secondary);
+  font-size: 12px;
+  line-height: 1.65;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.package-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.package-card-footer > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--app-text-muted);
+  font-size: 12px;
+}
+
+.upload-list {
+  overflow: hidden;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+}
+
+.upload-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--app-divider);
+}
+
+.upload-row:last-child {
+  border-bottom: 0;
+}
+
+.upload-file-icon {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  background: var(--app-surface-muted);
+  color: var(--app-text-secondary);
+}
+
+.upload-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.upload-copy strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upload-error {
+  color: var(--app-error) !important;
+  overflow-wrap: anywhere;
+}
+
+.panel-empty {
+  padding: 34px 0;
+}
+
+.browser-login-card {
+  width: min(440px, calc(100vw - 32px));
+}
+
+.browser-login-card p {
+  color: var(--app-text-muted);
+}
+
+.pending-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 18px;
+  color: var(--app-text-muted);
+}
+
+.login-error {
+  margin: 14px 0 0;
+  color: var(--app-error) !important;
+  font-size: 12px;
+  text-align: center;
+}
+
 @media (max-width:700px) {
-  .hub-view { padding:18px 14px 30px }
-  .hub-header { align-items:flex-start; flex-direction:column }
-  .toolbar { align-items:stretch; flex-direction:column }
-  .toolbar .n-input { max-width:none }
+  .hub-view {
+    padding: 10px 14px 30px;
+  }
+
+  .identity > span {
+    display: none;
+  }
+
+  .toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .toolbar .n-input {
+    max-width: none;
+  }
+
+  .publish-intro {
+    padding: 22px;
+  }
+
+  .publish-intro-copy {
+    align-items: flex-start;
+  }
+
+  .review-flow {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .review-flow i {
+    width: 1px;
+    height: 12px;
+    margin-left: 4px;
+  }
+
+  .publish-panel {
+    padding: 18px;
+  }
+
+  .local-package-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>
