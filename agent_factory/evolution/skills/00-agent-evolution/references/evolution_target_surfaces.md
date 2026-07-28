@@ -20,4 +20,3 @@ If no authoring action can represent the needed managed-surface change, stop and
 
 Package knowledge is opt-in. Generic requests mentioning documents, knowledge bases, persona, prompts, or future user uploads do not authorize bundling files into `knowledge/`. Require authoritative, distributable source evidence and keep mutable material in runtime knowledge sources or tools.
 The source registry is maintained by create_agent_authoring; never edit it directly.
-Retired `knowledge`, `memory`, `session`, and `state` contracts are not valid evolution targets and must not be restored.
