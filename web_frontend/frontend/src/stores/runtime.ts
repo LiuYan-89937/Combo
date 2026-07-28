@@ -63,6 +63,7 @@ import {
   applyMessagePartCompleted,
   applyMessagePartDelta,
   applyMessageStarted,
+  reconcileAssistantDialogueInterrupt,
 } from './runtime/messageMutations'
 import {
   agentPackageConversationScope,
@@ -779,7 +780,10 @@ export const useRuntimeStore = defineStore('runtime', {
       turn.status = 'interrupted'
       turn.completedAt = event.timestamp
       const message = shouldRenderInterruptMessage(event) ? interruptMessage(event) : ''
-      if (message) {
+      const reconciled = message
+        ? reconcileAssistantDialogueInterrupt(this, event, message)
+        : false
+      if (message && !reconciled) {
         const item: TranscriptItem = {
           id: event.event_id,
           role: 'assistant',
