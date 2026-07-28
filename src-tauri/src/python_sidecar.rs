@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use tauri::{AppHandle, Manager};
 
+use crate::user_environment;
+
 #[cfg(all(windows, not(debug_assertions)))]
 use std::os::windows::process::CommandExt;
 #[cfg(all(windows, not(debug_assertions)))]
@@ -80,6 +82,10 @@ impl PythonSidecar {
             .stdin(Stdio::piped())
             .stdout(Stdio::from(stdout_log))
             .stderr(Stdio::from(stderr_log));
+
+        if let Some(path) = user_environment::executable_path() {
+            cmd.env("PATH", path);
+        }
 
         #[cfg(all(windows, not(debug_assertions)))]
         cmd.creation_flags(CREATE_NO_WINDOW);

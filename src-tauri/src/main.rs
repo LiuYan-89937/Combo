@@ -3,6 +3,7 @@
 
 mod desktop_file_actions;
 mod python_sidecar;
+mod user_environment;
 
 use desktop_file_actions::{reveal_in_file_manager, save_file_as, select_directory};
 use python_sidecar::PythonSidecar;
