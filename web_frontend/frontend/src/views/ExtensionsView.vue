@@ -4,7 +4,7 @@
       <div>
         <div class="eyebrow">EXTENSION REGISTRY</div>
         <h1>{{ t('extensions.title') }}</h1>
-        <p>统一注册扩展，然后拖动到右侧 Agent 轮盘完成装配。</p>
+        <p>统一注册扩展，然后拖动到右侧 Agent 选择器完成装配。</p>
       </div>
       <n-button quaternary circle class="refresh-button" @click="refreshExtensionWorkbench">
         <template #icon><n-icon><Refresh /></n-icon></template>
@@ -32,7 +32,7 @@
                 <strong>全局 MCP 注册</strong>
                 <span>配置只保存一次，可装配给任意 Agent</span>
               </div>
-              <n-button type="primary" @click="openAddMcp">
+              <n-button class="primary-action" @click="openAddMcp">
                 <template #icon><n-icon><Add /></n-icon></template>
                 {{ t('extensions.addServer') }}
               </n-button>
@@ -43,16 +43,28 @@
                 v-for="item in extensionStore.mcpItems"
                 :key="extensionKey(item)"
                 class="registry-card mcp-card"
+                :class="{
+                  'is-being-dragged': isDraggedExtension(
+                    'mcp',
+                    String(item.payload?.server_id || ''),
+                  ),
+                }"
                 draggable="true"
-                @dragstart="startExtensionDrag('mcp', String(item.payload?.server_id || ''))"
-                @dragend="finishExtensionDrag"
+                @dragstart="beginExtensionDrag(
+                  $event,
+                  'mcp',
+                  String(item.payload?.server_id || ''),
+                  item.name,
+                )"
+                @dragend="finishWorkbenchDrag"
               >
-                <div class="drag-grip">⋮⋮</div>
-                <div class="card-icon">M</div>
+                <div class="card-topline">
+                  <div class="card-icon">MCP</div>
+                  <div class="drag-grip">DRAG</div>
+                </div>
                 <div class="card-body">
                   <div class="card-title-row">
                     <strong>{{ item.name }}</strong>
-                    <span class="live-dot" />
                   </div>
                   <p>{{ item.payload?.description || item.summary || t('common.noDescription') }}</p>
                   <code>{{ mcpCommandLine(item) }}</code>
@@ -60,7 +72,7 @@
                 <div class="card-actions">
                   <n-button size="tiny" quaternary @click="handleTestMcp(item)">测试</n-button>
                   <n-dropdown :options="mcpActions" @select="(key) => handleMcpAction(key, item)">
-                    <n-button size="tiny" quaternary circle>
+                    <n-button size="tiny" quaternary circle @click.stop>
                       <n-icon><EllipsisHorizontal /></n-icon>
                     </n-button>
                   </n-dropdown>
@@ -85,7 +97,7 @@
               />
               <n-button
                 size="small"
-                type="primary"
+                class="primary-action"
                 :disabled="!skillHubCliAvailable || !skillHubQuery.trim()"
                 @click="handleSkillHubSearch"
               >
@@ -107,7 +119,7 @@
                 <strong>全局 Skill 注册</strong>
                 <span>Skill 内容集中管理，Agent 仅保存绑定</span>
               </div>
-              <n-button type="primary" @click="openAddSkill">
+              <n-button class="primary-action" @click="openAddSkill">
                 <template #icon><n-icon><Add /></n-icon></template>
                 {{ t('extensions.addSkill') }}
               </n-button>
@@ -118,19 +130,32 @@
                 v-for="item in extensionStore.skillItems"
                 :key="extensionKey(item)"
                 class="registry-card skill-card"
+                :class="{
+                  'is-being-dragged': isDraggedExtension(
+                    'skill',
+                    String(item.payload?.skill_id || ''),
+                  ),
+                }"
                 draggable="true"
-                @dragstart="startExtensionDrag('skill', String(item.payload?.skill_id || ''))"
-                @dragend="finishExtensionDrag"
+                @dragstart="beginExtensionDrag(
+                  $event,
+                  'skill',
+                  String(item.payload?.skill_id || ''),
+                  item.name,
+                )"
+                @dragend="finishWorkbenchDrag"
               >
-                <div class="drag-grip">⋮⋮</div>
-                <div class="card-icon">S</div>
+                <div class="card-topline">
+                  <div class="card-icon">SKILL</div>
+                  <div class="drag-grip">DRAG</div>
+                </div>
                 <div class="card-body">
                   <div class="card-title-row"><strong>{{ item.name }}</strong></div>
                   <p>{{ item.payload?.description || item.summary || t('common.noDescription') }}</p>
                   <code>{{ item.payload?.path || t('extensions.pathUnset') }}</code>
                 </div>
                 <n-dropdown :options="skillActions" @select="(key) => handleSkillAction(key, item)">
-                  <n-button size="tiny" quaternary circle>
+                  <n-button size="tiny" quaternary circle class="corner-action" @click.stop>
                     <n-icon><EllipsisHorizontal /></n-icon>
                   </n-button>
                 </n-dropdown>
@@ -145,78 +170,105 @@
         <div class="assembly-heading">
           <div>
             <div class="eyebrow">AGENT ASSEMBLY</div>
-            <h2>Agent 扩展轮盘</h2>
+            <h2>选择 Agent</h2>
           </div>
           <span v-if="draggingExtension" class="drop-hint">拖到目标 Agent</span>
         </div>
 
-        <div
-          class="agent-orbit"
-          :class="{ 'is-dense': assemblyTargets.length > 8 }"
-        >
-          <div class="orbit-line orbit-line-a" />
-          <div class="orbit-line orbit-line-b" />
-          <div class="orbit-core">
+        <div class="picker-stage">
+          <div class="picker-axis" aria-hidden="true">
+            <span />
+            <span />
+          </div>
+          <div
+            ref="agentPicker"
+            class="agent-picker"
+            :class="{ 'is-pointer-dragging': pickerPointer.active }"
+            @scroll="handlePickerScroll"
+            @pointerdown="handlePickerPointerDown"
+            @pointermove="handlePickerPointerMove"
+            @pointerup="handlePickerPointerUp"
+            @pointercancel="handlePickerPointerUp"
+          >
+            <div class="picker-spacer" aria-hidden="true" />
+            <n-popover
+              v-for="(target, index) in assemblyTargets"
+              :key="target.id"
+              trigger="hover"
+              placement="left"
+              :show-arrow="false"
+              class="agent-extension-popover"
+            >
+              <template #trigger>
+                <button
+                  class="agent-wheel-item"
+                  :class="{
+                    active: selectedAssemblyTargetId === target.id,
+                    busy: assemblyBusyTargetId === target.id,
+                    'is-drop-target': dragHoverTargetId === target.id,
+                    'is-just-bound': recentlyBoundTargetId === target.id,
+                  }"
+                  :style="wheelItemStyle(index)"
+                  @click="selectWheelTarget(index)"
+                  @dragenter.prevent="handleTargetDragEnter(target.id, index)"
+                  @dragover.prevent
+                  @dragleave="handleTargetDragLeave($event, target.id)"
+                  @drop.prevent="handleWheelDrop(target.id)"
+                >
+                  <span class="agent-index">{{ String(index + 1).padStart(2, '0') }}</span>
+                  <span class="agent-name">{{ target.name }}</span>
+                  <span v-if="dragHoverTargetId === target.id" class="drop-action">释放添加</span>
+                  <span v-else-if="recentlyBoundTargetId === target.id" class="drop-action">已添加</span>
+                  <span v-else class="agent-count">{{ targetExtensionCount(target.id) }}</span>
+                </button>
+              </template>
+              <div class="bound-popover">
+                <div class="bound-title">
+                  <strong>{{ target.name }}</strong>
+                  <span>已装配扩展</span>
+                </div>
+                <div v-if="targetExtensions(target.id).length" class="bound-list">
+                  <div v-for="item in targetExtensions(target.id)" :key="extensionKey(item)">
+                    <span class="bound-kind">{{ item.kind === 'mcp' ? 'M' : 'S' }}</span>
+                    <span>{{ item.name }}</span>
+                    <n-button
+                      size="tiny"
+                      quaternary
+                      @click="removeExtensionFromTarget(
+                        target.id,
+                        item.kind === 'mcp' ? 'mcp' : 'skill',
+                        String(item.payload?.server_id || item.payload?.skill_id || ''),
+                      )"
+                    >
+                      移除
+                    </n-button>
+                  </div>
+                </div>
+                <n-empty v-else size="small" description="尚未装配扩展" />
+              </div>
+            </n-popover>
+            <div class="picker-spacer" aria-hidden="true" />
+          </div>
+
+          <div class="selected-target-summary">
             <span>当前目标</span>
             <strong>{{ selectedAssemblyTarget?.name || 'Agent' }}</strong>
             <small>{{ targetExtensionCount(selectedAssemblyTarget?.id || '') }} 个扩展</small>
-          </div>
-
-          <n-popover
-            v-for="(target, index) in assemblyTargets"
-            :key="target.id"
-            trigger="hover"
-            placement="left"
-            :show-arrow="false"
-            class="agent-extension-popover"
-          >
-            <template #trigger>
-              <button
-                class="agent-node"
-                :class="{
-                  active: selectedAssemblyTargetId === target.id,
-                  busy: assemblyBusyTargetId === target.id,
-                }"
-                :style="wheelNodeStyle(index, assemblyTargets.length)"
-                @click="selectedAssemblyTargetId = target.id"
-                @dragover.prevent
-                @drop.prevent="dropExtensionOnTarget(target.id)"
+            <div class="selected-extension-list">
+              <span
+                v-for="item in targetExtensions(selectedAssemblyTarget?.id || '')"
+                :key="extensionKey(item)"
               >
-                <span class="agent-avatar">{{ target.glyph }}</span>
-                <span class="agent-name">{{ target.name }}</span>
-                <span class="agent-count">{{ targetExtensionCount(target.id) }}</span>
-              </button>
-            </template>
-            <div class="bound-popover">
-              <div class="bound-title">
-                <strong>{{ target.name }}</strong>
-                <span>已装配扩展</span>
-              </div>
-              <div v-if="targetExtensions(target.id).length" class="bound-list">
-                <div v-for="item in targetExtensions(target.id)" :key="extensionKey(item)">
-                  <span class="bound-kind">{{ item.kind === 'mcp' ? 'M' : 'S' }}</span>
-                  <span>{{ item.name }}</span>
-                  <n-button
-                    size="tiny"
-                    quaternary
-                    type="error"
-                    @click="removeExtensionFromTarget(
-                      target.id,
-                      item.kind === 'mcp' ? 'mcp' : 'skill',
-                      String(item.payload?.server_id || item.payload?.skill_id || ''),
-                    )"
-                  >
-                    移除
-                  </n-button>
-                </div>
-              </div>
-              <n-empty v-else size="small" description="尚未装配扩展" />
+                {{ item.name }}
+              </span>
+              <span v-if="!targetExtensions(selectedAssemblyTarget?.id || '').length" class="empty-selection">
+                暂无扩展
+              </span>
             </div>
-          </n-popover>
+          </div>
         </div>
 
         <footer class="assembly-footer">
-          <span class="pulse-ring" />
           拖拽后立即保存；进行中的任务保持不变，下一次运行使用最新装配。
         </footer>
       </section>
@@ -242,6 +294,7 @@
 </template>
 
 <script setup lang="ts">
+import { nextTick, onMounted, reactive, ref } from 'vue'
 import type { CSSProperties } from 'vue'
 import {
   NAlert,
@@ -307,22 +360,161 @@ const {
   testResultType,
 } = useExtensionsManager()
 
-function wheelNodeStyle(index: number, total: number): CSSProperties {
-  const usesTwoRings = total > 8
-  const ring = usesTwoRings ? index % 2 : 0
-  const ringIndex = usesTwoRings ? Math.floor(index / 2) : index
-  const ringCount = usesTwoRings
-    ? Math.ceil((total - ring) / 2)
-    : total
-  const angle = ringCount <= 1 ? -90 : -90 + (360 / ringCount) * ringIndex
+const WHEEL_ITEM_HEIGHT = 72
+const agentPicker = ref<HTMLElement | null>(null)
+const pickerPosition = ref(0)
+const pickerScrollFrame = ref<number | null>(null)
+const dragHoverTargetId = ref('')
+const recentlyBoundTargetId = ref('')
+const pickerPointer = reactive({
+  active: false,
+  pointerId: -1,
+  startY: 0,
+  startScrollTop: 0,
+  moved: false,
+})
+
+function wheelItemStyle(index: number): CSSProperties {
+  const delta = index - pickerPosition.value
+  const distance = Math.abs(delta)
+  const curveOffset = Math.min(distance * distance * 15, 90)
   return {
-    '--orbit-angle': `${angle}deg`,
-    '--orbit-delay': `${index * -0.45}s`,
-    '--orbit-radius': usesTwoRings
-      ? (ring === 0 ? 'clamp(164px, 15vw, 196px)' : 'clamp(112px, 10.5vw, 140px)')
-      : 'clamp(164px, 15vw, 205px)',
+    '--wheel-x': `${curveOffset}px`,
+    '--wheel-scale': String(Math.max(0.78, 1 - distance * 0.085)),
+    '--wheel-opacity': String(Math.max(0.16, 1 - distance * 0.25)),
+    '--wheel-tilt': `${Math.max(-28, Math.min(28, delta * -8))}deg`,
   } as CSSProperties
 }
+
+function updatePickerPosition(): void {
+  if (!agentPicker.value) return
+  pickerPosition.value = agentPicker.value.scrollTop / WHEEL_ITEM_HEIGHT
+  const index = Math.max(
+    0,
+    Math.min(assemblyTargets.value.length - 1, Math.round(pickerPosition.value)),
+  )
+  const target = assemblyTargets.value[index]
+  if (target) selectedAssemblyTargetId.value = target.id
+}
+
+function handlePickerScroll(): void {
+  if (pickerScrollFrame.value !== null) cancelAnimationFrame(pickerScrollFrame.value)
+  pickerScrollFrame.value = requestAnimationFrame(() => {
+    pickerScrollFrame.value = null
+    updatePickerPosition()
+  })
+}
+
+function scrollToWheelIndex(index: number, behavior: ScrollBehavior = 'smooth'): void {
+  agentPicker.value?.scrollTo({
+    top: index * WHEEL_ITEM_HEIGHT,
+    behavior,
+  })
+}
+
+function selectWheelTarget(index: number): void {
+  if (pickerPointer.moved) return
+  scrollToWheelIndex(index)
+}
+
+function isDraggedExtension(kind: 'mcp' | 'skill', identifier: string): boolean {
+  return draggingExtension.value?.kind === kind
+    && draggingExtension.value.identifier === identifier
+}
+
+function beginExtensionDrag(
+  event: DragEvent,
+  kind: 'mcp' | 'skill',
+  identifier: string,
+  name: string,
+): void {
+  startExtensionDrag(kind, identifier)
+  if (!event.dataTransfer) return
+  event.dataTransfer.effectAllowed = 'copy'
+  event.dataTransfer.setData('text/plain', name)
+  const preview = document.createElement('div')
+  preview.className = 'extension-drag-preview'
+  preview.textContent = `${kind === 'mcp' ? 'MCP' : 'SKILL'} · ${name}`
+  document.body.appendChild(preview)
+  event.dataTransfer.setDragImage(preview, 18, 18)
+  requestAnimationFrame(() => preview.remove())
+}
+
+function finishWorkbenchDrag(): void {
+  dragHoverTargetId.value = ''
+  finishExtensionDrag()
+}
+
+function handleTargetDragEnter(targetId: string, index: number): void {
+  if (!draggingExtension.value) return
+  dragHoverTargetId.value = targetId
+  scrollToWheelIndex(index)
+}
+
+function handleTargetDragLeave(event: DragEvent, targetId: string): void {
+  const currentTarget = event.currentTarget
+  const nextTarget = event.relatedTarget
+  if (
+    currentTarget instanceof HTMLElement
+    && nextTarget instanceof Node
+    && currentTarget.contains(nextTarget)
+  ) return
+  if (dragHoverTargetId.value === targetId) dragHoverTargetId.value = ''
+}
+
+async function handleWheelDrop(targetId: string): Promise<void> {
+  dragHoverTargetId.value = ''
+  await dropExtensionOnTarget(targetId)
+  recentlyBoundTargetId.value = targetId
+  window.setTimeout(() => {
+    if (recentlyBoundTargetId.value === targetId) recentlyBoundTargetId.value = ''
+  }, 900)
+}
+
+function handlePickerPointerDown(event: PointerEvent): void {
+  if (!agentPicker.value || event.button !== 0) return
+  pickerPointer.active = true
+  pickerPointer.pointerId = event.pointerId
+  pickerPointer.startY = event.clientY
+  pickerPointer.startScrollTop = agentPicker.value.scrollTop
+  pickerPointer.moved = false
+  agentPicker.value.setPointerCapture(event.pointerId)
+}
+
+function handlePickerPointerMove(event: PointerEvent): void {
+  if (
+    !pickerPointer.active
+    || pickerPointer.pointerId !== event.pointerId
+    || !agentPicker.value
+  ) return
+  const offset = event.clientY - pickerPointer.startY
+  if (Math.abs(offset) > 4) pickerPointer.moved = true
+  agentPicker.value.scrollTop = pickerPointer.startScrollTop - offset
+}
+
+function handlePickerPointerUp(event: PointerEvent): void {
+  if (!pickerPointer.active || pickerPointer.pointerId !== event.pointerId) return
+  pickerPointer.active = false
+  pickerPointer.pointerId = -1
+  if (agentPicker.value?.hasPointerCapture(event.pointerId)) {
+    agentPicker.value.releasePointerCapture(event.pointerId)
+  }
+  scrollToWheelIndex(Math.round(pickerPosition.value))
+  window.setTimeout(() => {
+    pickerPointer.moved = false
+  }, 0)
+}
+
+onMounted(() => {
+  void nextTick(() => {
+    const selectedIndex = Math.max(
+      0,
+      assemblyTargets.value.findIndex((target) => target.id === selectedAssemblyTargetId.value),
+    )
+    pickerPosition.value = selectedIndex
+    scrollToWheelIndex(selectedIndex, 'auto')
+  })
+})
 </script>
 
 <style scoped>
@@ -332,21 +524,7 @@ function wheelNodeStyle(index: number, total: number): CSSProperties {
   overflow: auto;
   padding: 28px 30px 34px;
   color: var(--app-text);
-  background:
-    radial-gradient(circle at 82% 48%, rgba(111, 89, 255, .12), transparent 34%),
-    radial-gradient(circle at 16% 8%, rgba(51, 185, 255, .09), transparent 28%),
-    linear-gradient(145deg, var(--app-surface) 0%, color-mix(in srgb, var(--app-surface) 94%, #6f59ff) 100%);
-}
-
-.extension-workbench::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  opacity: .22;
-  background-image: radial-gradient(circle, currentColor .55px, transparent .7px);
-  background-size: 24px 24px;
-  mask-image: linear-gradient(to bottom, black, transparent 78%);
+  background: var(--app-surface);
 }
 
 .workbench-header {
@@ -359,7 +537,7 @@ function wheelNodeStyle(index: number, total: number): CSSProperties {
 }
 
 .eyebrow {
-  color: #7967ff;
+  color: var(--app-text-muted);
   font-size: 11px;
   font-weight: 800;
   letter-spacing: .18em;
@@ -371,10 +549,21 @@ h2 { font-size: 20px; }
 .workbench-header p { margin: 7px 0 0; color: var(--app-text-muted); }
 
 .refresh-button {
-  border: 1px solid color-mix(in srgb, var(--app-border) 70%, transparent);
-  backdrop-filter: blur(18px);
+  border: 1px solid var(--app-border);
+  border-radius: 12px;
 }
 
+.primary-action {
+  color: var(--app-surface);
+  border-color: var(--app-text);
+  border-radius: 10px;
+  background: var(--app-text);
+}
+.primary-action:hover {
+  color: var(--app-surface);
+  border-color: var(--app-text);
+  background: color-mix(in srgb, var(--app-text) 86%, transparent);
+}
 .test-result { margin-bottom: 18px; }
 
 .workbench-grid {
@@ -389,24 +578,13 @@ h2 { font-size: 20px; }
 .registry-panel, .assembly-panel {
   position: relative;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--app-border) 72%, transparent);
-  border-radius: 28px;
-  background: color-mix(in srgb, var(--app-surface) 84%, transparent);
-  box-shadow: 0 24px 70px rgba(27, 24, 58, .08);
-  backdrop-filter: blur(24px) saturate(135%);
+  border: 1px solid var(--app-border);
+  border-radius: 22px;
+  background: var(--app-surface);
 }
 
 .registry-panel { padding: 18px; }
-.panel-glow {
-  position: absolute;
-  width: 260px;
-  height: 260px;
-  left: -100px;
-  top: -130px;
-  border-radius: 50%;
-  background: rgba(71, 183, 255, .14);
-  filter: blur(55px);
-}
+.panel-glow { display: none; }
 
 .registry-tabs { position: relative; z-index: 1; }
 .registry-toolbar {
@@ -419,59 +597,107 @@ h2 { font-size: 20px; }
 .registry-toolbar > div { display: grid; gap: 3px; }
 .registry-toolbar span, .skillhub-strip span { color: var(--app-text-muted); font-size: 12px; }
 
-.registry-cards { display: grid; gap: 10px; }
-.registry-card {
+.registry-cards {
   display: grid;
-  grid-template-columns: 18px 42px minmax(0, 1fr) auto;
-  align-items: center;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
   gap: 12px;
-  min-height: 88px;
-  padding: 13px 12px;
-  border: 1px solid color-mix(in srgb, var(--app-border) 68%, transparent);
-  border-radius: 18px;
+}
+.registry-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  aspect-ratio: 1;
+  min-width: 0;
+  padding: 15px;
+  border: 1px solid var(--app-border);
+  border-radius: 16px;
   cursor: grab;
-  background: color-mix(in srgb, var(--app-surface) 91%, transparent);
-  transition: transform .24s ease, box-shadow .24s ease, border-color .24s ease;
+  background: var(--app-surface);
+  transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease, opacity .2s ease;
 }
 .registry-card:hover {
-  transform: translateY(-3px) scale(1.008);
-  border-color: rgba(112, 91, 255, .45);
-  box-shadow: 0 15px 36px rgba(59, 48, 133, .11);
+  transform: translateY(-3px);
+  border-color: var(--app-text);
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--app-text) 9%, transparent);
 }
 .registry-card:active { cursor: grabbing; }
-.drag-grip { color: var(--app-text-muted); opacity: .5; letter-spacing: -4px; }
+.registry-card.is-being-dragged {
+  opacity: .36;
+  transform: scale(.96);
+  border-style: dashed;
+}
+.card-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.drag-grip {
+  color: var(--app-text-muted);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .14em;
+}
 .card-icon, .bound-kind {
   display: grid;
   place-items: center;
-  border-radius: 13px;
+  border-radius: 8px;
   font-weight: 800;
 }
-.card-icon { width: 42px; height: 42px; }
-.mcp-card .card-icon { color: #196bb0; background: rgba(70, 173, 255, .14); }
-.skill-card .card-icon { color: #6a4bd6; background: rgba(126, 92, 255, .13); }
-.card-body { min-width: 0; }
+.card-icon {
+  width: auto;
+  height: 26px;
+  padding: 0 8px;
+  color: var(--app-surface);
+  font-size: 9px;
+  letter-spacing: .08em;
+  background: var(--app-text);
+}
+.card-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  padding-top: 18px;
+}
 .card-title-row { display: flex; align-items: center; gap: 8px; }
-.card-body p {
+.card-title-row strong {
   overflow: hidden;
-  margin: 5px 0;
-  color: var(--app-text-muted);
-  font-size: 12px;
+  font-size: 15px;
+  line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.card-body p {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 9px 0 auto;
+  color: var(--app-text-muted);
+  font-size: 12px;
+  line-height: 1.55;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
 }
 .card-body code {
   display: block;
   overflow: hidden;
-  color: color-mix(in srgb, var(--app-text) 72%, #765fff);
+  margin-top: 12px;
+  padding-top: 9px;
+  border-top: 1px solid var(--app-border);
+  color: var(--app-text-muted);
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.card-actions { display: flex; align-items: center; }
-.live-dot {
-  width: 7px; height: 7px; border-radius: 50%;
-  background: #36d391;
-  box-shadow: 0 0 0 5px rgba(54, 211, 145, .1);
+.card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 8px -5px -5px;
+}
+.corner-action {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
 }
 .registry-empty { padding: 70px 0; }
 
@@ -482,8 +708,9 @@ h2 { font-size: 20px; }
   gap: 10px;
   margin: 14px 3px 4px;
   padding: 13px;
-  border-radius: 16px;
-  background: rgba(121, 103, 255, .07);
+  border: 1px solid var(--app-border);
+  border-radius: 14px;
+  background: var(--app-surface-soft);
 }
 .skillhub-strip > div { display: grid; }
 .skillhub-results { display: grid; gap: 6px; padding: 8px 3px; }
@@ -495,116 +722,221 @@ h2 { font-size: 20px; }
 .assembly-panel {
   min-height: 650px;
   padding: 24px;
-  transition: border-color .25s ease, box-shadow .25s ease;
+  transition: border-color .2s ease, box-shadow .2s ease;
 }
 .assembly-panel.is-dragging {
-  border-color: rgba(117, 94, 255, .6);
-  box-shadow: 0 26px 90px rgba(86, 62, 205, .17);
+  border-color: var(--app-text);
+  box-shadow: inset 0 0 0 1px var(--app-text);
 }
 .assembly-heading { display: flex; justify-content: space-between; align-items: center; }
 .drop-hint {
   padding: 7px 11px;
-  border-radius: 999px;
-  color: #684ff0;
-  background: rgba(117, 94, 255, .1);
+  border: 1px solid var(--app-text);
+  border-radius: 10px;
+  color: var(--app-surface);
+  font-size: 12px;
+  background: var(--app-text);
   animation: hintPulse 1.2s ease-in-out infinite;
 }
 
-.agent-orbit {
+.picker-stage {
   position: absolute;
-  inset: 82px 12px 52px;
-  min-height: 490px;
-}
-.orbit-line {
-  position: absolute;
-  left: 50%; top: 50%;
-  border: 1px solid rgba(117, 94, 255, .16);
-  border-radius: 50%;
-  transform: translate(-50%, -50%);
-}
-.orbit-line-a { width: 74%; aspect-ratio: 1; animation: orbitGlow 6s ease-in-out infinite; }
-.orbit-line-b { width: 52%; aspect-ratio: 1; border-style: dashed; animation: rotateRing 28s linear infinite; }
-.orbit-core {
-  position: absolute;
-  left: 50%; top: 50%;
+  inset: 86px 24px 54px;
   display: grid;
-  place-items: center;
-  width: 148px; height: 148px;
-  padding: 16px;
-  border: 1px solid rgba(117, 94, 255, .24);
-  border-radius: 50%;
-  text-align: center;
-  transform: translate(-50%, -50%);
-  background:
-    radial-gradient(circle at 35% 28%, rgba(255,255,255,.9), transparent 32%),
-    linear-gradient(145deg, rgba(121,103,255,.18), rgba(68,179,255,.1));
-  box-shadow: 0 22px 55px rgba(78, 59, 177, .17), inset 0 0 30px rgba(255,255,255,.28);
-}
-.orbit-core span, .orbit-core small { color: var(--app-text-muted); font-size: 11px; }
-.orbit-core strong { max-width: 110px; font-size: 16px; line-height: 1.2; }
-
-.agent-node {
-  --orbit-radius: clamp(164px, 15vw, 205px);
-  position: absolute;
-  left: 50%; top: 50%;
-  display: grid;
-  grid-template-columns: 42px minmax(0, 86px) 22px;
+  grid-template-columns: minmax(260px, 1.15fr) minmax(170px, .85fr);
   align-items: center;
-  gap: 7px;
-  min-width: 154px;
-  padding: 8px 9px;
-  border: 1px solid color-mix(in srgb, var(--app-border) 74%, transparent);
-  border-radius: 18px;
-  color: inherit;
-  background: color-mix(in srgb, var(--app-surface) 92%, transparent);
-  box-shadow: 0 10px 30px rgba(31, 27, 71, .09);
-  cursor: pointer;
-  transform:
-    translate(-50%, -50%)
-    rotate(var(--orbit-angle))
-    translateX(var(--orbit-radius))
-    rotate(calc(var(--orbit-angle) * -1));
-  transition: border-color .2s ease, box-shadow .2s ease, scale .2s ease;
-  animation: nodeFloat 4.2s ease-in-out var(--orbit-delay) infinite;
+  gap: 20px;
+  overflow: hidden;
 }
-.agent-node:hover, .agent-node.active {
-  border-color: rgba(117, 94, 255, .58);
-  box-shadow: 0 15px 42px rgba(83, 61, 194, .18);
-  scale: 1.05;
+.agent-picker {
+  position: relative;
+  height: 430px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 0 28px 0 4px;
+  cursor: grab;
+  scrollbar-width: none;
+  scroll-snap-type: y mandatory;
+  overscroll-behavior: contain;
+  perspective: 820px;
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    black 18%,
+    black 82%,
+    transparent 100%
+  );
 }
-.is-dragging .agent-node { animation: dropPulse 1.15s ease-in-out var(--orbit-delay) infinite; }
-.agent-avatar {
-  display: grid; place-items: center;
-  width: 42px; height: 42px;
+.agent-picker::-webkit-scrollbar { display: none; }
+.agent-picker.is-pointer-dragging {
+  cursor: grabbing;
+  scroll-snap-type: none;
+}
+.picker-spacer {
+  height: calc((430px - 72px) / 2);
+  pointer-events: none;
+}
+.picker-axis {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  left: 4px;
+  width: calc(57.5% - 10px);
+  height: 72px;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+.picker-axis::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--app-text);
+  border-radius: 15px;
+  opacity: .12;
+}
+.picker-axis span {
+  position: absolute;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--app-text);
+  transform: translateY(-50%);
+}
+.picker-axis span:first-child { left: -2px; }
+.picker-axis span:last-child { right: -2px; }
+.agent-wheel-item {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  width: calc(100% - 92px);
+  height: 60px;
+  margin: 6px 0;
+  padding: 0 14px;
+  border: 1px solid var(--app-border);
   border-radius: 14px;
-  color: white;
-  font-weight: 800;
-  background: linear-gradient(145deg, #826dff, #4baeea);
+  color: inherit;
+  text-align: left;
+  background: var(--app-surface);
+  cursor: pointer;
+  opacity: var(--wheel-opacity);
+  scroll-snap-align: center;
+  transform:
+    translateX(var(--wheel-x))
+    rotateX(var(--wheel-tilt))
+    scale(var(--wheel-scale));
+  transform-origin: left center;
+  transition:
+    color .18s ease,
+    background .18s ease,
+    border-color .18s ease,
+    box-shadow .18s ease,
+    opacity .08s linear,
+    transform .08s linear;
 }
-.agent-name { overflow: hidden; font-size: 12px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.agent-wheel-item:hover {
+  border-color: var(--app-text);
+}
+.agent-wheel-item.active {
+  color: var(--app-surface);
+  border-color: var(--app-text);
+  background: var(--app-text);
+  box-shadow: 0 12px 28px color-mix(in srgb, var(--app-text) 15%, transparent);
+}
+.agent-index {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  opacity: .5;
+}
+.agent-name {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .agent-count {
   display: grid; place-items: center;
-  width: 22px; height: 22px;
-  border-radius: 50%;
-  color: #6b52e9;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid currentColor;
+  border-radius: 8px;
   font-size: 11px;
-  background: rgba(117, 94, 255, .11);
+  opacity: .65;
 }
-.agent-node.busy { opacity: .55; pointer-events: none; }
-.agent-orbit.is-dense .agent-node {
-  grid-template-columns: 36px minmax(0, 68px) 20px;
-  min-width: 132px;
-  gap: 5px;
-  padding: 7px;
+.agent-wheel-item.busy {
+  opacity: .42 !important;
+  pointer-events: none;
 }
-.agent-orbit.is-dense .agent-avatar {
-  width: 36px;
-  height: 36px;
-  border-radius: 12px;
+.agent-wheel-item.is-drop-target {
+  z-index: 3;
+  color: var(--app-surface);
+  border-color: var(--app-text);
+  background: var(--app-text);
+  box-shadow:
+    0 0 0 5px color-mix(in srgb, var(--app-text) 10%, transparent),
+    0 16px 36px color-mix(in srgb, var(--app-text) 18%, transparent);
+  animation: dropTargetBreath .72s ease-in-out infinite alternate;
 }
-.agent-orbit.is-dense .agent-count {
-  width: 20px;
-  height: 20px;
+.agent-wheel-item.is-just-bound {
+  animation: boundConfirm .8s ease both;
+}
+.drop-action {
+  padding: 5px 8px;
+  border: 1px solid currentColor;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.is-dragging .agent-wheel-item:not(.is-drop-target) {
+  border-style: dashed;
+}
+.selected-target-summary {
+  display: flex;
+  align-self: stretch;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+  margin: 56px 0;
+  padding: 24px;
+  border: 1px solid var(--app-border);
+  border-radius: 18px;
+  background: var(--app-surface-soft);
+}
+.selected-target-summary > span,
+.selected-target-summary small {
+  color: var(--app-text-muted);
+  font-size: 11px;
+}
+.selected-target-summary strong {
+  overflow: hidden;
+  margin: 7px 0 3px;
+  font-size: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.selected-extension-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 20px;
+}
+.selected-extension-list > span {
+  max-width: 100%;
+  overflow: hidden;
+  padding: 5px 8px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.selected-extension-list .empty-selection {
+  border-style: dashed;
+  color: var(--app-text-muted);
 }
 
 .assembly-footer {
@@ -613,10 +945,6 @@ h2 { font-size: 20px; }
   display: flex; align-items: center; justify-content: center; gap: 8px;
   color: var(--app-text-muted);
   font-size: 12px;
-}
-.pulse-ring {
-  width: 8px; height: 8px; border-radius: 50%; background: #795fff;
-  box-shadow: 0 0 0 5px rgba(121,95,255,.1);
 }
 
 .bound-popover { width: 290px; padding: 4px; }
@@ -632,21 +960,48 @@ h2 { font-size: 20px; }
   border-radius: 10px;
   background: var(--app-surface-soft);
 }
-.bound-kind { width: 26px; height: 26px; color: #6c54e6; background: rgba(117,94,255,.1); }
+.bound-kind {
+  width: 26px;
+  height: 26px;
+  color: var(--app-surface);
+  background: var(--app-text);
+}
 
-@keyframes rotateRing { to { transform: translate(-50%, -50%) rotate(360deg); } }
-@keyframes orbitGlow { 50% { border-color: rgba(74,174,238,.28); box-shadow: 0 0 55px rgba(94,80,215,.08); } }
-@keyframes nodeFloat { 50% { translate: 0 -5px; } }
-@keyframes dropPulse { 50% { filter: brightness(1.08); } }
+:global(.extension-drag-preview) {
+  position: fixed;
+  z-index: 100000;
+  top: -1000px;
+  left: -1000px;
+  max-width: 240px;
+  overflow: hidden;
+  padding: 10px 14px;
+  border: 1px solid var(--app-text);
+  border-radius: 12px;
+  color: var(--app-surface);
+  font: 700 12px/1.2 system-ui, sans-serif;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: var(--app-text);
+  box-shadow: 0 12px 30px color-mix(in srgb, var(--app-text) 20%, transparent);
+}
+
+@keyframes dropTargetBreath {
+  from { transform: translateX(var(--wheel-x)) rotateX(var(--wheel-tilt)) scale(1.02); }
+  to { transform: translateX(var(--wheel-x)) rotateX(var(--wheel-tilt)) scale(1.075); }
+}
+@keyframes boundConfirm {
+  0% { transform: translateX(var(--wheel-x)) rotateX(var(--wheel-tilt)) scale(1); }
+  45% { transform: translateX(var(--wheel-x)) rotateX(var(--wheel-tilt)) scale(1.08); }
+  100% { transform: translateX(var(--wheel-x)) rotateX(var(--wheel-tilt)) scale(var(--wheel-scale)); }
+}
 @keyframes hintPulse { 50% { transform: scale(1.04); } }
 
 @media (max-width: 1100px) {
   .workbench-grid { grid-template-columns: 1fr; }
   .assembly-panel { min-height: 620px; }
-  .agent-node { --orbit-radius: min(31vw, 205px); }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .orbit-line-b, .agent-node, .drop-hint { animation: none !important; }
+  .agent-wheel-item, .drop-hint { animation: none !important; }
 }
 </style>
