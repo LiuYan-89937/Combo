@@ -44,9 +44,12 @@ function signIn() {
     <div class="container header__inner">
       <RouterLink to="/" class="brand" aria-label="FastAgentFactory">
         <span class="brand__mark" aria-hidden="true">
-          <span class="brand__dot" />
+          <img src="/favicon.png" alt="" width="38" height="38" />
         </span>
-        <span class="brand__text">FastAgentFactory</span>
+        <span class="brand__wordmark" aria-hidden="true">
+          <span class="brand__name">Fast<span>Agent</span></span>
+          <span class="brand__factory">FACTORY</span>
+        </span>
       </RouterLink>
 
       <nav class="nav" :aria-label="t('nav.menu')">
@@ -136,42 +139,65 @@ function signIn() {
   position: sticky;
   top: 0;
   z-index: 100;
-  background: color-mix(in srgb, var(--surface) 82%, transparent);
-  backdrop-filter: saturate(1.4) blur(14px);
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
+  backdrop-filter: saturate(1.5) blur(18px);
   border-bottom: 1px solid var(--border);
 }
 .header__inner {
   display: flex;
   align-items: center;
-  gap: var(--space-6);
+  gap: clamp(var(--space-4), 2vw, var(--space-6));
   height: var(--header-height);
 }
 .brand {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: 10px;
   color: var(--text-strong);
   text-decoration: none;
-  font-weight: 650;
-  letter-spacing: -0.01em;
   flex-shrink: 0;
 }
 .brand__mark {
-  display: inline-grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 8px;
-  background: var(--primary);
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: #fff;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+  transition: transform var(--dur-base) var(--ease-out), box-shadow var(--dur-base) var(--ease-out);
 }
-.brand__dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 3px;
-  background: var(--on-primary);
+.brand:hover .brand__mark {
+  transform: rotate(-3deg) translateY(-1px);
+  box-shadow: 0 7px 20px rgba(0, 0, 0, 0.12);
 }
-.brand__text {
+.brand__mark img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.brand__wordmark {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  line-height: 1;
+}
+.brand__name {
   font-size: 16px;
+  font-weight: 760;
+  letter-spacing: -0.055em;
+}
+.brand__name span {
+  font-weight: 420;
+}
+.brand__factory {
+  margin-top: 4px;
+  padding-left: 1px;
+  font-family: var(--font-mono);
+  font-size: 7px;
+  font-weight: 650;
+  letter-spacing: 0.31em;
+  color: var(--text-muted);
 }
 
 .nav {
@@ -337,6 +363,9 @@ function signIn() {
   }
 }
 @media (prefers-reduced-motion: reduce) {
+  .brand__mark {
+    transition: none;
+  }
   .sheet-enter-active,
   .sheet-leave-active {
     transition: none;
