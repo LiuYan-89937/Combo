@@ -25,6 +25,7 @@
   --primary-hover: #262626;
   --on-primary: #ffffff;
   --overlay: rgba(0, 0, 0, 0.36);
+  --brand-mark-filter: none;
 
   /* Semantic — status only */
   --success: #16803c;
@@ -95,6 +96,7 @@
   --primary-hover: #e5e5e5;
   --on-primary: #000000;
   --overlay: rgba(0, 0, 0, 0.68);
+  --brand-mark-filter: invert(1);
 
   --success: #54b977;
   --warning: #d6a34a;

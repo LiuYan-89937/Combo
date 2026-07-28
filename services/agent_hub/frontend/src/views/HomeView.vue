@@ -30,12 +30,7 @@ const pipelineKeys: Array<{ key: string; icon: IconName }> = [
   { key: 'distribute', icon: 'upload' },
 ]
 
-const factoryNodes = [
-  { label: 'MODEL', className: 'factory-node--model' },
-  { label: 'TOOLS', className: 'factory-node--tools' },
-  { label: 'MCP', className: 'factory-node--mcp' },
-  { label: 'SKILLS', className: 'factory-node--skills' },
-]
+const factoryNodes = ['MODEL', 'TOOLS', 'MCP', 'SKILLS']
 
 const featured = ref<AgentRelease[]>([])
 const featuredState = ref<'loading' | 'ready' | 'empty' | 'error'>('loading')
@@ -76,7 +71,6 @@ onMounted(loadFeatured)
   <div class="home">
     <!-- HERO -->
     <section class="hero">
-      <div class="hero__aura" aria-hidden="true" />
       <div class="container hero__inner">
         <div class="hero__copy">
           <span class="hero__badge eyebrow">
@@ -108,17 +102,19 @@ onMounted(loadFeatured)
             <span class="factory-orbit factory-orbit--inner" />
             <span class="factory-sweep" />
             <span
-              v-for="node in factoryNodes"
-              :key="node.label"
-              class="factory-node"
-              :class="node.className"
+              v-for="(node, index) in factoryNodes"
+              :key="node"
+              class="factory-node-orbit"
+              :class="`factory-node-orbit--${index}`"
             >
-              <i />
-              {{ node.label }}
+              <span class="factory-node">
+                <i />
+                {{ node }}
+              </span>
             </span>
             <div class="factory-core">
               <span class="factory-core__halo" />
-              <img src="/favicon.png" alt="" width="82" height="82" />
+              <img src="/brand-mark.png" alt="" width="82" height="82" />
               <span class="factory-core__label">AGENT</span>
             </div>
           </div>
@@ -128,7 +124,6 @@ onMounted(loadFeatured)
           </div>
         </div>
       </div>
-      <div class="hero__grid" aria-hidden="true" />
     </section>
 
     <!-- PIPELINE -->
@@ -272,6 +267,38 @@ onMounted(loadFeatured)
 </template>
 
 <style scoped>
+.home {
+  position: relative;
+  isolation: isolate;
+  overflow: clip;
+  background: var(--surface);
+}
+.home::before,
+.home::after {
+  content: '';
+  position: fixed;
+  z-index: -2;
+  pointer-events: none;
+}
+.home::before {
+  inset: -24vh -18vw;
+  background:
+    radial-gradient(circle at 14% 18%, color-mix(in srgb, var(--text-strong) 5%, transparent), transparent 28%),
+    radial-gradient(circle at 82% 28%, color-mix(in srgb, var(--text-strong) 4%, transparent), transparent 31%),
+    radial-gradient(circle at 52% 82%, color-mix(in srgb, var(--text-strong) 3%, transparent), transparent 34%);
+  filter: blur(34px);
+  animation: page-atmosphere 24s ease-in-out infinite alternate;
+}
+.home::after {
+  z-index: -1;
+  inset: -60px;
+  background-image: radial-gradient(circle at 1px 1px, var(--border-strong) 0.8px, transparent 0);
+  background-size: 44px 44px;
+  opacity: 0.24;
+  mask-image: linear-gradient(to bottom, #000, transparent 88%);
+  animation: page-grid-drift 36s linear infinite;
+}
+
 /* HERO */
 .hero {
   position: relative;
@@ -280,7 +307,6 @@ onMounted(loadFeatured)
   display: flex;
   align-items: center;
   padding-block: clamp(76px, 10vw, 132px);
-  border-bottom: 1px solid var(--border);
 }
 .hero__inner {
   position: relative;
@@ -340,30 +366,6 @@ onMounted(loadFeatured)
   gap: var(--space-3);
   margin-top: var(--space-8);
 }
-.hero__grid {
-  position: absolute;
-  inset: -40px;
-  background-image: radial-gradient(circle at 1px 1px, var(--border-strong) 1px, transparent 0);
-  background-size: 40px 40px;
-  mask-image: radial-gradient(ellipse 80% 70% at 78% 20%, #000 0%, transparent 72%);
-  opacity: 0.46;
-  pointer-events: none;
-  animation: grid-drift 28s linear infinite;
-}
-.hero__aura {
-  position: absolute;
-  width: min(58vw, 760px);
-  aspect-ratio: 1;
-  right: -8vw;
-  top: -30%;
-  border-radius: 50%;
-  background: radial-gradient(circle, color-mix(in srgb, var(--text-strong) 7%, transparent), transparent 68%);
-  filter: blur(24px);
-  opacity: 0.65;
-  pointer-events: none;
-  animation: aura-drift 18s ease-in-out infinite alternate;
-}
-
 /* Animated agent assembly core */
 .factory-visual {
   position: relative;
@@ -436,15 +438,16 @@ onMounted(loadFeatured)
   transform: translate(-50%, -50%);
   border: 1px solid var(--border-strong);
   border-radius: 34px;
-  background: var(--surface);
-  box-shadow: 0 18px 50px color-mix(in srgb, var(--text-strong) 14%, transparent);
+  background: color-mix(in srgb, var(--surface) 24%, transparent);
+  backdrop-filter: blur(5px);
 }
 .factory-core img {
   position: relative;
   z-index: 2;
   width: 82px;
   height: 82px;
-  border-radius: 24px;
+  object-fit: contain;
+  filter: var(--brand-mark-filter);
 }
 .factory-core__halo {
   position: absolute;
@@ -464,9 +467,17 @@ onMounted(loadFeatured)
   letter-spacing: 0.28em;
   color: var(--text-secondary);
 }
-.factory-node {
+.factory-node-orbit {
   position: absolute;
   z-index: 4;
+  inset: 14%;
+  border-radius: 50%;
+  animation: node-orbit 20s linear infinite;
+}
+.factory-node {
+  position: absolute;
+  left: 50%;
+  top: -15px;
   display: inline-flex;
   align-items: center;
   gap: 7px;
@@ -480,7 +491,10 @@ onMounted(loadFeatured)
   font-weight: 650;
   letter-spacing: 0.13em;
   color: var(--text-secondary);
-  animation: node-live 8s var(--ease-out) infinite;
+  transform: translateX(-50%);
+  animation:
+    node-counter-orbit 20s linear infinite,
+    node-live 10s var(--ease-out) infinite;
 }
 .factory-node i,
 .factory-caption i {
@@ -489,25 +503,21 @@ onMounted(loadFeatured)
   border-radius: 50%;
   background: currentColor;
 }
-.factory-node--model {
-  left: 8%;
-  top: 19%;
-  animation-delay: 0s;
+.factory-node-orbit--0,
+.factory-node-orbit--0 .factory-node {
+  animation-delay: 0s, 0s;
 }
-.factory-node--tools {
-  right: 7%;
-  top: 23%;
-  animation-delay: 2s;
+.factory-node-orbit--1,
+.factory-node-orbit--1 .factory-node {
+  animation-delay: -5s, -5s;
 }
-.factory-node--mcp {
-  right: 9%;
-  bottom: 18%;
-  animation-delay: 4s;
+.factory-node-orbit--2,
+.factory-node-orbit--2 .factory-node {
+  animation-delay: -10s, -10s;
 }
-.factory-node--skills {
-  left: 7%;
-  bottom: 22%;
-  animation-delay: 6s;
+.factory-node-orbit--3,
+.factory-node-orbit--3 .factory-node {
+  animation-delay: -15s, -15s;
 }
 .factory-caption {
   display: flex;
@@ -643,8 +653,7 @@ onMounted(loadFeatured)
 
 /* ARCHITECTURE */
 .arch {
-  background: var(--surface-subtle);
-  border-block: 1px solid var(--border);
+  background: transparent;
 }
 .arch__diagram {
   display: flex;
@@ -714,7 +723,7 @@ onMounted(loadFeatured)
 
 /* DOWNLOAD */
 .download {
-  border-top: 1px solid var(--border);
+  position: relative;
 }
 .download__grid {
   display: grid;
@@ -754,12 +763,12 @@ onMounted(loadFeatured)
   font-size: 14px;
 }
 
-@keyframes grid-drift {
-  to { transform: translate3d(40px, 40px, 0); }
+@keyframes page-grid-drift {
+  to { transform: translate3d(44px, 44px, 0); }
 }
-@keyframes aura-drift {
-  from { transform: translate3d(0, 0, 0) scale(0.94); }
-  to { transform: translate3d(-8%, 12%, 0) scale(1.08); }
+@keyframes page-atmosphere {
+  from { transform: translate3d(-2%, -1%, 0) scale(0.96) rotate(-2deg); }
+  to { transform: translate3d(3%, 4%, 0) scale(1.08) rotate(2deg); }
 }
 @keyframes signal-breathe {
   0%, 100% { opacity: 0; transform: scale(0.55); }
@@ -778,6 +787,12 @@ onMounted(loadFeatured)
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
+@keyframes node-orbit {
+  to { transform: rotate(360deg); }
+}
+@keyframes node-counter-orbit {
+  to { transform: translateX(-50%) rotate(-360deg); }
+}
 @keyframes core-pulse {
   0%, 100% { opacity: 0.28; transform: scale(0.94); }
   50% { opacity: 0.8; transform: scale(1.04); }
@@ -786,12 +801,10 @@ onMounted(loadFeatured)
   0%, 16%, 100% {
     color: var(--text-secondary);
     border-color: var(--border-strong);
-    transform: translateY(0);
   }
   5%, 10% {
     color: var(--text-strong);
     border-color: var(--text-strong);
-    transform: translateY(-2px);
   }
 }
 @keyframes pipeline-focus {
@@ -870,12 +883,13 @@ onMounted(loadFeatured)
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .hero__grid,
-  .hero__aura,
+  .home::before,
+  .home::after,
   .hero__badge-signal::after,
   .factory-orbit,
   .factory-sweep,
   .factory-core__halo,
+  .factory-node-orbit,
   .factory-node,
   .pipeline__step,
   .pipeline__scan {

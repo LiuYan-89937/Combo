@@ -44,7 +44,7 @@ function signIn() {
     <div class="container header__inner">
       <RouterLink to="/" class="brand" aria-label="FastAgentFactory">
         <span class="brand__mark" aria-hidden="true">
-          <img src="/favicon.png" alt="" width="38" height="38" />
+          <img src="/brand-mark.png" alt="" width="34" height="34" />
         </span>
         <span class="brand__wordmark" aria-hidden="true">
           <span class="brand__name">Fast<span>Agent</span></span>
@@ -158,23 +158,20 @@ function signIn() {
   flex-shrink: 0;
 }
 .brand__mark {
-  width: 38px;
-  height: 38px;
-  border: 1px solid var(--border);
-  border-radius: 11px;
-  background: #fff;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
-  overflow: hidden;
-  transition: transform var(--dur-base) var(--ease-out), box-shadow var(--dur-base) var(--ease-out);
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  transition: transform var(--dur-base) var(--ease-out);
 }
 .brand:hover .brand__mark {
   transform: rotate(-3deg) translateY(-1px);
-  box-shadow: 0 7px 20px rgba(0, 0, 0, 0.12);
 }
 .brand__mark img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
+  filter: var(--brand-mark-filter);
 }
 .brand__wordmark {
   display: flex;
