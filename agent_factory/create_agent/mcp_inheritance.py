@@ -5,8 +5,13 @@ import json
 from pathlib import Path
 from typing import Any
 
+from agent_factory.tooling.extension_registry import (
+    load_agent_extension_bindings,
+    load_registered_mcp_servers,
+    save_agent_extension_bindings,
+)
 from agent_factory.tooling.factory_extensions import FactoryExtensionManager
-from agent_factory.tooling.providers.mcp import MCPServerConfig, MCPServersConfig
+from agent_factory.tooling.providers.mcp import MCPServerConfig
 
 
 PACKAGE_EXTENSION_ROOT = "extensions"
@@ -73,9 +78,18 @@ def materialize_referenced_factory_mcp(package_root: str | Path) -> MCPInheritan
         changed_files.add(_relative(root, tools_contract_path))
     extension_root = root / PACKAGE_EXTENSION_ROOT
     extension_root.mkdir(parents=True, exist_ok=True)
-    mcp_path = extension_root / "mcp_servers.json"
-    if _write_inherited_mcp_servers(mcp_path, servers):
-        changed_files.add(_relative(root, mcp_path))
+    bindings_path = extension_root / "extension_bindings.json"
+    current_bindings = load_agent_extension_bindings([extension_root])
+    next_bindings = current_bindings.model_copy(
+        update={
+            "mcp_server_ids": sorted(
+                {*current_bindings.mcp_server_ids, *server_ids}
+            )
+        }
+    )
+    if next_bindings != current_bindings:
+        save_agent_extension_bindings(extension_root, next_bindings)
+        changed_files.add(_relative(root, bindings_path))
     return MCPInheritanceResult(
         changed_files=sorted(changed_files),
         inherited_tool_ids=matched_tool_ids,
@@ -86,15 +100,18 @@ def materialize_referenced_factory_mcp(package_root: str | Path) -> MCPInheritan
 
 def discover_factory_mcp_inventory() -> FactoryMCPInventory:
     manager = FactoryExtensionManager()
-    bundle = manager.loader.load()
-    result, report = manager.discover()
+    result, report = manager.discover_registry()
     tool_to_server: dict[str, str] = {}
     diagnostics = [diagnostic.model_dump(mode="json") if hasattr(diagnostic, "model_dump") else dict(diagnostic) for diagnostic in result.diagnostics]
     for spec in result.tool_specs:
         server_id = _server_id_from_entrypoint(str(spec.entrypoint))
         if server_id:
             tool_to_server[spec.id] = server_id
-    servers = {server.server_id: server for server in bundle.mcp_servers.servers if server.enabled}
+    servers = {
+        server.server_id: server
+        for server in load_registered_mcp_servers().servers
+        if server.enabled
+    }
     diagnostics.append(report.model_dump(mode="json"))
     return FactoryMCPInventory(tool_to_server=tool_to_server, servers=servers, diagnostics=diagnostics)
 
@@ -110,11 +127,8 @@ def materialized_package_mcp_tool_ids(package_root: str | Path) -> set[str]:
     tools_contract = _read_json(tools_contract_path)
     config = tools_contract.get("config") if isinstance(tools_contract.get("config"), dict) else {}
     extension_root = str(config.get("instance_extension_root") or PACKAGE_EXTENSION_ROOT).strip() or PACKAGE_EXTENSION_ROOT
-    mcp_path = root / extension_root / "mcp_servers.json"
-    if not mcp_path.is_file():
-        return set()
-    package_config = MCPServersConfig.model_validate(_read_json(mcp_path))
-    package_server_ids = {server.server_id for server in package_config.servers if server.enabled}
+    package_bindings = load_agent_extension_bindings([root / extension_root])
+    package_server_ids = set(package_bindings.mcp_server_ids)
     inventory = discover_factory_mcp_inventory()
     return {
         tool_id
@@ -151,21 +165,6 @@ def _ensure_package_extension_root(tools_contract_path: Path) -> bool:
     if before == after:
         return False
     _write_json(tools_contract_path, payload)
-    return True
-
-
-def _write_inherited_mcp_servers(path: Path, servers: list[MCPServerConfig]) -> bool:
-    current = MCPServersConfig.model_validate(_read_json(path) if path.is_file() else {})
-    by_id = {server.server_id: server for server in current.servers}
-    for server in servers:
-        by_id[server.server_id] = server
-    next_config = MCPServersConfig(servers=sorted(by_id.values(), key=lambda item: item.server_id))
-    next_payload = next_config.model_dump(mode="json")
-    before = json.dumps(current.model_dump(mode="json"), ensure_ascii=False, sort_keys=True)
-    after = json.dumps(next_payload, ensure_ascii=False, sort_keys=True)
-    if before == after:
-        return False
-    _write_json(path, next_payload)
     return True
 
 

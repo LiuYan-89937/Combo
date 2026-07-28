@@ -232,6 +232,7 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
     extensionStore.setItems(runtimeStore.extensionItems)
     extensionStore.setTestResult(runtimeStore.extensionTestResult)
     extensionStore.setToolPermissions(runtimeStore.toolPermissions)
+    extensionStore.setBindings(runtimeStore.extensionBindings)
     if (event.payload?.skillhub) {
       extensionStore.setSkillHubResult(event.payload.skillhub)
     }

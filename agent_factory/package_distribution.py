@@ -12,7 +12,21 @@ from agent_factory.create_agent.package_paths import (
     is_transient_package_path,
     normalize_package_relative,
 )
+from agent_factory.tooling.extension_registry import (
+    AgentExtensionBindings,
+    import_registered_skill_directory,
+    load_agent_extension_bindings,
+    load_registered_mcp_servers,
+    load_registered_skills,
+    remove_registered_extension,
+    save_registered_mcp_servers,
+    save_registered_skills,
+    save_agent_extension_bindings,
+    selected_registry_configs,
+    upsert_registered_mcp_servers,
+)
 from agent_factory.tooling.providers import EnabledSkillsConfig, MCPServersConfig
+from agent_factory.tooling.skills import parse_skill_directory
 
 
 PACKAGE_ASSET_DIRS = frozenset(
@@ -30,6 +44,8 @@ PACKAGE_ASSET_DIRS = frozenset(
     }
 )
 PACKAGE_REPORT_FILENAME = "package_report.json"
+EXTENSION_DISTRIBUTION_FILENAME = "distribution_extensions.json"
+EXTENSION_DISTRIBUTION_SKILLS_DIR = "distribution_skills"
 DISTRIBUTION_LOCAL_PARTS = frozenset({".agent_runtime", ".factory", "checkpoints", "logs", "sessions"})
 DISTRIBUTION_LOCAL_NAMES = frozenset({".env", "agent.sqlite", "runtime.sqlite"})
 DISTRIBUTION_LOCAL_SUFFIXES = frozenset({".log", ".pyc", ".pyo"})
@@ -104,13 +120,11 @@ def copy_publishable_package(source: Path, target: Path) -> None:
 
 def distribution_extension_preview(source: Path, package_id: str) -> dict[str, Any]:
     _require_package_id(source, package_id)
+    mcp_servers, skills, _ = selected_registry_configs([source / "extensions"])
     return {
         "package_id": package_id,
-        "mcp_servers": _read_extension_config(
-            source / "extensions" / "mcp_servers.json",
-            default=MCPServersConfig().model_dump(mode="json"),
-        ),
-        "skills": _distribution_skills(source),
+        "mcp_servers": mcp_servers.model_dump(mode="json"),
+        "skills": _distribution_skills(skills),
     }
 
 
@@ -126,14 +140,92 @@ def export_distribution_archive(
     with tempfile.TemporaryDirectory(prefix="agent-package-distribution-") as temp_dir:
         snapshot_root = Path(temp_dir) / source.name
         copy_publishable_package(source, snapshot_root)
-        skill_paths = _normalize_distribution_skills(source=source, snapshot=snapshot_root)
+        skill_paths = _materialize_distribution_extensions(
+            source=source,
+            snapshot=snapshot_root,
+        )
         _apply_extension_overrides(snapshot_root, overrides, skill_paths=skill_paths)
         _sanitize_resource_defaults(snapshot_root)
+        _validate_distribution_extensions(snapshot_root)
         validate_distribution_snapshot(snapshot_root)
         with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for path in sorted(item for item in snapshot_root.rglob("*") if item.is_file()):
                 relative = Path(source.name) / path.relative_to(snapshot_root)
                 archive.write(path, relative.as_posix())
+
+
+def import_distribution_extensions(root: Path) -> dict[str, list[str]]:
+    path = root / "extensions" / EXTENSION_DISTRIBUTION_FILENAME
+    if not path.is_file():
+        return {"mcp_servers": [], "skills": [], "preserved": []}
+    _validate_distribution_extensions(root)
+    payload = _read_extension_config(path, default={})
+    mcp_config = MCPServersConfig.model_validate(payload.get("mcp_servers") or {})
+    skills_config = EnabledSkillsConfig.model_validate(payload.get("skills") or {})
+    bindings = load_agent_extension_bindings([root / "extensions"])
+    bound_mcp_ids = set(bindings.mcp_server_ids)
+    bound_skill_ids = set(bindings.skill_ids)
+    if any(server.server_id not in bound_mcp_ids for server in mcp_config.servers):
+        raise PackageDistributionError(
+            "distribution MCP snapshot contains servers not declared by extension bindings"
+        )
+    if any(skill.skill_id not in bound_skill_ids for skill in skills_config.skills):
+        raise PackageDistributionError(
+            "distribution Skill snapshot contains Skills not declared by extension bindings"
+        )
+
+    current_mcp = load_registered_mcp_servers()
+    current_skills = load_registered_skills()
+    current_mcp_ids = {server.server_id for server in current_mcp.servers}
+    current_skill_ids = {skill.skill_id for skill in current_skills.skills}
+    new_mcp = [
+        server for server in mcp_config.servers if server.server_id not in current_mcp_ids
+    ]
+    new_skills = [
+        skill for skill in skills_config.skills if skill.skill_id not in current_skill_ids
+    ]
+    imported_skill_ids: list[str] = []
+    try:
+        for skill in new_skills:
+            source = _distribution_skill_source(root, skill)
+            imported = import_registered_skill_directory(
+                source,
+                enabled=skill.enabled,
+                required=skill.required,
+                source_kind="agent_hub",
+                expected_skill_id=skill.skill_id,
+            )
+            if imported.skill_id != skill.skill_id:
+                raise PackageDistributionError(
+                    f"distributed Skill identity mismatch: {skill.skill_id} != {imported.skill_id}"
+                )
+            imported_skill_ids.append(imported.skill_id)
+        if new_mcp:
+            upsert_registered_mcp_servers(new_mcp)
+    except Exception:
+        for skill_id in imported_skill_ids:
+            remove_registered_extension("skill", skill_id)
+        save_registered_mcp_servers(current_mcp)
+        save_registered_skills(current_skills)
+        raise
+    return {
+        "mcp_servers": [server.server_id for server in new_mcp],
+        "skills": imported_skill_ids,
+        "preserved": sorted(
+            {
+                *(
+                    server.server_id
+                    for server in mcp_config.servers
+                    if server.server_id in current_mcp_ids
+                ),
+                *(
+                    skill.skill_id
+                    for skill in skills_config.skills
+                    if skill.skill_id in current_skill_ids
+                ),
+            }
+        ),
+    }
 
 
 def _require_package_id(source: Path, package_id: str) -> None:
@@ -288,9 +380,22 @@ def _apply_extension_overrides(
 ) -> None:
     mcp_payload = overrides.get("mcp_servers")
     if mcp_payload is not None:
-        path = root / "extensions" / "mcp_servers.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(mcp_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        path = root / "extensions" / EXTENSION_DISTRIBUTION_FILENAME
+        payload = _read_extension_config(path, default={})
+        current = MCPServersConfig.model_validate(payload.get("mcp_servers") or {})
+        replacement = MCPServersConfig.model_validate(mcp_payload)
+        current_ids = {server.server_id for server in current.servers}
+        replacement_ids = {server.server_id for server in replacement.servers}
+        if replacement_ids != current_ids:
+            raise PackageDistributionError(
+                "MCP upload review may edit configuration values but cannot add or remove "
+                "registered server identities"
+            )
+        payload["mcp_servers"] = mcp_payload
+        path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
     skill_overrides = overrides.get("skills")
     if skill_overrides is None:
         return
@@ -332,75 +437,156 @@ def _apply_extension_overrides(
                 path.write_text(content, encoding="utf-8")
 
 
-def _distribution_skills(source: Path) -> list[dict[str, Any]]:
-    config = _load_enabled_skills(source)
-    skill_paths = _portable_skill_paths(source, config)
+def _distribution_skills(config: EnabledSkillsConfig) -> list[dict[str, Any]]:
     return [
         {
             "skill_id": skill.skill_id,
             "source": skill.source,
             "enabled": skill.enabled,
             "required": skill.required,
-            "path": skill_paths[skill.skill_id].as_posix(),
-            "files": _skill_file_inventory(
-                source / "extensions" / skill_paths[skill.skill_id]
-            ),
+            "path": (
+                Path(EXTENSION_DISTRIBUTION_SKILLS_DIR) / skill.skill_id
+            ).as_posix(),
+            "files": _skill_file_inventory(Path(skill.path).expanduser().resolve()),
         }
         for skill in config.skills
     ]
 
 
-def _normalize_distribution_skills(*, source: Path, snapshot: Path) -> dict[str, Path]:
-    config = _load_enabled_skills(source)
-    skill_paths = _portable_skill_paths(source, config)
-    if not config.skills:
-        return skill_paths
-    skills = [
-        skill.model_copy(update={"path": skill_paths[skill.skill_id].as_posix()})
-        for skill in config.skills
-    ]
-    path = snapshot / "extensions" / "enabled_skills.json"
+def _materialize_distribution_extensions(
+    *,
+    source: Path,
+    snapshot: Path,
+) -> dict[str, Path]:
+    extensions_root = snapshot / "extensions"
+    existing_distribution_skills = extensions_root / EXTENSION_DISTRIBUTION_SKILLS_DIR
+    if existing_distribution_skills.exists():
+        shutil.rmtree(existing_distribution_skills)
+    (extensions_root / EXTENSION_DISTRIBUTION_FILENAME).unlink(missing_ok=True)
+    mcp_config, skills_config, bindings = selected_registry_configs(
+        [source / "extensions"]
+    )
+    save_agent_extension_bindings(extensions_root, bindings)
+    skill_paths: dict[str, Path] = {}
+    portable_skills = []
+    for skill in skills_config.skills:
+        source_root = Path(skill.path).expanduser().resolve()
+        if not (source_root / "SKILL.md").is_file():
+            raise PackageDistributionError(
+                f"Skill {skill.skill_id!r} is registered but SKILL.md is missing"
+            )
+        symlink = next((path for path in source_root.rglob("*") if path.is_symlink()), None)
+        if symlink is not None:
+            raise PackageDistributionError(
+                f"Skill {skill.skill_id!r} contains a symbolic link and cannot be distributed"
+            )
+        relative = Path(EXTENSION_DISTRIBUTION_SKILLS_DIR) / skill.skill_id
+        destination = extensions_root / relative
+        if destination.exists():
+            shutil.rmtree(destination)
+        shutil.copytree(
+            source_root,
+            destination,
+            symlinks=False,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo", ".DS_Store"),
+        )
+        skill_paths[skill.skill_id] = relative
+        portable_skills.append(
+            skill.model_copy(update={"path": relative.as_posix(), "source": "agent_hub"})
+        )
+    path = extensions_root / EXTENSION_DISTRIBUTION_FILENAME
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        config.model_copy(update={"skills": skills}).model_dump_json(indent=2),
+        json.dumps(
+            {
+                "version": "extension_distribution.v0",
+                "mcp_servers": mcp_config.model_dump(mode="json"),
+                "skills": EnabledSkillsConfig(skills=portable_skills).model_dump(
+                    mode="json"
+                ),
+                "bindings": bindings.model_dump(mode="json"),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
         encoding="utf-8",
     )
     return skill_paths
 
 
-def _load_enabled_skills(source: Path) -> EnabledSkillsConfig:
-    payload = _read_extension_config(
-        source / "extensions" / "enabled_skills.json",
-        default=EnabledSkillsConfig().model_dump(mode="json"),
+def _validate_distribution_extensions(root: Path) -> None:
+    path = root / "extensions" / EXTENSION_DISTRIBUTION_FILENAME
+    payload = _read_extension_config(path, default={})
+    mcp_config = MCPServersConfig.model_validate(payload.get("mcp_servers") or {})
+    skills_config = EnabledSkillsConfig.model_validate(payload.get("skills") or {})
+    bindings = load_agent_extension_bindings([root / "extensions"])
+    snapshot_bindings = AgentExtensionBindings.model_validate(
+        payload.get("bindings") or {}
     )
-    return EnabledSkillsConfig.model_validate(payload)
-
-
-def _portable_skill_paths(
-    source: Path,
-    config: EnabledSkillsConfig,
-) -> dict[str, Path]:
-    extension_root = (source / "extensions").resolve()
-    result: dict[str, Path] = {}
-    for skill in config.skills:
-        configured = Path(skill.path).expanduser()
-        resolved = (
-            configured.resolve()
-            if configured.is_absolute()
-            else (extension_root / configured).resolve()
+    if snapshot_bindings != bindings:
+        raise PackageDistributionError(
+            "distribution extension bindings do not match the package bindings"
         )
-        try:
-            relative = resolved.relative_to(extension_root)
-        except ValueError as exc:
+    bound_mcp_ids = set(bindings.mcp_server_ids)
+    bound_skill_ids = set(bindings.skill_ids)
+    if any(server.server_id not in bound_mcp_ids for server in mcp_config.servers):
+        raise PackageDistributionError(
+            "distribution MCP snapshot contains servers not declared by extension bindings"
+        )
+    for skill in skills_config.skills:
+        if skill.skill_id not in bound_skill_ids:
             raise PackageDistributionError(
-                f"Skill {skill.skill_id!r} must be installed inside the package extensions directory"
-            ) from exc
-        if not (resolved / "SKILL.md").is_file():
-            raise PackageDistributionError(
-                f"Skill {skill.skill_id!r} is configured but SKILL.md is missing"
+                "distribution Skill snapshot contains Skills not declared by extension bindings"
             )
-        result[skill.skill_id] = relative
-    return result
+        source = _distribution_skill_source(root, skill)
+        try:
+            importable = parse_skill_directory(
+                source,
+                allow_directory_name_mismatch=True,
+                allow_missing_frontmatter=True,
+                fallback_name=skill.skill_id,
+            )
+        except Exception as exc:
+            raise PackageDistributionError(
+                f"distributed Skill is invalid: {skill.skill_id}"
+            ) from exc
+        if importable.name != skill.skill_id:
+            raise PackageDistributionError(
+                f"distributed Skill identity mismatch: "
+                f"{skill.skill_id} != {importable.name}"
+            )
+
+
+def _distribution_skill_source(
+    root: Path,
+    skill: Any,
+) -> Path:
+    relative = PurePosixPath(str(skill.path or ""))
+    expected_prefix = PurePosixPath(EXTENSION_DISTRIBUTION_SKILLS_DIR)
+    if (
+        relative.is_absolute()
+        or "\\" in str(skill.path)
+        or not relative.parts
+        or PurePosixPath(*relative.parts[:1]) != expected_prefix
+        or any(part in {"", ".", ".."} for part in relative.parts)
+    ):
+        raise PackageDistributionError(
+            f"distributed Skill path is invalid: {skill.skill_id}"
+        )
+    source = (root / "extensions" / Path(*relative.parts)).resolve()
+    extension_root = (root / "extensions").resolve()
+    try:
+        source.relative_to(extension_root)
+    except ValueError as exc:
+        raise PackageDistributionError(
+            f"distributed Skill path escapes package: {skill.skill_id}"
+        ) from exc
+    if not (source / "SKILL.md").is_file():
+        raise PackageDistributionError(
+            f"distributed Skill content is missing: {skill.skill_id}"
+        )
+    return source
 
 
 def _skill_file_inventory(root: Path) -> list[dict[str, Any]]:

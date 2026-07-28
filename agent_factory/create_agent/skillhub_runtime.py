@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
+from agent_factory.tooling.extension_registry import set_agent_extension_binding
+
 
 class CreateAgentSkillHubRuntime:
     def __init__(
@@ -18,8 +20,34 @@ class CreateAgentSkillHubRuntime:
 
     def run(self, payload: dict[str, Any]) -> dict[str, Any]:
         action = str(payload.get("action") or "").strip().lower()
+        if action == "remove":
+            skill_id = str(payload.get("skill") or payload.get("query") or "").strip()
+            bindings = set_agent_extension_binding(
+                self._package_root / "extensions",
+                kind="skill",
+                identifier=skill_id,
+                enabled=False,
+            )
+            self._refresh_skill_config()
+            return {
+                "action": "remove",
+                "status": "ok",
+                "message": f"Skill unbound from package: {skill_id}",
+                "removed_skill": {"skill_id": skill_id},
+                "bindings": bindings.model_dump(mode="json"),
+                "restart_required": True,
+            }
         result = self._runtime.run(payload)
-        if action in {"install", "remove"} and _skill_config_changed(result):
+        if action == "install" and _skill_config_changed(result):
+            installed = result.get("installed_skill") if isinstance(result, dict) else None
+            skill_id = str(installed.get("skill_id") if isinstance(installed, dict) else "").strip()
+            if skill_id:
+                set_agent_extension_binding(
+                    self._package_root / "extensions",
+                    kind="skill",
+                    identifier=skill_id,
+                    enabled=True,
+                )
             self._refresh_skill_config()
         return result
 

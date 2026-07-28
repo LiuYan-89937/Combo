@@ -8,7 +8,6 @@ import logging
 import os
 from pathlib import Path, PurePosixPath
 import shutil
-import subprocess
 import threading
 from typing import Any, Iterator
 from uuid import uuid4
@@ -40,6 +39,7 @@ from agent_factory.runtime_attachments import (
     import_runtime_attachments,
     time_named_attachment_scope,
 )
+from agent_factory.tooling.extension_registry import default_extension_registry_root
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent, event
 from agent_factory.factory_graph.frontend_bridge.agent_package_repository import (
     AgentPackageRepository,
@@ -149,6 +149,7 @@ class AgentPackageRuntimeManager:
         self._package_initialization_locks: dict[str, threading.Lock] = {}
         self._instance_status_overrides: dict[str, dict[str, Any]] = {}
         self._mcp_gateways = HostMCPGatewayManager()
+        self._container_mcp_gateway_keys: dict[str, str] = {}
         self._skillhub_gateways = HostSkillHubGatewayManager()
         self._emit = emit
         self.resource_store = ResourceStore()
@@ -870,9 +871,6 @@ class AgentPackageRuntimeManager:
             request_id=request_id,
             progress=progress,
         )
-        if result.changed:
-            self._close_package_containers(package_id)
-            self._close_package_system_handles(package_id)
         return result.payload
 
     def system_extensions_manage(
@@ -1638,28 +1636,37 @@ class AgentPackageRuntimeManager:
         mcp_gateway = self._mcp_gateways.ensure_gateway(
             _load_extension_bundle(extension_root, package=package).mcp_servers
         )
-        skillhub_gateway = self._skillhub_gateways.ensure_gateway(extension_root)
-        plan = self.launcher.prepare(
-            package=package,
-            runtime_root=runtime_root,
-            artifacts_root=artifacts_root,
-            workdir_root=workdir_root,
-            runtime_instance_id=runtime_instance_id,
-            extension_root=extension_root,
-            mcp_gateway_url=mcp_gateway.host_url if mcp_gateway is not None else None,
-            skillhub_gateway_url=skillhub_gateway.host_url,
-        )
+        try:
+            skillhub_gateway = self._skillhub_gateways.ensure_gateway(
+                default_extension_registry_root()
+            )
+            plan = self.launcher.prepare(
+                package=package,
+                runtime_root=runtime_root,
+                artifacts_root=artifacts_root,
+                workdir_root=workdir_root,
+                runtime_instance_id=runtime_instance_id,
+                extension_root=extension_root,
+                mcp_gateway_url=mcp_gateway.host_url if mcp_gateway is not None else None,
+                skillhub_gateway_url=skillhub_gateway.host_url,
+            )
 
-        handle = NativeAgentRuntimeHandle(
-            package_id=package_id,
-            package_fingerprint=fingerprint,
-            idle_timeout_seconds=self.idle_timeout_seconds,
-            request_policy=self.request_policy,
-            bridge_startup_timeout_seconds=self.bridge_startup_timeout_seconds,
-            command=plan.command,
-            environment=plan.environment,
-            emit=self._emit,
-        )
+            handle = NativeAgentRuntimeHandle(
+                package_id=package_id,
+                package_fingerprint=fingerprint,
+                idle_timeout_seconds=self.idle_timeout_seconds,
+                request_policy=self.request_policy,
+                bridge_startup_timeout_seconds=self.bridge_startup_timeout_seconds,
+                command=plan.command,
+                environment=plan.environment,
+                emit=self._emit,
+            )
+        except Exception:
+            if mcp_gateway is not None:
+                self._mcp_gateways.release_gateway(mcp_gateway.key)
+            raise
+        if mcp_gateway is not None:
+            self._container_mcp_gateway_keys[runtime_instance_id] = mcp_gateway.key
         handle.startup_payload = {
             "package_id": package_id,
             "status": "running",
@@ -1760,10 +1767,15 @@ class AgentPackageRuntimeManager:
     def _close_container(self, runtime_key: str) -> None:
         with self._runtime_handle_lock:
             handle = self._containers.pop(runtime_key, None)
+            gateway_key = self._container_mcp_gateway_keys.pop(runtime_key, None)
             package_id = handle.package_id if handle is not None else _runtime_key_package_id(runtime_key)
             self._instance_status_overrides.pop(package_id, None)
-            if handle is not None:
-                handle.close()
+            try:
+                if handle is not None:
+                    handle.close()
+            finally:
+                if gateway_key is not None:
+                    self._mcp_gateways.release_gateway(gateway_key)
 
     def _close_system(self, runtime_key: str) -> None:
         with self._runtime_handle_lock:
@@ -1856,6 +1868,19 @@ def _runtime_fingerprint(package_id: str, package: LoadedAgentPackage) -> str:
     digest.update(b"runtime-extension-root")
     digest.update(str(extension_root.resolve()).encode("utf-8"))
     _hash_tree(digest, extension_root)
+    extension_bundle = _load_extension_bundle(extension_root, package=package)
+    digest.update(b"resolved-extension-config")
+    digest.update(
+        json.dumps(
+            {
+                "mcp_servers": extension_bundle.mcp_servers.model_dump(mode="json"),
+                "skills": extension_bundle.enabled_skills.model_dump(mode="json"),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
     return digest.hexdigest()
 
 

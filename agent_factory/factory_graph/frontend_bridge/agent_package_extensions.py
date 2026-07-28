@@ -5,7 +5,6 @@ from pathlib import Path
 import re
 import shutil
 import shlex
-import subprocess
 import threading
 from typing import Any, Callable
 from urllib.parse import urlparse
@@ -26,6 +25,21 @@ from agent_factory.factory_graph.frontend_bridge.agent_package_utils import (
     write_json_object,
 )
 from agent_factory.tooling.approval_policy import ToolApprovalOverrideConfig, ToolApprovalPolicyConfig
+from agent_factory.tooling.extension_registry import (
+    default_extension_registry_root,
+    find_registered_mcp_server,
+    import_registered_skill_directory,
+    load_registered_mcp_servers,
+    load_resolved_registered_skills,
+    load_registered_skills,
+    registered_agent_extension_bindings,
+    registry_mcp_path,
+    registry_skills_path,
+    remove_registered_extension,
+    set_agent_extension_binding,
+    upsert_registered_mcp_servers,
+    upsert_registered_skill,
+)
 from agent_factory.tooling.factory_extensions import (
     SystemAgentExtensionOwner,
     default_builtin_factory_extension_root,
@@ -169,7 +183,6 @@ def _extension_summary(
     package: LoadedAgentPackage | None = None,
     system_owner: SystemAgentExtensionOwner | None = None,
 ) -> dict[str, Any]:
-    _prune_missing_local_skills(extension_root)
     bundle = _load_effective_extension_bundle(
         extension_root,
         package=package,
@@ -180,12 +193,22 @@ def _extension_summary(
         "resource_mode": system_owner or "package",
         "mcp_servers": [
             public_mcp_server(server.model_dump(mode="json"))
-            for server in bundle.mcp_servers.servers
+            for server in load_registered_mcp_servers().servers
         ],
         "skills": [
             public_skill(skill.model_dump(mode="json"))
-            for skill in bundle.enabled_skills.skills
+            for skill in load_resolved_registered_skills().skills
         ],
+        "bindings": registered_agent_extension_bindings(
+            [
+                *(
+                    _system_extension_inherited_roots(extension_root)
+                    if system_owner is not None
+                    else _extension_inherited_roots(extension_root, package=package)
+                ),
+                extension_root,
+            ]
+        ).model_dump(mode="json"),
         "tool_permissions": _tool_permissions_view(
             package=package,
             extension_root=extension_root,
@@ -194,8 +217,8 @@ def _extension_summary(
         ),
         "sources": {
             "extension_root": str(bundle.sources.extension_root),
-            "mcp_servers_paths": [str(path) for path in bundle.sources.mcp_servers_paths],
-            "enabled_skills_paths": [str(path) for path in bundle.sources.enabled_skills_paths],
+            "mcp_servers_paths": [str(registry_mcp_path())],
+            "enabled_skills_paths": [str(registry_skills_path())],
             "tool_permissions_path": str(extension_root / TOOL_PERMISSIONS_FILENAME),
         },
     }
@@ -221,6 +244,30 @@ def _manage_extension_root(
 
     if action == "list":
         return ExtensionManageResult(summary())
+    if action == "set_binding":
+        kind = str(payload.get("kind") or "").strip()
+        if kind not in {"mcp", "skill"}:
+            raise ValueError("extension binding kind must be mcp or skill")
+        identifier = str(payload.get("identifier") or "").strip()
+        bindings = set_agent_extension_binding(
+            extension_root,
+            kind=kind,
+            identifier=identifier,
+            enabled=bool(payload.get("enabled", True)),
+            inherited_extension_roots=(
+                _system_extension_inherited_roots(extension_root)
+                if system_owner is not None
+                else _extension_inherited_roots(extension_root, package=package)
+            ),
+        )
+        return ExtensionManageResult(
+            {
+                "updated": "binding",
+                "bindings": bindings.model_dump(mode="json"),
+                **summary(),
+            },
+            changed=True,
+        )
     if action == "get_mcp_config":
         server_id = _required_config_id(payload, "server_id")
         server = _find_mcp_server(
@@ -261,21 +308,6 @@ def _manage_extension_root(
             package=package,
             system_owner=system_owner,
             operation=operation,
-        )
-    if action == "set_mcp_enabled":
-        server_id = _required_config_id(payload, "server_id")
-        server = _set_mcp_server_enabled(
-            extension_root,
-            server_id=server_id,
-            enabled=bool(payload.get("enabled", True)),
-        )
-        return ExtensionManageResult(
-            {
-                "updated": "mcp",
-                "server": public_mcp_server(server.model_dump(mode="json")),
-                **summary(),
-            },
-            changed=True,
         )
     if action == "remove_mcp":
         server_id = _required_config_id(payload, "server_id")
@@ -328,15 +360,15 @@ def _manage_extension_root(
         )
     if action == "upsert_skill":
         skill_payload = payload.get("skill") if isinstance(payload.get("skill"), dict) else payload
-        skill = _skill_from_payload(skill_payload, extension_root=extension_root)
         replace_skill_id = str(
             payload.get("replace_skill_id")
             or skill_payload.get("replace_skill_id")
             or ""
         ).strip()
-        if replace_skill_id and replace_skill_id != skill.skill_id:
-            _remove_enabled_skill(extension_root, skill_id=replace_skill_id)
-        _save_enabled_skill(extension_root, skill)
+        skill = _save_managed_skill_from_payload(
+            skill_payload,
+            replace_skill_id=replace_skill_id,
+        )
         return ExtensionManageResult(
             {
                 "updated": "skill",
@@ -347,7 +379,7 @@ def _manage_extension_root(
         )
     if action in {"skillhub_status", "skillhub_search", "skillhub_install"}:
         skillhub_action = action.removeprefix("skillhub_")
-        result = SkillHubService(extension_root=extension_root).run(
+        result = SkillHubService(extension_root=default_extension_registry_root()).run(
             {
                 "action": skillhub_action,
                 "query": payload.get("query"),
@@ -361,21 +393,6 @@ def _manage_extension_root(
                 **summary(),
             },
             changed=changed,
-        )
-    if action == "set_skill_enabled":
-        skill_id = _required_config_id(payload, "skill_id")
-        skill = _set_skill_enabled(
-            extension_root,
-            skill_id=skill_id,
-            enabled=bool(payload.get("enabled", True)),
-        )
-        return ExtensionManageResult(
-            {
-                "updated": "skill",
-                "skill": public_skill(skill.model_dump(mode="json")),
-                **summary(),
-            },
-            changed=True,
         )
     if action == "remove_skill":
         skill_id = _required_config_id(payload, "skill_id")
@@ -637,12 +654,15 @@ def load_extension_bundle(extension_root: Path, *, package: LoadedAgentPackage |
 
 
 def load_system_agent_extension_bundle(extension_root: Path) -> Any:
-    builtin_root = default_builtin_factory_extension_root()
-    inherited_roots = [] if builtin_root.resolve() == extension_root.resolve() else [builtin_root]
     return AgentInstanceExtensionConfigLoader(
         extension_root,
-        inherited_extension_roots=inherited_roots,
+        inherited_extension_roots=_system_extension_inherited_roots(extension_root),
     ).load()
+
+
+def _system_extension_inherited_roots(extension_root: Path) -> list[Path]:
+    builtin_root = default_builtin_factory_extension_root()
+    return [] if builtin_root.resolve() == extension_root.resolve() else [builtin_root]
 
 
 def _load_effective_extension_bundle(
@@ -734,107 +754,59 @@ def _extension_inherited_roots(extension_root: Path, *, package: LoadedAgentPack
     return roots
 
 
-def _load_local_mcp_config(extension_root: Path) -> MCPServersConfig:
-    return MCPServersConfig.model_validate(read_json_object(extension_root / "mcp_servers.json") or {})
-
-
-def _write_local_mcp_config(extension_root: Path, config: MCPServersConfig) -> None:
-    write_json_object(extension_root / "mcp_servers.json", config.model_dump(mode="json"))
-
-
 def _load_local_skills_config(extension_root: Path) -> EnabledSkillsConfig:
-    return EnabledSkillsConfig.model_validate(read_json_object(extension_root / "enabled_skills.json") or {})
-
-
-def _write_local_skills_config(extension_root: Path, config: EnabledSkillsConfig) -> None:
-    write_json_object(extension_root / "enabled_skills.json", config.model_dump(mode="json"))
-
-
-def _prune_missing_local_skills(extension_root: Path) -> bool:
-    config = _load_local_skills_config(extension_root)
-    skills = [skill for skill in config.skills if _skill_path_exists(extension_root, skill)]
-    changed = len(skills) != len(config.skills)
-    if changed:
-        _write_local_skills_config(extension_root, config.model_copy(update={"skills": skills}))
-    return changed
+    return load_registered_skills()
 
 
 def _save_mcp_server(extension_root: Path, server: MCPServerConfig) -> None:
-    config = _load_local_mcp_config(extension_root)
-    servers = [item for item in config.servers if item.server_id != server.server_id]
-    servers.append(server)
-    _write_local_mcp_config(
-        extension_root,
-        config.model_copy(update={"servers": sorted(servers, key=lambda item: item.server_id)}),
-    )
+    upsert_registered_mcp_servers([server])
 
 
 def _save_mcp_servers(extension_root: Path, servers: list[MCPServerConfig]) -> None:
-    config = _load_local_mcp_config(extension_root)
-    replacements = {server.server_id: server for server in servers}
-    retained = [server for server in config.servers if server.server_id not in replacements]
-    _write_local_mcp_config(
-        extension_root,
-        config.model_copy(update={"servers": sorted([*retained, *servers], key=lambda item: item.server_id)}),
-    )
-
-
-def _set_mcp_server_enabled(extension_root: Path, *, server_id: str, enabled: bool) -> MCPServerConfig:
-    config = _load_local_mcp_config(extension_root)
-    servers: list[MCPServerConfig] = []
-    updated: MCPServerConfig | None = None
-    for server in config.servers:
-        if server.server_id == server_id:
-            updated = server.model_copy(update={"enabled": enabled})
-            servers.append(updated)
-        else:
-            servers.append(server)
-    if updated is None:
-        raise ValueError(f"MCP server is not configured: {server_id}")
-    _write_local_mcp_config(extension_root, config.model_copy(update={"servers": servers}))
-    return updated
+    upsert_registered_mcp_servers(servers)
 
 
 def _remove_mcp_server(extension_root: Path, *, server_id: str) -> bool:
-    config = _load_local_mcp_config(extension_root)
-    servers = [server for server in config.servers if server.server_id != server_id]
-    removed = len(servers) != len(config.servers)
-    _write_local_mcp_config(extension_root, config.model_copy(update={"servers": servers}))
-    return removed
+    return remove_registered_extension("mcp", server_id)
 
 
 def _save_enabled_skill(extension_root: Path, skill: EnabledSkillConfig) -> None:
-    config = _load_local_skills_config(extension_root)
-    skills = [item for item in config.skills if item.skill_id != skill.skill_id]
-    skills.append(skill)
-    _write_local_skills_config(
-        extension_root,
-        config.model_copy(update={"skills": sorted(skills, key=lambda item: item.skill_id)}),
-    )
+    upsert_registered_skill(skill)
 
 
-def _set_skill_enabled(extension_root: Path, *, skill_id: str, enabled: bool) -> EnabledSkillConfig:
-    config = _load_local_skills_config(extension_root)
-    skills: list[EnabledSkillConfig] = []
-    updated: EnabledSkillConfig | None = None
-    for skill in config.skills:
-        if skill.skill_id == skill_id:
-            updated = skill.model_copy(update={"enabled": enabled})
-            skills.append(updated)
-        else:
-            skills.append(skill)
-    if updated is None:
-        raise ValueError(f"Skill is not configured: {skill_id}")
-    _write_local_skills_config(extension_root, config.model_copy(update={"skills": skills}))
-    return updated
+def _save_managed_skill_from_payload(
+    payload: dict[str, Any],
+    *,
+    replace_skill_id: str,
+) -> EnabledSkillConfig:
+    raw = dict(payload or {})
+    path = str(raw.get("path") or "").strip()
+    if not path:
+        raise ValueError("Skill path is required")
+    source = str(raw.get("source") or "local").strip() or "local"
+    registry_root = default_extension_registry_root()
+    resolved = Path(_skill_path_for_validation(path, registry_root)).resolve()
+    try:
+        resolved.relative_to((registry_root / "skills").resolve())
+    except ValueError:
+        return import_registered_skill_directory(
+            resolved,
+            enabled=raw.get("enabled", True) is not False,
+            required=bool(raw.get("required")),
+            source_kind=source,
+            replace_skill_id=replace_skill_id or None,
+        )
+    skill = _skill_from_payload(raw, extension_root=registry_root)
+    if replace_skill_id and replace_skill_id != skill.skill_id:
+        raise ValueError(
+            "Managed Skill identity cannot be changed without selecting a new Skill folder"
+        )
+    _save_enabled_skill(registry_root, skill)
+    return skill
 
 
 def _remove_enabled_skill(extension_root: Path, *, skill_id: str) -> bool:
-    config = _load_local_skills_config(extension_root)
-    skills = [skill for skill in config.skills if skill.skill_id != skill_id]
-    removed = len(skills) != len(config.skills)
-    _write_local_skills_config(extension_root, config.model_copy(update={"skills": skills}))
-    return removed
+    return remove_registered_extension("skill", skill_id)
 
 
 def _remove_skill(extension_root: Path, *, skill_id: str) -> dict[str, Any]:
@@ -858,10 +830,6 @@ def _remove_skill(extension_root: Path, *, skill_id: str) -> dict[str, Any]:
         "paths": removed_paths,
         "missing_paths": missing_paths,
     }
-
-
-def _skill_path_exists(extension_root: Path, skill: EnabledSkillConfig) -> bool:
-    return (_resolved_skill_path(extension_root, skill) / "SKILL.md").is_file()
 
 
 def _resolved_skill_path(extension_root: Path, skill: EnabledSkillConfig) -> Path:
@@ -911,15 +879,7 @@ def _find_mcp_server(
 ) -> MCPServerConfig | None:
     if not server_id:
         return None
-    bundle = _load_effective_extension_bundle(
-        extension_root,
-        package=package,
-        system_owner=system_owner,
-    )
-    for server in bundle.mcp_servers.servers:
-        if server.server_id == server_id:
-            return server
-    return None
+    return find_registered_mcp_server(server_id)
 
 
 def _mcp_server_for_test(
@@ -1340,8 +1300,14 @@ def _skill_metadata_for_public_view(payload: dict[str, Any]) -> dict[str, Any]:
     path = str(payload.get("path") or "").strip()
     if not path:
         return {}
+    source = str(payload.get("source") or "local")
     try:
-        skill = parse_skill_directory(path)
+        skill = parse_skill_directory(
+            path,
+            allow_directory_name_mismatch=source in {"skillhub", "agent_hub"},
+            allow_missing_frontmatter=source in {"skillhub", "agent_hub"},
+            fallback_name=str(payload.get("skill_id") or Path(path).name),
+        )
     except Exception:
         return {}
     return {

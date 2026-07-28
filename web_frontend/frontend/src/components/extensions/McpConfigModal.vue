@@ -95,9 +95,6 @@
             <n-select v-model:value="formData.risk_level_default" :options="riskOptions" />
           </n-form-item-gi>
         </n-grid>
-        <n-form-item :label="t('scheduler.enabled')">
-          <n-switch v-model:value="formData.enabled" />
-        </n-form-item>
       </n-form>
     </n-spin>
 
@@ -167,7 +164,6 @@ import {
   NSelect,
   NSpace,
   NSpin,
-  NSwitch,
   NTag,
   NText,
 } from 'naive-ui'
@@ -251,7 +247,7 @@ function emptyForm() {
   return {
     display_name: '', description: '', transport: 'stdio' as McpServerConfig['transport'],
     command: '', args: '', cwd: '', env: '', url: '', headers: '', timeout_seconds: 60,
-    enabled: true, risk_level_default: 'medium' as const,
+    risk_level_default: 'medium' as const,
   }
 }
 
@@ -266,7 +262,7 @@ function loadForm(item: ExtensionItemView | null | undefined) {
     command: String(payload.command || ''),
     args: mcpConfigArgsText(payload.args),
     cwd: String(payload.cwd || ''), env: '', url: String(payload.url || ''), headers: '',
-    timeout_seconds: Number(payload.timeout_seconds || 60), enabled: item.enabled !== false,
+    timeout_seconds: Number(payload.timeout_seconds || 60),
     risk_level_default: normalizeRiskLevel(payload.risk_level_default),
   }
 }
@@ -348,7 +344,7 @@ function manualServer(): McpServerConfig {
     url: formData.value.transport !== 'stdio' ? formData.value.url.trim() : undefined,
     headers: formData.value.transport !== 'stdio' && headers ? headers : undefined,
     timeout_seconds: formData.value.timeout_seconds,
-    enabled: formData.value.enabled,
+    enabled: true,
     risk_level_default: formData.value.risk_level_default,
     source: { type: formData.value.transport === 'stdio' ? 'local' : 'remote', name, description: formData.value.description.trim() || undefined },
   }

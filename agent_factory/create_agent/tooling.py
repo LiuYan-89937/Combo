@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
 from pathlib import Path
 from typing import Any, Literal
 
@@ -58,10 +57,13 @@ from agent_factory.tooling.factory_extensions import (
     FactoryExtensionManager,
     default_system_agent_extension_root,
 )
+from agent_factory.tooling.extension_registry import (
+    default_extension_registry_root,
+    selected_registry_configs,
+)
 from agent_factory.tooling.output_store import TOOL_OUTPUT_STORE_RESOURCE, ToolOutputStore
 from agent_factory.tooling.providers import (
     BuiltinToolProvider,
-    EnabledSkillsConfig,
     SkillProvider,
     ToolProviderContext,
     ToolProviderResult,
@@ -137,7 +139,7 @@ class CreateAgentToolEnvironmentBuilder:
         }
         builtin_context = ToolProviderContext(
             package_root=workspace,
-            extension_root=package_extension_root,
+            extension_root=default_extension_registry_root(),
             resources=provider_resources,
         )
         extension_context = ToolProviderContext(
@@ -150,10 +152,14 @@ class CreateAgentToolEnvironmentBuilder:
         builtin_result = BuiltinToolProvider(tool_ids=builtin_tool_ids).discover(builtin_context)
         if authoring_mode:
             extension_result, extension_report = extension_manager.discover(context=extension_context)
+            registry_result, _registry_report = extension_manager.discover_registry(
+                context=extension_context
+            )
             workspace_skill_result = _discover_workspace_skills(package_extension_root, context=builtin_context)
             _append_workspace_skill_report(extension_report, package_extension_root, workspace_skill_result)
         else:
             extension_result = ToolProviderResult()
+            registry_result = ToolProviderResult()
             extension_report = FactoryExtensionLoadReport(extension_root=str(factory_extension_root))
             workspace_skill_result = ToolProviderResult()
         provider_result = builtin_result.merge(extension_result) if authoring_mode else builtin_result
@@ -243,9 +249,7 @@ class CreateAgentToolEnvironmentBuilder:
                 "contracts/session.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "contracts/state.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "contracts/memory.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
-                "extensions/mcp_servers.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
-                "extensions/enabled_skills.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
-                "extensions/skills": {"write_tool": "skillhub"},
+                "extensions/extension_bindings.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "tools": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "knowledge": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "state": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
@@ -303,7 +307,7 @@ class CreateAgentToolEnvironmentBuilder:
                 extra_specs=extra_specs,
             )
         )
-        extension_specs = _stable_specs(extension_result.tool_specs) if authoring_mode else []
+        extension_specs = _stable_specs(registry_result.tool_specs) if authoring_mode else []
         capability_inventory = build_capability_inventory(
             manufacturing_specs=specs,
             extension_specs=extension_specs,
@@ -354,20 +358,10 @@ def _unique_specs(result: ToolProviderResult, *, extra_specs=()):
 
 
 def _discover_workspace_skills(extension_root: Path, *, context: ToolProviderContext) -> ToolProviderResult:
-    config = _load_enabled_skills_config(extension_root)
+    _mcp, config, _bindings = selected_registry_configs([extension_root])
     if not config.skills:
         return ToolProviderResult()
     return SkillProvider(config=config).discover(context)
-
-
-def _load_enabled_skills_config(extension_root: Path) -> EnabledSkillsConfig:
-    path = extension_root / "enabled_skills.json"
-    if not path.is_file():
-        return EnabledSkillsConfig()
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError(f"enabled_skills.json must contain a JSON object: {path}")
-    return EnabledSkillsConfig.model_validate(payload)
 
 
 def _append_workspace_skill_report(
@@ -375,7 +369,7 @@ def _append_workspace_skill_report(
     extension_root: Path,
     result: ToolProviderResult,
 ) -> None:
-    enabled_skills_path = extension_root / "enabled_skills.json"
+    enabled_skills_path = extension_root / "extension_bindings.json"
     if enabled_skills_path.is_file():
         report.enabled_skills_path = str(enabled_skills_path)
         report.enabled_skills_paths = _unique_texts([*report.enabled_skills_paths, str(enabled_skills_path)])

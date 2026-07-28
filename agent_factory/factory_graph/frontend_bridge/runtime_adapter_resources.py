@@ -113,10 +113,9 @@ class RuntimeResourceCommandMixin:
         if action in {
             "upsert_mcp",
             "install_mcp",
-            "set_mcp_enabled",
             "remove_mcp",
+            "set_binding",
             "upsert_skill",
-            "set_skill_enabled",
             "remove_skill",
             "update_tool_permissions",
             "set_tool_permission",

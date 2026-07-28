@@ -14,6 +14,7 @@ from agent_factory.paths import project_root, system_package_root
 from agent_factory.package_distribution import (
     distribution_extension_preview,
     export_distribution_archive,
+    import_distribution_extensions,
 )
 from agent_factory.runtime_contracts import AgentPackageLoader, LoadedAgentPackage
 
@@ -188,8 +189,11 @@ class AgentPackageRepository:
                 target.rename(backup_root)
             try:
                 staged_package_root.rename(target)
+                import_distribution_extensions(target)
             except Exception:
-                if backup_root.exists() and not target.exists():
+                if target.exists():
+                    shutil.rmtree(target)
+                if backup_root.exists():
                     backup_root.rename(target)
                 raise
             if backup_root.exists():

@@ -160,6 +160,7 @@ export const useRuntimeStore = defineStore('runtime', {
     schedulerRunNotices: [],
     extensionItems: [],
     extensionTestResult: null,
+    extensionBindings: { mcp_server_ids: [], skill_ids: [] },
     toolPermissions: null,
     sessions: [],
     agentPackages: [],

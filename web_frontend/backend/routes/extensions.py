@@ -21,6 +21,23 @@ def create_extensions_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         )
         return {"event": event}
 
+    @router.put("/bindings")
+    async def set_extension_binding(payload: dict[str, Any]):
+        event = await resource_command(
+            runtime_bridge,
+            "extensions_manage",
+            {
+                "action": "set_binding",
+                "kind": payload.get("kind"),
+                "identifier": payload.get("identifier"),
+                "enabled": payload.get("enabled", True),
+                **optional_package(payload.get("package_id")),
+                **optional_resource_mode(payload.get("resource_mode")),
+            },
+            {"extension_config_updated"},
+        )
+        return {"event": event}
+
     @router.post("/mcp")
     async def save_mcp(payload: dict[str, Any]):
         event = await resource_command(
@@ -76,22 +93,6 @@ def create_extensions_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         )
         return {"event": event}
 
-    @router.patch("/mcp/{server_id}")
-    async def set_mcp_enabled(server_id: str, payload: dict[str, Any]):
-        event = await resource_command(
-            runtime_bridge,
-            "extensions_manage",
-            {
-                "action": "set_mcp_enabled",
-                "server_id": server_id,
-                "enabled": payload.get("enabled", True),
-                **optional_package(payload.get("package_id")),
-                **optional_resource_mode(payload.get("resource_mode")),
-            },
-            {"extension_config_updated"},
-        )
-        return {"event": event}
-
     @router.delete("/mcp/{server_id}")
     async def remove_mcp(server_id: str, package_id: str | None = None, resource_mode: str | None = None):
         event = await resource_command(
@@ -118,22 +119,6 @@ def create_extensions_router(runtime_bridge: RuntimeBridge) -> APIRouter:
                 "skill": payload.get("skill") if isinstance(payload.get("skill"), dict) else payload,
                 "replace_skill_id": payload.get("replace_skill_id"),
                 **optional_package(package_id),
-                **optional_resource_mode(payload.get("resource_mode")),
-            },
-            {"extension_config_updated"},
-        )
-        return {"event": event}
-
-    @router.patch("/skills/{skill_id}")
-    async def set_skill_enabled(skill_id: str, payload: dict[str, Any]):
-        event = await resource_command(
-            runtime_bridge,
-            "extensions_manage",
-            {
-                "action": "set_skill_enabled",
-                "skill_id": skill_id,
-                "enabled": payload.get("enabled", True),
-                **optional_package(payload.get("package_id")),
                 **optional_resource_mode(payload.get("resource_mode")),
             },
             {"extension_config_updated"},

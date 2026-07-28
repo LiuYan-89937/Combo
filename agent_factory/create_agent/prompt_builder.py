@@ -208,7 +208,7 @@ def _invariant_system_prompt_text() -> str:
             "先加载 11-skillhub-system 制造 skill，再执行：提炼能力缺口、skillhub status、分组短查询搜索、候选比较、精确安装、安装后 Skill Gateway 验证、运行期接线和剩余缺口判定。"
             "搜索时调用 skillhub(action='search', query=...)；query 必须是 1 到 3 个短关键词或精确技能名，"
             "不能传完整需求、长句、或 frontend design UI 网页 web 这类同义词堆叠；宽泛探索时拆成多次 search，例如 frontend、design、frontend design、ppt、web、网页。"
-            "比较候选与真实能力缺口后，只使用搜索结果里的 install_name 调用 skillhub(action='install', skill=install_name) 安装到当前 package extensions。"
+            "比较候选与真实能力缺口后，只使用搜索结果里的 install_name 调用 skillhub(action='install', skill=install_name) 注册到全局扩展库并绑定当前 package。"
             "不要把候选标题、版本号、描述文本或压缩摘要拼成 skill 参数。"
             "安装成功后必须使用 skill(action='describe', name=<installed skill_id>, current_system='capability_implementation') 验证注册结果；"
             "需要正文时再 load，需要模板、资产或脚本来源时只读取 describe 列出的资源。未完成安装后验证，不能声称 SkillHub 能力已经接入。"
@@ -218,7 +218,7 @@ def _invariant_system_prompt_text() -> str:
             "plan_and_execute 给 executor/casual_react；如果 final_answer 需要交付或读取最终产物，也可以给 final_answer，planner 不调用业务工具或 skill。"
             "如果 SkillHub skill 已经提供可注册执行入口，优先暴露该 skill-derived tool；"
             "如果只提供 guidance/assets，则用 skill 指导现有工具完成；只有剩余执行缺口才创建 package tool。"
-            "不要把 SkillHub skill 复制成 package tool，也不要手写 extensions/enabled_skills.json；skillhub install 会写入 package extension。"
+            "不要把 SkillHub skill 复制成 package tool，也不要手写全局注册文件或 extensions/extension_bindings.json；skillhub install 会完成全局注册和当前 package 绑定。"
         ),
         (
             "skill gateway 只服务能力写法和 validator 修复。正常生产路径：describe 一个相关 skill，读取一个相关 capability example，"

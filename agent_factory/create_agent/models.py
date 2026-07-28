@@ -605,7 +605,7 @@ def initial_system_manufacturing_state(
                 "contracts/resources.json",
                 "tools/",
                 "extensions/",
-                "extensions/enabled_skills.json",
+                "extensions/extension_bindings.json",
                 "knowledge/",
                 "contracts/dependencies.json",
                 "contracts/model.json",

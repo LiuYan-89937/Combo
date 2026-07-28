@@ -10,6 +10,17 @@ export function useExtensionCommands() {
     return transport.applyEventRequest(extensionsApi.list(context))
   }
 
+  const setExtensionBinding = (
+    kind: 'mcp' | 'skill',
+    identifier: string,
+    enabled: boolean,
+    context?: WorkspaceContextInput,
+  ) => {
+    return transport.applyEventRequest(
+      extensionsApi.setBinding(kind, identifier, enabled, context),
+    )
+  }
+
   const getMcpConfig = (serverId: string, context?: WorkspaceContextInput) => {
     return transport.applyEventRequest(extensionsApi.getMcpConfig(serverId, context))
   }
@@ -26,20 +37,12 @@ export function useExtensionCommands() {
     return transport.applyEventRequest(extensionsApi.testMcp(serverIdOrConfig, requestId, context))
   }
 
-  const setMcpEnabled = (serverId: string, enabled: boolean, context?: WorkspaceContextInput) => {
-    return transport.applyEventRequest(extensionsApi.setMcpEnabled(serverId, enabled, context))
-  }
-
   const removeMcp = (serverId: string, context?: WorkspaceContextInput) => {
     return transport.applyEventRequest(extensionsApi.removeMcp(serverId, context))
   }
 
   const saveSkill = (skill: SkillConfig, context?: WorkspaceContextInput) => {
     return transport.applyEventRequest(extensionsApi.saveSkill(skill, context))
-  }
-
-  const setSkillEnabled = (skillId: string, enabled: boolean, context?: WorkspaceContextInput) => {
-    return transport.applyEventRequest(extensionsApi.setSkillEnabled(skillId, enabled, context))
   }
 
   const removeSkill = (skillId: string, context?: WorkspaceContextInput) => {
@@ -72,14 +75,13 @@ export function useExtensionCommands() {
 
   return {
     refreshExtensions,
+    setExtensionBinding,
     getMcpConfig,
     saveMcp,
     installMcp,
     testMcp,
-    setMcpEnabled,
     removeMcp,
     saveSkill,
-    setSkillEnabled,
     removeSkill,
     skillHubStatus,
     searchSkillHub,
