@@ -49,14 +49,12 @@
                     String(item.payload?.server_id || ''),
                   ),
                 }"
-                draggable="true"
-                @dragstart="beginExtensionDrag(
+                @pointerdown="beginPointerExtensionDrag(
                   $event,
                   'mcp',
                   String(item.payload?.server_id || ''),
                   item.name,
                 )"
-                @dragend="finishWorkbenchDrag"
               >
                 <div class="card-topline">
                   <div class="card-icon">MCP</div>
@@ -136,14 +134,12 @@
                     String(item.payload?.skill_id || ''),
                   ),
                 }"
-                draggable="true"
-                @dragstart="beginExtensionDrag(
+                @pointerdown="beginPointerExtensionDrag(
                   $event,
                   'skill',
                   String(item.payload?.skill_id || ''),
                   item.name,
                 )"
-                @dragend="finishWorkbenchDrag"
               >
                 <div class="card-topline">
                   <div class="card-icon">SKILL</div>
@@ -202,6 +198,7 @@
               <template #trigger>
                 <button
                   class="agent-wheel-item"
+                  :data-agent-target-id="target.id"
                   :class="{
                     active: selectedAssemblyTargetId === target.id,
                     busy: assemblyBusyTargetId === target.id,
@@ -210,10 +207,6 @@
                   }"
                   :style="wheelItemStyle(index)"
                   @click="selectWheelTarget(index)"
-                  @dragenter.prevent="handleTargetDragEnter(target.id, index)"
-                  @dragover.prevent
-                  @dragleave="handleTargetDragLeave($event, target.id)"
-                  @drop.prevent="handleWheelDrop(target.id)"
                 >
                   <span class="agent-index">{{ String(index + 1).padStart(2, '0') }}</span>
                   <span class="agent-name">{{ target.name }}</span>
@@ -290,11 +283,22 @@
       :item="editingSkill"
       @submit="handleSaveSkill"
     />
+
+    <Teleport to="body">
+      <div
+        v-if="pointerDrag.started"
+        class="extension-drag-preview"
+        :style="pointerDragPreviewStyle"
+      >
+        <span>{{ pointerDrag.kind === 'mcp' ? 'MCP' : 'SKILL' }}</span>
+        <strong>{{ pointerDrag.name }}</strong>
+      </div>
+    </Teleport>
   </div>
 </template>
 
 <script setup lang="ts">
-import { nextTick, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import type { CSSProperties } from 'vue'
 import {
   NAlert,
@@ -366,6 +370,18 @@ const pickerPosition = ref(0)
 const pickerScrollFrame = ref<number | null>(null)
 const dragHoverTargetId = ref('')
 const recentlyBoundTargetId = ref('')
+const pointerDrag = reactive({
+  active: false,
+  started: false,
+  pointerId: -1,
+  startX: 0,
+  startY: 0,
+  x: 0,
+  y: 0,
+  kind: 'mcp' as 'mcp' | 'skill',
+  identifier: '',
+  name: '',
+})
 const pickerPointer = reactive({
   active: false,
   pointerId: -1,
@@ -373,6 +389,9 @@ const pickerPointer = reactive({
   startScrollTop: 0,
   moved: false,
 })
+const pointerDragPreviewStyle = computed<CSSProperties>(() => ({
+  transform: `translate3d(${pointerDrag.x + 16}px, ${pointerDrag.y + 16}px, 0)`,
+}))
 
 function wheelItemStyle(index: number): CSSProperties {
   const delta = index - pickerPosition.value
@@ -422,44 +441,30 @@ function isDraggedExtension(kind: 'mcp' | 'skill', identifier: string): boolean 
     && draggingExtension.value.identifier === identifier
 }
 
-function beginExtensionDrag(
-  event: DragEvent,
+function beginPointerExtensionDrag(
+  event: PointerEvent,
   kind: 'mcp' | 'skill',
   identifier: string,
   name: string,
 ): void {
-  startExtensionDrag(kind, identifier)
-  if (!event.dataTransfer) return
-  event.dataTransfer.effectAllowed = 'copy'
-  event.dataTransfer.setData('text/plain', name)
-  const preview = document.createElement('div')
-  preview.className = 'extension-drag-preview'
-  preview.textContent = `${kind === 'mcp' ? 'MCP' : 'SKILL'} · ${name}`
-  document.body.appendChild(preview)
-  event.dataTransfer.setDragImage(preview, 18, 18)
-  requestAnimationFrame(() => preview.remove())
-}
-
-function finishWorkbenchDrag(): void {
-  dragHoverTargetId.value = ''
-  finishExtensionDrag()
-}
-
-function handleTargetDragEnter(targetId: string, index: number): void {
-  if (!draggingExtension.value) return
-  dragHoverTargetId.value = targetId
-  scrollToWheelIndex(index)
-}
-
-function handleTargetDragLeave(event: DragEvent, targetId: string): void {
-  const currentTarget = event.currentTarget
-  const nextTarget = event.relatedTarget
   if (
-    currentTarget instanceof HTMLElement
-    && nextTarget instanceof Node
-    && currentTarget.contains(nextTarget)
+    event.button !== 0
+    || !identifier
+    || (event.target instanceof Element && event.target.closest('button'))
   ) return
-  if (dragHoverTargetId.value === targetId) dragHoverTargetId.value = ''
+  pointerDrag.active = true
+  pointerDrag.started = false
+  pointerDrag.pointerId = event.pointerId
+  pointerDrag.startX = event.clientX
+  pointerDrag.startY = event.clientY
+  pointerDrag.x = event.clientX
+  pointerDrag.y = event.clientY
+  pointerDrag.kind = kind
+  pointerDrag.identifier = identifier
+  pointerDrag.name = name
+  window.addEventListener('pointermove', handleExtensionPointerMove)
+  window.addEventListener('pointerup', handleExtensionPointerUp)
+  window.addEventListener('pointercancel', handleExtensionPointerCancel)
 }
 
 async function handleWheelDrop(targetId: string): Promise<void> {
@@ -469,6 +474,73 @@ async function handleWheelDrop(targetId: string): Promise<void> {
   window.setTimeout(() => {
     if (recentlyBoundTargetId.value === targetId) recentlyBoundTargetId.value = ''
   }, 900)
+}
+
+function handleExtensionPointerMove(event: PointerEvent): void {
+  if (!pointerDrag.active || event.pointerId !== pointerDrag.pointerId) return
+  pointerDrag.x = event.clientX
+  pointerDrag.y = event.clientY
+  if (!pointerDrag.started) {
+    const distance = Math.hypot(
+      event.clientX - pointerDrag.startX,
+      event.clientY - pointerDrag.startY,
+    )
+    if (distance < 6) return
+    pointerDrag.started = true
+    startExtensionDrag(pointerDrag.kind, pointerDrag.identifier)
+    document.body.classList.add('is-extension-pointer-dragging')
+  }
+  event.preventDefault()
+  const element = document.elementFromPoint(event.clientX, event.clientY)
+  const targetElement = element?.closest<HTMLElement>('[data-agent-target-id]')
+  const targetId = targetElement?.dataset.agentTargetId || ''
+  if (targetId === dragHoverTargetId.value) return
+  dragHoverTargetId.value = targetId
+  if (targetId) selectedAssemblyTargetId.value = targetId
+}
+
+function handleExtensionPointerUp(event: PointerEvent): void {
+  if (!pointerDrag.active || event.pointerId !== pointerDrag.pointerId) return
+  if (pointerDrag.started) event.preventDefault()
+  const targetId = dragHoverTargetId.value
+  const shouldBind = pointerDrag.started && Boolean(targetId)
+  detachPointerDragListeners()
+  if (shouldBind) {
+    void finishPointerBinding(targetId)
+    return
+  }
+  resetPointerDrag()
+}
+
+function handleExtensionPointerCancel(event: PointerEvent): void {
+  if (!pointerDrag.active || event.pointerId !== pointerDrag.pointerId) return
+  detachPointerDragListeners()
+  resetPointerDrag()
+}
+
+async function finishPointerBinding(targetId: string): Promise<void> {
+  try {
+    await handleWheelDrop(targetId)
+  } finally {
+    resetPointerDrag()
+  }
+}
+
+function detachPointerDragListeners(): void {
+  window.removeEventListener('pointermove', handleExtensionPointerMove)
+  window.removeEventListener('pointerup', handleExtensionPointerUp)
+  window.removeEventListener('pointercancel', handleExtensionPointerCancel)
+}
+
+function resetPointerDrag(): void {
+  document.body.classList.remove('is-extension-pointer-dragging')
+  dragHoverTargetId.value = ''
+  finishExtensionDrag()
+  pointerDrag.active = false
+  pointerDrag.started = false
+  pointerDrag.pointerId = -1
+  pointerDrag.identifier = ''
+  pointerDrag.name = ''
 }
 
 function handlePickerPointerDown(event: PointerEvent): void {
@@ -514,6 +586,11 @@ onMounted(() => {
     pickerPosition.value = selectedIndex
     scrollToWheelIndex(selectedIndex, 'auto')
   })
+})
+
+onBeforeUnmount(() => {
+  detachPointerDragListeners()
+  document.body.classList.remove('is-extension-pointer-dragging')
 })
 </script>
 
@@ -612,6 +689,7 @@ h2 { font-size: 20px; }
   border: 1px solid var(--app-border);
   border-radius: 16px;
   cursor: grab;
+  user-select: none;
   background: var(--app-surface);
   transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease, opacity .2s ease;
 }
@@ -970,8 +1048,11 @@ h2 { font-size: 20px; }
 :global(.extension-drag-preview) {
   position: fixed;
   z-index: 100000;
-  top: -1000px;
-  left: -1000px;
+  top: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
   max-width: 240px;
   overflow: hidden;
   padding: 10px 14px;
@@ -983,6 +1064,21 @@ h2 { font-size: 20px; }
   white-space: nowrap;
   background: var(--app-text);
   box-shadow: 0 12px 30px color-mix(in srgb, var(--app-text) 20%, transparent);
+  pointer-events: none;
+  will-change: transform;
+}
+:global(.extension-drag-preview span) {
+  font-size: 9px;
+  letter-spacing: .1em;
+  opacity: .6;
+}
+:global(.extension-drag-preview strong) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+:global(body.is-extension-pointer-dragging) {
+  cursor: grabbing !important;
+  user-select: none !important;
 }
 
 @keyframes dropTargetBreath {
