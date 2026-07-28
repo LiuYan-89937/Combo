@@ -61,7 +61,6 @@ class AgentAssemblyCompiler:
             render_manifest=resolved_render_manifest,
             system_wrapper_ids=runtime_build.system_wrappers if runtime_build else system_wrapper_ids,
             node_providers=runtime_build.node_providers if runtime_build else None,
-            state_contracts=runtime_build.state_contracts if runtime_build else None,
         )
         compiled_app.metadata["agent_id"] = spec.agent.id
         return CompiledAgentAssembly(

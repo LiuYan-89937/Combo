@@ -1,6 +1,6 @@
 ---
 name: 08-knowledge-system
-description: Guides knowledge contract and package knowledge assets for produced agents.
+description: Guides package knowledge assets for produced agents.
 metadata:
   system_id: knowledge_system
   stage_order: 8
@@ -9,7 +9,7 @@ metadata:
 # Knowledge System
 
 ## Role
-Guides knowledge contract and package knowledge assets for produced agents.
+Guides package knowledge assets for produced agents.
 
 ## Baseline Package Assumption
 - The workspace starts with a scaffolded empty AgentPackage: required files, required contracts, and package asset directories already exist.
@@ -21,12 +21,11 @@ Guides knowledge contract and package knowledge assets for produced agents.
 ## When To Use This Skill
 - The agent explicitly needs fixed, authoritative reference material bundled with the AgentPackage and retrieved or cited at runtime.
 - A package tool/node depends on knowledge assets.
-- Validator reports knowledge contract issues.
+- Validator reports package knowledge asset issues.
 
 Do not use this skill merely because an Agent has an identity, persona, system prompt, tool instructions, or because the user may upload knowledge after publication.
 
 ## Focus Files
-- `contracts/knowledge.json`
 - `knowledge/`
 
 ## Manufacturing Protocol
@@ -42,7 +41,6 @@ Do not use this skill merely because an Agent has an identity, persona, system p
 - Identity, persona, tone, behavior rules, system prompts, tool instructions, schemas, manufacturing guidance, secrets, and dynamic external data do not belong in knowledge/.
 - Valid sources, in priority order, are user-provided material approved for bundling, project-owned reference assets, distributable Skill assets, and public sources explicitly authorized by the user.
 - Use runtime resources, mounted knowledge sources, APIs, databases, or search tools for external, mutable, user-managed, or post-publication material.
-- Update the knowledge contract only when the package includes real knowledge assets or retrieval behavior.
 - Before writing, verify that the material is authoritative, distributable, stable enough to bundle, and genuinely needs retrieval or citation rather than prompt/config placement.
 - Write confirmed package knowledge with create_agent_authoring(action="upsert_knowledge_file", knowledge_path=..., knowledge_content=..., knowledge_purpose=..., knowledge_source={source_kind, reference, distributable: true}) instead of generic filesystem write.
 - Remove an invalid or obsolete package knowledge file with create_agent_authoring(action="remove_knowledge_file", knowledge_path=...); this also removes its source record.
@@ -69,6 +67,3 @@ Repair references:
 - `references/knowledge_system.repair_hints.md`
 - `references/knowledge_system.common_errors.md`
 - `references/knowledge_system.validator_scope.md`
-
-Schema reference, last resort:
-- `references/knowledge_system.schema.json`

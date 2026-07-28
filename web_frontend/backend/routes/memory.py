@@ -14,8 +14,8 @@ from agent_factory.memory_system.retrieval import retrieve_memory_context
 from agent_factory.memory_system.schema import MemoryContextPack
 from agent_factory.memory_system.store_index import build_memory_store_index
 from agent_factory.runtime_contracts.builder import runtime_build_context
-from agent_factory.runtime_contracts.memory_config import resolve_memory_system_config
-from agent_factory.runtime_contracts.schema import MemoryContract
+from agent_factory.runtime_contracts.memory_config import memory_system_config_from_context
+from agent_factory.runtime_contracts.schema import ContextContract
 from agent_factory.runtime_kernel.persistence import LangGraphStoreConfig, LangGraphStoreFactory
 from web_frontend.backend.runtime_bridge import RuntimeBridge
 
@@ -142,13 +142,15 @@ def _build_existing_store(*, config: MemorySystemConfig, store_config: LangGraph
 
 
 def _agent_memory_config(*, package: Any, runtime_root: Path) -> MemorySystemConfig:
-    payload = package.contracts.get("memory")
-    contract = MemoryContract.model_validate(payload or {})
+    payload = package.contracts.get("context")
+    contract = ContextContract.model_validate(payload or {})
     context = runtime_build_context(package, runtime_root=runtime_root)
-    config = contract.config.memory_system
-    if not contract.enabled:
-        config = config.model_copy(update={"enabled": False}, deep=True)
-    return resolve_memory_system_config(config, context)
+    config = memory_system_config_from_context(contract.config, context)
+    return (
+        config
+        if contract.enabled
+        else config.model_copy(update={"enabled": False}, deep=True)
+    )
 
 
 def _pack_response(pack: MemoryContextPack, *, package_id: str | None) -> dict[str, Any]:

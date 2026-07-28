@@ -18,7 +18,7 @@ from agent_factory.knowledge_system.identifiers import stable_source_id
 from agent_factory.knowledge_system.loaders import discover_source, json_hash, sha256_text
 from agent_factory.knowledge_system.planner import plan_knowledge_ingestion
 from agent_factory.knowledge_system.schema import (
-    KnowledgeContractConfig,
+    KnowledgeRuntimeConfig,
     KnowledgeDocument,
     KnowledgeIngestionPlan,
     KnowledgeIngestionJob,
@@ -33,7 +33,7 @@ from agent_factory.knowledge_system.schema import (
 
 @dataclass(slots=True)
 class KnowledgeRuntime:
-    config: KnowledgeContractConfig
+    config: KnowledgeRuntimeConfig
     owner_type: str
     owner_id: str
     catalog: KnowledgeCatalog

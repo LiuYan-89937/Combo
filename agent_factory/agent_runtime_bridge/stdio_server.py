@@ -874,9 +874,7 @@ def _resume_interrupt(
 
 
 def _list_sessions(normalizer: RuntimeEventNormalizer, package: LoadedAgentPackage) -> int:
-    session_contract = package.contracts.get("session") if isinstance(package.contracts, dict) else None
-    session_config = session_contract.get("config", {}) if isinstance(session_contract, dict) else {}
-    session_root = _runtime_path(str(session_config.get("session_root") or ".agent_runtime/sessions"))
+    session_root = RUNTIME_ROOT / "sessions"
     sessions = []
     for path in sorted(session_root.glob("*.json")):
         try:

@@ -234,6 +234,9 @@ interface LocalModelProfileBase {
     batch_generation: boolean
     async_job: boolean
   }
+  settings: {
+    temperature?: number | null
+  }
   limits: {
     max_input_tokens?: number | null
     max_output_tokens?: number | null

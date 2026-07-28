@@ -629,13 +629,7 @@ def _runtime_path_report(
 
 
 RUNTIME_CONTRACT_PATH_FIELDS: dict[str, tuple[str, ...]] = {
-    "knowledge": ("config.root", "config.catalog_path", "config.rag_store.path"),
-    "memory": (
-        "config.memory_system.store.path",
-        "config.memory_system.background.journal_root",
-    ),
     "scheduler": ("config.store_path",),
-    "session": ("config.session_root", "config.checkpoint_path"),
     "tools": ("config.instance_extension_root",),
 }
 
@@ -1081,8 +1075,6 @@ def _json_schema_repair_hint(relative_path: str) -> str:
         return "Regenerate runtime resource descriptors through create_agent_authoring(action='upsert_resources') instead of hand-editing resource contract shape."
     if relative_path == "contracts/scheduler_seed.json":
         return "Regenerate scheduler seeds through create_agent_authoring(action='upsert_scheduler_seed') instead of hand-editing scheduler seed contract shape."
-    if relative_path == "contracts/state.json":
-        return "Regenerate package state through create_agent_authoring(action='upsert_state') so contract, schema, and initial state stay aligned."
     if relative_path.startswith("contracts/"):
         contract_key = Path(relative_path).stem
         return f"Reset scaffold-owned contract shape with create_agent_authoring(action='reset_contract', contract_key='{contract_key}') unless a capability-specific authoring action applies."
@@ -2215,11 +2207,8 @@ def _recommended_resources(skill: str, target_files: list[str]) -> list[str]:
         ]
     artifact = {
         "02-model-system": "model_system",
-        "03-session-system": "session_system",
-        "04-state-system": "state_system",
         "05-resources-system": "resources_system",
         "06-context-system": "context_system",
-        "07-memory-system": "memory_system",
         "08-knowledge-system": "knowledge_system",
         "09-tools-system": "tools_system",
         "14-scheduler-system": "scheduler_system",
@@ -2234,12 +2223,9 @@ def _skill_for_targets(target_files: list[str]) -> str:
     pairs = [
         ("contracts/model", "02-model-system"),
         ("contracts/dependencies", "02-model-system"),
-        ("contracts/session", "03-session-system"),
-        ("contracts/state", "04-state-system"),
         ("contracts/resources", "05-resources-system"),
         ("contracts/context", "06-context-system"),
-        ("contracts/memory", "07-memory-system"),
-        ("contracts/knowledge", "08-knowledge-system"),
+        ("knowledge/", "08-knowledge-system"),
         ("contracts/tools", "10-package-tool-system"),
         ("contracts/scheduler_seed", "15-scheduler-seed-system"),
         ("contracts/scheduler", "14-scheduler-system"),

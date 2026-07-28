@@ -59,16 +59,15 @@ def resolve_chat_model_profile(
     settings = settings_from_local_profile(profile, role=role)
     settings = replace(
         settings,
-        temperature=overrides.temperature,
-        timeout_seconds=overrides.timeout_seconds or settings.timeout_seconds,
-        max_output_tokens=overrides.max_output_tokens or settings.max_output_tokens,
-        max_input_tokens=overrides.max_input_tokens or settings.max_input_tokens,
-        multimodal=settings.multimodal if overrides.multimodal is None else overrides.multimodal,
-        reasoning=settings.reasoning if overrides.reasoning is None else overrides.reasoning,
-        structured_output_method=(
-            settings.structured_output_method
-            if overrides.structured_output_method is None
-            else overrides.structured_output_method
+        temperature=(
+            overrides.temperature
+            if overrides.temperature is not None
+            else profile.settings.temperature
+        ),
+        max_output_tokens=(
+            overrides.max_output_tokens
+            if overrides.max_output_tokens is not None
+            else settings.max_output_tokens
         ),
     )
     model = create_chat_model_from_settings(settings)

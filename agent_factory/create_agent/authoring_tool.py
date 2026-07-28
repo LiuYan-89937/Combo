@@ -29,7 +29,6 @@ from agent_factory.runtime_contracts.schema import (
     ResourceDescriptor,
     ResourcesContract,
     SchedulerSeedContract,
-    StateContract,
     ToolsContract,
 )
 from agent_factory.scheduler_system.schema import SchedulerSeedPlan
@@ -64,7 +63,6 @@ CREATE_AGENT_AUTHORING_ACTIONS = {
     "upsert_package_tool",
     "upsert_resources",
     "upsert_scheduler_seed",
-    "upsert_state",
 }
 SUPPORTED_PATTERN_IDS = {"react_agent", "plan_and_execute"}
 RESETTABLE_CONTRACT_KEYS = frozenset(base_contract_paths())
@@ -193,10 +191,6 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                     "required": ["source_kind", "reference", "distributable"],
                     "additionalProperties": False,
                 },
-                "state_namespace": {"type": "string"},
-                "state_schema": {"type": "object", "additionalProperties": True},
-                "initial_state": {"type": "object", "additionalProperties": True},
-                "writable_node_ids": {"type": "array", "items": {"type": "string"}},
                 "contract_key": {"type": "string", "enum": sorted(RESETTABLE_CONTRACT_KEYS)},
                 "bindings": {
                     "type": "object",
@@ -214,25 +208,7 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                                     "type": "object",
                                     "properties": {
                                         "temperature": {"type": "number", "minimum": 0},
-                                        "timeout_seconds": {"type": "number", "exclusiveMinimum": 0},
                                         "max_output_tokens": {"type": "integer", "minimum": 1},
-                                        "max_input_tokens": {"type": "integer", "minimum": 1},
-                                        "multimodal": {"type": "boolean"},
-                                        "structured_output_method": {
-                                            "type": "string",
-                                            "enum": ["function_calling", "json_mode", "json_schema"],
-                                        },
-                                        "reasoning": {
-                                            "type": "object",
-                                            "properties": {
-                                                "enabled": {"type": "boolean"},
-                                                "effort": {"type": "string"},
-                                                "summary": {"type": "string"},
-                                                "budget_tokens": {"type": "integer", "minimum": 1},
-                                                "send_history": {"type": "boolean"},
-                                            },
-                                            "additionalProperties": False,
-                                        },
                                     },
                                     "additionalProperties": False,
                                 },
@@ -263,25 +239,7 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                                 "type": "object",
                                 "properties": {
                                     "temperature": {"type": "number", "minimum": 0},
-                                    "timeout_seconds": {"type": "number", "exclusiveMinimum": 0},
                                     "max_output_tokens": {"type": "integer", "minimum": 1},
-                                    "max_input_tokens": {"type": "integer", "minimum": 1},
-                                    "multimodal": {"type": "boolean"},
-                                    "structured_output_method": {
-                                        "type": "string",
-                                        "enum": ["function_calling", "json_mode", "json_schema"],
-                                    },
-                                    "reasoning": {
-                                        "type": "object",
-                                        "properties": {
-                                            "enabled": {"type": "boolean"},
-                                            "effort": {"type": "string"},
-                                            "summary": {"type": "string"},
-                                            "budget_tokens": {"type": "integer", "minimum": 1},
-                                            "send_history": {"type": "boolean"},
-                                        },
-                                        "additionalProperties": False,
-                                    },
                                 },
                                 "additionalProperties": False,
                             },
@@ -357,10 +315,6 @@ def build_create_agent_authoring_tool_spec() -> ToolSpec:
                             "knowledge_source",
                         ]
                     },
-                },
-                {
-                    "if": {"properties": {"action": {"const": "upsert_state"}}},
-                    "then": {"required": ["state_namespace", "state_schema", "initial_state", "writable_node_ids"]},
                 },
                 {"if": {"properties": {"action": {"const": "reset_contract"}}}, "then": {"required": ["contract_key"]}},
                 {
@@ -533,7 +487,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     elif action == "materialize_mcp_inheritance":
         result = _materialize_mcp_inheritance(workspace)
     else:
-        result = _upsert_state(workspace, arguments)
+        raise ValueError(f"unsupported create-agent authoring action: {action}")
     if result["changed_files"]:
         sync_authoring_stage(workspace, action)
     return tool_envelope(result, evidence={"authoring": result}, summary=result["summary"])
@@ -1151,39 +1105,6 @@ def _remove_empty_knowledge_directories(path: Path, *, root: Path) -> None:
         current = current.parent
 
 
-def _upsert_state(workspace: CreateAgentWorkspace, arguments: dict[str, Any]) -> dict[str, Any]:
-    namespace = _state_namespace(str(arguments.get("state_namespace") or "package"))
-    schema = _required_dict(arguments, "state_schema")
-    initial_state = _required_dict(arguments, "initial_state")
-    writable_node_ids = _string_list(arguments.get("writable_node_ids"))
-    schema_relative = f"state/{namespace}.schema.json"
-    initial_relative = f"state/{namespace}.initial.json"
-    contract = StateContract.model_validate(
-        {
-            "type": "state",
-            "version": "state_contract.v0",
-            "enabled": True,
-            "config": {
-                "namespace": namespace,
-                "schema_path": schema_relative,
-                "initial_state_path": initial_relative,
-                "writable_node_ids": writable_node_ids,
-            },
-        }
-    )
-    contract_path = workspace.root / "contracts" / "state.json"
-    schema_path = workspace.root / schema_relative
-    initial_path = workspace.root / initial_relative
-    _write_json(contract_path, contract.model_dump(mode="json"))
-    _write_json(schema_path, schema)
-    _write_json(initial_path, initial_state)
-    return _result(
-        "upsert_state",
-        ["contracts/state.json", schema_relative, initial_relative],
-        f"Upserted package state namespace {namespace}.",
-    )
-
-
 def _reset_contract(workspace: CreateAgentWorkspace, arguments: dict[str, Any]) -> dict[str, Any]:
     contract_key = str(arguments.get("contract_key") or "").strip()
     if contract_key not in RESETTABLE_CONTRACT_KEYS:
@@ -1464,16 +1385,6 @@ def _knowledge_relative_path(value: str) -> str:
     if any(part in {"", ".", ".."} for part in resolved.parts):
         raise ValueError("knowledge_path must not contain empty, current, or parent directory segments")
     return resolved.as_posix()
-
-
-def _state_namespace(value: str) -> str:
-    namespace = value.strip() or "package"
-    path = Path(namespace)
-    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
-        raise ValueError("state_namespace must be a simple package state namespace")
-    if "/" in namespace or "\\" in namespace:
-        raise ValueError("state_namespace must not contain path separators")
-    return namespace
 
 
 def _package_tool_id(value: str) -> str:

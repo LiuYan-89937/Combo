@@ -22,19 +22,6 @@
               "default": null,
               "title": "Temperature"
             },
-            "timeout_seconds": {
-              "anyOf": [
-                {
-                  "exclusiveMinimum": 0,
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Timeout Seconds"
-            },
             "max_output_tokens": {
               "anyOf": [
                 {
@@ -47,59 +34,6 @@
               ],
               "default": null,
               "title": "Max Output Tokens"
-            },
-            "max_input_tokens": {
-              "anyOf": [
-                {
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Max Input Tokens"
-            },
-            "multimodal": {
-              "anyOf": [
-                {
-                  "type": "boolean"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Multimodal"
-            },
-            "reasoning": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/ModelReasoningSettings"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
-            },
-            "structured_output_method": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "function_calling",
-                    "json_mode",
-                    "json_schema"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Structured Output Method"
             }
           },
           "title": "ModelBindingRuntimeOverrides",
@@ -173,72 +107,6 @@
             }
           },
           "title": "ModelProfileBinding",
-          "type": "object"
-        },
-        "ModelReasoningSettings": {
-          "properties": {
-            "enabled": {
-              "anyOf": [
-                {
-                  "type": "boolean"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Enabled"
-            },
-            "effort": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Effort"
-            },
-            "summary": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Summary"
-            },
-            "budget_tokens": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Budget Tokens"
-            },
-            "send_history": {
-              "anyOf": [
-                {
-                  "type": "boolean"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "title": "Send History"
-            }
-          },
-          "title": "ModelReasoningSettings",
           "type": "object"
         },
         "ModelToolBinding": {

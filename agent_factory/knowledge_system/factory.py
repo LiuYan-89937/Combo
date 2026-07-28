@@ -6,7 +6,7 @@ from pathlib import Path
 from agent_factory.knowledge_system.catalog import KnowledgeCatalog
 from agent_factory.knowledge_system.events import KnowledgeEventSink
 from agent_factory.knowledge_system.runtime import KnowledgeIngestionWorker, KnowledgeRuntime
-from agent_factory.knowledge_system.schema import KnowledgeContractConfig
+from agent_factory.knowledge_system.schema import KnowledgeRuntimeConfig
 from agent_factory.knowledge_system.store_index import build_knowledge_store_index
 from agent_factory.runtime_kernel.persistence import LangGraphStoreConfig, LangGraphStoreFactory, LangGraphStoreHandle
 
@@ -20,7 +20,7 @@ class KnowledgeRuntimeAssembly:
 
 def build_knowledge_runtime(
     *,
-    config: KnowledgeContractConfig,
+    config: KnowledgeRuntimeConfig,
     owner_type: str,
     owner_id: str,
     event_sink: KnowledgeEventSink | None = None,

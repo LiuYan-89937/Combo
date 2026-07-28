@@ -59,12 +59,24 @@ export const agentPackagesApi = {
         body: JSON.stringify({ description }),
       },
     ),
-  updateMemoryConfig: (packageId: string, writeIntervalTurns: number) =>
+  updateContextConfig: (packageId: string, config: Record<string, unknown>) =>
     requestJson<AgentPackageConfigurationResponse>(
-      `/api/agent-packages/${encodeURIComponent(packageId)}/memory-config`,
+      `/api/agent-packages/${encodeURIComponent(packageId)}/context-config`,
       {
         method: 'PATCH',
-        body: JSON.stringify({ write_interval_turns: writeIntervalTurns }),
+        body: JSON.stringify({ config }),
+      },
+    ),
+  updateModelOverrides: (
+    packageId: string,
+    bindings: Record<string, Record<string, number | null>>,
+    toolBindings: Record<string, Record<string, number | null>>,
+  ) =>
+    requestJson<AgentPackageConfigurationResponse>(
+      `/api/agent-packages/${encodeURIComponent(packageId)}/model-overrides`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ bindings, tool_bindings: toolBindings }),
       },
     ),
   resources: (packageId: string) =>

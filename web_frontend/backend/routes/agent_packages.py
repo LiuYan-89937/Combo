@@ -117,13 +117,33 @@ def create_agent_package_router(runtime_bridge: RuntimeBridge, logger: logging.L
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"package": summary}
 
-    @router.patch("/{package_id}/memory-config")
-    def update_agent_package_memory_config(package_id: str, payload: dict[str, Any]):
+    @router.patch("/{package_id}/context-config")
+    def update_agent_package_context_config(package_id: str, payload: dict[str, Any]):
+        config = payload.get("config")
+        if not isinstance(config, dict):
+            raise HTTPException(status_code=400, detail="context config is required")
         try:
-            write_interval_turns = _validated_memory_write_interval(payload)
-            summary = AgentPackageRuntimeManager().update_memory_config(
+            summary = AgentPackageRuntimeManager().update_context_config(
                 package_id,
-                write_interval_turns=write_interval_turns,
+                config=config,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"package": summary}
+
+    @router.patch("/{package_id}/model-overrides")
+    def update_agent_package_model_overrides(package_id: str, payload: dict[str, Any]):
+        bindings = payload.get("bindings")
+        tool_bindings = payload.get("tool_bindings")
+        if not isinstance(bindings, dict) or not isinstance(tool_bindings, dict):
+            raise HTTPException(status_code=400, detail="model and model tool overrides are required")
+        try:
+            summary = AgentPackageRuntimeManager().update_model_overrides(
+                package_id,
+                bindings=bindings,
+                tool_bindings=tool_bindings,
             )
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -196,17 +216,6 @@ def create_agent_package_router(runtime_bridge: RuntimeBridge, logger: logging.L
 def _is_initialize_status_event(item: dict[str, Any], *, package_id: str) -> bool:
     payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
     return str(payload.get("package_id") or "").strip() == package_id
-
-
-def _validated_memory_write_interval(payload: dict[str, Any]) -> int:
-    if "write_interval_turns" not in payload:
-        raise ValueError("write_interval_turns is required")
-    value = payload["write_interval_turns"]
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError("write_interval_turns must be an integer")
-    if value < 1 or value > 1000:
-        raise ValueError("write_interval_turns must be between 1 and 1000")
-    return value
 
 
 def unlink_file(path: Path) -> None:

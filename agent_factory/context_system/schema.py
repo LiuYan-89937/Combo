@@ -2,46 +2,57 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-ContextSourceId = Literal["cross_session_memory"]
 ContextCandidateKind = Literal["memory"]
 ContextEventStatus = Literal["started", "completed", "failed", "skipped"]
-DEFAULT_COMPRESSION_TRIGGER_TOKEN_THRESHOLD = 200000
 
 
 class CompressionPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
-    trigger_token_threshold: int = Field(
-        default=DEFAULT_COMPRESSION_TRIGGER_TOKEN_THRESHOLD,
+    trigger_token_threshold: int | None = Field(
+        default=None,
         ge=1000,
-        description="Legacy package value retained for contract compatibility; runtime uses the active model profile.",
+        description="Optional Agent override. Null follows the active model profile.",
     )
     keep_recent_messages: int = Field(default=12, ge=2, le=128)
 
 
-class RetrievalPolicy(BaseModel):
+class CrossSessionMemoryPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
-    source_ids: list[ContextSourceId] = Field(
-        default_factory=lambda: ["cross_session_memory"]
-    )
+    write_enabled: bool = True
+    injection_enabled: bool = True
+    write_interval_turns: int = Field(default=3, ge=1, le=1000)
     max_candidates: int = Field(default=24, ge=1, le=128)
-    min_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    min_score: float = Field(default=0.55, ge=0.0, le=1.0)
+    max_items: int = Field(default=8, ge=1, le=64)
+    max_tokens: int = Field(default=1200, ge=100, le=32000)
+    per_kind_limits: dict[str, int] = Field(
+        default_factory=lambda: {
+            "constraint": 3,
+            "preference": 3,
+            "decision": 2,
+            "fact": 2,
+            "artifact": 1,
+        }
+    )
 
-    @field_validator("source_ids")
+    @field_validator("per_kind_limits")
     @classmethod
-    def _dedupe_sources(cls, value: list[ContextSourceId]) -> list[ContextSourceId]:
-        result: list[ContextSourceId] = []
-        seen: set[str] = set()
-        for item in value:
-            if item not in seen:
-                result.append(item)
-                seen.add(item)
+    def _per_kind_limits_are_valid(cls, value: dict[str, int]) -> dict[str, int]:
+        result: dict[str, int] = {}
+        for raw_kind, raw_limit in value.items():
+            kind = str(raw_kind).strip()
+            if not kind:
+                raise ValueError("per_kind_limits keys must not be empty")
+            if isinstance(raw_limit, bool) or not isinstance(raw_limit, int) or raw_limit < 0:
+                raise ValueError("per_kind_limits values must be non-negative integers")
+            result[kind] = raw_limit
         return result
 
 
@@ -50,38 +61,41 @@ class AssemblyPolicy(BaseModel):
 
     max_items_total: int = Field(default=8, ge=1, le=64)
     max_tokens_total: int = Field(default=1200, ge=100, le=32000)
-    per_source_limits: dict[str, int] = Field(
-        default_factory=lambda: {
-            "cross_session_memory": 4,
-        }
-    )
+    per_source_limits: dict[str, int] = Field(default_factory=dict)
 
 
 class ContextPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    version: Literal["context_policy.v0"] = "context_policy.v0"
+    version: Literal["context_policy.v1"] = "context_policy.v1"
     compression: CompressionPolicy = Field(default_factory=CompressionPolicy)
-    retrieval: RetrievalPolicy = Field(default_factory=RetrievalPolicy)
-    assembly: AssemblyPolicy = Field(default_factory=AssemblyPolicy)
+    cross_session_memory: CrossSessionMemoryPolicy = Field(default_factory=CrossSessionMemoryPolicy)
+
+    def assembly_policy(self) -> AssemblyPolicy:
+        memory = self.cross_session_memory
+        return AssemblyPolicy(
+            max_items_total=memory.max_items,
+            max_tokens_total=memory.max_tokens,
+            per_source_limits={"cross_session_memory": memory.max_items},
+        )
 
 
 class ContextContractConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    version: Literal["context_system.v0"] = "context_system.v0"
+    version: Literal["context_system.v1"] = "context_system.v1"
     enabled: bool = True
     context_window_tokens: int | None = Field(default=None, ge=1000)
     default_policy: ContextPolicy = Field(default_factory=ContextPolicy)
-    node_policies: dict[str, ContextPolicy] = Field(default_factory=dict)
 
-    @field_validator("node_policies")
-    @classmethod
-    def _node_ids_not_empty(cls, value: dict[str, ContextPolicy]) -> dict[str, ContextPolicy]:
-        for node_id in value:
-            if not str(node_id).strip():
-                raise ValueError("node_policies keys must not be empty")
-        return value
+    @model_validator(mode="after")
+    def _explicit_limits_are_consistent(self) -> "ContextContractConfig":
+        if self.context_window_tokens is None:
+            return self
+        threshold = self.default_policy.compression.trigger_token_threshold
+        if threshold is not None and threshold > self.context_window_tokens:
+            raise ValueError("compression threshold exceeds context_window_tokens")
+        return self
 
 
 class ContextQuery(BaseModel):

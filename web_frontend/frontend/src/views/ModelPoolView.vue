@@ -507,6 +507,15 @@
           <n-form-item v-if="profileForm.kind === 'chat'" :label="t('localModel.contextCompressionThreshold')">
             <n-input-number v-model:value="profileForm.context_compression_threshold_tokens" :min="1000" clearable />
           </n-form-item>
+          <n-form-item v-if="profileForm.kind === 'chat'" :label="t('modelPool.temperature')">
+            <n-input-number
+              v-model:value="profileForm.temperature"
+              :min="0"
+              :step="0.1"
+              clearable
+              :placeholder="t('modelPool.providerDefault')"
+            />
+          </n-form-item>
           <n-form-item v-if="profileForm.kind === 'chat' && profileForm.mtp_enabled" :label="t('localModel.mtpMaxDraftTokens')">
             <n-input-number v-model:value="profileForm.mtp_max_draft_tokens" :min="1" :max="32" />
           </n-form-item>
@@ -672,6 +681,7 @@ const profileForm = reactive({
   mtp_min_acceptance_probability: 0, mtp_backend_sampling: true,
   max_input_tokens: null as number | null,
   max_output_tokens: null as number | null, context_compression_threshold_tokens: null as number | null,
+  temperature: null as number | null,
   embedding_dimensions: null as number | null,
   trust_remote_code: false, tool_calling: true, reasoning_supported: false,
   image_input: false,
@@ -919,6 +929,7 @@ function openProfile(item?: LocalModelProfile): void {
     ?? null
   profileForm.max_output_tokens = item?.limits.max_output_tokens ?? null
   profileForm.context_compression_threshold_tokens = item?.limits.context_compression_threshold_tokens ?? null
+  profileForm.temperature = item?.settings.temperature ?? null
   profileForm.embedding_dimensions = item?.embedding_dimensions
     ?? remoteModel?.embedding_dimensions
     ?? directory?.embedding_dimensions
@@ -1072,6 +1083,9 @@ async function saveProfile(): Promise<void> {
         max_output_tokens: profileForm.max_output_tokens,
         timeout_seconds: null,
         context_compression_threshold_tokens: isChat ? profileForm.context_compression_threshold_tokens : null,
+      },
+      settings: {
+        temperature: isChat ? profileForm.temperature : null,
       },
       inference: externalInference.value
         ? {

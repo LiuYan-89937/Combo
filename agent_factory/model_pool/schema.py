@@ -178,6 +178,12 @@ class ModelPoolLimits(BaseModel):
         return self
 
 
+class ModelPoolRuntimeSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    temperature: float | None = Field(default=None, ge=0)
+
+
 class LlamaCppMtpConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -310,6 +316,7 @@ class ModelPoolProfile(BaseModel):
     served_model_name: str
     enabled: bool = True
     capabilities: ModelPoolCapabilities = Field(default_factory=ModelPoolCapabilities)
+    settings: ModelPoolRuntimeSettings = Field(default_factory=ModelPoolRuntimeSettings)
     limits: ModelPoolLimits = Field(default_factory=ModelPoolLimits)
     inference: LocalInferenceConfig
     embedding_dimensions: int | None = Field(default=None, ge=1)
@@ -534,12 +541,7 @@ class ModelBindingRuntimeOverrides(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     temperature: float | None = Field(default=None, ge=0)
-    timeout_seconds: float | None = Field(default=None, gt=0)
     max_output_tokens: int | None = Field(default=None, ge=1)
-    max_input_tokens: int | None = Field(default=None, ge=1)
-    multimodal: bool | None = None
-    reasoning: ModelReasoningSettings | None = None
-    structured_output_method: StructuredOutputMethod | None = None
 
 
 class ModelProfileBinding(BaseModel):

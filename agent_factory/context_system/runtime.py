@@ -21,6 +21,7 @@ from agent_factory.context_system.sources import ContextSource, ContextSourceRun
 from agent_factory.context_system.token_counter import (
     TokenCountResult,
     count_messages_tokens,
+    context_limits_with_overrides,
     model_context_limits,
 )
 from agent_factory.context_system.token_estimation import estimate_text_tokens
@@ -47,9 +48,6 @@ class ContextSystemRuntime:
         self.config = config or ContextContractConfig()
         self.sources = sources or default_context_sources()
 
-    def policy_for_node(self, node_id: str) -> ContextPolicy:
-        return self.config.node_policies.get(node_id) or self.config.default_policy
-
     def prepare_before_model_call(
         self,
         *,
@@ -70,11 +68,14 @@ class ContextSystemRuntime:
                 retrieval_report=retrieval_report,
                 injection_report=injection_report,
             )
-        policy = self.policy_for_node(node_id)
-        active_limits = model_context_limits(services=services, state=state, model_role="main")
-        trigger_limit = active_limits.compression_trigger_tokens
+        policy = self.config.default_policy
+        active_limits = context_limits_with_overrides(
+            model_context_limits(services=services, state=state, model_role="main"),
+            context_window_tokens=self.config.context_window_tokens,
+            compression_trigger_tokens=policy.compression.trigger_token_threshold,
+        )
         compression_policy = policy.compression.model_copy(
-            update={"trigger_token_threshold": trigger_limit}
+            update={"trigger_token_threshold": active_limits.compression_trigger_tokens}
         )
         working_messages = list(messages)
         working_state = state
@@ -205,7 +206,7 @@ class ContextSystemRuntime:
             node_id=node_id,
             query=query,
             candidates=candidates,
-            policy=policy.assembly,
+            policy=policy.assembly_policy(),
         )
         retrieval_report.selected_count = len(frame.items)
         retrieval_report.token_estimate = frame.token_estimate
@@ -274,7 +275,7 @@ class ContextSystemRuntime:
             node_id=stage_id,
             query=query,
             candidates=candidates,
-            policy=policy.assembly,
+            policy=policy.assembly_policy(),
         )
         retrieval_report.selected_count = len(frame.items)
         retrieval_report.token_estimate = frame.token_estimate
@@ -330,24 +331,25 @@ class ContextSystemRuntime:
         runtime_context: ContextSourceRuntime,
     ) -> tuple[list[ContextCandidate], ContextRetrievalReport]:
         started = perf_counter()
-        if not policy.retrieval.enabled:
+        memory_policy = policy.cross_session_memory
+        if not memory_policy.enabled or not memory_policy.injection_enabled:
             return [], ContextRetrievalReport(status="skipped", node_id=query.node_id)
         candidates: list[ContextCandidate] = []
         source_counts: dict[str, int] = {}
         try:
-            for source_id in policy.retrieval.source_ids:
+            for source_id in ("cross_session_memory",):
                 source = self.sources.get(source_id)
                 if source is None:
                     continue
                 items = [
                     item
                     for item in source.retrieve(query=query, runtime_context=runtime_context)
-                    if item.score >= policy.retrieval.min_score
+                    if item.score >= memory_policy.min_score
                 ]
                 source_counts[source_id] = len(items)
                 candidates.extend(items)
-                if len(candidates) >= policy.retrieval.max_candidates:
-                    candidates = candidates[: policy.retrieval.max_candidates]
+                if len(candidates) >= memory_policy.max_candidates:
+                    candidates = candidates[: memory_policy.max_candidates]
                     break
             return (
                 candidates,

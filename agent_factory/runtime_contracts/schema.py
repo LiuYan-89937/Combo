@@ -7,8 +7,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from pydantic.json_schema import SkipJsonSchema
 
 from agent_factory.context_system import ContextContractConfig
-from agent_factory.knowledge_system import KnowledgeContractConfig
-from agent_factory.memory_system import MemorySystemConfig, default_agent_memory_config
 from agent_factory.model_pool.schema import ModelBindingRole, ModelProfileBinding, ModelToolBinding
 from agent_factory.scheduler_system.schema import SchedulerContractConfig, SchedulerSeedContractConfig
 from agent_factory.trace_system.schema import TraceContractConfig
@@ -21,17 +19,14 @@ from agent_factory.runtime_defaults import (
 
 
 PACKAGE_INFRASTRUCTURE_CONTRACTS = frozenset({"artifact", "render", "sandbox", "trace"})
+RETIRED_AGENT_PACKAGE_CONTRACTS = frozenset({"knowledge", "memory", "session", "state"})
 REQUIRED_AGENT_PACKAGE_CONTRACTS = frozenset(
     {
         "context",
         "dependencies",
         "model",
-        "knowledge",
-        "memory",
         "resources",
         "scheduler",
-        "session",
-        "state",
         "tools",
     }
 )
@@ -71,6 +66,12 @@ class AgentPackageManifest(BaseModel):
                 "agent package must not declare runtime infrastructure contracts: "
                 + ", ".join(infrastructure_contracts)
             )
+        retired_contracts = sorted(RETIRED_AGENT_PACKAGE_CONTRACTS & set(self.contracts))
+        if retired_contracts:
+            raise ValueError(
+                "agent package declares retired contracts: "
+                + ", ".join(retired_contracts)
+            )
         for key in (
             "assembly_spec_path",
         ):
@@ -91,23 +92,6 @@ class RuntimeContractEnvelope(BaseModel):
     version: str
     enabled: bool = True
     config: dict[str, Any] = Field(default_factory=dict)
-
-
-class SessionContractConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    session_root: str = ".agent_runtime/sessions"
-    checkpointer_backend: Literal["sqlite", "memory"] = "sqlite"
-    checkpoint_path: str = ".agent_runtime/checkpoints/agent.sqlite"
-
-
-class SessionContract(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    type: Literal["session"] = "session"
-    version: Literal["session_contract.v0"] = "session_contract.v0"
-    enabled: bool = True
-    config: SessionContractConfig = Field(default_factory=SessionContractConfig)
 
 
 class ToolsContractConfig(BaseModel):
@@ -163,26 +147,11 @@ class ToolsContract(BaseModel):
     config: ToolsContractConfig = Field(default_factory=ToolsContractConfig)
 
 
-class MemoryContractConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    memory_system: MemorySystemConfig = Field(default_factory=default_agent_memory_config)
-
-
-class MemoryContract(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    type: Literal["memory"] = "memory"
-    version: Literal["memory_contract.v0"] = "memory_contract.v0"
-    enabled: bool = True
-    config: MemoryContractConfig = Field(default_factory=MemoryContractConfig)
-
-
 class ContextContract(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["context"] = "context"
-    version: Literal["context_contract.v0"] = "context_contract.v0"
+    version: Literal["context_contract.v1"] = "context_contract.v1"
     enabled: bool = True
     config: ContextContractConfig = Field(default_factory=ContextContractConfig)
 
@@ -194,15 +163,6 @@ class TraceContract(BaseModel):
     version: Literal["trace_contract.v0"] = "trace_contract.v0"
     enabled: bool = True
     config: TraceContractConfig = Field(default_factory=TraceContractConfig)
-
-
-class KnowledgeContract(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    type: Literal["knowledge"] = "knowledge"
-    version: Literal["knowledge_contract.v0"] = "knowledge_contract.v0"
-    enabled: bool = True
-    config: KnowledgeContractConfig = Field(default_factory=KnowledgeContractConfig)
 
 
 class ModelContractConfig(BaseModel):
@@ -241,56 +201,6 @@ class ModelContract(BaseModel):
     version: Literal["model_contract.v1"] = "model_contract.v1"
     enabled: bool = True
     config: ModelContractConfig = Field(default_factory=ModelContractConfig)
-
-
-class StateContractConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    namespace: str = "package"
-    schema_path: str = "state/package.schema.json"
-    initial_state_path: str = "state/package.initial.json"
-    writable_node_ids: list[str] = Field(default_factory=list)
-
-    @field_validator("namespace")
-    @classmethod
-    def _namespace_is_valid(cls, value: str) -> str:
-        namespace = str(value).strip()
-        if not namespace:
-            raise ValueError("state namespace must not be empty")
-        if not namespace.replace("_", "").replace(".", "").isalnum() or namespace[0].isdigit():
-            raise ValueError("state namespace must use lowercase alphanumeric, underscore, and dot segments")
-        for part in namespace.split("."):
-            if not part or not part[0].isalpha() or part.lower() != part:
-                raise ValueError("state namespace segments must start with a lowercase letter")
-        return namespace
-
-    @field_validator("schema_path", "initial_state_path")
-    @classmethod
-    def _state_paths_are_relative(cls, value: str) -> str:
-        return _validate_package_relative_path(value, field_name="state contract path")
-
-    @field_validator("writable_node_ids")
-    @classmethod
-    def _node_ids_are_non_empty(cls, value: list[str]) -> list[str]:
-        ids: list[str] = []
-        seen: set[str] = set()
-        for item in value:
-            node_id = str(item).strip()
-            if not node_id:
-                raise ValueError("writable_node_ids must not contain empty values")
-            if node_id not in seen:
-                ids.append(node_id)
-                seen.add(node_id)
-        return ids
-
-
-class StateContract(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    type: Literal["state"] = "state"
-    version: Literal["state_contract.v0"] = "state_contract.v0"
-    enabled: bool = False
-    config: StateContractConfig = Field(default_factory=StateContractConfig)
 
 
 class NodeProviderReference(BaseModel):

@@ -14,13 +14,9 @@
   "contracts": {
     "context": "contracts/context.json",
     "dependencies": "contracts/dependencies.json",
-    "knowledge": "contracts/knowledge.json",
-    "memory": "contracts/memory.json",
     "model": "contracts/model.json",
     "resources": "contracts/resources.json",
     "scheduler": "contracts/scheduler.json",
-    "session": "contracts/session.json",
-    "state": "contracts/state.json",
     "tools": "contracts/tools.json"
   },
   "tools": []

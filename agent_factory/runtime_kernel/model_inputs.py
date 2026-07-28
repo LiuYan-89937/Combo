@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langchain_core.tools import BaseTool
 
 from agent_factory.models.message_layout import system_messages_first
+from agent_factory.models.temporal_context import current_date_system_context
 from agent_factory.knowledge_system.guidance import KNOWLEDGE_GUIDANCE_CONTEXT_KEY
 from agent_factory.runtime_attachments import (
     format_current_user_attachment_manifest,
@@ -110,7 +111,13 @@ def build_runtime_model_input(
         node_id=node_id,
         include_extracted_text_for_images=not image_input_enabled,
     )
-    system_messages: list[Any] = [SystemMessage(content=stable_system)]
+    system_messages: list[Any] = [
+        SystemMessage(content=stable_system),
+        SystemMessage(
+            content=current_date_system_context(),
+            additional_kwargs={"kind": "runtime_temporal_context"},
+        ),
+    ]
     knowledge_guidance = _knowledge_guidance_text(state)
     if knowledge_guidance:
         system_messages.append(

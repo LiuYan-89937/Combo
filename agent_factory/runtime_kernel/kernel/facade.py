@@ -72,7 +72,6 @@ from agent_factory.runtime_kernel.state import (
     RuntimeState,
     ToolState,
 )
-from agent_factory.runtime_kernel.state_contracts import PackageStateManager, StateNamespaceSpec
 from agent_factory.runtime_kernel.background_workers import RuntimeBackgroundWorkerManager
 from agent_factory.runtime_render import RenderManifest
 from agent_factory.runtime_kernel.wrappers.system_registry import DEFAULT_RUNTIME_SYSTEM_WRAPPER_IDS
@@ -87,11 +86,11 @@ class RuntimeKernelFacade:
         builtins_dir: str | Path | None = None,
         session_config: AgentSessionConfig | None = None,
     ) -> "RuntimeKernelFacade":
-        """Build a kernel whose persistent services come from package contracts.
+        """Build a kernel whose persistent services are assembled by the App runtime.
 
-        AgentPackages require session and memory contracts. Their builders own
-        the persistent SQLite handles, so bootstrap services stay in-memory
-        instead of opening duplicate connections to the same package stores.
+        AgentPackage compilation contributes the fixed session infrastructure
+        and the context-owned cross-session memory runtime. Bootstrap services
+        therefore stay in-memory instead of opening duplicate persistent stores.
         """
 
         bootstrap_memory = default_agent_memory_config().model_copy(
@@ -211,7 +210,6 @@ class RuntimeKernelFacade:
         render_manifest: RenderManifest | dict | None = None,
         system_wrapper_ids: list[str] | tuple[str, ...] | None = None,
         node_providers: list[NodeProvider] | tuple[NodeProvider, ...] | None = None,
-        state_contracts: list[StateNamespaceSpec] | tuple[StateNamespaceSpec, ...] | None = None,
     ) -> CompiledKernelApp:
         services = services or self.instance.services
         if services is self.instance.services:
@@ -221,7 +219,6 @@ class RuntimeKernelFacade:
             self.register_node_providers(node_providers)
         pattern = self.instance.pattern_registry.get(pattern_id)
         resolved_render_manifest = resolve_render_manifest(pattern, render_manifest)
-        package_state_manager = PackageStateManager(tuple(state_contracts or ())) if state_contracts else None
         ensure_memory_runtime(services)
         services.validate_required(required_services_for_pattern(pattern))
         return self.instance.compiler.compile(
@@ -230,7 +227,7 @@ class RuntimeKernelFacade:
             services=services,
             render_manifest=resolved_render_manifest,
             system_wrapper_ids=DEFAULT_RUNTIME_SYSTEM_WRAPPER_IDS if system_wrapper_ids is None else system_wrapper_ids,
-            package_state_manager=package_state_manager,
+            package_state_manager=None,
         )
 
     def register_node_providers(self, providers: list[NodeProvider] | tuple[NodeProvider, ...]) -> None:

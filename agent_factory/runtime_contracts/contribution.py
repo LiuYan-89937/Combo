@@ -16,7 +16,6 @@ class RuntimeContribution:
     session_config: dict[str, Any] = field(default_factory=dict)
     resources: dict[str, Any] = field(default_factory=dict)
     tool_runtime_resources: dict[str, Any] = field(default_factory=dict)
-    state_contracts: list[Any] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -26,7 +25,6 @@ class RuntimeBuildResult:
     session_config: dict[str, Any] = field(default_factory=dict)
     background_workers: list[Any] = field(default_factory=list)
     node_providers: list[Any] = field(default_factory=list)
-    state_contracts: list[Any] = field(default_factory=list)
 
 
 class RuntimeContributionMergeError(ValueError):
@@ -42,7 +40,6 @@ class RuntimeContributionMerger:
         background_workers: list[Any] = []
         node_providers: list[Any] = []
         seen_node_impl_ids: set[str] = set()
-        state_contracts: list[Any] = []
         system_wrappers: list[str] = []
         seen_system_wrappers: set[str] = set()
         session_config: dict[str, Any] = {}
@@ -86,7 +83,6 @@ class RuntimeContributionMerger:
                     raise RuntimeContributionMergeError(f"conflicting tool runtime resource: {key}")
                 tool_runtime_resources[key] = value
             background_workers.extend(contribution.background_workers)
-            state_contracts.extend(contribution.state_contracts)
         services["runtime_resources"] = dict(resources)
         services["tool_runtime_resources"] = dict(tool_runtime_resources)
         return RuntimeBuildResult(
@@ -95,7 +91,6 @@ class RuntimeContributionMerger:
             session_config=session_config,
             background_workers=background_workers,
             node_providers=node_providers,
-            state_contracts=state_contracts,
         )
 
 

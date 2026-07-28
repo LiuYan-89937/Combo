@@ -13,16 +13,20 @@ from typing import Any, Iterator
 from uuid import uuid4
 
 from agent_factory.knowledge_system import KnowledgeIngestionWorker, KnowledgeRuntime, build_knowledge_runtime
-from agent_factory.knowledge_system.schema import KnowledgeContractConfig
+from agent_factory.knowledge_system.schema import KnowledgeRuntimeConfig
 from agent_factory.agent_registry import refresh_agent_registry_index
 from agent_factory.collaboration_system.store import CollaborationStore
-from agent_factory.runtime_contracts import ContextContract, LoadedAgentPackage, MemoryContract
+from agent_factory.runtime_contracts import ContextContract, LoadedAgentPackage
 from agent_factory.model_pool.resolver import (
     resolve_available_chat_model,
     resolve_chat_model_binding,
 )
 from agent_factory.model_pool.schema import ModelProfileBinding
-from agent_factory.context_system.token_counter import model_context_limits
+from agent_factory.context_system.token_counter import (
+    ModelContextLimits,
+    context_limits_with_overrides,
+    model_context_limits,
+)
 from agent_factory.runtime_kernel.session import AgentSessionConfig, AgentSessionManager
 from agent_factory.runtime_kernel.persistence import delete_sqlite_checkpoint_thread
 from agent_factory.mcp_gateway import HostMCPGatewayManager
@@ -60,10 +64,8 @@ from agent_factory.factory_graph.frontend_bridge.agent_package_paths import (
     package_runtime_workspace as _package_runtime_workspace,
     host_package_workdir as _host_package_workdir,
     host_session_workdir as _host_session_workdir,
-    host_session_root as _host_session_root,
     is_host_system_package as _is_host_system_package,
     is_system_package as _is_system_package,
-    runtime_contract_path as _runtime_contract_path,
 )
 from agent_factory.factory_graph.frontend_bridge.agent_package_utils import (
     humanize_identifier as _humanize_identifier,
@@ -527,18 +529,35 @@ class AgentPackageRuntimeManager:
         )
         return self.package_summary(package_id)
 
-    def update_memory_config(
+    def update_context_config(
         self,
         package_id: str,
         *,
-        write_interval_turns: int,
+        config: dict[str, Any],
     ) -> dict[str, Any]:
         package_dir = self.repository.package_dir(package_id)
         if not (package_dir / "agent_package.json").is_file():
             raise FileNotFoundError(f"agent package not found: {package_id}")
-        AgentPackageConfigurationEditor().update_memory_write_interval(
+        AgentPackageConfigurationEditor().update_context_config(
             package_dir,
-            write_interval_turns,
+            config,
+        )
+        return self.package_summary(package_id)
+
+    def update_model_overrides(
+        self,
+        package_id: str,
+        *,
+        bindings: dict[str, Any],
+        tool_bindings: dict[str, Any],
+    ) -> dict[str, Any]:
+        package_dir = self.repository.package_dir(package_id)
+        if not (package_dir / "agent_package.json").is_file():
+            raise FileNotFoundError(f"agent package not found: {package_id}")
+        AgentPackageConfigurationEditor().update_model_overrides(
+            package_dir,
+            bindings=bindings,
+            tool_bindings=tool_bindings,
         )
         return self.package_summary(package_id)
 
@@ -871,19 +890,17 @@ class AgentPackageRuntimeManager:
         background: bool = False,
     ) -> KnowledgeRuntime:
         package = self.load_package(package_id)
-        contract = package.contracts.get("knowledge") if isinstance(package.contracts, dict) else None
-        config_payload = contract.get("config", {}) if isinstance(contract, dict) else {}
-        config = KnowledgeContractConfig.model_validate(config_payload or {})
         runtime_root = _host_runtime_root(package_id)
-        config = config.model_copy(
+        defaults = KnowledgeRuntimeConfig()
+        knowledge_root = runtime_root / "knowledge"
+        config = defaults.model_copy(
             update={
-                "root": str(_runtime_contract_path(runtime_root, config.root)),
-                "catalog_path": str(_runtime_contract_path(runtime_root, config.catalog_path)),
-                "rag_store": config.rag_store.model_copy(
-                    update={"path": str(_runtime_contract_path(runtime_root, config.rag_store.path))}
+                "root": str(knowledge_root),
+                "catalog_path": str(knowledge_root / "catalog" / "knowledge.sqlite"),
+                "rag_store": defaults.rag_store.model_copy(
+                    update={"path": str(knowledge_root / "catalog" / "knowledge_store.sqlite")}
                 ),
             },
-            deep=True,
         )
         if not background:
             return build_knowledge_runtime(
@@ -1237,13 +1254,13 @@ class AgentPackageRuntimeManager:
                 "agent_id": package.assembly_spec.agent.id,
                 "agent_name": package.assembly_spec.agent.name,
                 "agent_description": package.assembly_spec.agent.description,
+                "runtime_pattern_id": package.assembly_spec.runtime.pattern_id,
                 "status": str(report.get("status") or "available"),
                 "updated_at": _path_updated_at(manifest_path.parent),
                 "tool_count": len(package.assembly_spec.tools),
                 "session_count": len(sessions),
                 "model_contract": _model_contract_summary(package),
                 "context_contract": _context_contract_summary(manifest_path.parent),
-                "memory_contract": _memory_contract_summary(manifest_path.parent),
                 "resources": self.resource_status(package_id),
                 "environment": _environment_summary(
                     manifest_path.parent,
@@ -1261,11 +1278,11 @@ class AgentPackageRuntimeManager:
                 "is_builtin": package_origin == "system",
                 "capabilities": package_capabilities,
                 "status": "invalid",
+                "runtime_pattern_id": None,
                 "updated_at": _path_updated_at(manifest_path.parent),
                 "error": f"{type(exc).__name__}: {exc}",
                 "model_contract": {"version": "", "bindings": {}, "tool_bindings": {}},
                 "context_contract": _context_contract_summary(manifest_path.parent),
-                "memory_contract": _memory_contract_summary(manifest_path.parent),
                 "extensions": _extensions_summary(package_id),
                 "tools": [],
                 "mcp_servers": [],
@@ -1274,14 +1291,9 @@ class AgentPackageRuntimeManager:
             }
 
     def _session_manager_for_package(self, package_id: str, package: LoadedAgentPackage) -> AgentSessionManager:
-        session_contract = package.contracts.get("session") if isinstance(package.contracts, dict) else None
-        config = session_contract.get("config", {}) if isinstance(session_contract, dict) else {}
-        root = _host_runtime_root(package_id) / "sessions"
-        if isinstance(config, dict):
-            configured = str(config.get("session_root") or "")
-            if configured:
-                root = _host_session_root(package_id=package_id, package=package, configured=configured)
-        return AgentSessionManager(AgentSessionConfig(root=root))
+        return AgentSessionManager(
+            AgentSessionConfig(root=_host_runtime_root(package_id) / "sessions")
+        )
 
     def _list_sessions_for_loaded_package(
         self,
@@ -1910,13 +1922,7 @@ def _delete_agent_session_checkpoint(
     session_id: str,
     thread_id: str,
 ) -> int:
-    session_contract = package.contracts.get("session") if isinstance(package.contracts, dict) else None
-    config = session_contract.get("config", {}) if isinstance(session_contract, dict) else {}
-    backend = str(config.get("checkpointer_backend") or "sqlite").strip().lower()
-    if backend != "sqlite":
-        return 0
-    checkpoint_path = str(config.get("checkpoint_path") or ".agent_runtime/checkpoints/agent.sqlite").strip()
-    path = _runtime_contract_path(_host_runtime_root(package_id), checkpoint_path)
+    path = _host_runtime_root(package_id) / "checkpoints" / "agent.sqlite"
     return 1 if delete_sqlite_checkpoint_thread(path, thread_id) else 0
 
 
@@ -1973,17 +1979,17 @@ def _context_contract_summary(package_root: Path) -> dict[str, Any]:
     resolved = _resolved_main_model_for_package(package_root)
     settings = resolved.settings if resolved is not None else None
     fallback_limits = model_context_limits(model_role="main")
-    context_window = getattr(settings, "max_input_tokens", None) or fallback_limits.context_window_tokens
-    compression_threshold = (
-        getattr(settings, "compression_trigger_tokens", None)
-        or fallback_limits.compression_trigger_tokens
-    )
     base = {
         "version": "",
-        "context_window_tokens": context_window,
-        "context_window_tokens_source": "model_profile",
-        "compression_threshold_tokens": compression_threshold,
-        "compression_threshold_tokens_source": "model_profile",
+        "enabled": False,
+        "config": {},
+        "context_window_tokens": getattr(settings, "max_input_tokens", None) or fallback_limits.context_window_tokens,
+        "context_window_tokens_source": "model_profile" if settings is not None else "system_default",
+        "compression_threshold_tokens": (
+            getattr(settings, "compression_trigger_tokens", None)
+            or fallback_limits.compression_trigger_tokens
+        ),
+        "compression_threshold_tokens_source": "model_profile" if settings is not None else "system_default",
         "model_profile_id": getattr(settings, "profile_id", None),
     }
     if not contract_path.is_file():
@@ -1993,9 +1999,35 @@ def _context_contract_summary(package_root: Path) -> dict[str, Any]:
         validated = ContextContract.model_validate(document)
     except Exception as exc:
         return {**base, "error": f"{type(exc).__name__}: {exc}"}
+    config = validated.config
+    compression_override = config.default_policy.compression.trigger_token_threshold
+    context_window_override = config.context_window_tokens
+    effective_limits = context_limits_with_overrides(
+        ModelContextLimits(
+            context_window_tokens=int(base["context_window_tokens"]),
+            compression_trigger_tokens=int(base["compression_threshold_tokens"]),
+        ),
+        context_window_tokens=context_window_override,
+        compression_trigger_tokens=compression_override,
+    )
+    compression_source = (
+        "agent_override"
+        if compression_override is not None
+        else (
+            "agent_window_limit"
+            if effective_limits.compression_trigger_tokens != base["compression_threshold_tokens"]
+            else base["compression_threshold_tokens_source"]
+        )
+    )
     return {
         **base,
         "version": validated.version,
+        "enabled": validated.enabled and config.enabled,
+        "config": config.model_dump(mode="json", exclude_none=False),
+        "context_window_tokens": effective_limits.context_window_tokens,
+        "context_window_tokens_source": "agent_override" if context_window_override is not None else base["context_window_tokens_source"],
+        "compression_threshold_tokens": effective_limits.compression_trigger_tokens,
+        "compression_threshold_tokens_source": compression_source,
     }
 
 
@@ -2017,40 +2049,6 @@ def _resolved_main_model_for_package(package_root: Path):
         return resolve_available_chat_model("main")
     except Exception:
         return None
-
-
-def _memory_contract_summary(package_root: Path) -> dict[str, Any]:
-    contract_path = package_root / "contracts" / "memory.json"
-    if not contract_path.is_file():
-        return {
-            "available": False,
-            "version": "",
-            "enabled": False,
-            "write_enabled": False,
-            "injection_enabled": False,
-            "write_interval_turns": None,
-        }
-    try:
-        contract = MemoryContract.model_validate(_read_json_object(contract_path))
-    except Exception as exc:
-        return {
-            "available": False,
-            "version": "",
-            "enabled": False,
-            "write_enabled": False,
-            "injection_enabled": False,
-            "write_interval_turns": None,
-            "error": f"{type(exc).__name__}: {exc}",
-        }
-    memory_system = contract.config.memory_system
-    return {
-        "available": True,
-        "version": contract.version,
-        "enabled": contract.enabled and memory_system.enabled,
-        "write_enabled": memory_system.write_enabled,
-        "injection_enabled": memory_system.injection_enabled,
-        "write_interval_turns": memory_system.background.write_interval_turns,
-    }
 
 
 def _hydrate_session_runtime_view(session: dict[str, Any]) -> dict[str, Any]:

@@ -3,7 +3,7 @@ from agent_factory.knowledge_system.factory import KnowledgeRuntimeAssembly, bui
 from agent_factory.knowledge_system.runtime import KnowledgeIngestionWorker, KnowledgeRuntime
 from agent_factory.knowledge_system.schema import (
     KnowledgeChunk,
-    KnowledgeContractConfig,
+    KnowledgeRuntimeConfig,
     KnowledgeDocument,
     KnowledgeIngestionPlan,
     KnowledgeIngestionJob,
@@ -15,7 +15,7 @@ from agent_factory.knowledge_system.schema import (
 __all__ = [
     "KnowledgeCatalog",
     "KnowledgeChunk",
-    "KnowledgeContractConfig",
+    "KnowledgeRuntimeConfig",
     "KnowledgeDocument",
     "KnowledgeIngestionPlan",
     "KnowledgeIngestionJob",

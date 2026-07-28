@@ -8,7 +8,7 @@ Use this reference only when deciding where a requested evolution belongs.
 | Change only dependency metadata | `contracts/dependencies.json` | `create_agent_authoring(action="configure_dependencies")` |
 | Change plan/executor/final answer behavior | `assembly_spec.json` | `create_agent_authoring(action="configure_pattern_assembly")` |
 | Change package identity text | `agent_package.json`, `assembly_spec.json` | `create_agent_authoring(action="set_identity")` |
-| Add explicitly requested, sourced package knowledge | `knowledge/*`, `contracts/knowledge.json` if needed | `create_agent_authoring(action="upsert_knowledge_file", knowledge_purpose=..., knowledge_source=...)` |
+| Add explicitly requested, sourced package knowledge | `knowledge/*` | `create_agent_authoring(action="upsert_knowledge_file", knowledge_purpose=..., knowledge_source=...)` |
 | Remove invalid or obsolete package knowledge | `knowledge/*`, `.factory/knowledge_sources.json` | `create_agent_authoring(action="remove_knowledge_file", knowledge_path=...)` |
 | Add runtime resources | `resources.json`, `contracts/resources.json` | `create_agent_authoring(action="upsert_resources")` |
 | Add scheduler seed | `contracts/scheduler_seed.json` | `create_agent_authoring(action="upsert_scheduler_seed")` |
