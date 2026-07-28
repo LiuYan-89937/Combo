@@ -544,6 +544,21 @@ class AgentPackageRuntimeManager:
         )
         return self.package_summary(package_id)
 
+    def update_scheduler_config(
+        self,
+        package_id: str,
+        *,
+        config: dict[str, Any],
+    ) -> dict[str, Any]:
+        package_dir = self.repository.package_dir(package_id)
+        if not (package_dir / "agent_package.json").is_file():
+            raise FileNotFoundError(f"agent package not found: {package_id}")
+        AgentPackageConfigurationEditor().update_scheduler_config(
+            package_dir,
+            config,
+        )
+        return self.package_summary(package_id)
+
     def update_model_overrides(
         self,
         package_id: str,
@@ -1300,6 +1315,7 @@ class AgentPackageRuntimeManager:
                 "session_count": len(sessions),
                 "model_contract": _model_contract_summary(package),
                 "context_contract": _context_contract_summary(manifest_path.parent),
+                "scheduler_contract": _scheduler_contract_summary(package),
                 "resources": self.resource_status(package_id),
                 "environment": _environment_summary(
                     manifest_path.parent,
@@ -1322,6 +1338,7 @@ class AgentPackageRuntimeManager:
                 "error": f"{type(exc).__name__}: {exc}",
                 "model_contract": {"version": "", "bindings": {}, "tool_bindings": {}},
                 "context_contract": _context_contract_summary(manifest_path.parent),
+                "scheduler_contract": {"version": "", "enabled": False, "config": {}},
                 "extensions": _extensions_summary(package_id),
                 "tools": [],
                 "mcp_servers": [],
@@ -2067,6 +2084,17 @@ def _context_contract_summary(package_root: Path) -> dict[str, Any]:
         "context_window_tokens_source": "agent_override" if context_window_override is not None else base["context_window_tokens_source"],
         "compression_threshold_tokens": effective_limits.compression_trigger_tokens,
         "compression_threshold_tokens_source": compression_source,
+    }
+
+
+def _scheduler_contract_summary(package: LoadedAgentPackage) -> dict[str, Any]:
+    contract = package.contracts.get("scheduler") if isinstance(package.contracts, dict) else None
+    if not isinstance(contract, dict):
+        return {"version": "", "enabled": False, "config": {}}
+    return {
+        "version": str(contract.get("version") or ""),
+        "enabled": bool(contract.get("enabled", True)),
+        "config": contract.get("config") if isinstance(contract.get("config"), dict) else {},
     }
 
 

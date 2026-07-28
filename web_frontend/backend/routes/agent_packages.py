@@ -133,6 +133,22 @@ def create_agent_package_router(runtime_bridge: RuntimeBridge, logger: logging.L
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"package": summary}
 
+    @router.patch("/{package_id}/scheduler-config")
+    def update_agent_package_scheduler_config(package_id: str, payload: dict[str, Any]):
+        config = payload.get("config")
+        if not isinstance(config, dict):
+            raise HTTPException(status_code=400, detail="scheduler config is required")
+        try:
+            summary = AgentPackageRuntimeManager().update_scheduler_config(
+                package_id,
+                config=config,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"package": summary}
+
     @router.patch("/{package_id}/model-overrides")
     def update_agent_package_model_overrides(package_id: str, payload: dict[str, Any]):
         bindings = payload.get("bindings")

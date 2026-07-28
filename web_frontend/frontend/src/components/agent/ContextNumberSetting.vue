@@ -7,6 +7,7 @@
       :max="max"
       :step="step"
       :precision="precision"
+      :disabled="disabled"
       @update:value="updateValue"
     />
   </div>
@@ -24,8 +25,10 @@ const props = withDefaults(defineProps<{
   min: number
   max: number
   step?: number
+  disabled?: boolean
 }>(), {
   step: 1,
+  disabled: false,
 })
 
 const emit = defineEmits<{
