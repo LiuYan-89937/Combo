@@ -87,6 +87,24 @@ export interface AgentPackageContextContractView {
   error?: string | null
 }
 
+export interface AgentPackageSchedulerContractView {
+  version: string
+  enabled: boolean
+  config: {
+    store_backend: 'sqlite'
+    store_path: string
+    timezone: string
+    default_concurrency_policy: 'skip' | 'queue' | 'replace'
+    default_timeout_seconds: number
+    unattended_policy: 'deny_if_approval_required' | 'pause_and_wait_for_user' | 'allow_preapproved_only'
+    default_failure_policy: {
+      enabled: boolean
+      max_consecutive_failures: number
+      action: 'pause'
+    }
+  }
+}
+
 export interface AgentPackageView {
   package_id: string
   package_path?: string
@@ -111,6 +129,7 @@ export interface AgentPackageView {
   sandbox?: Record<string, any>
   model_contract?: AgentPackageModelContractView
   context_contract?: AgentPackageContextContractView
+  scheduler_contract?: AgentPackageSchedulerContractView
   resources?: { key_available: boolean; resources: Array<{ resource_id: string; configured: boolean }>; migration?: { status: string } }
   environment?: { status?: string; image?: string; image_digest?: string; platform?: Record<string, string>; verified_at?: string; error?: string }
   extensions?: Record<string, any>

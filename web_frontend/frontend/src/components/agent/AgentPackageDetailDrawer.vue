@@ -104,6 +104,96 @@
 
         <section class="detail-section">
           <div class="section-header">
+            <div class="section-label">定时任务策略</div>
+            <n-tag size="small" :bordered="false">
+              {{ agentPackage.scheduler_contract?.version || t('common.unknown') }}
+            </n-tag>
+          </div>
+          <div v-if="schedulerDraft" class="context-policy-panel">
+            <div class="context-config-row">
+              <div class="context-config-main">
+                <setting-help-label
+                  label="默认时区"
+                  help="新建定时任务未单独指定时区时使用。已有任务保留创建时记录的时区。"
+                />
+              </div>
+              <div class="scheduler-value-control">
+                <n-select
+                  v-model:value="schedulerDraft.timezone"
+                  :options="timezoneOptions"
+                  filterable
+                />
+              </div>
+            </div>
+            <div class="context-config-row">
+              <div class="context-config-main">
+                <setting-help-label
+                  label="默认并发策略"
+                  help="同一任务上一次运行尚未结束时再次触发的默认处理方式。任务自身配置可以覆盖此值。"
+                />
+              </div>
+              <div class="scheduler-value-control">
+                <n-select
+                  v-model:value="schedulerDraft.default_concurrency_policy"
+                  :options="schedulerConcurrencyOptions"
+                />
+              </div>
+            </div>
+            <context-number-setting
+              v-model="schedulerDraft.default_timeout_seconds"
+              label="默认超时时间（秒）"
+              help="新建任务未单独设置超时时间时使用。"
+              :min="1"
+              :max="86400"
+            />
+            <div class="context-config-row">
+              <div class="context-config-main">
+                <setting-help-label
+                  label="无人值守审批策略"
+                  help="定时任务在没有用户驻留时遇到需要审批的操作所采用的默认策略。"
+                />
+              </div>
+              <div class="scheduler-value-control">
+                <n-select
+                  v-model:value="schedulerDraft.unattended_policy"
+                  :options="schedulerUnattendedOptions"
+                />
+              </div>
+            </div>
+            <div class="context-setting-line">
+              <setting-help-label
+                label="连续失败后自动暂停"
+                help="开启后，任务连续失败达到设定次数时自动暂停，避免持续消耗资源。"
+              />
+              <n-switch v-model:value="schedulerDraft.default_failure_policy.enabled" />
+            </div>
+            <context-number-setting
+              v-model="schedulerDraft.default_failure_policy.max_consecutive_failures"
+              label="连续失败次数"
+              help="达到该次数后自动暂停新建任务；任务自身配置可以覆盖此值。"
+              :min="1"
+              :max="100"
+              :disabled="!schedulerDraft.default_failure_policy.enabled"
+            />
+            <div class="resource-section-hint">
+              这些设置是新建定时任务的默认值。正在运行的 Agent 实例需重新初始化后读取新配置，已有任务不会被批量改写。
+            </div>
+            <div v-if="schedulerConfigError" class="resource-error">{{ schedulerConfigError }}</div>
+            <n-button
+              size="small"
+              type="primary"
+              class="context-save-button"
+              :loading="schedulerConfigSaving"
+              :disabled="!schedulerConfigDirty"
+              @click="saveSchedulerConfig"
+            >
+              {{ t('common.save') }}
+            </n-button>
+          </div>
+        </section>
+
+        <section class="detail-section">
+          <div class="section-header">
             <div class="section-label">{{ t('agentDetail.contextPolicy') }}</div>
             <n-tag size="small" :bordered="false">
               {{ agentPackage.context_contract?.version || t('common.unknown') }}
@@ -504,6 +594,7 @@ import {
   NDrawerContent,
   NEmpty,
   NInputNumber,
+  NSelect,
   NSwitch,
   NTag,
 } from 'naive-ui'
@@ -631,6 +722,19 @@ interface ModelOverrideDraft {
   temperature: number | null
   max_output_tokens: number | null
 }
+interface SchedulerConfigDraft {
+  store_backend: 'sqlite'
+  store_path: string
+  timezone: string
+  default_concurrency_policy: 'skip' | 'queue' | 'replace'
+  default_timeout_seconds: number
+  unattended_policy: 'deny_if_approval_required' | 'pause_and_wait_for_user' | 'allow_preapproved_only'
+  default_failure_policy: {
+    enabled: boolean
+    max_consecutive_failures: number
+    action: 'pause'
+  }
+}
 const toolDescriptionDrafts = ref<Record<string, string>>({})
 const toolDescriptionErrors = ref<Record<string, string>>({})
 const toolDescriptionSavingKey = ref('')
@@ -638,6 +742,9 @@ const memoryKinds: MemoryKind[] = ['constraint', 'preference', 'decision', 'fact
 const contextDraft = ref<ContextConfigDraft | null>(null)
 const contextConfigSaving = ref(false)
 const contextConfigError = ref('')
+const schedulerDraft = ref<SchedulerConfigDraft | null>(null)
+const schedulerConfigSaving = ref(false)
+const schedulerConfigError = ref('')
 const modelOverrideDrafts = ref<Record<string, ModelOverrideDraft>>({})
 const modelToolOverrideDrafts = ref<Record<string, ModelOverrideDraft>>({})
 const modelConfigSaving = ref(false)
@@ -646,6 +753,28 @@ const contextConfigDirty = computed(() => {
   const persisted = props.agentPackage?.context_contract?.config
   if (!contextDraft.value || !persisted) return false
   return JSON.stringify(contextDraft.value) !== JSON.stringify(persisted)
+})
+const schedulerConfigDirty = computed(() => {
+  const persisted = props.agentPackage?.scheduler_contract?.config
+  if (!schedulerDraft.value || !persisted) return false
+  return JSON.stringify(schedulerDraft.value) !== JSON.stringify(persisted)
+})
+const schedulerConcurrencyOptions = [
+  { label: '跳过本次触发', value: 'skip' },
+  { label: '排队等待', value: 'queue' },
+  { label: '替换当前运行', value: 'replace' },
+]
+const schedulerUnattendedOptions = [
+  { label: '需要审批时拒绝执行', value: 'deny_if_approval_required' },
+  { label: '暂停并等待用户', value: 'pause_and_wait_for_user' },
+  { label: '仅允许预先批准的操作', value: 'allow_preapproved_only' },
+]
+const timezoneOptions = computed(() => {
+  const intl = Intl as typeof Intl & { supportedValuesOf?: (key: 'timeZone') => string[] }
+  const current = schedulerDraft.value?.timezone || ''
+  const values = intl.supportedValuesOf?.('timeZone') || []
+  if (current && !values.includes(current)) values.unshift(current)
+  return values.map(value => ({ label: value, value }))
 })
 const modelConfigDirty = computed(() => {
   const bindings = props.agentPackage?.model_contract?.bindings || {}
@@ -667,6 +796,17 @@ watch(
       ? JSON.parse(JSON.stringify(contract)) as ContextConfigDraft
       : null
     contextConfigError.value = ''
+  },
+  { immediate: true },
+)
+
+watch(
+  () => props.agentPackage?.scheduler_contract?.config,
+  (config) => {
+    schedulerDraft.value = config
+      ? JSON.parse(JSON.stringify(config)) as SchedulerConfigDraft
+      : null
+    schedulerConfigError.value = ''
   },
   { immediate: true },
 )
@@ -839,6 +979,21 @@ async function saveContextConfig(): Promise<void> {
     contextConfigError.value = errorMessage(error)
   } finally {
     contextConfigSaving.value = false
+  }
+}
+
+async function saveSchedulerConfig(): Promise<void> {
+  const packageId = props.agentPackage?.package_id
+  if (!packageId || !schedulerDraft.value || !schedulerConfigDirty.value) return
+  schedulerConfigSaving.value = true
+  schedulerConfigError.value = ''
+  try {
+    const response = await agentPackagesApi.updateSchedulerConfig(packageId, schedulerDraft.value)
+    emit('packageUpdated', response.package as AgentPackageView)
+  } catch (error) {
+    schedulerConfigError.value = errorMessage(error)
+  } finally {
+    schedulerConfigSaving.value = false
   }
 }
 
@@ -1124,6 +1279,11 @@ function packageStatusLabel(status: string | null | undefined): string {
 
 .context-value-control :deep(.n-input-number) {
   width: 100%;
+}
+
+.scheduler-value-control {
+  width: 220px;
+  flex: 0 0 220px;
 }
 
 .context-config-row {

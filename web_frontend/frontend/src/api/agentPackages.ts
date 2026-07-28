@@ -67,6 +67,14 @@ export const agentPackagesApi = {
         body: JSON.stringify({ config }),
       },
     ),
+  updateSchedulerConfig: (packageId: string, config: Record<string, unknown>) =>
+    requestJson<AgentPackageConfigurationResponse>(
+      `/api/agent-packages/${encodeURIComponent(packageId)}/scheduler-config`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ config }),
+      },
+    ),
   updateModelOverrides: (
     packageId: string,
     bindings: Record<string, Record<string, number | null>>,

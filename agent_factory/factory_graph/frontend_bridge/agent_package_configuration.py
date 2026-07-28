@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from agent_factory.assembly.schema import AgentAssemblySpec
 from agent_factory.model_pool.schema import ModelBindingRuntimeOverrides
-from agent_factory.runtime_contracts import ContextContract, ModelContract
+from agent_factory.runtime_contracts import ContextContract, ModelContract, SchedulerContract
 from agent_factory.tooling.spec import ToolSpec
 
 
@@ -43,6 +43,13 @@ class AgentPackageConfigurationEditor:
         document = _read_json_document(contract_path)
         document["config"] = config
         validated = ContextContract.model_validate(document).model_dump(mode="json", exclude_none=False)
+        _write_documents_atomically({contract_path: validated})
+
+    def update_scheduler_config(self, package_root: Path, config: dict[str, Any]) -> None:
+        contract_path = package_root / "contracts" / "scheduler.json"
+        document = _read_json_document(contract_path)
+        document["config"] = config
+        validated = SchedulerContract.model_validate(document).model_dump(mode="json", exclude_none=False)
         _write_documents_atomically({contract_path: validated})
 
     def update_model_overrides(
