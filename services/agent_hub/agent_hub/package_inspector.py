@@ -92,6 +92,10 @@ SENSITIVE_KEY_PATTERN = re.compile(
     r"(?i)(?:api[_-]?key|access[_-]?token|auth(?:orization)?|client[_-]?secret|"
     r"password|private[_-]?key|secret)"
 )
+SENSITIVE_ARGUMENT_PATTERN = re.compile(
+    r"(?i)^--?(?:api[_-]?key|access[_-]?token|auth(?:orization)?|client[_-]?secret|"
+    r"password|private[_-]?key|secret)(?:=|$)"
+)
 MAX_JSON_BYTES = 5 * 1024 * 1024
 MAX_SCANNED_TEXT_BYTES = 10 * 1024 * 1024
 MAX_SINGLE_TEXT_SCAN_BYTES = 1 * 1024 * 1024
@@ -225,7 +229,10 @@ def _validate_archive_members(
                 "archive_transient_file",
                 f"transient or secret file is not publishable: {member}",
             )
-        if member.endswith((".log", ".pyc", ".pyo")):
+        if (
+            PurePosixPath(member).name.startswith(".env.")
+            or member.endswith((".key", ".log", ".p12", ".pfx", ".pyc", ".pyo"))
+        ):
             raise PackageInspectionError(
                 "archive_transient_suffix",
                 f"runtime or compiled file is not publishable: {member}",
@@ -509,6 +516,15 @@ def _validate_distribution_extensions(
                     "mcp_host_path",
                     "distributed MCP configuration must not contain cwd",
                 )
+            arguments = server.get("args")
+            if isinstance(arguments, list) and any(
+                isinstance(argument, str) and SENSITIVE_ARGUMENT_PATTERN.match(argument)
+                for argument in arguments
+            ):
+                raise PackageInspectionError(
+                    "mcp_argument_credentials",
+                    "distributed MCP configuration must not contain credential arguments",
+                )
             distribution = (
                 server.get("source", {}).get("distribution")
                 if isinstance(server.get("source"), dict)
@@ -567,7 +583,8 @@ def _validate_resource_defaults(contract: dict[str, Any]) -> None:
 
 def _nested_value_exists(value: Any, field_path: str) -> bool:
     current = value
-    parts = [part for part in field_path.split(".") if part]
+    separator = "/" if field_path.startswith("/") else "."
+    parts = [part for part in field_path.split(separator) if part]
     for part in parts:
         if not isinstance(current, dict) or part not in current:
             return False

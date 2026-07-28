@@ -7,6 +7,7 @@ import re
 import shutil
 import tempfile
 from typing import Any, Iterable
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import zipfile
 
 from agent_factory.create_agent.package_paths import (
@@ -33,7 +34,7 @@ PACKAGE_ASSET_DIRS = frozenset(
 PACKAGE_REPORT_FILENAME = "package_report.json"
 DISTRIBUTION_LOCAL_PARTS = frozenset({".agent_runtime", ".factory", "checkpoints", "logs", "sessions"})
 DISTRIBUTION_LOCAL_NAMES = frozenset({".env", "agent.sqlite", "runtime.sqlite"})
-DISTRIBUTION_LOCAL_SUFFIXES = frozenset({".log", ".pyc", ".pyo"})
+DISTRIBUTION_LOCAL_SUFFIXES = frozenset({".key", ".log", ".p12", ".pfx", ".pyc", ".pyo"})
 TEXT_SUFFIXES = frozenset(
     {
         ".cjs",
@@ -82,6 +83,10 @@ HOST_PATH_PATTERNS = (
 SENSITIVE_KEY_PATTERN = re.compile(
     r"(?i)(?:api[_-]?key|access[_-]?token|auth(?:orization)?|client[_-]?secret|"
     r"password|private[_-]?key|secret)"
+)
+SENSITIVE_ARGUMENT_PATTERN = re.compile(
+    r"(?i)^--?(?:api[_-]?key|access[_-]?token|auth(?:orization)?|client[_-]?secret|"
+    r"password|private[_-]?key|secret)(?:=|$)"
 )
 
 
@@ -242,22 +247,36 @@ def _sanitize_mcp_config(*, source: Path, snapshot: Path) -> None:
         env_keys = sorted(server.env)
         header_keys = sorted(server.headers)
         removed_cwd = bool(server.cwd)
+        args, argument_keys = _sanitize_mcp_arguments(server.args)
+        url, url_keys, url_authority_removed = _sanitize_mcp_url(server.url)
         source_metadata = _without_host_paths(dict(server.source))
-        needs_configuration = bool(env_keys or header_keys or removed_cwd)
+        needs_configuration = bool(
+            env_keys
+            or header_keys
+            or removed_cwd
+            or argument_keys
+            or url_keys
+            or url_authority_removed
+        )
         if needs_configuration:
             source_metadata["distribution"] = {
                 "requires_configuration": True,
                 "env_keys": env_keys,
                 "header_keys": header_keys,
                 "cwd_required": removed_cwd,
+                "argument_keys": argument_keys,
+                "url_query_keys": url_keys,
+                "url_authority_credentials_required": url_authority_removed,
             }
         servers.append(
             server.model_copy(
                 update={
+                    "args": args,
                     "cwd": None,
                     "env": {},
                     "headers": {},
                     "source": source_metadata,
+                    "url": url,
                     "enabled": False if needs_configuration else server.enabled,
                 }
             )
@@ -328,7 +347,8 @@ def _sanitize_resource_defaults(snapshot: Path) -> None:
 
 
 def _remove_nested_value(value: Any, field_path: str) -> None:
-    parts = [part for part in field_path.split(".") if part]
+    separator = "/" if field_path.startswith("/") else "."
+    parts = [part for part in field_path.split(separator) if part]
     current = value
     for part in parts[:-1]:
         if not isinstance(current, dict):
@@ -354,6 +374,57 @@ def _without_host_paths(value: Any) -> Any:
     if isinstance(value, str) and _host_absolute_path(value):
         return None
     return value
+
+
+def _sanitize_mcp_arguments(arguments: list[str]) -> tuple[list[str], list[str]]:
+    sanitized: list[str] = []
+    required_keys: list[str] = []
+    index = 0
+    while index < len(arguments):
+        argument = str(arguments[index])
+        match = SENSITIVE_ARGUMENT_PATTERN.match(argument)
+        if match is None:
+            sanitized.append(argument)
+            index += 1
+            continue
+        key = argument.split("=", 1)[0]
+        if key not in required_keys:
+            required_keys.append(key)
+        if "=" not in argument and index + 1 < len(arguments):
+            index += 2
+        else:
+            index += 1
+    return sanitized, sorted(required_keys)
+
+
+def _sanitize_mcp_url(value: str | None) -> tuple[str | None, list[str], bool]:
+    if not value:
+        return value, [], False
+    parsed = urlsplit(value)
+    authority_credentials_removed = parsed.username is not None or parsed.password is not None
+    host = parsed.hostname or ""
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    netloc = host
+    if parsed.port is not None:
+        netloc = f"{netloc}:{parsed.port}"
+    retained_query: list[tuple[str, str]] = []
+    removed_keys: list[str] = []
+    for key, item in parse_qsl(parsed.query, keep_blank_values=True):
+        if SENSITIVE_KEY_PATTERN.search(key):
+            removed_keys.append(key)
+        else:
+            retained_query.append((key, item))
+    sanitized = urlunsplit(
+        (
+            parsed.scheme,
+            netloc if authority_credentials_removed else parsed.netloc,
+            parsed.path,
+            urlencode(retained_query, doseq=True),
+            parsed.fragment,
+        )
+    )
+    return sanitized, sorted(set(removed_keys)), authority_credentials_removed
 
 
 def _host_absolute_path(value: str) -> bool:
@@ -435,6 +506,7 @@ def _is_distribution_local_path(relative_path: str) -> bool:
     return (
         any(part in DISTRIBUTION_LOCAL_PARTS for part in path.parts)
         or path.name in DISTRIBUTION_LOCAL_NAMES
+        or path.name.startswith(".env.")
         or any(path.name.endswith(suffix) for suffix in DISTRIBUTION_LOCAL_SUFFIXES)
     )
 
