@@ -1,0 +1,33 @@
+[Unit]
+Description=FastAgentHub package validation worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=fastagenthub
+Group=fastagenthub
+WorkingDirectory=/opt/fastagenthub/service
+EnvironmentFile=/etc/fastagenthub.env
+ExecStart=/opt/fastagenthub/venv/bin/python -m agent_hub.worker
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=60
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+ReadWritePaths=/var/lib/fastagenthub
+UMask=0027
+MemoryMax=768M
+TasksMax=128
+
+[Install]
+WantedBy=multi-user.target

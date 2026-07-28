@@ -38,6 +38,12 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/PublishedView.vue'),
   },
   {
+    path: '/agent-hub',
+    name: 'AgentHub',
+    component: () => import('@/views/AgentHubView.vue'),
+    meta: { rightSidebarAvailable: false },
+  },
+  {
     path: '/collaboration',
     name: 'Collaboration',
     component: () => import('@/views/CollaborationView.vue'),

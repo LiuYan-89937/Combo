@@ -557,6 +557,27 @@ class AgentPackageRuntimeManager:
     def export_package_archive(self, package_id: str) -> Path:
         return self.repository.export_user_package_archive(package_id)
 
+    def install_package_archive(
+        self,
+        archive_path: str | Path,
+        *,
+        expected_sha256: str,
+        expected_package_id: str,
+        replace: bool = False,
+    ) -> dict[str, Any]:
+        existing_manifest = self.repository.manifest_path(expected_package_id)
+        if existing_manifest.is_file():
+            self.shutdown_package_instance(expected_package_id)
+            self._close_knowledge_runtime(expected_package_id)
+        package = self.repository.install_user_package_archive(
+            archive_path,
+            expected_sha256=expected_sha256,
+            expected_package_id=expected_package_id,
+            replace=replace,
+        )
+        self._environment_preparation_errors.pop(expected_package_id, None)
+        return self._package_summary(package.manifest_path)
+
     def list_sessions(self, package_id: str) -> list[dict[str, Any]]:
         package = self.load_package(package_id)
         return self._list_sessions_for_loaded_package(package_id, package)

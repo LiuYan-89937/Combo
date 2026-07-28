@@ -5,6 +5,7 @@ import {
   Build,
   Chatbubbles,
   ChatbubbleEllipses,
+  CloudDownload,
   ExtensionPuzzle,
   GitCompare,
   Layers,
@@ -44,6 +45,11 @@ export function sidebarMenuOptions(t: Translate): MenuOption[] {
       label: t('route.agents'),
       key: '/agents',
       icon: renderIcon(Rocket),
+    },
+    {
+      label: t('route.agentHub'),
+      key: '/agent-hub',
+      icon: renderIcon(CloudDownload),
     },
     {
       label: t('route.collaboration'),
