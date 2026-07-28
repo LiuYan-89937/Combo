@@ -425,9 +425,19 @@ async function install(release: AgentHubRelease) {
   }
   installingReleaseId.value = release.release_id
   try {
-    await agentHubApi.install(release.release_id, replace)
+    const result = await agentHubApi.install(release.release_id, replace)
     commands.listAgentPackages()
-    message.success(t('agentHub.installSuccess'))
+    const extensions = result.package.extensions as
+      | { mcp_servers?: Array<{ payload?: { source?: { distribution?: { requires_configuration?: boolean } } } }> }
+      | undefined
+    const requiresMcpConfiguration = extensions?.mcp_servers?.some(
+      server => server.payload?.source?.distribution?.requires_configuration === true,
+    )
+    if (requiresMcpConfiguration) {
+      message.warning(t('agentHub.installRequiresMcpConfiguration'), { duration: 8000 })
+    } else {
+      message.success(t('agentHub.installSuccess'))
+    }
   } catch (error) {
     showError(error)
   } finally {

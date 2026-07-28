@@ -9,8 +9,8 @@ from typing import Any
 
 from agent_factory.assembly.compiler import AgentAssemblyCompiler
 from agent_factory.agent_registry import refresh_agent_registry_index
-from agent_factory.create_agent.models import CreateAgentPublishDecision, PUBLISH_FILE
-from agent_factory.create_agent.package_paths import is_transient_package_path, normalize_package_relative
+from agent_factory.create_agent.models import CreateAgentPublishDecision
+from agent_factory.create_agent.package_paths import is_transient_package_path
 from agent_factory.create_agent.stage_sync import sync_publish_stage
 from agent_factory.create_agent.validation_state import package_fingerprint
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
@@ -18,6 +18,7 @@ from agent_factory.environment_system import EnvironmentResolver
 from agent_factory.resource_system import ResourceStore
 from agent_factory.runtime_contracts import ResourcesContract
 from agent_factory.paths import factory_artifact_path
+from agent_factory.package_distribution import copy_publishable_package
 from agent_factory.runtime_contracts import AgentPackageLoader, RuntimeBuildPlanner
 from agent_factory.runtime_contracts.builtins import default_runtime_contract_registry
 from agent_factory.runtime_kernel.kernel import RuntimeKernelFacade
@@ -29,18 +30,6 @@ from agent_factory.runtime_kernel.persistence import (
 
 
 CREATE_AGENT_PACKAGE_REGISTRY_RESOURCE = "create_agent_package_registry"
-PACKAGE_ASSET_DIRS = {
-    "artifacts",
-    "extensions",
-    "formatters",
-    "knowledge",
-    "patterns",
-    "policies",
-    "prompts",
-    "resources",
-    "strategies",
-    "tools",
-}
 
 
 def confirm_and_publish(
@@ -89,7 +78,7 @@ def publish_workspace(
     staging_root.mkdir(parents=True, exist_ok=True)
     if staging.exists():
         shutil.rmtree(staging)
-    _copy_publishable_package(workspace.root, staging)
+    copy_publishable_package(workspace.root, staging)
     environment_resolver = EnvironmentResolver()
     environment_resolver.materialize_lock_without_installation(staging)
     environment_resolver.require_ready(staging)
@@ -212,80 +201,6 @@ def _safe_child(root: Path, child: str) -> Path:
     except ValueError as exc:
         raise ValueError(f"path escapes package registry: {child}") from exc
     return target
-
-
-def _copy_publishable_package(source: Path, target: Path) -> None:
-    manifest = _read_manifest_payload(source)
-    publishable_files, publishable_dirs = _publishable_paths(manifest)
-    target.mkdir(parents=True, exist_ok=True)
-    for path in sorted(item for item in source.rglob("*") if item.is_file()):
-        relative = path.relative_to(source).as_posix()
-        if not _is_publishable(relative, publishable_files=publishable_files, publishable_dirs=publishable_dirs):
-            continue
-        destination = target / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(path, destination)
-
-
-def _read_manifest_payload(root: Path) -> dict[str, Any]:
-    path = root / "agent_package.json"
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        raise ValueError("agent_package.json must be readable before publish") from exc
-    if not isinstance(payload, dict):
-        raise ValueError("agent_package.json must contain a JSON object")
-    return payload
-
-
-def _publishable_paths(manifest: dict[str, Any]) -> tuple[set[str], set[str]]:
-    files = {"agent_package.json", "environment.lock.json"}
-    dirs: set[str] = set()
-    for key in ("assembly_spec_path",):
-        _add_manifest_file(files, manifest.get(key))
-    contracts = manifest.get("contracts")
-    if isinstance(contracts, dict):
-        for value in contracts.values():
-            _add_manifest_file(files, value)
-    for key in ("bindings", "patterns", "prompts", "tools", "policies", "strategies", "formatters"):
-        value = manifest.get(key)
-        if isinstance(value, list):
-            for item in value:
-                _add_manifest_file(files, item)
-                _add_asset_dir_for_manifest_path(dirs, item)
-        elif isinstance(value, dict):
-            for item in value.values():
-                _add_manifest_file(files, item)
-                _add_asset_dir_for_manifest_path(dirs, item)
-    return files, dirs | PACKAGE_ASSET_DIRS
-
-
-def _add_manifest_file(files: set[str], value: Any) -> None:
-    if not isinstance(value, str) or not value.strip():
-        return
-    relative = normalize_package_relative(value)
-    if relative and not is_transient_package_path(relative):
-        files.add(relative)
-
-
-def _add_asset_dir_for_manifest_path(dirs: set[str], value: Any) -> None:
-    if not isinstance(value, str) or not value.strip():
-        return
-    relative = normalize_package_relative(value)
-    parts = relative.split("/")
-    if parts and parts[0] in PACKAGE_ASSET_DIRS:
-        dirs.add(parts[0] if len(parts) == 1 else "/".join(parts[:-1]))
-
-
-def _is_publishable(relative: str, *, publishable_files: set[str], publishable_dirs: set[str]) -> bool:
-    normalized = normalize_package_relative(relative)
-    if normalized == normalize_package_relative(PUBLISH_FILE):
-        return False
-    if is_transient_package_path(normalized):
-        return False
-    if normalized in publishable_files:
-        return True
-    return any(normalized == directory or normalized.startswith(f"{directory}/") for directory in publishable_dirs)
 
 
 def _prune_transient_paths(root: Path) -> None:
