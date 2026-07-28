@@ -4,6 +4,7 @@ from pathlib import PurePath, PurePosixPath, PureWindowsPath
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 from agent_factory.context_system import ContextContractConfig
 from agent_factory.knowledge_system import KnowledgeContractConfig
@@ -419,11 +420,11 @@ class DependenciesContractConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     python_requirements: list[str] = Field(default_factory=list)
-    system_packages: list[str] = Field(default_factory=list)
+    system_packages: SkipJsonSchema[list[str]] = Field(default_factory=list, exclude=True)
     npm_requirements: list[str] = Field(default_factory=list)
     system_binaries: list[str] = Field(default_factory=list)
     platform_architectures: list[Literal["amd64", "arm64"]] = Field(default_factory=list)
-    base_image: str = "agentfactory-runtime-python:3.12"
+    base_image: SkipJsonSchema[str] = Field(default="local-python", exclude=True)
     verification_commands: list[list[str]] = Field(default_factory=list)
     install_timeout_seconds: int | None = Field(default=None, ge=1)
 

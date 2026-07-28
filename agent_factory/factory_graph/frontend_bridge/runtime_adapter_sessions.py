@@ -415,6 +415,15 @@ class RuntimeSessionCommandMixin:
         *,
         mode: str | None = None,
     ) -> bool:
+        requested_session_id = str(command.session_id or "").strip()
+        if requested_session_id:
+            requested_record = self.session_manager.load_if_exists(requested_session_id)
+            if requested_record is None:
+                self._emit_error(command, f"factory session not found: {requested_session_id}")
+                return False
+            self.session_record = requested_record
+            self.mode = _session_mode(mode) or _session_mode(command.mode) or requested_record.current_mode
+            self._restore_session_mode_context()
         if self.session_record is None:
             resolved_mode = _session_mode(mode) or _session_mode(command.mode) or _session_mode(self.mode)
             if resolved_mode is None:

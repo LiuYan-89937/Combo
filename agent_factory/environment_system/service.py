@@ -47,8 +47,8 @@ class EnvironmentResolver:
         if contract.enabled and config.system_packages:
             raise EnvironmentResolutionError(
                 "local_system_dependencies_unsupported",
-                "Local runtime does not install operating-system packages. Declare required host capabilities "
-                "through system_binaries and verification_commands instead.",
+                "The package contains legacy system_packages metadata that the local runtime cannot materialize. "
+                "Inspect required commands and rewrite the dependency contract with system_binaries.",
             )
         if not _has_materializable_dependencies(enabled=contract.enabled, config=config):
             request = _dependency_request(
@@ -162,8 +162,8 @@ class EnvironmentResolver:
         if contract.enabled and config.system_packages:
             raise EnvironmentResolutionError(
                 "local_system_dependencies_unsupported",
-                "Local runtime does not install operating-system packages. Declare required host capabilities "
-                "through system_binaries and verification_commands instead.",
+                "The package contains legacy system_packages metadata that the local runtime cannot materialize. "
+                "Inspect required commands and rewrite the dependency contract with system_binaries.",
             )
         if not _has_materializable_dependencies(enabled=contract.enabled, config=config):
             request = _dependency_request(
@@ -288,13 +288,13 @@ def _normalized_values(values: list[str]) -> list[str]:
 
 
 def _has_materializable_dependencies(*, enabled: bool, config: Any) -> bool:
-    return bool(enabled and (config.python_requirements or config.system_packages or config.npm_requirements))
+    return bool(enabled and (config.python_requirements or config.npm_requirements))
 
 
 def _dependency_count(request: dict[str, Any]) -> int:
     return sum(
         len(request.get(key) or [])
-        for key in ("python_requirements", "system_packages", "npm_requirements")
+        for key in ("python_requirements", "npm_requirements")
     )
 
 
