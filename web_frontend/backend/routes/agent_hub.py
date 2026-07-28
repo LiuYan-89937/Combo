@@ -65,6 +65,13 @@ def create_agent_hub_router(
     ):
         return await _call(hub.list_packages, query=q, limit=limit, offset=offset)
 
+    @router.get("/packages/{package_id}/publish-preview")
+    async def publish_package_preview(package_id: str):
+        return await _call(
+            resolve_runtime().package_distribution_preview,
+            package_id,
+        )
+
     @router.get("/packages/{publisher}/{package_id}")
     async def package_detail(publisher: str, package_id: str):
         return await _call(hub.package_detail, publisher, package_id)
@@ -74,11 +81,20 @@ def create_agent_hub_router(
         return await _call(hub.list_uploads, limit=limit)
 
     @router.post("/packages/{package_id}/publish")
-    async def publish_package(package_id: str):
+    async def publish_package(package_id: str, payload: dict[str, Any]):
+        if payload.get("confirmed_sensitive_review") is not True:
+            raise HTTPException(
+                status_code=422,
+                detail="Skill and MCP configuration review must be confirmed before upload",
+            )
+        extension_overrides = payload.get("extensions")
+        if not isinstance(extension_overrides, dict):
+            raise HTTPException(status_code=422, detail="reviewed extension configuration is required")
         return await _call(
             hub.publish_package,
             package_id,
             runtime=resolve_runtime(),
+            extension_overrides=extension_overrides,
         )
 
     @router.post("/releases/{release_id}/install")

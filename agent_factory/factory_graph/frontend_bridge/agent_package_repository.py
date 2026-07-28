@@ -11,7 +11,10 @@ from uuid import uuid4
 import zipfile
 
 from agent_factory.paths import project_root, system_package_root
-from agent_factory.package_distribution import export_distribution_archive
+from agent_factory.package_distribution import (
+    distribution_extension_preview,
+    export_distribution_archive,
+)
 from agent_factory.runtime_contracts import AgentPackageLoader, LoadedAgentPackage
 
 
@@ -100,7 +103,33 @@ class AgentPackageRepository:
         shutil.rmtree(target)
         return {"package_id": package_id, "deleted": True}
 
-    def export_user_package_archive(self, package_id: str) -> Path:
+    def distribution_preview(self, package_id: str) -> dict[str, object]:
+        target = self._require_exportable_user_package(package_id)
+        return distribution_extension_preview(target, package_id)
+
+    def export_user_package_archive(
+        self,
+        package_id: str,
+        *,
+        extension_overrides: dict[str, object] | None = None,
+    ) -> Path:
+        target = self._require_exportable_user_package(package_id)
+        archive_stem = safe_archive_stem(package_id)
+        with tempfile.NamedTemporaryFile(prefix=f"{archive_stem}-", suffix=".zip", delete=False) as handle:
+            archive_path = Path(handle.name)
+        try:
+            export_distribution_archive(
+                target,
+                package_id,
+                archive_path,
+                extension_overrides=extension_overrides,
+            )
+        except Exception:
+            archive_path.unlink(missing_ok=True)
+            raise
+        return archive_path
+
+    def _require_exportable_user_package(self, package_id: str) -> Path:
         target = self.package_dir(package_id, include_system_packages=False)
         manifest_path = target / "agent_package.json"
         if not manifest_path.is_file():
@@ -108,15 +137,7 @@ class AgentPackageRepository:
             if (system_target / "agent_package.json").is_file():
                 raise ValueError(f"built-in agent package cannot be exported: {package_id}")
             raise FileNotFoundError(f"agent package not found: {package_id}")
-        archive_stem = safe_archive_stem(package_id)
-        with tempfile.NamedTemporaryFile(prefix=f"{archive_stem}-", suffix=".zip", delete=False) as handle:
-            archive_path = Path(handle.name)
-        try:
-            export_distribution_archive(target, package_id, archive_path)
-        except Exception:
-            archive_path.unlink(missing_ok=True)
-            raise
-        return archive_path
+        return target
 
     def install_user_package_archive(
         self,

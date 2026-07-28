@@ -144,7 +144,7 @@
                     <n-button
                       type="primary"
                       size="small"
-                      :loading="publishingPackageId === pkg.package_id"
+                      :loading="reviewingPackageId === pkg.package_id || publishingPackageId === pkg.package_id"
                       @click="publish(pkg.package_id)"
                     >
                       <template #icon><n-icon><ArrowUpOutline /></n-icon></template>
@@ -209,6 +209,111 @@
         <p v-if="loginError" class="login-error">{{ loginError }}</p>
       </n-card>
     </n-modal>
+
+    <n-modal v-model:show="publishReviewOpen" :mask-closable="false">
+      <n-card
+        class="publish-review-card"
+        :title="t('agentHub.reviewTitle')"
+        closable
+        @close="closePublishReview"
+      >
+        <n-alert type="warning" :show-icon="true" class="review-alert">
+          {{ t('agentHub.reviewWarning') }}
+        </n-alert>
+
+        <n-tabs v-model:value="reviewTab" type="line" animated>
+          <n-tab-pane name="mcp" :tab="t('agentHub.reviewMcp')">
+            <p class="review-hint">{{ t('agentHub.reviewMcpHint') }}</p>
+            <n-input
+              v-model:value="mcpDraftJson"
+              type="textarea"
+              :autosize="{ minRows: 18, maxRows: 28 }"
+              class="json-editor"
+              spellcheck="false"
+            />
+          </n-tab-pane>
+
+          <n-tab-pane name="skills" :tab="t('agentHub.reviewSkills')">
+            <div v-if="skillDrafts.length" class="skill-review-layout">
+              <aside class="skill-review-list">
+                <button
+                  v-for="skill in skillDrafts"
+                  :key="skill.skill_id"
+                  type="button"
+                  :class="{ active: selectedSkillId === skill.skill_id }"
+                  @click="selectSkill(skill.skill_id)"
+                >
+                  <strong>{{ skill.skill_id }}</strong>
+                  <span>{{ skill.files.length }} {{ t('agentHub.reviewFiles') }}</span>
+                </button>
+              </aside>
+
+              <section class="skill-file-list">
+                <div class="skill-path">{{ selectedSkill?.path }}</div>
+                <button
+                  v-for="file in selectedSkill?.files || []"
+                  :key="file.path"
+                  type="button"
+                  :class="{ active: selectedSkillFilePath === file.path }"
+                  @click="selectedSkillFilePath = file.path"
+                >
+                  <n-checkbox
+                    :checked="file.included"
+                    :disabled="file.path === 'SKILL.md'"
+                    @click.stop
+                    @update:checked="file.included = $event"
+                  />
+                  <span class="file-copy">
+                    <strong>{{ file.path }}</strong>
+                    <small>{{ file.kind }} · {{ formatBytes(file.size_bytes) }}</small>
+                  </span>
+                </button>
+              </section>
+
+              <section class="skill-file-editor">
+                <template v-if="selectedSkillFile">
+                  <div class="editor-heading">
+                    <strong>{{ selectedSkillFile.path }}</strong>
+                    <n-tag size="small" :bordered="false">{{ selectedSkillFile.kind }}</n-tag>
+                  </div>
+                  <n-input
+                    v-if="selectedSkillFile.kind === 'text'"
+                    v-model:value="selectedSkillFile.content"
+                    type="textarea"
+                    :disabled="!selectedSkillFile.included"
+                    :autosize="{ minRows: 18, maxRows: 28 }"
+                    class="skill-text-editor"
+                    spellcheck="false"
+                  />
+                  <div v-else class="binary-file-note">
+                    {{ t('agentHub.reviewBinaryResource') }}
+                  </div>
+                </template>
+              </section>
+            </div>
+            <n-empty v-else :description="t('agentHub.reviewNoSkills')" class="review-empty" />
+          </n-tab-pane>
+        </n-tabs>
+
+        <p v-if="publishReviewError" class="review-error">{{ publishReviewError }}</p>
+        <n-checkbox v-model:checked="publishReviewConfirmed" class="review-confirm">
+          {{ t('agentHub.reviewConfirm') }}
+        </n-checkbox>
+        <template #footer>
+          <div class="review-actions">
+            <n-button @click="closePublishReview">{{ t('common.cancel') }}</n-button>
+            <n-button
+              type="primary"
+              :disabled="!publishReviewConfirmed"
+              :loading="publishingPackageId === publishReviewPackageId"
+              @click="submitPublishReview"
+            >
+              {{ t('agentHub.publishAction') }}
+            </n-button>
+          </div>
+        </template>
+      </n-card>
+    </n-modal>
   </div>
 </template>
 
@@ -219,6 +324,7 @@ import {
   NAvatar,
   NButton,
   NCard,
+  NCheckbox,
   NEmpty,
   NIcon,
   NInput,
@@ -243,6 +349,8 @@ import {
   agentHubApi,
   type AgentHubAuthStatus,
   type AgentHubBrowserAuthorization,
+  type AgentHubSkillDraft,
+  type AgentHubSkillFileDraft,
   type AgentHubRelease,
   type AgentHubUpload,
 } from '@/api/agentHub'
@@ -267,15 +375,31 @@ const loadingPackages = ref(false)
 const loadingUploads = ref(false)
 const installingReleaseId = ref<string | null>(null)
 const publishingPackageId = ref<string | null>(null)
+const reviewingPackageId = ref<string | null>(null)
 const errorMessage = ref('')
 const browserLoginOpen = ref(false)
 const browserAuthorization = ref<AgentHubBrowserAuthorization | null>(null)
 const loginError = ref('')
+const publishReviewOpen = ref(false)
+const publishReviewPackageId = ref('')
+const publishReviewConfirmed = ref(false)
+const publishReviewError = ref('')
+const reviewTab = ref<'mcp' | 'skills'>('mcp')
+const mcpDraftJson = ref('')
+const skillDrafts = ref<AgentHubSkillDraft[]>([])
+const selectedSkillId = ref('')
+const selectedSkillFilePath = ref('')
 let pollTimer: number | null = null
 let browserLoginExpiresAt = 0
 
 const publishablePackages = computed(() =>
   agentStore.agentPackages.filter(pkg => !pkg.is_builtin && pkg.capabilities?.exportable !== false),
+)
+const selectedSkill = computed(
+  () => skillDrafts.value.find(skill => skill.skill_id === selectedSkillId.value) || null,
+)
+const selectedSkillFile = computed<AgentHubSkillFileDraft | null>(
+  () => selectedSkill.value?.files.find(file => file.path === selectedSkillFilePath.value) || null,
 )
 
 onMounted(async () => {
@@ -425,19 +549,9 @@ async function install(release: AgentHubRelease) {
   }
   installingReleaseId.value = release.release_id
   try {
-    const result = await agentHubApi.install(release.release_id, replace)
+    await agentHubApi.install(release.release_id, replace)
     commands.listAgentPackages()
-    const extensions = result.package.extensions as
-      | { mcp_servers?: Array<{ payload?: { source?: { distribution?: { requires_configuration?: boolean } } } }> }
-      | undefined
-    const requiresMcpConfiguration = extensions?.mcp_servers?.some(
-      server => server.payload?.source?.distribution?.requires_configuration === true,
-    )
-    if (requiresMcpConfiguration) {
-      message.warning(t('agentHub.installRequiresMcpConfiguration'), { duration: 8000 })
-    } else {
-      message.success(t('agentHub.installSuccess'))
-    }
+    message.success(t('agentHub.installSuccess'))
   } catch (error) {
     showError(error)
   } finally {
@@ -446,16 +560,85 @@ async function install(release: AgentHubRelease) {
 }
 
 async function publish(packageId: string) {
-  publishingPackageId.value = packageId
+  reviewingPackageId.value = packageId
   try {
-    await agentHubApi.publish(packageId)
-    message.success(t('agentHub.publishSuccess'))
-    await loadUploads()
+    const preview = await agentHubApi.publishPreview(packageId)
+    publishReviewPackageId.value = packageId
+    mcpDraftJson.value = JSON.stringify(preview.mcp_servers, null, 2)
+    skillDrafts.value = preview.skills.map(skill => ({
+      ...skill,
+      files: skill.files.map(file => ({ ...file })),
+    }))
+    selectSkill(skillDrafts.value[0]?.skill_id || '')
+    publishReviewConfirmed.value = false
+    publishReviewError.value = ''
+    reviewTab.value = 'mcp'
+    publishReviewOpen.value = true
   } catch (error) {
     showError(error)
   } finally {
+    reviewingPackageId.value = null
+  }
+}
+
+async function submitPublishReview() {
+  const packageId = publishReviewPackageId.value
+  if (!packageId || !publishReviewConfirmed.value) return
+  let mcpServers: Record<string, unknown>
+  try {
+    const parsed = JSON.parse(mcpDraftJson.value)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error(t('agentHub.reviewMcpObjectRequired'))
+    }
+    mcpServers = parsed as Record<string, unknown>
+  } catch (error) {
+    reviewTab.value = 'mcp'
+    publishReviewError.value = error instanceof Error ? error.message : String(error)
+    return
+  }
+  publishingPackageId.value = packageId
+  publishReviewError.value = ''
+  try {
+    await agentHubApi.publish(packageId, {
+      mcp_servers: mcpServers,
+      skills: skillDrafts.value.map(skill => ({
+        skill_id: skill.skill_id,
+        files: skill.files.map(file => ({
+          path: file.path,
+          included: file.included,
+          content: file.content,
+        })),
+      })),
+    })
+    closePublishReview()
+    message.success(t('agentHub.publishSuccess'))
+    await loadUploads()
+  } catch (error) {
+    publishReviewError.value = error instanceof Error ? error.message : String(error)
+  } finally {
     publishingPackageId.value = null
   }
+}
+
+function selectSkill(skillId: string) {
+  selectedSkillId.value = skillId
+  const skill = skillDrafts.value.find(item => item.skill_id === skillId)
+  selectedSkillFilePath.value =
+    skill?.files.find(file => file.path === 'SKILL.md')?.path
+    || skill?.files[0]?.path
+    || ''
+}
+
+function closePublishReview() {
+  if (publishingPackageId.value) return
+  publishReviewOpen.value = false
+  publishReviewPackageId.value = ''
+  publishReviewConfirmed.value = false
+  publishReviewError.value = ''
+  mcpDraftJson.value = ''
+  skillDrafts.value = []
+  selectedSkillId.value = ''
+  selectedSkillFilePath.value = ''
 }
 
 function isInstalled(packageId: string) {
@@ -476,6 +659,12 @@ function packageColor(packageId: string) {
 }
 
 function formatSize(bytes: number) {
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
@@ -817,6 +1006,155 @@ function uploadStatusLabel(status: string) {
   width: min(440px, calc(100vw - 32px));
 }
 
+.publish-review-card {
+  width: min(1120px, calc(100vw - 40px));
+  max-height: calc(100vh - 40px);
+}
+
+.publish-review-card :deep(.n-card__content) {
+  overflow: auto;
+}
+
+.review-alert {
+  margin-bottom: 16px;
+}
+
+.review-hint {
+  margin: 0 0 10px;
+  color: var(--app-text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.json-editor,
+.skill-text-editor {
+  font-family: var(--app-font-mono);
+  font-size: 12px;
+}
+
+.skill-review-layout {
+  min-height: 480px;
+  display: grid;
+  grid-template-columns: 180px 280px minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+}
+
+.skill-review-list,
+.skill-file-list {
+  min-width: 0;
+  overflow: auto;
+  border-right: 1px solid var(--app-divider);
+  background: var(--app-surface-muted);
+}
+
+.skill-review-list button,
+.skill-file-list button {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--app-divider);
+  background: transparent;
+  color: var(--app-text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.skill-review-list button {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+}
+
+.skill-review-list button span,
+.file-copy small,
+.skill-path {
+  color: var(--app-text-muted);
+  font-size: 11px;
+}
+
+.skill-review-list button.active,
+.skill-file-list button.active {
+  background: var(--app-surface);
+}
+
+.skill-path {
+  padding: 10px 12px;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--app-divider);
+}
+
+.skill-file-list button {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px 12px;
+}
+
+.file-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.file-copy strong {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.skill-file-editor {
+  min-width: 0;
+  padding: 14px;
+  background: var(--app-surface);
+}
+
+.editor-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.editor-heading strong {
+  overflow-wrap: anywhere;
+}
+
+.binary-file-note {
+  min-height: 360px;
+  display: grid;
+  place-items: center;
+  padding: 30px;
+  border: 1px dashed var(--app-border);
+  border-radius: var(--app-radius-md);
+  color: var(--app-text-muted);
+  line-height: 1.7;
+  text-align: center;
+}
+
+.review-empty {
+  padding: 80px 0;
+}
+
+.review-confirm {
+  margin-top: 16px;
+}
+
+.review-error {
+  margin: 14px 0 0;
+  color: var(--app-error);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.review-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 .browser-login-card p {
   color: var(--app-text-muted);
 }
@@ -876,6 +1214,19 @@ function uploadStatusLabel(status: string) {
 
   .publish-panel {
     padding: 18px;
+  }
+
+  .publish-review-card {
+    width: calc(100vw - 20px);
+  }
+
+  .skill-review-layout {
+    grid-template-columns: 120px minmax(0, 1fr);
+  }
+
+  .skill-file-editor {
+    grid-column: 1 / -1;
+    border-top: 1px solid var(--app-divider);
   }
 
   .local-package-grid {

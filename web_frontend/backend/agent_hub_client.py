@@ -236,8 +236,12 @@ class AgentHubClient:
         package_id: str,
         *,
         runtime: AgentPackageRuntimeManager,
+        extension_overrides: dict[str, Any],
     ) -> dict[str, Any]:
-        archive_path = runtime.export_package_archive(package_id)
+        archive_path = runtime.export_package_archive(
+            package_id,
+            extension_overrides=extension_overrides,
+        )
         try:
             size = archive_path.stat().st_size
             upload_result = self._request(

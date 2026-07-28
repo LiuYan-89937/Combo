@@ -73,6 +73,29 @@ export interface AgentHubUpload {
   updated_at: string
 }
 
+export interface AgentHubSkillFileDraft {
+  path: string
+  size_bytes: number
+  kind: 'text' | 'binary'
+  included: boolean
+  content: string | null
+}
+
+export interface AgentHubSkillDraft {
+  skill_id: string
+  source: string
+  enabled: boolean
+  required: boolean
+  path: string
+  files: AgentHubSkillFileDraft[]
+}
+
+export interface AgentHubPublishPreview {
+  package_id: string
+  mcp_servers: Record<string, unknown>
+  skills: AgentHubSkillDraft[]
+}
+
 export const agentHubApi = {
   auth: () => requestJson<AgentHubAuthStatus>('/api/agent-hub/auth'),
   startBrowserLogin: () =>
@@ -105,9 +128,28 @@ export const agentHubApi = {
         body: JSON.stringify({ replace }),
       },
     ),
-  publish: (packageId: string) =>
+  publishPreview: (packageId: string) =>
+    requestJson<AgentHubPublishPreview>(
+      `/api/agent-hub/packages/${encodeURIComponent(packageId)}/publish-preview`,
+    ),
+  publish: (
+    packageId: string,
+    extensions: {
+      mcp_servers: Record<string, unknown>
+      skills: Array<{
+        skill_id: string
+        files: Array<{ path: string; included: boolean; content: string | null }>
+      }>
+    },
+  ) =>
     requestJson<AgentHubUpload>(
       `/api/agent-hub/packages/${encodeURIComponent(packageId)}/publish`,
-      { method: 'POST' },
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          confirmed_sensitive_review: true,
+          extensions,
+        }),
+      },
     ),
 }

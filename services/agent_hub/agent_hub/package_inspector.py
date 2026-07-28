@@ -39,66 +39,12 @@ TRANSIENT_NAMES = frozenset(
         "runtime.sqlite",
     }
 )
-TEXT_SUFFIXES = frozenset(
-    {
-        ".json",
-        ".md",
-        ".py",
-        ".txt",
-        ".yaml",
-        ".yml",
-        ".toml",
-        ".js",
-        ".mjs",
-        ".cjs",
-        ".ts",
-        ".tsx",
-        ".sh",
-        ".ps1",
-    }
-)
 PACKAGE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 VERSION_PATTERN = re.compile(
     r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
     r"(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$"
 )
-SECRET_PATTERNS = (
-    ("aliyun_access_key", re.compile(r"\bLTAI[A-Za-z0-9]{12,}\b")),
-    ("private_key", re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----")),
-    (
-        "authorization_header",
-        re.compile(r"(?i)\bauthorization\s*[:=]\s*['\"]?(?:bearer|basic)\s+[^\s'\"]{8,}"),
-    ),
-    (
-        "credential_assignment",
-        re.compile(
-            r"(?i)(?:api[_-]?key|access[_-]?token|client[_-]?secret|password)"
-            r"\s*[:=]\s*['\"][^'\"]{8,}"
-        ),
-    ),
-    (
-        "credential_query_parameter",
-        re.compile(
-            r"(?i)[?&](?:api[_-]?key|access[_-]?token|client[_-]?secret|password)"
-            r"=[^&\s'\"]{8,}"
-        ),
-    ),
-)
-ABSOLUTE_PATH_PATTERNS = (
-    re.compile(r"(?<![A-Za-z0-9_])/(?:Users|home|root|private/(?:tmp|var)|var/folders|tmp)/[^\s\"']+"),
-    re.compile(r"(?i)(?<![A-Za-z0-9_])[A-Z]:\\[^\s\"']+"),
-)
-SENSITIVE_KEY_PATTERN = re.compile(
-    r"(?i)(?:api[_-]?key|access[_-]?token|auth(?:orization)?|client[_-]?secret|"
-    r"password|private[_-]?key|secret)"
-)
-SENSITIVE_ARGUMENT_PATTERN = re.compile(
-    r"(?i)^--?(?:api[_-]?key|access[_-]?token|auth(?:orization)?|client[_-]?secret|"
-    r"password|private[_-]?key|secret)(?:=|$)"
-)
 MAX_JSON_BYTES = 5 * 1024 * 1024
-MAX_SCANNED_TEXT_BYTES = 10 * 1024 * 1024
-MAX_SINGLE_TEXT_SCAN_BYTES = 1 * 1024 * 1024
 
 
 class PackageInspectionError(ValueError):
@@ -170,9 +116,12 @@ def inspect_package_archive(path: Path, settings: Settings) -> PackageInspection
             )
             for contract_id, relative_path in manifest["contracts"].items()
         }
-        _validate_distribution_extensions(archive, infos, package_root=package_root)
+        warnings = _validate_distribution_extensions(
+            archive,
+            infos,
+            package_root=package_root,
+        )
         _validate_resource_defaults(contracts["resources"])
-        warnings = _scan_archive_text(archive, infos)
         return PackageInspection(
             package_id=identity["id"],
             name=identity["name"],
@@ -231,7 +180,7 @@ def _validate_archive_members(
             )
         if (
             PurePosixPath(member).name.startswith(".env.")
-            or member.endswith((".key", ".log", ".p12", ".pfx", ".pyc", ".pyo"))
+            or member.endswith((".log", ".pyc", ".pyo"))
         ):
             raise PackageInspectionError(
                 "archive_transient_suffix",
@@ -434,65 +383,13 @@ def _string_list(value: Any) -> list[str]:
     )
 
 
-def _scan_archive_text(
-    archive: zipfile.ZipFile,
-    infos: list[zipfile.ZipInfo],
-) -> list[dict[str, str]]:
-    warnings: list[dict[str, str]] = []
-    scanned = 0
-    for info in infos:
-        if PurePosixPath(info.filename).suffix.lower() not in TEXT_SUFFIXES:
-            continue
-        if info.file_size > MAX_SINGLE_TEXT_SCAN_BYTES:
-            raise PackageInspectionError(
-                "text_scan_limit",
-                f"text file exceeds the inspection limit: {info.filename}",
-            )
-        if scanned + info.file_size > MAX_SCANNED_TEXT_BYTES:
-            raise PackageInspectionError(
-                "text_scan_budget",
-                "package text exceeds the inspection budget",
-            )
-        scanned += info.file_size
-        try:
-            content = archive.read(info).decode("utf-8")
-        except UnicodeDecodeError:
-            raise PackageInspectionError(
-                "text_encoding",
-                f"text file is not valid UTF-8: {info.filename}",
-            )
-        for code, pattern in SECRET_PATTERNS:
-            if pattern.search(content):
-                raise PackageInspectionError(
-                    "secret_detected",
-                    f"possible {code} detected in {info.filename}",
-                )
-        for pattern in ABSOLUTE_PATH_PATTERNS:
-            if pattern.search(content):
-                raise PackageInspectionError(
-                    "host_absolute_path",
-                    f"host absolute path detected in {info.filename}",
-                )
-        if PurePosixPath(info.filename).suffix.lower() == ".json":
-            try:
-                payload = json.loads(content)
-            except json.JSONDecodeError:
-                continue
-            for key, value in _iter_json_items(payload):
-                if SENSITIVE_KEY_PATTERN.search(key) and _looks_like_secret_value(value):
-                    raise PackageInspectionError(
-                        "credential_value",
-                        f"credential value detected in {info.filename}",
-                    )
-    return warnings
-
-
 def _validate_distribution_extensions(
     archive: zipfile.ZipFile,
     infos: list[zipfile.ZipInfo],
     *,
     package_root: str,
-) -> None:
+) -> list[dict[str, str]]:
+    warnings: list[dict[str, str]] = []
     names = {info.filename for info in infos}
     mcp_name = _package_member_name(package_root, "extensions/mcp_servers.json")
     if mcp_name in names:
@@ -506,38 +403,22 @@ def _validate_distribution_extensions(
         for server in servers:
             if not isinstance(server, dict):
                 raise PackageInspectionError("mcp_config", "MCP server entries must be objects")
-            if server.get("env") not in ({}, None) or server.get("headers") not in ({}, None):
-                raise PackageInspectionError(
-                    "mcp_credentials",
-                    "distributed MCP configuration must not contain env or header values",
-                )
-            if server.get("cwd") not in ("", None):
-                raise PackageInspectionError(
-                    "mcp_host_path",
-                    "distributed MCP configuration must not contain cwd",
-                )
-            arguments = server.get("args")
-            if isinstance(arguments, list) and any(
-                isinstance(argument, str) and SENSITIVE_ARGUMENT_PATTERN.match(argument)
-                for argument in arguments
-            ):
-                raise PackageInspectionError(
-                    "mcp_argument_credentials",
-                    "distributed MCP configuration must not contain credential arguments",
-                )
-            distribution = (
-                server.get("source", {}).get("distribution")
-                if isinstance(server.get("source"), dict)
-                else None
-            )
-            if (
-                isinstance(distribution, dict)
-                and distribution.get("requires_configuration") is True
-                and server.get("enabled") is not False
-            ):
-                raise PackageInspectionError(
-                    "mcp_configuration_state",
-                    "MCP servers requiring local configuration must be distributed disabled",
+            server_id = str(server.get("server_id") or "unknown")
+            review_fields = [
+                field
+                for field in ("env", "headers", "cwd")
+                if server.get(field) not in ({}, "", None)
+            ]
+            if review_fields:
+                warnings.append(
+                    {
+                        "code": "mcp_private_configuration_reviewed",
+                        "path": mcp_name,
+                        "message": (
+                            f"MCP server {server_id} includes user-reviewed fields: "
+                            + ", ".join(review_fields)
+                        ),
+                    }
                 )
 
     skills_name = _package_member_name(package_root, "extensions/enabled_skills.json")
@@ -562,6 +443,7 @@ def _validate_distribution_extensions(
                     "skill_files_missing",
                     f"distributed Skill is missing SKILL.md: {path}",
                 )
+    return warnings
 
 
 def _validate_resource_defaults(contract: dict[str, Any]) -> None:
@@ -590,32 +472,6 @@ def _nested_value_exists(value: Any, field_path: str) -> bool:
             return False
         current = current[part]
     return bool(parts)
-
-
-def _iter_json_items(value: Any) -> Any:
-    if isinstance(value, dict):
-        for key, item in value.items():
-            yield str(key), item
-            yield from _iter_json_items(item)
-    elif isinstance(value, list):
-        for item in value:
-            yield from _iter_json_items(item)
-
-
-def _looks_like_secret_value(value: Any) -> bool:
-    if not isinstance(value, str):
-        return False
-    text = value.strip()
-    if len(text) < 8:
-        return False
-    return text.casefold() not in {
-        "string",
-        "password",
-        "secret",
-        "required",
-        "optional",
-        "configured",
-    }
 
 
 def _is_symlink(info: zipfile.ZipInfo) -> bool:

@@ -554,8 +554,19 @@ class AgentPackageRuntimeManager:
         result["agent_registry_refresh"] = _refresh_agent_registry_index(package_id)
         return result
 
-    def export_package_archive(self, package_id: str) -> Path:
-        return self.repository.export_user_package_archive(package_id)
+    def package_distribution_preview(self, package_id: str) -> dict[str, object]:
+        return self.repository.distribution_preview(package_id)
+
+    def export_package_archive(
+        self,
+        package_id: str,
+        *,
+        extension_overrides: dict[str, object] | None = None,
+    ) -> Path:
+        return self.repository.export_user_package_archive(
+            package_id,
+            extension_overrides=extension_overrides,
+        )
 
     def install_package_archive(
         self,
