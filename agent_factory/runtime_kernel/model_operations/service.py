@@ -27,7 +27,6 @@ from agent_factory.model_pool.runtime_override import (
 from agent_factory.model_pool.schema import ModelBindingRuntimeOverrides
 from agent_factory.context_system.events import emit_context_event
 from agent_factory.context_system.token_counter import (
-    context_limits_with_overrides,
     context_window_payload,
     model_context_limits,
     provider_token_budget_payload,
@@ -914,13 +913,12 @@ def _emit_provider_usage_context_window(
         return
     limits = model_context_limits(services=services, state=state, model_role=model_role)
     context_runtime = getattr(services, "context_system", None)
-    context_config = getattr(context_runtime, "config", None)
-    if context_config is not None:
-        policy = context_runtime.policy_for_node(node_id)
-        limits = context_limits_with_overrides(
-            limits,
-            context_window_tokens=context_config.context_window_tokens,
-            compression_trigger_tokens=policy.compression.trigger_token_threshold,
+    resolve_context_limits = getattr(context_runtime, "model_context_limits", None)
+    if callable(resolve_context_limits):
+        limits = resolve_context_limits(
+            services=services,
+            state=state,
+            model_role=model_role,
         )
     emit_context_event(
         services=services,

@@ -19,10 +19,11 @@ from agent_factory.context_system.schema import (
 )
 from agent_factory.context_system.sources import ContextSource, ContextSourceRuntime, default_context_sources
 from agent_factory.context_system.token_counter import (
+    ModelContextLimits,
     TokenCountResult,
     count_messages_tokens,
     context_limits_with_overrides,
-    model_context_limits,
+    model_context_limits as resolve_model_context_limits,
 )
 from agent_factory.context_system.token_estimation import estimate_text_tokens
 
@@ -69,10 +70,10 @@ class ContextSystemRuntime:
                 injection_report=injection_report,
             )
         policy = self.config.default_policy
-        active_limits = context_limits_with_overrides(
-            model_context_limits(services=services, state=state, model_role="main"),
-            context_window_tokens=self.config.context_window_tokens,
-            compression_trigger_tokens=policy.compression.trigger_token_threshold,
+        active_limits = self.model_context_limits(
+            services=services,
+            state=state,
+            model_role="main",
         )
         compression_policy = policy.compression.model_copy(
             update={"trigger_token_threshold": active_limits.compression_trigger_tokens}
@@ -262,7 +263,7 @@ class ContextSystemRuntime:
             user_input=str(values.get("user_input") or values.get("requirement") or ""),
             text=_factory_query_text(stage_id=stage_id, values=values),
         )
-        policy = self.policy_for_node(stage_id)
+        policy = self.config.default_policy
         candidates, retrieval_report = self._retrieve(
             query=query,
             policy=policy,
@@ -383,6 +384,24 @@ class ContextSystemRuntime:
                 chunks.append(str(content))
         text = "\n".join(chunk for chunk in chunks if chunk.strip())
         return ContextQuery(node_id=node_id, impl=impl, user_input=user_input or None, text=text)
+
+    def model_context_limits(
+        self,
+        *,
+        services: Any = None,
+        state: Any = None,
+        model_role: str = "main",
+    ) -> ModelContextLimits:
+        compression = self.config.default_policy.compression
+        return context_limits_with_overrides(
+            resolve_model_context_limits(
+                services=services,
+                state=state,
+                model_role=model_role,
+            ),
+            context_window_tokens=self.config.context_window_tokens,
+            compression_trigger_tokens=compression.trigger_token_threshold,
+        )
 
 
 def default_context_runtime(config: ContextContractConfig | None = None) -> ContextSystemRuntime:
