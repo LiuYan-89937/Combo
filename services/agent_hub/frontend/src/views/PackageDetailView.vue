@@ -7,7 +7,6 @@
  */
 import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
-import { storeToRefs } from 'pinia'
 import AgentAvatar from '@/components/base/AgentAvatar.vue'
 import BaseBadge from '@/components/base/BaseBadge.vue'
 import BaseButton from '@/components/base/BaseButton.vue'

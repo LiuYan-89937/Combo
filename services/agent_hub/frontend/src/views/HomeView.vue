@@ -6,7 +6,6 @@
  * config has no URL rather than faking a link.
  */
 import { computed, onMounted, ref } from 'vue'
-import { RouterLink } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseIcon, { type IconName } from '@/components/base/BaseIcon.vue'
@@ -19,7 +18,7 @@ import { useSeo, ORIGIN } from '@/composables/useSeo'
 import { listPackages } from '@/api/packages'
 import type { AgentRelease } from '@/api/types'
 
-const { t, localeTag } = useI18n()
+const { t } = useI18n()
 const { config } = storeToRefs(useConfigStore())
 
 const pipelineKeys: Array<{ key: string; icon: IconName }> = [

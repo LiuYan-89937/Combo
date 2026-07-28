@@ -5,7 +5,7 @@
  * their intended destination — defaulting to the publish center. A ?status=
  * hint from the backend lets us show a failure state without a session probe.
  */
-import { computed, onMounted, ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseIcon from '@/components/base/BaseIcon.vue'

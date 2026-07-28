@@ -54,6 +54,32 @@ install -o root -g root -m 0644 "${nginx_source}" /etc/nginx/sites-available/fas
 ln -sfn /etc/nginx/sites-available/fastagenthub /etc/nginx/sites-enabled/fastagenthub
 rm -f /etc/nginx/sites-enabled/default
 
+# Static frontend (SPA). Prefer a prebuilt bundle (frontend/dist); otherwise
+# build it in place when Node/npm are available. The web root is served by the
+# nginx config above with an index.html fallback.
+frontend_dist="${source_dir}/frontend/dist"
+if [[ ! -d "${frontend_dist}" && -f "${source_dir}/frontend/package.json" ]] && command -v npm >/dev/null 2>&1; then
+  echo "building frontend bundle..."
+  ( cd "${source_dir}/frontend" && npm ci && npm run build )
+fi
+if [[ -d "${frontend_dist}" ]]; then
+  install -d -o root -g root -m 0755 /var/www/fastagenthub
+  # Atomic-ish swap: stage then rsync/copy over the live root.
+  rm -rf /var/www/fastagenthub.next
+  install -d -o root -g root -m 0755 /var/www/fastagenthub.next
+  cp -a "${frontend_dist}/." /var/www/fastagenthub.next/
+  rm -rf /var/www/fastagenthub.previous
+  if [[ -d /var/www/fastagenthub && -n "$(ls -A /var/www/fastagenthub 2>/dev/null)" ]]; then
+    mv /var/www/fastagenthub /var/www/fastagenthub.previous
+  else
+    rm -rf /var/www/fastagenthub
+  fi
+  mv /var/www/fastagenthub.next /var/www/fastagenthub
+else
+  echo "WARNING: no frontend bundle at ${frontend_dist}; serving API only." >&2
+  install -d -o root -g root -m 0755 /var/www/fastagenthub
+fi
+
 chown root:fastagenthub /etc/fastagenthub.env
 chmod 0640 /etc/fastagenthub.env
 systemctl daemon-reload

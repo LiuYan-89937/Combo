@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /publish
+Disallow: /auth/
+
+Sitemap: https://liuyanai.top/sitemap.xml

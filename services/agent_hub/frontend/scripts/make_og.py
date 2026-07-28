@@ -10,7 +10,9 @@ from PIL import Image, ImageDraw, ImageFont
 W, H = 1200, 630
 OUT = os.path.join(os.path.dirname(__file__), "..", "public", "og-cover.png")
 
-CJK = "/System/Library/Fonts/PingFang.ttc"
+# PingFang is not always openable via FreeType; Heiti SC (index 1) is reliable.
+CJK = "/System/Library/Fonts/STHeiti Medium.ttc"
+CJK_INDEX = 1
 SANS = "/System/Library/Fonts/Helvetica.ttc"
 
 
@@ -45,8 +47,8 @@ d.rounded_rectangle((122, 176, 134, 188), radius=4, fill="#050505")
 
 d.text((184, 168), "FastAgentFactory", font=font(SANS, 34), fill="#9a9a9a")
 
-d.text((92, 286), "制造真正能", font=font(CJK, 92, index=1), fill="#ffffff")
-d.text((92, 398), "工作的 Agent", font=font(CJK, 92, index=1), fill="#ffffff")
+d.text((92, 286), "制造真正能", font=font(CJK, 92, index=CJK_INDEX), fill="#ffffff")
+d.text((92, 398), "工作的 Agent", font=font(CJK, 92, index=CJK_INDEX), fill="#ffffff")
 
 d.text((96, 540), "Local-first · Cross-platform · Build · Run · Distribute",
        font=font(SANS, 28), fill="#6f6f6f")

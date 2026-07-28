@@ -126,9 +126,9 @@ onMounted(async () => {
             <p class="uploader__note">{{ t('publish.uploadNote') }}</p>
           </div>
 
-          <!-- Dropzone (idle / error) -->
+          <!-- Dropzone (idle only; the error phase renders in the flow block) -->
           <div
-            v-if="flow.phase.value === 'idle' || flow.phase.value === 'error'"
+            v-if="flow.phase.value === 'idle'"
             class="dropzone"
             :class="{ 'dropzone--drag': dragging, 'dropzone--error': !!fileError }"
             role="button"
