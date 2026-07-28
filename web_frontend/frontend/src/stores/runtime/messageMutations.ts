@@ -72,6 +72,30 @@ export function applyMessageCompleted(state: MessageMutationState, event: Factor
   syncTurnAssistantMessage(state, message, event)
 }
 
+export function reconcileAssistantDialogueInterrupt(
+  state: MessageMutationState,
+  event: FactoryFrontendEvent,
+  text: string,
+): boolean {
+  if (event.payload?.presentation !== 'assistant_dialogue' || !text) return false
+  const requestId = event.request_id || state.activeRequestId
+  if (!requestId) return false
+  const turn = [...state.conversationTurns]
+    .reverse()
+    .find(item => item.requestId === requestId)
+  const message = [...(turn?.assistantMessages || [])]
+    .reverse()
+    .find(item => item.role === 'assistant' && !item.metadata?.tool_activity && !item.metadata?.interrupt)
+  if (!message) return false
+
+  replaceAssistantDialogueBody(message, event, text)
+  const transcriptMessage = state.transcript.find(item => item.id === message.id)
+  if (transcriptMessage && transcriptMessage !== message) {
+    replaceAssistantDialogueBody(transcriptMessage, event, text)
+  }
+  return true
+}
+
 function ensureMessage(
   state: MessageMutationState,
   event: FactoryFrontendEvent,
@@ -97,6 +121,32 @@ function ensureMessage(
   }
   state.transcript.push(message)
   return message
+}
+
+function replaceAssistantDialogueBody(
+  message: TranscriptItem,
+  event: FactoryFrontendEvent,
+  text: string,
+) {
+  const preservedParts = message.parts.filter(part => part.type !== 'text')
+  message.parts = [
+    ...preservedParts,
+    textPart(`${event.event_id}:text`, text, {
+      format: 'markdown',
+      status: 'completed',
+      timestamp: event.timestamp,
+    }),
+  ]
+  message.content = partsToText(message.parts)
+  message.reasoning = messageReasoning(message)
+  message.status = 'completed'
+  message.timestamp = event.timestamp
+  message.metadata = {
+    ...(message.metadata || {}),
+    interrupt: true,
+    interrupt_type: String(event.payload?.type || ''),
+    mode: event.mode || null,
+  }
 }
 
 function upsertMessagePart(message: TranscriptItem, part: ChatMessagePart, timestamp: string) {
