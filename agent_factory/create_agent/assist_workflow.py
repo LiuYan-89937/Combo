@@ -12,6 +12,7 @@ from langgraph.graph.message import add_messages
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.models import get_main_model
 from agent_factory.models.message_layout import system_messages_first
+from agent_factory.models.temporal_context import current_date_system_context
 from agent_factory.model_pool.runtime_override import resolve_runtime_main_chat_model_from_state
 from agent_factory.runtime_attachments import format_attachments_for_model
 from agent_factory.runtime_kernel.model_operations import ModelOperationService
@@ -107,6 +108,7 @@ def _messages_with_system(state: CreateAgentAssistState, tools: list[BaseTool]) 
             item
             for item in [
                 "你是 FastAgentFactory 的 /create-agent 辅助模式。",
+                current_date_system_context(),
                 "当前图只用于问答、查看 workspace、解释已有状态；不能创建、修改、验证或推进 AgentPackage。",
                 "如果用户要求创建、继续、修复、验证或制造 AgentPackage，说明该请求需要进入 manufacture graph，而不是在辅助模式中执行。",
                 "如果用户询问当前工作区，直接说明 workspace path；package 文件若存在，位于 workspace 根目录。",

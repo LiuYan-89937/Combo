@@ -243,16 +243,11 @@ class CreateAgentToolEnvironmentBuilder:
                 "contracts/resources.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "contracts/scheduler_seed.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "contracts/context.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
-                "contracts/knowledge.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "contracts/model.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "contracts/scheduler.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
-                "contracts/session.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
-                "contracts/state.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
-                "contracts/memory.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "extensions/extension_bindings.json": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "tools": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
                 "knowledge": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
-                "state": {"write_tool": CREATE_AGENT_AUTHORING_TOOL_ID},
             }
         if authoring_mode:
             skill_registry = _create_agent_skill_registry(

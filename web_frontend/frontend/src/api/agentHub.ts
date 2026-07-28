@@ -36,7 +36,51 @@ export interface AgentHubValidation {
     mcp_servers?: string[]
     builtin_tools?: string[]
   }
+  model?: {
+    bindings?: Record<string, AgentHubModelBindingRequirement>
+    tool_bindings?: Record<string, AgentHubModelToolBindingRequirement>
+  }
   warnings?: Array<{ code: string; message: string; path?: string }>
+}
+
+export interface AgentHubModelBindingRequirement {
+  reason?: string
+  required_capabilities?: Record<string, unknown>
+}
+
+export interface AgentHubModelToolBindingRequirement extends AgentHubModelBindingRequirement {
+  capability?: string
+  description?: string
+}
+
+export interface AgentHubModelCandidate {
+  profile_id: string
+  display_name: string
+  provider: string
+  model_name: string
+}
+
+export interface AgentHubModelRecommendation extends AgentHubModelCandidate {
+  role: string
+  candidates: AgentHubModelCandidate[]
+}
+
+export interface AgentHubModelToolRecommendation extends AgentHubModelCandidate {
+  tool_id: string
+  capability: string
+  candidates: AgentHubModelCandidate[]
+}
+
+export interface AgentHubInstallationPlan {
+  release: AgentHubRelease
+  requirements: Record<string, Record<string, unknown>>
+  tool_requirements: Record<string, Record<string, unknown>>
+  selection: {
+    status: 'completed' | 'blocked'
+    recommendations: AgentHubModelRecommendation[]
+    tool_recommendations: AgentHubModelToolRecommendation[]
+    unmatched: Array<Record<string, unknown>>
+  }
 }
 
 export interface AgentHubRelease {
@@ -120,12 +164,23 @@ export const agentHubApi = {
     ),
   uploads: (limit = 50) =>
     requestJson<AgentHubUpload[]>(withQuery('/api/agent-hub/uploads', { limit })),
-  install: (releaseId: string, replace = false) =>
+  installationPlan: (releaseId: string) =>
+    requestJson<AgentHubInstallationPlan>(
+      `/api/agent-hub/releases/${encodeURIComponent(releaseId)}/installation-plan`,
+    ),
+  install: (
+    releaseId: string,
+    payload: {
+      replace: boolean
+      model_bindings: Record<string, string>
+      model_tool_bindings: Record<string, string>
+    },
+  ) =>
     requestJson<{ release: AgentHubRelease; package: Record<string, unknown> }>(
       `/api/agent-hub/releases/${encodeURIComponent(releaseId)}/install`,
       {
         method: 'POST',
-        body: JSON.stringify({ replace }),
+        body: JSON.stringify(payload),
       },
     ),
   publishPreview: (packageId: string) =>

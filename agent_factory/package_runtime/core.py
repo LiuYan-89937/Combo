@@ -562,13 +562,7 @@ class PackageRuntimeCore:
         return 0
 
     def _list_sessions(self, normalizer: RuntimeEventNormalizer) -> int:
-        session_contract = self.package.contracts.get("session") if isinstance(self.package.contracts, dict) else None
-        session_config = session_contract.get("config", {}) if isinstance(session_contract, dict) else {}
-        session_root = _runtime_session_root(
-            runtime_root=self.runtime_root,
-            package_root=self.package.package_root,
-            configured=str(session_config.get("session_root") or ".agent_runtime/sessions"),
-        )
+        session_root = (self.runtime_root or self.package.package_root / ".agent_runtime") / "sessions"
         sessions = []
         for path in sorted(session_root.glob("*.json")):
             try:
@@ -948,34 +942,6 @@ def _emit_failed_runtime_final(
     normalizer.complete_open_model_streams(reason="run_failed")
     normalizer.emit_run_failed(RuntimeError(runtime_error_message(final_state, command=command)), extra_payload)
     return 1
-
-
-def _runtime_session_root(*, runtime_root: Path | None, package_root: Path, configured: str) -> Path:
-    value = configured.strip() or ".agent_runtime/sessions"
-    if runtime_root is not None:
-        if value == "/runtime":
-            return runtime_root.resolve()
-        if value.startswith("/runtime/"):
-            return _root_relative_path(
-                runtime_root,
-                Path(value.removeprefix("/runtime/")),
-                field_path="session.config.session_root",
-            )
-        if value == ".agent_runtime":
-            return runtime_root.resolve()
-        if value.startswith(".agent_runtime/"):
-            return _root_relative_path(
-                runtime_root,
-                Path(value.removeprefix(".agent_runtime/")),
-                field_path="session.config.session_root",
-            )
-    path = Path(value).expanduser()
-    if path.is_absolute():
-        raise ValueError(
-            "session.config.session_root must be package-relative or use /runtime/... "
-            f"when a runtime workspace is mounted; got {value!r}"
-        )
-    return _root_relative_path(package_root, path, field_path="session.config.session_root")
 
 
 def _root_relative_path(root_path: Path, path: Path, *, field_path: str) -> Path:

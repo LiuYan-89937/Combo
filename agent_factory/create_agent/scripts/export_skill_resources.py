@@ -10,13 +10,9 @@ from agent_factory.create_agent.package_scaffold import materialize_empty_agent_
 from agent_factory.runtime_contracts.builtins import (
     default_context_contract,
     default_dependencies_contract,
-    default_knowledge_contract,
-    default_memory_contract,
     default_model_contract,
     default_resources_contract,
     default_scheduler_contract,
-    default_session_contract,
-    default_state_contract,
     default_tools_contract,
 )
 from agent_factory.runtime_contracts.schema import AgentPackageManifest
@@ -29,12 +25,8 @@ RESOURCE_IDS = {
     "00-manufacturing-control": "manufacturing_control",
     "01-package-identity-system": "package_identity",
     "02-model-system": "model_system",
-    "03-session-system": "session_system",
-    "04-state-system": "state_system",
     "05-resources-system": "resources_system",
     "06-context-system": "context_system",
-    "07-memory-system": "memory_system",
-    "08-knowledge-system": "knowledge_system",
     "09-tools-system": "tools_system",
     "10-package-tool-system": "package_tool_system",
     "12-assembly-pattern-system": "assembly_pattern_system",
@@ -73,18 +65,6 @@ def main() -> None:
                 "contracts/dependencies.json": (type(default_dependencies_contract()), scaffold["contracts/dependencies.json"]),
             },
         ),
-        "03-session-system": _export(
-            title="Session contract",
-            files={"contracts/session.json": (type(default_session_contract()), default_session_contract())},
-        ),
-        "04-state-system": _export(
-            title="State contract and state files",
-            files={
-                "contracts/state.json": (type(default_state_contract()), default_state_contract()),
-                "state/package.schema.json": (dict, {"type": "object", "additionalProperties": True}),
-                "state/package.initial.json": (dict, {}),
-            },
-        ),
         "05-resources-system": _export(
             title="Resources contract and resource facts",
             files={
@@ -98,14 +78,6 @@ def main() -> None:
         "06-context-system": _export(
             title="Context contract",
             files={"contracts/context.json": (type(default_context_contract()), default_context_contract())},
-        ),
-        "07-memory-system": _export(
-            title="Memory contract",
-            files={"contracts/memory.json": (type(default_memory_contract()), default_memory_contract())},
-        ),
-        "08-knowledge-system": _export(
-            title="Knowledge contract",
-            files={"contracts/knowledge.json": (type(default_knowledge_contract()), default_knowledge_contract())},
         ),
         "09-tools-system": _export(
             title="Tools contract",

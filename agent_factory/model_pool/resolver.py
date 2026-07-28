@@ -64,14 +64,22 @@ def resolve_chat_model_profile(
         base_url=credential.base_url,
         profile_id=profile.profile_id,
         source="model_pool",
-        temperature=overrides.temperature,
-        timeout_seconds=overrides.timeout_seconds or profile.limits.timeout_seconds,
-        max_output_tokens=overrides.max_output_tokens or profile.limits.max_output_tokens,
+        temperature=(
+            overrides.temperature
+            if overrides.temperature is not None
+            else profile.settings.temperature
+        ),
+        timeout_seconds=profile.limits.timeout_seconds,
+        max_output_tokens=(
+            overrides.max_output_tokens
+            if overrides.max_output_tokens is not None
+            else profile.limits.max_output_tokens
+        ),
         max_input_tokens=profile.limits.max_input_tokens,
         compression_trigger_tokens=profile.limits.compression_trigger_tokens,
-        multimodal=bool(overrides.multimodal) if overrides.multimodal is not None else ("image" in profile.capabilities.input_modalities),
-        reasoning=overrides.reasoning or _default_reasoning(),
-        structured_output_method=overrides.structured_output_method,
+        multimodal="image" in profile.capabilities.input_modalities,
+        reasoning=_default_reasoning(),
+        structured_output_method=None,
     )
     model = create_chat_model_from_settings(settings)
     if model is None:
@@ -150,7 +158,7 @@ def resolve_image_generation_model_profile(
         base_url=credential.base_url,
         profile_id=profile.profile_id,
         source="model_pool",
-        timeout_seconds=binding.overrides.timeout_seconds or profile.limits.timeout_seconds,
+        timeout_seconds=profile.limits.timeout_seconds,
     )
     return ResolvedImageGenerationProfile(
         profile_id=profile.profile_id,

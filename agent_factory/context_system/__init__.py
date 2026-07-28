@@ -1,6 +1,7 @@
 from agent_factory.context_system.schema import (
     AssemblyPolicy,
     CompressionPolicy,
+    CrossSessionMemoryPolicy,
     ContextCandidate,
     ContextContractConfig,
     ContextInjectionReport,
@@ -8,12 +9,12 @@ from agent_factory.context_system.schema import (
     ContextQuery,
     ContextRetrievalReport,
     LLMContextFrame,
-    RetrievalPolicy,
 )
 
 __all__ = [
     "AssemblyPolicy",
     "CompressionPolicy",
+    "CrossSessionMemoryPolicy",
     "ContextCandidate",
     "ContextContractConfig",
     "ContextInjectionReport",
@@ -21,5 +22,4 @@ __all__ = [
     "ContextQuery",
     "ContextRetrievalReport",
     "LLMContextFrame",
-    "RetrievalPolicy",
 ]

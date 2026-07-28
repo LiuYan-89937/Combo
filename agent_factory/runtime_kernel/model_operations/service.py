@@ -24,8 +24,10 @@ from agent_factory.model_pool.runtime_override import (
     resolve_runtime_main_chat_model_from_state,
     resolve_runtime_reasoning_model,
 )
+from agent_factory.model_pool.schema import ModelBindingRuntimeOverrides
 from agent_factory.context_system.events import emit_context_event
 from agent_factory.context_system.token_counter import (
+    context_limits_with_overrides,
     context_window_payload,
     model_context_limits,
     provider_token_budget_payload,
@@ -52,12 +54,14 @@ class ModelOperationService:
         settings: Any | None = None,
         models_by_role: Mapping[str, tuple[Any, Any]] | None = None,
         require_runtime_profile: bool = False,
+        runtime_profile_overrides: ModelBindingRuntimeOverrides | None = None,
     ) -> None:
         self.model_role = role
         self._model = model
         self._settings = settings
         self._models_by_role = dict(models_by_role or {})
         self._require_runtime_profile = require_runtime_profile
+        self._runtime_profile_overrides = runtime_profile_overrides or ModelBindingRuntimeOverrides()
 
     def text(
         self,
@@ -370,7 +374,10 @@ class ModelOperationService:
     def _resolve_model(self, role: ModelRole | None = None, *, state: Any | None = None) -> tuple[Any, dict[str, Any]]:
         requested_role = role or self.model_role
         if state is not None and (requested_role == "main" or self._require_runtime_profile):
-            override = resolve_runtime_main_chat_model_from_state(state)
+            override = resolve_runtime_main_chat_model_from_state(
+                state,
+                overrides=self._runtime_profile_overrides,
+            )
             if override is not None:
                 return self._apply_runtime_reasoning(
                     override.model,
@@ -480,7 +487,10 @@ class ModelOperationService:
         if item is not None:
             return item
         if state is not None:
-            override = resolve_runtime_main_chat_model_from_state(state)
+            override = resolve_runtime_main_chat_model_from_state(
+                state,
+                overrides=self._runtime_profile_overrides,
+            )
             if override is not None:
                 return override.model, override.settings
         model, settings = _configured_model_for_role("main")
@@ -903,6 +913,15 @@ def _emit_provider_usage_context_window(
     if token_count is None:
         return
     limits = model_context_limits(services=services, state=state, model_role=model_role)
+    context_runtime = getattr(services, "context_system", None)
+    context_config = getattr(context_runtime, "config", None)
+    if context_config is not None:
+        policy = context_runtime.policy_for_node(node_id)
+        limits = context_limits_with_overrides(
+            limits,
+            context_window_tokens=context_config.context_window_tokens,
+            compression_trigger_tokens=policy.compression.trigger_token_threshold,
+        )
     emit_context_event(
         services=services,
         state=state,

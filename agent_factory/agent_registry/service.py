@@ -296,7 +296,6 @@ def _package_document(package_path: Path) -> AgentIndexDocument | None:
         return None
     assembly = _read_json(package_path / "assembly_spec.json")
     report = _read_json(package_path / "package_report.json")
-    knowledge_contract = _read_json(package_path / "contracts" / "knowledge.json")
     agent_name = _clean_text(agent.get("name") or package_id)
     description = _clean_text(agent.get("description") or "")
     pattern_id = _clean_text((manifest.get("runtime") or {}).get("pattern_id") if isinstance(manifest.get("runtime"), dict) else "")
@@ -308,7 +307,7 @@ def _package_document(package_path: Path) -> AgentIndexDocument | None:
         tools=_tool_summaries(assembly),
         skills=_skill_summaries(package_path),
         mcp_servers=_mcp_summaries(package_path),
-        knowledge_sources=_knowledge_sources(knowledge_contract),
+        knowledge_sources=[],
         report=report,
     )
     document_text = _agent_card_text(agent_card)
@@ -403,12 +402,6 @@ def _mcp_summaries(package_path: Path) -> list[dict[str, Any]]:
             }
         )
     return result
-
-
-def _knowledge_sources(knowledge_contract: dict[str, Any]) -> list[dict[str, Any]]:
-    config = knowledge_contract.get("config") if isinstance(knowledge_contract.get("config"), dict) else {}
-    sources = config.get("sources") if isinstance(config.get("sources"), list) else []
-    return [source for source in sources if isinstance(source, dict)]
 
 
 def _report_summary(report: dict[str, Any]) -> dict[str, Any]:

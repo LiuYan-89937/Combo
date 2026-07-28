@@ -13,14 +13,11 @@ from agent_factory.runtime_contracts.schema import (
     AgentPackageManifest,
     ContextContract,
     DependenciesContract,
-    KnowledgeContract,
-    MemoryContract,
     ModelContract,
     ResourcesContract,
     RuntimeContractEnvelope,
     SchedulerContract,
     SchedulerSeedContract,
-    SessionContract,
     ToolsContract,
 )
 
@@ -30,9 +27,7 @@ __all__ = [
     "AgentPackageManifest",
     "ContextContract",
     "DependenciesContract",
-    "KnowledgeContract",
     "LoadedAgentPackage",
-    "MemoryContract",
     "ModelContract",
     "ResourcesContract",
     "RuntimeBuildContext",
@@ -45,6 +40,5 @@ __all__ = [
     "RuntimeContributionMerger",
     "SchedulerContract",
     "SchedulerSeedContract",
-    "SessionContract",
     "ToolsContract",
 ]

@@ -1,178 +1,81 @@
 {
-  "$defs": {
-    "AssemblyPolicy": {
-      "additionalProperties": false,
-      "properties": {
-        "max_items_total": {
-          "default": 8,
-          "maximum": 64,
-          "minimum": 1,
-          "title": "Max Items Total",
-          "type": "integer"
-        },
-        "max_tokens_total": {
-          "default": 1200,
-          "maximum": 32000,
-          "minimum": 100,
-          "title": "Max Tokens Total",
-          "type": "integer"
-        },
-        "per_source_limits": {
-          "additionalProperties": {
-            "type": "integer"
-          },
-          "title": "Per Source Limits",
-          "type": "object"
-        }
-      },
-      "title": "AssemblyPolicy",
-      "type": "object"
-    },
-    "CompressionPolicy": {
-      "additionalProperties": false,
-      "properties": {
-        "enabled": {
-          "default": true,
-          "title": "Enabled",
-          "type": "boolean"
-        },
-        "trigger_token_threshold": {
-          "minimum": 1000,
-          "title": "Trigger Token Threshold",
-          "type": "integer"
-        },
-        "keep_recent_messages": {
-          "default": 12,
-          "maximum": 128,
-          "minimum": 2,
-          "title": "Keep Recent Messages",
-          "type": "integer"
-        }
-      },
-      "title": "CompressionPolicy",
-      "type": "object"
-    },
-    "ContextContractConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "version": {
-          "const": "context_system.v0",
-          "default": "context_system.v0",
-          "title": "Version",
-          "type": "string"
-        },
-        "enabled": {
-          "default": true,
-          "title": "Enabled",
-          "type": "boolean"
-        },
-        "context_window_tokens": {
-          "anyOf": [
-            {
-              "minimum": 1000,
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Context Window Tokens"
-        },
-        "default_policy": {
-          "$ref": "#/$defs/ContextPolicy"
-        },
-        "node_policies": {
-          "additionalProperties": {
-            "$ref": "#/$defs/ContextPolicy"
-          },
-          "title": "Node Policies",
-          "type": "object"
-        }
-      },
-      "title": "ContextContractConfig",
-      "type": "object"
-    },
-    "ContextPolicy": {
-      "additionalProperties": false,
-      "properties": {
-        "version": {
-          "const": "context_policy.v0",
-          "default": "context_policy.v0",
-          "title": "Version",
-          "type": "string"
-        },
-        "compression": {
-          "$ref": "#/$defs/CompressionPolicy"
-        },
-        "retrieval": {
-          "$ref": "#/$defs/RetrievalPolicy"
-        },
-        "assembly": {
-          "$ref": "#/$defs/AssemblyPolicy"
-        }
-      },
-      "title": "ContextPolicy",
-      "type": "object"
-    },
-    "RetrievalPolicy": {
-      "additionalProperties": false,
-      "properties": {
-        "enabled": {
-          "default": true,
-          "title": "Enabled",
-          "type": "boolean"
-        },
-        "source_ids": {
-          "items": {
-            "const": "cross_session_memory",
-            "type": "string"
-          },
-          "title": "Source Ids",
-          "type": "array"
-        },
-        "max_candidates": {
-          "default": 24,
-          "maximum": 128,
-          "minimum": 1,
-          "title": "Max Candidates",
-          "type": "integer"
-        },
-        "min_score": {
-          "default": 0.0,
-          "maximum": 1.0,
-          "minimum": 0.0,
-          "title": "Min Score",
-          "type": "number"
-        }
-      },
-      "title": "RetrievalPolicy",
-      "type": "object"
-    }
-  },
+  "type": "object",
   "additionalProperties": false,
   "properties": {
-    "type": {
-      "const": "context",
-      "default": "context",
-      "title": "Type",
-      "type": "string"
-    },
-    "version": {
-      "const": "context_contract.v0",
-      "default": "context_contract.v0",
-      "title": "Version",
-      "type": "string"
-    },
-    "enabled": {
-      "default": true,
-      "title": "Enabled",
-      "type": "boolean"
-    },
+    "type": {"const": "context"},
+    "version": {"const": "context_contract.v1"},
+    "enabled": {"type": "boolean", "default": true},
     "config": {
-      "$ref": "#/$defs/ContextContractConfig"
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {"const": "context_system.v1"},
+        "enabled": {"type": "boolean", "default": true},
+        "context_window_tokens": {
+          "anyOf": [
+            {"type": "integer", "minimum": 1000},
+            {"type": "null"}
+          ],
+          "default": null
+        },
+        "default_policy": {"$ref": "#/$defs/context_policy"}
+      },
+      "required": ["version", "enabled", "default_policy"]
     }
   },
-  "title": "Context contract",
-  "type": "object"
+  "required": ["type", "version", "enabled", "config"],
+  "$defs": {
+    "context_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {"const": "context_policy.v1"},
+        "compression": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "trigger_token_threshold": {
+              "anyOf": [
+                {"type": "integer", "minimum": 1000},
+                {"type": "null"}
+              ]
+            },
+            "keep_recent_messages": {"type": "integer", "minimum": 2, "maximum": 128}
+          },
+          "required": ["enabled", "trigger_token_threshold", "keep_recent_messages"]
+        },
+        "cross_session_memory": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "write_enabled": {"type": "boolean"},
+            "injection_enabled": {"type": "boolean"},
+            "write_interval_turns": {"type": "integer", "minimum": 1, "maximum": 1000},
+            "max_candidates": {"type": "integer", "minimum": 1, "maximum": 128},
+            "min_score": {"type": "number", "minimum": 0, "maximum": 1},
+            "max_items": {"type": "integer", "minimum": 1, "maximum": 64},
+            "max_tokens": {"type": "integer", "minimum": 100, "maximum": 32000},
+            "per_kind_limits": {
+              "type": "object",
+              "additionalProperties": {"type": "integer", "minimum": 0}
+            }
+          },
+          "required": [
+            "enabled",
+            "write_enabled",
+            "injection_enabled",
+            "write_interval_turns",
+            "max_candidates",
+            "min_score",
+            "max_items",
+            "max_tokens",
+            "per_kind_limits"
+          ]
+        }
+      },
+      "required": ["version", "compression", "cross_session_memory"]
+    }
+  }
 }

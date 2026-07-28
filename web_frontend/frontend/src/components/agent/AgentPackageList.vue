@@ -79,6 +79,9 @@
                 <n-tag v-if="pkg.is_builtin" size="small" :bordered="false">
                   {{ t('agents.builtin') }}
                 </n-tag>
+                <n-tag v-if="pkg.runtime_pattern_id" size="small" :bordered="false">
+                  {{ runtimePatternLabel(pkg.runtime_pattern_id) }}
+                </n-tag>
               </div>
               <n-text depth="3" class="package-desc">
                 {{ pkg.agent_description || t('common.noDescription') }}
@@ -239,6 +242,13 @@ const selectedPackages = computed(() => {
     (pkg) => selectedPackageIds.value.has(pkg.package_id) && isPackageDeletable(pkg),
   )
 })
+
+function runtimePatternLabel(patternId: string): string {
+  return {
+    react_agent: 'ReAct',
+    plan_and_execute: 'Plan and Execute',
+  }[patternId] || patternId
+}
 const selectedCount = computed(() => selectedPackages.value.length)
 
 function handleRefresh() {

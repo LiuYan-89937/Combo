@@ -77,21 +77,13 @@ export interface AgentPackageModelContractView {
 
 export interface AgentPackageContextContractView {
   version: string
+  enabled?: boolean
+  config?: Record<string, any>
   context_window_tokens?: number | null
   context_window_tokens_source?: string | null
   compression_threshold_tokens?: number | null
   compression_threshold_tokens_source?: string | null
   model_profile_id?: string | null
-  error?: string | null
-}
-
-export interface AgentPackageMemoryContractView {
-  available: boolean
-  version: string
-  enabled: boolean
-  write_enabled: boolean
-  injection_enabled: boolean
-  write_interval_turns?: number | null
   error?: string | null
 }
 
@@ -110,6 +102,7 @@ export interface AgentPackageView {
   agent_name: string | null
   name: string | null
   agent_description: string | null
+  runtime_pattern_id?: string | null
   status: string | null
   tool_count: number | null
   session_count: number | null
@@ -118,7 +111,6 @@ export interface AgentPackageView {
   sandbox?: Record<string, any>
   model_contract?: AgentPackageModelContractView
   context_contract?: AgentPackageContextContractView
-  memory_contract?: AgentPackageMemoryContractView
   resources?: { key_available: boolean; resources: Array<{ resource_id: string; configured: boolean }>; migration?: { status: string } }
   environment?: { status?: string; image?: string; image_digest?: string; platform?: Record<string, string>; verified_at?: string; error?: string }
   extensions?: Record<string, any>

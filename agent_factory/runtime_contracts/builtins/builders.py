@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -9,7 +8,7 @@ from langgraph.errors import GraphInterrupt
 from agent_factory.artifact_system import ArtifactStore, ReportStore
 from agent_factory.context_system.runtime import ContextSystemRuntime
 from agent_factory.context_system.sources import default_context_sources
-from agent_factory.knowledge_system import build_knowledge_runtime
+from agent_factory.knowledge_system import KnowledgeRuntimeConfig, build_knowledge_runtime
 from agent_factory.memory_system import default_agent_runtime
 from agent_factory.memory_system.background import MemoryBackgroundWorker
 from agent_factory.memory_system.store_index import build_memory_store_index
@@ -19,7 +18,7 @@ from agent_factory.model_pool import (
 )
 from agent_factory.runtime_contracts.builder import RuntimeBuildContext
 from agent_factory.runtime_contracts.contribution import RuntimeContribution
-from agent_factory.runtime_contracts.memory_config import resolve_memory_system_config
+from agent_factory.runtime_contracts.memory_config import memory_system_config_from_context
 from agent_factory.runtime_contracts.paths import (
     package_runtime_path_text,
     resolve_package_runtime_path,
@@ -28,15 +27,11 @@ from agent_factory.runtime_contracts.schema import (
     ArtifactContract,
     ContextContract,
     DependenciesContract,
-    KnowledgeContract,
-    MemoryContract,
     ModelContract,
     NodeProviderContract,
     ResourcesContract,
     SchedulerContract,
     SchedulerSeedContract,
-    SessionContract,
-    StateContract,
     ToolsContract,
     TraceContract,
 )
@@ -52,7 +47,6 @@ from agent_factory.runtime_kernel.persistence import (
     LangGraphStoreFactory,
     migrate_legacy_instance_checkpoints,
 )
-from agent_factory.runtime_kernel.state_contracts import StateNamespaceSpec
 from agent_factory.runtime_kernel.types import ToolExecutionResult
 from agent_factory.runtime_kernel.wrappers.system_context import CONTEXT_PREPARE_SYSTEM_WRAPPER_ID
 from agent_factory.runtime_kernel.wrappers.system_knowledge import KNOWLEDGE_GUIDANCE_SYSTEM_WRAPPER_ID
@@ -73,38 +67,48 @@ from agent_factory.trace_system import JSONLTraceStore, TraceDiagnostics, TraceP
 from agent_factory.trace_system.runtime_log import RuntimeLogStore
 
 
-class SessionContractBuilder:
-    contract_type = "session"
-    contract_version = "session_contract.v0"
+def build_session_runtime(context: RuntimeBuildContext) -> RuntimeContribution:
+    runtime_root = context.runtime_root or context.package_root / ".agent_runtime"
+    session_root = runtime_root / "sessions"
+    checkpoint_path = runtime_root / "checkpoints" / "agent.sqlite"
+    migrate_legacy_instance_checkpoints(checkpoint_path)
+    checkpointer = LangGraphCheckpointerFactory().build(
+        LangGraphCheckpointerConfig(backend="sqlite", path=checkpoint_path)
+    ).saver
+    return RuntimeContribution(
+        services={"checkpointer": checkpointer},
+        session_config={
+            "session_root": str(session_root),
+            "checkpointer_backend": "sqlite",
+            "checkpoint_path": str(checkpoint_path),
+        },
+    )
 
-    def build(self, contract: SessionContract, context: RuntimeBuildContext) -> RuntimeContribution:
-        config = contract.config
-        session_root = package_runtime_path_text(context, config.session_root, field_path="session.config.session_root")
-        checkpoint_path = (
-            resolve_package_runtime_path(
-                context,
-                config.checkpoint_path,
-                field_path="session.config.checkpoint_path",
-            )
-            if config.checkpointer_backend == "sqlite"
-            else None
-        )
-        if checkpoint_path is not None:
-            migrate_legacy_instance_checkpoints(checkpoint_path)
-        checkpointer = LangGraphCheckpointerFactory().build(
-            LangGraphCheckpointerConfig(
-                backend=config.checkpointer_backend,
-                path=checkpoint_path,
-            )
-        ).saver
-        return RuntimeContribution(
-            services={"checkpointer": checkpointer},
-            session_config={
-                "session_root": session_root,
-                "checkpointer_backend": config.checkpointer_backend,
-                "checkpoint_path": str(checkpoint_path) if checkpoint_path is not None else "",
-            },
-        )
+
+def build_knowledge_runtime_infrastructure(context: RuntimeBuildContext) -> RuntimeContribution:
+    runtime_root = context.runtime_root or context.package_root / ".agent_runtime"
+    knowledge_root = runtime_root / "knowledge"
+    defaults = KnowledgeRuntimeConfig()
+    config = defaults.model_copy(
+        update={
+            "root": str(knowledge_root),
+            "catalog_path": str(knowledge_root / "catalog" / "knowledge.sqlite"),
+            "rag_store": defaults.rag_store.model_copy(
+                update={"path": str(knowledge_root / "catalog" / "knowledge_store.sqlite")}
+            ),
+        }
+    )
+    assembly = build_knowledge_runtime(
+        config=config,
+        owner_type="agent",
+        owner_id=context.package.assembly_spec.agent.id,
+    )
+    return RuntimeContribution(
+        services={"knowledge_runtime": assembly.runtime},
+        system_wrappers=[KNOWLEDGE_GUIDANCE_SYSTEM_WRAPPER_ID],
+        tool_runtime_resources={"knowledge_runtime": assembly.runtime},
+        background_workers=[assembly.ingestion_worker],
+    )
 
 
 class ToolsContractBuilder:
@@ -236,63 +240,58 @@ class ToolsContractBuilder:
         )
 
 
-class MemoryContractBuilder:
-    contract_type = "memory"
-    contract_version = "memory_contract.v0"
-
-    def build(self, contract: MemoryContract, context: RuntimeBuildContext) -> RuntimeContribution:
-        config = resolve_memory_system_config(contract.config.memory_system, context)
-        if not config.enabled:
-            return RuntimeContribution(
-                services={
-                    "memory_store": None,
-                    "memory_system": default_agent_runtime(
-                        agent_id=context.package.assembly_spec.agent.id,
-                        config=config,
-                        store=None,
-                    ),
-                }
-            )
-        store_config = LangGraphStoreConfig(
-            backend=config.store.backend,
-            path=(
-                Path(config.store.path)
-                if config.store.backend == "sqlite" and config.store.path.strip()
-                else None
-            ),
-            connection_uri=config.store.connection_uri,
-            database_name=config.store.database_name,
-            collection_name=config.store.collection_name,
-            setup=config.store.setup,
-            provider_options=config.store.provider_options,
-            index=build_memory_store_index(config),
-        )
-        store = LangGraphStoreFactory().build(store_config).store
-        runtime = default_agent_runtime(
-            agent_id=context.package.assembly_spec.agent.id,
-            config=config,
-            store=store,
-        )
-        background_workers: list[Any] = []
-        if config.write_enabled:
-            worker = MemoryBackgroundWorker(store=store, config=config)
-            runtime.writer = worker
-            background_workers.append(worker)
+def _memory_runtime_contribution(
+    contract: ContextContract,
+    context: RuntimeBuildContext,
+) -> RuntimeContribution:
+    config = memory_system_config_from_context(contract.config, context)
+    if not config.enabled:
         return RuntimeContribution(
-            services={"memory_store": store, "memory_system": runtime},
-            background_workers=background_workers,
+            services={
+                "memory_system": default_agent_runtime(
+                    agent_id=context.package.assembly_spec.agent.id,
+                    config=config,
+                    store=None,
+                ),
+            }
         )
+    store_config = LangGraphStoreConfig(
+        backend=config.store.backend,
+        path=Path(config.store.path),
+        setup=config.store.setup,
+        index=build_memory_store_index(config),
+    )
+    store = LangGraphStoreFactory().build(store_config).store
+    runtime = default_agent_runtime(
+        agent_id=context.package.assembly_spec.agent.id,
+        config=config,
+        store=store,
+    )
+    background_workers: list[Any] = []
+    if config.write_enabled:
+        worker = MemoryBackgroundWorker(store=store, config=config)
+        runtime.writer = worker
+        background_workers.append(worker)
+    return RuntimeContribution(
+        services={"memory_store": store, "memory_system": runtime},
+        background_workers=background_workers,
+    )
 
 
 class ContextContractBuilder:
     contract_type = "context"
-    contract_version = "context_contract.v0"
+    contract_version = "context_contract.v1"
 
     def build(self, contract: ContextContract, context: RuntimeBuildContext) -> RuntimeContribution:
         sources = default_context_sources()
+        memory = _memory_runtime_contribution(contract, context)
         return RuntimeContribution(
-            services={"context_system": ContextSystemRuntime(config=contract.config, sources=sources)},
+            services={
+                **memory.services,
+                "context_system": ContextSystemRuntime(config=contract.config, sources=sources),
+            },
             system_wrappers=[CONTEXT_PREPARE_SYSTEM_WRAPPER_ID],
+            background_workers=memory.background_workers,
         )
 
 
@@ -328,50 +327,6 @@ class TraceContractBuilder:
                 "trace_projector": projector,
                 "trace_diagnostics": diagnostics,
             }
-        )
-
-
-class KnowledgeContractBuilder:
-    contract_type = "knowledge"
-    contract_version = "knowledge_contract.v0"
-
-    def build(self, contract: KnowledgeContract, context: RuntimeBuildContext) -> RuntimeContribution:
-        rag_store = contract.config.rag_store
-        config = contract.config.model_copy(
-            update={
-                "root": package_runtime_path_text(context, contract.config.root, field_path="knowledge.config.root"),
-                "catalog_path": package_runtime_path_text(
-                    context,
-                    contract.config.catalog_path,
-                    field_path="knowledge.config.catalog_path",
-                ),
-                "rag_store": (
-                    rag_store.model_copy(
-                        update={
-                            "path": package_runtime_path_text(
-                                context,
-                                rag_store.path,
-                                field_path="knowledge.config.rag_store.path",
-                            )
-                        }
-                    )
-                    if rag_store.backend == "sqlite" and rag_store.path.strip()
-                    else rag_store
-                ),
-            }
-        )
-        assembly = build_knowledge_runtime(
-            config=config,
-            owner_type="agent",
-            owner_id=context.package.assembly_spec.agent.id,
-        )
-        return RuntimeContribution(
-            services={"knowledge_runtime": assembly.runtime},
-            system_wrappers=[KNOWLEDGE_GUIDANCE_SYSTEM_WRAPPER_ID],
-            tool_runtime_resources={
-                "knowledge_runtime": assembly.runtime,
-            },
-            background_workers=[assembly.ingestion_worker],
         )
 
 
@@ -442,11 +397,13 @@ class ModelContractBuilder:
                     model=(resolved_profiles["main"].model if "main" in resolved_profiles else None),
                     settings=(resolved_profiles["main"].settings if "main" in resolved_profiles else None),
                     require_runtime_profile=runtime_main_profile_required,
+                    runtime_profile_overrides=main_binding.overrides,
                 ),
                 "model_operation_service": ModelOperationService(
                     role="main",
                     models_by_role=models_by_role,
                     require_runtime_profile=runtime_main_profile_required,
+                    runtime_profile_overrides=main_binding.overrides,
                 ),
             },
             tool_runtime_resources=(
@@ -460,30 +417,6 @@ class ModelContractBuilder:
 def _runtime_log_path(context: RuntimeBuildContext) -> Path:
     runtime_root = context.runtime_root if context.runtime_root is not None else context.package_root / ".agent_runtime"
     return runtime_root / "logs" / "runtime_kernel.jsonl"
-
-
-class StateContractBuilder:
-    contract_type = "state"
-    contract_version = "state_contract.v0"
-
-    def build(self, contract: StateContract, context: RuntimeBuildContext) -> RuntimeContribution:
-        config = contract.config
-        schema = _read_package_json(context.package_root, config.schema_path)
-        initial_state = _read_package_json(context.package_root, config.initial_state_path)
-        if not isinstance(schema, dict):
-            raise ValueError("state contract schema file must contain a JSON object")
-        if not isinstance(initial_state, dict):
-            raise ValueError("state contract initial state file must contain a JSON object")
-        return RuntimeContribution(
-            state_contracts=[
-                StateNamespaceSpec(
-                    namespace=config.namespace,
-                    schema=schema,
-                    initial_state=initial_state,
-                    writable_node_ids=frozenset(config.writable_node_ids),
-                )
-            ]
-        )
 
 
 class NodeProviderContractBuilder:
@@ -665,9 +598,8 @@ def _merge_tool_resources(
 
 
 def _tool_output_root(*, context: RuntimeBuildContext, instance_extension_root: Path) -> Path:
-    runtime_root = _runtime_root_from_session_contract(context)
-    if runtime_root is not None:
-        return runtime_root / "tool_outputs"
+    if context.runtime_root is not None:
+        return context.runtime_root / "tool_outputs"
     if instance_extension_root.name == "extensions":
         return instance_extension_root.parent / "tool_outputs"
     return instance_extension_root / "tool_outputs"
@@ -684,27 +616,3 @@ def _inherits_builtin_agent_extensions(package: Any) -> bool:
 
 def _package_extension_roots(context: RuntimeBuildContext) -> list[Path]:
     return [context.package_root / "extensions"]
-
-
-def _runtime_root_from_session_contract(context: RuntimeBuildContext) -> Path | None:
-    session_contract = context.package.contracts.get("session")
-    if not isinstance(session_contract, dict):
-        return None
-    config = session_contract.get("config")
-    if not isinstance(config, dict):
-        return None
-    session_root = str(config.get("session_root") or "").strip()
-    if not session_root:
-        return None
-    path = resolve_package_runtime_path(context, session_root, field_path="session.config.session_root")
-    return path.parent if path.name == "sessions" else path
-
-
-def _read_package_json(package_root: Path, relative_path: str) -> Any:
-    target = (package_root / relative_path).resolve()
-    root = package_root.resolve()
-    try:
-        target.relative_to(root)
-    except ValueError as exc:
-        raise ValueError(f"package path escapes package root: {relative_path}") from exc
-    return json.loads(target.read_text(encoding="utf-8"))

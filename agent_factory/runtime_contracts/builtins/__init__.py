@@ -4,29 +4,21 @@ from agent_factory.runtime_contracts.builtins.builders import (
     ArtifactContractBuilder,
     ContextContractBuilder,
     DependenciesContractBuilder,
-    KnowledgeContractBuilder,
-    MemoryContractBuilder,
     ModelContractBuilder,
     NodeProviderContractBuilder,
     ResourcesContractBuilder,
     SchedulerContractBuilder,
     SchedulerSeedContractBuilder,
-    SessionContractBuilder,
-    StateContractBuilder,
     ToolsContractBuilder,
     TraceContractBuilder,
 )
 from agent_factory.runtime_contracts.builtins.defaults import (
     default_context_contract,
     default_dependencies_contract,
-    default_knowledge_contract,
-    default_memory_contract,
     default_model_contract,
     default_resources_contract,
     default_scheduler_contract,
     default_scheduler_seed_contract,
-    default_session_contract,
-    default_state_contract,
     default_tools_contract,
 )
 from agent_factory.runtime_contracts.registry import RuntimeContractRegistry
@@ -34,15 +26,11 @@ from agent_factory.runtime_contracts.schema import (
     ArtifactContract,
     ContextContract,
     DependenciesContract,
-    KnowledgeContract,
-    MemoryContract,
     ModelContract,
     NodeProviderContract,
     ResourcesContract,
     SchedulerContract,
     SchedulerSeedContract,
-    SessionContract,
-    StateContract,
     ToolsContract,
     TraceContract,
 )
@@ -59,26 +47,14 @@ def default_runtime_contract_registry(
         node_provider_registry.register_factory(PackageNodeProviderFactory())
     registry = RuntimeContractRegistry()
     registry.register(
-        contract_type="session",
-        version="session_contract.v0",
-        model=SessionContract,
-        builder=SessionContractBuilder(),
-    )
-    registry.register(
         contract_type="tools",
         version="tools_contract.v0",
         model=ToolsContract,
         builder=ToolsContractBuilder(),
     )
     registry.register(
-        contract_type="memory",
-        version="memory_contract.v0",
-        model=MemoryContract,
-        builder=MemoryContractBuilder(),
-    )
-    registry.register(
         contract_type="context",
-        version="context_contract.v0",
+        version="context_contract.v1",
         model=ContextContract,
         builder=ContextContractBuilder(),
     )
@@ -89,22 +65,10 @@ def default_runtime_contract_registry(
         builder=TraceContractBuilder(),
     )
     registry.register(
-        contract_type="knowledge",
-        version="knowledge_contract.v0",
-        model=KnowledgeContract,
-        builder=KnowledgeContractBuilder(),
-    )
-    registry.register(
         contract_type="model",
         version="model_contract.v1",
         model=ModelContract,
         builder=ModelContractBuilder(),
-    )
-    registry.register(
-        contract_type="state",
-        version="state_contract.v0",
-        model=StateContract,
-        builder=StateContractBuilder(),
     )
     registry.register(
         contract_type="node_provider",
@@ -148,14 +112,10 @@ def default_runtime_contract_registry(
 __all__ = [
     "default_context_contract",
     "default_dependencies_contract",
-    "default_knowledge_contract",
-    "default_memory_contract",
     "default_model_contract",
     "default_resources_contract",
     "default_runtime_contract_registry",
     "default_scheduler_contract",
     "default_scheduler_seed_contract",
-    "default_session_contract",
-    "default_state_contract",
     "default_tools_contract",
 ]

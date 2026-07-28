@@ -163,7 +163,7 @@ class KnowledgeGuidanceConfig(BaseModel):
     max_description_chars: int = Field(default=160, ge=40, le=1000)
 
 
-class KnowledgeContractConfig(BaseModel):
+class KnowledgeRuntimeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     root: str = ".agent_runtime/knowledge"

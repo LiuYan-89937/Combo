@@ -104,66 +104,16 @@
 
         <section class="detail-section">
           <div class="section-header">
-            <div class="section-label">{{ t('agentDetail.memoryPolicy') }}</div>
-            <n-tag
-              size="small"
-              :bordered="false"
-              :type="agentPackage.memory_contract?.enabled ? 'success' : 'default'"
-            >
-              {{ agentPackage.memory_contract?.enabled ? t('agentDetail.enabled') : t('agentDetail.disabled') }}
-            </n-tag>
-          </div>
-          <n-empty
-            v-if="!agentPackage.memory_contract?.available"
-            :description="agentPackage.memory_contract?.error || t('agentDetail.memoryUnavailable')"
-            size="small"
-          />
-          <div v-else class="memory-policy-panel">
-            <div class="context-config-row">
-              <div class="context-config-main">
-                <div class="context-config-heading">
-                  <div class="item-title">{{ t('agentDetail.memoryWriteInterval') }}</div>
-                  <div class="context-window-meta">
-                    <span>{{ t('agentDetail.memoryCurrentInterval', { turns: agentPackage.memory_contract?.write_interval_turns ?? t('common.unset') }) }}</span>
-                    <span>{{ t('agentDetail.memoryWriteStatus', { status: agentPackage.memory_contract?.write_enabled ? t('agentDetail.enabled') : t('agentDetail.disabled') }) }}</span>
-                    <span>{{ t('agentDetail.memoryInjectionStatus', { status: agentPackage.memory_contract?.injection_enabled ? t('agentDetail.enabled') : t('agentDetail.disabled') }) }}</span>
-                  </div>
-                </div>
-              </div>
-              <div class="memory-config-control">
-                <n-input-number
-                  v-model:value="memoryWriteIntervalDraft"
-                  :min="1"
-                  :max="1000"
-                  :precision="0"
-                  :show-button="true"
-                />
-                <span>{{ t('agentDetail.memoryTurnsUnit') }}</span>
-              </div>
-            </div>
-            <div class="context-window-help">{{ t('agentDetail.memoryPolicyHint') }}</div>
-            <div v-if="memoryConfigError" class="resource-error">{{ memoryConfigError }}</div>
-            <n-button
-              size="small"
-              type="primary"
-              class="context-save-button"
-              :loading="memoryConfigSaving"
-              :disabled="!memoryConfigDirty"
-              @click="saveMemoryConfig"
-            >
-              {{ t('common.save') }}
-            </n-button>
-          </div>
-        </section>
-
-        <section class="detail-section">
-          <div class="section-header">
             <div class="section-label">{{ t('agentDetail.contextPolicy') }}</div>
             <n-tag size="small" :bordered="false">
               {{ agentPackage.context_contract?.version || t('common.unknown') }}
             </n-tag>
           </div>
-          <div class="context-policy-panel">
+          <div v-if="contextDraft" class="context-policy-panel">
+            <div class="context-setting-line">
+              <span>启用上下文系统</span>
+              <n-switch v-model:value="contextDraft.enabled" />
+            </div>
             <div class="context-config-row">
               <div class="context-config-main">
                 <div class="context-config-heading">
@@ -171,11 +121,25 @@
                   <div class="context-window-meta">
                     <span>{{ t('agentDetail.contextEffective', { tokens: formatTokens(agentPackage.context_contract?.context_window_tokens) }) }}</span>
                     <span>{{ t('agentDetail.contextModelProfile', { profile: agentPackage.context_contract?.model_profile_id || t('common.auto') }) }}</span>
+                    <span>{{ contextSourceLabel(agentPackage.context_contract?.context_window_tokens_source) }}</span>
                   </div>
                 </div>
               </div>
+              <div class="context-value-control">
+                <n-input-number
+                  v-model:value="contextDraft.context_window_tokens"
+                  clearable
+                  :min="1000"
+                  :precision="0"
+                  placeholder="跟随模型"
+                />
+              </div>
             </div>
 
+            <div class="context-setting-line">
+              <span>启用上下文压缩</span>
+              <n-switch v-model:value="contextDraft.default_policy.compression.enabled" />
+            </div>
             <div class="context-config-row">
               <div class="context-config-main">
                 <div class="context-config-heading">
@@ -183,12 +147,108 @@
                   <div class="context-window-meta">
                     <span>{{ t('agentDetail.contextEffective', { tokens: formatTokens(agentPackage.context_contract?.compression_threshold_tokens) }) }}</span>
                     <span>{{ t('agentDetail.contextModelProfile', { profile: agentPackage.context_contract?.model_profile_id || t('common.auto') }) }}</span>
+                    <span>{{ contextSourceLabel(agentPackage.context_contract?.compression_threshold_tokens_source) }}</span>
                   </div>
                 </div>
               </div>
+              <div class="context-value-control">
+                <n-input-number
+                  v-model:value="contextDraft.default_policy.compression.trigger_token_threshold"
+                  clearable
+                  :min="1000"
+                  :precision="0"
+                  placeholder="跟随模型"
+                />
+              </div>
             </div>
+            <context-number-setting
+              v-model="contextDraft.default_policy.compression.keep_recent_messages"
+              label="压缩后保留最近消息"
+              :min="2"
+              :max="128"
+            />
 
-            <div class="context-window-help">{{ t('agentDetail.contextPolicyHint') }}</div>
+            <div class="context-subsection-title">跨会话记忆</div>
+            <div class="context-setting-line">
+              <setting-help-label
+                label="启用跨会话记忆"
+                help="总开关。关闭后不再从其他会话读取或写入记忆。例如临时咨询不希望影响后续会话时可关闭。"
+              />
+              <n-switch v-model:value="contextDraft.default_policy.cross_session_memory.enabled" />
+            </div>
+            <div class="context-setting-line">
+              <setting-help-label
+                label="写入记忆"
+                help="允许从当前对话提取可复用信息。例如记住“回答使用中文”这类长期偏好。"
+              />
+              <n-switch v-model:value="contextDraft.default_policy.cross_session_memory.write_enabled" />
+            </div>
+            <div class="context-setting-line">
+              <setting-help-label
+                label="注入记忆"
+                help="允许把相关的历史记忆加入新请求。例如讨论同一项目时带入此前确认的技术决策。"
+              />
+              <n-switch v-model:value="contextDraft.default_policy.cross_session_memory.injection_enabled" />
+            </div>
+            <context-number-setting
+              v-model="contextDraft.default_policy.cross_session_memory.write_interval_turns"
+              label="写入间隔（轮）"
+              help="每隔多少轮对话整理一次记忆。例如设为 3，约每完成 3 轮用户与 Agent 对话后提取一次。"
+              :min="1"
+              :max="1000"
+            />
+            <context-number-setting
+              v-model="contextDraft.default_policy.cross_session_memory.max_candidates"
+              label="最大候选数"
+              help="检索阶段最多比较多少条候选记忆。例如设为 24，会从相关候选中继续筛选最终注入项。"
+              :min="1"
+              :max="128"
+            />
+            <context-number-setting
+              v-model="contextDraft.default_policy.cross_session_memory.min_score"
+              label="最低相关分数"
+              help="候选记忆进入上下文所需的最低相关度，范围 0–1。例如 0.55 会过滤关联较弱的历史信息。"
+              :min="0"
+              :max="1"
+              :step="0.05"
+            />
+            <context-number-setting
+              v-model="contextDraft.default_policy.cross_session_memory.max_items"
+              label="最大注入条数"
+              help="单次请求最多注入多少条记忆。例如设为 8，即使检索到更多相关内容也只选最多 8 条。"
+              :min="1"
+              :max="64"
+            />
+            <context-number-setting
+              v-model="contextDraft.default_policy.cross_session_memory.max_tokens"
+              label="最大注入 Token"
+              help="所有跨会话记忆占用的总上下文预算。例如 1200 表示记忆内容合计最多约 1200 Token。"
+              :min="100"
+              :max="32000"
+            />
+
+            <div class="context-subsection-title">分类上限</div>
+            <context-number-setting
+              v-for="kind in memoryKinds"
+              :key="kind"
+              v-model="contextDraft.default_policy.cross_session_memory.per_kind_limits[kind]"
+              :label="memoryKindLabel(kind)"
+              :help="memoryKindHelp(kind)"
+              :min="0"
+              :max="32"
+            />
+
+            <div v-if="contextConfigError" class="resource-error">{{ contextConfigError }}</div>
+            <n-button
+              size="small"
+              type="primary"
+              class="context-save-button"
+              :loading="contextConfigSaving"
+              :disabled="!contextConfigDirty"
+              @click="saveContextConfig"
+            >
+              {{ t('common.save') }}
+            </n-button>
           </div>
         </section>
 
@@ -206,12 +266,52 @@
                 <div class="item-meta">
                   {{ binding.selection_source || t('common.auto') }}
                 </div>
+                <div class="model-override-grid">
+                  <div class="model-override-field">
+                    <setting-help-label
+                      label="Temperature"
+                      help="覆盖当前 Agent 使用该模型时的随机性。留空跟随模型池配置；模型池也未设置时使用供应商默认值。数值越低，输出通常越稳定。"
+                    />
+                    <n-input-number
+                      v-model:value="modelOverrideDrafts[binding.role].temperature"
+                      clearable
+                      :min="0"
+                      :step="0.1"
+                      placeholder="跟随模型池"
+                    />
+                  </div>
+                  <div class="model-override-field">
+                    <setting-help-label
+                      label="最大输出 Token"
+                      help="限制单次模型回复的最大 Token 数。留空跟随模型池配置；不影响上下文大小。"
+                    />
+                    <n-input-number
+                      v-model:value="modelOverrideDrafts[binding.role].max_output_tokens"
+                      clearable
+                      :min="1"
+                      :precision="0"
+                      placeholder="跟随模型池"
+                    />
+                  </div>
+                </div>
               </div>
               <n-tag size="small" :bordered="false">
                 {{ agentPackage.model_contract?.version || t('common.unknown') }}
               </n-tag>
             </div>
           </div>
+          <div v-if="modelConfigError" class="resource-error">{{ modelConfigError }}</div>
+          <n-button
+            v-if="modelBindings.length > 0"
+            size="small"
+            type="primary"
+            class="context-save-button"
+            :loading="modelConfigSaving"
+            :disabled="!modelConfigDirty"
+            @click="saveModelOverrides"
+          >
+            {{ t('common.save') }}
+          </n-button>
         </section>
 
         <section class="detail-section">
@@ -404,6 +504,7 @@ import {
   NDrawerContent,
   NEmpty,
   NInputNumber,
+  NSwitch,
   NTag,
 } from 'naive-ui'
 import { agentPackagesApi, type AgentPackageResourceDescriptorView } from '@/api/agentPackages'
@@ -429,6 +530,8 @@ import {
   toolMeta,
 } from './agentPackagePresentation'
 import ResourceSchemaForm from './ResourceSchemaForm.vue'
+import ContextNumberSetting from './ContextNumberSetting.vue'
+import SettingHelpLabel from './SettingHelpLabel.vue'
 import ToolDescriptionEditor from './ToolDescriptionEditor.vue'
 import {
   createResourceDraft,
@@ -499,28 +602,89 @@ const modelToolBindings = computed(() => {
   return Object.entries(bindings).map(([tool_id, binding]) => ({ tool_id, ...binding }))
 })
 type EditableToolKind = 'model_tool' | 'package_tool'
+type MemoryKind = 'constraint' | 'preference' | 'decision' | 'fact' | 'artifact'
+interface ContextConfigDraft {
+  version: 'context_system.v1'
+  enabled: boolean
+  context_window_tokens: number | null
+  default_policy: {
+    version: 'context_policy.v1'
+    compression: {
+      enabled: boolean
+      trigger_token_threshold: number | null
+      keep_recent_messages: number
+    }
+    cross_session_memory: {
+      enabled: boolean
+      write_enabled: boolean
+      injection_enabled: boolean
+      write_interval_turns: number
+      max_candidates: number
+      min_score: number
+      max_items: number
+      max_tokens: number
+      per_kind_limits: Record<MemoryKind, number>
+    }
+  }
+}
+interface ModelOverrideDraft {
+  temperature: number | null
+  max_output_tokens: number | null
+}
 const toolDescriptionDrafts = ref<Record<string, string>>({})
 const toolDescriptionErrors = ref<Record<string, string>>({})
 const toolDescriptionSavingKey = ref('')
-const memoryWriteIntervalDraft = ref<number | null>(null)
-const memoryConfigSaving = ref(false)
-const memoryConfigError = ref('')
-const memoryConfigDirty = computed(() => {
-  const contract = props.agentPackage?.memory_contract
-  const writeIntervalTurns = memoryWriteIntervalDraft.value
-  return contract?.available === true
-    && Number.isInteger(writeIntervalTurns)
-    && writeIntervalTurns !== null
-    && writeIntervalTurns >= 1
-    && writeIntervalTurns <= 1000
-    && writeIntervalTurns !== contract.write_interval_turns
+const memoryKinds: MemoryKind[] = ['constraint', 'preference', 'decision', 'fact', 'artifact']
+const contextDraft = ref<ContextConfigDraft | null>(null)
+const contextConfigSaving = ref(false)
+const contextConfigError = ref('')
+const modelOverrideDrafts = ref<Record<string, ModelOverrideDraft>>({})
+const modelToolOverrideDrafts = ref<Record<string, ModelOverrideDraft>>({})
+const modelConfigSaving = ref(false)
+const modelConfigError = ref('')
+const contextConfigDirty = computed(() => {
+  const persisted = props.agentPackage?.context_contract?.config
+  if (!contextDraft.value || !persisted) return false
+  return JSON.stringify(contextDraft.value) !== JSON.stringify(persisted)
+})
+const modelConfigDirty = computed(() => {
+  const bindings = props.agentPackage?.model_contract?.bindings || {}
+  const toolBindings = props.agentPackage?.model_contract?.tool_bindings || {}
+  const persistedBindings = Object.fromEntries(
+    Object.entries(bindings).map(([role, binding]) => [role, modelOverrideDraft(binding.overrides)]),
+  )
+  const persistedToolBindings = Object.fromEntries(
+    Object.entries(toolBindings).map(([toolId, binding]) => [toolId, modelOverrideDraft(binding.overrides)]),
+  )
+  return JSON.stringify(modelOverrideDrafts.value) !== JSON.stringify(persistedBindings)
+    || JSON.stringify(modelToolOverrideDrafts.value) !== JSON.stringify(persistedToolBindings)
 })
 
 watch(
-  () => props.agentPackage?.memory_contract,
+  () => props.agentPackage?.context_contract?.config,
   (contract) => {
-    memoryWriteIntervalDraft.value = contract?.write_interval_turns ?? null
-    memoryConfigError.value = ''
+    contextDraft.value = contract
+      ? JSON.parse(JSON.stringify(contract)) as ContextConfigDraft
+      : null
+    contextConfigError.value = ''
+  },
+  { immediate: true },
+)
+
+watch(
+  () => props.agentPackage?.model_contract,
+  (contract) => {
+    modelOverrideDrafts.value = Object.fromEntries(
+      Object.entries(contract?.bindings || {}).map(
+        ([role, binding]) => [role, modelOverrideDraft(binding.overrides)],
+      ),
+    )
+    modelToolOverrideDrafts.value = Object.fromEntries(
+      Object.entries(contract?.tool_bindings || {}).map(
+        ([toolId, binding]) => [toolId, modelOverrideDraft(binding.overrides)],
+      ),
+    )
+    modelConfigError.value = ''
   },
   { immediate: true },
 )
@@ -663,20 +827,76 @@ async function saveToolDescription(toolKind: EditableToolKind, toolId: string): 
   }
 }
 
-async function saveMemoryConfig(): Promise<void> {
+async function saveContextConfig(): Promise<void> {
   const packageId = props.agentPackage?.package_id
-  const writeIntervalTurns = memoryWriteIntervalDraft.value
-  if (!packageId || writeIntervalTurns === null || !memoryConfigDirty.value) return
-  memoryConfigSaving.value = true
-  memoryConfigError.value = ''
+  if (!packageId || !contextDraft.value || !contextConfigDirty.value) return
+  contextConfigSaving.value = true
+  contextConfigError.value = ''
   try {
-    const response = await agentPackagesApi.updateMemoryConfig(packageId, writeIntervalTurns)
+    const response = await agentPackagesApi.updateContextConfig(packageId, contextDraft.value)
     emit('packageUpdated', response.package as AgentPackageView)
   } catch (error) {
-    memoryConfigError.value = errorMessage(error)
+    contextConfigError.value = errorMessage(error)
   } finally {
-    memoryConfigSaving.value = false
+    contextConfigSaving.value = false
   }
+}
+
+async function saveModelOverrides(): Promise<void> {
+  const packageId = props.agentPackage?.package_id
+  if (!packageId || !modelConfigDirty.value) return
+  modelConfigSaving.value = true
+  modelConfigError.value = ''
+  try {
+    const response = await agentPackagesApi.updateModelOverrides(
+      packageId,
+      modelOverrideDrafts.value,
+      modelToolOverrideDrafts.value,
+    )
+    emit('packageUpdated', response.package as AgentPackageView)
+  } catch (error) {
+    modelConfigError.value = errorMessage(error)
+  } finally {
+    modelConfigSaving.value = false
+  }
+}
+
+function modelOverrideDraft(overrides: Record<string, any> | undefined): ModelOverrideDraft {
+  return {
+    temperature: typeof overrides?.temperature === 'number' ? overrides.temperature : null,
+    max_output_tokens: typeof overrides?.max_output_tokens === 'number'
+      ? overrides.max_output_tokens
+      : null,
+  }
+}
+
+function memoryKindLabel(kind: MemoryKind): string {
+  return {
+    constraint: '约束',
+    preference: '偏好',
+    decision: '决策',
+    fact: '事实',
+    artifact: '产物',
+  }[kind]
+}
+
+function memoryKindHelp(kind: MemoryKind): string {
+  return {
+    constraint: '单次最多注入的约束记忆。例如“必须使用中文”“不要修改原文件”。',
+    preference: '单次最多注入的偏好记忆。例如“偏好简洁回复”“界面使用黑白风格”。',
+    decision: '单次最多注入的已确认决策。例如“主运行模式采用 ReAct”。',
+    fact: '单次最多注入的稳定事实。例如“服务器位于阿里云北京区域”。',
+    artifact: '单次最多注入的产物线索。例如此前生成的报告名称或工作区文件。',
+  }[kind]
+}
+
+function contextSourceLabel(source: string | null | undefined): string {
+  return {
+    agent_override: 'Agent 覆盖',
+    agent_window_limit: '受 Agent 窗口限制',
+    model_profile: '跟随模型',
+    system_default: '系统默认',
+  }[source || ''] || '系统默认'
 }
 
 function errorMessage(error: unknown): string {
@@ -757,28 +977,6 @@ function packageStatusLabel(status: string | null | undefined): string {
   color: var(--app-text-muted);
   font-size: var(--app-font-xs);
   line-height: 1.45;
-}
-
-.memory-policy-panel {
-  display: grid;
-  gap: var(--app-space-md);
-}
-
-.memory-config-control {
-  display: flex;
-  align-items: center;
-  gap: var(--app-space-sm);
-  min-width: 156px;
-}
-
-.memory-config-control .n-input-number {
-  width: 112px;
-}
-
-.memory-config-control span {
-  color: var(--app-text-muted);
-  font-size: var(--app-font-xs);
-  white-space: nowrap;
 }
 
 .resource-item { align-items: flex-start; background: var(--app-surface); }
@@ -885,10 +1083,47 @@ function packageStatusLabel(status: string | null | undefined): string {
   line-height: 1.4;
 }
 
+.model-override-grid {
+  display: grid;
+  gap: var(--app-space-sm);
+  margin-top: var(--app-space-md);
+}
+
+.model-override-field {
+  display: grid;
+  gap: var(--app-space-xs);
+}
+
+.model-override-field :deep(.n-input-number) {
+  width: 100%;
+}
+
 .context-policy-panel {
   display: flex;
   flex-direction: column;
   gap: var(--app-space-md);
+}
+
+.context-setting-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-space-md);
+}
+
+.context-subsection-title {
+  padding-top: var(--app-space-xs);
+  color: var(--app-text);
+  font-size: var(--app-font-sm);
+  font-weight: 600;
+}
+
+.context-value-control {
+  width: 100%;
+}
+
+.context-value-control :deep(.n-input-number) {
+  width: 100%;
 }
 
 .context-config-row {

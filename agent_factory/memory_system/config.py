@@ -42,8 +42,8 @@ class MemoryStoreRuntimeConfig(BaseModel):
 class MemoryRankingConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    max_items_total: int = Field(default=8, ge=1, le=32)
-    max_tokens_total: int = Field(default=1200, ge=100, le=8000)
+    max_items_total: int = Field(default=8, ge=1, le=64)
+    max_tokens_total: int = Field(default=1200, ge=100, le=32000)
     min_score: float = Field(default=0.55, ge=0.0, le=1.0)
     per_kind_limits: dict[str, int] = Field(
         default_factory=lambda: {

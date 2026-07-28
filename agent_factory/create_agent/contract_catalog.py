@@ -7,14 +7,10 @@ from typing import Any
 from agent_factory.runtime_contracts.builtins import (
     default_context_contract,
     default_dependencies_contract,
-    default_knowledge_contract,
-    default_memory_contract,
     default_model_contract,
     default_resources_contract,
     default_scheduler_contract,
     default_scheduler_seed_contract,
-    default_session_contract,
-    default_state_contract,
     default_tools_contract,
 )
 from agent_factory.runtime_contracts.schema import REQUIRED_AGENT_PACKAGE_CONTRACTS
@@ -81,14 +77,6 @@ _CONTRACT_CATALOG = {
         "dependencies",
         default_factory=default_dependencies_contract,
     ),
-    "knowledge": _item(
-        "knowledge",
-        default_factory=default_knowledge_contract,
-    ),
-    "memory": _item(
-        "memory",
-        default_factory=default_memory_contract,
-    ),
     "model": _item(
         "model",
         default_factory=default_model_contract,
@@ -104,14 +92,6 @@ _CONTRACT_CATALOG = {
     "scheduler_seed": _item(
         "scheduler_seed",
         default_factory=default_scheduler_seed_contract,
-    ),
-    "session": _item(
-        "session",
-        default_factory=default_session_contract,
-    ),
-    "state": _item(
-        "state",
-        default_factory=default_state_contract,
     ),
     "tools": _item(
         "tools",

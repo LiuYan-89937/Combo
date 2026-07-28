@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from agent_factory.knowledge_system import KnowledgeIngestionPlan
 from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolSpec
 
 
@@ -29,7 +30,7 @@ def get_knowledge_tool_specs() -> list[ToolSpec]:
 
 
 def _input_schema() -> dict:
-    return {
+    schema = {
         "type": "object",
         "additionalProperties": False,
         "properties": {
@@ -93,3 +94,9 @@ def _input_schema() -> dict:
             {"properties": {"action": {"enum": ["open", "read"]}}, "required": ["action"]},
         ],
     }
+    ingestion_plan_schema = KnowledgeIngestionPlan.model_json_schema()
+    definitions = ingestion_plan_schema.pop("$defs", {})
+    schema["properties"]["source"]["properties"]["ingestion_plan"] = ingestion_plan_schema
+    if definitions:
+        schema["$defs"] = definitions
+    return schema

@@ -20,7 +20,10 @@
             "function_calling"
           ]
         },
-        "overrides": {}
+        "overrides": {
+          "temperature": null,
+          "max_output_tokens": null
+        }
       }
     },
     "tool_bindings": {

@@ -12,6 +12,14 @@ import httpx
 from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import (
     AgentPackageRuntimeManager,
 )
+from agent_factory.model_pool.schema import (
+    ModelSelectionRequest,
+    ModelSelectionRequirement,
+    ModelToolSelectionRequirement,
+    modality_requirement_for_tool_capability,
+    model_kind_requirement_for_tool_capability,
+)
+from agent_factory.model_pool.selector import ModelPoolSelector
 from agent_factory.paths import factory_artifact_path
 
 
@@ -180,8 +188,16 @@ class AgentHubClient:
         *,
         replace: bool,
         runtime: AgentPackageRuntimeManager,
+        model_bindings: dict[str, str],
+        model_tool_bindings: dict[str, str],
     ) -> dict[str, Any]:
-        release = self._request("GET", f"/api/v1/releases/{_path_part(release_id)}")
+        release, requirements, tool_requirements = self._release_installation_requirements(release_id)
+        self._validate_model_selections(
+            requirements=requirements,
+            tool_requirements=tool_requirements,
+            model_bindings=model_bindings,
+            model_tool_bindings=model_tool_bindings,
+        )
         expected_size = int(release["size_bytes"])
         if expected_size <= 0 or expected_size > MAX_DOWNLOAD_BYTES:
             raise AgentHubClientError(
@@ -225,11 +241,130 @@ class AgentHubClient:
                 expected_sha256=str(release["sha256"]),
                 expected_package_id=str(release["package_id"]),
                 replace=replace,
+                model_bindings=model_bindings,
+                model_tool_bindings=model_tool_bindings,
             )
             return {"release": release, "package": package}
         finally:
             if archive_path is not None:
                 archive_path.unlink(missing_ok=True)
+
+    def release_installation_plan(self, release_id: str) -> dict[str, Any]:
+        release, requirements, tool_requirements = self._release_installation_requirements(release_id)
+        selection = ModelPoolSelector().select(
+            ModelSelectionRequest(
+                requirements=list(requirements.values()),
+                tool_requirements=list(tool_requirements.values()),
+            )
+        )
+        return {
+            "release": release,
+            "requirements": {
+                role: requirement.model_dump(mode="json", exclude_none=True)
+                for role, requirement in requirements.items()
+            },
+            "tool_requirements": {
+                tool_id: requirement.model_dump(mode="json", exclude_none=True)
+                for tool_id, requirement in tool_requirements.items()
+            },
+            "selection": selection.model_dump(mode="json"),
+        }
+
+    def _release_installation_requirements(
+        self,
+        release_id: str,
+    ) -> tuple[
+        dict[str, Any],
+        dict[str, ModelSelectionRequirement],
+        dict[str, ModelToolSelectionRequirement],
+    ]:
+        release = self._request("GET", f"/api/v1/releases/{_path_part(release_id)}")
+        validation = release.get("validation")
+        model = validation.get("model") if isinstance(validation, dict) else None
+        if not isinstance(model, dict):
+            raise AgentHubClientError(
+                422,
+                "release_model_metadata_missing",
+                "release was not validated with the current AgentPackage model contract",
+            )
+        raw_bindings = model.get("bindings")
+        raw_tool_bindings = model.get("tool_bindings")
+        if not isinstance(raw_bindings, dict) or not isinstance(raw_tool_bindings, dict):
+            raise AgentHubClientError(
+                422,
+                "release_model_metadata_invalid",
+                "release model binding metadata is incomplete",
+            )
+        requirements = {
+            str(role): _model_requirement(str(role), raw)
+            for role, raw in raw_bindings.items()
+        }
+        tool_requirements = {
+            str(tool_id): _model_tool_requirement(str(tool_id), raw)
+            for tool_id, raw in raw_tool_bindings.items()
+        }
+        if "main" not in requirements:
+            raise AgentHubClientError(
+                422,
+                "release_main_model_missing",
+                "release does not declare a main model binding",
+            )
+        return release, requirements, tool_requirements
+
+    def _validate_model_selections(
+        self,
+        *,
+        requirements: dict[str, ModelSelectionRequirement],
+        tool_requirements: dict[str, ModelToolSelectionRequirement],
+        model_bindings: dict[str, str],
+        model_tool_bindings: dict[str, str],
+    ) -> None:
+        if set(model_bindings) != set(requirements):
+            raise AgentHubClientError(
+                422,
+                "model_bindings_incomplete",
+                "local model selections must cover every package model role",
+            )
+        if set(model_tool_bindings) != set(tool_requirements):
+            raise AgentHubClientError(
+                422,
+                "model_tool_bindings_incomplete",
+                "local model selections must cover every package model tool",
+            )
+        selector = ModelPoolSelector()
+        for role, requirement in requirements.items():
+            try:
+                issues = selector.profile_match_issues(model_bindings[role], requirement)
+            except (LookupError, RuntimeError, ValueError) as exc:
+                raise AgentHubClientError(
+                    422,
+                    "model_binding_invalid",
+                    f"selected profile for {role} is unavailable: {exc}",
+                ) from exc
+            if issues:
+                raise AgentHubClientError(
+                    422,
+                    "model_binding_incompatible",
+                    f"selected profile for {role} is incompatible: {', '.join(issues)}",
+                )
+        for tool_id, requirement in tool_requirements.items():
+            try:
+                issues = selector.profile_match_issues(
+                    model_tool_bindings[tool_id],
+                    requirement.as_model_requirement(),
+                )
+            except (LookupError, RuntimeError, ValueError) as exc:
+                raise AgentHubClientError(
+                    422,
+                    "model_tool_binding_invalid",
+                    f"selected profile for {tool_id} is unavailable: {exc}",
+                ) from exc
+            if issues:
+                raise AgentHubClientError(
+                    422,
+                    "model_tool_binding_incompatible",
+                    f"selected profile for {tool_id} is incompatible: {', '.join(issues)}",
+                )
 
     def publish_package(
         self,
@@ -303,6 +438,59 @@ class AgentHubClient:
             return {}
         payload = response.json()
         return payload
+
+
+def _model_requirement(role: str, raw: Any) -> ModelSelectionRequirement:
+    if not isinstance(raw, dict):
+        raise AgentHubClientError(
+            422,
+            "release_model_metadata_invalid",
+            f"model binding metadata must be an object: {role}",
+        )
+    capabilities = raw.get("required_capabilities")
+    values = dict(capabilities) if isinstance(capabilities, dict) else {}
+    allowed = set(ModelSelectionRequirement.model_fields) - {"role", "purpose"}
+    return ModelSelectionRequirement.model_validate(
+        {
+            "role": role,
+            "purpose": str(raw.get("reason") or ""),
+            **{key: value for key, value in values.items() if key in allowed},
+        }
+    )
+
+
+def _model_tool_requirement(tool_id: str, raw: Any) -> ModelToolSelectionRequirement:
+    if not isinstance(raw, dict):
+        raise AgentHubClientError(
+            422,
+            "release_model_metadata_invalid",
+            f"model tool binding metadata must be an object: {tool_id}",
+        )
+    capability = str(raw.get("capability") or "").strip()
+    base = ModelToolSelectionRequirement(
+        tool_id=tool_id,
+        capability=capability,
+        purpose=str(raw.get("reason") or raw.get("description") or ""),
+    )
+    required = raw.get("required_capabilities")
+    if not isinstance(required, dict):
+        return base
+    inputs, outputs = modality_requirement_for_tool_capability(base.capability)
+    model_values = {
+        "role": "task",
+        "purpose": base.purpose,
+        "kind": model_kind_requirement_for_tool_capability(base.capability),
+        "input_modalities": inputs,
+        "output_modalities": outputs,
+    }
+    allowed = set(ModelSelectionRequirement.model_fields) - {"role", "purpose"}
+    model_values.update({key: value for key, value in required.items() if key in allowed})
+    merged = ModelSelectionRequirement.model_validate(model_values)
+    return base.model_copy(
+        update={
+            "min_context_window_tokens": merged.min_context_window_tokens,
+        }
+    )
 
 
 def _raise_upstream(response: httpx.Response) -> None:

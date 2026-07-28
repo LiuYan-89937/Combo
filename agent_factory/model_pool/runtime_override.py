@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from agent_factory.model_pool.resolver import ResolvedChatModelProfile, resolve_chat_model_profile
-from agent_factory.model_pool.schema import ModelProfileBinding
+from agent_factory.model_pool.schema import ModelBindingRuntimeOverrides, ModelProfileBinding
 from agent_factory.models.chat_model import ChatModelSettings, create_chat_model_from_settings
 from agent_factory.models.reasoning import (
     RUNTIME_REASONING_INTENSITY_MAX,
@@ -35,18 +35,27 @@ def runtime_main_model_profile_id_from_state(state: Any) -> str | None:
     return main_model_profile_id_from_user_config(user_config)
 
 
-def resolve_runtime_main_chat_model_from_state(state: Any) -> ResolvedChatModelProfile | None:
+def resolve_runtime_main_chat_model_from_state(
+    state: Any,
+    *,
+    overrides: ModelBindingRuntimeOverrides | None = None,
+) -> ResolvedChatModelProfile | None:
     profile_id = runtime_main_model_profile_id_from_state(state)
     if not profile_id:
         return None
-    return resolve_runtime_main_chat_model(profile_id)
+    return resolve_runtime_main_chat_model(profile_id, overrides=overrides)
 
 
-def resolve_runtime_main_chat_model(profile_id: str) -> ResolvedChatModelProfile:
+def resolve_runtime_main_chat_model(
+    profile_id: str,
+    *,
+    overrides: ModelBindingRuntimeOverrides | None = None,
+) -> ResolvedChatModelProfile:
     binding = ModelProfileBinding(
         profile_id=profile_id,
         selection_source="manual",
         reason="runtime main model override",
+        overrides=overrides or ModelBindingRuntimeOverrides(),
     )
     return resolve_chat_model_profile(binding, role="main")
 

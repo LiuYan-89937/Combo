@@ -19,7 +19,7 @@ Guides runtime context contract changes for produced agents.
 - Use schema resources only when validator evidence or an example is insufficient for a concrete failed path.
 
 ## When To Use This Skill
-- The agent needs structured runtime context beyond default conversation and package state.
+- The agent needs structured runtime context, compression, or cross-session memory behavior beyond defaults.
 - A node/tool depends on specific context namespaces or fields.
 - Validator reports context contract issues.
 
@@ -37,6 +37,8 @@ Guides runtime context contract changes for produced agents.
 - Leave the scaffolded context contract as-is unless implemented behavior consumes or writes context fields.
 - Use context for runtime execution facts, not for secrets or unmanaged external resources.
 - Keep context names generic and capability-driven.
+- Configure cross-session memory behavior only through `config.default_policy.cross_session_memory`; storage and indexing backends are App infrastructure.
+- Leave context-window and compression thresholds null to follow the selected model, or set an explicit Agent override when required.
 
 ## Boundaries
 - Do not hardcode secrets, API keys, account ids, external paths, URLs, schedules, delivery channels, or user data.

@@ -27,6 +27,26 @@ class ModelContextLimits:
     compression_trigger_tokens: int
 
 
+def context_limits_with_overrides(
+    limits: ModelContextLimits,
+    *,
+    context_window_tokens: int | None,
+    compression_trigger_tokens: int | None,
+) -> ModelContextLimits:
+    window = context_window_tokens or limits.context_window_tokens
+    trigger = (
+        compression_trigger_tokens
+        if compression_trigger_tokens is not None
+        else min(limits.compression_trigger_tokens, window)
+    )
+    if trigger > window:
+        raise ValueError("context compression trigger exceeds the effective context window")
+    return ModelContextLimits(
+        context_window_tokens=window,
+        compression_trigger_tokens=trigger,
+    )
+
+
 def model_context_limits(
     *,
     services: Any | None = None,

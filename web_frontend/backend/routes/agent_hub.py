@@ -99,12 +99,32 @@ def create_agent_hub_router(
 
     @router.post("/releases/{release_id}/install")
     async def install_release(release_id: str, payload: dict[str, Any] | None = None):
+        request = payload or {}
+        model_bindings = request.get("model_bindings")
+        model_tool_bindings = request.get("model_tool_bindings")
+        if not isinstance(model_bindings, dict) or not isinstance(model_tool_bindings, dict):
+            raise HTTPException(
+                status_code=422,
+                detail="local model and model tool bindings are required",
+            )
         return await _call(
             hub.install_release,
             release_id,
-            replace=bool((payload or {}).get("replace")),
+            replace=bool(request.get("replace")),
             runtime=resolve_runtime(),
+            model_bindings={
+                str(role): str(profile_id)
+                for role, profile_id in model_bindings.items()
+            },
+            model_tool_bindings={
+                str(tool_id): str(profile_id)
+                for tool_id, profile_id in model_tool_bindings.items()
+            },
         )
+
+    @router.get("/releases/{release_id}/installation-plan")
+    async def release_installation_plan(release_id: str):
+        return await _call(hub.release_installation_plan, release_id)
 
     return router
 

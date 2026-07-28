@@ -14,6 +14,7 @@ from agent_factory.model_pool.runtime_override import (
     resolve_runtime_main_chat_model_from_state,
     resolve_runtime_reasoning_model,
 )
+from agent_factory.model_pool.schema import ModelBindingRuntimeOverrides
 from agent_factory.runtime_kernel.model_inputs import build_runtime_model_input
 from agent_factory.runtime_kernel.types import ModelInvocationResult
 from agent_factory.tooling.description_context import contextualize_tool_descriptions
@@ -78,11 +79,13 @@ class LangChainModelServiceAdapter:
         model: Any | None = None,
         settings: ChatModelSettings | None = None,
         require_runtime_profile: bool = False,
+        runtime_profile_overrides: ModelBindingRuntimeOverrides | None = None,
     ) -> None:
         self.model_role = role
         self._model = model
         self._settings = settings
         self._require_runtime_profile = require_runtime_profile
+        self._runtime_profile_overrides = runtime_profile_overrides or ModelBindingRuntimeOverrides()
 
     def generate(
         self,
@@ -126,7 +129,10 @@ class LangChainModelServiceAdapter:
 
     def _resolve_model(self, *, state: Any | None = None) -> tuple[Any, ChatModelSettings]:
         if self.model_role == "main" and state is not None:
-            override = resolve_runtime_main_chat_model_from_state(state)
+            override = resolve_runtime_main_chat_model_from_state(
+                state,
+                overrides=self._runtime_profile_overrides,
+            )
             if override is not None:
                 return override.model, override.settings
         if self._require_runtime_profile:

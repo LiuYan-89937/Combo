@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from collections.abc import Callable
 from hashlib import sha256
 from pathlib import Path
 import re
@@ -147,6 +148,7 @@ class AgentPackageRepository:
         expected_sha256: str,
         expected_package_id: str,
         replace: bool = False,
+        prepare_package: Callable[[Path], None] | None = None,
     ) -> LoadedAgentPackage:
         source = Path(archive_path)
         if not source.is_file():
@@ -185,6 +187,9 @@ class AgentPackageRepository:
                 raise FileExistsError(f"agent package is already installed: {package_id}")
 
             staged_package_root = manifest_path.parent
+            if prepare_package is not None:
+                prepare_package(staged_package_root)
+                package = self.loader.load_path(manifest_path)
             if target.exists():
                 target.rename(backup_root)
             try:

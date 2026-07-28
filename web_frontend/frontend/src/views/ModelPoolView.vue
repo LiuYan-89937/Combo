@@ -299,6 +299,15 @@
           <n-form-item :label="t('modelPool.maxOutput')">
             <n-input-number v-model:value="profileForm.max_output_tokens" :min="1" clearable />
           </n-form-item>
+          <n-form-item :label="t('modelPool.temperature')">
+            <n-input-number
+              v-model:value="profileForm.temperature"
+              :min="0"
+              :step="0.1"
+              clearable
+              :placeholder="t('modelPool.providerDefault')"
+            />
+          </n-form-item>
           <n-form-item :label="t('modelPool.inputPrice')">
             <n-input-number v-model:value="profileForm.input_per_1m_tokens" :min="0" clearable />
           </n-form-item>
@@ -442,6 +451,7 @@ const profileForm = reactive({
   max_input_tokens: null as number | null,
   compression_trigger_tokens: null as number | null,
   max_output_tokens: null as number | null,
+  temperature: null as number | null,
   timeout_seconds: null as number | null,
   input_per_1m_tokens: null as number | null,
   output_per_1m_tokens: null as number | null,
@@ -659,6 +669,7 @@ function openProfile(item?: ModelPoolProfile): void {
     ?? modelDefaults.value?.compression_trigger_tokens
     ?? null
   profileForm.max_output_tokens = item?.limits.max_output_tokens ?? null
+  profileForm.temperature = item?.settings.temperature ?? null
   profileForm.timeout_seconds = item?.limits.timeout_seconds ?? null
   profileForm.input_per_1m_tokens = item?.pricing.input_per_1m_tokens ?? null
   profileForm.output_per_1m_tokens = item?.pricing.output_per_1m_tokens ?? null
@@ -721,6 +732,9 @@ async function saveProfile(): Promise<void> {
         compression_trigger_tokens: isImageModel ? null : profileForm.compression_trigger_tokens,
         max_output_tokens: profileForm.max_output_tokens,
         timeout_seconds: profileForm.timeout_seconds,
+      },
+      settings: {
+        temperature: isImageModel ? null : profileForm.temperature,
       },
       pricing: {
         currency: 'CNY',

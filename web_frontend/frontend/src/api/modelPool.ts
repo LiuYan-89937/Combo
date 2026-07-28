@@ -65,6 +65,9 @@ export interface ModelPoolProfile {
     batch_generation?: boolean
     async_job?: boolean
   }
+  settings: {
+    temperature?: number | null
+  }
   limits: {
     max_input_tokens?: number | null
     compression_trigger_tokens?: number | null

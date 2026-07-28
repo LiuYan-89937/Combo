@@ -16,16 +16,13 @@ REQUIRED_CONTRACTS = frozenset(
     {
         "context",
         "dependencies",
-        "knowledge",
-        "memory",
         "model",
         "resources",
         "scheduler",
-        "session",
-        "state",
         "tools",
     }
 )
+RETIRED_CONTRACTS = frozenset({"knowledge", "memory", "session", "state"})
 TRANSIENT_ROOTS = frozenset({".agent_runtime", ".factory", "checkpoints", "logs", "sessions"})
 TRANSIENT_NAMES = frozenset(
     {
@@ -71,7 +68,7 @@ class PackageInspection:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "inspection_version": "agenthub.package_inspection.v1",
+            "inspection_version": "agenthub.package_inspection.v2",
             "package_id": self.package_id,
             "name": self.name,
             "description": self.description,
@@ -249,6 +246,12 @@ def _validate_manifest(
             "manifest_contracts_missing",
             "missing required contracts: " + ", ".join(missing),
         )
+    retired = sorted(RETIRED_CONTRACTS & set(contracts))
+    if retired:
+        raise PackageInspectionError(
+            "manifest_contracts_retired",
+            "retired contracts are not accepted: " + ", ".join(retired),
+        )
     references = [
         ("assembly_spec_path", manifest.get("assembly_spec_path")),
         *[(f"contracts.{key}", value) for key, value in contracts.items()],
@@ -359,14 +362,77 @@ def _tool_summary(contract: dict[str, Any], manifest: dict[str, Any]) -> dict[st
 
 
 def _model_summary(contract: dict[str, Any]) -> dict[str, Any]:
+    if contract.get("type") != "model" or contract.get("version") != "model_contract.v1":
+        raise PackageInspectionError(
+            "model_contract_version",
+            "model contract must use model_contract.v1",
+        )
     config = contract.get("config") if isinstance(contract.get("config"), dict) else contract
-    requirements = config.get("requirements") or config.get("capabilities") or {}
+    bindings = config.get("bindings")
+    tool_bindings = config.get("tool_bindings")
+    if not isinstance(bindings, dict) or "main" not in bindings:
+        raise PackageInspectionError(
+            "model_contract_main",
+            "model contract must declare the main model binding",
+        )
+    if set(bindings) - {"main", "task", "compression"}:
+        raise PackageInspectionError(
+            "model_contract_roles",
+            "model contract declares an unsupported model role",
+        )
+    if not isinstance(tool_bindings, dict):
+        raise PackageInspectionError(
+            "model_contract_tools",
+            "model contract tool_bindings must be an object",
+        )
     return {
-        "requirements": requirements if isinstance(requirements, (dict, list)) else {},
-        "profile_references": _string_list(
-            config.get("profile_ids") or config.get("profiles")
-        ),
+        "bindings": _binding_requirements(bindings),
+        "tool_bindings": _tool_binding_requirements(tool_bindings),
     }
+
+
+def _binding_requirements(value: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for role, raw_binding in value.items():
+        if not isinstance(raw_binding, dict):
+            raise PackageInspectionError(
+                "model_contract_binding",
+                f"model binding must be an object: {role}",
+            )
+        result[str(role)] = {
+            "reason": str(raw_binding.get("reason") or ""),
+            "required_capabilities": (
+                dict(raw_binding["required_capabilities"])
+                if isinstance(raw_binding.get("required_capabilities"), dict)
+                else {}
+            ),
+        }
+    return result
+
+
+def _tool_binding_requirements(value: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for tool_id, raw_binding in value.items():
+        if not isinstance(raw_binding, dict):
+            raise PackageInspectionError(
+                "model_contract_tool_binding",
+                f"model tool binding must be an object: {tool_id}",
+            )
+        result[str(tool_id)] = {
+            "capability": str(raw_binding.get("capability") or ""),
+            "description": str(raw_binding.get("description") or ""),
+            "reason": str(raw_binding.get("reason") or ""),
+            "required_capabilities": (
+                dict(raw_binding["required_capabilities"])
+                if isinstance(raw_binding.get("required_capabilities"), dict)
+                else {}
+            ),
+        }
+    return result
 
 
 def _string_list(value: Any) -> list[str]:

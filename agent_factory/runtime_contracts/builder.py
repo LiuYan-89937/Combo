@@ -81,6 +81,18 @@ class RuntimeBuildPlanner:
         contributions = [RuntimeContribution(system_wrappers=[RENDER_NODE_SYSTEM_WRAPPER_ID])]
         build_resources = dict(context.resources)
         build_tool_runtime_resources: dict[str, object] = {}
+        from agent_factory.runtime_contracts.builtins.builders import (
+            build_knowledge_runtime_infrastructure,
+            build_session_runtime,
+        )
+
+        for contribution in (
+            build_session_runtime(context),
+            build_knowledge_runtime_infrastructure(context),
+        ):
+            build_resources.update(contribution.resources)
+            build_tool_runtime_resources.update(contribution.tool_runtime_resources)
+            contributions.append(contribution)
         for contract in [*_default_runtime_infrastructure_contracts(), *contracts]:
             if not bool(getattr(contract, "enabled", True)):
                 continue
@@ -115,18 +127,14 @@ def _default_runtime_infrastructure_contracts() -> list[BaseModel]:
 def _contract_build_priority(contract: BaseModel) -> tuple[int, str]:
     contract_type = str(getattr(contract, "type"))
     priority = {
-        "session": 10,
         "resources": 20,
         "trace": 25,
-        "state": 30,
         "artifact": 35,
         "scheduler": 40,
         "scheduler_seed": 41,
-        "knowledge": 45,
         "model": 48,
         "tools": 50,
         "node_provider": 55,
-        "memory": 70,
         "context": 80,
         "dependencies": 100,
     }

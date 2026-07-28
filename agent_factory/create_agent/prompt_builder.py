@@ -11,6 +11,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool
 
 from agent_factory.models.message_layout import system_messages_first
+from agent_factory.models.temporal_context import current_date_system_context
 from agent_factory.create_agent.capability_inventory import (
     render_static_capability_inventory,
 )
@@ -154,7 +155,7 @@ def _invariant_system_prompt_text() -> str:
         (
             "空 AgentPackage 已由代码生成，是基础结构的唯一来源。不要读取 skill example 或 schema 来巡检 scaffold。"
             "你的职责是根据用户需求完成一个完整能力增量闭环，然后显式调用 create_agent_validate。"
-            "身份、内置 pattern assembly、package tool、scheduler seed、runtime resources、经确认的 package knowledge、package state 这些稳定包面必须优先调用 create_agent_authoring，"
+            "身份、内置 pattern assembly、package tool、scheduler seed、runtime resources、经确认的 package knowledge 这些稳定包面必须优先调用 create_agent_authoring，"
             "不要手动散写多个 package 文件后等待 validator 教你修。"
             "如果 validator 指向 scaffold-owned contract 结构损坏，优先用 create_agent_authoring(action='reset_contract', contract_key=...) 重置默认契约。"
             "业务代码内容、知识正文、资源值和自然语言 prompt 内容由你提供给 authoring 工具。"
@@ -311,7 +312,16 @@ def _dynamic_system_context_text(
     attachments = format_attachments_for_model(state.get("runtime_attachments"))
     interrupt_answer = _interrupt_answer_context(state.get("interrupt_answer"))
     return "\n\n".join(
-        item for item in [task_analysis, stage_context, interaction_turn, interrupt_answer, attachments] if item
+        item
+        for item in [
+            current_date_system_context(),
+            task_analysis,
+            stage_context,
+            interaction_turn,
+            interrupt_answer,
+            attachments,
+        ]
+        if item
     )
 
 

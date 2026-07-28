@@ -210,6 +210,66 @@
       </n-card>
     </n-modal>
 
+    <n-modal v-model:show="installPlanOpen" :mask-closable="false">
+      <n-card
+        class="install-plan-card"
+        :title="t('agentHub.bindLocalModels')"
+        closable
+        @close="closeInstallPlan"
+      >
+        <p class="install-plan-hint">{{ t('agentHub.bindLocalModelsHint') }}</p>
+        <n-alert v-if="installPlanBlocked" type="warning" class="page-alert">
+          {{ t('agentHub.noCompatibleLocalModel') }}
+        </n-alert>
+        <n-alert v-if="installPlanError" type="error" class="page-alert">
+          {{ installPlanError }}
+        </n-alert>
+        <div v-if="installPlan" class="install-binding-list">
+          <label
+            v-for="recommendation in installPlan.selection.recommendations"
+            :key="recommendation.role"
+            class="install-binding-row"
+          >
+            <span>
+              <strong>{{ modelRoleLabel(recommendation.role) }}</strong>
+              <small>{{ recommendation.role }}</small>
+            </span>
+            <n-select
+              v-model:value="installModelBindings[recommendation.role]"
+              :options="candidateOptions(recommendation.candidates)"
+            />
+          </label>
+          <label
+            v-for="recommendation in installPlan.selection.tool_recommendations"
+            :key="recommendation.tool_id"
+            class="install-binding-row"
+          >
+            <span>
+              <strong>{{ recommendation.tool_id }}</strong>
+              <small>{{ recommendation.capability }}</small>
+            </span>
+            <n-select
+              v-model:value="installModelToolBindings[recommendation.tool_id]"
+              :options="candidateOptions(recommendation.candidates)"
+            />
+          </label>
+        </div>
+        <template #footer>
+          <div class="review-actions">
+            <n-button @click="closeInstallPlan">{{ t('common.cancel') }}</n-button>
+            <n-button
+              type="primary"
+              :disabled="installPlanBlocked || !installSelectionsComplete"
+              :loading="Boolean(installingReleaseId)"
+              @click="confirmInstall"
+            >
+              {{ t('agentHub.install') }}
+            </n-button>
+          </div>
+        </template>
+      </n-card>
+    </n-modal>
+
     <n-modal v-model:show="publishReviewOpen" :mask-closable="false">
       <n-card
         class="publish-review-card"
@@ -329,6 +389,7 @@ import {
   NIcon,
   NInput,
   NModal,
+  NSelect,
   NSpin,
   NTabPane,
   NTabs,
@@ -349,6 +410,8 @@ import {
   agentHubApi,
   type AgentHubAuthStatus,
   type AgentHubBrowserAuthorization,
+  type AgentHubInstallationPlan,
+  type AgentHubModelCandidate,
   type AgentHubSkillDraft,
   type AgentHubSkillFileDraft,
   type AgentHubRelease,
@@ -374,6 +437,12 @@ const auth = reactive<AgentHubAuthStatus>({ authenticated: false, user: null, hu
 const loadingPackages = ref(false)
 const loadingUploads = ref(false)
 const installingReleaseId = ref<string | null>(null)
+const installPlanOpen = ref(false)
+const installPlan = ref<AgentHubInstallationPlan | null>(null)
+const installReplace = ref(false)
+const installModelBindings = ref<Record<string, string>>({})
+const installModelToolBindings = ref<Record<string, string>>({})
+const installPlanError = ref('')
 const publishingPackageId = ref<string | null>(null)
 const reviewingPackageId = ref<string | null>(null)
 const errorMessage = ref('')
@@ -401,6 +470,15 @@ const selectedSkill = computed(
 const selectedSkillFile = computed<AgentHubSkillFileDraft | null>(
   () => selectedSkill.value?.files.find(file => file.path === selectedSkillFilePath.value) || null,
 )
+const installPlanBlocked = computed(() =>
+  !installPlan.value || installPlan.value.selection.status === 'blocked',
+)
+const installSelectionsComplete = computed(() => {
+  const plan = installPlan.value
+  if (!plan) return false
+  return Object.keys(plan.requirements).every(role => Boolean(installModelBindings.value[role]))
+    && Object.keys(plan.tool_requirements).every(toolId => Boolean(installModelToolBindings.value[toolId]))
+})
 
 onMounted(async () => {
   commands.listAgentPackages()
@@ -549,14 +627,69 @@ async function install(release: AgentHubRelease) {
   }
   installingReleaseId.value = release.release_id
   try {
-    await agentHubApi.install(release.release_id, replace)
-    commands.listAgentPackages()
-    message.success(t('agentHub.installSuccess'))
+    const plan = await agentHubApi.installationPlan(release.release_id)
+    installPlan.value = plan
+    installReplace.value = replace
+    installModelBindings.value = Object.fromEntries(
+      plan.selection.recommendations.map(item => [item.role, item.profile_id]),
+    )
+    installModelToolBindings.value = Object.fromEntries(
+      plan.selection.tool_recommendations.map(item => [item.tool_id, item.profile_id]),
+    )
+    installPlanError.value = ''
+    installPlanOpen.value = true
   } catch (error) {
     showError(error)
   } finally {
     installingReleaseId.value = null
   }
+}
+
+async function confirmInstall() {
+  const plan = installPlan.value
+  if (!plan || !installSelectionsComplete.value || installPlanBlocked.value) return
+  installingReleaseId.value = plan.release.release_id
+  installPlanError.value = ''
+  try {
+    await agentHubApi.install(plan.release.release_id, {
+      replace: installReplace.value,
+      model_bindings: installModelBindings.value,
+      model_tool_bindings: installModelToolBindings.value,
+    })
+    installingReleaseId.value = null
+    closeInstallPlan()
+    commands.listAgentPackages()
+    message.success(t('agentHub.installSuccess'))
+  } catch (error) {
+    installPlanError.value = apiErrorMessage(error)
+  } finally {
+    installingReleaseId.value = null
+  }
+}
+
+function closeInstallPlan() {
+  if (installingReleaseId.value) return
+  installPlanOpen.value = false
+  installPlan.value = null
+  installReplace.value = false
+  installModelBindings.value = {}
+  installModelToolBindings.value = {}
+  installPlanError.value = ''
+}
+
+function candidateOptions(candidates: AgentHubModelCandidate[]) {
+  return candidates.map(candidate => ({
+    label: `${candidate.display_name} · ${candidate.provider}/${candidate.model_name}`,
+    value: candidate.profile_id,
+  }))
+}
+
+function modelRoleLabel(role: string) {
+  return {
+    main: t('agentHub.mainModel'),
+    task: t('agentHub.taskModel'),
+    compression: t('agentHub.compressionModel'),
+  }[role] || role
 }
 
 async function publish(packageId: string) {
@@ -646,12 +779,15 @@ function isInstalled(packageId: string) {
 }
 
 function showError(error: unknown) {
+  errorMessage.value = apiErrorMessage(error)
+}
+
+function apiErrorMessage(error: unknown): string {
   if (error instanceof ApiError && error.detail && typeof error.detail === 'object') {
     const detail = error.detail as { message?: unknown }
-    errorMessage.value = String(detail.message || error.message)
-  } else {
-    errorMessage.value = error instanceof Error ? error.message : String(error)
+    return String(detail.message || error.message)
   }
+  return error instanceof Error ? error.message : String(error)
 }
 
 function packageColor(packageId: string) {
@@ -714,6 +850,41 @@ function uploadStatusLabel(status: string) {
   min-height: 34px;
   color: var(--app-text-secondary);
   font-size: 12px;
+}
+
+.install-plan-card {
+  width: min(640px, calc(100vw - 32px));
+}
+
+.install-plan-hint {
+  margin: 0 0 18px;
+  color: var(--app-text-secondary);
+  line-height: 1.6;
+}
+
+.install-binding-list {
+  display: grid;
+  gap: 12px;
+}
+
+.install-binding-row {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.42fr) minmax(240px, 1fr);
+  align-items: center;
+  gap: 16px;
+  padding: 12px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface-muted);
+}
+
+.install-binding-row > span {
+  display: grid;
+  gap: 3px;
+}
+
+.install-binding-row small {
+  color: var(--app-text-muted);
 }
 
 .toolbar {
@@ -1218,6 +1389,10 @@ function uploadStatusLabel(status: string) {
 
   .publish-review-card {
     width: calc(100vw - 20px);
+  }
+
+  .install-binding-row {
+    grid-template-columns: 1fr;
   }
 
   .skill-review-layout {
