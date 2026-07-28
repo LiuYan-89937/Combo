@@ -37,6 +37,7 @@ class MCPGatewayHandle:
 class HostMCPGatewayManager:
     def __init__(self) -> None:
         self._handles: dict[str, MCPGatewayHandle] = {}
+        self._references: dict[str, int] = {}
         self._lock = Lock()
 
     def ensure_gateway(self, config: MCPServersConfig) -> MCPGatewayHandle | None:
@@ -47,6 +48,7 @@ class HostMCPGatewayManager:
         with self._lock:
             existing = self._handles.get(key)
             if existing is not None:
+                self._references[key] = self._references.get(key, 0) + 1
                 return existing
             server = MCPGatewayServer(
                 config=config,
@@ -56,12 +58,26 @@ class HostMCPGatewayManager:
             endpoint = server.start()
             handle = MCPGatewayHandle(key=key, server=server, endpoint=endpoint)
             self._handles[key] = handle
+            self._references[key] = 1
             return handle
+
+    def release_gateway(self, key: str) -> None:
+        handle: MCPGatewayHandle | None = None
+        with self._lock:
+            references = self._references.get(key, 0)
+            if references > 1:
+                self._references[key] = references - 1
+                return
+            self._references.pop(key, None)
+            handle = self._handles.pop(key, None)
+        if handle is not None:
+            handle.stop()
 
     def close_all(self) -> None:
         with self._lock:
             handles = list(self._handles.values())
             self._handles.clear()
+            self._references.clear()
         for handle in handles:
             handle.stop()
 

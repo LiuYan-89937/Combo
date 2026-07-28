@@ -5,6 +5,21 @@ import { requestEvent, withQuery } from './http'
 
 export const extensionsApi = {
   list: (context?: WorkspaceContextInput) => requestEvent(withQuery('/api/extensions', packageResourceContextPayload(context))),
+  setBinding: (
+    kind: 'mcp' | 'skill',
+    identifier: string,
+    enabled: boolean,
+    context?: WorkspaceContextInput,
+  ) =>
+    requestEvent('/api/extensions/bindings', {
+      method: 'PUT',
+      body: JSON.stringify({
+        kind,
+        identifier,
+        enabled,
+        ...packageResourceContextPayload(context),
+      }),
+    }),
   getMcpConfig: (serverId: string, context?: WorkspaceContextInput) =>
     requestEvent(withQuery(`/api/extensions/mcp/${encodeURIComponent(serverId)}`, packageResourceContextPayload(context))),
   saveMcp: (server: McpServerConfig, context?: WorkspaceContextInput) =>
@@ -27,11 +42,6 @@ export const extensionsApi = {
       body: JSON.stringify(payload),
     })
   },
-  setMcpEnabled: (serverId: string, enabled: boolean, context?: WorkspaceContextInput) =>
-    requestEvent(`/api/extensions/mcp/${encodeURIComponent(serverId)}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ enabled, ...packageResourceContextPayload(context) }),
-    }),
   removeMcp: (serverId: string, context?: WorkspaceContextInput) =>
     requestEvent(withQuery(`/api/extensions/mcp/${encodeURIComponent(serverId)}`, packageResourceContextPayload(context)), {
       method: 'DELETE',
@@ -44,11 +54,6 @@ export const extensionsApi = {
         replace_skill_id: skill.replace_skill_id,
         ...packageResourceContextPayload(context),
       }),
-    }),
-  setSkillEnabled: (skillId: string, enabled: boolean, context?: WorkspaceContextInput) =>
-    requestEvent(`/api/extensions/skills/${encodeURIComponent(skillId)}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ enabled, ...packageResourceContextPayload(context) }),
     }),
   removeSkill: (skillId: string, context?: WorkspaceContextInput) =>
     requestEvent(withQuery(`/api/extensions/skills/${encodeURIComponent(skillId)}`, packageResourceContextPayload(context)), {

@@ -17,6 +17,7 @@ export type ResourceMutationState = Pick<
   RuntimeViewState,
   | 'extensionItems'
   | 'extensionTestResult'
+  | 'extensionBindings'
   | 'toolPermissions'
   | 'knowledgeDocument'
   | 'knowledgeDocuments'
@@ -125,6 +126,14 @@ export function applyExtensionsEvent(state: ResourceMutationState, event: Factor
     ...mcpServers.map((item: any) => extensionItemView(item, 'mcp')),
     ...skills.map((item: any) => extensionItemView(item, 'skill')),
   ]
+  state.extensionBindings = {
+    mcp_server_ids: Array.isArray(event.payload?.bindings?.mcp_server_ids)
+      ? event.payload.bindings.mcp_server_ids.map(String)
+      : [],
+    skill_ids: Array.isArray(event.payload?.bindings?.skill_ids)
+      ? event.payload.bindings.skill_ids.map(String)
+      : [],
+  }
   state.toolPermissions = toolPermissionsView(event.payload?.tool_permissions)
   if (event.event_type === 'extension_config_tested') {
     state.extensionTestResult = event.payload?.test || event.payload?.install || event.payload || null

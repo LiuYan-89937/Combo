@@ -12,6 +12,10 @@ export const useExtensionStore = defineStore('extension', () => {
   const testResult = ref<any | null>(null)
   const toolPermissions = ref<ToolPermissionsView | null>(null)
   const skillHubResult = ref<any | null>(null)
+  const bindings = ref<{ mcp_server_ids: string[]; skill_ids: string[] }>({
+    mcp_server_ids: [],
+    skill_ids: [],
+  })
 
   const mcpItems = computed(() => {
     return items.value.filter((item) => item.kind === 'mcp')
@@ -37,11 +41,19 @@ export const useExtensionStore = defineStore('extension', () => {
     skillHubResult.value = value
   }
 
+  function setBindings(value: any): void {
+    bindings.value = {
+      mcp_server_ids: Array.isArray(value?.mcp_server_ids) ? value.mcp_server_ids.map(String) : [],
+      skill_ids: Array.isArray(value?.skill_ids) ? value.skill_ids.map(String) : [],
+    }
+  }
+
   function reset(): void {
     items.value = []
     testResult.value = null
     toolPermissions.value = null
     skillHubResult.value = null
+    setBindings(null)
   }
 
   return {
@@ -49,12 +61,14 @@ export const useExtensionStore = defineStore('extension', () => {
     testResult,
     toolPermissions,
     skillHubResult,
+    bindings,
     mcpItems,
     skillItems,
     setItems,
     setTestResult,
     setToolPermissions,
     setSkillHubResult,
+    setBindings,
     reset,
   }
 })

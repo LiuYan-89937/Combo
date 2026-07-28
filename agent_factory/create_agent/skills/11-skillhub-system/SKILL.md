@@ -23,8 +23,7 @@ Guides the complete SkillHub reuse phase between model/MCP assembly and package-
 - A SkillHub installation must be verified and connected to runtime tool access.
 
 ## Focus Files
-- `extensions/enabled_skills.json`
-- `extensions/skills/`
+- `extensions/extension_bindings.json`
 - `assembly_spec.json`
 - `contracts/tools.json`
 
@@ -43,7 +42,7 @@ Guides the complete SkillHub reuse phase between model/MCP assembly and package-
 - Treat SkillHub as capability reuse, not a source-code copying service.
 - Installed scripts are inspectable source assets until registered as ToolSpec entries. Do not execute them through shell or copy them into a package tool to bypass permissions, traces, or output validation.
 - Use skill guidance and templates through the runtime `skill` tool when the produced Agent needs them at run time.
-- Keep `extensions/enabled_skills.json` and installed skill directories managed by `skillhub`; do not hand-edit them.
+- Keep the global Skill registry and `extensions/extension_bindings.json` managed by `skillhub`; do not hand-edit them.
 - Do not install speculative skills that are unrelated to a confirmed capability gap.
 - Do not claim a skill is integrated until install, Skill Gateway describe, runtime tool access, and validation evidence all agree.
 

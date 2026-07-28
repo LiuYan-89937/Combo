@@ -1,10 +1,16 @@
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { useDialog } from 'naive-ui'
 import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
 import { useManagedResourceContext } from '@/composables/useManagedResourceContext'
 import { useExtensionStore } from '@/stores/extension'
-import type { McpServerConfig, SkillConfig } from '@/api/resourceTypes'
+import { useAgentStore } from '@/stores/agent'
+import { extensionsApi } from '@/api/extensions'
+import type {
+  McpServerConfig,
+  SkillConfig,
+  WorkspaceContextInput,
+} from '@/api/resourceTypes'
 import type {
   ExtensionItemView,
   ToolPermissionApproval,
@@ -17,6 +23,7 @@ import type {
 
 export function useExtensionsManager() {
   const extensionStore = useExtensionStore()
+  const agentStore = useAgentStore()
   const commands = useCommand()
   const dialog = useDialog()
   const resourceContext = useManagedResourceContext('system_and_package')
@@ -35,6 +42,10 @@ export function useExtensionsManager() {
   const mcpInstallStopping = ref(false)
   const mcpTestRequestId = ref<string | null>(null)
   const mcpTestStopping = ref(false)
+  const selectedAssemblyTargetId = ref('system:create_agent')
+  const bindingsByTarget = ref<Record<string, { mcp_server_ids: string[]; skill_ids: string[] }>>({})
+  const draggingExtension = ref<{ kind: 'mcp' | 'skill'; identifier: string } | null>(null)
+  const assemblyBusyTargetId = ref<string | null>(null)
   const mcpInstallDisplayResult = computed<Record<string, any> | null>(() => {
     const liveResult = extensionStore.testResult
     if (
@@ -47,6 +58,37 @@ export function useExtensionsManager() {
   })
 
   const extensionContext = computed(() => resourceContext.workspaceContext.value)
+  const assemblyTargets = computed(() => {
+    const systemTargets = [
+      {
+        id: 'system:create_agent',
+        packageId: '',
+        resourceMode: 'create_agent',
+        name: t('resource.manufacturing'),
+        glyph: '制',
+      },
+      {
+        id: 'system:evolve_agent',
+        packageId: '',
+        resourceMode: 'evolve_agent',
+        name: t('resource.evolution'),
+        glyph: '进',
+      },
+    ]
+    const packages = agentStore.agentPackages.map((pkg) => ({
+      id: `package:${pkg.package_id}`,
+      packageId: pkg.package_id,
+      resourceMode: '',
+      name: pkg.agent_name || pkg.name || pkg.package_id,
+      glyph: String(pkg.agent_name || pkg.name || pkg.package_id).slice(0, 1).toUpperCase(),
+    }))
+    return [...systemTargets, ...packages]
+  })
+  const selectedAssemblyTarget = computed(() => (
+    assemblyTargets.value.find((target) => target.id === selectedAssemblyTargetId.value)
+      || assemblyTargets.value[0]
+      || null
+  ))
   const testResultType = computed(() => {
     if (extensionStore.testResult?.status === 'ok') return 'success'
     if (extensionStore.testResult?.status === 'running') return 'info'
@@ -104,6 +146,116 @@ export function useExtensionsManager() {
     return refresh
   }
 
+  async function refreshExtensionWorkbench(): Promise<void> {
+    await commands.listAgentPackages()
+    await nextTick()
+    const targets = assemblyTargets.value
+    if (!targets.length) return
+    if (!targets.some((target) => target.id === selectedAssemblyTargetId.value)) {
+      selectedAssemblyTargetId.value = targets[0].id
+    }
+    const settled = await Promise.allSettled(
+      targets.map(async (target) => {
+        const response = await extensionsApi.list(assemblyTargetContext(target))
+        return {
+          targetId: target.id,
+          payload: (response as any)?.payload || {},
+        }
+      }),
+    )
+    const results = settled.flatMap((result) => (
+      result.status === 'fulfilled' ? [result.value] : []
+    ))
+    bindingsByTarget.value = Object.fromEntries(
+      results.map((result) => [
+        result.targetId,
+        normalizeBindings(result.payload.bindings),
+      ]),
+    )
+    const registryPayload = results[0]?.payload
+    if (registryPayload) {
+      extensionStore.setItems([
+        ...(Array.isArray(registryPayload.mcp_servers) ? registryPayload.mcp_servers : []),
+        ...(Array.isArray(registryPayload.skills) ? registryPayload.skills : []),
+      ])
+    }
+    void commands.skillHubStatus(extensionContext.value)
+  }
+
+  function startExtensionDrag(kind: 'mcp' | 'skill', identifier: string): void {
+    draggingExtension.value = { kind, identifier }
+  }
+
+  function finishExtensionDrag(): void {
+    draggingExtension.value = null
+  }
+
+  async function dropExtensionOnTarget(targetId: string): Promise<void> {
+    const dragged = draggingExtension.value
+    const target = assemblyTargets.value.find((item) => item.id === targetId)
+    if (!dragged || !target || assemblyBusyTargetId.value) return
+    assemblyBusyTargetId.value = targetId
+    selectedAssemblyTargetId.value = targetId
+    try {
+      await commands.setExtensionBinding(
+        dragged.kind,
+        dragged.identifier,
+        true,
+        assemblyTargetContext(target),
+      )
+      await refreshTargetBindings(target)
+    } finally {
+      assemblyBusyTargetId.value = null
+      finishExtensionDrag()
+    }
+  }
+
+  async function removeExtensionFromTarget(
+    targetId: string,
+    kind: 'mcp' | 'skill',
+    identifier: string,
+  ): Promise<void> {
+    const target = assemblyTargets.value.find((item) => item.id === targetId)
+    if (!target || assemblyBusyTargetId.value) return
+    assemblyBusyTargetId.value = targetId
+    try {
+      await commands.setExtensionBinding(
+        kind,
+        identifier,
+        false,
+        assemblyTargetContext(target),
+      )
+      await refreshTargetBindings(target)
+    } finally {
+      assemblyBusyTargetId.value = null
+    }
+  }
+
+  function targetExtensions(targetId: string): ExtensionItemView[] {
+    const bindings = bindingsByTarget.value[targetId] || normalizeBindings(null)
+    const mcpIds = new Set(bindings.mcp_server_ids)
+    const skillIds = new Set(bindings.skill_ids)
+    return extensionStore.items.filter((item) => (
+      item.kind === 'mcp'
+        ? mcpIds.has(String(item.payload?.server_id || ''))
+        : skillIds.has(String(item.payload?.skill_id || ''))
+    ))
+  }
+
+  function targetExtensionCount(targetId: string): number {
+    const bindings = bindingsByTarget.value[targetId] || normalizeBindings(null)
+    return bindings.mcp_server_ids.length + bindings.skill_ids.length
+  }
+
+  async function refreshTargetBindings(target: any): Promise<void> {
+    const response = await extensionsApi.list(assemblyTargetContext(target))
+    const payload = (response as any)?.payload || {}
+    bindingsByTarget.value = {
+      ...bindingsByTarget.value,
+      [target.id]: normalizeBindings(payload.bindings),
+    }
+  }
+
   async function handleSkillHubSearch(): Promise<void> {
     const query = skillHubQuery.value.trim()
     if (!query || busyKey.value) return
@@ -121,7 +273,7 @@ export function useExtensionsManager() {
     busyKey.value = `skillhub:install:${skill}`
     try {
       const event = await commands.installSkillHubSkill(skill, extensionContext.value)
-      if (event) await commands.refreshExtensions(extensionContext.value)
+      if (event) await refreshExtensionWorkbench()
     } finally {
       busyKey.value = null
     }
@@ -191,28 +343,6 @@ export function useExtensionsManager() {
     commands.cancelRequest('user_cancelled', requestId)
   }
 
-  async function handleToggleMcp(item: ExtensionItemView, enabled: boolean): Promise<void> {
-    const serverId = String(item.payload?.server_id || '')
-    if (!serverId) return
-    busyKey.value = `toggle:${extensionKey(item)}`
-    try {
-      await commands.setMcpEnabled(serverId, enabled, extensionContext.value)
-    } finally {
-      busyKey.value = null
-    }
-  }
-
-  async function handleToggleSkill(item: ExtensionItemView, enabled: boolean): Promise<void> {
-    const skillId = String(item.payload?.skill_id || '')
-    if (!skillId) return
-    busyKey.value = `toggle:${extensionKey(item)}`
-    try {
-      await commands.setSkillEnabled(skillId, enabled, extensionContext.value)
-    } finally {
-      busyKey.value = null
-    }
-  }
-
   async function handleInstallMcp(servers: McpServerConfig[]): Promise<void> {
     if (busyKey.value || servers.length === 0) return
     busyKey.value = 'mcp:install'
@@ -229,6 +359,7 @@ export function useExtensionsManager() {
       showMcpModal.value = false
       editingMcp.value = null
       editingMcpConfig.value = null
+      await refreshExtensionWorkbench()
     } finally {
       mcpInstallRequestId.value = null
       mcpInstallStopping.value = false
@@ -248,6 +379,7 @@ export function useExtensionsManager() {
     if (event) {
       showSkillModal.value = false
       editingSkill.value = null
+      await refreshExtensionWorkbench()
     }
   }
 
@@ -317,11 +449,17 @@ export function useExtensionsManager() {
     if (!serverId) return
     dialog.warning({
       title: t('extensions.deleteMcpTitle'),
-      content: t('extensions.deleteMcpContent', { name: item.name || t('extensions.thisMcpServer') }),
+      content: removalConfirmation(
+        item,
+        t('extensions.deleteMcpContent', {
+          name: item.name || t('extensions.thisMcpServer'),
+        }),
+      ),
       positiveText: t('common.delete'),
       negativeText: t('common.cancel'),
-      onPositiveClick: () => {
-        void commands.removeMcp(serverId, extensionContext.value)
+      onPositiveClick: async () => {
+        await commands.removeMcp(serverId, extensionContext.value)
+        await refreshExtensionWorkbench()
       },
     })
   }
@@ -331,25 +469,38 @@ export function useExtensionsManager() {
     if (!skillId) return
     dialog.warning({
       title: t('extensions.deleteSkillTitle'),
-      content: t('extensions.deleteSkillContent', { name: item.name || t('extensions.thisSkill') }),
+      content: removalConfirmation(
+        item,
+        t('extensions.deleteSkillContent', {
+          name: item.name || t('extensions.thisSkill'),
+        }),
+      ),
       positiveText: t('common.delete'),
       negativeText: t('common.cancel'),
-      onPositiveClick: () => {
-        void commands.removeSkill(skillId, extensionContext.value)
+      onPositiveClick: async () => {
+        await commands.removeSkill(skillId, extensionContext.value)
+        await refreshExtensionWorkbench()
       },
     })
   }
 
-  watch(
-    () => resourceContext.workspaceContextKey.value,
-    () => {
-      void refreshCurrentExtensions()
-    },
-  )
+  function extensionUsageCount(item: ExtensionItemView): number {
+    const identifier = extensionKey(item)
+    return Object.values(bindingsByTarget.value).filter((bindings) => (
+      item.kind === 'mcp'
+        ? bindings.mcp_server_ids.includes(identifier)
+        : bindings.skill_ids.includes(identifier)
+    )).length
+  }
+
+  function removalConfirmation(item: ExtensionItemView, base: string): string {
+    const count = extensionUsageCount(item)
+    if (!count) return base
+    return `${base}\n当前有 ${count} 个 Agent 正在使用，删除后会同时失效。`
+  }
 
   onMounted(() => {
-    commands.listAgentPackages()
-    void refreshCurrentExtensions()
+    void refreshExtensionWorkbench()
   })
 
   const mcpActions = computed(() => [
@@ -397,6 +548,10 @@ export function useExtensionsManager() {
 
   return {
     activePermissionModeLabel,
+    agentStore,
+    assemblyBusyTargetId,
+    assemblyTargets,
+    bindingsByTarget,
     busyKey,
     editingMcp,
     editingMcpConfig,
@@ -404,6 +559,7 @@ export function useExtensionsManager() {
     editingSkill,
     extensionKey,
     extensionStore,
+    draggingExtension,
     resourceContext,
     handleMcpAction,
     handleInstallMcp,
@@ -414,8 +570,8 @@ export function useExtensionsManager() {
     handleSkillHubSearch,
     handleSkillAction,
     handleTestMcp,
-    handleToggleMcp,
-    handleToggleSkill,
+    dropExtensionOnTarget,
+    finishExtensionDrag,
     mcpActions,
     mcpCommandLine,
     mcpInstallDisplayResult,
@@ -425,6 +581,8 @@ export function useExtensionsManager() {
     openAddSkill,
     permissionModeOptions,
     refreshCurrentExtensions,
+    refreshExtensionWorkbench,
+    removeExtensionFromTarget,
     approvalOptions,
     handlePermissionModeChange,
     handleResetToolPermission,
@@ -434,6 +592,8 @@ export function useExtensionsManager() {
     riskLevelOptions,
     showMcpModal,
     showSkillModal,
+    selectedAssemblyTarget,
+    selectedAssemblyTargetId,
     skillActions,
     skillHubCliAvailable,
     skillHubItems,
@@ -446,6 +606,21 @@ export function useExtensionsManager() {
     toolSourceLabel,
     testResultTitle,
     testResultType,
+    startExtensionDrag,
+    targetExtensionCount,
+    targetExtensions,
+  }
+}
+
+function assemblyTargetContext(target: any): WorkspaceContextInput {
+  if (target?.resourceMode) return { resourceMode: target.resourceMode }
+  return { packageId: String(target?.packageId || '') }
+}
+
+function normalizeBindings(value: any): { mcp_server_ids: string[]; skill_ids: string[] } {
+  return {
+    mcp_server_ids: Array.isArray(value?.mcp_server_ids) ? value.mcp_server_ids.map(String) : [],
+    skill_ids: Array.isArray(value?.skill_ids) ? value.skill_ids.map(String) : [],
   }
 }
 

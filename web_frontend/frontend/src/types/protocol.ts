@@ -558,6 +558,7 @@ export interface RuntimeViewState {
   schedulerRunNotices: SchedulerRunNoticeView[]
   extensionItems: ExtensionItemView[]
   extensionTestResult: Record<string, any> | null
+  extensionBindings: { mcp_server_ids: string[]; skill_ids: string[] }
   toolPermissions: ToolPermissionsView | null
   sessions: any[]
   agentPackages: any[]

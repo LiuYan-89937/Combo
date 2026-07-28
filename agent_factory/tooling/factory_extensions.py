@@ -11,15 +11,19 @@ from agent_factory.runtime_kernel.extensions.schema import (
     AgentInstanceExtensionConfigBundle,
     AgentInstanceExtensionSources,
 )
-from agent_factory.runtime_kernel.extensions.loader import AgentInstanceExtensionConfigLoader
 from agent_factory.tooling.entrypoints import MCPToolClient
+from agent_factory.tooling.extension_registry import (
+    default_extension_registry_root,
+    load_registered_mcp_servers,
+    load_resolved_registered_skills,
+    registry_mcp_path,
+    registry_skills_path,
+    selected_registry_configs,
+)
 from agent_factory.tooling.mcp_runtime import MCPRuntimeManager
 from agent_factory.tooling.providers import (
-    EnabledSkillConfig,
-    EnabledSkillsConfig,
     MCPToolCatalogClient,
     MCPToolProvider,
-    MCPServersConfig,
     SkillProvider,
     ToolProviderContext,
     ToolProviderResult,
@@ -70,7 +74,20 @@ class FactoryExtensionManager:
         self._effective_mcp_tool_clients: dict[str, MCPToolClient] = dict(mcp_tool_clients or {})
 
     def discover(self, context: ToolProviderContext | None = None) -> tuple[ToolProviderResult, FactoryExtensionLoadReport]:
-        bundle = self.loader.load()
+        return self._discover_bundle(self.loader.load(), context=context)
+
+    def discover_registry(
+        self,
+        context: ToolProviderContext | None = None,
+    ) -> tuple[ToolProviderResult, FactoryExtensionLoadReport]:
+        return self._discover_bundle(self.loader.load_registry(), context=context)
+
+    def _discover_bundle(
+        self,
+        bundle: AgentInstanceExtensionConfigBundle,
+        *,
+        context: ToolProviderContext | None,
+    ) -> tuple[ToolProviderResult, FactoryExtensionLoadReport]:
         mcp_runtime = MCPRuntimeManager(bundle.mcp_servers)
         catalog_clients = self.mcp_catalog_clients or mcp_runtime.clients()
         self._effective_mcp_tool_clients = self._configured_mcp_tool_clients or mcp_runtime.clients()
@@ -91,25 +108,9 @@ class FactoryExtensionManager:
                 if path is not None and path.exists()
             ],
             mcp_servers_path=str(bundle.sources.mcp_servers_path) if bundle.sources.mcp_servers_path else None,
-            mcp_servers_paths=[
-                str(path)
-                for path in _existing_paths(
-                    [
-                        self.builtin_extension_root / "mcp_servers.json" if self.builtin_extension_root else None,
-                        self.extension_root / "mcp_servers.json",
-                    ]
-                )
-            ],
+            mcp_servers_paths=[str(path) for path in _existing_paths([registry_mcp_path()])],
             enabled_skills_path=str(bundle.sources.enabled_skills_path) if bundle.sources.enabled_skills_path else None,
-            enabled_skills_paths=[
-                str(path)
-                for path in _existing_paths(
-                    [
-                        self.builtin_extension_root / "enabled_skills.json" if self.builtin_extension_root else None,
-                        self.extension_root / "enabled_skills.json",
-                    ]
-                )
-            ],
+            enabled_skills_paths=[str(path) for path in _existing_paths([registry_skills_path()])],
             tool_ids=[tool.id for tool in result.tool_specs],
             system_tool_ids=list(result.system_tool_ids),
             prompt_fragment_ids=[fragment.fragment_id for fragment in result.prompt_fragments],
@@ -134,51 +135,43 @@ class FactoryExtensionConfigLoader:
 
     def load(self) -> AgentInstanceExtensionConfigBundle:
         roots = [root for root in (self.builtin_extension_root, self.extension_root) if root is not None]
-        bundles = [AgentInstanceExtensionConfigLoader(root).load() for root in roots]
-        if not bundles:
-            return AgentInstanceExtensionConfigLoader(self.extension_root).load()
-        mcp_servers = _merge_mcp_servers([bundle.mcp_servers for bundle in bundles])
-        enabled_skills = _merge_enabled_skills(
-            [
-                (bundle.enabled_skills, bundle.sources.extension_root)
-                for bundle in bundles
-            ]
-        )
-        mcp_paths = [bundle.sources.mcp_servers_path for bundle in bundles if bundle.sources.mcp_servers_path]
-        skill_paths = [bundle.sources.enabled_skills_path for bundle in bundles if bundle.sources.enabled_skills_path]
-        return AgentInstanceExtensionConfigBundle(
-            sources=AgentInstanceExtensionSources(
-                extension_root=self.extension_root,
-                mcp_servers_path=mcp_paths[-1] if mcp_paths else None,
-                enabled_skills_path=skill_paths[-1] if skill_paths else None,
-            ),
+        mcp_servers, enabled_skills, _bindings = selected_registry_configs(roots)
+        return self._bundle(
+            roots=roots,
             mcp_servers=mcp_servers,
             enabled_skills=enabled_skills,
         )
 
+    def load_registry(self) -> AgentInstanceExtensionConfigBundle:
+        roots = [root for root in (self.builtin_extension_root, self.extension_root) if root is not None]
+        return self._bundle(
+            roots=roots,
+            mcp_servers=load_registered_mcp_servers(),
+            enabled_skills=load_resolved_registered_skills(),
+        )
 
-def _merge_mcp_servers(configs: list[MCPServersConfig]) -> MCPServersConfig:
-    by_id = {}
-    for config in configs:
-        for server in config.servers:
-            by_id[server.server_id] = server
-    return MCPServersConfig(servers=sorted(by_id.values(), key=lambda item: item.server_id))
-
-
-def _merge_enabled_skills(configs: list[tuple[EnabledSkillsConfig, Path]]) -> EnabledSkillsConfig:
-    by_id: dict[str, EnabledSkillConfig] = {}
-    for config, root in configs:
-        for skill in config.skills:
-            by_id[skill.skill_id] = _normalize_skill_path(skill, root)
-    return EnabledSkillsConfig(skills=sorted(by_id.values(), key=lambda item: item.skill_id))
-
-
-def _normalize_skill_path(skill: EnabledSkillConfig, root: Path) -> EnabledSkillConfig:
-    path = Path(skill.path).expanduser()
-    if path.is_absolute():
-        return skill
-    return skill.model_copy(update={"path": str((root / path).resolve())})
-
+    def _bundle(
+        self,
+        *,
+        roots: list[Path],
+        mcp_servers: Any,
+        enabled_skills: Any,
+    ) -> AgentInstanceExtensionConfigBundle:
+        registry_root = default_extension_registry_root()
+        mcp_path = registry_mcp_path()
+        skills_path = registry_skills_path()
+        return AgentInstanceExtensionConfigBundle(
+            sources=AgentInstanceExtensionSources(
+                extension_root=self.extension_root,
+                extension_roots=[*roots, registry_root],
+                mcp_servers_path=mcp_path if mcp_path.is_file() else None,
+                mcp_servers_paths=[mcp_path] if mcp_path.is_file() else [],
+                enabled_skills_path=skills_path if skills_path.is_file() else None,
+                enabled_skills_paths=[skills_path] if skills_path.is_file() else [],
+            ),
+            mcp_servers=mcp_servers,
+            enabled_skills=enabled_skills,
+        )
 
 def _existing_paths(paths: list[Path | None]) -> list[Path]:
     return [path for path in paths if path is not None and path.is_file()]

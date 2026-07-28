@@ -5,8 +5,8 @@ from pathlib import Path
 import re
 import shutil
 import tempfile
-import zipfile
 
+from agent_factory.package_distribution import export_distribution_archive
 from agent_factory.paths import project_root, system_package_root
 from agent_factory.runtime_contracts import AgentPackageLoader, LoadedAgentPackage
 
@@ -103,13 +103,11 @@ class AgentPackageRepository:
         archive_stem = safe_archive_stem(package_id)
         with tempfile.NamedTemporaryFile(prefix=f"{archive_stem}-", suffix=".zip", delete=False) as handle:
             archive_path = Path(handle.name)
-        root_name = target.name
-        with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            for path in sorted(item for item in target.rglob("*") if item.is_file()):
-                if path.is_symlink():
-                    continue
-                relative_path = Path(root_name) / path.relative_to(target)
-                archive.write(path, relative_path.as_posix())
+        try:
+            export_distribution_archive(target, package_id, archive_path)
+        except Exception:
+            archive_path.unlink(missing_ok=True)
+            raise
         return archive_path
 
 

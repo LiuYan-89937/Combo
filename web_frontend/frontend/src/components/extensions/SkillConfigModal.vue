@@ -12,9 +12,6 @@
         <n-select v-model:value="formData.source" :options="sourceOptions" />
       </n-form-item>
 
-      <n-form-item :label="t('scheduler.enabled')">
-        <n-switch v-model:value="formData.enabled" />
-      </n-form-item>
     </n-form>
 
     <template #footer>
@@ -28,7 +25,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { NButton, NForm, NFormItem, NInput, NModal, NSelect, NSpace, NSwitch } from 'naive-ui'
+import { NButton, NForm, NFormItem, NInput, NModal, NSelect, NSpace } from 'naive-ui'
 import type { FormInst, FormRules } from 'naive-ui'
 import type { SkillConfig } from '@/api/resourceTypes'
 import type { ExtensionItemView } from '@/types/protocol'
@@ -48,7 +45,6 @@ const emit = defineEmits<{
 interface SkillFormData {
   path: string
   source: string
-  enabled: boolean
   required: boolean
 }
 
@@ -79,7 +75,6 @@ function emptyForm(): SkillFormData {
   return {
     path: '',
     source: 'local',
-    enabled: true,
     required: false,
   }
 }
@@ -93,7 +88,6 @@ function loadForm(item: ExtensionItemView | null | undefined): void {
   formData.value = {
     path: String(payload.path || ''),
     source: String(payload.source || 'local'),
-    enabled: item.enabled !== false,
     required: Boolean(payload.required),
   }
 }
@@ -118,7 +112,7 @@ function handleSubmit(): void {
     emit('submit', {
       path: formData.value.path.trim(),
       source: formData.value.source,
-      enabled: formData.value.enabled,
+      enabled: true,
       required: formData.value.required,
       replace_skill_id: props.item?.payload?.skill_id,
     })

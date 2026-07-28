@@ -14,6 +14,7 @@ from typing import Any
 from agent_factory.models.embedding_model import get_embedding_model
 from agent_factory.paths import factory_artifact_path, system_package_root as default_system_package_root
 from agent_factory.sqlite_runtime import initialize_sqlite_store, sqlite_session
+from agent_factory.tooling.extension_registry import selected_registry_configs
 
 
 AGENT_REGISTRY_DB_ENV = "AGENTFACTORY_AGENT_REGISTRY_DB"
@@ -371,11 +372,10 @@ def _tool_summaries(assembly: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _skill_summaries(package_path: Path) -> list[dict[str, Any]]:
-    root = package_path / "extensions" / "skills"
-    if not root.is_dir():
-        return []
+    _, skills, _ = selected_registry_configs([package_path / "extensions"])
     result: list[dict[str, Any]] = []
-    for skill_dir in sorted(path for path in root.iterdir() if path.is_dir()):
+    for skill in skills.skills:
+        skill_dir = Path(skill.path).expanduser().resolve()
         meta = _read_json(skill_dir / "_meta.json")
         skill_md = skill_dir / "SKILL.md"
         description = _clean_text(meta.get("description") if meta else "")
@@ -383,26 +383,23 @@ def _skill_summaries(package_path: Path) -> list[dict[str, Any]]:
             description = _skill_markdown_summary(skill_md)
         result.append(
             {
-                "name": _clean_text(meta.get("name") if meta else "") or skill_dir.name,
+                "name": _clean_text(meta.get("name") if meta else "") or skill.skill_id,
                 "description": description,
-                "enabled": bool(meta.get("enabled", True)) if meta else True,
+                "enabled": skill.enabled,
             }
         )
     return result
 
 
 def _mcp_summaries(package_path: Path) -> list[dict[str, Any]]:
-    payload = _read_json(package_path / "extensions" / "mcp_servers.json")
-    servers = payload.get("servers") if isinstance(payload.get("servers"), list) else []
+    mcp, _, _ = selected_registry_configs([package_path / "extensions"])
     result: list[dict[str, Any]] = []
-    for server in servers:
-        if not isinstance(server, dict):
-            continue
+    for server in mcp.servers:
         result.append(
             {
-                "server_id": _clean_text(server.get("server_id")),
-                "tool_id_prefix": _clean_text(server.get("tool_id_prefix")),
-                "enabled": bool(server.get("enabled", True)),
+                "server_id": server.server_id,
+                "tool_id_prefix": _clean_text(server.tool_id_prefix),
+                "enabled": server.enabled,
             }
         )
     return result
