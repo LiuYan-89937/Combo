@@ -88,7 +88,6 @@ onMounted(loadFeatured)
             {{ t('home.ctaGithub') }}
           </BaseButton>
         </div>
-        <p class="hero__note">{{ t('home.notLocalPrivacy') }}</p>
       </div>
       <div class="hero__grid" aria-hidden="true" />
     </section>
@@ -267,12 +266,6 @@ onMounted(loadFeatured)
   flex-wrap: wrap;
   gap: var(--space-3);
   margin-top: var(--space-8);
-}
-.hero__note {
-  margin-top: var(--space-6);
-  font-size: 13px;
-  color: var(--text-muted);
-  max-width: 620px;
 }
 .hero__grid {
   position: absolute;
@@ -502,4 +495,3 @@ onMounted(loadFeatured)
   }
 }
 </style>
-

@@ -86,8 +86,6 @@ export const zh = {
     downloadSubtitle: 'macOS 与 Windows 均可使用。安装后即可配置模型并开始制造 Agent。',
     downloadUnavailable: '下载地址即将提供',
     downloadComingSoon: '发布配置尚未提供该平台的下载地址。',
-    notLocalPrivacy:
-      '本地优先并不等于完全离线：模型供应商、MCP 与 AgentHub 仍可能产生网络请求。',
   },
   hub: {
     title: 'AgentHub',
@@ -304,8 +302,6 @@ export const en = {
     downloadSubtitle: 'Available for macOS and Windows. Configure a model and start building after install.',
     downloadUnavailable: 'Download link coming soon',
     downloadComingSoon: 'The release configuration has no download link for this platform yet.',
-    notLocalPrivacy:
-      'Local-first is not fully offline: model providers, MCP and AgentHub may still make network requests.',
   },
   hub: {
     title: 'AgentHub',

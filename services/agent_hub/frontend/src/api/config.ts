@@ -29,23 +29,23 @@ export interface PublicConfig {
 
 const FALLBACK_CONFIG: PublicConfig = {
   maxPackageBytes: 200 * 1024 * 1024,
-  githubRepoUrl: 'https://github.com/liuyan/FastAgentFactory',
+  githubRepoUrl: 'https://github.com/LiuYan-89937/FastAgentFactory',
   downloads: [
     {
       platform: 'macos',
       label: 'macOS',
       arch: 'Apple Silicon',
-      url: '',
-      version: '',
-      sizeLabel: '',
+      url: 'https://github.com/LiuYan-89937/FastAgentFactory/releases/download/v0.1.0/FastAgentFactory_0.1.0_aarch64.dmg',
+      version: '0.1.0',
+      sizeLabel: '296 MB',
     },
     {
       platform: 'windows',
       label: 'Windows',
       arch: 'x64',
-      url: '',
-      version: '',
-      sizeLabel: '',
+      url: 'https://github.com/LiuYan-89937/FastAgentFactory/releases/download/v0.1.0/FastAgentFactory_0.1.0_x64-setup.exe',
+      version: '0.1.0',
+      sizeLabel: '96.2 MB',
     },
   ],
 }
