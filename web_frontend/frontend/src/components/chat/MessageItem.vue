@@ -407,13 +407,7 @@ function stableColorIndex(value: string, size: number): number {
 
 .message-item.streaming {
   position: relative;
-  animation: app-fade-in-up 0.55s var(--app-transition-spring) both,
-             message-pulse 3s ease-in-out infinite;
-}
-
-@keyframes message-pulse {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.005); }
+  animation: none;
 }
 
 .message-item.streaming::before {
