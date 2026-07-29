@@ -1,6 +1,0 @@
-{
-  "type": "state",
-  "version": "state_contract.v0",
-  "enabled": false,
-  "config": {"namespace": "package", "schema_path": "state/package.schema.json", "initial_state_path": "state/package.initial.json", "writable_node_ids": []}
-}

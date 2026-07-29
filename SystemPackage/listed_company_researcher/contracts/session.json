@@ -1,6 +1,0 @@
-{
-  "type": "session",
-  "version": "session_contract.v0",
-  "enabled": true,
-  "config": {"session_root": ".agent_runtime/sessions", "checkpointer_backend": "sqlite", "checkpoint_path": ".agent_runtime/checkpoints/agent.sqlite"}
-}

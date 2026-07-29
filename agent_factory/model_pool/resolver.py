@@ -172,9 +172,7 @@ def _resolve_image_generation_profile(
         if not binding.required:
             return None
         raise ValueError(f"local image generation profile is disabled: {profile.profile_id}")
-    endpoint = load_local_image_endpoint(
-        timeout_seconds=binding.overrides.timeout_seconds or profile.limits.timeout_seconds
-    )
+    endpoint = load_local_image_endpoint(timeout_seconds=profile.limits.timeout_seconds)
     inference = profile.inference
     if isinstance(inference, ExternalInferenceConfig):
         inference = inference.remote_inference
