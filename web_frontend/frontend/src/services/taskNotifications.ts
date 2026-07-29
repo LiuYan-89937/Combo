@@ -117,7 +117,7 @@ function showInAppNotification(
     message: body,
     duration: notification.status === 'completed' ? 8000 : 10000,
     actionLabel: translate(useUiStore().locale, 'common.view'),
-    onAction: () => void openNotificationTarget(notification.target),
+    onAction: () => openNotificationTargetSafely(notification.target),
   })
 }
 
@@ -156,19 +156,24 @@ async function isCurrentTargetVisible(target: TaskNotificationTarget): Promise<b
 
 async function openNotificationTarget(target: TaskNotificationTarget): Promise<void> {
   if (!router) return
-  await focusApplicationWindow()
+  const focusPromise = focusApplicationWindow().catch((error) => {
+    console.warn('Failed to focus the application window:', error)
+  })
   if (target.kind === 'scheduler') {
     await router.push({ name: 'Scheduler' })
+    await focusPromise
     return
   }
   if (target.kind === 'agentGroup') {
     await router.push({ name: 'AgentGroup' })
     await useAgentGroupStore().loadGroup(target.groupId)
+    await focusPromise
     return
   }
   if (target.kind === 'collaboration') {
     await router.push({ name: 'Collaboration' })
     await useCollaborationStore().loadSession(target.collaborationId)
+    await focusPromise
     return
   }
   if (target.mode === 'agent_package' && target.packageId && target.sessionId) {
@@ -181,6 +186,7 @@ async function openNotificationTarget(target: TaskNotificationTarget): Promise<v
         collaboration_task_id: target.collaborationTaskId || undefined,
       },
     })
+    await focusPromise
     return
   }
   const routeName = target.mode === 'create_agent'
@@ -192,6 +198,13 @@ async function openNotificationTarget(target: TaskNotificationTarget): Promise<v
   if (target.sessionId) {
     await postCommand(switchSessionCommand(target.sessionId, target.mode))
   }
+  await focusPromise
+}
+
+function openNotificationTargetSafely(target: TaskNotificationTarget): void {
+  void openNotificationTarget(target).catch((error) => {
+    console.warn('Failed to open task notification target:', error)
+  })
 }
 
 async function focusApplicationWindow(): Promise<void> {
@@ -250,7 +263,7 @@ function showBrowserNotification(
   browserNotification.onclick = () => {
     browserNotification.close()
     window.focus()
-    void openNotificationTarget(notification.target)
+    openNotificationTargetSafely(notification.target)
   }
 }
 

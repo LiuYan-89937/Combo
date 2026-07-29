@@ -18,7 +18,8 @@
         </div>
         <n-button
           size="small"
-          secondary
+          text
+          class="queued-message-action"
           :disabled="queuedMessage.steering"
           @click="emit('steer', queuedMessage.requestId)"
         >
@@ -488,6 +489,7 @@ defineExpose({
 
 <style scoped>
 .message-input-container {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-inline-size: 720px;
@@ -508,21 +510,36 @@ defineExpose({
   display: flex;
   flex-direction: column;
   gap: var(--app-space-xs);
-  margin: calc(-1 * var(--app-space-xl)) var(--app-space-sm) 0;
-  z-index: 1;
+  margin: calc(-1 * var(--app-space-xl)) var(--app-space-md) calc(-1 * var(--app-space-sm));
+  z-index: 2;
 }
 
 .queued-message-card {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--app-space-md);
-  padding: var(--app-space-sm) var(--app-space-md);
-  border: 1px solid var(--app-border);
-  border-radius: var(--app-radius-lg);
-  background: color-mix(in srgb, var(--app-surface) 94%, var(--app-primary) 6%);
-  box-shadow: var(--app-shadow-sm);
-  animation: app-pop-in 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+  padding: 10px 12px 10px 16px;
+  border: 1px solid var(--app-text);
+  border-radius: 22px;
+  background: var(--app-surface);
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--app-text) 12%, transparent);
+  transform-origin: 28px 100%;
+  animation: queued-message-bubble-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.queued-message-card:last-child::before {
+  position: absolute;
+  bottom: -7px;
+  left: 26px;
+  width: 13px;
+  height: 13px;
+  border-right: 1px solid var(--app-text);
+  border-bottom: 1px solid var(--app-text);
+  background: var(--app-surface);
+  content: '';
+  transform: rotate(45deg);
 }
 
 .queued-message-copy {
@@ -534,8 +551,9 @@ defineExpose({
 
 .queued-message-status {
   flex: 0 0 auto;
-  color: var(--app-text-muted);
+  color: var(--app-text);
   font-size: var(--app-font-xs);
+  font-weight: 650;
 }
 
 .queued-message-content {
@@ -544,6 +562,30 @@ defineExpose({
   color: var(--app-text);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.queued-message-action {
+  flex: 0 0 auto;
+  color: var(--app-text);
+  font-weight: 650;
+}
+
+@keyframes queued-message-bubble-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.9);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .queued-message-card {
+    animation: none;
+  }
 }
 
 .native-file-input {
