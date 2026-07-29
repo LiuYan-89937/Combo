@@ -1688,6 +1688,7 @@ class AgentPackageRuntimeManager:
             fingerprint = _runtime_fingerprint(package_id, package)
             if (
                 existing is not None
+                and existing.is_running
                 and existing.package_fingerprint == fingerprint
                 and not existing.is_idle(self.idle_timeout_seconds)
             ):

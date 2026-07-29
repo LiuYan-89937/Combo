@@ -364,7 +364,7 @@ class PackageRuntimeCore:
             session_config=session_config,
         )
         request_policy = RuntimeRequestPolicy.from_payload(payload.get("runtime_request"))
-        run_context.state.execution.timeout_seconds = request_policy.timeout_seconds
+        run_context.state.execution.timeout_seconds = 0
         run_context.state.execution.max_retries = request_policy.max_retries
         normalizer.session_id = run_context.session_id
         if _emit_pending_checkpoint_interrupt(normalizer, compiled.compiled_app, run_context.thread_id):
@@ -486,7 +486,7 @@ class PackageRuntimeCore:
             session_config=session_config,
         )
         request_policy = RuntimeRequestPolicy.from_payload(payload.get("runtime_request"))
-        run_context.state.execution.timeout_seconds = request_policy.timeout_seconds
+        run_context.state.execution.timeout_seconds = 0
         run_context.state.execution.max_retries = request_policy.max_retries
         final_state = None
         stop_requested = False
@@ -894,6 +894,7 @@ def _emit_stopped_runtime(
         base_state=run_context.state,
         visible_output=visible_output,
         fallback_user_input=fallback_user_input or run_context.first_user_input,
+        stop_reason=stop_signal.reason if stop_signal is not None else "user_cancelled",
     )
     agent_session = run_context.session_manager.touch_turn(
         session_id or run_context.session_id,

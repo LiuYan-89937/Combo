@@ -298,6 +298,26 @@ export interface CancelRuntimeRequestOptions {
   visibleOutput?: Record<string, any> | null
 }
 
+export interface SteerRuntimeRequestOptions {
+  queuedRequestId: string
+  sessionId?: string | null
+  mode?: FactoryMode | null
+  visibleOutput?: Record<string, any> | null
+}
+
+export function steerRuntimeRequestCommand(options: SteerRuntimeRequestOptions): FactoryFrontendCommand {
+  const requestId = generateRequestId()
+  return createCommand('steer_runtime_request', {
+    request_id: requestId,
+    session_id: options.sessionId,
+    mode: options.mode,
+    payload: {
+      queued_request_id: options.queuedRequestId,
+      ...(options.visibleOutput ? { visible_output: options.visibleOutput } : {}),
+    },
+  })
+}
+
 export function cancelRuntimeRequestCommand(options: CancelRuntimeRequestOptions = {}): FactoryFrontendCommand {
   const requestId = generateRequestId()
   return createCommand('cancel_runtime_request', {

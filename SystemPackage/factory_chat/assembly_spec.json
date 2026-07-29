@@ -51,10 +51,6 @@
             "shell",
             "shell_status",
             "shell_stop",
-            "collaboration",
-            "agent_list",
-            "agent_manufacture",
-            "agent_search",
             "knowledge",
             "scheduler",
             "skillhub"

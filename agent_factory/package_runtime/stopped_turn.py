@@ -8,13 +8,18 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
 from agent_factory.factory_graph.frontend_bridge.event_normalizer import VisibleAssistantMessage
 from agent_factory.runtime_kernel.state import RuntimeState
-from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
+from agent_factory.runtime_protocol.messages import close_incomplete_tool_call_history
 
 
 LANGGRAPH_INPUT_NODE = "__input__"
 USER_STOP_MARKER_CONTENT = (
     "用户已停止上一条助手回复。请将上一条助手回复视为已被用户中断，等待并遵循下一条用户消息继续。"
 )
+USER_STEER_MARKER_CONTENT = (
+    "用户用新的引导中断了上一条助手回复。上一条回复和未完成的工具执行已经安全结束；"
+    "紧随其后的用户消息是本次引导，请立即按该引导继续。"
+)
+INTERRUPTED_TOOL_MESSAGE_CONTENT = "工具执行因用户引导或停止操作而中断，未产生可用结果。"
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +35,7 @@ def close_stopped_turn_checkpoint(
     base_state: RuntimeState,
     visible_output: VisibleAssistantMessage,
     fallback_user_input: str,
+    stop_reason: str = "user_cancelled",
 ) -> StoppedTurn:
     values = _checkpoint_values(compiled_app, thread_id=thread_id)
     checkpoint_state = _checkpoint_runtime_state(values) or base_state
@@ -41,6 +47,7 @@ def close_stopped_turn_checkpoint(
     messages = _stopped_messages(
         values.get("messages"),
         visible_output=visible_output,
+        stop_reason=stop_reason,
     )
     compiled_app.graph_app.update_state(
         {"configurable": {"thread_id": thread_id}},
@@ -101,15 +108,23 @@ def _stopped_messages(
     raw_messages: Any,
     *,
     visible_output: VisibleAssistantMessage,
+    stop_reason: str,
 ) -> list[Any]:
-    messages = _complete_message_prefix(list(raw_messages or []))
+    messages = close_incomplete_tool_call_history(
+        list(raw_messages or []),
+        content=INTERRUPTED_TOOL_MESSAGE_CONTENT,
+    )
     assistant_message = _assistant_message(visible_output)
     if assistant_message is not None:
         messages.append(assistant_message)
     messages.append(
         HumanMessage(
-            content=USER_STOP_MARKER_CONTENT,
-            additional_kwargs={"factory_control": {"type": "user_stopped_generation"}},
+            content=USER_STEER_MARKER_CONTENT if stop_reason == "user_steered" else USER_STOP_MARKER_CONTENT,
+            additional_kwargs={
+                "factory_control": {
+                    "type": "user_steered_generation" if stop_reason == "user_steered" else "user_stopped_generation"
+                }
+            },
         )
     )
     return messages
@@ -124,11 +139,3 @@ def _assistant_message(visible_output: VisibleAssistantMessage) -> AIMessage | N
         content=content,
         additional_kwargs={"reasoning_content": reasoning_content} if reasoning_content else {},
     )
-
-
-def _complete_message_prefix(messages: list[Any]) -> list[Any]:
-    for index in range(len(messages), -1, -1):
-        prefix = messages[:index]
-        if not incomplete_tool_call_ids(prefix):
-            return prefix
-    return []

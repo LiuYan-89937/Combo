@@ -32,6 +32,7 @@
     "run_agent_group_member",
     "run_agent_evolution",
     "resume_interrupt",
+    "steer_runtime_request",
     "cancel_runtime_request",
     "shutdown"
   ],
@@ -53,6 +54,7 @@
     "mode_changed",
     "runtime_request_queued",
     "runtime_request_dispatched",
+    "runtime_request_steering",
     "run_started",
     "run_completed",
     "run_cancelled",
@@ -160,6 +162,7 @@
   "process_event_types": [
     "runtime_request_queued",
     "runtime_request_dispatched",
+    "runtime_request_steering",
     "run_started",
     "run_completed",
     "run_cancelled",

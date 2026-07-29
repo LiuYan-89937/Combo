@@ -10,6 +10,31 @@ def has_complete_tool_call_history(messages: Sequence[Any]) -> bool:
     return not incomplete_tool_call_ids(messages)
 
 
+def close_incomplete_tool_call_history(
+    messages: Sequence[Any],
+    *,
+    content: str,
+) -> list[Any]:
+    closed: list[Any] = []
+    pending: list[str] = []
+    for message in messages:
+        if pending and not _is_tool_message(message):
+            closed.extend(_interrupted_tool_messages(pending, content))
+            pending = []
+        closed.append(message)
+        tool_calls = _tool_calls(message)
+        if tool_calls:
+            pending = [_tool_call_id(call) for call in tool_calls if _tool_call_id(call)]
+            continue
+        if _is_tool_message(message):
+            tool_call_id = _tool_message_call_id(message)
+            if tool_call_id in pending:
+                pending = [item for item in pending if item != tool_call_id]
+    if pending:
+        closed.extend(_interrupted_tool_messages(pending, content))
+    return closed
+
+
 def incomplete_tool_call_ids(messages: Sequence[Any]) -> list[str]:
     missing: list[str] = []
     pending: list[str] = []
@@ -28,6 +53,18 @@ def incomplete_tool_call_ids(messages: Sequence[Any]) -> list[str]:
     if pending:
         missing.extend(pending)
     return missing
+
+
+def _interrupted_tool_messages(tool_call_ids: Sequence[str], content: str) -> list[ToolMessage]:
+    return [
+        ToolMessage(
+            content=content,
+            tool_call_id=tool_call_id,
+            status="error",
+            additional_kwargs={"factory_control": {"type": "tool_execution_interrupted"}},
+        )
+        for tool_call_id in tool_call_ids
+    ]
 
 
 def _tool_calls(message: Any) -> list[Any]:
