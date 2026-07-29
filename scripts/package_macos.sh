@@ -32,6 +32,7 @@ if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
     [[ -f "${DEFAULT_UPDATER_KEY}" ]] || fail "Updater signing key not found: ${DEFAULT_UPDATER_KEY}"
     export TAURI_SIGNING_PRIVATE_KEY="${DEFAULT_UPDATER_KEY}"
 fi
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
 
 if ! cargo tauri --version >/dev/null 2>&1; then
     echo "Installing Tauri CLI 2..."
