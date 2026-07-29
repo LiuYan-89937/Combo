@@ -95,6 +95,7 @@ def request_heartbeat_event(
     *,
     package_id: str,
     elapsed_seconds: float,
+    inactive_seconds: float,
     timeout_seconds: int,
 ) -> FactoryFrontendEvent:
     return event(
@@ -111,6 +112,7 @@ def request_heartbeat_event(
             "package_id": package_id,
             "status": "running",
             "elapsed_seconds": round(elapsed_seconds, 3),
+            "inactive_seconds": round(inactive_seconds, 3),
             "timeout_seconds": timeout_seconds,
         },
     )
@@ -121,16 +123,18 @@ def request_timeout_payload(
     package_id: str,
     request_id: str,
     elapsed_seconds: float,
+    inactive_seconds: float,
     timeout_seconds: int,
 ) -> dict[str, Any]:
     return {
         "where": "runtime_request",
         "why": "request_timeout",
-        "message": f"Runtime request timed out after {timeout_seconds} seconds.",
+        "message": f"Runtime request produced no progress for {timeout_seconds} seconds.",
         "suggested_action": "Retry the request or split it into smaller steps.",
         "package_id": package_id,
         "request_id": request_id,
         "elapsed_seconds": round(elapsed_seconds, 3),
+        "inactive_seconds": round(inactive_seconds, 3),
         "timeout_seconds": timeout_seconds,
     }
 
@@ -147,8 +151,18 @@ def request_cancelled_payload(*, package_id: str, request_id: str, reason: str) 
     }
 
 
-def request_timed_out(started_at: float, now: float, policy: RuntimeRequestPolicy) -> bool:
-    return policy.timeout_seconds > 0 and (now - started_at) >= policy.timeout_seconds
+def request_timed_out(last_progress_at: float, now: float, policy: RuntimeRequestPolicy) -> bool:
+    return policy.timeout_seconds > 0 and (now - last_progress_at) >= policy.timeout_seconds
+
+
+def is_request_progress(item: Any, request_id: str) -> bool:
+    if not isinstance(item, FactoryFrontendEvent) or item.request_id != request_id:
+        return False
+    return not (
+        item.event_type == "node_progress"
+        and item.node_id == "runtime_request"
+        and item.payload.get("status") == "running"
+    )
 
 
 def heartbeat_due(last_heartbeat_at: float, now: float, policy: RuntimeRequestPolicy) -> bool:

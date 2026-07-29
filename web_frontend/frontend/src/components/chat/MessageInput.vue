@@ -1,5 +1,32 @@
 <template>
   <div class="message-input-container" @dragover.prevent @drop.prevent="handleFileDrop">
+    <div v-if="queuedMessages.length > 0" class="queued-message-tray">
+      <div
+        v-for="queuedMessage in queuedMessages"
+        :key="queuedMessage.requestId"
+        class="queued-message-card"
+      >
+        <div class="queued-message-copy">
+          <span class="queued-message-status">
+            {{ queuedMessage.steering
+              ? t('chat.messageSteering')
+              : t('chat.messageQueuedAt', { position: queuedMessage.position }) }}
+          </span>
+          <span class="queued-message-content">
+            {{ queuedMessage.content || t('chat.attachmentMessage') }}
+          </span>
+        </div>
+        <n-button
+          size="small"
+          secondary
+          :disabled="queuedMessage.steering"
+          @click="emit('steer', queuedMessage.requestId)"
+        >
+          {{ queuedMessage.steering ? t('chat.steering') : t('chat.steer') }}
+        </n-button>
+      </div>
+    </div>
+
     <div v-if="contextReferences.length > 0" class="attachments-preview context-references-preview">
       <div
         v-for="(reference, index) in contextReferences"
@@ -192,7 +219,7 @@ import ResourceIcon from '@/components/common/ResourceIcon.vue'
 import { useI18n } from '@/composables/useI18n'
 import { useFileCapabilities } from '@/composables/useFileCapabilities'
 import { MAX_RUNTIME_ATTACHMENTS, extensionFromMimeType, pastedImageFiles, runtimeFileAttachmentFromFile } from '@/utils/attachments'
-import type { RuntimeAttachmentInput } from '@/types/protocol'
+import type { QueuedMessageView, RuntimeAttachmentInput } from '@/types/protocol'
 import { useContextReferenceStore } from '@/stores/contextReferences'
 
 const { t } = useI18n()
@@ -211,6 +238,7 @@ const props = withDefaults(
     disabled?: boolean
     isRunning?: boolean
     queuedCount?: number
+    queuedMessages?: QueuedMessageView[]
     rows?: number
     maxRows?: number
     attachmentsEnabled?: boolean
@@ -226,6 +254,7 @@ const props = withDefaults(
     disabled: false,
     isRunning: false,
     queuedCount: 0,
+    queuedMessages: () => [],
     rows: 3,
     maxRows: 10,
     attachmentsEnabled: true,
@@ -241,6 +270,7 @@ const props = withDefaults(
 const emit = defineEmits<{
   send: [message: string, attachments: RuntimeAttachmentInput[]]
   cancel: []
+  steer: [requestId: string]
   input: [value: string]
   'update:selectedModelProfileId': [value: string]
   'update:reasoningIntensity': [value: number | null]
@@ -472,6 +502,48 @@ defineExpose({
 .message-input-container:focus-within {
   border-color: var(--app-border-focus);
   box-shadow: 0 0 0 3px var(--app-focus-shadow);
+}
+
+.queued-message-tray {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-space-xs);
+  margin: calc(-1 * var(--app-space-xl)) var(--app-space-sm) 0;
+  z-index: 1;
+}
+
+.queued-message-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-space-md);
+  padding: var(--app-space-sm) var(--app-space-md);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-lg);
+  background: color-mix(in srgb, var(--app-surface) 94%, var(--app-primary) 6%);
+  box-shadow: var(--app-shadow-sm);
+  animation: app-pop-in 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.queued-message-copy {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: var(--app-space-sm);
+}
+
+.queued-message-status {
+  flex: 0 0 auto;
+  color: var(--app-text-muted);
+  font-size: var(--app-font-xs);
+}
+
+.queued-message-content {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--app-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .native-file-input {

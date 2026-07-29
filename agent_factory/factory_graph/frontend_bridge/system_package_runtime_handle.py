@@ -11,6 +11,7 @@ from uuid import uuid4
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent
 from agent_factory.factory_graph.frontend_bridge.runtime_events import (
     heartbeat_due,
+    is_request_progress,
     is_terminal_request_event,
     request_heartbeat_event,
     request_timed_out,
@@ -168,17 +169,20 @@ class SystemPackageRuntimeHandle:
         worker.start()
         terminal_seen = False
         started_at = time.monotonic()
+        last_progress_at = started_at
         last_heartbeat_at = started_at
         try:
             while not terminal_seen:
                 for stream_mode, item in self._next_request_batch(request_id):
+                    if is_request_progress(item, request_id):
+                        last_progress_at = time.monotonic()
                     yield stream_mode, item
                     if is_terminal_request_event(item, request_id):
                         terminal_seen = True
                 if terminal_seen:
                     break
                 now = time.monotonic()
-                if request_timed_out(started_at, now, request_policy):
+                if request_timed_out(last_progress_at, now, request_policy):
                     self.close()
                     yield "frontend_event", run_failed_event(
                         request_id,
@@ -186,6 +190,7 @@ class SystemPackageRuntimeHandle:
                             package_id=self.package_id,
                             request_id=request_id,
                             elapsed_seconds=now - started_at,
+                            inactive_seconds=now - last_progress_at,
                             timeout_seconds=request_policy.timeout_seconds,
                         ),
                     )
@@ -196,6 +201,7 @@ class SystemPackageRuntimeHandle:
                         request_id,
                         package_id=self.package_id,
                         elapsed_seconds=now - started_at,
+                        inactive_seconds=now - last_progress_at,
                         timeout_seconds=request_policy.timeout_seconds,
                     )
                 with self._condition:

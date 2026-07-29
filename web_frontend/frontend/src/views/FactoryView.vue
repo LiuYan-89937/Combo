@@ -87,6 +87,7 @@
           :disabled="inputDisabled"
           :is-running="runtimeStore.hasActiveRun"
           :queued-count="runtimeStore.queuedRequestCount"
+          :queued-messages="runtimeStore.queuedMessages"
           attachments-enabled
           model-selector-enabled
           :model-options="runtimeMainModelOptions"
@@ -98,6 +99,7 @@
           @update:reasoning-intensity="setReasoningIntensity"
           @send="handleSend"
           @cancel="handleCancel"
+          @steer="handleSteer"
         >
           <template #auxiliary-action>
             <n-button
@@ -201,6 +203,7 @@ const {
   cancelRequest,
   handleEvolutionPackageSelect,
   sendMessage,
+  steerQueuedRequest,
 } = useFactoryConversation()
 
 const {
@@ -245,6 +248,10 @@ function handleSend(message: string, attachments: RuntimeAttachmentInput[]) {
 
 function handleCancel() {
   cancelRequest()
+}
+
+function handleSteer(requestId: string) {
+  steerQueuedRequest(requestId)
 }
 
 function addMessageReference(message: TranscriptItem) {

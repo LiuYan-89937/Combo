@@ -202,9 +202,32 @@ export const useRuntimeStore = defineStore('runtime', {
       return Object.values(state.activeRequests).filter((request) => (
         !request.background
         && request.status === 'running'
-        && request.payload?.dispatch_state === 'queued'
+        && ['queued', 'steering'].includes(String(request.payload?.dispatch_state || ''))
         && (!state.activeConversationScope || request.conversationScope === state.activeConversationScope)
       )).length
+    },
+
+    queuedMessages: (state) => {
+      return Object.values(state.activeRequests)
+        .filter((request) => (
+          !request.background
+          && request.status === 'running'
+          && ['queued', 'steering'].includes(String(request.payload?.dispatch_state || ''))
+          && (!state.activeConversationScope || request.conversationScope === state.activeConversationScope)
+        ))
+        .sort((left, right) => {
+          const positionDelta = Number(left.payload?.queue_position || 0) - Number(right.payload?.queue_position || 0)
+          return positionDelta || Date.parse(left.startedAt) - Date.parse(right.startedAt)
+        })
+        .map((request) => {
+          const turn = state.conversationTurns.find((item) => item.requestId === request.requestId)
+          return {
+            requestId: request.requestId,
+            content: String(turn?.userMessage?.content || request.payload?.message || ''),
+            position: Number(request.payload?.queue_position || 0),
+            steering: request.payload?.dispatch_state === 'steering',
+          }
+        })
     },
 
     // 获取可见的模型流（用于主 transcript）
@@ -361,6 +384,8 @@ export const useRuntimeStore = defineStore('runtime', {
       // Runtime request dispatch
       else if (type === 'runtime_request_queued') {
         this._handleRuntimeRequestQueued(event)
+      } else if (type === 'runtime_request_steering') {
+        this._handleRuntimeRequestSteering(event)
       } else if (type === 'runtime_request_dispatched') {
         this._handleRuntimeRequestDispatched(event)
       }
@@ -1023,6 +1048,11 @@ export const useRuntimeStore = defineStore('runtime', {
       this._setRequestDispatchState(event.request_id, 'queued', event.payload)
     },
 
+    _handleRuntimeRequestSteering(event: FactoryFrontendEvent) {
+      this._registerActiveRequest(event, 'running')
+      this._setRequestDispatchState(event.request_id, 'steering', event.payload)
+    },
+
     _handleRuntimeRequestDispatched(event: FactoryFrontendEvent) {
       this._registerActiveRequest(event, 'running')
       this._setRequestDispatchState(event.request_id, 'running', event.payload)
@@ -1034,7 +1064,7 @@ export const useRuntimeStore = defineStore('runtime', {
 
     _setRequestDispatchState(
       requestId: string | null | undefined,
-      dispatchState: 'queued' | 'running' | 'completed' | 'cancelled' | 'failed' | 'stopped',
+      dispatchState: 'queued' | 'steering' | 'running' | 'completed' | 'cancelled' | 'failed' | 'stopped',
       payload: Record<string, any> = {},
     ) {
       if (!requestId) return

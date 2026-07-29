@@ -273,6 +273,13 @@ export interface ActiveRequestView {
   payload: Record<string, any>
 }
 
+export interface QueuedMessageView {
+  requestId: string
+  content: string
+  position: number
+  steering: boolean
+}
+
 // ========== 节点和阶段 ==========
 
 export interface NodeViewState {

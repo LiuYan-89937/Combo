@@ -137,6 +137,27 @@ export function useRuntimeCommands() {
     return command
   }
 
+  const steerRequest = (
+    queuedRequestId: string,
+    visibleOutput: Record<string, any> | null = null,
+  ) => {
+    const queuedRequest = runtimeStore.activeRequests[queuedRequestId]
+    const mode = queuedRequest?.mode || runtimeStore.currentMode
+    const sessionId = String(
+      queuedRequest?.payload?.session_id
+      || (mode === 'agent_package' ? runtimeStore.activeAgentSessionId : runtimeStore.activeFactorySessionId)
+      || '',
+    ).trim() || null
+    const command = commands.steerRuntimeRequestCommand({
+      queuedRequestId,
+      sessionId,
+      mode,
+      visibleOutput,
+    })
+    transport.sendRuntimeCommand(command)
+    return command
+  }
+
   return {
     startSession,
     listSessions,
@@ -150,6 +171,7 @@ export function useRuntimeCommands() {
     trustTool,
     reviseWithGuidance,
     answerInterrupt,
+    steerRequest,
     cancelRequest,
   }
 }

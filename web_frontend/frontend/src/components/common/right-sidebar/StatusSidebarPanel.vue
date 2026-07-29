@@ -50,6 +50,10 @@
           <strong>{{ t('status.seconds', { count: requestElapsedSeconds }) }}</strong>
         </div>
         <div class="request-status-row">
+          <span>{{ t('status.requestInactive') }}</span>
+          <strong>{{ t('status.seconds', { count: requestInactiveSeconds }) }}</strong>
+        </div>
+        <div class="request-status-row">
           <span>{{ t('status.requestTimeout') }}</span>
           <strong>{{ requestTimeoutText }}</strong>
         </div>
@@ -219,6 +223,9 @@ const requestElapsedSeconds = computed(() => {
     : 0
   return Math.floor(Math.max(heartbeatElapsed, localElapsed))
 })
+const requestInactiveSeconds = computed(() => (
+  Math.floor(nonNegativeNumber(requestRuntimeNode.value?.payload?.inactive_seconds) || 0)
+))
 const requestTimeoutText = computed(() => {
   const timeout = requestTimeoutSeconds.value
   if (timeout === null) return t('status.requestTimeoutPending')
@@ -228,7 +235,7 @@ const requestTimeoutText = computed(() => {
 const requestProgressWidth = computed(() => {
   const timeout = requestTimeoutSeconds.value
   if (timeout === null || timeout <= 0) return '0%'
-  return `${Math.min(100, (requestElapsedSeconds.value / timeout) * 100)}%`
+  return `${Math.min(100, (requestInactiveSeconds.value / timeout) * 100)}%`
 })
 
 const contextWindow = computed(() => runtimeStore.contextWindow)

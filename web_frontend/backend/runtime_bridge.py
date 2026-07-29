@@ -81,9 +81,12 @@ class RuntimeBridge:
         self._background_threads: dict[str, threading.Thread] = {}
         self._background_commands: dict[str, FactoryFrontendCommand] = {}
         self._active_requests: dict[str, dict[str, Any]] = {}
+        self._session_dispatch_queues: dict[str, deque[str]] = {}
+        self._session_running_requests: dict[str, str] = {}
         self._deleting_session_ids: set[str] = set()
         self._session_cleanup_tasks: set[asyncio.Task[None]] = set()
         self._background_lock = threading.Lock()
+        self._dispatch_condition = threading.Condition(self._background_lock)
         self._loop: asyncio.AbstractEventLoop | None = None
         self._event_pipeline = RuntimeEventPipeline(
             prepare=self._prepare_runtime_event,
@@ -127,6 +130,8 @@ class RuntimeBridge:
             self._background_threads.clear()
             self._background_commands.clear()
             self._active_requests.clear()
+            self._session_dispatch_queues.clear()
+            self._session_running_requests.clear()
             self._deleting_session_ids.clear()
         self._session_cleanup_tasks.clear()
         logger.info("Runtime service stopped")
@@ -150,11 +155,15 @@ class RuntimeBridge:
             )
             return
         if session_is_deleting and command.type not in {
+            "steer_runtime_request",
             "cancel_runtime_request",
             "delete_session",
             "delete_agent_package_session",
         }:
             raise RuntimeError(f"session is being deleted: {command_session_id}")
+        if command.type == "steer_runtime_request":
+            await asyncio.to_thread(self._steer_queued_request, command)
+            return
         if _is_long_running_command(command):
             self._start_background(command)
             return
@@ -251,33 +260,34 @@ class RuntimeBridge:
             session_id = _command_session_id(command)
             if session_id and session_id in self._deleting_session_ids:
                 raise RuntimeError(f"session is being deleted: {session_id}")
-            predecessors = [
-                thread
-                for active_request_id, thread in self._background_threads.items()
-                if active_request_id != request_id
-                and session_id
-                and _active_request_session_id(self._active_requests.get(active_request_id)) == session_id
-                and not bool(self._active_requests.get(active_request_id, {}).get("background"))
-            ]
             request = _active_request_from_command(command, request_id)
-            request["payload"]["dispatch_state"] = "queued" if predecessors else "running"
-            request["payload"]["queue_position"] = len(predecessors)
+            serialized = bool(session_id and not request["background"])
+            queued = serialized and session_id in self._session_running_requests
+            if serialized:
+                if queued:
+                    queue = self._session_dispatch_queues.setdefault(session_id, deque())
+                    queue.append(request_id)
+                    request["payload"]["queue_position"] = len(queue)
+                else:
+                    self._session_running_requests[session_id] = request_id
+                    request["payload"]["queue_position"] = 0
+            request["payload"]["dispatch_state"] = "queued" if queued else "running"
             self._active_requests[request_id] = request
             thread = threading.Thread(
                 target=self._run_background_command,
-                args=(command, request_id, predecessors),
+                args=(command, request_id),
                 name=f"factory-runtime-command-{request_id}",
                 daemon=True,
             )
             self._background_threads[request_id] = thread
             self._background_commands[request_id] = command
-            if predecessors:
+            if queued:
                 dispatch_event = _runtime_request_dispatch_event(
                     command=command,
                     request_id=request_id,
                     event_type="runtime_request_queued",
                     dispatch_state="queued",
-                    queue_position=len(predecessors),
+                    queue_position=int(request["payload"]["queue_position"]),
                 )
         if dispatch_event is not None:
             self._emit_from_runtime(dispatch_event)
@@ -354,17 +364,13 @@ class RuntimeBridge:
         self,
         command: FactoryFrontendCommand,
         request_id: str,
-        predecessors: list[threading.Thread],
     ) -> None:
         try:
-            for predecessor in predecessors:
-                predecessor.join()
+            if not self._wait_for_dispatch(request_id):
+                return
             with self._background_lock:
                 active_request = self._active_requests.get(request_id)
-                if active_request is None or active_request.get("payload", {}).get("cancel_requested_at"):
-                    return
-                active_request["payload"]["dispatch_state"] = "running"
-                active_request["payload"]["queue_position"] = 0
+                dispatch_payload = dict(active_request.get("payload") or {}) if active_request else {}
             self._emit_from_runtime(
                 _runtime_request_dispatch_event(
                     command=command,
@@ -372,6 +378,11 @@ class RuntimeBridge:
                     event_type="runtime_request_dispatched",
                     dispatch_state="running",
                     queue_position=0,
+                    extra_payload={
+                        key: dispatch_payload[key]
+                        for key in ("steer_from_request_id", "steer_requested_at")
+                        if dispatch_payload.get(key)
+                    },
                 )
             )
             self._handle_command(command)
@@ -386,9 +397,130 @@ class RuntimeBridge:
             )
         finally:
             with self._background_lock:
+                self._release_dispatch_slot(command, request_id)
                 self._background_threads.pop(request_id, None)
                 self._background_commands.pop(request_id, None)
                 self._active_requests.pop(request_id, None)
+                self._dispatch_condition.notify_all()
+
+    def _wait_for_dispatch(self, request_id: str) -> bool:
+        with self._dispatch_condition:
+            while True:
+                request = self._active_requests.get(request_id)
+                if request is None:
+                    return False
+                payload = request.setdefault("payload", {})
+                if payload.get("cancel_requested_at"):
+                    self._remove_queued_request(request_id, _active_request_session_id(request))
+                    return False
+                session_id = _active_request_session_id(request)
+                if (
+                    not session_id
+                    or bool(request.get("background"))
+                    or self._session_running_requests.get(session_id) == request_id
+                ):
+                    payload["dispatch_state"] = "running"
+                    payload["queue_position"] = 0
+                    return True
+                self._dispatch_condition.wait()
+
+    def _release_dispatch_slot(self, command: FactoryFrontendCommand, request_id: str) -> None:
+        session_id = _command_session_id(command)
+        if not session_id or self._session_running_requests.get(session_id) != request_id:
+            self._remove_queued_request(request_id, session_id)
+            return
+        self._session_running_requests.pop(session_id, None)
+        queue = self._session_dispatch_queues.get(session_id)
+        while queue:
+            next_request_id = queue.popleft()
+            next_request = self._active_requests.get(next_request_id)
+            if next_request is None or next_request.get("payload", {}).get("cancel_requested_at"):
+                continue
+            self._session_running_requests[session_id] = next_request_id
+            break
+        if queue is not None and not queue:
+            self._session_dispatch_queues.pop(session_id, None)
+
+    def _remove_queued_request(self, request_id: str, session_id: str) -> None:
+        queue = self._session_dispatch_queues.get(session_id)
+        if queue is None:
+            return
+        try:
+            queue.remove(request_id)
+        except ValueError:
+            return
+        if not queue:
+            self._session_dispatch_queues.pop(session_id, None)
+
+    def _steer_queued_request(self, command: FactoryFrontendCommand) -> None:
+        queued_request_id = str(command.payload.get("queued_request_id") or "").strip()
+        if not queued_request_id:
+            raise ValueError("steer_runtime_request requires queued_request_id")
+        with self._dispatch_condition:
+            queued_request = self._active_requests.get(queued_request_id)
+            if queued_request is None:
+                raise ValueError(f"queued runtime request is unavailable: {queued_request_id}")
+            queued_payload = queued_request.setdefault("payload", {})
+            if queued_payload.get("dispatch_state") != "queued":
+                raise ValueError(f"runtime request is not queued: {queued_request_id}")
+            session_id = _active_request_session_id(queued_request)
+            running_request_id = self._session_running_requests.get(session_id, "")
+            queue = self._session_dispatch_queues.get(session_id)
+            if not session_id or not running_request_id or queue is None:
+                raise ValueError(f"queued runtime request has no active predecessor: {queued_request_id}")
+            queued_command = self._background_commands.get(queued_request_id)
+            if queued_command is None:
+                raise ValueError(f"queued runtime command is unavailable: {queued_request_id}")
+            self._remove_queued_request(queued_request_id, session_id)
+            queue = self._session_dispatch_queues.setdefault(session_id, deque())
+            queue.appendleft(queued_request_id)
+            steer_requested_at = datetime.now(UTC).isoformat()
+            queued_payload.update(
+                {
+                    "dispatch_state": "steering",
+                    "queue_position": 0,
+                    "steer_from_request_id": running_request_id,
+                    "steer_requested_at": steer_requested_at,
+                }
+            )
+            running_request = self._active_requests.get(running_request_id)
+            running_mode = running_request.get("mode") if running_request else command.mode
+            running_payload = dict(running_request.get("payload") or {}) if running_request else {}
+            self._dispatch_condition.notify_all()
+        self._emit_from_runtime(
+            _runtime_request_dispatch_event(
+                command=queued_command,
+                request_id=queued_request_id,
+                event_type="runtime_request_steering",
+                dispatch_state="steering",
+                queue_position=0,
+                extra_payload={
+                    "steer_from_request_id": running_request_id,
+                    "steer_requested_at": steer_requested_at,
+                },
+            )
+        )
+        cancel_command = FactoryFrontendCommand(
+            type="cancel_runtime_request",
+            request_id=command.request_id,
+            session_id=session_id,
+            mode=running_mode,
+            payload={
+                "reason": "user_steered",
+                "target_request_id": running_request_id,
+                **(
+                    {"package_id": running_payload["package_id"]}
+                    if running_payload.get("package_id")
+                    else {}
+                ),
+                **(
+                    {"visible_output": command.payload["visible_output"]}
+                    if isinstance(command.payload.get("visible_output"), dict)
+                    else {}
+                ),
+            },
+        )
+        self._handle_command(self._resolve_cancel_command(cancel_command))
 
     def _resolve_cancel_command(self, command: FactoryFrontendCommand) -> FactoryFrontendCommand:
         if command.type != "cancel_runtime_request":
@@ -414,6 +546,7 @@ class RuntimeBridge:
             if resolved_target and resolved_target in self._active_requests:
                 active_payload = self._active_requests[resolved_target].setdefault("payload", {})
                 active_payload["cancel_requested_at"] = datetime.now(UTC).isoformat()
+                self._dispatch_condition.notify_all()
         if not resolved_target:
             return command
         if requested_target and requested_target != resolved_target:
@@ -651,6 +784,7 @@ def _runtime_request_dispatch_event(
     event_type: str,
     dispatch_state: str,
     queue_position: int,
+    extra_payload: dict[str, Any] | None = None,
 ):
     command_payload = dict(command.payload or {})
     session_id = _command_session_id(command)
@@ -670,6 +804,7 @@ def _runtime_request_dispatch_event(
             "dispatch_state": dispatch_state,
             "queue_position": queue_position,
             "session_id": session_id or None,
+            **dict(extra_payload or {}),
         }
     )
     return event(

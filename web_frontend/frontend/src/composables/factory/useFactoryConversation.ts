@@ -239,6 +239,10 @@ export function useFactoryConversation() {
     commands.cancelRequest('user_cancelled', requestId, visibleOutput)
   }
 
+  function steerQueuedRequest(requestId: string) {
+    commands.steerRequest(requestId, runtimeStore.activeVisibleAssistantOutput)
+  }
+
   function applyRouteMode() {
     if (isManufacturingRoute.value) {
       agentStore.leaveAgentChat()
@@ -287,6 +291,7 @@ export function useFactoryConversation() {
     reasoningIntensity,
     selectedMainModelProfileId,
     sendMessage,
+    steerQueuedRequest,
     setSelectedMainModelProfileId,
     setReasoningIntensity,
   }

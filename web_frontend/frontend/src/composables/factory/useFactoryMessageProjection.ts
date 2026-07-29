@@ -21,6 +21,7 @@ export function useFactoryMessageProjection() {
   const timelineItems = computed<FactoryTimelineItem[]>(() => {
     const items: FactoryTimelineItem[] = []
     runtimeStore.transcript.forEach((message, index) => {
+      if (['queued', 'steering'].includes(String(message.metadata?.dispatch_state || ''))) return
       items.push({
         kind: 'message',
         id: message.id,
