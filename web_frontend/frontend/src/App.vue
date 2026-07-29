@@ -12,6 +12,7 @@
             <AppHeader v-if="!startupStore.ready" />
             <AppContent v-if="startupStore.ready" />
             <SelectionReferenceMenu v-if="startupStore.ready" />
+            <AppUpdateDialog />
             <n-modal
               :show="!startupStore.ready"
               :mask-closable="false"
@@ -58,6 +59,7 @@ import { applyPaletteToRoot } from '@/theme/cssVariables'
 import AppContent from '@/layouts/AppContent.vue'
 import AppHeader from '@/components/common/AppHeader.vue'
 import SelectionReferenceMenu from '@/components/chat/SelectionReferenceMenu.vue'
+import AppUpdateDialog from '@/components/common/AppUpdateDialog.vue'
 
 const route = useRoute()
 const { locale, t } = useI18n()

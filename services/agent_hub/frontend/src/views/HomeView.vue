@@ -240,7 +240,7 @@ onMounted(loadFeatured)
           <p class="block-head__sub">{{ t('home.downloadSubtitle') }}</p>
         </header>
         <div class="download__grid">
-          <div v-for="d in config.downloads" :key="d.platform" class="download__card">
+          <div v-for="d in config.downloads" :key="`${d.platform}-${d.arch}`" class="download__card">
             <div class="download__meta">
               <h3 class="download__platform">{{ d.label }}</h3>
               <p class="download__arch">{{ d.arch }}</p>

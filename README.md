@@ -8,9 +8,9 @@ FastAgentFactory 将模型配置、Agent 制造与进化、会话工作区、工
 
 ### macOS
 
-1. 下载与 Mac 处理器架构匹配的 `.dmg`。
+1. 在 Apple Silicon（M 系列）Mac 上下载 `aarch64` `.dmg`。
 2. 打开镜像，将 FastAgentFactory 拖入 `Applications`。
-3. 启动应用。
+3. 启动应用。当前不提供 Intel Mac 安装包。
 
 ### Windows
 
@@ -205,6 +205,13 @@ Windows:
 
 如果出现 `Failed to fetch`、后端初始化超时或发布失败，优先查看 `backend.log` 中对应时间的完整异常。
 
+## 应用更新
+
+桌面应用在本地后端初始化完成后，每次启动异步检查一次正式版本更新。没有新版本
+或检查网络暂时不可用时不会打断启动；发现新版本后会展示版本号和更新日志，由用户
+选择是否下载。更新包下载完成并通过 Tauri 签名校验后，应用会先关闭本地 Python
+后端，再安装并重启。
+
 ## 架构简介
 
 ```text
@@ -265,7 +272,13 @@ cargo tauri dev
 
 ```text
 src-tauri/target/release/bundle/dmg/FastAgentFactory_<version>_<arch>.dmg
+src-tauri/target/release/bundle/macos/FastAgentFactory_<version>_<arch>.app.tar.gz
+src-tauri/target/release/bundle/macos/FastAgentFactory_<version>_<arch>.app.tar.gz.sig
 ```
+
+macOS 脚本默认从
+`~/.fastagentfactory/updater/fastagentfactory.key` 读取 Tauri 更新签名私钥。
+该文件不得提交到 Git，也不能丢失。
 
 ### Windows
 
@@ -279,7 +292,12 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\package_window
 
 ```text
 src-tauri\target\x86_64-pc-windows-msvc\release\bundle\nsis\*.exe
+src-tauri\target\x86_64-pc-windows-msvc\release\bundle\nsis\*.exe.sig
 ```
+
+Windows 必须使用与 macOS 相同的更新签名私钥。将私钥安全复制到
+`%USERPROFILE%\.fastagentfactory\updater\fastagentfactory.key`，或仅在当前
+PowerShell 进程设置 `TAURI_SIGNING_PRIVATE_KEY`。
 
 完整 Windows 构建日志位于：
 

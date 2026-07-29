@@ -9,6 +9,7 @@ TAURI_DIR="${PROJECT_ROOT}/src-tauri"
 CONFIG_PATH="${TAURI_DIR}/tauri.conf.json"
 PYTHON_RUNTIME="${TAURI_DIR}/resources/python/bin/python3"
 FRONTEND_DIR="${PROJECT_ROOT}/web_frontend/frontend"
+DEFAULT_UPDATER_KEY="${HOME}/.fastagentfactory/updater/fastagentfactory.key"
 
 fail() {
     echo "ERROR: $*" >&2
@@ -27,6 +28,10 @@ done
 
 [[ -f "${CONFIG_PATH}" ]] || fail "Tauri configuration not found: ${CONFIG_PATH}"
 [[ -f "${FRONTEND_DIR}/package-lock.json" ]] || fail "Frontend lockfile is required."
+if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
+    [[ -f "${DEFAULT_UPDATER_KEY}" ]] || fail "Updater signing key not found: ${DEFAULT_UPDATER_KEY}"
+    export TAURI_SIGNING_PRIVATE_KEY="${DEFAULT_UPDATER_KEY}"
+fi
 
 if ! cargo tauri --version >/dev/null 2>&1; then
     echo "Installing Tauri CLI 2..."
@@ -50,13 +55,10 @@ case "${HOST_ARCH}" in
     arm64)
         EXPECTED_PYTHON_ARCH="arm64"
         DMG_ARCH="aarch64"
-        ;;
-    x86_64)
-        EXPECTED_PYTHON_ARCH="x86_64"
-        DMG_ARCH="x64"
+        RELEASE_ARCH="aarch64"
         ;;
     *)
-        fail "Unsupported macOS architecture: ${HOST_ARCH}"
+        fail "FastAgentFactory macOS packages support Apple Silicon only; current host: ${HOST_ARCH}"
         ;;
 esac
 
@@ -82,9 +84,19 @@ echo "Building macOS application..."
 APP_PATH="${TAURI_DIR}/target/release/bundle/macos/${PRODUCT_NAME}.app"
 [[ -d "${APP_PATH}" ]] || fail "Application bundle not found: ${APP_PATH}"
 
-echo "Applying ad-hoc signature..."
-codesign --force --deep --sign - --timestamp=none "${APP_PATH}"
+echo "Verifying application signature..."
 codesign --verify --deep --strict "${APP_PATH}"
+
+GENERATED_UPDATER_PATH="${APP_PATH}.tar.gz"
+GENERATED_UPDATER_SIGNATURE_PATH="${GENERATED_UPDATER_PATH}.sig"
+[[ -f "${GENERATED_UPDATER_PATH}" ]] || fail "Updater bundle not found: ${GENERATED_UPDATER_PATH}"
+[[ -f "${GENERATED_UPDATER_SIGNATURE_PATH}" ]] || fail "Updater signature not found: ${GENERATED_UPDATER_SIGNATURE_PATH}"
+
+UPDATER_DIR="$(dirname "${GENERATED_UPDATER_PATH}")"
+UPDATER_PATH="${UPDATER_DIR}/${PRODUCT_NAME}_${PRODUCT_VERSION}_${RELEASE_ARCH}.app.tar.gz"
+UPDATER_SIGNATURE_PATH="${UPDATER_PATH}.sig"
+mv -f "${GENERATED_UPDATER_PATH}" "${UPDATER_PATH}"
+mv -f "${GENERATED_UPDATER_SIGNATURE_PATH}" "${UPDATER_SIGNATURE_PATH}"
 
 DMG_DIR="${TAURI_DIR}/target/release/bundle/dmg"
 DMG_PATH="${DMG_DIR}/${PRODUCT_NAME}_${PRODUCT_VERSION}_${DMG_ARCH}.dmg"
@@ -113,3 +125,5 @@ echo
 echo "Package created:"
 echo "  ${DMG_PATH}"
 shasum -a 256 "${DMG_PATH}"
+echo "  ${UPDATER_PATH}"
+echo "  ${UPDATER_SIGNATURE_PATH}"

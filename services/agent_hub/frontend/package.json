@@ -11,6 +11,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "dompurify": "^3.4.12",
+    "marked": "^15.0.12",
     "pinia": "^2.2.6",
     "vue": "^3.5.13",
     "vue-router": "^4.5.0"

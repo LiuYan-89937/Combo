@@ -1,4 +1,9 @@
-export type MarkdownRenderSurface = 'chat_message' | 'reasoning' | 'workspace_preview' | 'collaboration_sidebar'
+export type MarkdownRenderSurface =
+  | 'chat_message'
+  | 'reasoning'
+  | 'workspace_preview'
+  | 'collaboration_sidebar'
+  | 'app_update'
 
 export interface MarkdownRenderOptions {
   streaming?: boolean

@@ -3,11 +3,9 @@ import { request } from './client'
 /**
  * Public runtime configuration.
  *
- * The backend does not yet expose `GET /api/v1/config/public` (tracked as a
- * required contract in FRONTEND_DEVELOPMENT.md §9). Until it does, every
- * value that would come from that endpoint lives here in ONE place so nothing
- * is hardcoded inside components. When the endpoint ships, `loadPublicConfig`
- * will prefer its response and fall back to these defaults.
+ * The backend exposes `GET /api/v1/config/public`. The centralized fallback
+ * preserves the existing public downloads until the first database-managed
+ * application release is published.
  */
 
 export interface DownloadTarget {
@@ -25,6 +23,7 @@ export interface PublicConfig {
   maxPackageBytes: number
   githubRepoUrl: string
   downloads: DownloadTarget[]
+  releaseManaged?: boolean
 }
 
 const FALLBACK_CONFIG: PublicConfig = {
@@ -68,11 +67,11 @@ export async function loadPublicConfig(): Promise<PublicConfig> {
 function mergeConfig(remote: Partial<PublicConfig>): PublicConfig {
   return {
     maxPackageBytes: remote.maxPackageBytes ?? FALLBACK_CONFIG.maxPackageBytes,
-    githubRepoUrl: remote.githubRepoUrl ?? FALLBACK_CONFIG.githubRepoUrl,
-    downloads:
-      remote.downloads && remote.downloads.length > 0
-        ? remote.downloads
-        : FALLBACK_CONFIG.downloads,
+    githubRepoUrl: remote.githubRepoUrl || FALLBACK_CONFIG.githubRepoUrl,
+    downloads: remote.releaseManaged
+      ? remote.downloads ?? []
+      : FALLBACK_CONFIG.downloads,
+    releaseManaged: remote.releaseManaged ?? false,
   }
 }
 

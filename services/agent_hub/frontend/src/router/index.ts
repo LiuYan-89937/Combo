@@ -15,6 +15,8 @@ const routes: RouteRecordRaw[] = [
     props: true,
   },
   { path: '/publish', name: 'publish', component: () => import('@/views/PublishView.vue') },
+  { path: '/changelog', name: 'changelog', component: () => import('@/views/ChangelogView.vue') },
+  { path: '/admin', name: 'admin', component: () => import('@/views/AdminView.vue') },
   { path: '/guide', name: 'guide', component: () => import('@/views/GuideView.vue') },
   { path: '/auth/result', name: 'auth-result', component: () => import('@/views/AuthResultView.vue') },
   { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('@/views/NotFoundView.vue') },

@@ -1,5 +1,5 @@
 [Unit]
-Description=FastAgentHub package validation worker
+Description=FastAgentHub background worker
 After=network-online.target
 Wants=network-online.target
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Iterator
 
 import oss2
 
@@ -42,6 +42,24 @@ class ObjectStore:
 
     def incoming_key(self, upload_id: str) -> str:
         return self._key("incoming", f"{upload_id}.zip")
+
+    def app_release_staging_key(
+        self,
+        *,
+        app_release_id: str,
+        asset_id: str,
+        filename: str,
+    ) -> str:
+        safe_filename = PurePosixPath(filename).name
+        if safe_filename != filename:
+            raise ValueError("application release filename must be a basename")
+        return self._key(
+            "app-releases",
+            "staging",
+            app_release_id,
+            asset_id,
+            safe_filename,
+        )
 
     def release_key(
         self,
@@ -96,6 +114,28 @@ class ObjectStore:
             self.internal_bucket.get_object_to_file(object_key, str(target))
         except oss2.exceptions.NoSuchKey as exc:
             raise FileNotFoundError(f"OSS object not found: {object_key}") from exc
+
+    def iter_object(
+        self,
+        object_key: str,
+        *,
+        chunk_size: int = 1024 * 1024,
+    ) -> Iterator[bytes]:
+        self._validate_key(object_key)
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be greater than zero")
+        try:
+            result = self.internal_bucket.get_object(object_key)
+        except oss2.exceptions.NoSuchKey as exc:
+            raise FileNotFoundError(f"OSS object not found: {object_key}") from exc
+        try:
+            while True:
+                chunk = result.read(chunk_size)
+                if not chunk:
+                    break
+                yield bytes(chunk)
+        finally:
+            result.close()
 
     def promote(self, source_key: str, target_key: str) -> None:
         self._validate_key(source_key)

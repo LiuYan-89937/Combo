@@ -20,7 +20,6 @@ https://github.com/indygreg/python-build-standalone/releases
 
 Choose the appropriate architecture:
 - macOS: `cpython-3.12.x-aarch64-apple-darwin-install_only.tar.gz` (Apple Silicon)
-- macOS: `cpython-3.12.x-x86_64-apple-darwin-install_only.tar.gz` (Intel)
 - Windows: `cpython-3.12.x-x86_64-pc-windows-msvc-shared-install_only.tar.gz`
 - Linux: `cpython-3.12.x-x86_64-unknown-linux-gnu-install_only.tar.gz`
 

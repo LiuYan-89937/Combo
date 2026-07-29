@@ -22,6 +22,9 @@ class Settings:
     github_client_id: str
     github_client_secret: str
     github_success_redirect: str
+    github_release_owner: str
+    github_release_repo: str
+    github_release_token: str
     cors_origins: tuple[str, ...]
     oss_access_key_id: str
     oss_access_key_secret: str
@@ -35,12 +38,30 @@ class Settings:
     max_archive_files: int
     max_uncompressed_bytes: int
     max_compression_ratio: int
+    max_app_asset_bytes: int
     validation_poll_seconds: float
     backup_prefix: str
 
     @property
     def github_oauth_configured(self) -> bool:
         return bool(self.github_client_id and self.github_client_secret)
+
+    @property
+    def github_release_configured(self) -> bool:
+        return bool(
+            self.github_release_owner
+            and self.github_release_repo
+            and self.github_release_token
+        )
+
+    @property
+    def github_repository_url(self) -> str:
+        if not self.github_release_owner or not self.github_release_repo:
+            return ""
+        return (
+            f"https://github.com/{self.github_release_owner}/"
+            f"{self.github_release_repo}"
+        )
 
 
 @lru_cache(maxsize=1)
@@ -61,6 +82,15 @@ def get_settings() -> Settings:
         github_success_redirect=os.getenv(
             "AGENTHUB_GITHUB_SUCCESS_REDIRECT", "/api/v1/auth/me"
         ).strip(),
+        github_release_owner=os.getenv(
+            "AGENTHUB_GITHUB_RELEASE_OWNER", ""
+        ).strip(),
+        github_release_repo=os.getenv(
+            "AGENTHUB_GITHUB_RELEASE_REPO", ""
+        ).strip(),
+        github_release_token=os.getenv(
+            "AGENTHUB_GITHUB_RELEASE_TOKEN", ""
+        ).strip(),
         cors_origins=tuple(_csv_env("AGENTHUB_CORS_ORIGINS")),
         oss_access_key_id=os.getenv("AGENTHUB_OSS_ACCESS_KEY_ID", "").strip(),
         oss_access_key_secret=os.getenv("AGENTHUB_OSS_ACCESS_KEY_SECRET", "").strip(),
@@ -78,6 +108,9 @@ def get_settings() -> Settings:
             "AGENTHUB_MAX_UNCOMPRESSED_BYTES", 500 * 1024 * 1024
         ),
         max_compression_ratio=_positive_int_env("AGENTHUB_MAX_COMPRESSION_RATIO", 100),
+        max_app_asset_bytes=_positive_int_env(
+            "AGENTHUB_MAX_APP_ASSET_BYTES", 1024 * 1024 * 1024
+        ),
         validation_poll_seconds=_positive_float_env(
             "AGENTHUB_VALIDATION_POLL_SECONDS", 2.0
         ),
@@ -110,6 +143,28 @@ def _validate_settings(settings: Settings) -> None:
         raise ConfigurationError(
             "AGENTHUB_GITHUB_SUCCESS_REDIRECT must be an absolute-path reference"
         )
+    if bool(settings.github_release_owner) != bool(settings.github_release_repo):
+        raise ConfigurationError(
+            "AGENTHUB_GITHUB_RELEASE_OWNER and AGENTHUB_GITHUB_RELEASE_REPO "
+            "must be configured together"
+        )
+    if settings.github_release_token and not (
+        settings.github_release_owner and settings.github_release_repo
+    ):
+        raise ConfigurationError(
+            "AGENTHUB_GITHUB_RELEASE_TOKEN requires a configured GitHub repository"
+        )
+    for name, value in (
+        ("AGENTHUB_GITHUB_RELEASE_OWNER", settings.github_release_owner),
+        ("AGENTHUB_GITHUB_RELEASE_REPO", settings.github_release_repo),
+    ):
+        if value and (
+            value in {".", ".."}
+            or "/" in value
+            or "\\" in value
+            or any(character.isspace() for character in value)
+        ):
+            raise ConfigurationError(f"{name} must be a GitHub path segment")
 
 
 def _csv_env(name: str) -> list[str]:

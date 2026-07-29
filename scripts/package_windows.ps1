@@ -19,6 +19,7 @@ $PythonExecutable = Join-Path $PythonResourcesDir "python.exe"
 $DownloadDir = Join-Path $ProjectRoot "build\python-downloads"
 $BuildLogDir = Join-Path $ProjectRoot "build\logs"
 $BuildLogPath = Join-Path $BuildLogDir "windows-package.log"
+$DefaultUpdaterKey = Join-Path $env:USERPROFILE ".fastagentfactory\updater\fastagentfactory.key"
 
 $PythonArchiveName = "cpython-3.11.9+20240726-x86_64-pc-windows-msvc-shared-install_only.tar.gz"
 $PythonArchiveUrl = "https://github.com/astral-sh/python-build-standalone/releases/download/20240726/cpython-3.11.9%2B20240726-x86_64-pc-windows-msvc-shared-install_only.tar.gz"
@@ -98,6 +99,16 @@ function Test-TauriCli {
 
 foreach ($CommandName in @("cargo.exe", "rustup.exe", "npm.cmd", "curl.exe", "tar.exe", "cmd.exe")) {
     Assert-Command -Name $CommandName
+}
+
+if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
+    if (-not (Test-Path -LiteralPath $DefaultUpdaterKey -PathType Leaf)) {
+        throw (
+            "Updater signing key not found. Copy the shared FastAgentFactory updater key to " +
+            "$DefaultUpdaterKey or set TAURI_SIGNING_PRIVATE_KEY for this process."
+        )
+    }
+    $env:TAURI_SIGNING_PRIVATE_KEY = $DefaultUpdaterKey
 }
 
 if ($RustTarget -ne "x86_64-pc-windows-msvc") {
@@ -227,7 +238,12 @@ if (-not $Installers) {
 Write-Host ""
 Write-Host "Packages created:"
 foreach ($Installer in $Installers) {
+    $SignaturePath = "$($Installer.FullName).sig"
+    if (-not (Test-Path -LiteralPath $SignaturePath -PathType Leaf)) {
+        throw "Updater signature was not generated: $SignaturePath"
+    }
     $Hash = (Get-FileHash -LiteralPath $Installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     Write-Host "  $($Installer.FullName)"
+    Write-Host "  $SignaturePath"
     Write-Host "  SHA-256: $Hash"
 }

@@ -25,6 +25,7 @@ const year = computed(() => new Date().getFullYear())
           <RouterLink to="/hub" class="footer__link">{{ t('nav.hub') }}</RouterLink>
           <RouterLink to="/publish" class="footer__link">{{ t('nav.publish') }}</RouterLink>
           <RouterLink to="/#download" class="footer__link">{{ t('nav.download') }}</RouterLink>
+          <RouterLink to="/changelog" class="footer__link">{{ t('nav.changelog') }}</RouterLink>
         </div>
         <div class="footer__col">
           <p class="footer__heading">{{ t('footer.resources') }}</p>

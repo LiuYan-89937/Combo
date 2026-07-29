@@ -77,6 +77,13 @@ fn restart_backend(app: tauri::AppHandle, state: tauri::State<AppState>) -> Resu
 }
 
 #[tauri::command]
+fn shutdown_backend(state: tauri::State<AppState>) {
+    if let Some(mut running) = state.sidecar.lock().unwrap().take() {
+        running.shutdown();
+    }
+}
+
+#[tauri::command]
 fn desktop_platform() -> &'static str {
     std::env::consts::OS
 }
@@ -93,7 +100,9 @@ fn main() {
             },
         ))
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState {
             sidecar: Mutex::new(None),
         })
@@ -122,6 +131,7 @@ fn main() {
             backend_status,
             backend_url,
             restart_backend,
+            shutdown_backend,
             desktop_platform,
             reveal_in_file_manager,
             save_file_as,

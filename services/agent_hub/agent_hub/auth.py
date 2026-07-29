@@ -6,7 +6,7 @@ from hashlib import sha256
 import hmac
 import secrets
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 from uuid import uuid4
 
 import httpx
@@ -40,6 +40,7 @@ class OAuthLoginCompletion:
     user: dict[str, Any]
     session_token: str | None
     flow_kind: str
+    return_to: str | None
 
 
 class AuthService:
@@ -47,9 +48,10 @@ class AuthService:
         self.settings = settings
         self.database = database
 
-    def github_login_url(self) -> tuple[str, str]:
+    def github_login_url(self, *, return_to: str | None = None) -> tuple[str, str]:
         if not self.settings.github_oauth_configured:
             raise AuthenticationError("GitHub OAuth is not configured")
+        normalized_return_to = _safe_return_to(return_to)
         state = secrets.token_urlsafe(32)
         now = datetime.now(timezone.utc)
         expires = now + timedelta(seconds=self.settings.oauth_state_ttl_seconds)
@@ -59,10 +61,15 @@ class AuthService:
             connection.execute(
                 """
                 insert into oauth_states(
-                  state_hash, flow_kind, desktop_flow_id, expires_at, created_at
-                ) values (?, 'browser', null, ?, ?)
+                  state_hash, flow_kind, desktop_flow_id, return_to, expires_at, created_at
+                ) values (?, 'browser', null, ?, ?, ?)
                 """,
-                (_token_hash(state), expires.isoformat(), now.isoformat()),
+                (
+                    _token_hash(state),
+                    normalized_return_to,
+                    expires.isoformat(),
+                    now.isoformat(),
+                ),
             )
             connection.commit()
         return self._github_authorization_url(state), state
@@ -95,8 +102,8 @@ class AuthService:
             connection.execute(
                 """
                 insert into oauth_states(
-                  state_hash, flow_kind, desktop_flow_id, expires_at, created_at
-                ) values (?, 'desktop', ?, ?, ?)
+                  state_hash, flow_kind, desktop_flow_id, return_to, expires_at, created_at
+                ) values (?, 'desktop', ?, null, ?, ?)
                 """,
                 (
                     _token_hash(state),
@@ -147,12 +154,14 @@ class AuthService:
                 user=user,
                 session_token=None,
                 flow_kind="desktop",
+                return_to=None,
             )
         token = self.create_session(str(user["user_id"]))
         return OAuthLoginCompletion(
             user=user,
             session_token=token,
             flow_kind="browser",
+            return_to=str(oauth_state["return_to"] or "") or None,
         )
 
     def poll_github_desktop_login(
@@ -343,7 +352,7 @@ class AuthService:
             connection.execute("begin immediate")
             row = connection.execute(
                 """
-                select state_hash, flow_kind, desktop_flow_id
+                select state_hash, flow_kind, desktop_flow_id, return_to
                 from oauth_states
                 where state_hash = ? and expires_at > ?
                 """,
@@ -515,6 +524,23 @@ def public_user_view(user: dict[str, Any]) -> dict[str, Any]:
 
 def _token_hash(token: str) -> str:
     return sha256(token.encode("utf-8")).hexdigest()
+
+
+def _safe_return_to(value: str | None) -> str | None:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return None
+    parsed = urlparse(normalized)
+    if (
+        parsed.scheme
+        or parsed.netloc
+        or not normalized.startswith("/")
+        or normalized.startswith("//")
+        or "\\" in normalized
+        or any(ord(character) < 32 for character in normalized)
+    ):
+        raise AuthenticationError("OAuth return path must be an absolute-path reference")
+    return normalized
 
 
 def _response_object(response: httpx.Response, fallback_message: str) -> dict[str, Any]:

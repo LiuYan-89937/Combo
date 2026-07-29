@@ -84,6 +84,8 @@ chown root:fastagenthub /etc/fastagenthub.env
 chmod 0640 /etc/fastagenthub.env
 systemctl daemon-reload
 nginx -t
-systemctl enable --now nginx fastagenthub-api.service fastagenthub-worker.service
+systemctl enable --now nginx
+systemctl enable fastagenthub-api.service fastagenthub-worker.service
+systemctl restart fastagenthub-api.service fastagenthub-worker.service
 systemctl reload nginx
 systemctl enable --now fastagenthub-backup.timer

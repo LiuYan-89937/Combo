@@ -72,13 +72,14 @@ FastAgentFactory 是一个跨平台、以本地工作区为核心的 Agent 制�
 
 ### 3.3 管理入口
 
-管理员审核仍使用独立入口：
+管理员功能使用独立 SPA 入口：
 
 ```text
 /admin
 ```
 
-公开网站只在当前登录用户 `is_admin === true` 时显示“审核控制台”入口，不在公开导航中暴露管理能力说明。现有管理页可以后续按本文档视觉规范重构，但不能把管理员操作混入普通用户发布中心。
+公开网站只在当前登录用户 `is_admin === true` 时显示管理入口。管理页同时承载
+Agent 包审核和桌面应用版本发布，但不能把管理员操作混入普通用户发布中心。
 
 ## 4. 推荐技术方案
 
@@ -156,11 +157,13 @@ FastAgentFactory | 产品 | AgentHub | 使用指南 | GitHub | 下载
 | `/hub/:publisher/:packageId` | Agent 包详情 | 公开 |
 | `/publish` | 发布中心与我的提交 | 登录 |
 | `/guide` | 安装及基础使用说明 | 公开 |
+| `/changelog` | 桌面应用更新日志与历史安装包 | 公开 |
 | `/auth/result` | OAuth 登录结果过渡页 | 公开 |
 | `/404` | 未找到 | 公开 |
-| `/admin` | 独立审核控制台 | 管理员 |
+| `/admin` | 应用发布与 Agent 包审核控制台 | 管理员 |
 
-路由必须支持直接访问与刷新，Nginx 对非 API、非静态资源路径回退到 `index.html`。`/api/*`、`/health` 和 `/admin` 不得被 SPA 回退规则吞掉。
+路由必须支持直接访问与刷新，Nginx 对非 API、非静态资源路径（包括 `/admin`）
+回退到 `index.html`。`/api/*` 和 `/health` 不得被 SPA 回退规则吞掉。
 
 ## 6. 页面规格
 
@@ -636,17 +639,15 @@ interface HubUpload {
 - 422 展示服务端校验信息。
 - 5xx 显示重试入口，不自动无限重试。
 
-## 9. 当前后端需要补齐的 Web 支撑
+## 9. Web 支撑契约
 
-前端实施 Agent 开始工作前，应检查以下条件。它们属于完整 Web 体验的必要契约，不应通过前端绕过：
+以下契约已经接入，后续修改不得通过前端绕过：
 
-1. OAuth 登录需要支持安全的 `return_to`。当前回调只有单一 `AGENTHUB_GITHUB_SUCCESS_REDIRECT`，无法同时优雅返回 `/publish` 和 `/admin`。建议登录端点接收站内路径，并将其与 OAuth state 在服务端绑定；回调只允许经过验证的站内路径。
-2. 提供公开运行配置端点，例如 `GET /api/v1/config/public`，返回上传大小上限、支持平台下载信息和网站可公开展示的配置。
+1. OAuth 登录支持安全的站内 `return_to`，并与 OAuth state 在服务端绑定。
+2. `GET /api/v1/config/public` 返回上传上限、GitHub 仓库和最新应用下载信息。
 3. OSS Bucket CORS 必须允许官网 Origin 发起 `PUT`，允许 `Content-Type`，且范围不能使用无约束的生产通配。
-4. Nginx 需要提供静态站点、SPA 路由回退和长期缓存的哈希资源，同时明确排除 `/api/`、`/health`、`/admin`。
+4. Nginx 提供静态站点、SPA 路由回退和长期缓存的哈希资源，并明确排除 `/api/`、`/health`。
 5. 如需每个动态 Agent 详情页具备独立 SEO/分享卡片，需要增加预渲染流程或服务端 metadata 输出；纯 SPA 只能提供通用元信息。
-
-在这些契约补齐前，前端可以完成页面与 mock adapter，但不得把临时 token、固定限制或回跳地址散落到组件里。
 
 ## 10. 状态与交互要求
 

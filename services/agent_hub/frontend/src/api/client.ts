@@ -58,6 +58,20 @@ async function parseError(response: Response): Promise<ApiError> {
     const data = await response.json()
     if (data && typeof data === 'object' && 'error' in data && data.error) {
       body = data.error as ApiErrorBody
+    } else if (data && typeof data === 'object' && 'detail' in data) {
+      const detail = data.detail
+      body = {
+        code: 'validation_error',
+        message: Array.isArray(detail)
+          ? detail
+              .map((item) =>
+                item && typeof item === 'object' && 'msg' in item
+                  ? String(item.msg)
+                  : String(item),
+              )
+              .join('；')
+          : String(detail),
+      }
     } else if (data && typeof data === 'object' && 'message' in data) {
       body = data as ApiErrorBody
     }

@@ -15,6 +15,7 @@ export const zh = {
     product: '产品',
     hub: 'AgentHub',
     guide: '使用指南',
+    changelog: '更新日志',
     github: 'GitHub',
     download: '下载',
     publish: '发布中心',
@@ -167,6 +168,12 @@ export const zh = {
     rejected: '未通过',
     failed: '处理失败',
   },
+  changelog: {
+    title: '更新日志',
+    subtitle: '查看 FastAgentFactory 桌面应用的版本变化、修复内容与安装包。',
+    emptyTitle: '暂无更新日志',
+    emptyBody: '第一个应用版本发布后会显示在这里。',
+  },
   guide: {
     title: '使用指南',
     subtitle: '第一次使用 FastAgentFactory 的完整路径。',
@@ -231,6 +238,7 @@ export const en = {
     product: 'Product',
     hub: 'AgentHub',
     guide: 'Guide',
+    changelog: 'Changelog',
     github: 'GitHub',
     download: 'Download',
     publish: 'Publish',
@@ -382,6 +390,12 @@ export const en = {
     published: 'Published',
     rejected: 'Rejected',
     failed: 'Failed',
+  },
+  changelog: {
+    title: 'Changelog',
+    subtitle: 'Desktop release notes, fixes and installers for FastAgentFactory.',
+    emptyTitle: 'No releases yet',
+    emptyBody: 'The first application release will appear here after it is published.',
   },
   guide: {
     title: 'Guide',

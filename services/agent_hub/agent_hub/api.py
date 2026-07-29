@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from agent_hub.app_releases import AppReleaseRegistry
 from agent_hub.auth import (
     OAUTH_STATE_COOKIE,
     SESSION_COOKIE,
@@ -47,6 +48,26 @@ class DesktopAuthRequest(BaseModel):
     poll_secret: str = Field(min_length=20, max_length=500)
 
 
+class AppReleaseCreateRequest(BaseModel):
+    version: str = Field(min_length=1, max_length=100)
+    title: str = Field(min_length=1, max_length=200)
+    notes_markdown: str = Field(min_length=1, max_length=100_000)
+
+
+class AppReleaseUpdateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    notes_markdown: str = Field(min_length=1, max_length=100_000)
+
+
+class AppReleaseAssetCreateRequest(BaseModel):
+    asset_kind: str = Field(default="installer", min_length=1, max_length=20)
+    platform: str = Field(min_length=1, max_length=20)
+    architecture: str = Field(min_length=1, max_length=20)
+    filename: str = Field(min_length=1, max_length=200)
+    size_bytes: int = Field(gt=0)
+    updater_signature: str = Field(default="", max_length=20_000)
+
+
 class ApplicationServices:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -54,6 +75,11 @@ class ApplicationServices:
         self.auth = AuthService(settings, self.database)
         self.object_store = ObjectStore(settings)
         self.registry = AgentHubRegistry(settings, self.database, self.object_store)
+        self.app_releases = AppReleaseRegistry(
+            settings,
+            self.database,
+            self.object_store,
+        )
 
 
 @asynccontextmanager
@@ -78,7 +104,7 @@ if _configured_origins:
         CORSMiddleware,
         allow_origins=list(_configured_origins),
         allow_credentials=True,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
     )
 
@@ -174,20 +200,6 @@ def health(request: Request) -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/admin", include_in_schema=False)
-def admin_console() -> FileResponse:
-    return FileResponse(
-        Path(__file__).with_name("static") / "admin.html",
-        media_type="text/html",
-        headers={
-            "Content-Security-Policy": (
-                "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
-                "img-src https: data:; connect-src 'self'; frame-ancestors 'none'"
-            )
-        },
-    )
-
-
 @app.post("/api/v1/auth/github/device/start")
 def github_device_start(request: Request) -> dict[str, Any]:
     return services(request).auth.start_github_device_login()
@@ -233,9 +245,12 @@ def github_desktop_cancel(request: Request, payload: DesktopAuthRequest) -> dict
 
 
 @app.get("/api/v1/auth/github/login")
-def github_login(request: Request) -> RedirectResponse:
+def github_login(
+    request: Request,
+    return_to: str | None = Query(default=None, max_length=2_000),
+) -> RedirectResponse:
     service = services(request)
-    url, state = service.auth.github_login_url()
+    url, state = service.auth.github_login_url(return_to=return_to)
     response = RedirectResponse(url, status_code=307)
     response.set_cookie(
         OAUTH_STATE_COOKIE,
@@ -276,7 +291,10 @@ def github_callback(
     session_token = completion.session_token
     if not session_token:
         raise AuthenticationError("GitHub OAuth session was not created")
-    response = RedirectResponse(service.settings.github_success_redirect, status_code=303)
+    response = RedirectResponse(
+        completion.return_to or service.settings.github_success_redirect,
+        status_code=303,
+    )
     response.delete_cookie(OAUTH_STATE_COOKIE, path="/api/v1/auth/github/callback")
     response.set_cookie(
         SESSION_COOKIE,
@@ -332,6 +350,52 @@ def release_detail(request: Request, release_id: str) -> dict[str, Any]:
 def release_download(request: Request, release_id: str) -> RedirectResponse:
     url = services(request).registry.download_url(release_id)
     return RedirectResponse(url, status_code=307)
+
+
+@app.get("/api/v1/app-releases")
+def list_app_releases(
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=100),
+) -> list[dict[str, Any]]:
+    return services(request).app_releases.list_releases(
+        include_private=False,
+        limit=limit,
+    )
+
+
+@app.get("/api/v1/app-releases/latest")
+def latest_app_release(request: Request) -> dict[str, Any]:
+    return services(request).app_releases.latest_release()
+
+
+@app.get("/api/v1/app-releases/{app_release_id}")
+def app_release_detail(request: Request, app_release_id: str) -> dict[str, Any]:
+    return services(request).app_releases.release(
+        app_release_id,
+        include_private=False,
+    )
+
+
+@app.get("/api/v1/app-updates/{target}/{architecture}/{current_version}")
+def app_update_manifest(
+    request: Request,
+    target: str,
+    architecture: str,
+    current_version: str,
+) -> Response:
+    manifest = services(request).app_releases.update_manifest(
+        target=target,
+        architecture=architecture,
+        current_version=current_version,
+    )
+    if manifest is None:
+        return Response(status_code=204)
+    return JSONResponse(manifest)
+
+
+@app.get("/api/v1/config/public")
+def public_config(request: Request) -> dict[str, Any]:
+    return services(request).app_releases.public_config()
 
 
 @app.post("/api/v1/uploads", status_code=201)
@@ -431,6 +495,143 @@ def unpublish_release(
         release_id,
         admin=admin,
         review_message=payload.message,
+    )
+
+
+@app.get("/api/v1/admin/app-releases")
+def admin_list_app_releases(
+    request: Request,
+    _: Annotated[dict[str, Any], Depends(admin_user)],
+    limit: int = Query(default=50, ge=1, le=100),
+) -> list[dict[str, Any]]:
+    return services(request).app_releases.list_releases(
+        include_private=True,
+        limit=limit,
+    )
+
+
+@app.post("/api/v1/admin/app-releases", status_code=201)
+def admin_create_app_release(
+    request: Request,
+    payload: AppReleaseCreateRequest,
+    admin: Annotated[dict[str, Any], Depends(admin_user)],
+) -> dict[str, Any]:
+    return services(request).app_releases.create_release(
+        admin=admin,
+        version=payload.version,
+        title=payload.title,
+        notes_markdown=payload.notes_markdown,
+    )
+
+
+@app.get("/api/v1/admin/app-releases/{app_release_id}")
+def admin_app_release_detail(
+    request: Request,
+    app_release_id: str,
+    _: Annotated[dict[str, Any], Depends(admin_user)],
+) -> dict[str, Any]:
+    return services(request).app_releases.release(
+        app_release_id,
+        include_private=True,
+    )
+
+
+@app.put("/api/v1/admin/app-releases/{app_release_id}")
+def admin_update_app_release(
+    request: Request,
+    app_release_id: str,
+    payload: AppReleaseUpdateRequest,
+    admin: Annotated[dict[str, Any], Depends(admin_user)],
+) -> dict[str, Any]:
+    return services(request).app_releases.update_release(
+        app_release_id,
+        admin=admin,
+        title=payload.title,
+        notes_markdown=payload.notes_markdown,
+    )
+
+
+@app.delete(
+    "/api/v1/admin/app-releases/{app_release_id}",
+    status_code=204,
+)
+def admin_delete_app_release(
+    request: Request,
+    app_release_id: str,
+    admin: Annotated[dict[str, Any], Depends(admin_user)],
+) -> Response:
+    services(request).app_releases.delete_release(
+        app_release_id,
+        admin=admin,
+    )
+    return Response(status_code=204)
+
+
+@app.post(
+    "/api/v1/admin/app-releases/{app_release_id}/assets",
+    status_code=201,
+)
+def admin_create_app_release_asset(
+    request: Request,
+    app_release_id: str,
+    payload: AppReleaseAssetCreateRequest,
+    admin: Annotated[dict[str, Any], Depends(admin_user)],
+) -> dict[str, Any]:
+    return services(request).app_releases.create_asset_upload(
+        app_release_id,
+        admin=admin,
+        asset_kind=payload.asset_kind,
+        platform=payload.platform,
+        architecture=payload.architecture,
+        filename=payload.filename,
+        expected_size=payload.size_bytes,
+        updater_signature=payload.updater_signature,
+    )
+
+
+@app.post(
+    "/api/v1/admin/app-releases/{app_release_id}/assets/{asset_id}/complete"
+)
+def admin_complete_app_release_asset(
+    request: Request,
+    app_release_id: str,
+    asset_id: str,
+    admin: Annotated[dict[str, Any], Depends(admin_user)],
+) -> dict[str, Any]:
+    return services(request).app_releases.complete_asset_upload(
+        app_release_id,
+        asset_id,
+        admin=admin,
+    )
+
+
+@app.delete(
+    "/api/v1/admin/app-releases/{app_release_id}/assets/{asset_id}",
+    status_code=204,
+)
+def admin_delete_app_release_asset(
+    request: Request,
+    app_release_id: str,
+    asset_id: str,
+    admin: Annotated[dict[str, Any], Depends(admin_user)],
+) -> Response:
+    services(request).app_releases.delete_asset(
+        app_release_id,
+        asset_id,
+        admin=admin,
+    )
+    return Response(status_code=204)
+
+
+@app.post("/api/v1/admin/app-releases/{app_release_id}/publish")
+def admin_publish_app_release(
+    request: Request,
+    app_release_id: str,
+    admin: Annotated[dict[str, Any], Depends(admin_user)],
+) -> dict[str, Any]:
+    return services(request).app_releases.queue_publish(
+        app_release_id,
+        admin=admin,
     )
 
 
