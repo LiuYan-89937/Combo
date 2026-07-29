@@ -14,11 +14,11 @@ from uuid import uuid4
 
 from agent_factory.tooling.builtins.filesystem.common import (
     assert_not_protected_write_path,
+    filesystem_allowed_roots,
     filesystem_boundary,
     resolve_path,
     write_focus_facts,
 )
-from agent_factory.tooling.builtins.filesystem.workspace_search import workspace_relative_path
 from agent_factory.tooling.builtins.filesystem.text_changes import atomic_write_file
 
 
@@ -39,6 +39,7 @@ class StagedWrite:
     write_id: str
     workspace_root: Path
     target: Path
+    display_path: str
     staging_root: Path
     staging_file: Path
     snapshot: TargetSnapshot
@@ -59,6 +60,7 @@ class StagedWriteStore:
         *,
         root: Path,
         target: Path,
+        display_path: str,
         snapshot: TargetSnapshot,
         create_dirs: bool,
     ) -> StagedWrite:
@@ -70,6 +72,7 @@ class StagedWriteStore:
                 write_id=uuid4().hex,
                 workspace_root=root,
                 target=target,
+                display_path=display_path,
                 staging_root=staging_root,
                 staging_file=staging_root / "content",
                 snapshot=snapshot,
@@ -132,11 +135,12 @@ STAGED_WRITE_STORE = StagedWriteStore()
 def start_staged_write(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     path = _required_text(arguments, "path")
     root, allow_external = filesystem_boundary(resources)
-    target = resolve_path(path=path, root=root, allow_external=allow_external)
-    try:
-        target.relative_to(root)
-    except ValueError as exc:
-        raise ValueError("staged writes only support paths inside the configured workspace root") from exc
+    target = resolve_path(
+        path=path,
+        root=root,
+        allow_external=allow_external,
+        allowed_roots=filesystem_allowed_roots(resources),
+    )
     assert_not_protected_write_path(target, root=root, resources=resources)
     snapshot = _snapshot(target)
     expected_hash = str(arguments.get("expected_hash") or "").strip()
@@ -145,6 +149,7 @@ def start_staged_write(arguments: dict[str, Any], resources: dict[str, Any]) -> 
     staged = STAGED_WRITE_STORE.create(
         root=root,
         target=target,
+        display_path=path,
         snapshot=snapshot,
         create_dirs=bool(arguments.get("create_dirs", True)),
     )
@@ -152,7 +157,7 @@ def start_staged_write(arguments: dict[str, Any], resources: dict[str, Any]) -> 
         "action": "start",
         "status": "staging",
         "write_id": staged.write_id,
-        "path": workspace_relative_path(target, workspace_root=root),
+        "path": staged.display_path,
         "created_at": staged.created_at,
         "expires_at": staged.expires_at,
         "before_hash": snapshot.content_hash,
@@ -173,7 +178,7 @@ def append_staged_write(arguments: dict[str, Any], resources: dict[str, Any]) ->
         "action": "append",
         "status": "staging",
         "write_id": staged.write_id,
-        "path": workspace_relative_path(staged.target, workspace_root=staged.workspace_root),
+        "path": staged.display_path,
         "bytes_written": staged.bytes_written,
         "chunk_count": staged.chunk_count,
     }
@@ -202,7 +207,7 @@ def commit_staged_write(arguments: dict[str, Any], resources: dict[str, Any]) ->
             "action": "commit",
             "status": "committed",
             "write_id": staged.write_id,
-            "path": workspace_relative_path(staged.target, workspace_root=staged.workspace_root),
+            "path": staged.display_path,
             "created": not staged.snapshot.exists,
             "bytes_written": after_bytes,
             "chunk_count": staged.chunk_count,
@@ -239,16 +244,24 @@ def abort_staged_write(arguments: dict[str, Any], resources: dict[str, Any]) -> 
         "action": "abort",
         "status": "aborted",
         "write_id": staged.write_id,
-        "path": workspace_relative_path(staged.target, workspace_root=staged.workspace_root),
+        "path": staged.display_path,
         "bytes_written": staged.bytes_written,
         "chunk_count": staged.chunk_count,
     }
 
 
 def _validate_workspace(staged: StagedWrite, resources: dict[str, Any]) -> None:
-    root, _allow_external = filesystem_boundary(resources)
+    root, allow_external = filesystem_boundary(resources)
     if root != staged.workspace_root:
         raise ValueError("write_id belongs to a different workspace")
+    resolved = resolve_path(
+        path=staged.display_path,
+        root=root,
+        allow_external=allow_external,
+        allowed_roots=filesystem_allowed_roots(resources),
+    )
+    if resolved != staged.target:
+        raise ValueError("workspace mount changed after staged write started")
     assert_not_protected_write_path(staged.target, root=root, resources=resources)
 
 

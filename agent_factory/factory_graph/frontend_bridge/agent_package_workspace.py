@@ -15,6 +15,7 @@ from agent_factory.factory_graph.frontend_bridge.agent_package_paths import (
     package_runtime_workspace,
 )
 from agent_factory.factory_graph.frontend_bridge.agent_package_utils import humanize_identifier
+from agent_factory.workspace_mounts import WorkspaceMountRecord
 
 
 WORKSPACE_BINARY_PREVIEW_EXTENSIONS = {
@@ -143,17 +144,36 @@ def list_workspace_entries_from_roots(
     roots: dict[str, Path],
     scope: str = "workdir",
     relative_path: str = "",
+    mounts: dict[str, WorkspaceMountRecord] | None = None,
 ) -> dict[str, Any]:
     root = workspace_scope_root_from_roots(roots, scope)
-    target = safe_workspace_path(root, relative_path)
+    active_mounts = mounts if scope == "workdir" else {}
+    target = safe_workspace_path(root, relative_path, mounts=active_mounts)
     if not target.exists():
         return {**context, "scope": scope, "path": relative_path, "entries": []}
     if target.is_file():
-        entries = [workspace_entry(target, root=root, scope=scope)]
-    else:
         entries = [
-            workspace_entry(path, root=root, scope=scope)
-            for path in sorted(target.iterdir(), key=workspace_sort_key)
+            workspace_entry(
+                target,
+                root=root,
+                scope=scope,
+                relative_path=_normalized_workspace_relative_path(relative_path),
+            )
+        ]
+    else:
+        children = {path.name: path for path in target.iterdir()}
+        if not str(relative_path or "").strip():
+            for mount_name in active_mounts:
+                children.setdefault(mount_name, root / mount_name)
+        entries = [
+            workspace_entry(
+                path,
+                root=root,
+                scope=scope,
+                relative_path=_workspace_child_path(relative_path, path.name),
+                mount=active_mounts.get(path.name) if not str(relative_path or "").strip() else None,
+            )
+            for path in sorted(children.values(), key=workspace_sort_key)
         ]
     return {**context, "scope": scope, "path": relative_path, "entries": entries}
 
@@ -165,9 +185,14 @@ def read_workspace_file_from_roots(
     scope: str = "workdir",
     relative_path: str,
     max_chars: int = 20000,
+    mounts: dict[str, WorkspaceMountRecord] | None = None,
 ) -> dict[str, Any]:
     root = workspace_scope_root_from_roots(roots, scope)
-    target = safe_workspace_path(root, relative_path)
+    target = safe_workspace_path(
+        root,
+        relative_path,
+        mounts=mounts if scope == "workdir" else None,
+    )
     if not target.is_file():
         raise FileNotFoundError(f"workspace file not found: {relative_path}")
     stat = target.stat()
@@ -180,7 +205,15 @@ def read_workspace_file_from_roots(
     content_base64 = ""
     preview_mode = "binary"
     truncated = stat.st_size > byte_limit
-    extracted_text = workspace_extracted_text_preview(target=target, root=root, max_chars=max_chars)
+    extracted_text = workspace_extracted_text_preview(
+        target=target,
+        root=_workspace_content_root(
+            root,
+            relative_path,
+            mounts=mounts if scope == "workdir" else None,
+        ),
+        max_chars=max_chars,
+    )
     if extracted_text is not None:
         content, extracted_truncated = extracted_text
         is_binary = False
@@ -197,7 +230,7 @@ def read_workspace_file_from_roots(
     return {
         **context,
         "scope": scope,
-        "path": target.relative_to(root).as_posix(),
+        "path": _normalized_workspace_relative_path(relative_path),
         "name": target.name,
         "kind": "binary" if is_binary else "text",
         "mime_type": mime_type or "application/octet-stream",
@@ -215,9 +248,14 @@ def resolve_workspace_file_from_roots(
     roots: dict[str, Path],
     scope: str = "workdir",
     relative_path: str,
+    mounts: dict[str, WorkspaceMountRecord] | None = None,
 ) -> Path:
     root = workspace_scope_root_from_roots(roots, scope)
-    target = safe_workspace_path(root, relative_path)
+    target = safe_workspace_path(
+        root,
+        relative_path,
+        mounts=mounts if scope == "workdir" else None,
+    )
     if not target.is_file():
         raise FileNotFoundError(f"workspace file not found: {relative_path}")
     return target
@@ -228,9 +266,14 @@ def resolve_workspace_entry_from_roots(
     roots: dict[str, Path],
     scope: str = "workdir",
     relative_path: str,
+    mounts: dict[str, WorkspaceMountRecord] | None = None,
 ) -> Path:
     root = workspace_scope_root_from_roots(roots, scope)
-    target = safe_workspace_path(root, relative_path)
+    target = safe_workspace_path(
+        root,
+        relative_path,
+        mounts=mounts if scope == "workdir" else None,
+    )
     if not target.exists():
         raise FileNotFoundError(f"workspace entry not found: {relative_path}")
     return target
@@ -242,12 +285,17 @@ def delete_workspace_file_from_roots(
     roots: dict[str, Path],
     scope: str = "workdir",
     relative_path: str,
+    mounts: dict[str, WorkspaceMountRecord] | None = None,
 ) -> dict[str, Any]:
     root = workspace_scope_root_from_roots(roots, scope)
-    target = safe_workspace_path(root, relative_path)
+    target = safe_workspace_path(
+        root,
+        relative_path,
+        mounts=mounts if scope == "workdir" else None,
+    )
     if not target.is_file():
         raise FileNotFoundError(f"workspace file not found: {relative_path}")
-    deleted_path = target.relative_to(root).as_posix()
+    deleted_path = _normalized_workspace_relative_path(relative_path)
     target.unlink()
     return {**context, "scope": scope, "path": deleted_path, "deleted": True}
 
@@ -297,7 +345,12 @@ def workspace_extracted_text_preview(*, target: Path, root: Path, max_chars: int
     return content[:max_chars], len(content) > max_chars
 
 
-def safe_workspace_path(root: Path, relative_path: str | os.PathLike[str] | None) -> Path:
+def safe_workspace_path(
+    root: Path,
+    relative_path: str | os.PathLike[str] | None,
+    *,
+    mounts: dict[str, WorkspaceMountRecord] | None = None,
+) -> Path:
     resolved_root = root.resolve()
     raw_path = str(relative_path or "").strip()
     if not raw_path:
@@ -305,6 +358,19 @@ def safe_workspace_path(root: Path, relative_path: str | os.PathLike[str] | None
     path = Path(raw_path)
     if path.is_absolute():
         raise ValueError("workspace path must be relative to its selected scope")
+    parts = path.parts
+    if any(part in {"", ".", ".."} for part in parts):
+        raise ValueError(f"workspace path contains an invalid segment: {raw_path}")
+    active_mounts = mounts or {}
+    mount = active_mounts.get(parts[0]) if parts else None
+    if mount is not None:
+        resolved_mount_root = Path(mount.source_path).expanduser().resolve(strict=False)
+        target = resolved_mount_root.joinpath(*parts[1:]).resolve(strict=False)
+        try:
+            target.relative_to(resolved_mount_root)
+        except ValueError as exc:
+            raise ValueError(f"workspace path escapes mounted directory: {raw_path}") from exc
+        return target
     target = (resolved_root / path).resolve()
     try:
         target.relative_to(resolved_root)
@@ -313,27 +379,89 @@ def safe_workspace_path(root: Path, relative_path: str | os.PathLike[str] | None
     return target
 
 
-def workspace_entry(path: Path, *, root: Path, scope: str) -> dict[str, Any]:
+def workspace_entry(
+    path: Path,
+    *,
+    root: Path,
+    scope: str,
+    relative_path: str | None = None,
+    mount: WorkspaceMountRecord | None = None,
+) -> dict[str, Any]:
+    mount_source = (
+        Path(mount.source_path).expanduser().resolve(strict=False)
+        if mount is not None
+        else None
+    )
+    effective_path = mount_source if mount_source is not None else path
     try:
-        stat = path.stat()
-        size_bytes = stat.st_size if path.is_file() else None
-        updated_at = datetime.fromtimestamp(stat.st_mtime, UTC).isoformat()
+        file_stat = effective_path.stat()
+        size_bytes = file_stat.st_size if effective_path.is_file() else None
+        updated_at = datetime.fromtimestamp(file_stat.st_mtime, UTC).isoformat()
     except OSError:
         size_bytes = None
         updated_at = None
-    try:
-        relative_path = path.relative_to(root).as_posix()
-    except ValueError:
-        relative_path = path.name
+    resolved_relative_path = relative_path
+    if resolved_relative_path is None:
+        try:
+            resolved_relative_path = path.relative_to(root).as_posix()
+        except ValueError:
+            resolved_relative_path = path.name
     return {
         "name": path.name,
         "scope": scope,
-        "path": "" if relative_path == "." else relative_path,
-        "kind": "directory" if path.is_dir() else "file",
+        "path": "" if resolved_relative_path == "." else resolved_relative_path,
+        "kind": "directory" if mount is not None or path.is_dir() else "file",
         "size_bytes": size_bytes,
         "updated_at": updated_at,
+        **(
+            {
+                "mount": True,
+                "mount_source": str(mount_source),
+                "connected": (
+                    mount_source.is_dir()
+                    and os.path.lexists(path)
+                    and path.resolve(strict=False) == mount_source
+                ),
+                "mount_id": mount.mount_id,
+            }
+            if mount is not None and mount_source is not None
+            else {}
+        ),
     }
 
 
 def workspace_sort_key(path: Path) -> tuple[int, str]:
     return (0 if path.is_dir() else 1, path.name.lower())
+
+
+def _normalized_workspace_relative_path(value: str | os.PathLike[str] | None) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    path = Path(raw)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        raise ValueError(f"invalid workspace relative path: {raw}")
+    return path.as_posix()
+
+
+def _workspace_child_path(parent: str, name: str) -> str:
+    normalized_parent = _normalized_workspace_relative_path(parent)
+    return (
+        f"{normalized_parent}/{name}"
+        if normalized_parent
+        else name
+    )
+
+
+def _workspace_content_root(
+    root: Path,
+    relative_path: str,
+    *,
+    mounts: dict[str, WorkspaceMountRecord] | None,
+) -> Path:
+    normalized = _normalized_workspace_relative_path(relative_path)
+    first_part = Path(normalized).parts[0] if normalized else ""
+    mount = (mounts or {}).get(first_part)
+    if mount is None:
+        return root
+    return Path(mount.source_path).expanduser().resolve(strict=False)

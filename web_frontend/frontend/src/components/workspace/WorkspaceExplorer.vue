@@ -16,6 +16,19 @@
         <n-text depth="3" class="header-subtitle">{{ effectiveScope }}</n-text>
       </div>
       <n-space :size="6">
+        <n-button
+          v-if="canMountDirectory"
+          size="small"
+          quaternary
+          circle
+          :loading="mountingDirectory"
+          :title="t('workspace.mountDirectory')"
+          @click="mountLocalDirectory"
+        >
+          <template #icon>
+            <n-icon><FolderOpenOutline /></n-icon>
+          </template>
+        </n-button>
         <n-button size="small" quaternary circle @click="refreshTree">
           <template #icon>
             <n-icon><Refresh /></n-icon>
@@ -53,10 +66,29 @@
             class="entry-icon"
           />
 
-          <span class="entry-name" :title="row.entry.path">{{ row.entry.name }}</span>
+          <span class="entry-name" :title="row.entry.mountSource || row.entry.path">{{ row.entry.name }}</span>
+          <span
+            v-if="row.entry.mount"
+            class="mount-badge"
+            :class="{ disconnected: row.entry.connected === false }"
+            :title="row.entry.connected === false ? t('workspace.mountDisconnected') : t('workspace.mountedDirectory')"
+          >
+            <n-icon size="13"><LinkOutline /></n-icon>
+          </span>
           <span v-if="row.entry.kind === 'file' && row.entry.sizeBytes" class="entry-size">
             {{ formatFileSize(row.entry.sizeBytes) }}
           </span>
+          <div v-if="row.entry.mount" class="entry-actions" @click.stop>
+            <n-button
+              quaternary
+              circle
+              size="tiny"
+              :title="t('workspace.unmountDirectory')"
+              @click="confirmUnmount(row.entry)"
+            >
+              <template #icon><n-icon><UnlinkOutline /></n-icon></template>
+            </n-button>
+          </div>
           <div v-if="row.entry.kind === 'file'" class="entry-actions" @click.stop>
             <n-button quaternary circle size="tiny" :title="t('references.addWorkspaceFile')" @click="addFileReference(row.entry)">
               <template #icon><n-icon><AddCircleOutline /></n-icon></template>
@@ -95,6 +127,7 @@ import {
   NSpace,
   NText,
   NPopconfirm,
+  useDialog,
   useMessage,
   type DropdownOption,
 } from 'naive-ui'
@@ -102,7 +135,10 @@ import {
   ChevronForward,
   Refresh,
   AddCircleOutline,
+  FolderOpenOutline,
+  LinkOutline,
   TrashOutline,
+  UnlinkOutline,
 } from '@/components/icons'
 import ResourceIcon from '@/components/common/ResourceIcon.vue'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -111,6 +147,10 @@ import { useI18n } from '@/composables/useI18n'
 import { workspaceEntryView } from '@/stores/runtime/viewMappers'
 import { workspaceFileView } from '@/stores/runtime/viewMappers'
 import { workspaceApi } from '@/api/workspace'
+import {
+  desktopDirectoryPickerAvailable,
+  selectDesktopDirectory,
+} from '@/api/desktopDialogs'
 import {
   desktopWorkspaceFileActionsAvailable,
   revealWorkspaceEntry,
@@ -142,6 +182,7 @@ const workspaceStore = useWorkspaceStore()
 const commands = useCommand()
 const { t } = useI18n()
 const message = useMessage()
+const dialog = useDialog()
 const referenceStore = useContextReferenceStore()
 const entriesByPath = ref<Record<string, WorkspaceEntry[]>>({})
 const loadingPaths = ref<Set<string>>(new Set())
@@ -151,11 +192,21 @@ const contextMenuEntry = ref<WorkspaceEntry | null>(null)
 const contextMenuVisible = ref(false)
 const contextMenuX = ref(0)
 const contextMenuY = ref(0)
+const mountingDirectory = ref(false)
 const rootLoading = computed(() => loadingPaths.value.has('') && !entriesByPath.value[''])
 const requestContext = computed<WorkspaceRequestContext | string | undefined>(() => (
   props.workspaceContext || props.packageId || undefined
 ))
 const effectiveScope = computed<WorkspaceScope>(() => props.fixedScope || 'workdir')
+const canMountDirectory = computed(() => {
+  if (!desktopDirectoryPickerAvailable() || effectiveScope.value !== 'workdir') return false
+  const context = props.workspaceContext
+  return Boolean(
+    context
+    && context.resourceMode === 'package'
+    && context.packageSessionId,
+  )
+})
 const contextMenuOptions = computed<DropdownOption[]>(() => {
   const entry = contextMenuEntry.value
   if (!entry) return []
@@ -183,6 +234,15 @@ const contextMenuOptions = computed<DropdownOption[]>(() => {
       {
         label: t('references.addWorkspaceFile'),
         key: 'add-reference',
+      },
+    )
+  }
+  if (entry.mount && entry.mountId) {
+    options.push(
+      { type: 'divider', key: 'mount-actions-divider' },
+      {
+        label: t('workspace.unmountDirectory'),
+        key: 'unmount',
       },
     )
   }
@@ -315,10 +375,56 @@ async function handleContextMenuSelect(key: string | number) {
     }
     if (key === 'add-reference' && entry.kind === 'file') {
       await addFileReference(entry)
+      return
+    }
+    if (key === 'unmount' && entry.mountId) {
+      confirmUnmount(entry)
     }
   } catch (error) {
     message.error(error instanceof Error ? error.message : String(error))
   }
+}
+
+async function mountLocalDirectory() {
+  if (!canMountDirectory.value || mountingDirectory.value) return
+  mountingDirectory.value = true
+  try {
+    const sourcePath = await selectDesktopDirectory()
+    if (!sourcePath) return
+    const result = await workspaceApi.mountDirectory(
+      sourcePath,
+      props.workspaceContext,
+    )
+    message.success(
+      result.created
+        ? t('workspace.mountAdded')
+        : t('workspace.mountAlreadyAdded'),
+    )
+    refreshTree()
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : String(error))
+  } finally {
+    mountingDirectory.value = false
+  }
+}
+
+function confirmUnmount(entry: WorkspaceEntry) {
+  if (!entry.mountId) return
+  dialog.warning({
+    title: t('workspace.unmountDirectory'),
+    content: t('workspace.unmountDirectoryConfirm', { name: entry.name }),
+    positiveText: t('workspace.unmountDirectory'),
+    negativeText: t('common.cancel'),
+    onPositiveClick: async () => {
+      try {
+        await workspaceApi.unmountDirectory(entry.mountId!, props.workspaceContext)
+        message.success(t('workspace.mountRemoved'))
+        refreshTree()
+      } catch (error) {
+        message.error(error instanceof Error ? error.message : String(error))
+      }
+    },
+  })
 }
 
 async function addFileReference(entry: WorkspaceEntry) {
@@ -505,6 +611,16 @@ function workspaceContextKey(context: WorkspaceRequestContext | string | undefin
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.mount-badge {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--app-text-muted);
+}
+
+.mount-badge.disconnected {
+  color: var(--app-danger);
 }
 
 .entry-size {

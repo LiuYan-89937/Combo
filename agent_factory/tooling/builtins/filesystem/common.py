@@ -42,16 +42,49 @@ def filesystem_boundary(resources: dict[str, Any]) -> tuple[Path, bool]:
     return root, allow_external
 
 
-def resolve_path(*, path: str, root: Path, allow_external: bool) -> Path:
+def filesystem_allowed_roots(resources: dict[str, Any]) -> tuple[Path, ...]:
+    config = resources.get("filesystem", {})
+    values = config.get("allowed_roots", []) if isinstance(config, dict) else []
+    if not isinstance(values, list):
+        return ()
+    return tuple(
+        Path(value).expanduser().resolve(strict=False)
+        for value in values
+        if isinstance(value, str) and value.strip()
+    )
+
+
+def filesystem_mounts(resources: dict[str, Any]) -> dict[str, Path]:
+    config = resources.get("filesystem", {})
+    values = config.get("mounts", {}) if isinstance(config, dict) else {}
+    if not isinstance(values, dict):
+        return {}
+    return {
+        str(name): Path(value).expanduser().resolve(strict=False)
+        for name, value in values.items()
+        if isinstance(name, str)
+        and name.strip()
+        and isinstance(value, str)
+        and value.strip()
+    }
+
+
+def resolve_path(
+    *,
+    path: str,
+    root: Path,
+    allow_external: bool,
+    allowed_roots: tuple[Path, ...] = (),
+) -> Path:
     candidate = workspace_path_candidate(path, root=root)
     resolved = candidate.resolve(strict=False)
     if allow_external:
         return resolved
-    try:
-        resolved.relative_to(root)
-    except ValueError as exc:
-        raise ValueError(f"path escapes filesystem root: {path}") from exc
-    return resolved
+    if _path_is_within(resolved, root):
+        return resolved
+    if any(_path_is_within(resolved, allowed_root) for allowed_root in allowed_roots):
+        return resolved
+    raise ValueError(f"path escapes filesystem root: {path}")
 
 
 def path_type(path: Path) -> str:
@@ -80,7 +113,12 @@ def path_risk_result(
     tool_resources = dict(context.get("resources") or {})
     root, allow_external = filesystem_boundary(tool_resources)
     try:
-        resolved = resolve_path(path=path_value, root=root, allow_external=allow_external)
+        resolved = resolve_path(
+            path=path_value,
+            root=root,
+            allow_external=allow_external,
+            allowed_roots=filesystem_allowed_roots(tool_resources),
+        )
     except Exception as exc:
         return ToolRiskResult(
             action="deny",
@@ -299,6 +337,14 @@ def _relative_path_text(path: Path, *, root: Path) -> str:
         return path.relative_to(root).as_posix()
     except ValueError:
         return str(path)
+
+
+def _path_is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
 
 
 def _workspace_path_guidance(root: Path) -> str:

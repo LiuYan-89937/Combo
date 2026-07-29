@@ -5,16 +5,90 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, ConfigDict
 
 from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import AgentPackageRuntimeManager
+from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import SYSTEM_CHAT_PACKAGE_ID
 from agent_factory.factory_graph.frontend_bridge.workspace_resources import FrontendWorkspaceService
 from agent_factory.factory_graph.session import FactorySessionManager
 from web_frontend.backend.runtime_bridge import RuntimeBridge
 from web_frontend.backend.routes.utils import optional_package, resource_command
 
 
+class WorkspaceMountRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_path: str
+    name: str | None = None
+
+
 def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
     router = APIRouter(prefix="/api/workspace")
+
+    @router.get("/mounts")
+    def list_workspace_mounts(
+        package_id: str | None = None,
+        package_session_id: str | None = None,
+    ):
+        resolved_package_id, resolved_session_id = _workspace_mount_context(
+            package_id,
+            package_session_id,
+        )
+        try:
+            mounts = AgentPackageRuntimeManager().list_workspace_mounts(
+                resolved_package_id,
+                resolved_session_id,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {
+            "package_id": resolved_package_id,
+            "package_session_id": resolved_session_id,
+            "mounts": mounts,
+        }
+
+    @router.post("/mounts")
+    def mount_workspace_directory(
+        payload: WorkspaceMountRequest,
+        package_id: str | None = None,
+        package_session_id: str | None = None,
+    ):
+        resolved_package_id, resolved_session_id = _workspace_mount_context(
+            package_id,
+            package_session_id,
+        )
+        try:
+            return AgentPackageRuntimeManager().mount_workspace_directory(
+                resolved_package_id,
+                resolved_session_id,
+                source_path=payload.source_path,
+                name=payload.name,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.delete("/mounts/{mount_id}")
+    def unmount_workspace_directory(
+        mount_id: str,
+        package_id: str | None = None,
+        package_session_id: str | None = None,
+    ):
+        resolved_package_id, resolved_session_id = _workspace_mount_context(
+            package_id,
+            package_session_id,
+        )
+        try:
+            return AgentPackageRuntimeManager().unmount_workspace_directory(
+                resolved_package_id,
+                resolved_session_id,
+                mount_id,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.get("/roots")
     async def workspace_roots(
@@ -253,3 +327,17 @@ def workspace_context_payload(
         **({"collaboration_id": collaboration_id} if collaboration_id else {}),
         **({"group_id": group_id} if group_id else {}),
     }
+
+
+def _workspace_mount_context(
+    package_id: str | None,
+    package_session_id: str | None,
+) -> tuple[str, str]:
+    resolved_package_id = str(package_id or "").strip() or SYSTEM_CHAT_PACKAGE_ID
+    resolved_session_id = str(package_session_id or "").strip()
+    if not resolved_session_id:
+        raise HTTPException(
+            status_code=400,
+            detail="package_session_id is required to manage workspace mounts",
+        )
+    return resolved_package_id, resolved_session_id

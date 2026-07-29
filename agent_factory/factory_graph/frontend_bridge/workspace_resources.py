@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
 from agent_factory.collaboration_system import CollaborationStore
 from agent_factory.agent_group_system.store import AgentGroupStore
+from agent_factory.workspace_mounts import WorkspaceMountRecord
 from agent_factory.factory_graph.frontend_bridge.agent_package_workspace import (
     list_workspace_entries_from_roots,
     delete_workspace_file_from_roots,
@@ -26,6 +27,7 @@ class FrontendWorkspaceTarget:
     resource_mode: str
     context: dict[str, Any]
     roots: dict[str, Path]
+    mounts: dict[str, WorkspaceMountRecord] = field(default_factory=dict)
     unavailable_reason: str | None = None
 
     @property
@@ -60,6 +62,7 @@ class FrontendWorkspaceService:
             roots=target.roots,
             scope=scope,
             relative_path=relative_path,
+            mounts=target.mounts,
         )
 
     def read_file(
@@ -80,6 +83,7 @@ class FrontendWorkspaceService:
             scope=scope,
             relative_path=relative_path,
             max_chars=max_chars,
+            mounts=target.mounts,
         )
 
     def resolve_file(
@@ -97,6 +101,7 @@ class FrontendWorkspaceService:
             roots=target.roots,
             scope=scope,
             relative_path=relative_path,
+            mounts=target.mounts,
         )
 
     def resolve_entry(
@@ -114,6 +119,7 @@ class FrontendWorkspaceService:
             roots=target.roots,
             scope=scope,
             relative_path=relative_path,
+            mounts=target.mounts,
         )
 
     def delete_file(
@@ -132,6 +138,7 @@ class FrontendWorkspaceService:
             roots=target.roots,
             scope=scope,
             relative_path=relative_path,
+            mounts=target.mounts,
         )
 
     def _target(self, payload: dict[str, Any], *, session_record: Any | None = None) -> FrontendWorkspaceTarget:
@@ -169,6 +176,10 @@ class FrontendWorkspaceService:
             resource_mode="package",
             context=context,
             roots={"workdir": runtime_roots["workdir"]},
+            mounts=self.agent_package_runtime.workspace_mount_records(
+                package_id,
+                package_session_id,
+            ),
         )
 
     def _create_agent_target(

@@ -21,6 +21,7 @@ from agent_factory.runtime_defaults import (
     DEFAULT_BUILTIN_ALLOW_EXTERNAL_PATHS,
     DEFAULT_BUILTIN_WORKSPACE_ROOT,
 )
+from agent_factory.runtime_workspace import RUNTIME_WORKSPACE_MOUNTS_SESSION_KEY
 from agent_factory.runtime_kernel.planning import is_plan_and_execute_pattern_id
 from agent_factory.runtime_kernel.prompt_fragments import runtime_prompt_fragments_from_state
 from agent_factory.runtime_kernel.tool_governance import tool_governance_prompt
@@ -174,6 +175,9 @@ def _stable_system_prompt(*, prompt_binding: dict[str, Any], state: Any, node_id
         parts.append(FINAL_ANSWER_TOOL_POLICY)
     parts.append(RUNTIME_REACT_PROTOCOL)
     parts.extend(runtime_prompt_fragments_from_state(state))
+    mount_guidance = _workspace_mount_guidance(state)
+    if mount_guidance:
+        parts.append(mount_guidance)
     return "\n\n".join(parts)
 
 
@@ -222,6 +226,28 @@ def _builtin_allow_external_paths(state: Any) -> bool:
     if not isinstance(session_config, dict):
         return DEFAULT_BUILTIN_ALLOW_EXTERNAL_PATHS
     return bool(session_config.get("builtin_allow_external_paths", DEFAULT_BUILTIN_ALLOW_EXTERNAL_PATHS))
+
+
+def _workspace_mount_guidance(state: Any) -> str:
+    session_config = getattr(getattr(state, "runtime_config", None), "session_config", {}) or {}
+    if not isinstance(session_config, dict):
+        return ""
+    mounts = session_config.get(RUNTIME_WORKSPACE_MOUNTS_SESSION_KEY)
+    if not isinstance(mounts, list):
+        return ""
+    paths = [
+        f"{DEFAULT_BUILTIN_WORKSPACE_ROOT.rstrip('/')}/{name}"
+        for item in mounts
+        if isinstance(item, dict)
+        and (name := str(item.get("name") or "").strip())
+    ]
+    if not paths:
+        return ""
+    return (
+        "The user mounted these local directories into the current workspace: "
+        + ", ".join(paths)
+        + ". They are live links to the user's original files. Read and modify them only when the task requires it."
+    )
 
 
 def _history_messages(

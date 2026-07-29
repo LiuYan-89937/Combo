@@ -7,6 +7,7 @@ from typing import Any
 from agent_factory.runtime_attachments import ATTACHMENT_INPUT_DIR
 from agent_factory.runtime_workspace import (
     RUNTIME_OUTPUT_ROOT_SESSION_KEY,
+    RUNTIME_WORKSPACE_MOUNTS_SESSION_KEY,
     RUNTIME_WORKSPACE_ROOT_SESSION_KEY,
     SESSION_OUTPUT_DIR,
 )
@@ -45,9 +46,21 @@ def runtime_resource_overrides_from_state(state: Any) -> dict[str, Any]:
     if not output_root:
         output_root = str(Path(root) / SESSION_OUTPUT_DIR)
     read_only_input = str(Path(root) / ATTACHMENT_INPUT_DIR)
+    mounts = session_config.get(RUNTIME_WORKSPACE_MOUNTS_SESSION_KEY)
+    mount_paths = {
+        str(item.get("name") or "").strip(): str(
+            Path(str(item.get("source_path"))).expanduser().resolve(strict=False)
+        )
+        for item in mounts
+        if isinstance(item, Mapping)
+        and str(item.get("name") or "").strip()
+        and str(item.get("source_path") or "").strip()
+    } if isinstance(mounts, list) else {}
     workspace_boundary = {
         "root": root,
         "read_only_paths": [read_only_input],
+        "allowed_roots": list(mount_paths.values()),
+        "mounts": mount_paths,
     }
     return {
         **overrides,

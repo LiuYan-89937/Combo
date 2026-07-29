@@ -4,7 +4,9 @@ import re
 from typing import Any
 
 from agent_factory.tooling.builtins.filesystem.common import (
+    filesystem_allowed_roots,
     filesystem_boundary,
+    filesystem_mounts,
     path_risk_result,
     positive_int,
     required_string,
@@ -47,7 +49,12 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("max_results must be less than or equal to 5000")
     matcher = _compile_matcher(pattern=pattern, case_sensitive=case_sensitive, use_regex=use_regex)
     root, allow_external = filesystem_boundary(resources)
-    target = resolve_path(path=base_path, root=root, allow_external=allow_external)
+    target = resolve_path(
+        path=base_path,
+        root=root,
+        allow_external=allow_external,
+        allowed_roots=filesystem_allowed_roots(resources),
+    )
     if not target.exists():
         raise FileNotFoundError(str(target))
     matches: list[dict[str, Any]] = []
@@ -81,7 +88,11 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
                 })
             line_index = line_number - 1
             matches.append({
-                "path": workspace_relative_path(file_path, workspace_root=root),
+                "path": workspace_relative_path(
+                    file_path,
+                    workspace_root=root,
+                    mounts=filesystem_mounts(resources),
+                ),
                 "line": line,
                 "line_number": line_number,
                 "before": lines[max(0, line_index - context_before):line_index],

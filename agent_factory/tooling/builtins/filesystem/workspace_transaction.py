@@ -14,10 +14,12 @@ from uuid import uuid4
 
 from agent_factory.tooling.builtins.filesystem.common import (
     assert_not_protected_write_path,
+    filesystem_allowed_roots,
     filesystem_boundary,
     resolve_path,
 )
-from agent_factory.tooling.builtins.filesystem.text_changes import text_change_summary
+from agent_factory.tooling.builtins.filesystem.text_changes import atomic_write_bytes, text_change_summary
+from agent_factory.tooling.workspace_paths import workspace_virtual_relative_path
 DEFAULT_TRANSACTION_TTL_SECONDS = 600
 SUPPORTED_OPERATION_TYPES = frozenset({"create", "write", "replace", "move", "copy", "delete"})
 
@@ -42,6 +44,7 @@ class WorkspaceTransactionPlan:
     created_at: str
     expires_at: str
     operations: tuple[dict[str, Any], ...]
+    targets: dict[str, Path]
     snapshots: dict[str, FileSnapshot]
     final_files: dict[str, VirtualFile | None]
     affected_files: tuple[dict[str, Any], ...]
@@ -91,25 +94,30 @@ def preview_transaction(
     resources: dict[str, Any],
 ) -> dict[str, Any]:
     root, allow_external = filesystem_boundary(resources)
+    allowed_roots = filesystem_allowed_roots(resources)
+    targets: dict[str, Path] = {}
     snapshots: dict[str, FileSnapshot] = {}
     original_files: dict[str, VirtualFile | None] = {}
     virtual_files: dict[str, VirtualFile | None] = {}
     normalized_operations: list[dict[str, Any]] = []
 
     def current_file(path_value: str) -> tuple[str, Path, VirtualFile | None]:
-        target = resolve_path(path=path_value, root=root, allow_external=allow_external)
-        try:
-            relative = target.relative_to(root).as_posix()
-        except ValueError as exc:
-            raise ValueError(
-                "workspace transactions only support paths inside the configured workspace root"
-            ) from exc
+        relative = workspace_virtual_relative_path(path_value)
+        target = resolve_path(
+            path=path_value,
+            root=root,
+            allow_external=allow_external,
+            allowed_roots=allowed_roots,
+        )
         assert_not_protected_write_path(target, root=root, resources=resources)
         if relative not in snapshots:
             snapshot, file_value = _snapshot_file(target)
+            targets[relative] = target
             snapshots[relative] = snapshot
             original_files[relative] = file_value
             virtual_files[relative] = file_value
+        elif targets[relative] != target:
+            raise ValueError(f"workspace path resolves inconsistently: {relative}")
         return relative, target, virtual_files[relative]
 
     for index, raw_operation in enumerate(operations):
@@ -185,6 +193,7 @@ def preview_transaction(
         created_at=now.isoformat(),
         expires_at=(now + timedelta(seconds=_transaction_ttl_seconds())).isoformat(),
         operations=tuple(normalized_operations),
+        targets=targets,
         snapshots=snapshots,
         final_files=final_files,
         affected_files=affected_files,
@@ -291,7 +300,7 @@ def _replace_text(content: bytes, operation: dict[str, Any], *, operation_index:
 def _validate_snapshots(plan: WorkspaceTransactionPlan) -> None:
     stale_paths: list[str] = []
     for relative, expected in plan.snapshots.items():
-        current, _file_value = _snapshot_file(plan.workspace_root / relative)
+        current, _file_value = _snapshot_file(plan.targets[relative])
         if (
             current.exists != expected.exists
             or current.content_hash != expected.content_hash
@@ -310,12 +319,17 @@ def _validate_commit_targets(
     *,
     resources: dict[str, Any],
 ) -> None:
+    _root, allow_external = filesystem_boundary(resources)
+    allowed_roots = filesystem_allowed_roots(resources)
     for relative in plan.final_files:
         target = resolve_path(
             path=relative,
             root=plan.workspace_root,
-            allow_external=False,
+            allow_external=allow_external,
+            allowed_roots=allowed_roots,
         )
+        if target != plan.targets[relative]:
+            raise ValueError(f"workspace mount changed after transaction preview: {relative}")
         assert_not_protected_write_path(
             target,
             root=plan.workspace_root,
@@ -326,34 +340,28 @@ def _validate_commit_targets(
 def _apply_transaction(plan: WorkspaceTransactionPlan) -> None:
     staging_root = Path(mkdtemp(prefix=".agentfactory-edit-", dir=str(plan.workspace_root)))
     backup_root = staging_root / "backups"
-    prepared_root = staging_root / "prepared"
     created_directories: list[Path] = []
     try:
-        for index, (relative, final_value) in enumerate(sorted(plan.final_files.items())):
-            target = plan.workspace_root / relative
+        for relative, _final_value in sorted(plan.final_files.items()):
+            target = plan.targets[relative]
             if target.exists():
                 backup = backup_root / relative
                 backup.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(target, backup)
-            if final_value is not None:
-                prepared = prepared_root / str(index)
-                prepared.parent.mkdir(parents=True, exist_ok=True)
-                prepared.write_bytes(final_value.content)
-                if final_value.mode is not None:
-                    prepared.chmod(final_value.mode)
 
         try:
-            for relative in sorted(plan.final_files, key=lambda value: len(Path(value).parts), reverse=True):
-                target = plan.workspace_root / relative
-                if target.exists():
-                    target.unlink()
-            for index, (relative, final_value) in enumerate(sorted(plan.final_files.items())):
+            for relative, final_value in sorted(plan.final_files.items()):
+                target = plan.targets[relative]
                 if final_value is None:
+                    if target.exists():
+                        target.unlink()
                     continue
-                target = plan.workspace_root / relative
-                created_directories.extend(_ensure_parent_directories(target.parent, stop=plan.workspace_root))
-                prepared = prepared_root / str(index)
-                prepared.replace(target)
+                created_directories.extend(
+                    _ensure_parent_directories(target.parent, stop=plan.workspace_root)
+                )
+                atomic_write_bytes(target, final_value.content)
+                if final_value.mode is not None:
+                    target.chmod(final_value.mode)
         except Exception as apply_error:
             try:
                 _rollback_transaction(
@@ -379,7 +387,7 @@ def _rollback_transaction(
 ) -> None:
     rollback_errors: list[str] = []
     for relative in sorted(plan.final_files, key=lambda value: len(Path(value).parts), reverse=True):
-        target = plan.workspace_root / relative
+        target = plan.targets[relative]
         try:
             if target.exists():
                 target.unlink()

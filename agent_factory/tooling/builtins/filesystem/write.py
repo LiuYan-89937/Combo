@@ -5,7 +5,9 @@ from typing import Any
 
 from agent_factory.tooling.builtins.filesystem.common import (
     assert_not_protected_write_path,
+    filesystem_allowed_roots,
     filesystem_boundary,
+    filesystem_mounts,
     path_risk_result,
     required_string,
     resolve_path,
@@ -74,7 +76,12 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("content must be a string")
     create_dirs = bool(arguments.get("create_dirs", True))
     root, allow_external = filesystem_boundary(resources)
-    target = resolve_path(path=path, root=root, allow_external=allow_external)
+    target = resolve_path(
+        path=path,
+        root=root,
+        allow_external=allow_external,
+        allowed_roots=filesystem_allowed_roots(resources),
+    )
     assert_not_protected_write_path(target, root=root, resources=resources)
     existed = target.exists()
     before_hash = None
@@ -95,7 +102,11 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     content_bytes = content.encode("utf-8")
     atomic_write_bytes(target, content_bytes)
     output = {
-        "path": workspace_relative_path(target, workspace_root=root),
+        "path": workspace_relative_path(
+            target,
+            workspace_root=root,
+            mounts=filesystem_mounts(resources),
+        ),
         "created": not existed,
         "bytes_written": len(content_bytes),
         "before_hash": before_hash,

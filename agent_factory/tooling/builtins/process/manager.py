@@ -219,17 +219,37 @@ def process_runtime_boundary(resources: dict[str, Any]) -> tuple[Path, bool]:
     return Path(str(root_value)).expanduser().resolve(), allow_external
 
 
-def resolve_cwd(*, cwd: str | None, root: Path, allow_external: bool) -> Path:
+def process_runtime_allowed_roots(resources: dict[str, Any]) -> tuple[Path, ...]:
+    config = resources.get("process_runtime", {})
+    values = config.get("allowed_roots", []) if isinstance(config, dict) else []
+    if not isinstance(values, list):
+        return ()
+    return tuple(
+        Path(value).expanduser().resolve(strict=False)
+        for value in values
+        if isinstance(value, str) and value.strip()
+    )
+
+
+def resolve_cwd(
+    *,
+    cwd: str | None,
+    root: Path,
+    allow_external: bool,
+    allowed_roots: tuple[Path, ...] = (),
+) -> Path:
     value = cwd if cwd is not None and cwd.strip() else "."
     candidate = workspace_path_candidate(value, root=root)
     resolved = candidate.resolve(strict=False)
     if allow_external:
         return resolved
-    try:
-        resolved.relative_to(root)
-    except ValueError as exc:
-        raise ValueError(f"cwd escapes process runtime root: {value}") from exc
-    return resolved
+    for allowed_root in (root, *allowed_roots):
+        try:
+            resolved.relative_to(allowed_root)
+            return resolved
+        except ValueError:
+            continue
+    raise ValueError(f"cwd escapes process runtime root: {value}")
 
 
 def is_read_only_process_path(path: Path, *, root: Path, resources: dict[str, Any]) -> bool:

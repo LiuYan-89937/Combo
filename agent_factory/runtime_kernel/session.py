@@ -17,6 +17,7 @@ from agent_factory.runtime_protocol.turn_lifecycle import (
     supersede_running_turns,
 )
 from agent_factory.trace_system import JSONLTraceStore
+from agent_factory.workspace_mounts import WorkspaceMountRecord
 
 
 class AgentSessionTurn(BaseModel):
@@ -55,6 +56,7 @@ class AgentSessionRecord(BaseModel):
     turn_count: int = 0
     turns: list[AgentSessionTurn] = Field(default_factory=list)
     runtime_refs: dict[str, str] = Field(default_factory=dict)
+    workspace_mounts: list[WorkspaceMountRecord] = Field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)

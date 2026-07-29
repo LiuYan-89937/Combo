@@ -368,6 +368,18 @@ export interface WorkspaceEntry {
   kind: 'file' | 'directory'
   sizeBytes: number | null
   updatedAt: string | null
+  mount: boolean
+  mountId: string | null
+  mountSource: string | null
+  connected: boolean | null
+}
+
+export interface WorkspaceMountView {
+  mountId: string
+  name: string
+  sourcePath: string
+  createdAt: string
+  connected: boolean
 }
 
 export interface WorkspaceFileView {
