@@ -30,6 +30,10 @@ REQUIRED_AGENT_PACKAGE_CONTRACTS = frozenset(
         "tools",
     }
 )
+OPTIONAL_AGENT_PACKAGE_CONTRACTS = frozenset({"scheduler_seed"})
+SUPPORTED_AGENT_PACKAGE_CONTRACTS = (
+    REQUIRED_AGENT_PACKAGE_CONTRACTS | OPTIONAL_AGENT_PACKAGE_CONTRACTS
+)
 
 
 class AgentIdentitySpec(BaseModel):
@@ -71,6 +75,12 @@ class AgentPackageManifest(BaseModel):
             raise ValueError(
                 "agent package declares retired contracts: "
                 + ", ".join(retired_contracts)
+            )
+        unsupported_contracts = sorted(set(self.contracts) - SUPPORTED_AGENT_PACKAGE_CONTRACTS)
+        if unsupported_contracts:
+            raise ValueError(
+                "agent package declares unsupported contracts: "
+                + ", ".join(unsupported_contracts)
             )
         for key in (
             "assembly_spec_path",

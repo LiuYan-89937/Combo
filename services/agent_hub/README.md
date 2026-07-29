@@ -44,6 +44,16 @@ OpenAPI 文档部署后位于 `https://liuyanai.top/api/docs`。主要端点：
 上传流程为：创建上传 -> 按返回的签名请求直传 OSS -> complete -> 异步验证 ->
 管理员审核 -> 发布。
 
+AgentHub 使用由桌面端核心 Pydantic 契约生成的独立 JSON Schema
+`agent_hub/agent_package_schemas.json`，服务端不再维护另一套 Package 字段规则。
+核心契约发生变化时，在仓库根目录重新生成并提交该文件：
+
+```bash
+.venv/bin/python scripts/generate_agent_hub_package_schemas.py
+```
+
+CI 或部署前可使用 `--check` 检查快照是否与核心契约一致。
+
 管理员审核入口：
 
 ```text

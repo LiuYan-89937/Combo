@@ -4,7 +4,6 @@
   "enabled": true,
   "config": {
     "python_requirements": [],
-    "system_packages": [],
     "system_binaries": []
   }
 }

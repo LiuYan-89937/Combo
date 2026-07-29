@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from hashlib import sha256
+from importlib.resources import files
 import json
 from pathlib import Path, PurePosixPath
 import re
@@ -10,19 +11,10 @@ from typing import Any
 import zipfile
 
 from agent_hub.config import Settings
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
 
 
-REQUIRED_CONTRACTS = frozenset(
-    {
-        "context",
-        "dependencies",
-        "model",
-        "resources",
-        "scheduler",
-        "tools",
-    }
-)
-RETIRED_CONTRACTS = frozenset({"knowledge", "memory", "session", "state"})
 TRANSIENT_ROOTS = frozenset({".agent_runtime", ".factory", "checkpoints", "logs", "sessions"})
 TRANSIENT_NAMES = frozenset(
     {
@@ -42,6 +34,7 @@ VERSION_PATTERN = re.compile(
     r"(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$"
 )
 MAX_JSON_BYTES = 5 * 1024 * 1024
+PACKAGE_SCHEMA_RESOURCE = "agent_package_schemas.json"
 
 
 class PackageInspectionError(ValueError):
@@ -85,6 +78,109 @@ class PackageInspection:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class PackageSchemaRegistry:
+    required_contracts: frozenset[str]
+    supported_contracts: frozenset[str]
+    manifest: Draft202012Validator
+    assembly_spec: Draft202012Validator
+    contracts: dict[str, Draft202012Validator]
+
+    @classmethod
+    def load(cls) -> "PackageSchemaRegistry":
+        resource = files("agent_hub").joinpath(PACKAGE_SCHEMA_RESOURCE)
+        payload = json.loads(resource.read_text(encoding="utf-8"))
+        if payload.get("version") != "agenthub.package_schemas.v1":
+            raise RuntimeError("unsupported AgentHub package schema bundle")
+        contract_schemas = payload.get("contracts")
+        if not isinstance(contract_schemas, dict):
+            raise RuntimeError("AgentHub package schema bundle has no contract schemas")
+        manifest_schema = _schema_object(payload.get("manifest"), label="manifest")
+        assembly_schema = _schema_object(payload.get("assembly_spec"), label="assembly_spec")
+        schemas = {
+            str(contract_id): _schema_object(schema, label=f"contracts.{contract_id}")
+            for contract_id, schema in contract_schemas.items()
+        }
+        for schema in (manifest_schema, assembly_schema, *schemas.values()):
+            try:
+                Draft202012Validator.check_schema(schema)
+            except SchemaError as exc:
+                raise RuntimeError("AgentHub package schema bundle is invalid") from exc
+        required = _schema_string_set(payload.get("required_contracts"), label="required_contracts")
+        supported = _schema_string_set(payload.get("supported_contracts"), label="supported_contracts")
+        if required - supported or supported != frozenset(schemas):
+            raise RuntimeError("AgentHub package schema contract catalog is inconsistent")
+        return cls(
+            required_contracts=required,
+            supported_contracts=supported,
+            manifest=Draft202012Validator(manifest_schema),
+            assembly_spec=Draft202012Validator(assembly_schema),
+            contracts={
+                contract_id: Draft202012Validator(schema)
+                for contract_id, schema in schemas.items()
+            },
+        )
+
+    def validate_manifest(self, payload: dict[str, Any]) -> None:
+        _validate_schema(self.manifest, payload, label="agent_package.json")
+
+    def validate_assembly_spec(self, payload: dict[str, Any]) -> None:
+        _validate_schema(self.assembly_spec, payload, label="assembly_spec")
+
+    def validate_contract(self, contract_id: str, payload: dict[str, Any]) -> None:
+        try:
+            validator = self.contracts[contract_id]
+        except KeyError as exc:
+            raise PackageInspectionError(
+                "manifest_contracts_unsupported",
+                f"unsupported contract: {contract_id}",
+            ) from exc
+        _validate_schema(validator, payload, label=f"contracts.{contract_id}")
+
+
+def _schema_object(value: Any, *, label: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise RuntimeError(f"AgentHub package schema {label} must be an object")
+    return value
+
+
+def _schema_string_set(value: Any, *, label: str) -> frozenset[str]:
+    if not isinstance(value, list):
+        raise RuntimeError(f"AgentHub package schema {label} must be an array")
+    result = frozenset(
+        str(item).strip()
+        for item in value
+        if isinstance(item, str) and item.strip()
+    )
+    if len(result) != len(value):
+        raise RuntimeError(f"AgentHub package schema {label} contains invalid values")
+    return result
+
+
+def _validate_schema(
+    validator: Draft202012Validator,
+    payload: dict[str, Any],
+    *,
+    label: str,
+) -> None:
+    errors = sorted(
+        validator.iter_errors(payload),
+        key=lambda item: tuple(str(part) for part in item.absolute_path),
+    )
+    if not errors:
+        return
+    error = errors[0]
+    location = ".".join(str(part) for part in error.absolute_path)
+    subject = f"{label}.{location}" if location else label
+    raise PackageInspectionError(
+        "package_contract_invalid",
+        f"{subject}: {error.message}",
+    )
+
+
+PACKAGE_SCHEMAS = PackageSchemaRegistry.load()
+
+
 def inspect_package_archive(path: Path, settings: Settings) -> PackageInspection:
     archive_size = path.stat().st_size
     if archive_size <= 0:
@@ -105,6 +201,12 @@ def inspect_package_archive(path: Path, settings: Settings) -> PackageInspection
         manifest_name, package_root = _manifest_location(infos)
         manifest = _json_member(archive, manifest_name, label="agent_package.json")
         identity = _validate_manifest(archive, manifest, package_root=package_root)
+        assembly_spec = _json_member(
+            archive,
+            _package_member_name(package_root, manifest["assembly_spec_path"]),
+            label="assembly_spec",
+        )
+        PACKAGE_SCHEMAS.validate_assembly_spec(assembly_spec)
         contracts = {
             contract_id: _json_member(
                 archive,
@@ -113,6 +215,8 @@ def inspect_package_archive(path: Path, settings: Settings) -> PackageInspection
             )
             for contract_id, relative_path in manifest["contracts"].items()
         }
+        for contract_id, contract in contracts.items():
+            PACKAGE_SCHEMAS.validate_contract(contract_id, contract)
         warnings = _validate_distribution_extensions(
             archive,
             infos,
@@ -216,14 +320,8 @@ def _validate_manifest(
     *,
     package_root: str,
 ) -> dict[str, str]:
-    if manifest.get("version") != "agent_package.v0":
-        raise PackageInspectionError(
-            "manifest_version",
-            "agent_package.json version must be agent_package.v0",
-        )
-    identity = manifest.get("agent")
-    if not isinstance(identity, dict):
-        raise PackageInspectionError("manifest_agent", "agent_package.json agent must be an object")
+    PACKAGE_SCHEMAS.validate_manifest(manifest)
+    identity = manifest["agent"]
     package_id = str(identity.get("id") or "").strip()
     if not PACKAGE_ID_PATTERN.fullmatch(package_id):
         raise PackageInspectionError("manifest_package_id", "agent id is invalid")
@@ -234,23 +332,18 @@ def _validate_manifest(
     description = str(identity.get("description") or "").strip()
     if not name:
         raise PackageInspectionError("manifest_name", "agent name must not be empty")
-    contracts = manifest.get("contracts")
-    if not isinstance(contracts, dict):
-        raise PackageInspectionError(
-            "manifest_contracts",
-            "agent_package.json contracts must be an object",
-        )
-    missing = sorted(REQUIRED_CONTRACTS - set(contracts))
+    contracts = manifest["contracts"]
+    missing = sorted(PACKAGE_SCHEMAS.required_contracts - set(contracts))
     if missing:
         raise PackageInspectionError(
             "manifest_contracts_missing",
             "missing required contracts: " + ", ".join(missing),
         )
-    retired = sorted(RETIRED_CONTRACTS & set(contracts))
-    if retired:
+    unsupported = sorted(set(contracts) - PACKAGE_SCHEMAS.supported_contracts)
+    if unsupported:
         raise PackageInspectionError(
-            "manifest_contracts_retired",
-            "retired contracts are not accepted: " + ", ".join(retired),
+            "manifest_contracts_unsupported",
+            "unsupported contracts are not accepted: " + ", ".join(unsupported),
         )
     references = [
         ("assembly_spec_path", manifest.get("assembly_spec_path")),
@@ -323,16 +416,10 @@ def _json_member(archive: zipfile.ZipFile, name: str, *, label: str) -> dict[str
 
 
 def _dependency_summary(contract: dict[str, Any]) -> dict[str, Any]:
-    config = contract.get("config") if isinstance(contract.get("config"), dict) else contract
-    python_items = _string_list(
-        config.get("python")
-        or config.get("python_requirements")
-        or config.get("requirements")
-    )
-    npm_items = _string_list(config.get("npm") or config.get("npm_dependencies"))
-    system_items = _string_list(
-        config.get("system") or config.get("system_dependencies") or config.get("commands")
-    )
+    config = contract["config"]
+    python_items = _string_list(config.get("python_requirements"))
+    npm_items = _string_list(config.get("npm_requirements"))
+    system_items = _string_list(config.get("system_binaries"))
     return {
         "python": python_items,
         "npm": npm_items,
@@ -344,47 +431,25 @@ def _dependency_summary(contract: dict[str, Any]) -> dict[str, Any]:
 
 
 def _tool_summary(contract: dict[str, Any], manifest: dict[str, Any]) -> dict[str, Any]:
-    config = contract.get("config") if isinstance(contract.get("config"), dict) else contract
-    builtins = _string_list(config.get("builtin_tools") or config.get("builtins"))
+    config = contract["config"]
+    builtins = _string_list(config.get("builtin_tool_ids"))
     package_tools = [
         str(item)
         for item in manifest.get("tools") or []
         if isinstance(item, str) and item.strip()
     ]
-    mcp_servers = _string_list(config.get("mcp_servers") or config.get("mcp"))
-    permissions = config.get("approval_policy") or config.get("permissions") or {}
+    permissions = config.get("approval_policy") or {}
     return {
         "builtin_tools": builtins,
         "package_tools": package_tools,
-        "mcp_servers": mcp_servers,
-        "permissions": permissions if isinstance(permissions, (dict, list)) else {},
+        "permissions": permissions,
     }
 
 
 def _model_summary(contract: dict[str, Any]) -> dict[str, Any]:
-    if contract.get("type") != "model" or contract.get("version") != "model_contract.v1":
-        raise PackageInspectionError(
-            "model_contract_version",
-            "model contract must use model_contract.v1",
-        )
-    config = contract.get("config") if isinstance(contract.get("config"), dict) else contract
-    bindings = config.get("bindings")
-    tool_bindings = config.get("tool_bindings")
-    if not isinstance(bindings, dict) or "main" not in bindings:
-        raise PackageInspectionError(
-            "model_contract_main",
-            "model contract must declare the main model binding",
-        )
-    if set(bindings) - {"main", "task", "compression"}:
-        raise PackageInspectionError(
-            "model_contract_roles",
-            "model contract declares an unsupported model role",
-        )
-    if not isinstance(tool_bindings, dict):
-        raise PackageInspectionError(
-            "model_contract_tools",
-            "model contract tool_bindings must be an object",
-        )
+    config = contract["config"]
+    bindings = config.get("bindings") or {}
+    tool_bindings = config.get("tool_bindings") or {}
     return {
         "bindings": _binding_requirements(bindings),
         "tool_bindings": _tool_binding_requirements(tool_bindings),
@@ -392,15 +457,8 @@ def _model_summary(contract: dict[str, Any]) -> dict[str, Any]:
 
 
 def _binding_requirements(value: Any) -> dict[str, dict[str, Any]]:
-    if not isinstance(value, dict):
-        return {}
     result: dict[str, dict[str, Any]] = {}
     for role, raw_binding in value.items():
-        if not isinstance(raw_binding, dict):
-            raise PackageInspectionError(
-                "model_contract_binding",
-                f"model binding must be an object: {role}",
-            )
         result[str(role)] = {
             "reason": str(raw_binding.get("reason") or ""),
             "required_capabilities": (
@@ -413,15 +471,8 @@ def _binding_requirements(value: Any) -> dict[str, dict[str, Any]]:
 
 
 def _tool_binding_requirements(value: Any) -> dict[str, dict[str, Any]]:
-    if not isinstance(value, dict):
-        return {}
     result: dict[str, dict[str, Any]] = {}
     for tool_id, raw_binding in value.items():
-        if not isinstance(raw_binding, dict):
-            raise PackageInspectionError(
-                "model_contract_tool_binding",
-                f"model tool binding must be an object: {tool_id}",
-            )
         result[str(tool_id)] = {
             "capability": str(raw_binding.get("capability") or ""),
             "description": str(raw_binding.get("description") or ""),
@@ -436,17 +487,9 @@ def _tool_binding_requirements(value: Any) -> dict[str, dict[str, Any]]:
 
 
 def _string_list(value: Any) -> list[str]:
-    if isinstance(value, dict):
-        return sorted(str(key) for key in value if str(key).strip())
-    if not isinstance(value, list):
+    if value is None:
         return []
-    return sorted(
-        {
-            str(item).strip()
-            for item in value
-            if isinstance(item, (str, int, float)) and str(item).strip()
-        }
-    )
+    return sorted(set(value))
 
 
 def _validate_distribution_extensions(
