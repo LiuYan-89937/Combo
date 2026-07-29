@@ -211,6 +211,10 @@ const zhCN = {
   'settings.notificationCollaboration': '多 Agent 协作',
   'settings.notificationAgentGroup': 'Agent 群聊',
   'settings.notificationScheduler': '定时任务',
+  'settings.checkForUpdates': '检查更新',
+  'settings.updateAvailable': '发现新版本，请在更新窗口中继续。',
+  'settings.upToDate': '当前已是最新版本。',
+  'settings.updateCheckUnavailable': '暂时无法检查更新，请稍后重试。',
 
   'taskNotification.title': '{subject} · {status}',
   'taskNotification.conversation': '对话回复',
@@ -1231,6 +1235,10 @@ const enUS: Record<MessageKey, string> = {
   'settings.notificationCollaboration': 'Multi-agent collaboration',
   'settings.notificationAgentGroup': 'Agent group chat',
   'settings.notificationScheduler': 'Scheduled tasks',
+  'settings.checkForUpdates': 'Check for updates',
+  'settings.updateAvailable': 'A new version is available in the update dialog.',
+  'settings.upToDate': 'You are using the latest version.',
+  'settings.updateCheckUnavailable': 'Unable to check for updates. Try again later.',
 
   'taskNotification.title': '{subject} · {status}',
   'taskNotification.conversation': 'Conversation reply',

@@ -888,7 +888,7 @@ class AppReleaseRegistry:
                     github_asset_id=staged_asset.asset_id,
                 )
             self._set_job_stage(str(job["job_id"]), stage="committing_assets")
-            committed = client.commit_staged_assets(
+            client.commit_staged_assets(
                 github_release_id=github_release_id,
                 staged_assets=[item[1] for item in staged],
             )
@@ -900,11 +900,15 @@ class AppReleaseRegistry:
                 notes_markdown=str(release["notes_markdown"]),
                 prerelease=release_version.is_prerelease,
             )
+            published_assets = client.published_assets(
+                github_release_id=github_release_id,
+                expected_assets=[item[1] for item in staged],
+            )
             now = utc_now()
             with self.database.connect() as connection:
                 connection.execute("begin immediate")
                 for asset, staged_asset, digest_hex in staged:
-                    remote = committed[staged_asset.final_name]
+                    remote = published_assets[staged_asset.final_name]
                     connection.execute(
                         """
                         update app_release_assets

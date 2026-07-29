@@ -3,10 +3,12 @@
     :show="updateStore.visible && !startupStore.initializing"
     :mask-closable="false"
     :close-on-esc="false"
+    :closable="canDismiss"
     preset="card"
     class="update-dialog"
     style="width: min(560px, calc(100vw - 32px)); max-width: 560px"
     title="发现新版本"
+    @close="updateStore.dismiss"
   >
     <div v-if="updateStore.metadata" class="update-dialog__content">
       <div class="update-dialog__version">
@@ -73,6 +75,9 @@ import { renderMarkdownDocument } from '@/rendering/markdown'
 
 const updateStore = useAppUpdateStore()
 const startupStore = useStartupStore()
+const canDismiss = computed(() =>
+  updateStore.status !== 'downloading' && updateStore.status !== 'installing',
+)
 
 const renderedNotes = computed(() =>
   renderMarkdownDocument(updateStore.metadata?.body || '', {

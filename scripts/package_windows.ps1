@@ -211,6 +211,10 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "Building Windows x64 installers..."
 New-Item -ItemType Directory -Force -Path $BuildLogDir | Out-Null
+$BundleDir = Join-Path $TauriDir "target\$RustTarget\release\bundle\nsis"
+if (Test-Path -LiteralPath $BundleDir) {
+    Remove-Item -LiteralPath $BundleDir -Recurse -Force
+}
 Push-Location $TauriDir
 try {
     $BuildCommand = "cargo.exe tauri build --target $RustTarget --bundles nsis 2>&1"
@@ -225,7 +229,6 @@ finally {
     Pop-Location
 }
 
-$BundleDir = Join-Path $TauriDir "target\$RustTarget\release\bundle\nsis"
 if (-not (Test-Path -LiteralPath $BundleDir -PathType Container)) {
     throw "Tauri NSIS bundle directory not found: $BundleDir"
 }

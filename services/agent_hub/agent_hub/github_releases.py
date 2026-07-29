@@ -244,6 +244,36 @@ class GitHubReleaseClient:
         self._delete_stale_asset_backups(github_release_id)
         return committed
 
+    def published_assets(
+        self,
+        *,
+        github_release_id: int,
+        expected_assets: list[StagedGitHubAsset],
+    ) -> dict[str, dict[str, Any]]:
+        assets_by_name = {
+            str(asset.get("name") or ""): asset
+            for asset in self.list_assets(github_release_id)
+        }
+        published: dict[str, dict[str, Any]] = {}
+        for expected in expected_assets:
+            asset = assets_by_name.get(expected.final_name)
+            if asset is None:
+                raise GitHubReleaseError(
+                    f"published GitHub asset is missing: {expected.final_name}"
+                )
+            download_url = str(asset.get("browser_download_url") or "").strip()
+            if (
+                int(asset.get("id") or 0) != expected.asset_id
+                or str(asset.get("state") or "") != "uploaded"
+                or int(asset.get("size") or 0) != expected.size
+                or not download_url
+            ):
+                raise GitHubReleaseError(
+                    f"published GitHub asset verification failed for {expected.final_name}"
+                )
+            published[expected.final_name] = asset
+        return published
+
     def _delete_stale_asset_backups(self, github_release_id: int) -> None:
         for asset in self.list_assets(github_release_id):
             if ".fastagenthub-backup-" not in str(asset.get("name") or ""):

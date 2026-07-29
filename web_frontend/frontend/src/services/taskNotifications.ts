@@ -47,12 +47,15 @@ const SEEN_NOTIFICATION_STORAGE_KEY = 'fast-agent-factory.seenTaskNotifications'
 const MAX_SEEN_NOTIFICATION_KEYS = 256
 const MAX_NOTIFICATION_BODY_LENGTH = 240
 const NATIVE_TARGET_EXTRA_KEY = 'fastAgentFactoryTarget'
+const NATIVE_TARGET_STORAGE_KEY = 'fast-agent-factory.nativeNotificationTargets'
+const MAX_NATIVE_NOTIFICATION_TARGETS = 128
 
 let router: Router | null = null
 let nativeActionListener: PluginListener | null = null
 let initialization: Promise<void> | null = null
 const pendingNotifications: TaskTerminalNotification[] = []
 const seenKeys = readSeenKeys()
+const nativeTargets = readNativeTargets()
 
 export function initializeTaskNotifications(appRouter: Router): Promise<void> {
   router = appRouter
@@ -91,7 +94,9 @@ async function initializeNativeNotifications(): Promise<void> {
   if (!isTauri()) return
   nativeActionListener = await onAction((notification) => {
     const target = targetFromNativeNotification(notification)
-    if (target) void openNotificationTarget(target)
+    if (!target) return
+    forgetNativeTarget(notification.id)
+    openNotificationTargetSafely(target)
   })
   const preferences = useTaskNotificationPreferencesStore()
   if (preferences.active) await ensureNativePermission(true)
@@ -117,16 +122,24 @@ async function deliverTaskNotification(notification: TaskTerminalNotification): 
     return
   }
 
-  sendNotification({
-    id: stableNotificationId(notification.key),
-    title,
-    body,
-    autoCancel: true,
-    group: notification.category,
-    extra: {
-      [NATIVE_TARGET_EXTRA_KEY]: JSON.stringify(notification.target),
-    },
-  })
+  const notificationId = stableNotificationId(notification.key)
+  rememberNativeTarget(notificationId, notification.target)
+  try {
+    sendNotification({
+      id: notificationId,
+      title,
+      body,
+      autoCancel: true,
+      group: notification.category,
+      extra: {
+        [NATIVE_TARGET_EXTRA_KEY]: JSON.stringify(notification.target),
+      },
+    })
+  } catch (error) {
+    forgetNativeTarget(notificationId)
+    console.warn('Native task notification delivery failed:', error)
+    showInAppNotification(notification, title, body)
+  }
 }
 
 function showInAppNotification(
@@ -144,7 +157,7 @@ function showInAppNotification(
     message: body,
     duration: notification.status === 'completed' ? 8000 : 10000,
     actionLabel: translate(useUiStore().locale, 'common.view'),
-    onAction: () => void openNotificationTarget(notification.target),
+    onAction: () => openNotificationTargetSafely(notification.target),
   })
 }
 
@@ -189,19 +202,24 @@ async function isCurrentTargetVisible(target: TaskNotificationTarget): Promise<b
 
 async function openNotificationTarget(target: TaskNotificationTarget): Promise<void> {
   if (!router) return
-  await focusApplicationWindow()
+  const focusPromise = focusApplicationWindow().catch((error) => {
+    console.warn('Failed to focus the application window:', error)
+  })
   if (target.kind === 'scheduler') {
     await router.push({ name: 'Scheduler' })
+    await focusPromise
     return
   }
   if (target.kind === 'agentGroup') {
     await router.push({ name: 'AgentGroup' })
     await useAgentGroupStore().loadGroup(target.groupId)
+    await focusPromise
     return
   }
   if (target.kind === 'collaboration') {
     await router.push({ name: 'Collaboration' })
     await useCollaborationStore().loadSession(target.collaborationId)
+    await focusPromise
     return
   }
   if (target.mode === 'agent_package' && target.packageId && target.sessionId) {
@@ -214,6 +232,7 @@ async function openNotificationTarget(target: TaskNotificationTarget): Promise<v
         collaboration_task_id: target.collaborationTaskId || undefined,
       },
     })
+    await focusPromise
     return
   }
   const routeName = target.mode === 'create_agent'
@@ -225,6 +244,13 @@ async function openNotificationTarget(target: TaskNotificationTarget): Promise<v
   if (target.sessionId) {
     await postCommand(switchSessionCommand(target.sessionId, target.mode))
   }
+  await focusPromise
+}
+
+function openNotificationTargetSafely(target: TaskNotificationTarget): void {
+  void openNotificationTarget(target).catch((error) => {
+    console.warn('Failed to open task notification target:', error)
+  })
 }
 
 async function focusApplicationWindow(): Promise<void> {
@@ -237,12 +263,12 @@ async function focusApplicationWindow(): Promise<void> {
 
 function targetFromNativeNotification(notification: NativeNotificationOptions): TaskNotificationTarget | null {
   const serialized = notification.extra?.[NATIVE_TARGET_EXTRA_KEY]
-  if (typeof serialized !== 'string') return null
-  try {
-    return JSON.parse(serialized) as TaskNotificationTarget
-  } catch {
-    return null
-  }
+  const embedded = parseNotificationTarget(serialized)
+  if (embedded) return embedded
+  const notificationId = Number(notification.id)
+  return Number.isInteger(notificationId)
+    ? nativeTargets.get(notificationId) || null
+    : null
 }
 
 function notificationTitle(notification: TaskTerminalNotification): string {
@@ -313,4 +339,67 @@ function rememberSeenKey(key: string): void {
   if (typeof window !== 'undefined') {
     window.localStorage.setItem(SEEN_NOTIFICATION_STORAGE_KEY, JSON.stringify([...seenKeys]))
   }
+}
+
+function readNativeTargets(): Map<number, TaskNotificationTarget> {
+  if (typeof window === 'undefined') return new Map()
+  try {
+    const stored = JSON.parse(
+      window.localStorage.getItem(NATIVE_TARGET_STORAGE_KEY) || '[]',
+    ) as Array<[unknown, unknown]>
+    const entries = Array.isArray(stored)
+      ? stored.flatMap(([id, target]) => {
+          const numericId = Number(id)
+          const parsedTarget = parseNotificationTarget(target)
+          return Number.isInteger(numericId) && parsedTarget
+            ? [[numericId, parsedTarget] as const]
+            : []
+        })
+      : []
+    return new Map(entries)
+  } catch {
+    return new Map()
+  }
+}
+
+function rememberNativeTarget(id: number, target: TaskNotificationTarget): void {
+  nativeTargets.delete(id)
+  nativeTargets.set(id, target)
+  while (nativeTargets.size > MAX_NATIVE_NOTIFICATION_TARGETS) {
+    const oldest = nativeTargets.keys().next().value
+    if (oldest === undefined) break
+    nativeTargets.delete(oldest)
+  }
+  persistNativeTargets()
+}
+
+function forgetNativeTarget(id: number | undefined): void {
+  if (!Number.isInteger(id)) return
+  nativeTargets.delete(Number(id))
+  persistNativeTargets()
+}
+
+function persistNativeTargets(): void {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(
+    NATIVE_TARGET_STORAGE_KEY,
+    JSON.stringify([...nativeTargets.entries()]),
+  )
+}
+
+function parseNotificationTarget(value: unknown): TaskNotificationTarget | null {
+  if (typeof value === 'string') {
+    try {
+      return parseNotificationTarget(JSON.parse(value))
+    } catch {
+      return null
+    }
+  }
+  if (!value || typeof value !== 'object') return null
+  const target = value as Partial<TaskNotificationTarget>
+  return ['conversation', 'collaboration', 'agentGroup', 'scheduler'].includes(
+    String(target.kind || ''),
+  )
+    ? target as TaskNotificationTarget
+    : null
 }

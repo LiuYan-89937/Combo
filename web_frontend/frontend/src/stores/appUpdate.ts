@@ -1,4 +1,5 @@
 import { computed, ref } from 'vue'
+import { getVersion } from '@tauri-apps/api/app'
 import { defineStore } from 'pinia'
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import { relaunch } from '@tauri-apps/plugin-process'
@@ -11,6 +12,8 @@ type UpdateStatus =
   | 'downloading'
   | 'installing'
   | 'error'
+
+export type UpdateCheckResult = 'available' | 'up-to-date' | 'unavailable'
 
 export interface AppUpdateMetadata {
   currentVersion: string
@@ -25,9 +28,10 @@ export const useAppUpdateStore = defineStore('appUpdate', () => {
   const downloadedBytes = ref(0)
   const contentLength = ref(0)
   const error = ref('')
+  const currentVersion = ref('')
   let pendingUpdate: Update | null = null
   let checkedThisLaunch = false
-  let activeCheck: Promise<void> | null = null
+  let activeCheck: Promise<UpdateCheckResult> | null = null
 
   const visible = computed(() =>
     ['available', 'downloading', 'installing', 'error'].includes(status.value),
@@ -37,14 +41,23 @@ export const useAppUpdateStore = defineStore('appUpdate', () => {
     return Math.min(1, downloadedBytes.value / contentLength.value)
   })
 
-  function checkAtStartup(): Promise<void> {
-    if (checkedThisLaunch) return activeCheck || Promise.resolve()
+  async function loadCurrentVersion(): Promise<string> {
+    if (currentVersion.value) return currentVersion.value
+    if (!isTauri()) return ''
+    currentVersion.value = await getVersion()
+    return currentVersion.value
+  }
+
+  function checkAtStartup(): Promise<UpdateCheckResult> {
+    void loadCurrentVersion().catch(() => undefined)
+    if (checkedThisLaunch) return activeCheck || Promise.resolve('up-to-date')
     checkedThisLaunch = true
     return checkForUpdate()
   }
 
-  function checkForUpdate(): Promise<void> {
-    if (!isTauri() || import.meta.env.DEV) return Promise.resolve()
+  function checkForUpdate(): Promise<UpdateCheckResult> {
+    void loadCurrentVersion().catch(() => undefined)
+    if (!isTauri() || import.meta.env.DEV) return Promise.resolve('unavailable')
     if (activeCheck) return activeCheck
     status.value = 'checking'
     error.value = ''
@@ -52,7 +65,7 @@ export const useAppUpdateStore = defineStore('appUpdate', () => {
       .then(async (update) => {
         if (!update) {
           status.value = 'idle'
-          return
+          return 'up-to-date' as const
         }
         if (pendingUpdate) await pendingUpdate.close()
         pendingUpdate = update
@@ -63,10 +76,12 @@ export const useAppUpdateStore = defineStore('appUpdate', () => {
           body: update.body || '',
         }
         status.value = 'available'
+        return 'available' as const
       })
       .catch((reason: unknown) => {
         status.value = 'idle'
         console.warn('Application update check failed:', reason)
+        return 'unavailable' as const
       })
       .finally(() => {
         activeCheck = null
@@ -122,8 +137,10 @@ export const useAppUpdateStore = defineStore('appUpdate', () => {
     downloadedBytes,
     contentLength,
     error,
+    currentVersion,
     visible,
     progress,
+    loadCurrentVersion,
     checkAtStartup,
     checkForUpdate,
     install,

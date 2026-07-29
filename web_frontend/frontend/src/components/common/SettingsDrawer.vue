@@ -135,7 +135,26 @@
         <!-- 页脚：关于 -->
         <footer class="settings-footer">
           <div class="footer-title">{{ t('settings.about') }}</div>
-          <div class="footer-brand">FastAgentFactory <span class="footer-version">v1.0</span></div>
+          <div class="footer-brand-row">
+            <div class="footer-brand">
+              FastAgentFactory
+              <span class="footer-version">v{{ appUpdateStore.currentVersion || '—' }}</span>
+            </div>
+            <n-button
+              size="small"
+              secondary
+              :loading="appUpdateStore.status === 'checking'"
+              @click="checkForUpdates"
+            >
+              <template #icon>
+                <n-icon><Refresh /></n-icon>
+              </template>
+              {{ t('settings.checkForUpdates') }}
+            </n-button>
+          </div>
+          <div v-if="updateCheckMessage" class="footer-update-status" role="status">
+            {{ updateCheckMessage }}
+          </div>
           <div class="footer-desc">{{ t('settings.description') }}</div>
         </footer>
       </div>
@@ -144,8 +163,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import {
+  NButton,
   NDrawer,
   NDrawerContent,
   NIcon,
@@ -154,7 +174,7 @@ import {
   NRadioGroup,
   NSwitch,
 } from 'naive-ui'
-import { ColorPalette, NotificationsOutline, Time } from '@/components/icons'
+import { ColorPalette, NotificationsOutline, Refresh, Time } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import { useUiStore } from '@/stores/ui'
 import { useRuntimePreferencesStore } from '@/stores/runtimePreferences'
@@ -165,6 +185,7 @@ import {
 import type { Locale } from '@/i18n'
 import type { ThemeMode } from '@/stores/ui'
 import { requestNativeTaskNotificationPermission } from '@/services/taskNotifications'
+import { useAppUpdateStore } from '@/stores/appUpdate'
 
 const props = defineProps<{
   show: boolean
@@ -177,7 +198,13 @@ const emit = defineEmits<{
 const uiStore = useUiStore()
 const runtimePreferences = useRuntimePreferencesStore()
 const taskNotificationPreferences = useTaskNotificationPreferencesStore()
+const appUpdateStore = useAppUpdateStore()
 const { localeOptions, t } = useI18n()
+const updateCheckMessage = ref('')
+
+onMounted(() => {
+  void appUpdateStore.loadCurrentVersion()
+})
 
 const show = computed({
   get: () => props.show,
@@ -232,6 +259,18 @@ const taskNotificationCategoryOptions = computed<Array<{
 function setTaskNotificationsEnabled(value: boolean): void {
   taskNotificationPreferences.setEnabled(value)
   if (value) void requestNativeTaskNotificationPermission()
+}
+
+async function checkForUpdates(): Promise<void> {
+  updateCheckMessage.value = ''
+  const result = await appUpdateStore.checkForUpdate()
+  if (result === 'available') {
+    updateCheckMessage.value = t('settings.updateAvailable')
+  } else if (result === 'up-to-date') {
+    updateCheckMessage.value = t('settings.upToDate')
+  } else {
+    updateCheckMessage.value = t('settings.updateCheckUnavailable')
+  }
 }
 </script>
 
@@ -443,6 +482,18 @@ function setTaskNotificationsEnabled(value: boolean): void {
   display: flex;
   align-items: baseline;
   gap: var(--app-space-sm);
+}
+
+.footer-brand-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-space-md);
+}
+
+.footer-update-status {
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-sm);
 }
 
 .footer-version {
