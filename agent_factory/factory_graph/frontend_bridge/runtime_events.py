@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent, event
+from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent, FactoryMode, event
 from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
 
 

@@ -120,8 +120,8 @@ _READ_PATH_DESCRIPTION = f"要读取的文件路径。{_PATH_BOUNDARY_DESCRIPTIO
 _LS_PATH_DESCRIPTION = f"要列出的目录路径。{_PATH_BOUNDARY_DESCRIPTION}"
 _WRITE_PATH_DESCRIPTION = (
     f"要写入的文件路径。{_PATH_BOUNDARY_DESCRIPTION}"
-    "新生成的文件应写入工作区内，例如 output/report.md 或 "
-    f"{DEFAULT_BUILTIN_WORKSPACE_ROOT}/output/report.md。"
+    "新生成的文件应直接写入工作区内，例如 report.md 或 "
+    f"{DEFAULT_BUILTIN_WORKSPACE_ROOT}/report.md。"
 )
 _BASE_PATH_DESCRIPTION = f"可选搜索根目录。{_PATH_BOUNDARY_DESCRIPTION}"
 

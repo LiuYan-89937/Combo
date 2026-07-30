@@ -44,10 +44,11 @@ from agent_factory.resource_system import ResourceStore, migrate_package_resourc
 from agent_factory.environment_system import EnvironmentResolver
 from agent_factory.runtime_contracts import ResourcesContract
 from agent_factory.runtime_attachments import (
-    ATTACHMENT_INPUT_DIR,
     AttachmentImportResult,
     import_runtime_attachments,
     time_named_attachment_scope,
+    workspace_attachment_root,
+    workspace_attachment_runtime_root,
 )
 from agent_factory.tooling.extension_registry import default_extension_registry_root
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent, event
@@ -111,6 +112,7 @@ class AgentPackageRunResult:
 class AgentPackageStreamRun:
     package: LoadedAgentPackage
     session: dict[str, Any]
+    request_id: str
     events: Iterator[tuple[str, Any]]
 
 
@@ -694,7 +696,9 @@ class AgentPackageRuntimeManager:
     def load_session(self, package_id: str, session_id: str) -> dict[str, Any]:
         package = self.load_package(package_id)
         session = self._session_manager_for_package(package_id, package).load(session_id).model_dump(mode="json")
-        return _hydrate_session_runtime_view(session)
+        return _hydrate_session_runtime_view(
+            self._session_with_workspace(package_id, session)
+        )
 
     def list_workspace_mounts(self, package_id: str, session_id: str) -> list[dict[str, object]]:
         workspace = self._workspace_for_session(package_id, session_id)
@@ -732,7 +736,7 @@ class AgentPackageRuntimeManager:
         return {
             "package_id": package_id,
             "package_session_id": session_id,
-            "mount": workspace_mount_payload(mount, workdir_root=workdir),
+            "mount": workspace_mount_payload(mount, workdir_root=workspace.workdir),
             "created": created,
         }
 
@@ -1213,7 +1217,10 @@ class AgentPackageRuntimeManager:
         manager = self._session_manager_for_package(package_id, package)
         if session_id:
             try:
-                return manager.load(session_id).model_dump(mode="json")
+                return self._session_with_workspace(
+                    package_id,
+                    manager.load(session_id).model_dump(mode="json"),
+                )
             except FileNotFoundError:
                 pass
         workspace = self._resolve_workspace_for_new_session(
@@ -1221,7 +1228,7 @@ class AgentPackageRuntimeManager:
             workspace_id=workspace_id,
             title=first_user_input,
         )
-        return manager.create(
+        session = manager.create(
             agent_id=package.assembly_spec.agent.id,
             workspace_id=workspace.workspace_id,
             session_id=session_id,
@@ -1231,7 +1238,11 @@ class AgentPackageRuntimeManager:
             collaboration_task_id=collaboration_task_id,
             agent_group_id=agent_group_id,
             visible_in_agent_session_list=visible_in_agent_session_list,
-        ).model_dump(mode="json")
+        )
+        return self._session_with_workspace(
+            package_id,
+            session.model_dump(mode="json"),
+        )
 
     def run(self, package_id: str, *, user_input: str, session_id: str | None = None) -> AgentPackageRunResult:
         raise RuntimeError("AgentPackage host-process execution is disabled; use stream() for sandbox execution.")
@@ -1338,12 +1349,14 @@ class AgentPackageRuntimeManager:
         if _is_host_system_package(package):
             return AgentPackageStreamRun(
                 package=package,
-                session=session.model_dump(mode="json"),
+                session=self._session_with_workspace(package_id, session.model_dump(mode="json")),
+                request_id=resolved_request_id,
                 events=self._system_events(package_id, package=package, command=command, workdir_root=resolved_workdir_root),
             )
         return AgentPackageStreamRun(
             package=package,
-            session=session.model_dump(mode="json"),
+            session=self._session_with_workspace(package_id, session.model_dump(mode="json")),
+            request_id=resolved_request_id,
             events=self._container_events(package_id, package=package, command=command, workdir_root=resolved_workdir_root),
         )
 
@@ -1361,11 +1374,11 @@ class AgentPackageRuntimeManager:
             runtime_workdir = str(workdir_root)
         else:
             runtime_workdir = str(workdir_root.resolve())
-        runtime_path_root = str(PurePosixPath(runtime_workdir) / ATTACHMENT_INPUT_DIR / attachment_scope)
+        runtime_path_root = workspace_attachment_runtime_root(runtime_workdir, attachment_scope)
         return import_runtime_attachments(
             user_input,
             attachments,
-            storage_root=workdir_root / ATTACHMENT_INPUT_DIR / attachment_scope,
+            storage_root=workspace_attachment_root(workdir_root) / attachment_scope,
             runtime_path_root=runtime_path_root,
             base_dir=project_root(),
             scope=attachment_scope,
@@ -1409,12 +1422,14 @@ class AgentPackageRuntimeManager:
         if _is_host_system_package(package):
             return AgentPackageStreamRun(
                 package=package,
-                session=session.model_dump(mode="json"),
+                session=self._session_with_workspace(package_id, session.model_dump(mode="json")),
+                request_id=command["request_id"],
                 events=self._system_events(package_id, package=package, command=command, workdir_root=resolved_workdir_root),
             )
         return AgentPackageStreamRun(
             package=package,
-            session=session.model_dump(mode="json"),
+            session=self._session_with_workspace(package_id, session.model_dump(mode="json")),
+            request_id=command["request_id"],
             events=self._container_events(package_id, package=package, command=command, workdir_root=resolved_workdir_root),
         )
 
@@ -1533,11 +1548,33 @@ class AgentPackageRuntimeManager:
         manager = self._session_manager_for_package(package_id, package)
         return [
             {
-                **record.model_dump(mode="json"),
+                **self._session_with_workspace(
+                    package_id,
+                    record.model_dump(mode="json"),
+                ),
                 "package_id": package_id,
             }
             for record in manager.list_sessions(agent_id=package.assembly_spec.agent.id)
         ]
+
+    def _session_with_workspace(
+        self,
+        package_id: str,
+        session: dict[str, Any],
+    ) -> dict[str, Any]:
+        hydrated = dict(session)
+        session_id = str(hydrated.get("session_id") or "").strip()
+        if not session_id:
+            return hydrated
+        workspace = self._workspace_for_session(package_id, session_id)
+        hydrated["workspace"] = {
+            "workspace_id": workspace.record.workspace_id,
+            "title": workspace.record.title,
+            "mode": workspace.record.mode,
+            "root_kind": workspace.record.root_kind,
+            "workdir_root": str(workspace.workdir),
+        }
+        return hydrated
 
     def close_all(self) -> None:
         for package_id in list(self._knowledge_handles):
@@ -1556,7 +1593,6 @@ class AgentPackageRuntimeManager:
         request_id: str | None = None,
         package_id: str | None = None,
         session_id: str | None = None,
-        visible_output: Any = None,
     ) -> int:
         cancelled = 0
         target_package_id = str(package_id or "").strip()
@@ -1575,14 +1611,12 @@ class AgentPackageRuntimeManager:
                 reason=reason,
                 request_id=request_id,
                 session_id=session_id,
-                visible_output=visible_output,
             )
         for _, handle in system_items:
             cancelled += handle.cancel_active_requests(
                 reason=reason,
                 request_id=request_id,
                 session_id=session_id,
-                visible_output=visible_output,
             )
         return cancelled
 

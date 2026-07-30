@@ -6,6 +6,9 @@ from pathlib import Path
 import threading
 from typing import Any, Callable
 
+from langgraph.errors import GraphDrained
+from langgraph.runtime import RunControl
+
 from agent_factory.assembly.compiler import AgentAssemblyCompiler
 from agent_factory.factory_graph.frontend_bridge.event_normalizer import (
     RuntimeEventNormalizer,
@@ -20,7 +23,6 @@ from agent_factory.runtime_kernel.background_workers import RuntimeBackgroundWor
 from agent_factory.runtime_kernel.kernel import RuntimeKernelFacade
 from agent_factory.runtime_kernel.session import AgentSessionConfig
 from agent_factory.runtime_protocol.completion import runtime_completed, runtime_error_message
-from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
 from agent_factory.scheduler_system import (
     SchedulerExecutor,
     runtime_tool_runner,
@@ -37,8 +39,11 @@ from agent_factory.scheduler_system.execution_config import (
 from agent_factory.scheduler_system.seeds import apply_scheduler_seed_contract
 from agent_factory.knowledge_system.events import KNOWLEDGE_EVENT_TYPES
 from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
-from agent_factory.package_runtime.stop_signal import RuntimeStopSignal
-from agent_factory.package_runtime.stopped_turn import close_stopped_turn_checkpoint
+from agent_factory.package_runtime.run_control import RuntimeRunControlRegistry
+from agent_factory.package_runtime.drained_checkpoint import (
+    finalize_drained_runtime_checkpoint,
+    repair_incomplete_message_checkpoint,
+)
 from agent_factory.package_runtime.workspace_scope import apply_runtime_workspace
 from agent_factory.package_runtime.session_turns import (
     resume_user_input,
@@ -98,40 +103,28 @@ class PackageRuntimeCore:
         self.compiled_runtime: CompiledPackageRuntime | None = None
         self.background_workers = RuntimeBackgroundWorkerManager()
         self._compile_lock = threading.Lock()
-        self._cancel_lock = threading.Lock()
-        self._active_cancel_tokens: dict[str, RuntimeStopSignal] = {}
+        self._run_controls = RuntimeRunControlRegistry()
 
     def cancel_active_requests(
         self,
         *,
         reason: str = "user_cancelled",
         request_id: str | None = None,
-        visible_output: Any = None,
     ) -> int:
-        target = (request_id or "").strip()
-        with self._cancel_lock:
-            request_ids = [target] if target and target in self._active_cancel_tokens else list(self._active_cancel_tokens)
-            for active_request_id in request_ids:
-                self._active_cancel_tokens[active_request_id].request(
-                    reason=reason,
-                    visible_output=visible_output,
-                )
-            return len(request_ids)
+        return self._run_controls.request_drain(
+            reason=reason,
+            request_id=request_id,
+        )
 
-    def _register_cancel_token(self, request_id: str | None, command_type: str) -> RuntimeStopSignal | None:
+    def _register_run_control(self, request_id: str | None, command_type: str) -> RunControl | None:
         if command_type not in {"run_message", "resume_interrupt"} or not request_id:
             return None
-        token = RuntimeStopSignal()
-        with self._cancel_lock:
-            self._active_cancel_tokens[request_id] = token
-        return token
+        return self._run_controls.register(request_id)
 
-    def _forget_cancel_token(self, request_id: str | None, token: RuntimeStopSignal | None) -> None:
-        if not request_id or token is None:
+    def _forget_run_control(self, request_id: str | None, control: RunControl | None) -> None:
+        if not request_id or control is None:
             return
-        with self._cancel_lock:
-            if self._active_cancel_tokens.get(request_id) is token:
-                self._active_cancel_tokens.pop(request_id, None)
+        self._run_controls.release(request_id, control)
 
     def set_runtime_resources_override(self, resources: dict[str, Any]) -> None:
         self.runtime_resources_override = dict(resources)
@@ -159,7 +152,6 @@ class PackageRuntimeCore:
             stopped = self.cancel_active_requests(
                 reason=reason,
                 request_id=target_request_id,
-                visible_output=payload.get("visible_output"),
             )
             normalizer.runtime_event(
                 "debug_patch",
@@ -199,7 +191,7 @@ class PackageRuntimeCore:
                     payload={"message": str(exc), "error_type": type(exc).__name__},
                 )
                 return 1
-        cancel_token = self._register_cancel_token(request_id, command_type)
+        run_control = self._register_run_control(request_id, command_type)
         run_started_payload: dict[str, Any] = {
             "command": command_type,
             "attachment_count": _attachment_count(payload),
@@ -213,14 +205,14 @@ class PackageRuntimeCore:
             if command_type == "list_sessions":
                 return self._list_sessions(normalizer)
             if command_type == "run_message":
-                return self._run_message(normalizer, payload, cancel_token=cancel_token)
+                return self._run_message(normalizer, payload, run_control=run_control)
             if command_type == "resume_interrupt":
-                return self._resume_interrupt(normalizer, payload, cancel_token=cancel_token)
+                return self._resume_interrupt(normalizer, payload, run_control=run_control)
         except Exception as exc:
             normalizer.emit_run_failed(exc)
             return 1
         finally:
-            self._forget_cancel_token(request_id, cancel_token)
+            self._forget_run_control(request_id, run_control)
         normalizer.runtime_event("error", severity="error", payload={"message": f"unknown command: {command_type}"})
         return 1
 
@@ -337,7 +329,7 @@ class PackageRuntimeCore:
         normalizer: RuntimeEventNormalizer,
         payload: dict[str, Any],
         *,
-        cancel_token: RuntimeStopSignal | None = None,
+        run_control: RunControl | None = None,
     ) -> int:
         message = str(payload.get("message") or "").strip()
         if not message and not has_attachment_payload(payload.get("attachments")):
@@ -369,15 +361,10 @@ class PackageRuntimeCore:
         normalizer.session_id = run_context.session_id
         if _emit_pending_checkpoint_interrupt(normalizer, compiled.compiled_app, run_context.thread_id):
             return 0
-        missing_tool_call_ids = _checkpoint_incomplete_tool_call_ids(compiled.compiled_app, run_context.thread_id)
-        if missing_tool_call_ids:
-            normalizer.emit_run_failed(
-                RuntimeError(
-                    "agent session has incomplete tool call history; resume the pending tool interaction "
-                    f"before sending a new message. missing_tool_call_ids={missing_tool_call_ids}"
-                )
-            )
-            return 1
+        repair_incomplete_message_checkpoint(
+            graph_app=compiled.compiled_app.graph_app,
+            thread_id=run_context.thread_id,
+        )
         run_context.session_manager.touch_turn(
             run_context.session_id,
             request_id=normalizer.request_id,
@@ -387,26 +374,26 @@ class PackageRuntimeCore:
             status="running",
         )
         final_state = None
-        stop_requested = False
+        graph_drained = False
         stream_iter = facade.instance.controller.stream(
             compiled.compiled_app,
             run_context.state,
             thread_id=run_context.thread_id,
+            control=run_control,
         )
         try:
             for stream_mode, chunk in stream_iter:
-                if _cancel_requested(cancel_token):
-                    stop_requested = True
-                    break
                 if _handle_stream_item(normalizer, stream_mode, chunk):
                     return 0
                 if stream_mode == "runtime_final":
                     final_state = chunk
+        except GraphDrained:
+            graph_drained = True
         finally:
             close = getattr(stream_iter, "close", None)
             if callable(close):
                 close()
-        if stop_requested:
+        if graph_drained or bool(run_control and run_control.drain_requested):
             return _emit_stopped_runtime(
                 normalizer,
                 run_context,
@@ -416,7 +403,7 @@ class PackageRuntimeCore:
                 request_id=normalizer.request_id,
                 fallback_user_input=run_context.first_user_input,
                 fallback_attachments=user_config.get("attachments"),
-                stop_signal=cancel_token,
+                stop_reason=run_control.drain_reason if run_control else None,
             )
         if final_state is None:
             normalizer.emit_run_failed(RuntimeError("agent runtime did not produce a final state"))
@@ -463,7 +450,7 @@ class PackageRuntimeCore:
         normalizer: RuntimeEventNormalizer,
         payload: dict[str, Any],
         *,
-        cancel_token: RuntimeStopSignal | None = None,
+        run_control: RunControl | None = None,
     ) -> int:
         session_id = str(payload.get("session_id") or "").strip()
         resume_payload = payload.get("resume_payload")
@@ -489,27 +476,27 @@ class PackageRuntimeCore:
         run_context.state.execution.timeout_seconds = 0
         run_context.state.execution.max_retries = request_policy.max_retries
         final_state = None
-        stop_requested = False
+        graph_drained = False
         stream_iter = facade.instance.controller.stream_resume(
             compiled.compiled_app,
             run_context.state,
             thread_id=run_context.thread_id,
             resume_payload=resume_payload if isinstance(resume_payload, dict) else {},
+            control=run_control,
         )
         try:
             for stream_mode, chunk in stream_iter:
-                if _cancel_requested(cancel_token):
-                    stop_requested = True
-                    break
                 if _handle_stream_item(normalizer, stream_mode, chunk):
                     return 0
                 if stream_mode == "runtime_final":
                     final_state = chunk
+        except GraphDrained:
+            graph_drained = True
         finally:
             close = getattr(stream_iter, "close", None)
             if callable(close):
                 close()
-        if stop_requested:
+        if graph_drained or bool(run_control and run_control.drain_requested):
             return _emit_stopped_runtime(
                 normalizer,
                 run_context,
@@ -519,7 +506,7 @@ class PackageRuntimeCore:
                 request_id=run_context.session_turn_request_id,
                 session_id=session_id,
                 fallback_user_input=resume_user_input(resume_payload) or run_context.first_user_input,
-                stop_signal=cancel_token,
+                stop_reason=run_control.drain_reason if run_control else None,
             )
         if final_state is None:
             normalizer.emit_run_failed(RuntimeError("agent runtime resume did not produce a final state"))
@@ -808,17 +795,6 @@ def _emit_pending_checkpoint_interrupt(normalizer: RuntimeEventNormalizer, compi
     return True
 
 
-def _checkpoint_incomplete_tool_call_ids(compiled_app: Any, thread_id: str) -> list[str]:
-    try:
-        snapshot = compiled_app.graph_app.get_state({"configurable": {"thread_id": thread_id}})
-    except Exception:
-        return []
-    values = getattr(snapshot, "values", {}) or {}
-    if not isinstance(values, dict):
-        return []
-    return incomplete_tool_call_ids(list(values.get("messages") or []))
-
-
 def _handle_stream_item(normalizer: RuntimeEventNormalizer, stream_mode: str, chunk: Any) -> bool:
     interrupt_payload = _extract_interrupt_payload(chunk)
     if interrupt_payload is not None:
@@ -865,10 +841,6 @@ def _touch_session_turn_from_final_state(
     )
 
 
-def _cancel_requested(token: RuntimeStopSignal | None) -> bool:
-    return bool(token is not None and token.is_set())
-
-
 def _emit_stopped_runtime(
     normalizer: RuntimeEventNormalizer,
     run_context: Any,
@@ -880,21 +852,15 @@ def _emit_stopped_runtime(
     session_id: str | None = None,
     fallback_user_input: str | None = None,
     fallback_attachments: Any = None,
-    stop_signal: RuntimeStopSignal | None = None,
+    stop_reason: str | None = None,
 ) -> int:
     normalizer.complete_open_model_streams(reason="user_stopped")
-    visible_output = (
-        stop_signal.resolved_visible_output(normalizer.visible_assistant_output)
-        if stop_signal is not None
-        else normalizer.visible_assistant_output
-    )
-    stopped_turn = close_stopped_turn_checkpoint(
+    drained_checkpoint = finalize_drained_runtime_checkpoint(
         compiled_app=compiled.compiled_app,
         thread_id=run_context.thread_id,
         base_state=run_context.state,
-        visible_output=visible_output,
         fallback_user_input=fallback_user_input or run_context.first_user_input,
-        stop_reason=stop_signal.reason if stop_signal is not None else "user_cancelled",
+        stop_reason=stop_reason or "user_cancelled",
     )
     agent_session = run_context.session_manager.touch_turn(
         session_id or run_context.session_id,
@@ -902,10 +868,10 @@ def _emit_stopped_runtime(
         first_user_input=fallback_user_input or run_context.first_user_input,
         user_input=fallback_user_input or run_context.first_user_input,
         attachments=fallback_attachments,
-        reasoning_content=stopped_turn.state.conversation.reasoning_content,
-        final_answer=stopped_turn.state.conversation.final_answer,
+        reasoning_content=drained_checkpoint.state.conversation.reasoning_content,
+        final_answer=drained_checkpoint.state.conversation.final_answer,
         status="stopped",
-        trace_ref=session_trace_ref(compiled, stopped_turn.state),
+        trace_ref=session_trace_ref(compiled, drained_checkpoint.state),
     )
     normalizer.emit_run_completed(
         {

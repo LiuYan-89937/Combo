@@ -23,7 +23,7 @@ from agent_factory.model_pool import (
     resolve_model_pool_store_path,
 )
 from agent_factory.paths import factory_artifact_path
-from agent_factory.runtime_attachments import ATTACHMENT_INPUT_DIR
+from agent_factory.runtime_attachments import workspace_attachment_root
 from agent_factory.environment_system import (
     EnvironmentResolver,
     dependency_pool_path,
@@ -117,7 +117,7 @@ class NativeAgentRuntimeLauncher:
         )
 
         # Create input files directory
-        input_files_root = workdir_root / ATTACHMENT_INPUT_DIR
+        input_files_root = workspace_attachment_root(workdir_root)
         input_files_root.mkdir(parents=True, exist_ok=True)
 
         # Prepare control plane snapshots (model pool, resource store)

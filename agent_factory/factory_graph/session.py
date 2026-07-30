@@ -15,6 +15,7 @@ from agent_factory.runtime_attachments import normalized_runtime_attachments
 from agent_factory.runtime_protocol.chat_parts import build_chat_turn_messages
 from agent_factory.runtime_protocol.turn_lifecycle import (
     normalize_running_turn_sequence,
+    stop_unidentified_running_turns,
     supersede_running_turns,
 )
 from agent_factory.runtime_kernel.persistence import (
@@ -279,15 +280,16 @@ class FactorySessionManager:
         session_id: str,
         mode: FactorySessionMode,
         *,
-        request_id: str | None,
+        request_id: str,
         user_input: str,
         attachments: Any = None,
     ) -> FactorySessionRecord:
+        resolved_request_id = _required_request_id(request_id)
         record = self.load(session_id)
         _remember_record_title(record, user_input)
         record.current_mode = mode
         turns = _turns_for_mode(record, mode)
-        turn = _find_turn(turns, request_id=request_id)
+        turn = _find_turn(turns, request_id=resolved_request_id)
         now = _now()
         for superseded in supersede_running_turns(turns, updated_at=now, keep=turn):
             superseded.messages = _turn_messages(superseded)
@@ -296,7 +298,7 @@ class FactorySessionManager:
                 index=len(turns) + 1,
                 created_at=now,
                 updated_at=now,
-                request_id=(request_id or "").strip() or None,
+                request_id=resolved_request_id,
                 user_input=user_input.strip() or None,
                 attachments=normalized_runtime_attachments(attachments),
                 status="running",
@@ -320,82 +322,30 @@ class FactorySessionManager:
         session_id: str,
         mode: FactorySessionMode,
         *,
-        request_id: str | None,
+        request_id: str,
         final_answer: str | None,
         status: str,
         reasoning_content: str | None = None,
         tool_activities: list[dict[str, Any]] | None = None,
         trace_ref: dict[str, str] | None = None,
     ) -> FactorySessionRecord:
+        resolved_request_id = _required_request_id(request_id)
         record = self.load(session_id)
         turns = _turns_for_mode(record, mode)
-        turn = _find_turn(turns, request_id=request_id)
-        if turn is None and turns:
-            turn = turns[-1]
-        if turn is not None:
-            turn.final_answer = (final_answer or "").strip() or None
-            turn.reasoning_content = (reasoning_content or "").strip() or None
-            turn.status = status.strip() or None
-            if tool_activities is not None:
-                turn.tool_activities = list(tool_activities)
-            if trace_ref is not None:
-                turn.trace_ref = trace_ref or None
-            turn.messages = _turn_messages(turn)
-            turn.updated_at = _now()
-        _sync_turn_count(record, mode)
-        self.save(record)
-        return record
-
-    def replace_turns_from_agent_session(
-        self,
-        session_id: str,
-        mode: FactorySessionMode,
-        agent_turns: list[dict[str, Any]],
-    ) -> FactorySessionRecord:
-        record = self.load(session_id)
-        turns: list[FactorySessionTurn] = []
-        for index, raw_turn in enumerate(agent_turns, start=1):
-            if not isinstance(raw_turn, dict):
-                continue
-            user_input = str(raw_turn.get("user_input") or "").strip() or None
-            attachments = normalized_runtime_attachments(raw_turn.get("attachments"))
-            reasoning_content = str(raw_turn.get("reasoning_content") or "").strip() or None
-            final_answer = str(raw_turn.get("final_answer") or "").strip() or None
-            tool_activities = raw_turn.get("tool_activities")
-            message_metadata = raw_turn.get("message_metadata")
-            messages = raw_turn.get("messages")
-            trace_ref = raw_turn.get("trace_ref")
-            if not user_input and not final_answer:
-                continue
-            created_at = str(raw_turn.get("created_at") or _now())
-            updated_at = str(raw_turn.get("updated_at") or created_at)
-            turn = FactorySessionTurn(
-                index=_safe_turn_index(raw_turn.get("index"), fallback=index),
-                created_at=created_at,
-                updated_at=updated_at,
-                request_id=str(raw_turn.get("request_id") or "").strip() or None,
-                user_input=user_input,
-                attachments=attachments,
-                reasoning_content=reasoning_content,
-                final_answer=final_answer,
-                tool_activities=[item for item in tool_activities if isinstance(item, dict)] if isinstance(tool_activities, list) else [],
-                message_metadata=message_metadata if isinstance(message_metadata, dict) else _message_metadata_from_messages(messages),
-                messages=[item for item in messages if isinstance(item, dict)] if isinstance(messages, list) else [],
-                status=str(raw_turn.get("status") or "").strip() or None,
-                trace_ref=trace_ref if isinstance(trace_ref, dict) else None,
+        turn = _find_turn(turns, request_id=resolved_request_id)
+        if turn is None:
+            raise LookupError(
+                f"Factory session turn not found: session={session_id}, mode={mode}, request={resolved_request_id}"
             )
-            if not turn.messages:
-                turn.messages = _turn_messages(turn)
-            turns.append(
-                turn
-            )
-        for superseded in normalize_running_turn_sequence(turns, updated_at=_now()):
-            superseded.messages = _turn_messages(superseded)
-        _set_turns_for_mode(record, mode, turns)
-        first_input = _first_turn_input(turns)
-        if first_input:
-            _remember_record_title(record, first_input)
-        record.current_mode = mode
+        turn.final_answer = (final_answer or "").strip() or None
+        turn.reasoning_content = (reasoning_content or "").strip() or None
+        turn.status = status.strip() or None
+        if tool_activities is not None:
+            turn.tool_activities = list(tool_activities)
+        if trace_ref is not None:
+            turn.trace_ref = trace_ref or None
+        turn.messages = _turn_messages(turn)
+        turn.updated_at = _now()
         _sync_turn_count(record, mode)
         self.save(record)
         return record
@@ -609,11 +559,20 @@ def _turn_messages(turn: FactorySessionTurn) -> list[dict[str, Any]]:
 def _normalized_record(record: FactorySessionRecord) -> FactorySessionRecord:
     for mode in ("create_agent", "evolve_agent"):
         turns = _turns_for_mode(record, mode)
+        for stopped in stop_unidentified_running_turns(turns, updated_at=_now()):
+            stopped.messages = _turn_messages(stopped)
         for superseded in normalize_running_turn_sequence(turns, updated_at=_now()):
             superseded.messages = _turn_messages(superseded)
         for turn in turns:
             turn.messages = _turn_messages(turn)
     return record
+
+
+def _required_request_id(value: str | None) -> str:
+    request_id = str(value or "").strip()
+    if not request_id:
+        raise ValueError("Factory session turn requires request_id")
+    return request_id
 
 
 def _factory_session_record_from_json(value: str) -> FactorySessionRecord:

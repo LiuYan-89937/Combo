@@ -26,6 +26,7 @@ class CreateAgentAssistState(TypedDict, total=False):
     runtime_main_model_profile_id: str
     runtime_reasoning_intensity: int | None
     done: bool
+    flow_status: Literal["running", "turn_complete"]
     final_answer: str
     tool_rounds: int
 
@@ -71,9 +72,11 @@ class CreateAgentAssistWorkflow:
             node_id="create_agent_assist",
         )
         response = result.ai_message if isinstance(result.ai_message, BaseMessage) else AIMessage(content=result.assistant_draft or "")
+        turn_complete = not bool(getattr(response, "tool_calls", None))
         return {
             "messages": [response],
-            "done": not bool(getattr(response, "tool_calls", None)),
+            "done": turn_complete,
+            "flow_status": "turn_complete" if turn_complete else "running",
             "final_answer": _message_text(response),
         }
 
@@ -90,6 +93,7 @@ class CreateAgentAssistWorkflow:
             **result,
             "tool_rounds": rounds,
             "done": False,
+            "flow_status": "running",
         }
 
     def _route_after_assistant(self, state: CreateAgentAssistState) -> Literal["tools", "end"]:

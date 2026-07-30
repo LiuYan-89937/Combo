@@ -54,6 +54,7 @@ export interface AgentGroupMemberRunView {
 
 export interface AgentGroupSessionView {
   group_id: string
+  workspace_id: string
   title: string
   status: GroupStatus
   created_at: string
@@ -67,6 +68,7 @@ export interface AgentGroupSessionView {
   workspace_resource?: {
     resource_mode: string
     group_id: string
+    workspace_id: string
     workdir: string
   }
 }
@@ -89,6 +91,7 @@ export const agentGroupApi = {
   async createGroup(payload: {
     title: string
     member_package_ids: string[]
+    workspace_id?: string
   }): Promise<{ group: AgentGroupSessionView }> {
     return requestJson('/api/agent-group/groups', {
       method: 'POST',

@@ -19,6 +19,7 @@ from agent_factory.agent_group_system.store import AgentGroupStore
 from agent_factory.agent_group_system.workspace_transaction import WorkspaceTransactionManager
 from agent_factory.context_system.schema import CompressionPolicy
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendCommand
+from agent_factory.workspace_system import WorkspaceStore
 
 
 class AgentGroupService:
@@ -51,11 +52,20 @@ class AgentGroupService:
     def shutdown(self) -> None:
         self._compaction_executor.shutdown(wait=False, cancel_futures=True)
 
-    def create_group(self, title: str, member_package_ids: list[str], runtime: Any) -> dict[str, Any]:
+    def create_group(
+        self,
+        title: str,
+        member_package_ids: list[str],
+        runtime: Any,
+        *,
+        workspace_id: str | None = None,
+    ) -> dict[str, Any]:
         """Create a group and persist only real member runtime sessions."""
         self.logger.info(f"Creating group: {title} with {len(member_package_ids)} members")
-        group = self.store.create_group(title)
+        workspace = self._resolve_group_workspace(title, workspace_id)
+        group = self.store.create_group(title, workspace.workspace_id)
         group_id = str(group["group_id"])
+        self.workspace_manager.initialize_workspace(group_id)
         for package_id in dict.fromkeys(member_package_ids):
             self._add_member_with_runtime_session(group_id, str(package_id), runtime)
         group = self.store.get_group(group_id)
@@ -78,6 +88,7 @@ class AgentGroupService:
                 session_kind="agent_group_member",
                 agent_group_id=group_id,
                 visible_in_agent_session_list=False,
+                workspace_id=str(group.get("workspace_id") or ""),
             )
             resolved_session_id = str(session.get("session_id") or "").strip()
             if not resolved_session_id:
@@ -121,11 +132,13 @@ class AgentGroupService:
         return self.store.get_group(group_id)
 
     def _add_member_with_runtime_session(self, group_id: str, package_id: str, runtime: Any) -> None:
+        group = self.store.get_group(group_id)
         session = runtime.ensure_session(
             package_id,
             session_kind="agent_group_member",
             agent_group_id=group_id,
             visible_in_agent_session_list=False,
+            workspace_id=str(group.get("workspace_id") or ""),
         )
         session_id = str(session.get("session_id") or "").strip()
         if not session_id:
@@ -542,6 +555,20 @@ class AgentGroupService:
     def group_staging_root(self, group_id: str, group_run_id: str):
         """群聊 run staging 目录"""
         return self.store.group_staging_root(group_id, group_run_id)
+
+    def _resolve_group_workspace(self, title: str, workspace_id: str | None):
+        store = WorkspaceStore()
+        normalized_workspace_id = str(workspace_id or "").strip()
+        if normalized_workspace_id:
+            workspace = store.load(normalized_workspace_id)
+            if workspace.mode != "project":
+                workspace = store.update(workspace.workspace_id, mode="project")
+            return workspace
+        return store.create(
+            title=f"{title.strip()} 工作区",
+            mode="project",
+            root_kind="managed",
+        )
 
 
 def _context_references(value: Any) -> list[dict[str, str]]:

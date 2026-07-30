@@ -17,12 +17,26 @@ const REQUEST_SCOPED_PREFIXES = [
 
 const USER_INPUT_INTERRUPT_TYPES = new Set([
   'create_agent_question',
+  'agent_evolution_question',
 ])
 
 const DEDICATED_INTERRUPT_PANEL_TYPES = new Set<string>()
 
+const REQUEST_TERMINAL_EVENT_TYPES = new Set([
+  'run_completed',
+  'run_cancelled',
+  'run_failed',
+  'error',
+  'interrupt_requested',
+  'tool_approval_requested',
+])
+
 export function isRequestScopedEvent(eventType: string): boolean {
   return REQUEST_SCOPED_PREFIXES.some((prefix) => eventType.startsWith(prefix))
+}
+
+export function isRequestTerminalEvent(eventType: string): boolean {
+  return REQUEST_TERMINAL_EVENT_TYPES.has(eventType)
 }
 
 export function isSchedulerRequest(requestId: string | null | undefined): boolean {

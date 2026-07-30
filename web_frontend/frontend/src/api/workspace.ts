@@ -6,9 +6,17 @@ import { requestEvent, requestJson, withQuery } from './http'
 export const workspaceApi = {
   projects: () =>
     requestJson<{ workspaces: WorkspaceProjectView[] }>('/api/workspace/projects'),
+  directoryRoots: () =>
+    requestJson<{ roots: WorkspaceDirectoryView[] }>('/api/workspace/directory-roots'),
+  directories: (path: string) =>
+    requestJson<WorkspaceDirectoryListing>(
+      withQuery('/api/workspace/directories', { path }),
+    ),
   createProject: (payload: {
     title?: string | null
     mode?: WorkspaceProjectMode
+    root_kind?: WorkspaceRootKind
+    workdir_root?: string | null
     owner_package_id?: string | null
   }) =>
     requestJson<{ workspace: WorkspaceProjectView }>('/api/workspace/projects', {
@@ -70,16 +78,29 @@ export const workspaceApi = {
 }
 
 export type WorkspaceProjectMode = 'isolated' | 'project'
+export type WorkspaceRootKind = 'managed' | 'linked'
 
 export interface WorkspaceProjectView {
   workspace_id: string
   title: string
   mode: WorkspaceProjectMode
+  root_kind: WorkspaceRootKind
   owner_package_id: string | null
   workdir_root: string
   archived: boolean
   created_at: string
   updated_at: string
+}
+
+export interface WorkspaceDirectoryView {
+  name: string
+  path: string
+}
+
+export interface WorkspaceDirectoryListing {
+  path: string
+  parent: string | null
+  directories: WorkspaceDirectoryView[]
 }
 
 interface RawWorkspaceMount {

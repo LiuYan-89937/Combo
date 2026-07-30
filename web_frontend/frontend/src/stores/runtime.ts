@@ -37,6 +37,7 @@ import {
   interruptType,
   isBackgroundEvent,
   isRequestScopedEvent,
+  isRequestTerminalEvent,
   isRestorableProcessStateEvent,
   isSchedulerRequest,
   isUserInputInterrupt,
@@ -86,8 +87,6 @@ import {
 import {
   attachmentPart,
   errorPart,
-  messageReasoning,
-  messageText,
   textPart,
 } from './runtime/messageParts'
 import {
@@ -196,7 +195,10 @@ export const useRuntimeStore = defineStore('runtime', {
 
     // 当前是否有活跃的运行
     hasActiveRun: (state): boolean => {
-      return state.activeRequestId !== null && state.runStatus === 'running'
+      if (!state.activeRequestId || state.runStatus !== 'running') return false
+      const request = state.activeRequests[state.activeRequestId]
+      if (!request || request.status !== 'running' || request.payload?.stop_requested_at) return false
+      return !['stopped', 'cancelled'].includes(String(request.payload?.dispatch_state || ''))
     },
 
     queuedRequestCount: (state): number => {
@@ -241,19 +243,6 @@ export const useRuntimeStore = defineStore('runtime', {
         return state.conversationTurns.find((turn) => turn.requestId === state.activeRequestId) || null
       }
       return state.conversationTurns[state.conversationTurns.length - 1] || null
-    },
-
-    activeVisibleAssistantOutput: (state): Record<string, any> | null => {
-      if (!state.activeRequestId) return null
-      const turn = state.conversationTurns.find((item) => item.requestId === state.activeRequestId)
-      const message = turn?.assistantMessages?.[turn.assistantMessages.length - 1]
-      if (!message) return null
-      const reasoning = messageReasoning(message)
-      return {
-        content: messageText(message),
-        reasoning_content: reasoning?.content || '',
-        stream_id: message.streamId || null,
-      }
     },
 
     // 获取当前审批请求
@@ -306,6 +295,7 @@ export const useRuntimeStore = defineStore('runtime', {
         event.request_id
         && isRequestScopedEvent(event.event_type)
         && this.activeRequests[event.request_id]?.payload?.stop_requested_at
+        && !isRequestTerminalEvent(event.event_type)
       ) {
         return
       }
@@ -586,9 +576,11 @@ export const useRuntimeStore = defineStore('runtime', {
       const activeRequests = Array.isArray(event.payload?.active_requests)
         ? event.payload.active_requests.map(activeRequestViewFromPayload).filter(Boolean) as ActiveRequestView[]
         : []
+      const activeRequestIds = new Set(activeRequests.map(request => request.requestId))
 
       if (activeRequests.length === 0) {
         this._clearStaleForegroundRun()
+        this._reconcileRestoredTurnStatuses(activeRequestIds)
         return
       }
 
@@ -610,6 +602,7 @@ export const useRuntimeStore = defineStore('runtime', {
         && request.status === 'running'
         && request.payload?.dispatch_state !== 'queued'
       ))
+      this._reconcileRestoredTurnStatuses(activeRequestIds)
       if (foregroundRequests.length === 0) return
 
       const currentActive = this.activeRequestId ? this.activeRequests[this.activeRequestId] : null
@@ -619,19 +612,19 @@ export const useRuntimeStore = defineStore('runtime', {
         foregroundRequests[foregroundRequests.length - 1]
 
       this.activeRequestId = preferred.requestId
-      this.runStatus = 'running'
+      this.runStatus = preferred.payload?.dispatch_state === 'stopping' ? 'stopping' : 'running'
       this.currentRunId = preferred.runId
       this.pendingInterrupt = null
       if (!this.currentMode && preferred.mode) {
         this.currentMode = preferred.mode
       }
       const turn = ensureConversationTurn(this, preferred.requestId, preferred.startedAt)
-      turn.status = 'running'
+      turn.status = this.runStatus
       turn.completedAt = null
     },
 
     _clearStaleForegroundRun() {
-      if (!this.activeRequestId || this.runStatus !== 'running') return
+      if (!this.activeRequestId || !['running', 'stopping'].includes(this.runStatus)) return
       const request = this.activeRequests[this.activeRequestId]
       if (request?.background) return
       this.activeRequestId = null
@@ -1066,7 +1059,7 @@ export const useRuntimeStore = defineStore('runtime', {
 
     _setRequestDispatchState(
       requestId: string | null | undefined,
-      dispatchState: 'queued' | 'steering' | 'running' | 'completed' | 'cancelled' | 'failed' | 'stopped',
+      dispatchState: 'queued' | 'steering' | 'running' | 'stopping' | 'completed' | 'cancelled' | 'failed' | 'stopped',
       payload: Record<string, any> = {},
     ) {
       if (!requestId) return
@@ -1177,6 +1170,13 @@ export const useRuntimeStore = defineStore('runtime', {
       if (!snapshot.hasMessages && snapshot.processEvents.length === 0) return
       this.transcript = snapshot.transcript
       this.conversationTurns = snapshot.conversationTurns
+      this._reconcileRestoredTurnStatuses(
+        new Set(
+          Object.values(this.activeRequests)
+            .filter(request => request.status === 'running')
+            .map(request => request.requestId),
+        ),
+      )
       this.tools = snapshot.tools
       this.pendingInterrupt = snapshot.pendingInterrupt
       this._restoreProcessEvents(snapshot.processEvents)
@@ -1213,6 +1213,13 @@ export const useRuntimeStore = defineStore('runtime', {
 
       this.transcript = snapshot.transcript
       this.conversationTurns = snapshot.conversationTurns
+      this._reconcileRestoredTurnStatuses(
+        new Set(
+          Object.values(this.activeRequests)
+            .filter(request => request.status === 'running')
+            .map(request => request.requestId),
+        ),
+      )
       this._restoreProcessEvents(snapshot.processEvents)
       this._restoreActiveTurnFromSnapshot(snapshot.activeTurn, {
         mode: 'agent_package',
@@ -1567,6 +1574,7 @@ export const useRuntimeStore = defineStore('runtime', {
         this.pendingInterrupt ||
         this.activeRequestId ||
         this.runStatus === 'running' ||
+        this.runStatus === 'stopping' ||
         this.runStatus === 'interrupted',
       )
     },
@@ -1588,9 +1596,9 @@ export const useRuntimeStore = defineStore('runtime', {
       },
     ) {
       if (!turn?.requestId) return
-      if (turn.status !== 'running' && turn.status !== 'interrupted') return
+      if (!['running', 'stopping', 'interrupted'].includes(turn.status)) return
       const existing = this.activeRequests[turn.requestId]
-      if (turn.status === 'running' && existing?.status !== 'running') return
+      if (['running', 'stopping'].includes(turn.status) && existing?.status !== 'running') return
       this.activeRequestId = turn.requestId
       this.runStatus = turn.status
       this.currentRunId = existing?.runId || null
@@ -1611,6 +1619,15 @@ export const useRuntimeStore = defineStore('runtime', {
           ...(options.payload || {}),
         },
       }
+    },
+
+    _reconcileRestoredTurnStatuses(activeRequestIds: ReadonlySet<string>) {
+      this.conversationTurns.forEach((turn) => {
+        if (turn.status !== 'running' && turn.status !== 'stopping') return
+        if (turn.requestId && activeRequestIds.has(turn.requestId)) return
+        turn.status = 'stopped'
+        turn.completedAt = turn.completedAt || turn.startedAt
+      })
     },
 
     _clearConversationViewState() {
@@ -1660,7 +1677,7 @@ export const useRuntimeStore = defineStore('runtime', {
       }
       const timestamp = new Date().toISOString()
       const messageId = `user-${Date.now()}`
-      const queued = Boolean(this.activeRequestId && this.runStatus === 'running')
+      const queued = Boolean(this.activeRequestId && ['running', 'stopping'].includes(this.runStatus))
       const dispatchState = queued ? 'queued' : 'running'
       const messageMetadata = {
         ...metadata,
@@ -1722,11 +1739,12 @@ export const useRuntimeStore = defineStore('runtime', {
       const timestamp = new Date().toISOString()
       const request = this.activeRequests[targetRequestId]
       if (request) {
-        request.status = 'stopped'
-        request.completedAt = timestamp
+        request.status = 'running'
+        request.completedAt = null
         request.payload = {
           ...(request.payload || {}),
           stop_requested_at: timestamp,
+          dispatch_state: 'stopping',
         }
       }
       Object.values(this.modelStreams).forEach((stream) => {
@@ -1740,22 +1758,28 @@ export const useRuntimeStore = defineStore('runtime', {
       turn.metadata = {
         ...(turn.metadata || {}),
         stop_requested_at: timestamp,
+        dispatch_state: 'stopping',
       }
-      turn.status = 'stopped'
-      turn.completedAt = timestamp
+      turn.status = 'stopping'
+      turn.completedAt = null
       turn.errorMessage = null
       turn.assistantMessages.forEach((message) => {
-        message.status = 'stopped'
         message.parts = message.parts.map((part) => (
           part.status === 'streaming'
             ? { ...part, status: 'completed', updatedAt: timestamp } as ChatMessagePart
             : part
         ))
       })
-      if (this.activeRequestId === targetRequestId) {
-        this.activeRequestId = null
-      }
-      this.runStatus = 'stopped'
+      this.transcript.forEach((message) => {
+        if (message.metadata?.request_id !== targetRequestId) return
+        message.parts = message.parts.map((part) => (
+          part.status === 'streaming'
+            ? { ...part, status: 'completed', updatedAt: timestamp } as ChatMessagePart
+            : part
+        ))
+      })
+      this.activeRequestId = targetRequestId
+      this.runStatus = 'stopping'
       this.pendingInterrupt = null
       this._saveActiveConversationScope()
     },

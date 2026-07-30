@@ -115,7 +115,6 @@ export function useRuntimeCommands() {
   const cancelRequest = (
     reason = 'user_cancelled',
     targetRequestId: string | null = null,
-    visibleOutput: Record<string, any> | null = null,
   ) => {
     const activeRequest = targetRequestId ? runtimeStore.activeRequests[targetRequestId] : null
     const mode = activeRequest?.mode || runtimeStore.currentMode
@@ -131,16 +130,12 @@ export function useRuntimeCommands() {
       sessionId,
       mode,
       packageId,
-      visibleOutput,
     })
     transport.sendRuntimeCommand(command)
     return command
   }
 
-  const steerRequest = (
-    queuedRequestId: string,
-    visibleOutput: Record<string, any> | null = null,
-  ) => {
+  const steerRequest = (queuedRequestId: string) => {
     const queuedRequest = runtimeStore.activeRequests[queuedRequestId]
     const mode = queuedRequest?.mode || runtimeStore.currentMode
     const sessionId = String(
@@ -152,7 +147,6 @@ export function useRuntimeCommands() {
       queuedRequestId,
       sessionId,
       mode,
-      visibleOutput,
     })
     transport.sendRuntimeCommand(command)
     return command

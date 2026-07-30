@@ -20,6 +20,7 @@ from uuid import uuid4
 
 from agent_factory.paths import factory_artifact_path, resolve_project_path
 from agent_factory.sqlite_runtime import connect_sqlite, initialize_sqlite_store
+from agent_factory.workspace_system import WorkspaceStore
 
 # ===== 常量 =====
 
@@ -91,6 +92,7 @@ class AgentGroupStore:
                 create table if not exists agent_group_sessions (
                     group_id text primary key,
                     title text not null,
+                    workspace_id text not null,
                     status text not null,
                     created_at text not null,
                     updated_at text not null,
@@ -219,6 +221,7 @@ class AgentGroupStore:
             _ensure_column(conn, "agent_group_messages", "reply_to_message_id", "text")
             _ensure_column(conn, "agent_group_messages", "context_references_json", "text not null default '[]'")
             _ensure_column(conn, "agent_group_member_runs", "request_id", "text")
+            _ensure_column(conn, "agent_group_sessions", "workspace_id", "text not null default ''")
 
 
     # ===== 群聊会话 CRUD =====
@@ -227,17 +230,20 @@ class AgentGroupStore:
         """List group snapshots; frontend state never fabricates absent members or runs."""
         with self._connect() as conn:
             rows = conn.execute("""
-                select group_id, title, status, created_at, updated_at, archived_at
+                select group_id, title, workspace_id, status, created_at, updated_at, archived_at
                 from agent_group_sessions
                 order by updated_at desc
             """).fetchall()
             group_ids = [str(row["group_id"]) for row in rows]
         return [self.get_group(group_id) for group_id in group_ids]
 
-    def create_group(self, title: str) -> dict[str, Any]:
+    def create_group(self, title: str, workspace_id: str) -> dict[str, Any]:
         """创建新群聊"""
         if not title.strip():
             raise AgentGroupStoreError("title must not be empty")
+        normalized_workspace_id = str(workspace_id or "").strip()
+        if not normalized_workspace_id:
+            raise AgentGroupStoreError("workspace_id must not be empty")
 
         group_id = uuid4().hex
         now = utc_now_text()
@@ -245,9 +251,11 @@ class AgentGroupStore:
         with self._connect() as conn:
             # 插入群聊会话
             conn.execute("""
-                insert into agent_group_sessions (group_id, title, status, created_at, updated_at, archived_at)
-                values (?, ?, ?, ?, ?, ?)
-            """, (group_id, title.strip(), "draft", now, now, None))
+                insert into agent_group_sessions (
+                    group_id, title, workspace_id, status, created_at, updated_at, archived_at
+                )
+                values (?, ?, ?, ?, ?, ?, ?)
+            """, (group_id, title.strip(), normalized_workspace_id, "draft", now, now, None))
 
             # 初始化上下文版本 0（空快照）
             conn.execute("""
@@ -272,7 +280,7 @@ class AgentGroupStore:
         with self._connect() as conn:
             # 主记录
             session_row = conn.execute("""
-                select group_id, title, status, created_at, updated_at, archived_at
+                select group_id, title, workspace_id, status, created_at, updated_at, archived_at
                 from agent_group_sessions
                 where group_id = ?
             """, (group_id,)).fetchone()
@@ -281,6 +289,11 @@ class AgentGroupStore:
                 raise AgentGroupStoreError(f"group not found: {group_id}")
 
             session = self._session_view(session_row)
+            if not str(session.get("workspace_id") or "").strip():
+                session["workspace_id"] = self._migrate_legacy_group_workspace(
+                    group_id,
+                    str(session.get("title") or ""),
+                )
 
             # 成员
             member_rows = conn.execute("""
@@ -322,7 +335,8 @@ class AgentGroupStore:
             session["workspace_resource"] = {
                 "resource_mode": "agent_group",
                 "group_id": group_id,
-                "workdir": str(self.group_workspace_root(group_id) / "committed"),
+                "workspace_id": session["workspace_id"],
+                "workdir": str(self.group_workdir(group_id)),
             }
 
         return session
@@ -848,6 +862,21 @@ class AgentGroupStore:
 
         return new_revision
 
+    def replace_initial_workspace_manifest(
+        self,
+        group_id: str,
+        file_manifest: dict[str, str],
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                update agent_group_workspace_revisions
+                set file_manifest_json = ?
+                where group_id = ? and revision = 0
+                """,
+                (json_dumps(file_manifest), group_id),
+            )
+
     def _current_workspace_revision(self, conn: sqlite3.Connection, group_id: str) -> int:
         """获取当前最大 revision 号"""
         row = conn.execute("""
@@ -942,8 +971,25 @@ class AgentGroupStore:
     # ===== 辅助方法（路径、视图转换） =====
 
     def group_workspace_root(self, group_id: str) -> Path:
-        """群聊工作区根目录"""
+        """群聊事务数据根目录，不是用户共享工作区。"""
         return factory_artifact_path("agent_group", group_id, "workspace")
+
+    def group_workdir(self, group_id: str) -> Path:
+        """群聊成员共享的最终工作区根目录。"""
+        with self._connect() as conn:
+            row = conn.execute(
+                "select title, workspace_id from agent_group_sessions where group_id = ?",
+                (group_id,),
+            ).fetchone()
+        if row is None:
+            raise AgentGroupStoreError(f"group not found: {group_id}")
+        workspace_id = str(row["workspace_id"] or "").strip()
+        if not workspace_id:
+            workspace_id = self._migrate_legacy_group_workspace(
+                group_id,
+                str(row["title"] or ""),
+            )
+        return WorkspaceStore().workdir(workspace_id)
 
     def group_staging_root(self, group_id: str, group_run_id: str) -> Path:
         """群聊 run staging 目录"""
@@ -952,6 +998,34 @@ class AgentGroupStore:
     def group_workspace_revision_root(self, group_id: str, revision: int) -> Path:
         """Immutable filesystem snapshot for one committed workspace revision."""
         return self.group_workspace_root(group_id) / "revisions" / str(revision)
+
+    def _migrate_legacy_group_workspace(self, group_id: str, title: str) -> str:
+        legacy_workdir = self.group_workspace_root(group_id) / "committed"
+        workspace = WorkspaceStore().create(
+            title=f"{title.strip() or 'Agent 群聊'} 工作区",
+            mode="project",
+            root_kind="managed",
+            workdir_root=legacy_workdir,
+        )
+        with self._connect() as conn:
+            conn.execute(
+                """
+                update agent_group_sessions
+                set workspace_id = ?
+                where group_id = ? and workspace_id = ''
+                """,
+                (workspace.workspace_id, group_id),
+            )
+            row = conn.execute(
+                "select workspace_id from agent_group_sessions where group_id = ?",
+                (group_id,),
+            ).fetchone()
+        resolved = str(row["workspace_id"] or "").strip() if row is not None else ""
+        if resolved != workspace.workspace_id:
+            WorkspaceStore().delete(workspace.workspace_id, delete_files=False)
+        if not resolved:
+            raise AgentGroupStoreError(f"failed to migrate group workspace: {group_id}")
+        return resolved
 
     # ===== 视图转换（Row -> dict） =====
 

@@ -6,11 +6,12 @@ from datetime import UTC, datetime
 import json
 from pathlib import Path
 import shutil
-import threading
 from typing import Any
 from uuid import uuid4
 
 from langchain_core.messages import HumanMessage
+from langgraph.errors import GraphDrained
+from langgraph.runtime import RunControl
 from langgraph.types import Command
 
 from agent_factory.create_agent.models import CreateAgentAction, initial_system_manufacturing_state
@@ -40,6 +41,11 @@ from agent_factory.model_pool.runtime_override import (
     runtime_reasoning_intensity_from_user_config,
 )
 from agent_factory.paths import factory_artifact_path, project_root
+from agent_factory.package_runtime.drained_checkpoint import (
+    finalize_drained_message_checkpoint,
+    repair_incomplete_message_checkpoint,
+)
+from agent_factory.package_runtime.run_control import RuntimeRunControlRegistry
 from agent_factory.runtime_attachments import ATTACHMENT_INPUT_DIR, import_runtime_attachments, time_named_attachment_scope
 from agent_factory.runtime_contracts import AgentPackageLoader
 from agent_factory.runtime_kernel.persistence import delete_checkpoint_thread
@@ -53,6 +59,7 @@ from agent_factory.trace_system.schema import RepairTracePack, TraceRunFilter
 class AgentEvolutionStreamRun:
     package_id: str
     trace_id: str | None
+    request_id: str
     events: Iterator[tuple[str, Any]]
 
 
@@ -90,8 +97,7 @@ class AgentEvolutionRuntime:
         self.checkpointer = checkpointer or build_factory_checkpointer_handle().saver
         self.package_restart_handler = package_restart_handler
         self._active_runs: dict[str, _EvolutionRunContext] = {}
-        self._cancel_lock = threading.Lock()
-        self._active_cancel_tokens: dict[str, threading.Event] = {}
+        self._run_controls = RuntimeRunControlRegistry()
 
     def stream(
         self,
@@ -104,19 +110,27 @@ class AgentEvolutionRuntime:
         user_config: dict[str, Any] | None = None,
     ) -> AgentEvolutionStreamRun:
         safe_package_id = _safe_id(package_id, label="package_id")
+        resolved_request_id = request_id or uuid4().hex
         trace_id = self.latest_failed_trace_id(safe_package_id)
+        run_control = self._register_run_control(resolved_request_id)
         return AgentEvolutionStreamRun(
             package_id=safe_package_id,
             trace_id=trace_id,
-            events=self._events(
-                package_id=safe_package_id,
-                trace_id=trace_id,
-                user_input=user_input,
-                request_id=request_id or uuid4().hex,
-                session_id=session_id,
-                resume_payload=None,
-                attachments=attachments,
-                user_config=user_config,
+            request_id=resolved_request_id,
+            events=self._owned_events(
+                request_id=resolved_request_id,
+                run_control=run_control,
+                events=self._events(
+                    package_id=safe_package_id,
+                    trace_id=trace_id,
+                    user_input=user_input,
+                    request_id=resolved_request_id,
+                    session_id=session_id,
+                    resume_payload=None,
+                    attachments=attachments,
+                    user_config=user_config,
+                    run_control=run_control,
+                ),
             ),
         )
 
@@ -133,40 +147,45 @@ class AgentEvolutionRuntime:
         if active_context is None:
             raise RuntimeError(f"no active evolution run to resume: {safe_package_id}")
         trace_id = active_context.trace_id if active_context is not None else None
+        resolved_request_id = request_id or uuid4().hex
+        run_control = self._register_run_control(resolved_request_id)
         return AgentEvolutionStreamRun(
             package_id=safe_package_id,
             trace_id=trace_id,
-            events=self._events(
-                package_id=safe_package_id,
-                trace_id=trace_id,
-                user_input="",
-                request_id=request_id or uuid4().hex,
-                session_id=session_id,
-                resume_payload=resume_payload or {},
-                attachments=None,
-                user_config=None,
+            request_id=resolved_request_id,
+            events=self._owned_events(
+                request_id=resolved_request_id,
+                run_control=run_control,
+                events=self._events(
+                    package_id=safe_package_id,
+                    trace_id=trace_id,
+                    user_input="",
+                    request_id=resolved_request_id,
+                    session_id=session_id,
+                    resume_payload=resume_payload or {},
+                    attachments=None,
+                    user_config=None,
+                    run_control=run_control,
+                ),
             ),
         )
 
-    def cancel_active_requests(self, *, reason: str = "user_cancelled", request_id: str | None = None) -> int:
-        del reason
-        target = (request_id or "").strip()
-        with self._cancel_lock:
-            request_ids = [target] if target and target in self._active_cancel_tokens else list(self._active_cancel_tokens)
-            for active_request_id in request_ids:
-                self._active_cancel_tokens[active_request_id].set()
-            return len(request_ids)
+    def cancel_active_requests(
+        self,
+        *,
+        reason: str = "user_cancelled",
+        request_id: str | None = None,
+    ) -> int:
+        return self._run_controls.request_drain(
+            reason=reason,
+            request_id=request_id,
+        )
 
-    def _register_cancel_token(self, request_id: str) -> threading.Event:
-        token = threading.Event()
-        with self._cancel_lock:
-            self._active_cancel_tokens[request_id] = token
-        return token
+    def _register_run_control(self, request_id: str) -> RunControl:
+        return self._run_controls.register(request_id)
 
-    def _forget_cancel_token(self, request_id: str, token: threading.Event) -> None:
-        with self._cancel_lock:
-            if self._active_cancel_tokens.get(request_id) is token:
-                self._active_cancel_tokens.pop(request_id, None)
+    def _forget_run_control(self, request_id: str, control: RunControl) -> None:
+        self._run_controls.release(request_id, control)
 
     def latest_failed_trace_id(self, package_id: str) -> str | None:
         safe_package_id = _safe_id(package_id, label="package_id")
@@ -209,6 +228,18 @@ class AgentEvolutionRuntime:
             "deleted_checkpoint_count": deleted_checkpoint_count,
         }
 
+    def _owned_events(
+        self,
+        *,
+        request_id: str,
+        run_control: RunControl,
+        events: Iterator[tuple[str, Any]],
+    ) -> Iterator[tuple[str, Any]]:
+        try:
+            yield from events
+        finally:
+            self._forget_run_control(request_id, run_control)
+
     def _events(
         self,
         *,
@@ -220,8 +251,8 @@ class AgentEvolutionRuntime:
         resume_payload: dict[str, Any] | None,
         attachments: Any,
         user_config: dict[str, Any] | None,
+        run_control: RunControl,
     ) -> Iterator[tuple[str, Any]]:
-        cancel_token = self._register_cancel_token(request_id)
         pending_events: list[FactoryFrontendEvent] = []
 
         def emit_frontend(item: FactoryFrontendEvent) -> None:
@@ -359,12 +390,11 @@ class AgentEvolutionRuntime:
                 )
 
             model_trace = _ModelTraceAccumulator(record_trace)
+            workflow: Any | None = None
 
             def emit_cancelled() -> Iterator[tuple[str, FactoryFrontendEvent]]:
                 model_trace.flush()
                 normalizer.complete_open_model_streams(reason="user_stopped")
-                if context.backup_path is not None and context.backup_path.exists():
-                    _restore_package(context.backup_path, context.package_path)
                 self._active_runs.pop(active_run_key, None)
                 normalizer.runtime_event(
                     "node_completed",
@@ -403,7 +433,7 @@ class AgentEvolutionRuntime:
                     },
                 },
             )
-            if cancel_token.is_set():
+            if run_control.drain_requested:
                 yield from emit_cancelled()
                 return
             if target_plan.surface == "runtime_blocker":
@@ -467,7 +497,7 @@ class AgentEvolutionRuntime:
                 },
             )
             yield from drain_events()
-            if cancel_token.is_set():
+            if run_control.drain_requested:
                 yield from emit_cancelled()
                 return
             workflow = CreateAgentWorkflow(
@@ -477,6 +507,10 @@ class AgentEvolutionRuntime:
                 workflow_kind="evolution",
             ).compile(checkpointer=self.checkpointer)
             if resume_payload is None:
+                repair_incomplete_message_checkpoint(
+                    graph_app=workflow,
+                    thread_id=resolved_thread_id,
+                )
                 stream_input: Any = {
                     "request": context.user_input,
                     "session_id": context.session_id,
@@ -510,12 +544,12 @@ class AgentEvolutionRuntime:
                 stream_input,
                 config=config,
                 stream_mode=["messages", "custom", "values"],
+                durability="sync",
+                control=run_control,
             )
+            graph_drained = False
             try:
                 for stream_mode, chunk in stream_iter:
-                    if cancel_token.is_set():
-                        yield from emit_cancelled()
-                        return
                     interrupt_payload = extract_interrupt_payload(chunk)
                     if interrupt_payload is not None:
                         normalizer.emit_interrupt(interrupt_payload)
@@ -559,10 +593,20 @@ class AgentEvolutionRuntime:
                             record_trace("tool_call", record)
                     normalizer.emit_stream_item(stream_mode, chunk, updates_payload_key="evolution_update")
                     yield from drain_events()
+            except GraphDrained:
+                graph_drained = True
             finally:
                 close = getattr(stream_iter, "close", None)
                 if callable(close):
                     close()
+            if graph_drained or run_control.drain_requested:
+                finalize_drained_message_checkpoint(
+                    graph_app=workflow,
+                    thread_id=resolved_thread_id,
+                    stop_reason=run_control.drain_reason or "user_cancelled",
+                )
+                yield from emit_cancelled()
+                return
             model_trace.flush()
             if not final_state:
                 raise RuntimeError("agent evolution workflow did not produce final state")
@@ -694,9 +738,6 @@ class AgentEvolutionRuntime:
             self._active_runs.pop(active_run_key, None)
             normalizer.emit_run_failed(exc)
             yield from drain_events()
-        finally:
-            self._forget_cancel_token(request_id, cancel_token)
-
     def _restart_evolved_package(self, package_id: str, request_id: str | None) -> dict[str, Any]:
         if self.package_restart_handler is None:
             return {"status": "not_configured", "package_id": package_id}

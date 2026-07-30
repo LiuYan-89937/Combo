@@ -209,7 +209,7 @@ def _executor_tool_policy(state: Any) -> str:
         "Never invent or reuse a transaction_id, and never use shell as a fallback for file creation, movement, "
         "copying, or deletion when edit is available. "
         f"{boundary} Generated files should be written under the workspace root, for example "
-        f"output/report.md or {workspace_root.rstrip('/')}/output/report.md."
+        f"report.md or {workspace_root.rstrip('/')}/report.md."
     )
 
 

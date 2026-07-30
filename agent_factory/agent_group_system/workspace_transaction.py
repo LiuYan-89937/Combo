@@ -39,6 +39,21 @@ class WorkspaceTransactionManager:
         self.store = store
         self.logger = logger or logging.getLogger(__name__)
 
+    def initialize_workspace(self, group_id: str) -> None:
+        """Capture the selected shared directory as immutable revision zero."""
+        with _GROUP_COMMIT_LOCKS[group_id]:
+            workdir = self.store.group_workdir(group_id)
+            revision_root = self.store.group_workspace_revision_root(group_id, 0)
+            if revision_root.exists():
+                shutil.rmtree(revision_root)
+            revision_root.mkdir(parents=True, exist_ok=True)
+            if workdir.exists() and any(workdir.iterdir()):
+                self._copy_tree(workdir, revision_root)
+            self.store.replace_initial_workspace_manifest(
+                group_id,
+                self._build_manifest(revision_root),
+            )
+
     def prepare_staging(self, group_id: str, group_run_id: str, base_revision: int) -> Path:
         """
         为 run 准备 staging 目录（全量复制）
@@ -46,7 +61,7 @@ class WorkspaceTransactionManager:
         返回：staging 根路径
         """
         staging_root = self.store.group_staging_root(group_id, group_run_id)
-        committed_root = self.store.group_workspace_root(group_id) / "committed"
+        committed_root = self.store.group_workdir(group_id)
         base_root = self.store.group_workspace_revision_root(group_id, base_revision)
 
         self.logger.info(f"Preparing staging for run {group_run_id[:8]}, base revision {base_revision}")
@@ -110,7 +125,7 @@ class WorkspaceTransactionManager:
         self.logger.info(f"Committing staging for run {group_run_id[:8]}")
 
         staging_root = self.store.group_staging_root(group_id, group_run_id)
-        committed_root = self.store.group_workspace_root(group_id) / "committed"
+        committed_root = self.store.group_workdir(group_id)
         base_root = self.store.group_workspace_revision_root(group_id, base_revision)
 
         commit_id = commit_id or self.store.create_workspace_commit(group_id, group_run_id, base_revision)

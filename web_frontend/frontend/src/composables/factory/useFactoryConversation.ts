@@ -236,13 +236,12 @@ export function useFactoryConversation() {
 
   function cancelRequest() {
     const requestId = runtimeStore.activeRequestId
-    const visibleOutput = runtimeStore.activeVisibleAssistantOutput
     runtimeStore.markActiveRequestStopping(requestId)
-    commands.cancelRequest('user_cancelled', requestId, visibleOutput)
+    commands.cancelRequest('user_cancelled', requestId)
   }
 
   function steerQueuedRequest(requestId: string) {
-    commands.steerRequest(requestId, runtimeStore.activeVisibleAssistantOutput)
+    commands.steerRequest(requestId)
   }
 
   function applyRouteMode() {

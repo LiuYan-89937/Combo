@@ -44,7 +44,6 @@ _NAVIGATION_COMMAND_TYPES = frozenset(
     }
 )
 
-
 @dataclass(slots=True)
 class FactoryRuntimeAdapter(
     RuntimeSessionCommandMixin,

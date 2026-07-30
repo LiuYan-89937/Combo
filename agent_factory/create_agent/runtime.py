@@ -4,12 +4,13 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import shutil
-import threading
 import time
 from typing import Any
 from uuid import uuid4
 
 from langchain_core.messages import HumanMessage
+from langgraph.errors import GraphDrained
+from langgraph.runtime import RunControl
 from langgraph.types import Command
 
 from agent_factory.create_agent.assist_workflow import CreateAgentAssistWorkflow
@@ -30,6 +31,11 @@ from agent_factory.model_pool.runtime_override import (
     runtime_reasoning_intensity_from_user_config,
 )
 from agent_factory.paths import factory_artifact_path, project_root
+from agent_factory.package_runtime.drained_checkpoint import (
+    finalize_drained_message_checkpoint,
+    repair_incomplete_message_checkpoint,
+)
+from agent_factory.package_runtime.run_control import RuntimeRunControlRegistry
 from agent_factory.runtime_attachments import (
     ATTACHMENT_INPUT_DIR,
     import_runtime_attachments,
@@ -43,6 +49,7 @@ from agent_factory.runtime_protocol.chat_parts import build_chat_turn_messages
 @dataclass(frozen=True, slots=True)
 class CreateAgentStreamRun:
     session_id: str
+    request_id: str
     workspace: CreateAgentWorkspace
     events: Iterator[tuple[str, Any]]
 
@@ -59,28 +66,24 @@ class CreateAgentRuntime:
         self.checkpointer = checkpointer or build_factory_checkpointer_handle().saver
         self.model = model
         self._active_graph_by_session: dict[str, str] = {}
-        self._cancel_lock = threading.Lock()
-        self._active_cancel_tokens: dict[str, threading.Event] = {}
+        self._run_controls = RuntimeRunControlRegistry()
 
-    def cancel_active_requests(self, *, reason: str = "user_cancelled", request_id: str | None = None) -> int:
-        del reason
-        target = (request_id or "").strip()
-        with self._cancel_lock:
-            request_ids = [target] if target and target in self._active_cancel_tokens else list(self._active_cancel_tokens)
-            for active_request_id in request_ids:
-                self._active_cancel_tokens[active_request_id].set()
-            return len(request_ids)
+    def cancel_active_requests(
+        self,
+        *,
+        reason: str = "user_cancelled",
+        request_id: str | None = None,
+    ) -> int:
+        return self._run_controls.request_drain(
+            reason=reason,
+            request_id=request_id,
+        )
 
-    def _register_cancel_token(self, request_id: str) -> threading.Event:
-        token = threading.Event()
-        with self._cancel_lock:
-            self._active_cancel_tokens[request_id] = token
-        return token
+    def _register_run_control(self, request_id: str) -> RunControl:
+        return self._run_controls.register(request_id)
 
-    def _forget_cancel_token(self, request_id: str, token: threading.Event) -> None:
-        with self._cancel_lock:
-            if self._active_cancel_tokens.get(request_id) is token:
-                self._active_cancel_tokens.pop(request_id, None)
+    def _forget_run_control(self, request_id: str, control: RunControl) -> None:
+        self._run_controls.release(request_id, control)
 
     def load_session_snapshot(self, session_id: str) -> dict[str, Any]:
         manufacture = self._checkpoint_snapshot(session_id=session_id, graph_kind="manufacture")
@@ -118,32 +121,43 @@ class CreateAgentRuntime:
     ) -> CreateAgentStreamRun:
         resolved_session_id = session_id or uuid4().hex
         resolved_request_id = request_id or uuid4().hex
-        workspace = CreateAgentWorkspace.for_session(resolved_session_id)
-        attachment_scope = time_named_attachment_scope()
-        attachment_result = import_runtime_attachments(
-            user_input,
-            attachments,
-            storage_root=workspace.root / ".factory" / ATTACHMENT_INPUT_DIR / attachment_scope,
-            runtime_path_root=f".factory/{ATTACHMENT_INPUT_DIR}/{attachment_scope}",
-            base_dir=project_root(),
-            scope=attachment_scope,
-        )
-        user_input = attachment_result.message
-        runtime_main_model_profile_id = main_model_profile_id_from_user_config(user_config)
-        runtime_reasoning_intensity = runtime_reasoning_intensity_from_user_config(user_config)
-        return CreateAgentStreamRun(
-            session_id=resolved_session_id,
-            workspace=workspace,
-            events=self._preflight_events(
-                user_input=user_input,
+        run_control = self._register_run_control(resolved_request_id)
+        try:
+            workspace = CreateAgentWorkspace.for_session(resolved_session_id)
+            attachment_scope = time_named_attachment_scope()
+            attachment_result = import_runtime_attachments(
+                user_input,
+                attachments,
+                storage_root=workspace.root / ".factory" / ATTACHMENT_INPUT_DIR / attachment_scope,
+                runtime_path_root=f".factory/{ATTACHMENT_INPUT_DIR}/{attachment_scope}",
+                base_dir=project_root(),
+                scope=attachment_scope,
+            )
+            runtime_main_model_profile_id = main_model_profile_id_from_user_config(user_config)
+            runtime_reasoning_intensity = runtime_reasoning_intensity_from_user_config(user_config)
+            events = self._preflight_events(
+                user_input=attachment_result.message,
                 session_id=resolved_session_id,
                 request_id=resolved_request_id,
                 workspace=workspace,
                 attachments=attachment_result.attachments,
                 runtime_main_model_profile_id=runtime_main_model_profile_id,
                 runtime_reasoning_intensity=runtime_reasoning_intensity,
-            ),
-        )
+                run_control=run_control,
+            )
+            return CreateAgentStreamRun(
+                session_id=resolved_session_id,
+                request_id=resolved_request_id,
+                workspace=workspace,
+                events=self._owned_events(
+                    request_id=resolved_request_id,
+                    run_control=run_control,
+                    events=events,
+                ),
+            )
+        except Exception:
+            self._forget_run_control(resolved_request_id, run_control)
+            raise
 
     def _preflight_events(
         self,
@@ -155,6 +169,7 @@ class CreateAgentRuntime:
         attachments: list[dict[str, Any]],
         runtime_main_model_profile_id: str | None,
         runtime_reasoning_intensity: int | None,
+        run_control: RunControl,
     ) -> Iterator[tuple[str, Any]]:
         pending_events: list[FactoryFrontendEvent] = []
         normalizer = RuntimeEventNormalizer(
@@ -169,6 +184,29 @@ class CreateAgentRuntime:
         def drain_events() -> Iterator[tuple[str, FactoryFrontendEvent]]:
             while pending_events:
                 yield "frontend_event", pending_events.pop(0)
+
+        def emit_cancelled(phase: str) -> Iterator[tuple[str, FactoryFrontendEvent]]:
+            normalizer.complete_open_model_streams(reason="user_stopped")
+            normalizer.runtime_event(
+                "node_completed",
+                node_id=phase,
+                node_label="Intent Analysis" if phase == "create_agent_intent_analysis" else "Task Analysis",
+                node_kind="control",
+                payload={
+                    "status": "stopped",
+                    "stop_reason": run_control.drain_reason,
+                    "visible_to_user": True,
+                },
+            )
+            normalizer.emit_run_completed(
+                {
+                    "status": "stopped",
+                    "stop_reason": run_control.drain_reason,
+                    "workspace_path": str(workspace.root),
+                    "agent_session": {"session_id": session_id},
+                }
+            )
+            yield from drain_events()
 
         normalizer.emit_run_started(
             {
@@ -187,10 +225,16 @@ class CreateAgentRuntime:
             payload={"status_key": "intent_analysis", "visible_to_user": True},
         )
         yield from drain_events()
+        if run_control.drain_requested:
+            yield from emit_cancelled("create_agent_intent_analysis")
+            return
 
         intent_started_at = time.monotonic()
-        retained_graph_kind = self._session_graph_kind(session_id=session_id, workspace=workspace)
-        if retained_graph_kind is None:
+        established_graph_kind = self._established_manufacture_graph_kind(
+            session_id=session_id,
+            workspace=workspace,
+        )
+        if established_graph_kind is None:
             try:
                 intent = classify_create_agent_intent(
                     user_input=user_input,
@@ -210,16 +254,22 @@ class CreateAgentRuntime:
                 normalizer.emit_run_failed(exc)
                 yield from drain_events()
                 return
+            if run_control.drain_requested:
+                yield from emit_cancelled("create_agent_intent_analysis")
+                return
             graph_kind = "manufacture" if intent.intent == "manufacture_agent" else "assist"
             intent_payload = intent.model_dump(mode="json")
         else:
-            graph_kind = retained_graph_kind
+            graph_kind = established_graph_kind
             intent_payload = {
-                "intent": "manufacture_agent" if graph_kind == "manufacture" else "workspace_assist",
-                "rationale": "The create-agent session retains its established workflow across turns.",
+                "intent": "manufacture_agent",
+                "rationale": "The create-agent session retains its established manufacturing workflow across turns.",
                 "confidence": 1.0,
             }
-        self._active_graph_by_session[session_id] = graph_kind
+        if graph_kind == "manufacture":
+            self._active_graph_by_session[session_id] = graph_kind
+        else:
+            self._active_graph_by_session.pop(session_id, None)
         normalizer.runtime_event(
             "node_completed",
             node_id="create_agent_intent_analysis",
@@ -231,7 +281,7 @@ class CreateAgentRuntime:
                 "visible_to_user": True,
                 "intent": intent_payload["intent"],
                 "graph_kind": graph_kind,
-                "retained_workflow": retained_graph_kind is not None,
+                "retained_workflow": established_graph_kind is not None,
                 "duration_ms": round((time.monotonic() - intent_started_at) * 1000),
             },
         )
@@ -248,9 +298,29 @@ class CreateAgentRuntime:
                 payload={"status_key": "task_analysis", "visible_to_user": True},
             )
             yield from drain_events()
+            if run_control.drain_requested:
+                yield from emit_cancelled("create_agent_task_analysis")
+                return
             task_started_at = time.monotonic()
             try:
                 task_analysis = analyze_create_agent_task(user_input=user_input, model=self.model)
+            except Exception as exc:
+                normalizer.runtime_event(
+                    "node_failed",
+                    node_id="create_agent_task_analysis",
+                    node_label="Task Analysis",
+                    node_kind="control",
+                    severity="error",
+                    message=str(exc),
+                    payload={"status_key": "task_analysis", "visible_to_user": True},
+                )
+                normalizer.emit_run_failed(exc)
+                yield from drain_events()
+                return
+            if run_control.drain_requested:
+                yield from emit_cancelled("create_agent_task_analysis")
+                return
+            try:
                 workspace.initialize(user_input=user_input, task_analysis=task_analysis)
             except Exception as exc:
                 normalizer.runtime_event(
@@ -302,18 +372,22 @@ class CreateAgentRuntime:
             run_id=normalizer.run_id,
             run_span_id=normalizer.run_span_id,
             initial_event_sequence=normalizer.sequence,
+            run_control=run_control,
         )
 
-    def _session_graph_kind(self, *, session_id: str, workspace: CreateAgentWorkspace) -> str | None:
+    def _established_manufacture_graph_kind(
+        self,
+        *,
+        session_id: str,
+        workspace: CreateAgentWorkspace,
+    ) -> str | None:
         active = self._active_graph_by_session.get(session_id)
-        if active in {"manufacture", "assist"}:
-            return active
+        if active == "manufacture":
+            return "manufacture"
         if self._checkpoint_values(thread_id=f"{session_id}:manufacture"):
             return "manufacture"
         if workspace.task_analysis_path.is_file() or workspace.package_manifest_path().is_file():
             return "manufacture"
-        if self._checkpoint_values(thread_id=f"{session_id}:assist"):
-            return "assist"
         return None
 
     def _checkpoint_snapshot(self, *, session_id: str, graph_kind: str) -> dict[str, Any] | None:
@@ -376,24 +450,46 @@ class CreateAgentRuntime:
         request_id: str | None,
     ) -> CreateAgentStreamRun:
         workspace = CreateAgentWorkspace.for_session(session_id)
-        graph_kind = self._session_graph_kind(session_id=session_id, workspace=workspace) or "manufacture"
-        resolved_request_id = request_id or uuid4().hex
-        return CreateAgentStreamRun(
+        graph_kind = self._established_manufacture_graph_kind(
             session_id=session_id,
             workspace=workspace,
-            events=self._events(
-                user_input="",
-                session_id=session_id,
+        ) or "manufacture"
+        resolved_request_id = request_id or uuid4().hex
+        run_control = self._register_run_control(resolved_request_id)
+        return CreateAgentStreamRun(
+            session_id=session_id,
+            request_id=resolved_request_id,
+            workspace=workspace,
+            events=self._owned_events(
                 request_id=resolved_request_id,
-                workspace=workspace,
-                resume_payload=resume_payload or {},
-                graph_kind=graph_kind,
-                attachments=[],
-                runtime_main_model_profile_id=None,
-                runtime_reasoning_intensity=None,
-                intent=None,
+                run_control=run_control,
+                events=self._events(
+                    user_input="",
+                    session_id=session_id,
+                    request_id=resolved_request_id,
+                    workspace=workspace,
+                    resume_payload=resume_payload or {},
+                    graph_kind=graph_kind,
+                    attachments=[],
+                    runtime_main_model_profile_id=None,
+                    runtime_reasoning_intensity=None,
+                    intent=None,
+                    run_control=run_control,
+                ),
             ),
         )
+
+    def _owned_events(
+        self,
+        *,
+        request_id: str,
+        run_control: RunControl,
+        events: Iterator[tuple[str, Any]],
+    ) -> Iterator[tuple[str, Any]]:
+        try:
+            yield from events
+        finally:
+            self._forget_run_control(request_id, run_control)
 
     def _events(
         self,
@@ -408,13 +504,13 @@ class CreateAgentRuntime:
         runtime_main_model_profile_id: str | None,
         runtime_reasoning_intensity: int | None,
         intent: dict[str, Any] | None,
+        run_control: RunControl,
         emit_run_started: bool = True,
         run_id: str | None = None,
         run_span_id: str | None = None,
         initial_event_sequence: int = 0,
     ) -> Iterator[tuple[str, Any]]:
         request_id = request_id or uuid4().hex
-        cancel_token = self._register_cancel_token(request_id)
         graph_id = "create_agent_react" if graph_kind == "manufacture" else "create_agent_assist"
         node_label = "Create Agent ReAct" if graph_kind == "manufacture" else "Create Agent Assist"
         if resume_payload is None and graph_kind == "manufacture":
@@ -463,6 +559,8 @@ class CreateAgentRuntime:
             sequence=initial_event_sequence,
         )
         model_trace = _ModelTraceAccumulator(record_trace)
+        workflow: Any | None = None
+        graph_thread_id = f"{session_id}:{graph_kind}"
 
         def emit_cancelled() -> Iterator[tuple[str, FactoryFrontendEvent]]:
             model_trace.flush()
@@ -521,9 +619,8 @@ class CreateAgentRuntime:
             },
         )
         yield from drain_events()
-        if cancel_token.is_set():
+        if run_control.drain_requested:
             yield from emit_cancelled()
-            self._forget_cancel_token(request_id, cancel_token)
             return
         normalizer.runtime_event(
             "node_started",
@@ -542,7 +639,7 @@ class CreateAgentRuntime:
         )
         yield from drain_events()
         try:
-            if cancel_token.is_set():
+            if run_control.drain_requested:
                 yield from emit_cancelled()
                 return
             tool_env = self.tool_environment_builder.build(workspace_root=workspace.root, mode=graph_kind)
@@ -557,9 +654,13 @@ class CreateAgentRuntime:
                     tools=tool_env.tools,
                     model=self.model,
                 ).compile(checkpointer=self.checkpointer)
-            config = {"configurable": {"thread_id": f"{session_id}:{graph_kind}"}}
+            config = {"configurable": {"thread_id": graph_thread_id}}
             stream_input: Any
             if resume_payload is None:
+                repair_incomplete_message_checkpoint(
+                    graph_app=workflow,
+                    thread_id=graph_thread_id,
+                )
                 stream_input = {
                     "request": user_input,
                     "session_id": session_id,
@@ -584,12 +685,12 @@ class CreateAgentRuntime:
                 stream_input,
                 config=config,
                 stream_mode=["messages", "custom", "values"],
+                durability="sync",
+                control=run_control,
             )
+            graph_drained = False
             try:
                 for stream_mode, chunk in stream_iter:
-                    if cancel_token.is_set():
-                        yield from emit_cancelled()
-                        return
                     interrupt_payload = extract_interrupt_payload(chunk)
                     if interrupt_payload is not None:
                         normalizer.emit_interrupt(frontend_json_safe(interrupt_payload))
@@ -632,10 +733,20 @@ class CreateAgentRuntime:
                             record_trace("tool_call", record)
                     normalizer.emit_stream_item(stream_mode, chunk, updates_payload_key="create_agent_update")
                     yield from drain_events()
+            except GraphDrained:
+                graph_drained = True
             finally:
                 close = getattr(stream_iter, "close", None)
                 if callable(close):
                     close()
+            if graph_drained or run_control.drain_requested:
+                finalize_drained_message_checkpoint(
+                    graph_app=workflow,
+                    thread_id=graph_thread_id,
+                    stop_reason=run_control.drain_reason or "user_cancelled",
+                )
+                yield from emit_cancelled()
+                return
             model_trace.flush()
             if not final_state:
                 raise RuntimeError("create-agent workflow did not produce final state")
@@ -745,10 +856,6 @@ class CreateAgentRuntime:
                 },
             )
             yield from drain_events()
-        finally:
-            self._forget_cancel_token(request_id, cancel_token)
-
-
 def _checkpoint_user_input(values: dict[str, Any]) -> str | None:
     request = str(values.get("request") or "").strip()
     if request:

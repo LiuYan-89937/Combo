@@ -229,7 +229,6 @@ class SystemPackageRuntimeHandle:
         reason: str,
         request_id: str | None = None,
         session_id: str | None = None,
-        visible_output: Any = None,
     ) -> int:
         with self._condition:
             request_ids = _target_request_ids(
@@ -243,7 +242,6 @@ class SystemPackageRuntimeHandle:
             cancelled += self.core.cancel_active_requests(
                 reason=reason,
                 request_id=active_request_id,
-                visible_output=visible_output,
             )
         return cancelled
 

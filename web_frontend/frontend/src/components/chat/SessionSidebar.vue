@@ -2,19 +2,17 @@
   <div class="session-panel">
     <div class="sidebar-header">
       <n-text strong>{{ panelTitle }}</n-text>
-      <n-dropdown
+      <n-button
         v-if="activeAgentPackageId"
-        trigger="click"
-        :options="newSessionOptions"
-        @select="handleNewSessionMode"
+        size="small"
+        :disabled="!canStartNewConversationSession"
+        @click="openNewSessionDialog"
       >
-        <n-button size="small" :disabled="!canStartNewConversationSession">
           <template #icon>
             <n-icon><Add /></n-icon>
           </template>
           {{ t('sessions.new') }}
-        </n-button>
-      </n-dropdown>
+      </n-button>
       <n-button v-else size="small" :disabled="!canStartNewConversationSession" @click="handleNewSession">
         <template #icon>
           <n-icon><Add /></n-icon>
@@ -65,16 +63,24 @@
                 {{ modeLabel(sessionMode(session)) }}
               </n-tag>
               <n-tag
-                v-if="sessionWorkspaceTitle(session)"
+                v-if="sessionWorkspaceLabel(session)"
                 size="tiny"
                 :bordered="false"
               >
-                {{ sessionWorkspaceTitle(session) }}
+                {{ sessionWorkspaceLabel(session) }}
               </n-tag>
               <n-text depth="3" style="font-size: 11px">
                 {{ formatTime(session.updated_at) }}
               </n-text>
             </div>
+            <n-text
+              v-if="sessionWorkspacePath(session)"
+              depth="3"
+              class="session-workspace-path"
+              :title="sessionWorkspacePath(session)"
+            >
+              {{ sessionWorkspacePath(session) }}
+            </n-text>
             <div class="session-stats">
               <n-text depth="3" style="font-size: 11px">
                 <n-icon size="12">
@@ -94,12 +100,20 @@
         class="sessions-empty"
       />
     </n-scrollbar>
+
+    <NewAgentSessionDialog
+      v-if="activeAgentPackageId"
+      v-model:show="showNewSessionDialog"
+      :package-id="activeAgentPackageId"
+      :initial-workspace-id="runtimeStore.activeWorkspaceId"
+      @create="createAgentSession"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { NButton, NDropdown, NIcon, NText, NInput, NScrollbar, NList, NListItem, NTag, NEmpty, useDialog } from 'naive-ui'
+import { NButton, NEmpty, NIcon, NInput, NList, NListItem, NScrollbar, NTag, NText, useDialog } from 'naive-ui'
 import { Add, ChatbubbleEllipses, Search, TrashOutline } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import { useSessionStore } from '@/stores/session'
@@ -110,7 +124,8 @@ import { useConversationSessionNavigation } from '@/composables/useConversationS
 import { useAgentSessionNavigation } from '@/composables/agent/useAgentSessionNavigation'
 import type { SessionView } from '@/stores/session'
 import type { AgentSessionView } from '@/stores/agent'
-import { workspaceApi, type WorkspaceProjectView } from '@/api/workspace'
+import type { WorkspaceProjectView } from '@/api/workspace'
+import NewAgentSessionDialog from '@/components/agent/NewAgentSessionDialog.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -130,7 +145,7 @@ const { openAgentSession, startNewAgentSession } = useAgentSessionNavigation()
 const { locale, t } = useI18n()
 const searchQuery = ref('')
 const dialog = useDialog()
-const workspaceProjects = ref<WorkspaceProjectView[]>([])
+const showNewSessionDialog = ref(false)
 
 const panelTitle = computed(() => props.title || t('sessions.main'))
 
@@ -140,13 +155,6 @@ const activeSessionMode = computed<'create_agent' | 'evolve_agent' | null>(() =>
   return null
 })
 const activeAgentPackageId = computed(() => agentStore.activeChatPackageId)
-const newSessionOptions = computed(() => [
-  { label: t('sessions.newIndependentTask'), key: 'independent' },
-  ...(runtimeStore.activeWorkspaceId
-    ? [{ label: t('sessions.newInCurrentWorkspace'), key: 'workspace' }]
-    : []),
-])
-
 const filteredSessions = computed(() => {
   const query = searchQuery.value.toLowerCase()
   const sessions: ConversationSession[] = activeAgentPackageId.value
@@ -168,13 +176,14 @@ function handleNewSession() {
   void startNewConversationSession()
 }
 
-function handleNewSessionMode(mode: string) {
+function openNewSessionDialog() {
+  showNewSessionDialog.value = true
+}
+
+function createAgentSession(workspaceId: string | null) {
   const packageId = activeAgentPackageId.value
   if (!packageId) return
-  void startNewAgentSession(
-    packageId,
-    mode === 'workspace' ? runtimeStore.activeWorkspaceId : null,
-  )
+  void startNewAgentSession(packageId, workspaceId)
 }
 
 type ConversationSession = SessionView | AgentSessionView
@@ -243,11 +252,31 @@ function sessionTitle(session: ConversationSession): string {
   return modeTitle || session.display_title || session.first_user_input || t('sessions.newSession')
 }
 
-function sessionWorkspaceTitle(session: ConversationSession): string {
-  if (!isAgentSession(session) || !session.workspace_id) return ''
-  return workspaceProjects.value.find(
-    workspace => workspace.workspace_id === session.workspace_id,
-  )?.title || ''
+function sessionWorkspace(session: ConversationSession): WorkspaceProjectView | null {
+  if (!isAgentSession(session)) return null
+  if (session.workspace) {
+    return {
+      ...session.workspace,
+      owner_package_id: session.package_id,
+      archived: false,
+      created_at: session.created_at,
+      updated_at: session.updated_at,
+    }
+  }
+  return null
+}
+
+function sessionWorkspaceLabel(session: ConversationSession): string {
+  const workspace = sessionWorkspace(session)
+  if (!workspace) return ''
+  const kind = workspace.mode === 'project'
+    ? t('sessions.sharedWorkspace')
+    : t('sessions.isolatedWorkspace')
+  return `${kind} · ${workspace.title}`
+}
+
+function sessionWorkspacePath(session: ConversationSession): string {
+  return sessionWorkspace(session)?.workdir_root || ''
 }
 
 function isAgentSession(session: ConversationSession): session is AgentSessionView {
@@ -301,14 +330,9 @@ function formatTime(timestamp: string): string {
 
 onMounted(() => {
   refreshSessions()
-  void refreshWorkspaces()
 })
 
 watch(activeAgentPackageId, refreshSessions)
-watch(
-  () => agentStore.agentSessions.map(session => session.workspace_id || '').join('|'),
-  () => void refreshWorkspaces(),
-)
 
 function refreshSessions() {
   const packageId = activeAgentPackageId.value
@@ -319,13 +343,6 @@ function refreshSessions() {
   commands.listSessions()
 }
 
-async function refreshWorkspaces() {
-  try {
-    workspaceProjects.value = (await workspaceApi.projects()).workspaces
-  } catch {
-    workspaceProjects.value = []
-  }
-}
 </script>
 
 <style scoped>
@@ -423,6 +440,16 @@ async function refreshWorkspaces() {
   align-items: center;
   gap: var(--app-space-md);
 }
+
+.session-workspace-path {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
 
 .session-stats :deep(.n-text) {
   display: inline-flex;

@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from typing import Any
 
 from langchain_core.messages import HumanMessage
+from langgraph.runtime import RunControl
 from langgraph.types import Command
 
 from agent_factory.memory_system.config import should_enqueue_memory_write
@@ -43,7 +44,14 @@ class ExecutionController:
             self._emit_run_completed(compiled_app, state)
             return state
 
-    def stream(self, compiled_app: Any, state: RuntimeState, *, thread_id: str) -> Iterator[tuple[str, Any]]:
+    def stream(
+        self,
+        compiled_app: Any,
+        state: RuntimeState,
+        *,
+        thread_id: str,
+        control: RunControl | None = None,
+    ) -> Iterator[tuple[str, Any]]:
         with tool_output_session_context(state.run.session_id):
             self._emit(
                 compiled_app,
@@ -58,7 +66,12 @@ class ExecutionController:
             )
             final_raw: dict[str, Any] = {"runtime": state.model_dump(mode="python")}
             graph_messages: list[Any] = []
-            for stream_mode, chunk in self._stream_graph(compiled_app, state, thread_id=thread_id):
+            for stream_mode, chunk in self._stream_graph(
+                compiled_app,
+                state,
+                thread_id=thread_id,
+                control=control,
+            ):
                 if stream_mode == "values" and isinstance(chunk, dict):
                     final_raw = chunk
                     graph_messages = list(chunk.get("messages") or [])
@@ -79,6 +92,7 @@ class ExecutionController:
         *,
         thread_id: str,
         resume_payload: dict[str, Any] | None = None,
+        control: RunControl | None = None,
     ) -> Iterator[tuple[str, Any]]:
         with tool_output_session_context(state.run.session_id):
             state = _prepare_resume_state(state, resume_payload=resume_payload)
@@ -90,6 +104,7 @@ class ExecutionController:
                 state,
                 thread_id=thread_id,
                 stream_input=Command(resume=resume_payload or {}),
+                control=control,
             ):
                 if stream_mode == "values" and isinstance(chunk, dict):
                     final_raw = chunk
@@ -150,11 +165,14 @@ class ExecutionController:
         *,
         thread_id: str,
         stream_input: Any | None = None,
+        control: RunControl | None = None,
     ) -> Iterator[tuple[str, Any]]:
         yield from compiled_app.graph_app.stream(
             _graph_input(state) if stream_input is None else stream_input,
             config=_graph_config(state, thread_id=thread_id),
             stream_mode=["updates", "values", "debug", "custom"],
+            durability="sync",
+            control=control,
         )
 
     def _final_state_from_raw(self, raw: dict[str, Any], *, messages: list[Any] | None = None) -> RuntimeState:
@@ -296,7 +314,6 @@ class ExecutionController:
         segment = build_conversation_segment(
             scope=memory_scope,
             namespace=namespace,
-            available_namespaces=available_namespaces,
             source=source,
             messages=messages or _messages_delta(state),
             end_turn=turn_index,
@@ -307,6 +324,7 @@ class ExecutionController:
         job = MemoryWriteJob(
             scope=memory_scope,
             namespace=namespace,
+            available_namespaces=available_namespaces,
             source=source,
             segment=segment,
         )

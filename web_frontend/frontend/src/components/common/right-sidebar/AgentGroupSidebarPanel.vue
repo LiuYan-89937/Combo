@@ -21,6 +21,13 @@
               </n-tag>
               <span class="member-count">{{ group.members.length }} 成员</span>
             </div>
+            <div
+              v-if="group.workspace_resource?.workdir"
+              class="group-workspace-path"
+              :title="group.workspace_resource.workdir"
+            >
+              {{ group.workspace_resource.workdir }}
+            </div>
           </div>
           <template #suffix>
             <n-popconfirm
@@ -104,6 +111,23 @@
             placeholder="选择 Agent"
           />
         </n-form-item>
+        <n-form-item label="共享工作区" path="workspace_id">
+          <div class="workspace-selection">
+            <n-select
+              v-model:value="createForm.workspace_id"
+              :options="workspaceOptions"
+              filterable
+              placeholder="选择共享工作区"
+            />
+            <n-button
+              secondary
+              :loading="creatingLinkedWorkspace"
+              @click="createLinkedWorkspace"
+            >
+              选择本地文件夹
+            </n-button>
+          </div>
+        </n-form-item>
       </n-form>
       <template #footer>
         <div style="display: flex; justify-content: flex-end; gap: 12px">
@@ -138,11 +162,15 @@
         </div>
       </template>
     </n-modal>
+    <WorkspaceDirectoryPicker
+      v-model:show="showServerDirectoryPicker"
+      @select="registerLinkedWorkspace"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import {
   NButton,
   NEmpty,
@@ -169,6 +197,9 @@ import { useRuntimeStore } from '@/stores/runtime'
 import { useWorkspaceStore } from '@/stores/workspace'
 import type { WorkspaceEntry } from '@/types/protocol'
 import { useI18n } from '@/composables/useI18n'
+import { workspaceApi, type WorkspaceProjectView } from '@/api/workspace'
+import { desktopDirectoryPickerAvailable, selectDesktopDirectory } from '@/api/desktopDialogs'
+import WorkspaceDirectoryPicker from '@/components/workspace/WorkspaceDirectoryPicker.vue'
 import {
   requiredArrayRule,
   requiredTextRule,
@@ -182,15 +213,20 @@ const runtimeStore = useRuntimeStore()
 const workspaceStore = useWorkspaceStore()
 const { t } = useI18n()
 const workspaceContext = computed(() => resourceContext.workspaceContext.value)
+const DEFAULT_WORKSPACE = '__default_workspace__'
 
 // State
 const showCreateDialog = ref(false)
 const showAddMemberDialog = ref(false)
+const workspaceProjects = ref<WorkspaceProjectView[]>([])
+const creatingLinkedWorkspace = ref(false)
+const showServerDirectoryPicker = ref(false)
 const createFormRef = ref<FormInst | null>(null)
 const addMemberFormRef = ref<FormInst | null>(null)
 const createForm = ref({
   title: '',
   member_package_ids: [] as string[],
+  workspace_id: DEFAULT_WORKSPACE,
 })
 const addMemberForm = ref({
   package_id: null as string | null,
@@ -210,6 +246,18 @@ const agentOptions = computed(() => {
     value: a.package_id,
   }))
 })
+const workspaceOptions = computed(() => [
+  {
+    label: '应用默认共享工作区',
+    value: DEFAULT_WORKSPACE,
+  },
+  ...workspaceProjects.value
+    .filter(workspace => workspace.mode === 'project')
+    .map(workspace => ({
+      label: `${workspace.title} — ${workspace.workdir_root}`,
+      value: workspace.workspace_id,
+    })),
+])
 
 const availableAgentOptions = computed(() => {
   if (!store.activeGroup) return agentOptions.value
@@ -229,15 +277,75 @@ const handleCreate = async () => {
 
   try {
     await store.createGroup({
-      ...createForm.value,
       title: createForm.value.title.trim(),
+      member_package_ids: createForm.value.member_package_ids,
+      ...(createForm.value.workspace_id !== DEFAULT_WORKSPACE
+        ? { workspace_id: createForm.value.workspace_id }
+        : {}),
     })
     showCreateDialog.value = false
-    createForm.value = { title: '', member_package_ids: [] }
+    createForm.value = {
+      title: '',
+      member_package_ids: [],
+      workspace_id: DEFAULT_WORKSPACE,
+    }
   } catch (e) {
     console.error('Failed to create group:', e)
   }
 }
+
+async function refreshWorkspaces() {
+  try {
+    workspaceProjects.value = (await workspaceApi.projects()).workspaces
+  } catch {
+    workspaceProjects.value = []
+  }
+}
+
+async function createLinkedWorkspace() {
+  if (creatingLinkedWorkspace.value) return
+  if (!desktopDirectoryPickerAvailable()) {
+    showServerDirectoryPicker.value = true
+    return
+  }
+  creatingLinkedWorkspace.value = true
+  try {
+    const sourcePath = await selectDesktopDirectory()
+    if (!sourcePath) return
+    await registerLinkedWorkspace(sourcePath)
+  } catch (error) {
+    console.error('Failed to create linked workspace:', error)
+  } finally {
+    creatingLinkedWorkspace.value = false
+  }
+}
+
+async function registerLinkedWorkspace(sourcePath: string) {
+  creatingLinkedWorkspace.value = true
+  try {
+    const response = await workspaceApi.createProject({
+      title: sourcePath.split(/[\\/]/).filter(Boolean).at(-1) || '共享工作区',
+      mode: 'project',
+      root_kind: 'linked',
+      workdir_root: sourcePath,
+    })
+    workspaceProjects.value = [
+      response.workspace,
+      ...workspaceProjects.value.filter(
+        workspace => workspace.workspace_id !== response.workspace.workspace_id,
+      ),
+    ]
+    createForm.value.workspace_id = response.workspace.workspace_id
+  } catch (error) {
+    console.error('Failed to create linked workspace:', error)
+  } finally {
+    creatingLinkedWorkspace.value = false
+  }
+}
+
+onMounted(() => {
+  void refreshWorkspaces()
+})
 
 const handleDeleteGroup = async (groupId: string) => {
   try {
@@ -330,6 +438,22 @@ function closePreview() {
 
 .member-count {
   font-size: 12px;
+}
+
+.group-workspace-path {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--app-text-muted);
+}
+
+.workspace-selection {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--app-space-sm);
 }
 
 .n-list-item.active {

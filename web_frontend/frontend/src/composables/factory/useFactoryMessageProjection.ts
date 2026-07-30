@@ -14,7 +14,11 @@ export function useFactoryMessageProjection() {
 
   const activeStreams = computed(() => {
     return Object.values(runtimeStore.modelStreams).filter(
-      (stream) => stream.visibleToUser && stream.active,
+      (stream) => (
+        stream.visibleToUser
+        && stream.active
+        && requestOwnsActivePresentation(stream.requestId)
+      ),
     )
   })
   const hasActiveStreams = computed(() => activeStreams.value.length > 0)
@@ -36,6 +40,7 @@ export function useFactoryMessageProjection() {
     if (!runtimeStore.hasActiveRun || runtimeStore.isAwaitingUserInputInterrupt) return []
     const activeTurn = runtimeStore.activeTurn
     if (!activeTurn?.userMessage) return []
+    if (!requestOwnsActivePresentation(activeTurn.requestId)) return []
     if (activeTurn.assistantMessages.some(messageHasDisplayParts)) return []
     const displayStatus = activeRuntimeDisplayStatus(runtimeStore.nodes, runtimeStore.contextActivity, t)
     const statusText = displayStatus.text
@@ -62,7 +67,9 @@ export function useFactoryMessageProjection() {
   })
   const hasApprovalRequests = computed(() => runtimeStore.currentApprovalRequests.length > 0)
   const runningToolActivities = computed(() => {
-    return runtimeStore.tools.filter((tool) => isToolActivityRunning(tool))
+    return runtimeStore.tools.filter(
+      (tool) => isToolActivityRunning(tool) && requestOwnsActivePresentation(tool.requestId),
+    )
   })
   const toolActivityHint = computed(() => {
     if (!runtimeStore.hasActiveRun || runningToolActivities.value.length === 0) return ''
@@ -82,7 +89,20 @@ export function useFactoryMessageProjection() {
 
   function isMessageStreaming(streamId?: string): boolean {
     if (!streamId) return false
-    return Boolean(runtimeStore.modelStreams[streamId]?.active)
+    const stream = runtimeStore.modelStreams[streamId]
+    return Boolean(stream?.active && requestOwnsActivePresentation(stream.requestId))
+  }
+
+  function requestOwnsActivePresentation(requestId?: string | null): boolean {
+    if (!runtimeStore.hasActiveRun || !runtimeStore.activeRequestId) return false
+    if (requestId && requestId !== runtimeStore.activeRequestId) return false
+    const request = runtimeStore.activeRequests[runtimeStore.activeRequestId]
+    return Boolean(
+      request
+      && request.status === 'running'
+      && !request.payload?.stop_requested_at
+      && !['stopped', 'cancelled'].includes(String(request.payload?.dispatch_state || '')),
+    )
   }
 
   return {
