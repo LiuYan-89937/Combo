@@ -11,6 +11,13 @@ if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
     throw "This script must run on Windows."
 }
 
+$Utf8Encoding = New-Object System.Text.UTF8Encoding $false
+[Console]::InputEncoding = $Utf8Encoding
+[Console]::OutputEncoding = $Utf8Encoding
+$OutputEncoding = $Utf8Encoding
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
+
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $TauriDir = Join-Path $ProjectRoot "src-tauri"
 $FrontendDir = Join-Path $ProjectRoot "web_frontend\frontend"
