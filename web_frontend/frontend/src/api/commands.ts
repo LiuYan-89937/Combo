@@ -127,7 +127,8 @@ export function runAgentPackageCommand(
   sessionId?: string,
   attachments?: RuntimeAttachmentInput[],
   runtimeOptions?: RuntimeMainModelOptions,
-  displayUserInput?: string | null
+  displayUserInput?: string | null,
+  workspaceId?: string | null,
 ): FactoryFrontendCommand {
   const requestId = generateRequestId()
   return createCommand('run_agent_package', {
@@ -138,6 +139,7 @@ export function runAgentPackageCommand(
         package_id: packageId,
         message,
         session_id: sessionId,
+        ...(workspaceId ? { workspace_id: workspaceId } : {}),
         ...(attachments && attachments.length > 0 ? { attachments } : {}),
         ...(displayUserInput ? { display_user_input: displayUserInput } : {}),
       },

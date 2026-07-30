@@ -373,6 +373,7 @@ class RuntimeAgentPackageCommandMixin:
                 runtime_request=_runtime_request(command),
                 require_ready=require_ready,
                 attachments=command.payload.get("attachments"),
+                workspace_id=str(command.payload.get("workspace_id") or "").strip() or None,
             )
             result = self._consume_agent_package_stream(package_id=package_id, run=run, normalizer=normalizer)
             self._persist_agent_package_stream_result(

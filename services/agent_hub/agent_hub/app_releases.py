@@ -734,6 +734,35 @@ class AppReleaseRegistry:
             raise RegistryError("app_asset_not_found", "application asset was not found")
         return _asset_view(row, include_private=True)
 
+    def installer_download_url(self, asset_id: str) -> str:
+        now = utc_now()
+        with self.database.connect() as connection:
+            asset = connection.execute(
+                """
+                update app_release_assets
+                set download_count = download_count + 1, updated_at = ?
+                where asset_id = ?
+                  and asset_kind = 'installer'
+                  and status = 'published'
+                  and download_url is not null
+                  and download_url != ''
+                  and exists (
+                    select 1
+                    from app_releases
+                    where app_releases.app_release_id = app_release_assets.app_release_id
+                      and app_releases.status = 'published'
+                  )
+                returning download_url
+                """,
+                (now, asset_id),
+            ).fetchone()
+        if asset is None:
+            raise RegistryError(
+                "app_asset_not_found",
+                "published application installer was not found",
+            )
+        return str(asset["download_url"])
+
     def public_config(self) -> dict[str, Any]:
         try:
             latest = self.latest_release()
@@ -746,17 +775,35 @@ class AppReleaseRegistry:
                     "platform": asset["platform"],
                     "label": _platform_label(str(asset["platform"])),
                     "arch": _architecture_label(str(asset["architecture"])),
-                    "url": asset["download_url"],
+                    "url": f"/api/v1/app-release-assets/{asset['asset_id']}/download",
                     "version": latest["version"],
                     "sizeLabel": _size_label(int(asset["size_bytes"])),
+                    "downloadCount": int(asset["download_count"]),
                 }
                 for asset in latest["assets"]
                 if asset["asset_kind"] == "installer" and asset["download_url"]
             ]
+        with self.database.connect() as connection:
+            total_download_count = int(
+                connection.execute(
+                    """
+                    select coalesce(sum(app_release_assets.download_count), 0)
+                    from app_release_assets
+                    join app_releases
+                      on app_releases.app_release_id = app_release_assets.app_release_id
+                    where app_release_assets.asset_kind = 'installer'
+                      and app_release_assets.status = 'published'
+                      and app_releases.status = 'published'
+                    """
+                ).fetchone()[0]
+            )
         return {
             "maxPackageBytes": self.settings.max_package_bytes,
             "githubRepoUrl": self.settings.github_repository_url,
             "downloads": downloads,
+            "totalDownloadCount": (
+                self.settings.installer_download_baseline + total_download_count
+            ),
             "releaseManaged": latest is not None,
         }
 
@@ -1398,6 +1445,7 @@ def _asset_view(row: sqlite3.Row, *, include_private: bool) -> dict[str, Any]:
         "sha256": str(row["sha256"] or ""),
         "status": str(row["status"]),
         "download_url": str(row["download_url"] or ""),
+        "download_count": int(row["download_count"]),
         "created_at": str(row["created_at"]),
         "updated_at": str(row["updated_at"]),
     }

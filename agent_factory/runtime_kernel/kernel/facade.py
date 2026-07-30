@@ -351,6 +351,7 @@ class RuntimeKernelFacade:
         state.run = RunState(
             agent_id=agent_id,
             session_id=session.session_id,
+            workspace_id=session.workspace_id,
             pattern_id=compiled.pattern_spec.pattern_id,
             pattern_version=compiled.pattern_spec.version,
         )
@@ -370,6 +371,7 @@ class RuntimeKernelFacade:
             **session_config,
             "session_id": session.session_id,
             "thread_id": session.thread_id,
+            "workspace_id": session.workspace_id,
         }
         configure_memory_runtime_for_agent(compiled.services, agent_id)
         return RuntimeKernelRunContext(
@@ -445,12 +447,14 @@ class RuntimeKernelFacade:
         state.package_state = initial_package_state(compiled)
         state.run.agent_id = session.agent_id
         state.run.session_id = session.session_id
+        state.run.workspace_id = session.workspace_id
         state.run.pattern_id = compiled.pattern_spec.pattern_id
         state.run.pattern_version = compiled.pattern_spec.version
         state.runtime_config.session_config = {
             **dict(session_config or {}),
             "session_id": session.session_id,
             "thread_id": session.thread_id,
+            "workspace_id": session.workspace_id,
         }
         configure_memory_runtime_for_agent(compiled.services, session.agent_id)
         return RuntimeKernelRunContext(

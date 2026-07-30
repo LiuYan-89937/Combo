@@ -58,7 +58,7 @@
     <!-- 全局通知 -->
     <n-notification-provider>
       <AppNotifications />
-      <TaskNotificationManager />
+      <TaskNotificationManager v-if="runtimeServicesEnabled" />
     </n-notification-provider>
 
     <!-- 设置抽屉 -->
@@ -70,7 +70,7 @@
     <SchedulerActivityDrawer />
 
     <!-- SSE 事件流初始化 -->
-    <EventStreamManager />
+    <EventStreamManager v-if="runtimeServicesEnabled" />
   </div>
 </template>
 
@@ -91,6 +91,12 @@ import SettingsDrawer from '@/components/common/SettingsDrawer.vue'
 import DebugDrawer from '@/components/common/DebugDrawer.vue'
 import SchedulerActivityDrawer from '@/components/scheduler/SchedulerActivityDrawer.vue'
 import EventStreamManager from '@/components/common/EventStreamManager.vue'
+
+withDefaults(defineProps<{
+  runtimeServicesEnabled?: boolean
+}>(), {
+  runtimeServicesEnabled: true,
+})
 
 const uiStore = useUiStore()
 const route = useRoute()

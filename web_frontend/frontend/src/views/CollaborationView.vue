@@ -108,6 +108,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
+import { useRoute } from 'vue-router'
 import {
   NEmpty,
   NScrollbar,
@@ -135,6 +136,7 @@ import TipPanel from '@/components/chat/TipPanel.vue'
 import type { TipMessageContext } from '@/stores/tips'
 
 const store = useCollaborationStore()
+const route = useRoute()
 const runtimeStore = useRuntimeStore()
 const modelPoolStore = useModelPoolStore()
 const uiStore = useUiStore()
@@ -212,7 +214,9 @@ onMounted(() => {
   uiStore.openRightSidebar('status')
   void store.bootstrap().then(() => {
     enterActiveMainAgentContext()
-    nextTick(() => inputRef.value?.focus())
+    if (!route.meta.showcaseMode) {
+      nextTick(() => inputRef.value?.focus())
+    }
   })
   void modelPoolStore.ensureLoaded()
 })

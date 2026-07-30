@@ -231,6 +231,7 @@ export interface ConversationScopeState {
   modelStreams: Record<string, ModelStream>
   activeFactorySessionId: string | null
   activeAgentSessionId: string | null
+  activeWorkspaceId: string | null
   activeRequestId?: string | null
   runStatus?: RunStatus
   pendingInterrupt?: FactoryFrontendEvent | null
@@ -548,6 +549,7 @@ export interface RuntimeViewState {
   currentMode: FactoryMode | null
   activeFactorySessionId: string | null
   activeAgentSessionId: string | null
+  activeWorkspaceId: string | null
   currentRunId: string | null
   nodes: Record<string, NodeViewState>
   stages: Record<string, StageStatus>

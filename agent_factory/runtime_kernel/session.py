@@ -42,6 +42,7 @@ class AgentSessionRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     session_id: str
+    workspace_id: str = ""
     agent_id: str
     thread_id: str
     session_kind: str = "normal"
@@ -56,7 +57,11 @@ class AgentSessionRecord(BaseModel):
     turn_count: int = 0
     turns: list[AgentSessionTurn] = Field(default_factory=list)
     runtime_refs: dict[str, str] = Field(default_factory=dict)
-    workspace_mounts: list[WorkspaceMountRecord] = Field(default_factory=list)
+    legacy_workspace_mounts: list[WorkspaceMountRecord] = Field(
+        default_factory=list,
+        validation_alias="workspace_mounts",
+        exclude=True,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +84,7 @@ class AgentSessionManager:
         self,
         *,
         agent_id: str,
+        workspace_id: str | None = None,
         session_id: str | None = None,
         first_user_input: str | None = None,
         session_kind: str = "normal",
@@ -94,6 +100,7 @@ class AgentSessionManager:
             raise ValueError(f"Agent session already exists: {resolved_session_id}")
         record = AgentSessionRecord(
             session_id=resolved_session_id,
+            workspace_id=str(workspace_id or resolved_session_id).strip(),
             agent_id=agent_id,
             thread_id=f"agent-{agent_id}-{uuid4().hex}",
             session_kind=kind,
@@ -354,6 +361,8 @@ def _latest_running_turn(turns: list[AgentSessionTurn]) -> AgentSessionTurn | No
 
 
 def _normalized_record(record: AgentSessionRecord) -> AgentSessionRecord:
+    if not record.workspace_id:
+        record.workspace_id = record.session_id
     for superseded in normalize_running_turn_sequence(record.turns, updated_at=_now()):
         superseded.messages = _turn_messages(superseded)
     for turn in record.turns:

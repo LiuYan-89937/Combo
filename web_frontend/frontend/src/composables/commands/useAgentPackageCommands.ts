@@ -117,8 +117,17 @@ export function useAgentPackageCommands() {
     attachments?: RuntimeAttachmentInput[],
     runtimeOptions?: commands.RuntimeMainModelOptions,
     displayUserInput?: string | null,
+    workspaceId?: string | null,
   ) => {
-    const command = commands.sendAgentPackageMessageCommand(packageId, message, sessionId, attachments, runtimeOptions, displayUserInput)
+    const command = commands.sendAgentPackageMessageCommand(
+      packageId,
+      message,
+      sessionId,
+      attachments,
+      runtimeOptions,
+      displayUserInput,
+      workspaceId,
+    )
     transport.sendRuntimeCommand(command)
     return command
   }

@@ -11,6 +11,8 @@ from agent_factory.context_system.sources import default_context_sources
 from agent_factory.knowledge_system import KnowledgeRuntimeConfig, build_knowledge_runtime
 from agent_factory.memory_system import default_agent_runtime
 from agent_factory.memory_system.background import MemoryBackgroundWorker
+from agent_factory.memory_system.migration import migrate_legacy_sqlite_memory
+from agent_factory.memory_system.scopes import local_memory_user_id, memory_migration_log_path
 from agent_factory.memory_system.store_index import build_memory_store_index
 from agent_factory.model_pool import (
     resolve_chat_model_binding,
@@ -262,10 +264,20 @@ def _memory_runtime_contribution(
         index=build_memory_store_index(config),
     )
     store = LangGraphStoreFactory().build(store_config).store
+    runtime_root = context.runtime_root or context.package_root / ".agent_runtime"
+    if config.store.backend != "memory":
+        migrate_legacy_sqlite_memory(
+            source_path=runtime_root / "memory" / "agent.sqlite",
+            target_store=store,
+            agent_id=context.package.assembly_spec.agent.id,
+            session_root=runtime_root / "sessions",
+            log_path=memory_migration_log_path(runtime_root),
+        )
     runtime = default_agent_runtime(
         agent_id=context.package.assembly_spec.agent.id,
         config=config,
         store=store,
+        user_id=local_memory_user_id(),
     )
     background_workers: list[Any] = []
     if config.write_enabled:

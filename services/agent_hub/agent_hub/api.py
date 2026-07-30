@@ -368,6 +368,12 @@ def latest_app_release(request: Request) -> dict[str, Any]:
     return services(request).app_releases.latest_release()
 
 
+@app.get("/api/v1/app-release-assets/{asset_id}/download")
+def app_installer_download(request: Request, asset_id: str) -> RedirectResponse:
+    url = services(request).app_releases.installer_download_url(asset_id)
+    return RedirectResponse(url, status_code=307)
+
+
 @app.get("/api/v1/app-releases/{app_release_id}")
 def app_release_detail(request: Request, app_release_id: str) -> dict[str, Any]:
     return services(request).app_releases.release(

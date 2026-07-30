@@ -65,6 +65,8 @@ export const zh = {
     ctaDownload: '下载 FastAgentFactory',
     ctaHub: '探索 AgentHub',
     ctaGithub: 'GitHub 仓库',
+    showcaseTitle: '看见 Agent 从想法变成结果',
+    showcaseSubtitle: '这不是截图或录屏。官网正在运行与桌面应用相同的界面组件，自动演示制造、装配、执行与交付。',
     pipelineTitle: '从模型到分发的一体化链路',
     pipelineSubtitle: '每一步都在本地工作区中完成，过程可见、结果可控。',
     steps: {
@@ -85,6 +87,7 @@ export const zh = {
     featuredViewAll: '浏览全部',
     downloadTitle: '下载桌面应用',
     downloadSubtitle: 'macOS 与 Windows 均可使用。安装后即可配置模型并开始制造 Agent。',
+    totalDownloads: '安装包累计下载 {count} 次',
     downloadUnavailable: '下载地址即将提供',
     downloadComingSoon: '发布配置尚未提供该平台的下载地址。',
   },
@@ -103,6 +106,7 @@ export const zh = {
     cardPython: 'Python 依赖',
     cardTools: '包工具',
     cardMcp: 'MCP',
+    downloadCount: '{count} 次下载',
   },
   detail: {
     downloadPackage: '下载 Agent 包',
@@ -228,6 +232,7 @@ export const zh = {
     product: '产品',
     resources: '资源',
     docs: '文档',
+    bugFeedback: 'Bug 反馈',
     rights: '保留所有权利。',
   },
 } as const
@@ -288,6 +293,8 @@ export const en = {
     ctaDownload: 'Download FastAgentFactory',
     ctaHub: 'Explore AgentHub',
     ctaGithub: 'GitHub repo',
+    showcaseTitle: 'Watch an agent become a deliverable',
+    showcaseSubtitle: 'This is not a screenshot or video. The site runs the same interface components as the desktop app to demonstrate building, assembling, running, and delivering an agent.',
     pipelineTitle: 'From model to distribution, in one loop',
     pipelineSubtitle: 'Every step runs in a local workspace — visible process, controllable results.',
     steps: {
@@ -308,6 +315,7 @@ export const en = {
     featuredViewAll: 'Browse all',
     downloadTitle: 'Download the desktop app',
     downloadSubtitle: 'Available for macOS and Windows. Configure a model and start building after install.',
+    totalDownloads: '{count} installer downloads',
     downloadUnavailable: 'Download link coming soon',
     downloadComingSoon: 'The release configuration has no download link for this platform yet.',
   },
@@ -326,6 +334,7 @@ export const en = {
     cardPython: 'Python deps',
     cardTools: 'Tools',
     cardMcp: 'MCP',
+    downloadCount: '{count} downloads',
   },
   detail: {
     downloadPackage: 'Download package',
@@ -451,6 +460,7 @@ export const en = {
     product: 'Product',
     resources: 'Resources',
     docs: 'Docs',
+    bugFeedback: 'Bug feedback',
     rights: 'All rights reserved.',
   },
 } as const

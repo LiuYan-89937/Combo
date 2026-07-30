@@ -26,6 +26,7 @@ def configure_memory_runtime_for_agent(services, agent_id: str) -> None:
         return
     runtime.scope = "agent"
     runtime.namespace = agent_memory_namespace(agent_id)
+    runtime.agent_id = agent_id
 
 
 def session_manager_from_config(session_config: dict, *, default: AgentSessionManager) -> AgentSessionManager:

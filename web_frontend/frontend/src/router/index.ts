@@ -12,7 +12,7 @@ import {
   translate,
 } from '@/i18n'
 
-const routes: RouteRecordRaw[] = [
+export const routes: RouteRecordRaw[] = [
   {
     path: '/',
     redirect: '/factory',

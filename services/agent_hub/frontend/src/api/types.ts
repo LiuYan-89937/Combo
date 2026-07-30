@@ -140,6 +140,7 @@ export interface AppReleaseAsset {
   sha256: string
   status: AppAssetStatus
   download_url: string
+  download_count: number
   created_at: string
   updated_at: string
   expected_size?: number

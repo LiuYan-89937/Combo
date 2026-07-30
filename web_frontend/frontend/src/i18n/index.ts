@@ -250,6 +250,8 @@ const zhCN = {
 
   'sessions.main': '主会话',
   'sessions.new': '新建',
+  'sessions.newIndependentTask': '新建独立任务',
+  'sessions.newInCurrentWorkspace': '在当前工作区新建会话',
   'sessions.empty': '没有会话',
   'sessions.newSession': '新会话',
   'sessions.turns': '{count} 轮',
@@ -836,6 +838,9 @@ const zhCN = {
   'status.memoryKind.decision': '决策',
   'status.memoryKind.constraint': '约束',
   'status.memoryKind.artifact': '产物',
+  'status.memoryScope.workspace': '当前工作区',
+  'status.memoryScope.agent': '当前 Agent',
+  'status.memoryScope.user': '全局偏好',
   'status.tools': '工具',
   'status.noTools': '暂无工具调用',
 
@@ -1274,6 +1279,8 @@ const enUS: Record<MessageKey, string> = {
 
   'sessions.main': 'Main sessions',
   'sessions.new': 'New',
+  'sessions.newIndependentTask': 'New independent task',
+  'sessions.newInCurrentWorkspace': 'New chat in current workspace',
   'sessions.empty': 'No sessions',
   'sessions.newSession': 'New session',
   'sessions.turns': '{count} turns',
@@ -1860,6 +1867,9 @@ const enUS: Record<MessageKey, string> = {
   'status.memoryKind.decision': 'Decision',
   'status.memoryKind.constraint': 'Constraint',
   'status.memoryKind.artifact': 'Artifact',
+  'status.memoryScope.workspace': 'Workspace',
+  'status.memoryScope.agent': 'Agent',
+  'status.memoryScope.user': 'Global preference',
   'status.tools': 'Tools',
   'status.noTools': 'No tool calls',
 

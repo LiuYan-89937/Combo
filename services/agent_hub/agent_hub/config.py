@@ -39,6 +39,7 @@ class Settings:
     max_uncompressed_bytes: int
     max_compression_ratio: int
     max_app_asset_bytes: int
+    installer_download_baseline: int
     validation_poll_seconds: float
     backup_prefix: str
 
@@ -111,6 +112,9 @@ def get_settings() -> Settings:
         max_app_asset_bytes=_positive_int_env(
             "AGENTHUB_MAX_APP_ASSET_BYTES", 1024 * 1024 * 1024
         ),
+        installer_download_baseline=_non_negative_int_env(
+            "AGENTHUB_INSTALLER_DOWNLOAD_BASELINE", 0
+        ),
         validation_poll_seconds=_positive_float_env(
             "AGENTHUB_VALIDATION_POLL_SECONDS", 2.0
         ),
@@ -176,6 +180,14 @@ def _positive_int_env(name: str, default: int) -> int:
     value = int(raw) if raw else default
     if value <= 0:
         raise ConfigurationError(f"{name} must be greater than zero")
+    return value
+
+
+def _non_negative_int_env(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    value = int(raw) if raw else default
+    if value < 0:
+        raise ConfigurationError(f"{name} must be zero or greater")
     return value
 
 

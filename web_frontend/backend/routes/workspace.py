@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import mimetypes
+from typing import Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query
@@ -11,6 +12,7 @@ from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import Ag
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import SYSTEM_CHAT_PACKAGE_ID
 from agent_factory.factory_graph.frontend_bridge.workspace_resources import FrontendWorkspaceService
 from agent_factory.factory_graph.session import FactorySessionManager
+from agent_factory.workspace_system import WorkspaceStore
 from web_frontend.backend.runtime_bridge import RuntimeBridge
 from web_frontend.backend.routes.utils import optional_package, resource_command
 
@@ -22,8 +24,78 @@ class WorkspaceMountRequest(BaseModel):
     name: str | None = None
 
 
+class WorkspaceCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = None
+    mode: Literal["isolated", "project"] = "isolated"
+    owner_package_id: str | None = None
+
+
+class WorkspaceUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = None
+    mode: Literal["isolated", "project"] | None = None
+    archived: bool | None = None
+
+
 def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
     router = APIRouter(prefix="/api/workspace")
+
+    @router.get("/projects")
+    def list_workspaces(include_archived: bool = False):
+        return {
+            "workspaces": [
+                record.model_dump(mode="json")
+                for record in WorkspaceStore().list(include_archived=include_archived)
+            ]
+        }
+
+    @router.post("/projects")
+    def create_workspace(payload: WorkspaceCreateRequest):
+        try:
+            record = WorkspaceStore().create(
+                title=payload.title,
+                mode=payload.mode,
+                owner_package_id=payload.owner_package_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"workspace": record.model_dump(mode="json")}
+
+    @router.patch("/projects/{workspace_id}")
+    def update_workspace(workspace_id: str, payload: WorkspaceUpdateRequest):
+        try:
+            record = WorkspaceStore().update(
+                workspace_id,
+                title=payload.title,
+                mode=payload.mode,
+                archived=payload.archived,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"workspace": record.model_dump(mode="json")}
+
+    @router.delete("/projects/{workspace_id}")
+    def delete_workspace(workspace_id: str, delete_files: bool = True):
+        references = _workspace_session_references(workspace_id)
+        if references:
+            raise HTTPException(
+                status_code=409,
+                detail={"message": "workspace still has sessions", "sessions": references},
+            )
+        try:
+            record = WorkspaceStore().delete(workspace_id, delete_files=delete_files)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {
+            "deleted": True,
+            "workspace_id": record.workspace_id,
+            "files_deleted": delete_files,
+        }
 
     @router.get("/mounts")
     def list_workspace_mounts(
@@ -341,3 +413,23 @@ def _workspace_mount_context(
             detail="package_session_id is required to manage workspace mounts",
         )
     return resolved_package_id, resolved_session_id
+
+
+def _workspace_session_references(workspace_id: str) -> list[dict[str, str]]:
+    target = str(workspace_id or "").strip()
+    manager = AgentPackageRuntimeManager()
+    references: list[dict[str, str]] = []
+    for package in manager.list_packages():
+        package_id = str(package.get("package_id") or "").strip()
+        if not package_id:
+            continue
+        for session in manager.list_sessions(package_id):
+            if str(session.get("workspace_id") or "").strip() != target:
+                continue
+            references.append(
+                {
+                    "package_id": package_id,
+                    "session_id": str(session.get("session_id") or ""),
+                }
+            )
+    return references

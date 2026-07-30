@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from agent_factory.context_system import ContextContractConfig
 from agent_factory.memory_system.config import MemorySystemConfig
+from agent_factory.memory_system.scopes import application_memory_store_path
 from agent_factory.runtime_contracts.builder import RuntimeBuildContext
 from agent_factory.runtime_contracts.paths import package_runtime_path_text
 
@@ -17,11 +18,7 @@ def resolve_memory_system_config(
             "store": (
                 store.model_copy(
                     update={
-                        "path": package_runtime_path_text(
-                            context,
-                            store.path,
-                            field_path="context.runtime.cross_session_memory.store.path",
-                        )
+                        "path": str(application_memory_store_path())
                     }
                 )
                 if store.backend == "sqlite" and store.path.strip()

@@ -7,7 +7,8 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-MemoryScope = Literal["factory", "agent", "user"]
+MemoryScope = Literal["factory", "agent", "user", "workspace"]
+MemoryTargetScope = Literal["factory", "workspace", "agent", "user", "none"]
 MemoryKind = Literal["fact", "preference", "decision", "constraint", "artifact"]
 MemoryType = Literal["semantic", "episodic", "procedural"]
 MemoryExtractionActionType = Literal["add", "update", "delete", "noop"]
@@ -40,6 +41,7 @@ class MemoryExtractionAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     action: MemoryExtractionActionType
+    target_scope: MemoryTargetScope
     memory_type: MemoryType | None = None
     kind: MemoryKind | None = None
     content: str = ""
@@ -62,6 +64,7 @@ class MemoryContextItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     memory_id: str
+    source_scope: MemoryTargetScope = "none"
     memory_type: MemoryType = "semantic"
     kind: MemoryKind
     content: str
@@ -82,12 +85,27 @@ class MemoryContextPack(BaseModel):
     report: dict[str, Any] = Field(default_factory=dict)
 
 
+class MemoryRetrievalSource(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scope: MemoryTargetScope
+    namespace: tuple[str, ...]
+    priority: int = 0
+
+    @model_validator(mode="after")
+    def _writable_scope(self) -> "MemoryRetrievalSource":
+        if self.scope == "none":
+            raise ValueError("none is not a retrievable memory scope")
+        return self
+
+
 class MemoryWriteJob(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     job_id: str = Field(default_factory=lambda: uuid4().hex)
     scope: MemoryScope
     namespace: tuple[str, ...]
+    available_namespaces: dict[MemoryTargetScope, tuple[str, ...]] = Field(default_factory=dict)
     source: dict[str, Any] = Field(default_factory=dict)
     segment: MemoryConversationSegment
     created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
@@ -98,6 +116,10 @@ class MemoryWriteJob(BaseModel):
             raise ValueError("segment scope must match job scope")
         if tuple(self.segment.namespace) != tuple(self.namespace):
             raise ValueError("segment namespace must match job namespace")
+        if not self.available_namespaces:
+            self.available_namespaces = {self.scope: self.namespace}
+        if "none" in self.available_namespaces:
+            raise ValueError("none is not a writable memory namespace")
         return self
 
     def journal_payload(self) -> dict[str, Any]:
@@ -114,7 +136,9 @@ class MemoryWriteReport(BaseModel):
     job_id: str
     status: MemoryWriteStatus
     namespace: tuple[str, ...]
+    namespaces: list[tuple[str, ...]] = Field(default_factory=list)
     action_counts: dict[str, int] = Field(default_factory=dict)
+    scope_action_counts: dict[str, dict[str, int]] = Field(default_factory=dict)
     error: str | None = None
     duration_ms: int = 0
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
@@ -125,6 +149,7 @@ class MemoryInjectionReport(BaseModel):
 
     status: Literal["injected", "skipped", "failed"]
     namespace: tuple[str, ...] = Field(default_factory=tuple)
+    namespaces: list[tuple[str, ...]] = Field(default_factory=list)
     item_count: int = 0
     token_estimate: int = 0
     min_score: float = 0.0

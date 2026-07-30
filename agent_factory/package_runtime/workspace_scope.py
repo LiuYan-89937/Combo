@@ -39,6 +39,9 @@ def apply_runtime_workspace(
     session_config[RUNTIME_WORKSPACE_MOUNTS_SESSION_KEY] = _runtime_workspace_mounts(
         workspace.get("mounts")
     )
+    workspace_id = str(workspace.get("workspace_id") or "").strip()
+    if workspace_id:
+        session_config["workspace_id"] = workspace_id
 
 
 def _runtime_workspace_mounts(value: Any) -> list[dict[str, str]]:

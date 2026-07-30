@@ -10,6 +10,7 @@ from agent_factory.memory_system.config import should_enqueue_memory_write
 from agent_factory.memory_system.reports import memory_event_payload
 from agent_factory.memory_system.segment import build_conversation_segment
 from agent_factory.memory_system.schema import MemoryWriteJob
+from agent_factory.memory_system.scopes import MemoryScopeContext, local_memory_user_id
 from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
 from agent_factory.runtime_kernel.observability.schema import RuntimeObservationEvent
 from agent_factory.runtime_kernel.state import RuntimeState
@@ -275,16 +276,27 @@ class ExecutionController:
         turn_index = int(state.conversation.turn_index or 0)
         if not should_enqueue_memory_write(turn_index=turn_index, config=runtime.config):
             return None
+        workspace_id = str(state.run.workspace_id or "").strip()
+        scope_context = MemoryScopeContext(
+            agent_id=str(runtime.agent_id or state.run.agent_id),
+            user_id=str(runtime.user_id or local_memory_user_id()),
+            workspace_id=workspace_id or None,
+        )
+        available_namespaces = scope_context.namespaces()
+        namespace = available_namespaces.get("workspace") or available_namespaces["agent"]
+        memory_scope = "workspace" if workspace_id else "agent"
         source = {
             "agent_id": state.run.agent_id,
             "session_id": state.run.session_id,
+            "workspace_id": workspace_id or None,
             "thread_id": thread_id,
             "run_id": state.run.run_id,
             "node_id": state.execution.current_node,
         }
         segment = build_conversation_segment(
-            scope="agent",
-            namespace=tuple(runtime.namespace),
+            scope=memory_scope,
+            namespace=namespace,
+            available_namespaces=available_namespaces,
             source=source,
             messages=messages or _messages_delta(state),
             end_turn=turn_index,
@@ -293,8 +305,8 @@ class ExecutionController:
         if segment is None:
             return None
         job = MemoryWriteJob(
-            scope="agent",
-            namespace=tuple(runtime.namespace),
+            scope=memory_scope,
+            namespace=namespace,
             source=source,
             segment=segment,
         )

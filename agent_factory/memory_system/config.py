@@ -96,8 +96,13 @@ class MemorySystemConfig(BaseModel):
 
 def default_agent_memory_config() -> MemorySystemConfig:
     config = MemorySystemConfig()
+    from agent_factory.memory_system.scopes import application_memory_store_path
+
     return config.model_copy(
         update={
+            "store": config.store.model_copy(
+                update={"path": str(application_memory_store_path())}
+            ),
             "background": config.background.model_copy(
                 update={"write_interval_turns": memory_write_interval_turns_from_env()}
             ),

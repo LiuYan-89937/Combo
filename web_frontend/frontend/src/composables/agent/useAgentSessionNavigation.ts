@@ -18,10 +18,17 @@ export function useAgentSessionNavigation() {
     })
   }
 
-  async function startNewAgentSession(packageId: string): Promise<void> {
+  async function startNewAgentSession(packageId: string, workspaceId?: string | null): Promise<void> {
     const normalizedPackageId = String(packageId || '').trim()
     if (!normalizedPackageId) return
-    await router.push({ name: 'Factory', query: { package_id: normalizedPackageId, new: '1' } })
+    await router.push({
+      name: 'Factory',
+      query: {
+        package_id: normalizedPackageId,
+        new: '1',
+        ...(workspaceId ? { workspace_id: workspaceId } : {}),
+      },
+    })
   }
 
   async function openPackageAgentChat(packageId: string): Promise<void> {

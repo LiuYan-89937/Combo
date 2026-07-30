@@ -33,6 +33,7 @@ from agent_factory.workspace_mounts import (
     WorkspaceMountService,
     workspace_mount_payload,
 )
+from agent_factory.workspace_system import WorkspaceRecord, WorkspaceStore
 from agent_factory.runtime_kernel.persistence import delete_sqlite_checkpoint_thread
 from agent_factory.mcp_gateway import HostMCPGatewayManager
 from agent_factory.skillhub_gateway import HostSkillHubGatewayManager
@@ -91,6 +92,12 @@ DEFAULT_AGENT_RUNTIME_INITIALIZE_TIMEOUT_SECONDS = 120
 DEFAULT_AGENT_RUNTIME_BRIDGE_STARTUP_TIMEOUT_SECONDS = 30
 Emit = Callable[[FactoryFrontendEvent], None]
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolvedWorkspace:
+    record: WorkspaceRecord
+    workdir: Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,9 +264,32 @@ class AgentPackageRuntimeManager:
         return _host_package_workdir(package_id)
 
     def workdir_for_session(self, package_id: str, session_id: str) -> Path:
-        workdir = _host_session_workdir(package_id, session_id)
-        workdir.mkdir(parents=True, exist_ok=True)
-        return workdir
+        return self._workspace_for_session(package_id, session_id).workdir
+
+    def _workspace_for_session(self, package_id: str, session_id: str):
+        package = self.load_package(package_id)
+        session = self._session_manager_for_package(package_id, package).load(session_id)
+        store = WorkspaceStore()
+        record = store.load_optional(session.workspace_id)
+        if record is None:
+            legacy_workdir = _host_session_workdir(package_id, session_id)
+            record = store.create(
+                workspace_id=session.workspace_id,
+                title=session.display_title or session.first_user_input or "新工作区",
+                mode="isolated",
+                owner_package_id=package_id,
+                workdir_root=legacy_workdir if legacy_workdir.exists() else None,
+            )
+        if session.legacy_workspace_mounts:
+            known_mount_ids = {mount.mount_id for mount in record.mounts}
+            record.mounts.extend(
+                mount
+                for mount in session.legacy_workspace_mounts
+                if mount.mount_id not in known_mount_ids
+            )
+            store.save(record)
+            self._session_manager_for_package(package_id, package).save(session)
+        return _ResolvedWorkspace(record=record, workdir=store.workdir(record.workspace_id))
 
     def list_instance_statuses(self) -> list[dict[str, Any]]:
         package_ids = {item.get("package_id") for item in self.list_packages()}
@@ -667,12 +697,10 @@ class AgentPackageRuntimeManager:
         return _hydrate_session_runtime_view(session)
 
     def list_workspace_mounts(self, package_id: str, session_id: str) -> list[dict[str, object]]:
-        package = self.load_package(package_id)
-        record = self._session_manager_for_package(package_id, package).load(session_id)
-        workdir = self.workdir_for_session(package_id, session_id)
+        workspace = self._workspace_for_session(package_id, session_id)
         return [
-            workspace_mount_payload(mount, workdir_root=workdir)
-            for mount in record.workspace_mounts
+            workspace_mount_payload(mount, workdir_root=workspace.workdir)
+            for mount in workspace.record.mounts
         ]
 
     def mount_workspace_directory(
@@ -683,20 +711,17 @@ class AgentPackageRuntimeManager:
         source_path: str,
         name: str | None = None,
     ) -> dict[str, Any]:
-        package = self.load_package(package_id)
-        manager = self._session_manager_for_package(package_id, package)
-        record = manager.load(session_id)
-        workdir = self.workdir_for_session(package_id, session_id)
-        service = WorkspaceMountService(workdir)
+        workspace = self._workspace_for_session(package_id, session_id)
+        service = WorkspaceMountService(workspace.workdir)
         mount, created = service.mount(
             source_path=source_path,
             name=name,
-            existing=record.workspace_mounts,
+            existing=workspace.record.mounts,
         )
         if created:
-            record.workspace_mounts.append(mount)
+            workspace.record.mounts.append(mount)
             try:
-                manager.save(record)
+                WorkspaceStore().save(workspace.record)
             except Exception:
                 service.unmount(mount)
                 raise
@@ -717,24 +742,22 @@ class AgentPackageRuntimeManager:
         session_id: str,
         mount_id: str,
     ) -> dict[str, Any]:
-        package = self.load_package(package_id)
-        manager = self._session_manager_for_package(package_id, package)
-        record = manager.load(session_id)
+        workspace = self._workspace_for_session(package_id, session_id)
         normalized_mount_id = str(mount_id or "").strip()
         mount = next(
-            (item for item in record.workspace_mounts if item.mount_id == normalized_mount_id),
+            (item for item in workspace.record.mounts if item.mount_id == normalized_mount_id),
             None,
         )
         if mount is None:
             raise FileNotFoundError(f"workspace mount not found: {normalized_mount_id}")
-        service = WorkspaceMountService(self.workdir_for_session(package_id, session_id))
+        service = WorkspaceMountService(workspace.workdir)
         service.unmount(mount)
-        record.workspace_mounts = [
-            item for item in record.workspace_mounts
+        workspace.record.mounts = [
+            item for item in workspace.record.mounts
             if item.mount_id != normalized_mount_id
         ]
         try:
-            manager.save(record)
+            WorkspaceStore().save(workspace.record)
         except Exception:
             service.ensure_projection(mount)
             raise
@@ -750,9 +773,8 @@ class AgentPackageRuntimeManager:
         package_id: str,
         session_id: str,
     ) -> dict[str, WorkspaceMountRecord]:
-        package = self.load_package(package_id)
-        record = self._session_manager_for_package(package_id, package).load(session_id)
-        return {mount.name: mount for mount in record.workspace_mounts}
+        workspace = self._workspace_for_session(package_id, session_id)
+        return {mount.name: mount for mount in workspace.record.mounts}
 
     def session_exists(self, package_id: str, session_id: str) -> bool:
         package = self.load_package(package_id)
@@ -796,18 +818,27 @@ class AgentPackageRuntimeManager:
                 "sessions": self._list_sessions_for_loaded_package(package_id, package),
                 "recent_agent_sessions": self.list_recent_sessions(),
             }
-        _remove_session_workspace_mounts(
-            record.workspace_mounts,
-            workdir_root=self.workdir_for_session(package_id, record.session_id),
-        )
+        workspace = self._workspace_for_session(package_id, record.session_id)
         deleted_checkpoint_count = _delete_agent_session_checkpoint(
             package_id=package_id,
             package=package,
             session_id=record.session_id,
             thread_id=record.thread_id,
         )
-        deleted_workdir = _delete_agent_session_workdir(package_id, record.session_id)
         result = manager.delete(record.session_id)
+        remaining_workspace_sessions = [
+            item
+            for item in manager.list_sessions(include_internal=True)
+            if item.workspace_id == record.workspace_id
+        ]
+        deleted_workdir = False
+        if workspace.record.mode == "isolated" and not remaining_workspace_sessions:
+            _remove_session_workspace_mounts(
+                workspace.record.mounts,
+                workdir_root=workspace.workdir,
+            )
+            WorkspaceStore().delete(workspace.record.workspace_id, delete_files=True)
+            deleted_workdir = True
         collaboration_unlink = (
             CollaborationStore().unlink_runtime_session(
                 package_id=package_id,
@@ -1176,6 +1207,7 @@ class AgentPackageRuntimeManager:
         collaboration_task_id: str | None = None,
         agent_group_id: str | None = None,
         visible_in_agent_session_list: bool | None = None,
+        workspace_id: str | None = None,
     ) -> dict[str, Any]:
         package = self.load_package(package_id)
         manager = self._session_manager_for_package(package_id, package)
@@ -1184,8 +1216,14 @@ class AgentPackageRuntimeManager:
                 return manager.load(session_id).model_dump(mode="json")
             except FileNotFoundError:
                 pass
+        workspace = self._resolve_workspace_for_new_session(
+            package_id=package_id,
+            workspace_id=workspace_id,
+            title=first_user_input,
+        )
         return manager.create(
             agent_id=package.assembly_spec.agent.id,
+            workspace_id=workspace.workspace_id,
             session_id=session_id,
             first_user_input=first_user_input,
             session_kind=session_kind,
@@ -1217,6 +1255,7 @@ class AgentPackageRuntimeManager:
         agent_group_id: str | None = None,
         visible_in_agent_session_list: bool | None = None,
         workdir_root: Path | None = None,
+        workspace_id: str | None = None,
     ) -> AgentPackageStreamRun:
         package = self.load_package(package_id)
         del require_ready
@@ -1226,8 +1265,14 @@ class AgentPackageRuntimeManager:
         if session_id:
             session = session_manager.load(session_id)
         else:
+            workspace = self._resolve_workspace_for_new_session(
+                package_id=package_id,
+                workspace_id=workspace_id,
+                title=session_user_input,
+            )
             session = session_manager.create(
                 agent_id=package.assembly_spec.agent.id,
+                workspace_id=workspace.workspace_id,
                 first_user_input=session_user_input,
                 session_kind=session_kind,
                 collaboration_id=collaboration_id,
@@ -1250,11 +1295,13 @@ class AgentPackageRuntimeManager:
                 agent_group_id=agent_group_id,
                 visible_in_agent_session_list=visible_in_agent_session_list,
             )
-        resolved_workdir_root = workdir_root or self.workdir_for_session(package_id, session.session_id)
+        workspace = self._workspace_for_session(package_id, session.session_id)
+        resolved_workdir_root = workdir_root or workspace.workdir
         runtime_workspace = _runtime_workspace_payload(
             package_id,
             resolved_workdir_root,
-            mounts=session.workspace_mounts,
+            workspace_id=session.workspace_id,
+            mounts=workspace.record.mounts,
         )
         attachment_result = self._prepare_runtime_attachments(
             package_id=package_id,
@@ -1336,11 +1383,13 @@ class AgentPackageRuntimeManager:
     ) -> AgentPackageStreamRun:
         package = self.load_package(package_id)
         session = self._session_manager_for_package(package_id, package).load(session_id)
-        resolved_workdir_root = workdir_root or self.workdir_for_session(package_id, session.session_id)
+        workspace = self._workspace_for_session(package_id, session.session_id)
+        resolved_workdir_root = workdir_root or workspace.workdir
         runtime_workspace = _runtime_workspace_payload(
             package_id,
             resolved_workdir_root,
-            mounts=session.workspace_mounts,
+            workspace_id=session.workspace_id,
+            mounts=workspace.record.mounts,
         )
         request_policy = RuntimeRequestPolicy.from_payload(
             runtime_request,
@@ -1454,6 +1503,26 @@ class AgentPackageRuntimeManager:
     def _session_manager_for_package(self, package_id: str, package: LoadedAgentPackage) -> AgentSessionManager:
         return AgentSessionManager(
             AgentSessionConfig(root=_host_runtime_root(package_id) / "sessions")
+        )
+
+    def _resolve_workspace_for_new_session(
+        self,
+        *,
+        package_id: str,
+        workspace_id: str | None,
+        title: str | None,
+    ) -> WorkspaceRecord:
+        store = WorkspaceStore()
+        identifier = str(workspace_id or "").strip()
+        if identifier:
+            record = store.load(identifier)
+            if record.mode != "project":
+                record = store.update(identifier, mode="project")
+            return record
+        return store.create(
+            title=title,
+            mode="isolated",
+            owner_package_id=package_id,
         )
 
     def _list_sessions_for_loaded_package(
@@ -1770,7 +1839,7 @@ class AgentPackageRuntimeManager:
         workspace = _package_runtime_workspace(package_id).ensure()
         runtime_root = workspace.root
         artifacts_root = workspace.artifacts
-        workdir_root = workspace.workdir
+        workdir_root = (workdir_root or workspace.workdir).expanduser().resolve()
         extension_root = _extension_root_for_package(package_id, package)
         for path in (artifacts_root, workdir_root, runtime_root, extension_root):
             path.mkdir(parents=True, exist_ok=True)
@@ -1841,7 +1910,7 @@ class AgentPackageRuntimeManager:
             workspace = _package_runtime_workspace(package_id).ensure()
             runtime_root = workspace.root
             artifacts_root = workspace.artifacts
-            workdir_root = workspace.workdir
+            workdir_root = (workdir_root or workspace.workdir).expanduser().resolve()
             extension_root = _extension_root_for_package(package_id, package)
             for path in (artifacts_root, workdir_root, runtime_root, extension_root):
                 path.mkdir(parents=True, exist_ok=True)
@@ -1968,25 +2037,27 @@ def _scoped_runtime_event(chunk: Any, *, package_id: str) -> FactoryFrontendEven
 
 
 def _runtime_handle_key(package_id: str, command: dict[str, Any]) -> str:
-    del command
-    return package_id
+    payload = command.get("payload") if isinstance(command.get("payload"), dict) else {}
+    runtime_workspace = (
+        payload.get("runtime_workspace")
+        if isinstance(payload.get("runtime_workspace"), dict)
+        else {}
+    )
+    workspace_id = str(runtime_workspace.get("workspace_id") or "").strip()
+    return f"{package_id}:{workspace_id}" if workspace_id else package_id
 
 
 def _runtime_workspace_payload(
     package_id: str,
     workdir_root: Path,
     *,
+    workspace_id: str | None = None,
     mounts: list[WorkspaceMountRecord] | None = None,
 ) -> dict[str, Any]:
-    package_workdir = _host_package_workdir(package_id).expanduser().resolve()
-    resolved = workdir_root.expanduser().resolve()
-    try:
-        relative = resolved.relative_to(package_workdir)
-    except ValueError:
-        return {}
-    scope = "" if relative == Path(".") else relative.as_posix()
+    del package_id, workdir_root
     return {
-        "scope": scope,
+        "scope": "",
+        **({"workspace_id": workspace_id} if workspace_id else {}),
         "mounts": [
             {
                 "name": mount.name,

@@ -10,11 +10,13 @@ import { storeToRefs } from 'pinia'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseIcon, { type IconName } from '@/components/base/BaseIcon.vue'
 import PackageCard from '@/components/hub/PackageCard.vue'
+import ProductShowcase from '@/components/home/ProductShowcase.vue'
 import StateBlock from '@/components/base/StateBlock.vue'
 import SkeletonBlock from '@/components/base/SkeletonBlock.vue'
 import { useI18n } from '@/i18n'
 import { useConfigStore } from '@/stores/config'
 import { useSeo, ORIGIN } from '@/composables/useSeo'
+import { formatCount } from '@/composables/useFormat'
 import { listPackages } from '@/api/packages'
 import type { AgentRelease } from '@/api/types'
 
@@ -125,6 +127,8 @@ onMounted(loadFeatured)
         </div>
       </div>
     </section>
+
+    <ProductShowcase />
 
     <!-- PIPELINE -->
     <section class="section">
@@ -238,6 +242,9 @@ onMounted(loadFeatured)
           <span class="eyebrow">{{ t('nav.download') }}</span>
           <h2 class="block-head__title">{{ t('home.downloadTitle') }}</h2>
           <p class="block-head__sub">{{ t('home.downloadSubtitle') }}</p>
+          <p class="download__total">
+            {{ t('home.totalDownloads', { count: formatCount(config.totalDownloadCount) }) }}
+          </p>
         </header>
         <div class="download__grid">
           <div v-for="d in config.downloads" :key="`${d.platform}-${d.arch}`" class="download__card">
@@ -730,6 +737,12 @@ onMounted(loadFeatured)
   grid-template-columns: repeat(2, minmax(0, 340px));
   gap: var(--space-4);
   justify-content: center;
+}
+.download__total {
+  margin-top: var(--space-3);
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 600;
 }
 .download__card {
   display: flex;

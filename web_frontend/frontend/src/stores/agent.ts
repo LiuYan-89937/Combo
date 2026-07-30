@@ -144,6 +144,7 @@ export interface AgentPackageView {
 
 export interface AgentSessionView {
   session_id: string
+  workspace_id?: string | null
   package_id: string
   session_kind?: string | null
   collaboration_id?: string | null

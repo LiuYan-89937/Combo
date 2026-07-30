@@ -333,10 +333,11 @@ onMounted(async () => {
   await activateCurrentRoute()
   void loadRuntimeMainModelProfiles()
 
-  // 聚焦输入框
-  nextTick(() => {
-    inputRef.value?.focus()
-  })
+  if (!route.meta.showcaseMode) {
+    nextTick(() => {
+      inputRef.value?.focus()
+    })
+  }
 })
 
 watch(
@@ -403,6 +404,7 @@ async function openRoutedAgentSession(version: number): Promise<boolean> {
     ) return true
     agentStore.enterAgentChat(packageId, null)
     runtimeStore.showEmptyAgentPackageSession(packageId)
+    runtimeStore.activeWorkspaceId = routeQueryText(route.query.workspace_id) || null
     await commands.selectAgentPackage(packageId, 'run')
     return true
   }

@@ -40,6 +40,12 @@ const year = computed(() => new Date().getFullYear())
 
     <div class="container footer__base">
       <span>© {{ year }} FastAgentFactory. {{ t('footer.rights') }}</span>
+      <a
+        class="footer__feedback"
+        href="mailto:2775965605@qq.com?subject=FastAgentFactory%20Bug%20Feedback"
+      >
+        {{ t('footer.bugFeedback') }}：2775965605@qq.com
+      </a>
     </div>
   </footer>
 </template>
@@ -99,10 +105,22 @@ const year = computed(() => new Date().getFullYear())
   color: var(--text-strong);
 }
 .footer__base {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
   padding-block: var(--space-6);
   border-top: 1px solid var(--border);
   color: var(--text-muted);
   font-size: 13px;
+}
+.footer__feedback {
+  color: var(--text-secondary);
+  text-decoration: none;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+.footer__feedback:hover {
+  color: var(--text-strong);
 }
 @media (max-width: 640px) {
   .footer__cols {

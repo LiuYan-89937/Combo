@@ -112,11 +112,12 @@
           <div v-for="item in memoryItems" :key="item.memory_id" class="memory-item">
             <div class="memory-item-header">
               <n-tag size="small" :bordered="false">{{ memoryKindLabel(item.kind) }}</n-tag>
+              <n-tag size="small" :bordered="false" type="info">{{ memoryScopeLabel(item.source_scope) }}</n-tag>
               <span class="memory-score">{{ t('status.memoryScore', { score: percentLabel(item.score) }) }}</span>
               <n-popconfirm
                 :positive-text="t('common.delete')"
                 :negative-text="t('common.cancel')"
-                @positive-click="deleteMemoryItem(item.memory_id)"
+                @positive-click="deleteMemoryItem(item)"
               >
                 <template #trigger>
                   <n-button
@@ -323,6 +324,7 @@ async function refreshMemory() {
       memoryQuery.value.trim(),
       resourceContext.packageIdForApi.value,
       8,
+      runtimeStore.activeWorkspaceId,
     )
     if (serial !== memoryRequestSerial) return
     memoryItems.value = [...(response.items || [])].sort(memorySort)
@@ -337,11 +339,17 @@ async function refreshMemory() {
   }
 }
 
-async function deleteMemoryItem(memoryId: string) {
+async function deleteMemoryItem(item: MemoryContextItemView) {
+  const memoryId = item.memory_id
   deletingMemoryIds.value = { ...deletingMemoryIds.value, [memoryId]: true }
   memoryError.value = ''
   try {
-    await memoryApi.deleteItem(memoryId, resourceContext.packageIdForApi.value)
+    await memoryApi.deleteItem(
+      memoryId,
+      item.source_scope === 'none' ? 'agent' : item.source_scope,
+      resourceContext.packageIdForApi.value,
+      runtimeStore.activeWorkspaceId,
+    )
     memoryItems.value = memoryItems.value.filter((item) => item.memory_id !== memoryId)
     await refreshMemory()
   } catch (error) {
@@ -396,6 +404,13 @@ function memoryKindLabel(kind: string): string {
   return kind || t('common.unknown')
 }
 
+function memoryScopeLabel(scope: string): string {
+  if (scope === 'workspace') return t('status.memoryScope.workspace')
+  if (scope === 'agent') return t('status.memoryScope.agent')
+  if (scope === 'user') return t('status.memoryScope.user')
+  return t('common.unknown')
+}
+
 function formatMemoryTime(value: string): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
@@ -426,6 +441,11 @@ watch(
 
 watch(
   () => resourceContext.packageIdForApi.value,
+  () => refreshMemory(),
+)
+
+watch(
+  () => runtimeStore.activeWorkspaceId,
   () => refreshMemory(),
 )
 

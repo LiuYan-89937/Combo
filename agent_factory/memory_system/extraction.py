@@ -21,8 +21,18 @@ Memory extraction policy:
   - semantic: durable facts, preferences, constraints, decisions, and artifact references.
   - episodic: important events or outcomes from this session that are worth recalling later.
   - procedural: reusable ways of working, workflows, commands, or project-specific operating procedures.
+- Choose exactly one target_scope for every action:
+  - factory: durable manufacturing-project memory, only when conversation_segment.scope is factory.
+  - workspace: facts, decisions, constraints, artifacts, or procedures that belong to the current project/workspace.
+  - agent: durable operating knowledge or behavior that should follow this Agent across unrelated workspaces.
+  - user: stable user preferences that should follow the user across different Agents and workspaces.
+  - none: transient content or content that must not be persisted. Use action=noop with target_scope=none.
+- A preference about the current project's output or conventions belongs to workspace. Use user only for a stable
+  person-level preference that is useful across unrelated Agents and projects.
+- Never choose factory unless conversation_segment.scope is factory.
 - Use related_memories to deduplicate. Prefer update when a memory should replace or refine an existing item.
-- delete requires merge_target_id and should only be used when the segment clearly invalidates an existing memory.
+- update/delete require merge_target_id. target_scope must match the source_scope of the related memory being changed.
+- delete should only be used when the segment clearly invalidates an existing memory.
 - noop if the segment contains only transient progress, greetings, raw logs, tool output, or details that should not be stored.
 - Never store secrets, credentials, API keys, raw private data, or large copied text.
 

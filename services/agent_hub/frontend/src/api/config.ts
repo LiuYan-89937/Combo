@@ -16,6 +16,7 @@ export interface DownloadTarget {
   url: string
   version: string
   sizeLabel: string
+  downloadCount: number
 }
 
 export interface PublicConfig {
@@ -23,6 +24,7 @@ export interface PublicConfig {
   maxPackageBytes: number
   githubRepoUrl: string
   downloads: DownloadTarget[]
+  totalDownloadCount: number
   releaseManaged?: boolean
 }
 
@@ -37,6 +39,7 @@ const FALLBACK_CONFIG: PublicConfig = {
       url: 'https://github.com/LiuYan-89937/FastAgentFactory/releases/download/v0.1.0/FastAgentFactory_0.1.0_aarch64.dmg',
       version: '0.1.0',
       sizeLabel: '296 MB',
+      downloadCount: 0,
     },
     {
       platform: 'windows',
@@ -45,8 +48,10 @@ const FALLBACK_CONFIG: PublicConfig = {
       url: 'https://github.com/LiuYan-89937/FastAgentFactory/releases/download/v0.1.0/FastAgentFactory_0.1.0_x64-setup.exe',
       version: '0.1.0',
       sizeLabel: '96.2 MB',
+      downloadCount: 0,
     },
   ],
+  totalDownloadCount: 0,
 }
 
 let cached: PublicConfig | null = null
@@ -71,6 +76,7 @@ function mergeConfig(remote: Partial<PublicConfig>): PublicConfig {
     downloads: remote.releaseManaged
       ? remote.downloads ?? []
       : FALLBACK_CONFIG.downloads,
+    totalDownloadCount: remote.totalDownloadCount ?? 0,
     releaseManaged: remote.releaseManaged ?? false,
   }
 }

@@ -358,11 +358,10 @@ def _assert_package_runtime_workspace(
     workdir_root: Path,
     extension_root: Path,
 ) -> None:
-    """Ensure all writable paths are inside the package runtime root."""
+    """Validate package-owned paths and the explicitly selected workdir."""
     root = runtime_root.resolve()
     for field_name, path in (
         ("artifacts_root", artifacts_root),
-        ("workdir_root", workdir_root),
         ("extension_root", extension_root),
     ):
         resolved = path.resolve()
@@ -377,6 +376,14 @@ def _assert_package_runtime_workspace(
                     f"root={root}, path={resolved}"
                 ),
             ) from exc
+    resolved_workdir = workdir_root.expanduser().resolve()
+    if resolved_workdir == resolved_workdir.parent:
+        raise AgentRuntimeLaunchError(
+            where="native.runtime_workspace",
+            why="unsafe_workspace_root",
+            message="workdir_root must not be a filesystem root",
+        )
+    resolved_workdir.mkdir(parents=True, exist_ok=True)
 
 
 def _copy_sqlite_snapshot(source: Path, target: Path) -> None:

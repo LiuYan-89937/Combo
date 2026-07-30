@@ -9,7 +9,7 @@ from typing import Iterator
 from agent_hub.config import Settings
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 SQLITE_BUSY_TIMEOUT_MS = 10_000
 
 
@@ -169,6 +169,7 @@ class Database:
                   progress_bytes integer not null default 0 check (progress_bytes >= 0),
                   github_asset_id integer unique,
                   download_url text,
+                  download_count integer not null default 0,
                   updater_signature text,
                   error_code text,
                   error_message text,
@@ -232,6 +233,12 @@ class Database:
                 declaration="text",
             )
             _migrate_app_release_assets_v4(connection)
+            _add_column_if_missing(
+                connection,
+                table="app_release_assets",
+                column="download_count",
+                declaration="integer not null default 0",
+            )
             connection.execute(
                 """
                 insert into schema_migrations(version, applied_at)

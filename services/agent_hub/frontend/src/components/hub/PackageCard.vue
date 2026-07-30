@@ -48,7 +48,7 @@ const mcpCount = computed(() => props.release.validation?.tools.mcp_servers.leng
       <span class="card__version mono">v{{ release.version }}</span>
       <span class="card__meta">
         <BaseIcon name="download" :size="14" />
-        {{ formatCount(release.download_count) }}
+        {{ t('hub.downloadCount', { count: formatCount(release.download_count) }) }}
       </span>
       <span class="card__meta">{{ formatBytes(release.size_bytes) }}</span>
       <BaseIcon name="arrow-right" :size="16" class="card__go" />

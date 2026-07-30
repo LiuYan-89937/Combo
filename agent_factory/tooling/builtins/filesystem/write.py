@@ -68,8 +68,8 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         return tool_envelope(result, evidence={FOCUS_EVIDENCE_KEY: focus} if focus else {})
     if action == "abort":
         return tool_envelope(abort_staged_write(arguments, resources))
-    if action:
-        raise ValueError("action must be start, append, commit, or abort")
+    if action != "write_once":
+        raise ValueError("action must be write_once, start, append, commit, or abort")
     path = required_string(arguments, "path")
     content = arguments.get("content")
     if not isinstance(content, str):

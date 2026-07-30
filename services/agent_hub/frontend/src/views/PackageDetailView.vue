@@ -130,7 +130,10 @@ onMounted(load)
           <div class="detail__facts">
             <BaseBadge tone="success"><BaseIcon name="shield-check" :size="13" /> {{ t('detail.validationPassed') }}</BaseBadge>
             <span class="detail__fact mono">v{{ active.version }}</span>
-            <span class="detail__fact"><BaseIcon name="download" :size="14" /> {{ formatCount(active.download_count) }}</span>
+            <span class="detail__fact">
+              <BaseIcon name="download" :size="14" />
+              {{ t('hub.downloadCount', { count: formatCount(active.download_count) }) }}
+            </span>
             <span class="detail__fact">{{ formatBytes(active.size_bytes) }}</span>
             <span class="detail__fact">{{ t('common.published') }} {{ formatDate(active.published_at, locale) }}</span>
           </div>
@@ -587,5 +590,4 @@ onMounted(load)
   }
 }
 </style>
-
 

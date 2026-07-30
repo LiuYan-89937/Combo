@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import re
 from time import perf_counter
 
 from langgraph.store.base import BaseStore, SearchItem
 
 from agent_factory.memory_system.config import MemorySystemConfig
 from agent_factory.memory_system.ranking import rank_memory_items
-from agent_factory.memory_system.schema import MemoryContextPack
+from agent_factory.memory_system.schema import MemoryContextPack, MemoryRetrievalSource
 
 
 def retrieve_memory_context(
@@ -66,6 +67,80 @@ def retrieve_memory_context(
     )
 
 
+def retrieve_scoped_memory_context(
+    *,
+    store: BaseStore | None,
+    sources: list[MemoryRetrievalSource],
+    query: str,
+    config: MemorySystemConfig,
+) -> MemoryContextPack:
+    started = perf_counter()
+    namespaces = [source.namespace for source in sources]
+    primary_namespace = namespaces[0] if namespaces else ()
+    if store is None or not config.enabled or not config.injection_enabled:
+        return MemoryContextPack(
+            namespace=primary_namespace,
+            query=query,
+            report={
+                "status": "skipped",
+                "reason": "memory disabled or store missing",
+                "namespaces": [list(namespace) for namespace in namespaces],
+            },
+        )
+    raw_items: list[SearchItem] = []
+    source_reports: list[dict] = []
+    source_priority = {source.namespace: source.priority for source in sources}
+    candidate_limit = max(config.ranking.max_items_total * 4, 16)
+    lexical_limit = max(config.ranking.max_items_total * 8, 32)
+    for source in sources:
+        semantic_items, semantic_error = _search_with_query(
+            store=store,
+            namespace=source.namespace,
+            query=query,
+            limit=candidate_limit,
+        )
+        lexical_items, lexical_error = _search_without_query(
+            store=store,
+            namespace=source.namespace,
+            limit=lexical_limit,
+        )
+        merged = _merge_search_items([*semantic_items, *lexical_items])
+        raw_items.extend(merged)
+        source_reports.append(
+            {
+                "scope": source.scope,
+                "namespace": list(source.namespace),
+                "candidate_count": len(merged),
+                "semantic_count": len(semantic_items),
+                "lexical_count": len(lexical_items),
+                "semantic_error": semantic_error,
+                "lexical_error": lexical_error,
+            }
+        )
+    deduplicated = _deduplicate_scoped_items(raw_items, source_priority=source_priority)
+    ranked, token_estimate = rank_memory_items(items=deduplicated, query=query, config=config.ranking)
+    selected_by_scope: dict[str, int] = {}
+    for item in ranked:
+        selected_by_scope[item.source_scope] = selected_by_scope.get(item.source_scope, 0) + 1
+    for report in source_reports:
+        report["selected_count"] = selected_by_scope.get(str(report["scope"]), 0)
+    return MemoryContextPack(
+        namespace=primary_namespace,
+        query=query,
+        items=ranked,
+        token_estimate=token_estimate,
+        report={
+            "status": "completed",
+            "namespaces": [list(namespace) for namespace in namespaces],
+            "raw_count": len(raw_items),
+            "deduplicated_count": len(deduplicated),
+            "selected_count": len(ranked),
+            "sources": source_reports,
+            "duration_ms": int((perf_counter() - started) * 1000),
+        },
+    )
+
+
 def _search_with_query(
     *,
     store: BaseStore,
@@ -101,6 +176,41 @@ def _merge_search_items(items: list[SearchItem]) -> list[SearchItem]:
         if existing is None or _score_value(item) > _score_value(existing):
             merged[key] = item
     return list(merged.values())
+
+
+def _deduplicate_scoped_items(
+    items: list[SearchItem],
+    *,
+    source_priority: dict[tuple[str, ...], int],
+) -> list[SearchItem]:
+    deduplicated: dict[str, SearchItem] = {}
+    for item in items:
+        value = dict(item.value or {})
+        content_key = _normalized_content(str(value.get("content") or ""))
+        key = content_key or f"{tuple(item.namespace)}:{item.key}"
+        existing = deduplicated.get(key)
+        if existing is None or _item_preference(
+            item,
+            source_priority=source_priority,
+        ) > _item_preference(existing, source_priority=source_priority):
+            deduplicated[key] = item
+    return list(deduplicated.values())
+
+
+def _item_preference(
+    item: SearchItem,
+    *,
+    source_priority: dict[tuple[str, ...], int],
+) -> tuple[int, float, str]:
+    return (
+        source_priority.get(tuple(item.namespace), 0),
+        _score_value(item),
+        str(getattr(item, "updated_at", "") or ""),
+    )
+
+
+def _normalized_content(content: str) -> str:
+    return re.sub(r"\s+", " ", content).strip().casefold()
 
 
 def _score_value(item: SearchItem) -> float:
