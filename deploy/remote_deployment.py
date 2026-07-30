@@ -168,13 +168,13 @@ class RemoteDeployment:
             "official llama.cpp",
             self.config.local_path("LOCAL_LLAMA_OFFICIAL_DIR"),
             str(self.config.remote_path("REMOTE_LLAMA_SOURCE_ROOT") / "official"),
-            exclude=lambda relative: any(part.startswith("build") for part in relative.parts),
+            exclude=exclude_build_directories,
         )
         self._sync_tree_archive(
             "AMD llama.cpp",
             self.config.local_path("LOCAL_LLAMA_AMD_DIR"),
             str(self.config.remote_path("REMOTE_LLAMA_SOURCE_ROOT") / "amd"),
-            exclude=lambda relative: any(part.startswith("build") for part in relative.parts),
+            exclude=exclude_build_directories,
         )
         self._sync_tree_archive(
             "shared llama.cpp operator trace",
@@ -185,10 +185,7 @@ class RemoteDeployment:
             "stable-diffusion.cpp",
             self.config.local_path("LOCAL_STABLE_DIFFUSION_CPP_DIR"),
             self.config.require("REMOTE_STABLE_DIFFUSION_CPP_DIR"),
-            exclude=lambda relative: (
-                ".git" in relative.parts
-                or (bool(relative.parts) and relative.parts[0].startswith("build"))
-            ),
+            exclude=exclude_stable_diffusion_generated_directories,
         )
 
     def ssh_run(self, *remote_arguments: str) -> None:
@@ -369,7 +366,7 @@ class RemoteDeployment:
         label: str,
         source: Path,
         target: str,
-        exclude: Callable[[Path], bool] | None = None,
+        exclude: Callable[[Path, bool], bool] | None = None,
     ) -> None:
         validate_remote_sync_target(target)
         log(f"Synchronizing {label} with a compressed archive")
@@ -410,18 +407,33 @@ def create_source_archive(
     source: Path,
     archive: Path,
     *,
-    exclude: Callable[[Path], bool] | None = None,
+    exclude: Callable[[Path, bool], bool] | None = None,
 ) -> None:
     if not source.is_dir():
         raise FileNotFoundError(f"sync source directory is missing: {source}")
 
     def archive_filter(info: tarfile.TarInfo) -> tarfile.TarInfo | None:
         relative = Path(info.name)
-        return None if exclude is not None and exclude(relative) else info
+        return None if exclude is not None and exclude(relative, info.isdir()) else info
 
     with tarfile.open(archive, "w:gz", dereference=False) as bundle:
         for child in sorted(source.iterdir(), key=lambda item: item.name.casefold()):
             bundle.add(child, arcname=child.name, recursive=True, filter=archive_filter)
+
+
+def exclude_build_directories(relative: Path, entry_is_directory: bool) -> bool:
+    directory_parts = relative.parts if entry_is_directory else relative.parts[:-1]
+    return any(part.startswith("build") for part in directory_parts)
+
+
+def exclude_stable_diffusion_generated_directories(
+    relative: Path,
+    entry_is_directory: bool,
+) -> bool:
+    directory_parts = relative.parts if entry_is_directory else relative.parts[:-1]
+    return ".git" in directory_parts or (
+        bool(directory_parts) and directory_parts[0].startswith("build")
+    )
 
 
 def build_remote_archive_install_script(target: str, archive: str) -> str:
