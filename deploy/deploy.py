@@ -128,7 +128,11 @@ def configure_local_profiles(config: DeploymentConfig) -> None:
     uv = require_command("uv")
     log("Preparing local Python environment")
     environment = config.runtime_environment()
-    run([uv, "sync", "--extra", "web"], cwd=PROJECT_ROOT, environment=environment)
+    command = [uv, "sync", "--extra", "web"]
+    python_request = local_python_request()
+    if python_request is not None:
+        command.extend(["--python", python_request])
+    run(command, cwd=PROJECT_ROOT, environment=environment)
     python_bin = virtualenv_python(PROJECT_ROOT)
     if not python_bin.is_file():
         raise FileNotFoundError(f"local Python environment was not created: {python_bin}")
@@ -243,6 +247,14 @@ def virtualenv_python(project_root: Path) -> Path:
     if os.name == "nt":
         return project_root / ".venv" / "Scripts" / "python.exe"
     return project_root / ".venv" / "bin" / "python"
+
+
+def local_python_request() -> str | None:
+    if platform.system() != "Windows":
+        return None
+    if platform.machine().lower() not in {"arm64", "aarch64"}:
+        return None
+    return "cpython-3.11-windows-x86_64-none"
 
 
 def boolean_argument(enabled: bool, name: str) -> str:
