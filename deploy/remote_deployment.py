@@ -92,9 +92,19 @@ class RemoteDeployment:
     def upload_controller(self) -> None:
         if self.config.deploy_target == "local":
             return
-        with rendered_remote_config(self.config) as rendered_config:
-            self.scp_upload(self.remote_controller, "/tmp/")
-            self.scp_upload(self.config.defaults_path, "/tmp/")
+        with (
+            normalized_posix_text_file(
+                self.remote_controller,
+                "remote_runtime.sh",
+            ) as remote_controller,
+            normalized_posix_text_file(
+                self.config.defaults_path,
+                "defaults.env",
+            ) as defaults,
+            rendered_remote_config(self.config) as rendered_config,
+        ):
+            self.scp_upload(remote_controller, REMOTE_CONTROLLER_PATH)
+            self.scp_upload(defaults, "/tmp/defaults.env")
             self.scp_upload(rendered_config, REMOTE_CONFIG_PATH)
         self.ssh_run("chmod", "700", REMOTE_CONTROLLER_PATH)
         self.ssh_run("chmod", "600", REMOTE_CONFIG_PATH)
@@ -385,6 +395,15 @@ def rendered_remote_config(config: DeploymentConfig) -> Iterator[Path]:
         except OSError:
             pass
         yield path
+
+
+@contextmanager
+def normalized_posix_text_file(source: Path, name: str) -> Iterator[Path]:
+    with tempfile.TemporaryDirectory(prefix="fastagentfactory-posix-text-") as temporary:
+        target = Path(temporary) / name
+        text = source.read_text(encoding="utf-8")
+        target.write_text(text, encoding="utf-8", newline="\n")
+        yield target
 
 
 def create_source_archive(
