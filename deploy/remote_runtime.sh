@@ -670,7 +670,7 @@ PY
 
 validate_stable_diffusion_source() {
     local source_dir="$1"
-    local required_file
+    local required_file actual_revision
     for required_file in \
         CMakeLists.txt \
         ggml/CMakeLists.txt \
@@ -682,7 +682,8 @@ validate_stable_diffusion_source() {
         [[ -f "${source_dir}/${required_file}" ]] \
             || fail "stable-diffusion.cpp source is incomplete: ${source_dir}/${required_file}"
     done
-    [[ "$(<"${source_dir}/.fastagentfactory-revision")" == "${STABLE_DIFFUSION_CPP_REVISION}" ]] \
+    actual_revision="$(tr -d '\r\n' <"${source_dir}/.fastagentfactory-revision")"
+    [[ "${actual_revision}" == "${STABLE_DIFFUSION_CPP_REVISION}" ]] \
         || fail "stable-diffusion.cpp source revision does not match STABLE_DIFFUSION_CPP_REVISION"
 }
 
