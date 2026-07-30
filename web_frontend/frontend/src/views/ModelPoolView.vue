@@ -667,6 +667,7 @@ const usageSummary = ref<ModelUsageSummary | null>(null)
 const usageGroupBy = ref<ModelUsageGroupBy>('model')
 const usageChartType = ref<'line' | 'bar'>('line')
 const usageDays = ref(14)
+const DEFAULT_PARALLEL_SLOTS = 3
 
 const artifactForm = reactive({
   display_name: '', kind: 'chat' as LocalModelKind, local_path: '', external_model_id: '',
@@ -675,7 +676,7 @@ const artifactForm = reactive({
 })
 const profileForm = reactive({
   display_name: '', description: '', artifact_id: '', kind: 'chat' as LocalModelKind,
-  served_model_name: '', gpu_layers: 99, parallel_slots: 1,
+  served_model_name: '', gpu_layers: 99, parallel_slots: DEFAULT_PARALLEL_SLOTS,
   cache_type_k: 'f16', cache_type_v: 'f16', flash_attention: true,
   mtp_enabled: false, mtp_max_draft_tokens: 3, mtp_min_draft_tokens: 0,
   mtp_min_acceptance_probability: 0, mtp_backend_sampling: true,
@@ -913,7 +914,7 @@ function openProfile(item?: LocalModelProfile): void {
     ? item ? imageRuntimeConfiguration(item, remoteModel) : remoteImageRuntimeConfiguration(remoteModel)
     : null
   profileForm.gpu_layers = chatInference?.gpu_layers ?? 99
-  profileForm.parallel_slots = chatInference?.parallel_slots ?? 1
+  profileForm.parallel_slots = chatInference?.parallel_slots ?? DEFAULT_PARALLEL_SLOTS
   profileForm.cache_type_k = chatInference?.cache_type_k ?? 'f16'
   profileForm.cache_type_v = chatInference?.cache_type_v ?? 'f16'
   profileForm.flash_attention = chatInference?.flash_attention ?? true
@@ -962,7 +963,7 @@ function syncProfileKind(artifactId: string): void {
   profileForm.description = ''
   profileForm.served_model_name = artifact.external_model_id || artifact.display_name
   profileForm.gpu_layers = runtimeConfiguration?.gpu_layers ?? 99
-  profileForm.parallel_slots = runtimeConfiguration?.parallel_slots ?? 1
+  profileForm.parallel_slots = runtimeConfiguration?.parallel_slots ?? DEFAULT_PARALLEL_SLOTS
   profileForm.cache_type_k = runtimeConfiguration?.cache_type_k ?? 'f16'
   profileForm.cache_type_v = runtimeConfiguration?.cache_type_v ?? 'f16'
   profileForm.flash_attention = runtimeConfiguration?.flash_attention ?? true
@@ -1350,7 +1351,9 @@ function remoteChatRuntimeConfiguration(remoteModel?: LocalModelStorage['remote_
   if (!configuration || typeof configuration.gpu_layers !== 'number') return null
   return {
     gpu_layers: configuration.gpu_layers,
-    parallel_slots: typeof configuration.parallel_slots === 'number' ? configuration.parallel_slots : 1,
+    parallel_slots: typeof configuration.parallel_slots === 'number'
+      ? configuration.parallel_slots
+      : DEFAULT_PARALLEL_SLOTS,
     per_slot_context_tokens: typeof configuration.per_slot_context_tokens === 'number' ? configuration.per_slot_context_tokens : null,
     server_context_tokens: typeof configuration.server_context_tokens === 'number' ? configuration.server_context_tokens : null,
     cache_type_k: typeof configuration.cache_type_k === 'string' ? configuration.cache_type_k : 'f16',
@@ -1374,7 +1377,9 @@ function profileTotalContextTokens(profile: LocalModelProfile): number | null {
   const inference = chatRuntimeConfiguration(profile)
   if (typeof inference?.server_context_tokens === 'number') return inference.server_context_tokens
   const perSlotTokens = profile.limits.max_input_tokens
-  return perSlotTokens ? perSlotTokens * (inference?.parallel_slots ?? 1) : null
+  return perSlotTokens
+    ? perSlotTokens * (inference?.parallel_slots ?? DEFAULT_PARALLEL_SLOTS)
+    : null
 }
 
 function profileMemoryEstimate(profile: LocalModelProfile): InferenceMemoryEstimate | null {

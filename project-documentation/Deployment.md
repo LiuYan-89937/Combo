@@ -36,7 +36,6 @@ Required commands:
 ```bash
 git --version
 ssh -V
-rsync --version
 python3 --version
 uv --version
 node --version
@@ -47,9 +46,25 @@ Minimum environment:
 
 - Python 3.11+
 - Node.js 18+
-- OpenSSH and `rsync`
+- OpenSSH
 - An SSH key or ssh-agent identity for split-host deployment
 - Free local ports `3000`, `8000`, `18002`, `18003`, `18004`, and `18005` when image generation is enabled
+
+On Windows, invoke `.\deploy.ps1 <command>` directly from PowerShell. WSL and
+Git Bash are not required. The Web stack, Agent runtime, and SSH tunnel run
+natively on Windows, and linked workspaces use paths such as
+`C:\Users\<username>\Documents` without copying the source files.
+
+```powershell
+Copy-Item .env.example .env
+Set-ExecutionPolicy -Scope Process Bypass
+.\deploy.ps1 up
+```
+
+SSH deployment prefers `rsync` when it is available. On Windows without
+`rsync`, the same deployment core uses SCP and compressed archives while
+preserving the controlled remote-directory replacement boundary. Local Linux
+ROCm deployment still requires `rsync`.
 
 AgentPackage sessions use a supervised Native Runtime and do not require Docker. Session workspaces, runtime state, tool outputs, and dependency environments remain logically isolated.
 
@@ -76,7 +91,166 @@ Runtime secrets, host addresses, and deployment overrides belong in `.env`, the 
 
 ## 4. Configure the Inference Target
 
-### 4.1 Remote AMD GPU
+### 4.1 Configure SSH Key Authentication from Scratch
+
+SSH deployment requires non-interactive key authentication from the control
+host. The deployment controller uses `BatchMode=yes` and never reads an SSH
+login password. Use the cloud console, an existing administrator connection, or
+temporary password access only to install the public key initially.
+
+Generate a dedicated key on Windows PowerShell:
+
+```powershell
+$KeyPath = Join-Path $HOME ".ssh\id_ed25519_fastagentfactory"
+New-Item -ItemType Directory -Force (Split-Path $KeyPath) | Out-Null
+ssh-keygen -t ed25519 -a 64 -f $KeyPath -C "fastagentfactory-control"
+Get-Content "$KeyPath.pub"
+```
+
+Generate it on macOS/Linux:
+
+```bash
+KEY_PATH="$HOME/.ssh/id_ed25519_fastagentfactory"
+mkdir -p "$(dirname "$KEY_PATH")"
+chmod 700 "$(dirname "$KEY_PATH")"
+ssh-keygen -t ed25519 -a 64 -f "$KEY_PATH" -C "fastagentfactory-control"
+cat "${KEY_PATH}.pub"
+```
+
+Never upload, commit, or copy the private key to the inference host. Only the
+single-line `.pub` value belongs on the server. If the key has a passphrase,
+load it into ssh-agent before deployment because automated commands cannot
+prompt for that passphrase.
+
+From the cloud console, inspect the SSH server:
+
+```bash
+command -v sshd || true
+ps -p 1 -o comm=
+ps -ef | grep '[s]shd' || true
+```
+
+Install OpenSSH on Ubuntu/Debian when it is absent:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y openssh-server
+```
+
+On a systemd host:
+
+```bash
+sudo /usr/sbin/sshd -t
+sudo systemctl enable --now ssh
+sudo systemctl status ssh --no-pager
+```
+
+In a container or hosted workspace without systemd as PID 1:
+
+```bash
+sudo mkdir -p /run/sshd
+sudo /usr/sbin/sshd -t
+sudo /usr/sbin/sshd
+ps -ef | grep '[s]shd'
+```
+
+If `ss` is installed, confirm the internal listener:
+
+```bash
+ss -lntp | grep sshd
+```
+
+Open the external SSH port in the cloud security group or port mapping.
+`SSH_PORT` is the public port reached by the control host; it may map to port
+`22` inside a container.
+
+Log in as the same account that will be placed in `SSH_USER`, replace
+`PUBLIC_KEY` with the complete public-key line, and install it:
+
+```bash
+PUBLIC_KEY='ssh-ed25519 AAAA... fastagentfactory-control'
+install -d -m 700 "$HOME/.ssh"
+touch "$HOME/.ssh/authorized_keys"
+grep -qxF "$PUBLIC_KEY" "$HOME/.ssh/authorized_keys" \
+  || printf '%s\n' "$PUBLIC_KEY" >> "$HOME/.ssh/authorized_keys"
+chmod 600 "$HOME/.ssh/authorized_keys"
+chown -R "$(id -u):$(id -g)" "$HOME/.ssh"
+```
+
+Keep the existing console open while validating a new connection.
+
+Windows PowerShell:
+
+```powershell
+ssh -i $KeyPath -p <external-port> <SSH_USER>@<SSH_HOST> "printf 'ssh-key-ok\n'"
+```
+
+macOS/Linux:
+
+```bash
+ssh -i "$KEY_PATH" -p <external-port> <SSH_USER>@<SSH_HOST> \
+  "printf 'ssh-key-ok\n'"
+```
+
+Verify the server Host Key before accepting it. A successful command prints
+only `ssh-key-ok`; add `-vvv` to the same command to diagnose identity selection
+or authentication failures.
+
+Load a passphrase-protected key into ssh-agent:
+
+```powershell
+# Windows; enabling the service initially may require an elevated PowerShell
+Get-Service ssh-agent | Set-Service -StartupType Manual
+Start-Service ssh-agent
+ssh-add $KeyPath
+```
+
+```bash
+# macOS/Linux
+eval "$(ssh-agent -s)"
+ssh-add "$KEY_PATH"
+```
+
+If Windows OpenSSH rejects broad private-key permissions:
+
+```powershell
+icacls $KeyPath /inheritance:r /grant:r "$($env:USERNAME):(R)"
+```
+
+Use a native Windows path with forward slashes:
+
+```dotenv
+DEPLOY_TARGET=ssh
+SSH_HOST=<SSH_HOST>
+SSH_PORT=<SSH_PORT>
+SSH_USER=root
+SSH_KEY=C:/Users/<username>/.ssh/id_ed25519_fastagentfactory
+```
+
+On macOS/Linux:
+
+```dotenv
+DEPLOY_TARGET=ssh
+SSH_HOST=<SSH_HOST>
+SSH_PORT=<SSH_PORT>
+SSH_USER=root
+SSH_KEY=~/.ssh/id_ed25519_fastagentfactory
+```
+
+Leave `SSH_KEY=` empty only when ssh-agent or OpenSSH configuration already
+selects the correct identity. Run a read-only diagnostic before deployment:
+
+```powershell
+.\deploy.ps1 doctor
+.\deploy.ps1 up
+```
+
+```bash
+./deploy.sh doctor
+./deploy.sh up
+```
+
+### 4.2 Remote AMD GPU
 
 ```dotenv
 DEPLOY_TARGET=ssh
@@ -94,7 +268,7 @@ Validate login before deployment:
 ssh root@<AMD-Inference-Host> -p <SSH-Port>
 ```
 
-### 4.2 Local AMD GPU
+### 4.3 Local AMD GPU
 
 ```dotenv
 DEPLOY_TARGET=local
@@ -106,7 +280,7 @@ SSH_KEY=
 
 Set all `REMOTE_*_ROOT` and `REMOTE_*_DIR` values to writable absolute paths on the local Linux host. The names are retained for compatibility but refer to the inference node in both modes.
 
-### 4.3 Important Configuration Groups
+### 4.4 Important Configuration Groups
 
 - Target and paths: `DEPLOY_TARGET`, `SSH_*`, `REMOTE_PROJECT_ROOT`, `REMOTE_STATE_ROOT`, `REMOTE_MODEL_ROOT`
 - llama.cpp builds: source roots, build type, active implementation, GPU architecture
@@ -115,7 +289,7 @@ Set all `REMOTE_*_ROOT` and `REMOTE_*_DIR` values to writable absolute paths on 
 - MTP: enabled flag, draft-token limit, acceptance probability, backend sampling
 - Embedding: model id, provider, device, dimensions
 - Image generation: FLUX GGUF, VAE, CLIP-L, T5XXL, eager loading, and residency policy
-- Web Search MCP: `TAVILY_API_KEY` or configured fallback provider
+- Web Search MCP: built and registered from `.agentfactory/mcp/web_search` with the bundled Hackson test configuration
 
 Do not commit filled deployment configuration.
 
@@ -252,6 +426,20 @@ ssh -vvv root@<host> -p <port>
 
 Verify the host, port, server public key installation, private-key permissions, and ssh-agent identity.
 
+Some hosted workspaces are containers without systemd as PID 1. In that case,
+`systemctl status ssh` failing does not mean OpenSSH is absent. Validate and
+start sshd directly:
+
+```bash
+/usr/sbin/sshd -t
+ps -ef | grep '[s]shd'
+mkdir -p /run/sshd
+/usr/sbin/sshd
+```
+
+Install the public key in the remote user's `~/.ssh/authorized_keys`. Keep the
+private key on the control host and select it through `SSH_KEY` or ssh-agent.
+
 ### SSH Channel Connection Refused
 
 SSH is connected but a remote inference service is not listening. Check:
@@ -287,7 +475,8 @@ Check Python, uv, package dependency declarations, and session-workspace permiss
 
 ```bash
 python3 -m compileall agent_factory web_frontend/backend deploy
-bash -n deploy.sh deploy/start_web.sh deploy/remote_runtime.sh web_frontend/lib/runtime_env.sh
+python3 -m compileall -q deploy
+bash -n deploy.sh deploy/start_web.sh deploy/remote_runtime.sh
 cd web_frontend/frontend && npm run type-check
 ```
 

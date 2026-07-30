@@ -145,6 +145,13 @@ export interface AgentPackageView {
 export interface AgentSessionView {
   session_id: string
   workspace_id?: string | null
+  workspace?: {
+    workspace_id: string
+    title: string
+    mode: 'isolated' | 'project'
+    root_kind: 'managed' | 'linked'
+    workdir_root: string
+  } | null
   package_id: string
   session_kind?: string | null
   collaboration_id?: string | null

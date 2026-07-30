@@ -207,6 +207,8 @@ const runStatusText = computed(() => {
   const labels = {
     idle: t('run.idle'),
     running: t('run.running'),
+    stopping: t('run.stopping'),
+    waiting_for_workers: t('collaboration.runtimeStatus.waiting_for_workers'),
     interrupted: t('run.interrupted'),
     completed: t('run.completed'),
     stopped: t('run.stopped'),
@@ -221,6 +223,8 @@ const runStatusType = computed(() => {
   const types = {
     idle: 'default',
     running: 'info',
+    stopping: 'warning',
+    waiting_for_workers: 'info',
     interrupted: 'warning',
     completed: 'success',
     stopped: 'default',

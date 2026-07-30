@@ -149,13 +149,12 @@ export function runAgentPackageCommand(
 }
 
 export function sendAgentPackageMessageCommand(
-    packageId: string,
-    message: string,
-    sessionId?: string,
-    attachments?: RuntimeAttachmentInput[],
-    runtimeOptions?: RuntimeMainModelOptions,
-    displayUserInput?: string | null,
-    workspaceId?: string | null,
+  packageId: string,
+  message: string,
+  sessionId?: string,
+  attachments?: RuntimeAttachmentInput[],
+  runtimeOptions?: RuntimeMainModelOptions,
+  displayUserInput?: string | null
 ): FactoryFrontendCommand {
   const requestId = generateRequestId()
   return createCommand('send_agent_package_message', {
@@ -166,7 +165,6 @@ export function sendAgentPackageMessageCommand(
         package_id: packageId,
         message,
         session_id: sessionId,
-        ...(workspaceId ? { workspace_id: workspaceId } : {}),
         ...(attachments && attachments.length > 0 ? { attachments } : {}),
         ...(displayUserInput ? { display_user_input: displayUserInput } : {}),
       },
@@ -299,14 +297,12 @@ export interface CancelRuntimeRequestOptions {
   sessionId?: string | null
   mode?: FactoryMode | null
   packageId?: string | null
-  visibleOutput?: Record<string, any> | null
 }
 
 export interface SteerRuntimeRequestOptions {
   queuedRequestId: string
   sessionId?: string | null
   mode?: FactoryMode | null
-  visibleOutput?: Record<string, any> | null
 }
 
 export function steerRuntimeRequestCommand(options: SteerRuntimeRequestOptions): FactoryFrontendCommand {
@@ -317,7 +313,6 @@ export function steerRuntimeRequestCommand(options: SteerRuntimeRequestOptions):
     mode: options.mode,
     payload: {
       queued_request_id: options.queuedRequestId,
-      ...(options.visibleOutput ? { visible_output: options.visibleOutput } : {}),
     },
   })
 }
@@ -332,7 +327,6 @@ export function cancelRuntimeRequestCommand(options: CancelRuntimeRequestOptions
       reason: options.reason || 'user_cancelled',
       ...(options.targetRequestId ? { target_request_id: options.targetRequestId } : {}),
       ...(options.packageId ? { package_id: options.packageId } : {}),
-      ...(options.visibleOutput ? { visible_output: options.visibleOutput } : {}),
     },
   })
 }

@@ -295,6 +295,7 @@ function transcriptItemFromPartMessage(
 function normalizeTurnStatus(value: any, fallback: RunStatus): RunStatus {
   if (
     value === 'running' ||
+    value === 'stopping' ||
     value === 'waiting_for_workers' ||
     value === 'interrupted' ||
     value === 'completed' ||
@@ -308,7 +309,7 @@ function normalizeTurnStatus(value: any, fallback: RunStatus): RunStatus {
 }
 
 function isActiveTurnStatus(status: RunStatus): boolean {
-  return status === 'running' || status === 'interrupted'
+  return status === 'running' || status === 'stopping' || status === 'interrupted'
 }
 
 function activeTurnFrom(turns: ConversationTurn[]): ConversationTurn | null {

@@ -255,6 +255,8 @@ class RuntimeBridge:
 
     def _start_background(self, command: FactoryFrontendCommand) -> None:
         request_id = command.request_id or f"{command.type}-{id(command)}"
+        if command.request_id != request_id:
+            command = command.model_copy(update={"request_id": request_id})
         dispatch_event = None
         with self._background_lock:
             session_id = _command_session_id(command)
@@ -410,7 +412,7 @@ class RuntimeBridge:
                 if request is None:
                     return False
                 payload = request.setdefault("payload", {})
-                if payload.get("cancel_requested_at"):
+                if payload.get("queue_cancel_requested_at"):
                     self._remove_queued_request(request_id, _active_request_session_id(request))
                     return False
                 session_id = _active_request_session_id(request)
@@ -426,6 +428,9 @@ class RuntimeBridge:
 
     def _release_dispatch_slot(self, command: FactoryFrontendCommand, request_id: str) -> None:
         session_id = _command_session_id(command)
+        self._release_session_dispatch_slot(session_id=session_id, request_id=request_id)
+
+    def _release_session_dispatch_slot(self, *, session_id: str, request_id: str) -> None:
         if not session_id or self._session_running_requests.get(session_id) != request_id:
             self._remove_queued_request(request_id, session_id)
             return
@@ -434,7 +439,7 @@ class RuntimeBridge:
         while queue:
             next_request_id = queue.popleft()
             next_request = self._active_requests.get(next_request_id)
-            if next_request is None or next_request.get("payload", {}).get("cancel_requested_at"):
+            if next_request is None or next_request.get("payload", {}).get("queue_cancel_requested_at"):
                 continue
             self._session_running_requests[session_id] = next_request_id
             break
@@ -513,11 +518,6 @@ class RuntimeBridge:
                     if running_payload.get("package_id")
                     else {}
                 ),
-                **(
-                    {"visible_output": command.payload["visible_output"]}
-                    if isinstance(command.payload.get("visible_output"), dict)
-                    else {}
-                ),
             },
         )
         self._handle_command(self._resolve_cancel_command(cancel_command))
@@ -545,7 +545,12 @@ class RuntimeBridge:
                     resolved_target = str(active_request.get("requestId") or "").strip()
             if resolved_target and resolved_target in self._active_requests:
                 active_payload = self._active_requests[resolved_target].setdefault("payload", {})
-                active_payload["cancel_requested_at"] = datetime.now(UTC).isoformat()
+                requested_at = datetime.now(UTC).isoformat()
+                if active_payload.get("dispatch_state") == "queued":
+                    active_payload["queue_cancel_requested_at"] = requested_at
+                else:
+                    active_payload["stop_requested_at"] = requested_at
+                    active_payload["dispatch_state"] = "stopping"
                 self._dispatch_condition.notify_all()
         if not resolved_target:
             return command
@@ -691,7 +696,10 @@ class RuntimeBridge:
             return [
                 dict(item)
                 for item in self._active_requests.values()
-                if not item.get("payload", {}).get("cancel_requested_at")
+                if not (
+                    item.get("payload", {}).get("dispatch_state") == "queued"
+                    and item.get("payload", {}).get("queue_cancel_requested_at")
+                )
             ]
 
     def _observe_runtime_event(self, event_payload: dict[str, Any]) -> None:

@@ -11,6 +11,7 @@ from agent_factory.models.protocol import ModelReasoningSettings, StructuredOutp
 
 
 UTC = timezone.utc
+DEFAULT_LLAMA_CPP_PARALLEL_SLOTS = 3
 
 
 ModelPoolProfileKind = Literal["chat", "embedding", "image_generation"]
@@ -216,7 +217,7 @@ class LlamaCppInferenceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     gpu_layers: int = Field(default=99, ge=0)
-    parallel_slots: int = Field(default=1, ge=1)
+    parallel_slots: int = Field(default=DEFAULT_LLAMA_CPP_PARALLEL_SLOTS, ge=1)
     cache_type_k: str = "f16"
     cache_type_v: str = "f16"
     flash_attention: bool = True

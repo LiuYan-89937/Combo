@@ -13,7 +13,6 @@ import {
   agentPackageConversationScope,
   isMoreSpecificConversationScope,
 } from '@/stores/runtime/scopes'
-import { messageReasoning, messageText } from '@/stores/runtime/messageParts'
 import type { RuntimeAttachmentInput, TranscriptAttachmentView } from '@/types/protocol'
 
 export function useCollaborationRuntime() {
@@ -155,9 +154,8 @@ export function useCollaborationRuntime() {
   function cancelMainAgentRequest(): void {
     const requestId = mainAgentActiveRequestId.value
     if (!requestId) return
-    const visibleOutput = activeVisibleAssistantOutput(requestId)
     runtimeStore.markActiveRequestStopping(requestId)
-    commands.cancelRequest('user_cancelled', requestId, visibleOutput)
+    commands.cancelRequest('user_cancelled', requestId)
   }
 
   watch(
@@ -198,19 +196,6 @@ export function useCollaborationRuntime() {
     cancelMainAgentRequest,
     enterActiveMainAgentContext,
     sendMainAgentMessage,
-  }
-}
-
-function activeVisibleAssistantOutput(requestId: string): Record<string, any> | null {
-  const runtimeStore = useRuntimeStore()
-  const turn = runtimeStore.conversationTurns.find((item) => item.requestId === requestId)
-  const message = turn?.assistantMessages?.[turn.assistantMessages.length - 1]
-  if (!message) return null
-  const reasoning = messageReasoning(message)
-  return {
-    content: messageText(message),
-    reasoning_content: reasoning?.content || '',
-    stream_id: message.streamId || null,
   }
 }
 

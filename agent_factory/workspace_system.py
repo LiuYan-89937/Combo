@@ -14,6 +14,7 @@ from agent_factory.workspace_mounts import WorkspaceMountRecord
 
 
 WorkspaceMode = Literal["isolated", "project"]
+WorkspaceRootKind = Literal["managed", "linked"]
 
 
 class WorkspaceRecord(BaseModel):
@@ -22,6 +23,7 @@ class WorkspaceRecord(BaseModel):
     workspace_id: str
     title: str
     mode: WorkspaceMode = "isolated"
+    root_kind: WorkspaceRootKind = "managed"
     owner_package_id: str | None = None
     workdir_root: str
     mounts: list[WorkspaceMountRecord] = Field(default_factory=list)
@@ -40,6 +42,7 @@ class WorkspaceStore:
         *,
         title: str | None = None,
         mode: WorkspaceMode = "isolated",
+        root_kind: WorkspaceRootKind = "managed",
         owner_package_id: str | None = None,
         workspace_id: str | None = None,
         workdir_root: Path | None = None,
@@ -48,16 +51,19 @@ class WorkspaceStore:
         if self.exists(identifier):
             raise ValueError(f"Workspace already exists: {identifier}")
         now = datetime.now(UTC).isoformat()
-        resolved_workdir = (
-            workdir_root.expanduser().resolve()
-            if workdir_root is not None
-            else (self.root / identifier / "workdir").resolve()
+        if root_kind == "linked" and workdir_root is None:
+            raise ValueError("linked workspace requires workdir_root")
+        resolved_workdir = _workspace_root_path(
+            workdir_root,
+            default=self.root / identifier / "workdir",
+            require_existing=root_kind == "linked",
         )
         resolved_workdir.mkdir(parents=True, exist_ok=True)
         record = WorkspaceRecord(
             workspace_id=identifier,
             title=str(title or "").strip() or "新工作区",
             mode=mode,
+            root_kind=root_kind,
             owner_package_id=str(owner_package_id or "").strip() or None,
             workdir_root=str(resolved_workdir),
             created_at=now,
@@ -133,7 +139,7 @@ class WorkspaceStore:
     def delete(self, workspace_id: str, *, delete_files: bool = True) -> WorkspaceRecord:
         record = self.load(workspace_id)
         workdir = Path(record.workdir_root).expanduser().resolve()
-        if delete_files and workdir.exists():
+        if delete_files and record.root_kind == "managed" and workdir.exists():
             shutil.rmtree(workdir)
         record_path = self._record_path(record.workspace_id)
         record_path.unlink(missing_ok=True)
@@ -151,3 +157,18 @@ def _identifier(value: str) -> str:
     if not identifier or identifier in {".", ".."} or "/" in identifier or "\\" in identifier:
         raise ValueError(f"invalid workspace id: {value!r}")
     return identifier
+
+
+def _workspace_root_path(
+    value: Path | None,
+    *,
+    default: Path,
+    require_existing: bool,
+) -> Path:
+    candidate = value.expanduser() if value is not None else default
+    if not candidate.is_absolute():
+        raise ValueError("workspace workdir_root must be an absolute path")
+    resolved = candidate.resolve()
+    if require_existing and not resolved.is_dir():
+        raise FileNotFoundError(f"workspace directory not found: {resolved}")
+    return resolved

@@ -45,12 +45,18 @@ def create_agent_group_router(
         try:
             title = payload.get("title", "").strip()
             member_package_ids = payload.get("member_package_ids", [])
+            workspace_id = str(payload.get("workspace_id") or "").strip() or None
 
             if not title:
                 raise HTTPException(status_code=400, detail="title is required")
 
             runtime = _agent_package_runtime(runtime_bridge)
-            group = service.create_group(title, member_package_ids, runtime)
+            group = service.create_group(
+                title,
+                member_package_ids,
+                runtime,
+                workspace_id=workspace_id,
+            )
             return {"group": group}
         except Exception as e:
             raise _http_error(e)

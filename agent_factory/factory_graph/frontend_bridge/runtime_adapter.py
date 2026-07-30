@@ -12,7 +12,6 @@ from agent_factory.evolution import AgentEvolutionRuntime
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendCommand, FactoryMode, event
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_agent_packages import RuntimeAgentPackageCommandMixin
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_resources import RuntimeResourceCommandMixin
-from agent_factory.factory_graph.frontend_bridge.runtime_request_control import RuntimeRequestCommitFence
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_scheduler import RuntimeSchedulerCommandMixin
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_sessions import RuntimeSessionCommandMixin
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import (
@@ -45,18 +44,6 @@ _NAVIGATION_COMMAND_TYPES = frozenset(
     }
 )
 
-_RUNTIME_REQUEST_COMMAND_TYPES = frozenset(
-    {
-        "send_message",
-        "send_agent_package_message",
-        "run_agent_package",
-        "run_agent_group_member",
-        "run_agent_evolution",
-        "resume_interrupt",
-    }
-)
-
-
 @dataclass(slots=True)
 class FactoryRuntimeAdapter(
     RuntimeSessionCommandMixin,
@@ -76,7 +63,6 @@ class FactoryRuntimeAdapter(
     )
     _navigation_lock: RLock = field(default_factory=RLock)
     _state_lock: RLock = field(default_factory=RLock)
-    request_commit_fence: RuntimeRequestCommitFence = field(default_factory=RuntimeRequestCommitFence)
     pending_agent_package_runs: dict[tuple[str, str], PendingAgentPackageRun] = field(default_factory=dict)
     pending_agent_package_runs_lock: RLock = field(default_factory=RLock)
     pending_agent_group_runs: dict[str, PendingAgentPackageRun] = field(default_factory=dict)
@@ -143,9 +129,6 @@ class FactoryRuntimeAdapter(
         return self._handle_with_command_context(command)
 
     def _handle_with_command_context(self, command: FactoryFrontendCommand) -> bool:
-        owns_request_fence = command.type in _RUNTIME_REQUEST_COMMAND_TYPES and bool(command.request_id)
-        if owns_request_fence:
-            self.request_commit_fence.begin(command.request_id)
         with self._state_lock:
             context = RuntimeCommandContext(
                 session_record=self._session_record,
@@ -177,8 +160,6 @@ class FactoryRuntimeAdapter(
         finally:
             self._commit_command_context(command, context)
             self._command_context.reset(token)
-            if owns_request_fence:
-                self.request_commit_fence.finish(command.request_id)
         return True
 
     def _commit_command_context(

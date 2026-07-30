@@ -8,7 +8,7 @@
         </n-text>
       </div>
       <div class="header-actions">
-        <n-button size="small" type="primary" @click="enterNewSession">
+        <n-button size="small" type="primary" @click="showNewSessionDialog = true">
           {{ t('agentSessions.newChat') }}
         </n-button>
         <n-button size="small" @click="refreshSessions">
@@ -60,10 +60,25 @@
               <n-tag size="tiny" type="success">
                 {{ t('agentSessions.tag') }}
               </n-tag>
+              <n-tag v-if="session.workspace" size="tiny" :bordered="false">
+                {{
+                  session.workspace.mode === 'project'
+                    ? t('sessions.sharedWorkspace')
+                    : t('sessions.isolatedWorkspace')
+                }}
+              </n-tag>
               <n-text depth="3" class="meta-text">
                 {{ formatTime(session.updated_at) }}
               </n-text>
             </div>
+            <n-text
+              v-if="session.workspace?.workdir_root"
+              depth="3"
+              class="workspace-path"
+              :title="session.workspace.workdir_root"
+            >
+              {{ session.workspace.workdir_root }}
+            </n-text>
             <div class="session-stats">
               <n-text depth="3" class="meta-text">
                 <n-icon size="12">
@@ -83,6 +98,11 @@
         style="margin-top: 40px"
       />
     </n-scrollbar>
+    <NewAgentSessionDialog
+      v-model:show="showNewSessionDialog"
+      :package-id="packageId"
+      @create="enterNewSession"
+    />
   </div>
 </template>
 
@@ -94,6 +114,7 @@ import { useI18n } from '@/composables/useI18n'
 import { useAgentStore } from '@/stores/agent'
 import { useCommand } from '@/composables/useCommand'
 import { useAgentSessionNavigation } from '@/composables/agent/useAgentSessionNavigation'
+import NewAgentSessionDialog from '@/components/agent/NewAgentSessionDialog.vue'
 
 const props = defineProps<{
   packageId: string
@@ -105,6 +126,7 @@ const { openAgentSession, startNewAgentSession } = useAgentSessionNavigation()
 const { locale, t } = useI18n()
 const searchQuery = ref('')
 const dialog = useDialog()
+const showNewSessionDialog = ref(false)
 
 const currentPackage = computed(() => {
   return agentStore.agentPackages.find((pkg) => pkg.package_id === props.packageId) || null
@@ -128,8 +150,8 @@ function refreshSessions() {
   commands.listAgentPackageSessions(props.packageId)
 }
 
-function enterNewSession() {
-  void startNewAgentSession(props.packageId)
+function enterNewSession(workspaceId: string | null) {
+  void startNewAgentSession(props.packageId, workspaceId)
 }
 
 function enterExistingSession(sessionId: string) {
@@ -287,6 +309,14 @@ watch(
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.workspace-path {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
 }
 
 .meta-text {

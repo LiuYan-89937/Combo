@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent
+from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendCommand, FactoryFrontendEvent
 
 
 @dataclass(slots=True)
@@ -24,6 +24,30 @@ class VisibleAssistantOutputAccumulator:
         content = visible_message_part_content(item)
         if content:
             self.content = content
+
+
+def interrupt_accepts_message(pending: Any) -> bool:
+    payload = getattr(pending, "interrupt_payload", None)
+    return isinstance(payload, dict) and str(payload.get("resume_kind") or "").strip() == "answer"
+
+
+def message_resume_command(
+    command: FactoryFrontendCommand,
+    message: str,
+) -> FactoryFrontendCommand:
+    return command.model_copy(
+        update={
+            "type": "resume_interrupt",
+            "message": None,
+            "payload": {
+                **dict(command.payload or {}),
+                "action": "answer",
+                "input_text": message,
+                "answer": message,
+                "message": message,
+            },
+        }
+    )
 
 
 TOOL_ACTIVITY_EVENT_STATUS = {

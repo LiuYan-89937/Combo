@@ -41,6 +41,7 @@ from web_frontend.backend.routes.tips import create_tip_router
 from web_frontend.backend.routes.workspace import create_workspace_router
 from web_frontend.backend.runtime_bridge import RuntimeBridge
 from web_frontend.backend.event_loop_watchdog import EventLoopWatchdog
+from web_frontend.backend.builtin_extensions import ensure_builtin_web_search_mcp
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -125,6 +126,8 @@ async def _ensure_skillhub_cli() -> None:
 
 @app.on_event("startup")
 async def startup_event():
+    builtin_web_search = ensure_builtin_web_search_mcp()
+    logger.info("Built-in MCP is configured: %s", builtin_web_search.server_id)
     event_loop_watchdog.start(asyncio.get_running_loop())
     await runtime_bridge.start()
     app.state.skillhub_cli_install_task = asyncio.create_task(

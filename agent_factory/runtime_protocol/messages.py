@@ -7,7 +7,20 @@ from langchain_core.messages import AIMessage, ToolMessage
 
 
 def has_complete_tool_call_history(messages: Sequence[Any]) -> bool:
-    return not incomplete_tool_call_ids(messages)
+    pending: list[str] = []
+    for message in messages:
+        if _is_tool_message(message):
+            tool_call_id = _tool_message_call_id(message)
+            if tool_call_id not in pending:
+                return False
+            pending = [item for item in pending if item != tool_call_id]
+            continue
+        if pending:
+            return False
+        tool_calls = _tool_calls(message)
+        if tool_calls:
+            pending = [_tool_call_id(call) for call in tool_calls if _tool_call_id(call)]
+    return not pending
 
 
 def close_incomplete_tool_call_history(
@@ -18,18 +31,20 @@ def close_incomplete_tool_call_history(
     closed: list[Any] = []
     pending: list[str] = []
     for message in messages:
-        if pending and not _is_tool_message(message):
+        if _is_tool_message(message):
+            tool_call_id = _tool_message_call_id(message)
+            if tool_call_id not in pending:
+                continue
+            closed.append(message)
+            pending = [item for item in pending if item != tool_call_id]
+            continue
+        if pending:
             closed.extend(_interrupted_tool_messages(pending, content))
             pending = []
         closed.append(message)
         tool_calls = _tool_calls(message)
         if tool_calls:
             pending = [_tool_call_id(call) for call in tool_calls if _tool_call_id(call)]
-            continue
-        if _is_tool_message(message):
-            tool_call_id = _tool_message_call_id(message)
-            if tool_call_id in pending:
-                pending = [item for item in pending if item != tool_call_id]
     if pending:
         closed.extend(_interrupted_tool_messages(pending, content))
     return closed

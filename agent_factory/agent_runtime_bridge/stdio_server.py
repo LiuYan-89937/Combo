@@ -8,6 +8,9 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from langgraph.errors import GraphDrained
+from langgraph.runtime import RunControl
+
 from agent_factory.assembly.compiler import AgentAssemblyCompiler
 from agent_factory.environment_system.runtime import RuntimeDependencyError, activate_runtime_dependencies
 from agent_factory.factory_graph.frontend_bridge.event_normalizer import (
@@ -39,10 +42,12 @@ from agent_factory.scheduler_system.execution_config import (
 )
 from agent_factory.scheduler_system.seeds import apply_scheduler_seed_contract
 from agent_factory.knowledge_system.events import KNOWLEDGE_EVENT_TYPES
-from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
 from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
-from agent_factory.package_runtime.stop_signal import RuntimeStopSignal
-from agent_factory.package_runtime.stopped_turn import close_stopped_turn_checkpoint
+from agent_factory.package_runtime.run_control import RuntimeRunControlRegistry
+from agent_factory.package_runtime.drained_checkpoint import (
+    finalize_drained_runtime_checkpoint,
+    repair_incomplete_message_checkpoint,
+)
 from agent_factory.package_runtime import host_runtime_package_view
 from agent_factory.package_runtime.workspace_scope import apply_runtime_workspace
 from agent_factory.package_runtime.session_turns import (
@@ -81,8 +86,7 @@ class BridgeRuntimeState:
     background_workers: RuntimeBackgroundWorkerManager = field(default_factory=RuntimeBackgroundWorkerManager)
     sandbox_lock: threading.Lock = field(default_factory=threading.Lock)
     compile_lock: threading.Lock = field(default_factory=threading.Lock)
-    cancel_lock: threading.Lock = field(default_factory=threading.Lock)
-    active_cancel_tokens: dict[str, RuntimeStopSignal] = field(default_factory=dict)
+    run_controls: RuntimeRunControlRegistry = field(default_factory=RuntimeRunControlRegistry)
     worker_threads: list[threading.Thread] = field(default_factory=list)
 
     def handle(self, command: dict[str, Any]) -> int:
@@ -106,7 +110,6 @@ class BridgeRuntimeState:
             stopped = self.cancel_active_requests(
                 reason=reason,
                 request_id=target_request_id,
-                visible_output=payload.get("visible_output"),
             )
             normalizer.runtime_event(
                 "debug_patch",
@@ -155,7 +158,7 @@ class BridgeRuntimeState:
                 )
                 return 1
         normalizer.emit_run_started({"command": command_type, "attachment_count": _attachment_count(payload)})
-        cancel_token = self._register_cancel_token(str(request_id or ""), command_type)
+        run_control = self._register_run_control(str(request_id or ""), command_type)
         if command_type == "list_sessions":
             return _list_sessions(normalizer, self._load_package())
         try:
@@ -163,14 +166,14 @@ class BridgeRuntimeState:
                 self._ensure_sandbox_initialized(normalizer)
                 runtime = self._ensure_compiled(normalizer)
                 if command_type == "run_message":
-                    return _run_message(normalizer, payload, runtime, cancel_token=cancel_token)
+                    return _run_message(normalizer, payload, runtime, run_control=run_control)
                 if command_type == "resume_interrupt":
-                    return _resume_interrupt(normalizer, payload, runtime, cancel_token=cancel_token)
+                    return _resume_interrupt(normalizer, payload, runtime, run_control=run_control)
                 return _run_harness(normalizer, payload, runtime)
             normalizer.runtime_event("error", severity="error", payload={"message": f"unknown command: {command_type}"})
             return 1
         finally:
-            self._forget_cancel_token(str(request_id or ""), cancel_token)
+            self._forget_run_control(str(request_id or ""), run_control)
 
     def start(self, command: dict[str, Any]) -> None:
         worker = threading.Thread(
@@ -187,32 +190,18 @@ class BridgeRuntimeState:
         *,
         reason: str = "user_cancelled",
         request_id: str | None = None,
-        visible_output: Any = None,
     ) -> int:
-        target = (request_id or "").strip()
-        with self.cancel_lock:
-            request_ids = [target] if target and target in self.active_cancel_tokens else list(self.active_cancel_tokens)
-            for active_request_id in request_ids:
-                self.active_cancel_tokens[active_request_id].request(
-                    reason=reason,
-                    visible_output=visible_output,
-                )
-            return len(request_ids)
+        return self.run_controls.request_drain(reason=reason, request_id=request_id)
 
-    def _register_cancel_token(self, request_id: str, command_type: str) -> RuntimeStopSignal | None:
+    def _register_run_control(self, request_id: str, command_type: str) -> RunControl | None:
         if command_type not in {"run_message", "resume_interrupt"} or not request_id:
             return None
-        token = RuntimeStopSignal()
-        with self.cancel_lock:
-            self.active_cancel_tokens[request_id] = token
-        return token
+        return self.run_controls.register(request_id)
 
-    def _forget_cancel_token(self, request_id: str, token: RuntimeStopSignal | None) -> None:
-        if token is None or not request_id:
+    def _forget_run_control(self, request_id: str, control: RunControl | None) -> None:
+        if control is None or not request_id:
             return
-        with self.cancel_lock:
-            if self.active_cancel_tokens.get(request_id) is token:
-                self.active_cancel_tokens.pop(request_id, None)
+        self.run_controls.release(request_id, control)
 
     def _run_worker_command(self, command: dict[str, Any]) -> None:
         try:
@@ -627,7 +616,7 @@ def _run_message(
     payload: dict[str, Any],
     runtime: CompiledRuntime,
     *,
-    cancel_token: RuntimeStopSignal | None = None,
+    run_control: RunControl | None = None,
 ) -> int:
     message = str(payload.get("message") or "").strip()
     if not message and not has_attachment_payload(payload.get("attachments")):
@@ -657,15 +646,10 @@ def _run_message(
     normalizer.session_id = run_context.session_id
     if _emit_pending_checkpoint_interrupt(normalizer, compiled.compiled_app, run_context.thread_id):
         return 0
-    missing_tool_call_ids = _checkpoint_incomplete_tool_call_ids(compiled.compiled_app, run_context.thread_id)
-    if missing_tool_call_ids:
-        normalizer.emit_run_failed(
-            RuntimeError(
-                "agent session has incomplete tool call history; resume the pending tool interaction "
-                f"before sending a new message. missing_tool_call_ids={missing_tool_call_ids}"
-            )
-        )
-        return 1
+    repair_incomplete_message_checkpoint(
+        graph_app=compiled.compiled_app.graph_app,
+        thread_id=run_context.thread_id,
+    )
     run_context.session_manager.touch_turn(
         run_context.session_id,
         request_id=normalizer.request_id,
@@ -675,26 +659,26 @@ def _run_message(
         status="running",
     )
     final_state = None
-    stop_requested = False
+    graph_drained = False
     stream_iter = facade.instance.controller.stream(
         compiled.compiled_app,
         run_context.state,
         thread_id=run_context.thread_id,
+        control=run_control,
     )
     try:
         for stream_mode, chunk in stream_iter:
-            if _cancel_requested(cancel_token):
-                stop_requested = True
-                break
             if _handle_stream_item(normalizer, stream_mode, chunk):
                 return 0
             if stream_mode == "runtime_final":
                 final_state = chunk
+    except GraphDrained:
+        graph_drained = True
     finally:
         close = getattr(stream_iter, "close", None)
         if callable(close):
             close()
-    if stop_requested:
+    if graph_drained or bool(run_control and run_control.drain_requested):
         return _emit_stopped_runtime(
             normalizer,
             run_context,
@@ -704,7 +688,7 @@ def _run_message(
             request_id=normalizer.request_id,
             fallback_user_input=run_context.first_user_input,
             fallback_attachments=user_config.get("attachments"),
-            stop_signal=cancel_token,
+            stop_reason=run_control.drain_reason if run_control else None,
         )
     if final_state is None:
         normalizer.emit_run_failed(RuntimeError("agent runtime did not produce a final state"))
@@ -760,23 +744,12 @@ def _emit_pending_checkpoint_interrupt(normalizer: RuntimeEventNormalizer, compi
     return True
 
 
-def _checkpoint_incomplete_tool_call_ids(compiled_app: Any, thread_id: str) -> list[str]:
-    try:
-        snapshot = compiled_app.graph_app.get_state({"configurable": {"thread_id": thread_id}})
-    except Exception:
-        return []
-    values = getattr(snapshot, "values", {}) or {}
-    if not isinstance(values, dict):
-        return []
-    return incomplete_tool_call_ids(list(values.get("messages") or []))
-
-
 def _resume_interrupt(
     normalizer: RuntimeEventNormalizer,
     payload: dict[str, Any],
     runtime: CompiledRuntime,
     *,
-    cancel_token: RuntimeStopSignal | None = None,
+    run_control: RunControl | None = None,
 ) -> int:
     session_id = str(payload.get("session_id") or "").strip()
     resume_payload = payload.get("resume_payload")
@@ -800,27 +773,27 @@ def _resume_interrupt(
     run_context.state.execution.timeout_seconds = 0
     run_context.state.execution.max_retries = request_policy.max_retries
     final_state = None
-    stop_requested = False
+    graph_drained = False
     stream_iter = facade.instance.controller.stream_resume(
         compiled.compiled_app,
         run_context.state,
         thread_id=run_context.thread_id,
         resume_payload=resume_payload if isinstance(resume_payload, dict) else {},
+        control=run_control,
     )
     try:
         for stream_mode, chunk in stream_iter:
-            if _cancel_requested(cancel_token):
-                stop_requested = True
-                break
             if _handle_stream_item(normalizer, stream_mode, chunk):
                 return 0
             if stream_mode == "runtime_final":
                 final_state = chunk
+    except GraphDrained:
+        graph_drained = True
     finally:
         close = getattr(stream_iter, "close", None)
         if callable(close):
             close()
-    if stop_requested:
+    if graph_drained or bool(run_control and run_control.drain_requested):
         return _emit_stopped_runtime(
             normalizer,
             run_context,
@@ -830,7 +803,7 @@ def _resume_interrupt(
             request_id=run_context.session_turn_request_id,
             session_id=session_id,
             fallback_user_input=resume_user_input(resume_payload) or run_context.first_user_input,
-            stop_signal=cancel_token,
+            stop_reason=run_control.drain_reason if run_control else None,
         )
     if final_state is None:
         normalizer.emit_run_failed(RuntimeError("agent runtime resume did not produce a final state"))
@@ -1007,10 +980,6 @@ def _touch_session_turn_from_final_state(
     )
 
 
-def _cancel_requested(token: RuntimeStopSignal | None) -> bool:
-    return bool(token is not None and token.is_set())
-
-
 def _emit_stopped_runtime(
     normalizer: RuntimeEventNormalizer,
     run_context: Any,
@@ -1022,20 +991,15 @@ def _emit_stopped_runtime(
     session_id: str | None = None,
     fallback_user_input: str | None = None,
     fallback_attachments: Any = None,
-    stop_signal: RuntimeStopSignal | None = None,
+    stop_reason: str | None = None,
 ) -> int:
     normalizer.complete_open_model_streams(reason="user_stopped")
-    visible_output = (
-        stop_signal.resolved_visible_output(normalizer.visible_assistant_output)
-        if stop_signal is not None
-        else normalizer.visible_assistant_output
-    )
-    stopped_turn = close_stopped_turn_checkpoint(
+    drained_checkpoint = finalize_drained_runtime_checkpoint(
         compiled_app=compiled.compiled_app,
         thread_id=run_context.thread_id,
         base_state=run_context.state,
-        visible_output=visible_output,
         fallback_user_input=fallback_user_input or run_context.first_user_input,
+        stop_reason=stop_reason or "user_cancelled",
     )
     agent_session = run_context.session_manager.touch_turn(
         session_id or run_context.session_id,
@@ -1043,10 +1007,10 @@ def _emit_stopped_runtime(
         first_user_input=fallback_user_input or run_context.first_user_input,
         user_input=fallback_user_input or run_context.first_user_input,
         attachments=fallback_attachments,
-        reasoning_content=stopped_turn.state.conversation.reasoning_content,
-        final_answer=stopped_turn.state.conversation.final_answer,
+        reasoning_content=drained_checkpoint.state.conversation.reasoning_content,
+        final_answer=drained_checkpoint.state.conversation.final_answer,
         status="stopped",
-        trace_ref=session_trace_ref(compiled, stopped_turn.state),
+        trace_ref=session_trace_ref(compiled, drained_checkpoint.state),
     )
     normalizer.emit_run_completed(
         {

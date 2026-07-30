@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import mimetypes
+from pathlib import Path
 from typing import Literal
 from urllib.parse import quote
 
@@ -9,11 +10,21 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict
 
 from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import AgentPackageRuntimeManager
+from agent_factory.agent_group_system.store import AgentGroupStore
+from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import SYSTEM_CHAT_PACKAGE_ID
 from agent_factory.factory_graph.frontend_bridge.workspace_resources import FrontendWorkspaceService
 from agent_factory.factory_graph.session import FactorySessionManager
 from agent_factory.workspace_system import WorkspaceStore
+from agent_factory.workspace_directories import WorkspaceDirectoryBrowser
 from web_frontend.backend.runtime_bridge import RuntimeBridge
 from web_frontend.backend.routes.utils import optional_package, resource_command
+
+
+class WorkspaceMountRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_path: str
+    name: str | None = None
 
 
 class WorkspaceCreateRequest(BaseModel):
@@ -21,6 +32,8 @@ class WorkspaceCreateRequest(BaseModel):
 
     title: str | None = None
     mode: Literal["isolated", "project"] = "isolated"
+    root_kind: Literal["managed", "linked"] = "managed"
+    workdir_root: str | None = None
     owner_package_id: str | None = None
 
 
@@ -50,11 +63,33 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
             record = WorkspaceStore().create(
                 title=payload.title,
                 mode=payload.mode,
+                root_kind=payload.root_kind,
                 owner_package_id=payload.owner_package_id,
+                workdir_root=Path(payload.workdir_root) if payload.workdir_root else None,
             )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"workspace": record.model_dump(mode="json")}
+
+    @router.get("/directory-roots")
+    def workspace_directory_roots():
+        try:
+            return {"roots": WorkspaceDirectoryBrowser().root_views()}
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @router.get("/directories")
+    def workspace_directories(path: str):
+        try:
+            return WorkspaceDirectoryBrowser().list_directories(path)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.patch("/projects/{workspace_id}")
     def update_workspace(workspace_id: str, payload: WorkspaceUpdateRequest):
@@ -88,6 +123,71 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
             "workspace_id": record.workspace_id,
             "files_deleted": delete_files,
         }
+
+    @router.get("/mounts")
+    def list_workspace_mounts(
+        package_id: str | None = None,
+        package_session_id: str | None = None,
+    ):
+        resolved_package_id, resolved_session_id = _workspace_mount_context(
+            package_id,
+            package_session_id,
+        )
+        try:
+            mounts = AgentPackageRuntimeManager().list_workspace_mounts(
+                resolved_package_id,
+                resolved_session_id,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {
+            "package_id": resolved_package_id,
+            "package_session_id": resolved_session_id,
+            "mounts": mounts,
+        }
+
+    @router.post("/mounts")
+    def mount_workspace_directory(
+        payload: WorkspaceMountRequest,
+        package_id: str | None = None,
+        package_session_id: str | None = None,
+    ):
+        resolved_package_id, resolved_session_id = _workspace_mount_context(
+            package_id,
+            package_session_id,
+        )
+        try:
+            return AgentPackageRuntimeManager().mount_workspace_directory(
+                resolved_package_id,
+                resolved_session_id,
+                source_path=payload.source_path,
+                name=payload.name,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.delete("/mounts/{mount_id}")
+    def unmount_workspace_directory(
+        mount_id: str,
+        package_id: str | None = None,
+        package_session_id: str | None = None,
+    ):
+        resolved_package_id, resolved_session_id = _workspace_mount_context(
+            package_id,
+            package_session_id,
+        )
+        try:
+            return AgentPackageRuntimeManager().unmount_workspace_directory(
+                resolved_package_id,
+                resolved_session_id,
+                mount_id,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.get("/roots")
     async def workspace_roots(
@@ -287,6 +387,22 @@ def workspace_context_payload(
         **({"collaboration_id": collaboration_id} if collaboration_id else {}),
         **({"group_id": group_id} if group_id else {}),
     }
+
+
+def _workspace_mount_context(
+    package_id: str | None,
+    package_session_id: str | None,
+) -> tuple[str, str]:
+    resolved_package_id = str(package_id or "").strip() or SYSTEM_CHAT_PACKAGE_ID
+    resolved_session_id = str(package_session_id or "").strip()
+    if not resolved_session_id:
+        raise HTTPException(
+            status_code=400,
+            detail="package_session_id is required to manage workspace mounts",
+        )
+    return resolved_package_id, resolved_session_id
+
+
 def _workspace_session_references(workspace_id: str) -> list[dict[str, str]]:
     target = str(workspace_id or "").strip()
     manager = AgentPackageRuntimeManager()
@@ -304,4 +420,13 @@ def _workspace_session_references(workspace_id: str) -> list[dict[str, str]]:
                     "session_id": str(session.get("session_id") or ""),
                 }
             )
+    for group in AgentGroupStore().list_groups():
+        if str(group.get("workspace_id") or "").strip() != target:
+            continue
+        references.append(
+            {
+                "package_id": "agent_group",
+                "session_id": str(group.get("group_id") or ""),
+            }
+        )
     return references

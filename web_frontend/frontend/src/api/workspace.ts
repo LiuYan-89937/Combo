@@ -1,13 +1,22 @@
 import type { WorkspaceContextInput, WorkspaceRequestContext, WorkspaceScope } from './resourceTypes'
+import type { WorkspaceMountView } from '@/types/protocol'
 import { resolvedBackendUrl } from './backendUrl'
 import { requestEvent, requestJson, withQuery } from './http'
 
 export const workspaceApi = {
   projects: () =>
     requestJson<{ workspaces: WorkspaceProjectView[] }>('/api/workspace/projects'),
+  directoryRoots: () =>
+    requestJson<{ roots: WorkspaceDirectoryView[] }>('/api/workspace/directory-roots'),
+  directories: (path: string) =>
+    requestJson<WorkspaceDirectoryListing>(
+      withQuery('/api/workspace/directories', { path }),
+    ),
   createProject: (payload: {
     title?: string | null
     mode?: WorkspaceProjectMode
+    root_kind?: WorkspaceRootKind
+    workdir_root?: string | null
     owner_package_id?: string | null
   }) =>
     requestJson<{ workspace: WorkspaceProjectView }>('/api/workspace/projects', {
@@ -35,19 +44,77 @@ export const workspaceApi = {
       withQuery('/api/workspace/file', { scope, path, ...workspaceQuery(context) }),
       { method: 'DELETE' },
     ),
+  mounts: async (context?: WorkspaceContextInput) => {
+    const response = await requestJson<{ mounts: RawWorkspaceMount[] }>(
+      withQuery('/api/workspace/mounts', workspaceQuery(context)),
+    )
+    return { mounts: response.mounts.map(workspaceMountView) }
+  },
+  mountDirectory: async (sourcePath: string, context?: WorkspaceContextInput, name?: string) => {
+    const response = await requestJson<{ mount: RawWorkspaceMount; created: boolean }>(
+      withQuery('/api/workspace/mounts', workspaceQuery(context)),
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          source_path: sourcePath,
+          name: name?.trim() || null,
+        }),
+      },
+    )
+    return {
+      mount: workspaceMountView(response.mount),
+      created: response.created,
+    }
+  },
+  unmountDirectory: (mountId: string, context?: WorkspaceContextInput) =>
+    requestJson<{ mount_id: string; removed: boolean }>(
+      withQuery(`/api/workspace/mounts/${encodeURIComponent(mountId)}`, workspaceQuery(context)),
+      { method: 'DELETE' },
+    ),
 }
 
 export type WorkspaceProjectMode = 'isolated' | 'project'
+export type WorkspaceRootKind = 'managed' | 'linked'
 
 export interface WorkspaceProjectView {
   workspace_id: string
   title: string
   mode: WorkspaceProjectMode
+  root_kind: WorkspaceRootKind
   owner_package_id: string | null
   workdir_root: string
   archived: boolean
   created_at: string
   updated_at: string
+}
+
+export interface WorkspaceDirectoryView {
+  name: string
+  path: string
+}
+
+export interface WorkspaceDirectoryListing {
+  path: string
+  parent: string | null
+  directories: WorkspaceDirectoryView[]
+}
+
+interface RawWorkspaceMount {
+  mount_id?: string
+  name?: string
+  source_path?: string
+  created_at?: string
+  connected?: boolean
+}
+
+function workspaceMountView(value: RawWorkspaceMount): WorkspaceMountView {
+  return {
+    mountId: String(value.mount_id || ''),
+    name: String(value.name || ''),
+    sourcePath: String(value.source_path || ''),
+    createdAt: String(value.created_at || ''),
+    connected: value.connected === true,
+  }
 }
 
 

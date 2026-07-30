@@ -90,27 +90,6 @@ def run_cancelled_event(request_id: str, payload: dict[str, Any]) -> FactoryFron
     )
 
 
-def run_stopped_event(
-    request_id: str,
-    *,
-    session_id: str | None,
-    mode: FactoryMode | None,
-    reason: str,
-) -> FactoryFrontendEvent:
-    return event(
-        "run_completed",
-        request_id=request_id,
-        session_id=session_id,
-        mode=mode,
-        graph_id="factory_runtime",
-        producer_type="factory_runtime",
-        payload={
-            "status": "stopped",
-            "stop_reason": reason,
-        },
-    )
-
-
 def request_heartbeat_event(
     request_id: str,
     *,

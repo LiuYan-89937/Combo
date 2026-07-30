@@ -89,13 +89,16 @@ Chat GGUF 约 23.5 GB，视觉投影器约 0.9 GB，另需 Embedding、llama.cpp
 
 ### 本机控制端
 
-- macOS 或 Linux
+- macOS、Linux 或 Windows 10/11
 - Git
 - OpenSSH：`ssh`、`scp`
-- `rsync`
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/)
 - Node.js 18+ 与 npm
+
+SSH 远端部署在 macOS/Linux 上优先使用 `rsync` 做增量同步；Windows
+无需安装 `rsync`，会使用 OpenSSH、SCP 和压缩归档完成同一同步边界。
+只有 Linux 本机 ROCm 部署要求 `rsync`。
 AgentPackage Native Runtime 不要求 Docker。不同包可以复用内容寻址的依赖池，但会话工作区、运行目录、工具输出和进程生命周期彼此隔离；该边界不等同于内核级安全沙箱。
 
 ### AMD ROCm 推理节点
@@ -128,6 +131,8 @@ SSH_KEY=
 ```
 
 `SSH_KEY` 可填写私钥绝对路径或 `~/.ssh/...`；如果 ssh-agent 或 OpenSSH 已能自动选择正确密钥，可以留空。
+从生成密钥、检查服务器 sshd、安装公钥到连接验证的完整步骤见
+[部署与验收指南的 SSH Key 章节](project-documentation/Deployment.zh-CN.md#41-从零配置-ssh-key)。
 
 先确认命令本身能登录：
 
@@ -153,9 +158,23 @@ SSH_KEY=
 
 ### 3. 一键准备并启动
 
+macOS 或 Linux：
+
 ```bash
 ./deploy.sh up
 ```
+
+Windows PowerShell：
+
+```powershell
+Copy-Item .env.example .env
+Set-ExecutionPolicy -Scope Process Bypass
+.\deploy.ps1 up
+```
+
+Windows 入口直接运行同一套跨平台 Python 部署核心，不要求 WSL、Git Bash
+或 Docker。Web、Agent Runtime 和 SSH 隧道运行在 Windows 本机，远端服务器
+仍只承担推理；工作区选择器直接使用 `C:\...` 等本机目录。
 
 首次执行会依次完成：
 
@@ -192,6 +211,8 @@ http://localhost:3000
 
 ## 部署命令
 
+下表中的 `./deploy.sh` 在 Windows PowerShell 中对应 `.\deploy.ps1`，其后参数完全一致。
+
 | 命令 | 作用 |
 | --- | --- |
 | `./deploy.sh up` | 按 `DEPLOY_TARGET` 幂等部署推理节点，然后启动 Web；SSH 模式同时建立隧道。 |
@@ -216,13 +237,9 @@ http://localhost:3000
 
 ### 网页搜索 MCP
 
-内置 Web Search MCP 支持 Tavily、SearXNG 和 DuckDuckGo。推荐在本机 `.env` 配置 Tavily：
+Hackson 测试部署内置 Tavily Web Search MCP。`deploy.sh up` 会将 MCP 安装到项目目录下的 `.agentfactory/mcp/web_search`，构建后自动注册并默认选择 Tavily，无需在 `.env` 中增加搜索配置。
 
-```dotenv
-TAVILY_API_KEY=<your-tavily-api-key>
-```
-
-密钥只由本机 MCP 子进程继承，不写入 `SystemPackage` 或 AgentPackage。启动时会明确显示 Tavily 是否已配置；留空不会阻止平台启动，默认改用自动管理的 SearXNG，SearXNG 不可用时再选择 DuckDuckGo。该回退用于选择启动时可用的默认 Provider，不代表 Tavily 请求已经发出后发生网络或配额错误时会自动跨 Provider 重试。
+仓库内置的是共享测试密钥，只用于比赛演示和功能验证，可能受到公共额度限制。AgentPackage 只保存 MCP 绑定关系，不会把该测试 MCP 写入发布包。
 
 ### 模型配置
 
@@ -269,6 +286,10 @@ Image Profile 默认允许在显存预算足够时与 Chat 同时驻留，模型
 在“Agent 制造”中描述目标、输入边界和交付标准。生成的 AgentPackage 保存模型 Profile 引用、工具权限、知识库和运行契约，不保存 GPU 绝对配置。
 
 发布后可以为 Agent 创建独立运行实例。每个实例拥有独立会话、工作区、知识库、长期记忆、工具审批和 Trace。
+
+新建会话时可以使用平台管理的独立工作区，也可以选择并链接本机已有文件夹。
+链接模式不复制原目录；同一工作区可以承载多个会话，并可从会话中解除链接。
+Agent 群聊让各成员以独立会话共享所选本机目录，多 Agent 协作仍使用任务自己的隔离工作区。
 
 ### Benchmark
 
@@ -451,7 +472,8 @@ GGUF 使用 `curl --continue-at -` 续传；完成后必须通过 SHA256 才会�
 项目开发约定不通过部署脚本运行 Agent 业务示例。提交前执行语法和静态检查：
 
 ```bash
-bash -n deploy.sh deploy/start_web.sh deploy/remote_runtime.sh web_frontend/lib/runtime_env.sh
+python3 -m compileall -q deploy
+bash -n deploy.sh deploy/start_web.sh deploy/remote_runtime.sh
 python3 -m compileall -q agent_factory web_frontend/backend deploy
 git diff --check
 ```

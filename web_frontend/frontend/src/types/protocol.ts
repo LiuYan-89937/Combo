@@ -7,7 +7,7 @@
 
 export type FactoryMode = 'create_agent' | 'evolve_agent' | 'agent_package' | 'agent_group'
 
-export type RunStatus = 'idle' | 'running' | 'waiting_for_workers' | 'interrupted' | 'completed' | 'stopped' | 'cancelled' | 'failed'
+export type RunStatus = 'idle' | 'running' | 'stopping' | 'waiting_for_workers' | 'interrupted' | 'completed' | 'stopped' | 'cancelled' | 'failed'
 
 export type PlanStepStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'skipped'
 
@@ -376,6 +376,18 @@ export interface WorkspaceEntry {
   kind: 'file' | 'directory'
   sizeBytes: number | null
   updatedAt: string | null
+  mount: boolean
+  mountId: string | null
+  mountSource: string | null
+  connected: boolean | null
+}
+
+export interface WorkspaceMountView {
+  mountId: string
+  name: string
+  sourcePath: string
+  createdAt: string
+  connected: boolean
 }
 
 export interface WorkspaceFileView {

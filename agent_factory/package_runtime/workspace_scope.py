@@ -7,7 +7,6 @@ from agent_factory.runtime_workspace import (
     RUNTIME_OUTPUT_ROOT_SESSION_KEY,
     RUNTIME_WORKSPACE_MOUNTS_SESSION_KEY,
     RUNTIME_WORKSPACE_ROOT_SESSION_KEY,
-    SESSION_OUTPUT_DIR,
 )
 
 
@@ -31,11 +30,9 @@ def apply_runtime_workspace(
     except ValueError as exc:
         raise ValueError(f"runtime workspace scope escapes package workdir: {scope}") from exc
     target.mkdir(parents=True, exist_ok=True)
-    output_root = target / SESSION_OUTPUT_DIR
-    output_root.mkdir(parents=True, exist_ok=True)
     session_config["builtin_workspace_root"] = str(target)
     session_config[RUNTIME_WORKSPACE_ROOT_SESSION_KEY] = str(target)
-    session_config[RUNTIME_OUTPUT_ROOT_SESSION_KEY] = str(output_root)
+    session_config[RUNTIME_OUTPUT_ROOT_SESSION_KEY] = str(target)
     session_config[RUNTIME_WORKSPACE_MOUNTS_SESSION_KEY] = _runtime_workspace_mounts(
         workspace.get("mounts")
     )

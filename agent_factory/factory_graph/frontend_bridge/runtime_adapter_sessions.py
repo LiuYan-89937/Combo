@@ -4,7 +4,11 @@ from dataclasses import asdict
 from typing import Any
 
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendCommand, event
-from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import session_payload
+from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import (
+    interrupt_accepts_message,
+    message_resume_command,
+    session_payload,
+)
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import (
     PendingAgentPackageRun,
 )
@@ -248,16 +252,21 @@ class RuntimeSessionCommandMixin:
         if not message and not has_attachment_payload(command.payload.get("attachments")):
             self._emit_error(command, "send_message requires message")
             return
-        interrupt_pending = (
-            (self.mode == "create_agent" and self.pending_create_agent_run is not None)
-            or (self.mode == "evolve_agent" and self.pending_evolution_run is not None)
-        )
-        if interrupt_pending:
-            self._emit_error(command, "cannot send a new message while an interrupt is pending")
-            return
         if self.mode == "create_agent":
+            if self.pending_create_agent_run is not None:
+                if interrupt_accepts_message(self.pending_create_agent_run):
+                    self._resume_create_agent_interrupt(message_resume_command(command, message))
+                else:
+                    self._emit_error(command, "cannot send a new message while an interrupt decision is pending")
+                return
             self._run_create_agent(command, message)
         else:
+            if self.pending_evolution_run is not None:
+                if interrupt_accepts_message(self.pending_evolution_run):
+                    self._resume_evolution_interrupt(message_resume_command(command, message))
+                else:
+                    self._emit_error(command, "cannot send a new message while an interrupt decision is pending")
+                return
             self._run_evolve_agent(command, message)
 
     def _apply_mode(self, command: FactoryFrontendCommand, mode: str | None) -> None:
@@ -315,6 +324,15 @@ class RuntimeSessionCommandMixin:
         with self.pending_agent_package_runs_lock:
             return key in self.pending_agent_package_runs
 
+    def _take_pending_agent_package_for_message(
+        self,
+        package_id: str,
+        session_id: str,
+    ) -> PendingAgentPackageRun | None:
+        key = (str(package_id).strip(), str(session_id).strip())
+        with self.pending_agent_package_runs_lock:
+            return self.pending_agent_package_runs.pop(key, None)
+
     def _take_pending_agent_package_run(
         self,
         target: _InterruptResumeTarget,
@@ -330,20 +348,6 @@ class RuntimeSessionCommandMixin:
             key, pending = matches[0]
             self.pending_agent_package_runs.pop(key, None)
             return pending
-
-    def _discard_pending_agent_package_runs(self, *, request_id: str | None) -> int:
-        if not request_id:
-            return 0
-        with self.pending_agent_package_runs_lock:
-            keys = [
-                key
-                for key, pending in self.pending_agent_package_runs.items()
-                if _normalized_optional(getattr(getattr(pending, "normalizer", None), "request_id", None))
-                == request_id
-            ]
-            for key in keys:
-                self.pending_agent_package_runs.pop(key, None)
-            return len(keys)
 
     def _emit_session_event(
         self,
@@ -478,21 +482,14 @@ class RuntimeSessionCommandMixin:
         return str(self.session_record.session_id)
 
     def _session_payload(self) -> dict[str, object]:
+        payload = session_payload(self.session_record, snapshot_mode=self.mode)
+        snapshot = payload.get("snapshot") if isinstance(payload.get("snapshot"), dict) else {}
         linked_agent_session = self._linked_agent_session_payload()
         if linked_agent_session is not None:
-            linked_turns = _turns_from_agent_session(linked_agent_session)
-            self._sync_factory_turns_from_linked_session(linked_agent_session)
-            payload = session_payload(self.session_record, snapshot_mode=self.mode)
-            snapshot = payload.get("snapshot") if isinstance(payload.get("snapshot"), dict) else {}
             snapshot = {
                 **snapshot,
-                "turns": linked_turns,
-                "messages": _messages_from_agent_session(linked_agent_session),
                 "agent_session": linked_agent_session,
             }
-        else:
-            payload = session_payload(self.session_record, snapshot_mode=self.mode)
-            snapshot = payload.get("snapshot") if isinstance(payload.get("snapshot"), dict) else {}
         payload["snapshot"] = snapshot
         return payload
 
@@ -555,21 +552,6 @@ class RuntimeSessionCommandMixin:
         except Exception:
             return None
 
-    def _sync_factory_turns_from_linked_session(self, linked_agent_session: dict[str, object]) -> None:
-        if self.session_record is None or self.mode != "create_agent":
-            return
-        turns = linked_agent_session.get("turns")
-        if not isinstance(turns, list):
-            return
-        try:
-            self.session_record = self.session_manager.replace_turns_from_agent_session(
-                self.session_record.session_id,
-                self.mode,
-                [turn for turn in turns if isinstance(turn, dict)],
-            )
-        except Exception:
-            return
-
     def checkpointer_payload(self) -> dict[str, object]:
         return {
             "backend": "system_package",
@@ -579,28 +561,6 @@ class RuntimeSessionCommandMixin:
 
     def _options_payload(self) -> dict[str, object]:
         return asdict(self.options)
-
-
-def _messages_from_agent_session(record: dict[str, object]) -> list[dict[str, object]]:
-    turns = record.get("turns")
-    if not isinstance(turns, list):
-        return []
-    messages: list[dict[str, object]] = []
-    for turn in turns:
-        if not isinstance(turn, dict):
-            continue
-        turn_messages = turn.get("messages")
-        if not isinstance(turn_messages, list):
-            continue
-        messages.extend(dict(message) for message in turn_messages if isinstance(message, dict))
-    return messages
-
-
-def _turns_from_agent_session(record: dict[str, object]) -> list[dict[str, object]]:
-    turns = record.get("turns")
-    if not isinstance(turns, list):
-        return []
-    return [dict(turn) for turn in turns if isinstance(turn, dict)]
 
 
 def _session_event_context(command: FactoryFrontendCommand) -> dict[str, object]:

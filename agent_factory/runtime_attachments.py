@@ -17,6 +17,7 @@ from agent_factory.file_utils import file_sha256
 
 
 ATTACHMENT_INPUT_DIR = "input_files"
+WORKSPACE_AGENT_DIR = ".agent"
 ATTACHMENT_MAX_FILES_ENV = "AGENTFACTORY_ATTACHMENT_MAX_FILES"
 ATTACHMENT_MAX_FILE_BYTES_ENV = "AGENTFACTORY_ATTACHMENT_MAX_FILE_BYTES"
 ATTACHMENT_MAX_TOTAL_BYTES_ENV = "AGENTFACTORY_ATTACHMENT_MAX_TOTAL_BYTES"
@@ -152,6 +153,19 @@ def import_runtime_attachments(
     return AttachmentImportResult(
         message=message,
         attachments=payload_attachments,
+    )
+
+
+def workspace_attachment_root(workdir_root: Path) -> Path:
+    return workdir_root / WORKSPACE_AGENT_DIR / ATTACHMENT_INPUT_DIR
+
+
+def workspace_attachment_runtime_root(runtime_workdir: str, scope: str) -> str:
+    return str(
+        PurePosixPath(runtime_workdir)
+        / WORKSPACE_AGENT_DIR
+        / ATTACHMENT_INPUT_DIR
+        / scope
     )
 
 
@@ -611,7 +625,7 @@ def _attachment_workspace_path(item: dict[str, Any]) -> str:
     if not parts or any(part == ".." for part in parts):
         return ""
     for index in range(len(parts) - 1):
-        if parts[index] == ".factory" and parts[index + 1] == ATTACHMENT_INPUT_DIR:
+        if parts[index] in {".factory", WORKSPACE_AGENT_DIR} and parts[index + 1] == ATTACHMENT_INPUT_DIR:
             return str(PurePosixPath(*parts[index:]))
     try:
         input_files_index = parts.index(ATTACHMENT_INPUT_DIR)

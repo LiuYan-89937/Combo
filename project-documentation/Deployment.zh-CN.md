@@ -47,7 +47,6 @@
 ```bash
 git --version
 ssh -V
-rsync --version
 python3 --version
 uv --version
 node --version
@@ -60,6 +59,20 @@ npm --version
 - Node.js 18+
 - SSH 模式下，私钥或 ssh-agent 可以登录 AMD 推理主机
 - 本机端口 `3000`、`8000`、`18002`、`18003`、`18004` 未被占用
+
+Windows 控制端直接在 PowerShell 中运行 `.\deploy.ps1 <命令>`，参数与
+`./deploy.sh <命令>` 一致，不要求 WSL 或 Git Bash。Web、Agent Runtime
+与 SSH 隧道均运行在 Windows 本机，工作区使用 `C:\...` 等原生路径；
+链接为会话工作区时不会复制源文件。
+
+```powershell
+Copy-Item .env.example .env
+Set-ExecutionPolicy -Scope Process Bypass
+.\deploy.ps1 up
+```
+
+SSH 远端部署在检测到 `rsync` 时使用增量同步；Windows 未安装 `rsync`
+时自动使用 SCP 压缩归档，并保持相同的远端目录清理边界。
 
 AgentPackage 会话使用受宿主监督的 Native Runtime，不要求 Docker。会话工作区、运行状态、工具输出与依赖环境仍保持逻辑隔离。
 
@@ -112,6 +125,174 @@ git pull --ff-only
 cp .env.example .env
 ```
 
+### 4.1 从零配置 SSH Key
+
+SSH 模式要求控制端能够用密钥直接登录推理节点。部署脚本使用
+`BatchMode=yes`，不会读取 SSH 登录密码。第一次配置时需要通过云平台控制台、
+已有管理员连接或临时密码进入服务器，把控制端公钥安装好。
+
+#### 第一步：在控制端生成专用密钥
+
+Windows PowerShell：
+
+```powershell
+$KeyPath = Join-Path $HOME ".ssh\id_ed25519_fastagentfactory"
+New-Item -ItemType Directory -Force (Split-Path $KeyPath) | Out-Null
+ssh-keygen -t ed25519 -a 64 -f $KeyPath -C "fastagentfactory-control"
+Get-Content "$KeyPath.pub"
+```
+
+macOS/Linux：
+
+```bash
+KEY_PATH="$HOME/.ssh/id_ed25519_fastagentfactory"
+mkdir -p "$(dirname "$KEY_PATH")"
+chmod 700 "$(dirname "$KEY_PATH")"
+ssh-keygen -t ed25519 -a 64 -f "$KEY_PATH" -C "fastagentfactory-control"
+cat "${KEY_PATH}.pub"
+```
+
+`ssh-keygen` 会询问是否设置私钥口令。可以留空；如果设置了口令，部署前必须先把
+私钥加入 ssh-agent，因为自动部署不会弹出交互式口令输入。私钥文件不得上传、
+提交到 Git 或复制到推理节点；只有 `.pub` 公钥可以发送到服务器。
+
+#### 第二步：检查服务器 SSH 环境
+
+通过云平台控制台进入推理节点后执行：
+
+```bash
+command -v sshd || true
+ps -p 1 -o comm=
+ps -ef | grep '[s]shd' || true
+```
+
+Ubuntu/Debian 缺少 sshd 时：
+
+```bash
+sudo apt-get update
+sudo apt-get install -y openssh-server
+```
+
+普通 systemd 主机：
+
+```bash
+sudo /usr/sbin/sshd -t
+sudo systemctl enable --now ssh
+sudo systemctl status ssh --no-pager
+```
+
+云端工作空间或容器的 PID 1 不是 systemd 时，不要继续调用 `systemctl`：
+
+```bash
+sudo mkdir -p /run/sshd
+sudo /usr/sbin/sshd -t
+sudo /usr/sbin/sshd
+ps -ef | grep '[s]shd'
+```
+
+系统安装了 `ss` 时可以检查内部监听端口：
+
+```bash
+ss -lntp | grep sshd
+```
+
+还要在云平台安全组或实例端口映射中开放对外 SSH 端口。`SSH_PORT` 填写的是
+控制端实际连接的外部端口；它可能映射到容器内部的 `22`，两者不一定相同。
+
+#### 第三步：把公钥写入服务器
+
+使用服务器上准备运行推理服务的账号登录；`.env` 中的 `SSH_USER` 必须与该账号一致。
+将第一步输出的完整单行公钥替换到 `PUBLIC_KEY`：
+
+```bash
+PUBLIC_KEY='ssh-ed25519 AAAA... fastagentfactory-control'
+install -d -m 700 "$HOME/.ssh"
+touch "$HOME/.ssh/authorized_keys"
+grep -qxF "$PUBLIC_KEY" "$HOME/.ssh/authorized_keys" \
+  || printf '%s\n' "$PUBLIC_KEY" >> "$HOME/.ssh/authorized_keys"
+chmod 600 "$HOME/.ssh/authorized_keys"
+chown -R "$(id -u):$(id -g)" "$HOME/.ssh"
+```
+
+不要把私钥内容写入 `authorized_keys`。完成后保留当前服务器控制台，先从控制端
+开一个新终端验证密钥，确认成功后再关闭原连接。
+
+#### 第四步：从控制端验证连接
+
+Windows PowerShell：
+
+```powershell
+ssh -i $KeyPath -p <外部端口> <SSH_USER>@<SSH_HOST> "printf 'ssh-key-ok\n'"
+```
+
+macOS/Linux：
+
+```bash
+ssh -i "$KEY_PATH" -p <外部端口> <SSH_USER>@<SSH_HOST> \
+  "printf 'ssh-key-ok\n'"
+```
+
+第一次连接会要求确认服务器 Host Key。核对云平台提供的主机指纹后接受；成功时应只输出
+`ssh-key-ok`。失败时使用相同参数增加 `-vvv` 查看实际选择的私钥和认证阶段。
+
+若私钥设置了口令，先加入 ssh-agent：
+
+```powershell
+# Windows；首次启用 ssh-agent 服务可能需要管理员 PowerShell
+Get-Service ssh-agent | Set-Service -StartupType Manual
+Start-Service ssh-agent
+ssh-add $KeyPath
+```
+
+```bash
+# macOS/Linux
+eval "$(ssh-agent -s)"
+ssh-add "$KEY_PATH"
+```
+
+Windows OpenSSH 若提示私钥权限过宽，可收紧 ACL：
+
+```powershell
+icacls $KeyPath /inheritance:r /grant:r "$($env:USERNAME):(R)"
+```
+
+#### 第五步：填写 `.env`
+
+Windows 原生路径推荐使用正斜杠：
+
+```dotenv
+DEPLOY_TARGET=ssh
+SSH_HOST=<SSH_HOST>
+SSH_PORT=<SSH_PORT>
+SSH_USER=root
+SSH_KEY=C:/Users/<用户名>/.ssh/id_ed25519_fastagentfactory
+```
+
+macOS/Linux：
+
+```dotenv
+DEPLOY_TARGET=ssh
+SSH_HOST=<SSH_HOST>
+SSH_PORT=<SSH_PORT>
+SSH_USER=root
+SSH_KEY=~/.ssh/id_ed25519_fastagentfactory
+```
+
+如果 ssh-agent 或 OpenSSH 配置已经能自动选中正确身份，可以保留 `SSH_KEY=`。
+填写后先执行只读诊断，再执行完整部署：
+
+```powershell
+.\deploy.ps1 doctor
+.\deploy.ps1 up
+```
+
+```bash
+./deploy.sh doctor
+./deploy.sh up
+```
+
+### 4.2 SSH 推理节点配置
+
 GPU 位于另一台机器时使用默认 SSH 目标：
 
 ```dotenv
@@ -143,7 +324,7 @@ SSH 模式完全相同的进程与接口，Web 端通过回环端口直接访问
 配置为当前用户可写的本机绝对路径；这些字段名为兼容既有配置保留，实际表示推理节点路径。
 本机必须是具有 `/dev/kfd` 和 AMD ROCm 驱动的 Linux 主机。
 
-### 4.1 主要配置字段
+### 4.3 主要配置字段
 
 | 字段 | 含义 | 默认策略 |
 | --- | --- | --- |
@@ -181,7 +362,6 @@ SSH 模式完全相同的进程与接口，Web 端通过回环端口直接访问
 | `CHAT_FLASH_ATTENTION` | Flash Attention | `1`，开启 |
 | `AGENTFACTORY_COLLABORATION_EVENT_COALESCE_WINDOW_SECONDS` | 子 Agent 事件触发主 Agent 恢复前的短聚合窗口 | `0.75` 秒 |
 | `AGENTFACTORY_COLLABORATION_EVENT_BATCH_LIMIT` | 单次主 Agent 恢复最多合并的原始事件数 | `64` |
-| `TAVILY_API_KEY` | 内置 `web_search` 的 Tavily Provider 密钥；只配置在本机 `.env`，由 MCP 子进程继承 | 留空时回退到 SearXNG/DuckDuckGo |
 | `REMOTE_INSTALL_BUILD_TOOLS` | 缺少普通工具时允许 apt 安装 | `1` |
 | `REMOTE_CA_BUNDLE` | curl、pip、Requests 和 ModelScope 共用的远端 CA bundle | `/etc/ssl/certs/ca-certificates.crt` |
 | `REMOTE_REPAIR_CA_TRUST` | 证书链缺失或损坏时允许重建并按需重装 `ca-certificates` | `1` |
@@ -212,7 +392,7 @@ Worker 租约以协作任务为唯一边界。同一个 AgentPackage 可以在�
 
 脚本按照以下顺序运行：
 
-1. 检查 Git、Python、uv、Node、npm 与 rsync；仅 SSH 目标检查 OpenSSH。
+1. 检查 Git、Python、uv、Node 与 npm；SSH 目标检查 OpenSSH，Linux 本机 ROCm 部署额外检查 rsync。
 2. 验证部署目标与端口；SSH 目标额外验证 Key 登录。
 3. 验证仓库自带的两套 llama.cpp、stable-diffusion.cpp 固定 revision 标记及递归子模块完整性。
 4. 上传远端控制脚本，准备缺失的普通编译工具，验证并按需修复系统 CA 信任链。
@@ -359,7 +539,7 @@ git pull --ff-only
 ./deploy.sh up
 ```
 
-远端同步以本机工作树为代码源，只传输 inference node、model pool 及其必要公共模块，并使用 `rsync --delete-excluded` 清除 bundle 中不属于该边界的旧文件。Factory 前后端、制造系统、会话与知识库代码不会上传；原生推理源码分别通过独立 rsync 边界同步，远端模型、状态、venv 与构建目录不进入应用 bundle。
+远端同步以本机工作树为代码源，只传输 inference node、model pool 及其必要公共模块。检测到 `rsync` 时使用 `--delete-excluded` 增量清理；否则使用压缩归档原子替换同一受控目录。Factory 前后端、制造系统、会话与知识库代码不会上传；原生推理源码分别通过独立同步边界传输，远端模型、状态、venv 与构建目录不进入应用 bundle。
 
 ## 9. llama.cpp 算子开发与部署
 
@@ -438,6 +618,19 @@ ssh -vvv <SSH_USER>@<SSH_HOST> -p <SSH_PORT>
 - 实例内 sshd 是否运行；
 - 平台 Host/Port 是否已更新；
 - Profile Public Key 与本机私钥是否匹配。
+
+部分云端工作空间是容器，PID 1 不是 systemd，此时
+`systemctl status ssh` 失败不代表 OpenSSH 未安装。可以直接检查并启动 sshd：
+
+```bash
+/usr/sbin/sshd -t
+ps -ef | grep '[s]shd'
+mkdir -p /run/sshd
+/usr/sbin/sshd
+```
+
+公钥应写入远端用户的 `~/.ssh/authorized_keys`；本机私钥仍由 `SSH_KEY`
+或 ssh-agent 管理，不要把私钥复制到推理节点。
 
 ### 11.2 SSH channel connection refused
 
@@ -527,7 +720,8 @@ profile/analysis.md
 部署脚本不自动运行 Agent 业务示例。提交前执行：
 
 ```bash
-bash -n deploy.sh deploy/start_web.sh deploy/remote_runtime.sh web_frontend/lib/runtime_env.sh
+python3 -m compileall -q deploy
+bash -n deploy.sh deploy/start_web.sh deploy/remote_runtime.sh
 python3 -m compileall -q agent_factory web_frontend/backend deploy
 git diff --check
 ```

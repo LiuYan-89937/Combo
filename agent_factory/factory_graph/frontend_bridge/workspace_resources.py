@@ -274,7 +274,7 @@ class FrontendWorkspaceService:
             )
         store = AgentGroupStore()
         store.get_group(group_id)
-        root = store.group_workspace_root(group_id) / "committed"
+        root = store.group_workdir(group_id)
         root.mkdir(parents=True, exist_ok=True)
         return FrontendWorkspaceTarget(
             resource_mode="agent_group",

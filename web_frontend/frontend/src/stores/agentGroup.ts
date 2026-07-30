@@ -159,7 +159,11 @@ export const useAgentGroupStore = defineStore('agentGroup', () => {
     }
   }
 
-  const createGroup = async (payload: { title: string; member_package_ids: string[] }) => {
+  const createGroup = async (payload: {
+    title: string
+    member_package_ids: string[]
+    workspace_id?: string
+  }) => {
     saving.value = true
     error.value = null
     try {

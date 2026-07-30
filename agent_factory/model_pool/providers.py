@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent_factory.model_pool.schema import DEFAULT_LLAMA_CPP_PARALLEL_SLOTS
+
 
 
 def list_local_inference_engines() -> list[dict[str, Any]]:
@@ -13,7 +15,10 @@ def list_local_inference_engines() -> list[dict[str, Any]]:
             "transport": "local_llama_cpp",
             "parameters": {
                 "gpu_layers": {"default": 99, "min": 0},
-                "parallel_slots": {"default": 1, "min": 1},
+                "parallel_slots": {
+                    "default": DEFAULT_LLAMA_CPP_PARALLEL_SLOTS,
+                    "min": 1,
+                },
                 "cache_types": ["f16", "bf16", "q8_0", "q4_0"],
                 "speculative_decoding_methods": ["mtp"],
             },

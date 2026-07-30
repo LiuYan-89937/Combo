@@ -86,12 +86,16 @@ The default deployment activates FLUX together with Chat and Embedding, waits fo
 
 ### Control Host
 
-- macOS or Linux
+- macOS, Linux, or Windows 10/11
 - Git and OpenSSH
-- `rsync`
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/)
 - Node.js 18+ and npm
+
+Remote SSH deployment prefers `rsync` on macOS/Linux. Windows does not require
+`rsync`; the shared deployment core uses OpenSSH, SCP, and compressed archives
+for the same synchronization boundary. Only local Linux ROCm deployment
+requires `rsync`.
 
 ### AMD ROCm Inference Host
 
@@ -123,6 +127,10 @@ SSH_USER=root
 SSH_KEY=
 ```
 
+For key generation, sshd validation, `authorized_keys`, ssh-agent, and
+connection verification, see
+[Configure SSH Key Authentication from Scratch](project-documentation/Deployment.md#41-configure-ssh-key-authentication-from-scratch).
+
 For a local AMD GPU host:
 
 ```dotenv
@@ -140,6 +148,20 @@ Override runtime or model directories in `.env` only when the defaults in `deplo
 ```bash
 ./deploy.sh up
 ```
+
+On Windows PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+Set-ExecutionPolicy -Scope Process Bypass
+.\deploy.ps1 up
+```
+
+The PowerShell entrypoint runs the same cross-platform Python deployment core
+directly on Windows; WSL, Git Bash, and Docker are not required. The Web stack,
+Agent runtime, and SSH tunnel remain on the Windows machine, while only
+inference runs remotely. Linked workspaces use native paths such as
+`C:\Users\<username>\Documents`.
 
 The command validates the target, prepares the ROCm build environment, synchronizes the bundled native inference sources, builds Official and AMD llama.cpp implementations, downloads and validates configured models, creates model profiles, starts the inference services, prepares local Python/frontend/native runtime dependencies, and launches the Web application.
 
@@ -183,18 +205,19 @@ See [Deployment and Acceptance](project-documentation/Deployment.md) for complet
 - Cross-session memory with package-level write interval configuration
 - Encrypted per-package resources and explicit approval policies
 - Multi-agent task decomposition, isolated workspaces, semantic acceptance, and active completion notifications
+- Managed per-session workspaces and linked local folders shared by multiple sessions without copying source files
 - Scheduled tasks, file artifacts, email delivery, and image generation
 - Runtime traces, model usage, token accounting, KV-prefix reuse, GPU telemetry, QPS, and operator analysis
 
 ## Web Search MCP
 
-The built-in Web Search MCP supports Tavily, SearXNG, and DuckDuckGo. Tavily is recommended:
+The Hackson test deployment includes a Tavily Web Search MCP. `deploy.sh up`
+installs it under `.agentfactory/mcp/web_search`, builds it, and registers it
+with Tavily selected by default. No search configuration is required in `.env`.
 
-```dotenv
-TAVILY_API_KEY=<your-tavily-api-key>
-```
-
-The key is inherited only by the local MCP process and is not written into an AgentPackage. When Tavily is not configured, startup selects an available managed SearXNG or DuckDuckGo provider.
+The bundled shared key is intended only for competition demonstrations and
+functional testing, and may be subject to shared quota limits. AgentPackage
+artifacts retain only their MCP binding and do not embed this test MCP.
 
 ## AMD Radeon GPU Optimization
 
@@ -254,7 +277,8 @@ Important runtime boundaries:
 
 ```bash
 python3 -m compileall agent_factory web_frontend/backend deploy
-bash -n deploy.sh deploy/start_web.sh deploy/remote_runtime.sh web_frontend/lib/runtime_env.sh
+python3 -m compileall -q deploy
+bash -n deploy.sh deploy/start_web.sh deploy/remote_runtime.sh
 cd web_frontend/frontend && npm run type-check
 ```
 
