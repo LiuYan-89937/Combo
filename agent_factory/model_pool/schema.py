@@ -8,6 +8,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from agent_factory.models.protocol import ModelReasoningSettings, StructuredOutputMethod
+from agent_factory.paths import cross_platform_absolute_path
 
 
 UTC = timezone.utc
@@ -241,8 +242,8 @@ class LlamaCppInferenceConfig(BaseModel):
         text = str(value or "").strip()
         if not text:
             return None
-        path = Path(text).expanduser()
-        if not path.is_absolute():
+        path = cross_platform_absolute_path(text)
+        if path is None:
             raise ValueError("mmproj_path must be an absolute path")
         return str(path)
 
@@ -276,8 +277,8 @@ class StableDiffusionCppInferenceConfig(BaseModel):
     @field_validator("vae_path", "clip_l_path", "t5xxl_path")
     @classmethod
     def _required_absolute_path(cls, value: str) -> str:
-        path = Path(str(value or "").strip()).expanduser()
-        if not path.is_absolute():
+        path = cross_platform_absolute_path(str(value or "").strip())
+        if path is None:
             raise ValueError("stable-diffusion.cpp component paths must be absolute")
         return str(path)
 
