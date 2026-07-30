@@ -37,7 +37,7 @@ from agent_factory.scheduler_system.execution_config import (
 from agent_factory.scheduler_system.seeds import apply_scheduler_seed_contract
 from agent_factory.knowledge_system.events import KNOWLEDGE_EVENT_TYPES
 from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
-from agent_factory.package_runtime.stop_signal import RuntimeStopSignal
+from agent_factory.package_runtime.stop_signal import RuntimeStopRegistry, RuntimeStopSignal
 from agent_factory.package_runtime.stopped_turn import close_stopped_turn_checkpoint
 from agent_factory.package_runtime.workspace_scope import apply_runtime_workspace
 from agent_factory.package_runtime.session_turns import (
@@ -98,8 +98,7 @@ class PackageRuntimeCore:
         self.compiled_runtime: CompiledPackageRuntime | None = None
         self.background_workers = RuntimeBackgroundWorkerManager()
         self._compile_lock = threading.Lock()
-        self._cancel_lock = threading.Lock()
-        self._active_cancel_tokens: dict[str, RuntimeStopSignal] = {}
+        self._stop_registry = RuntimeStopRegistry()
 
     def cancel_active_requests(
         self,
@@ -108,30 +107,21 @@ class PackageRuntimeCore:
         request_id: str | None = None,
         visible_output: Any = None,
     ) -> int:
-        target = (request_id or "").strip()
-        with self._cancel_lock:
-            request_ids = [target] if target and target in self._active_cancel_tokens else list(self._active_cancel_tokens)
-            for active_request_id in request_ids:
-                self._active_cancel_tokens[active_request_id].request(
-                    reason=reason,
-                    visible_output=visible_output,
-                )
-            return len(request_ids)
+        return self._stop_registry.request(
+            reason=reason,
+            request_id=request_id,
+            visible_output=visible_output,
+        )
 
     def _register_cancel_token(self, request_id: str | None, command_type: str) -> RuntimeStopSignal | None:
         if command_type not in {"run_message", "resume_interrupt"} or not request_id:
             return None
-        token = RuntimeStopSignal()
-        with self._cancel_lock:
-            self._active_cancel_tokens[request_id] = token
-        return token
+        return self._stop_registry.register(request_id)
 
     def _forget_cancel_token(self, request_id: str | None, token: RuntimeStopSignal | None) -> None:
         if not request_id or token is None:
             return
-        with self._cancel_lock:
-            if self._active_cancel_tokens.get(request_id) is token:
-                self._active_cancel_tokens.pop(request_id, None)
+        self._stop_registry.release(request_id, token)
 
     def set_runtime_resources_override(self, resources: dict[str, Any]) -> None:
         self.runtime_resources_override = dict(resources)

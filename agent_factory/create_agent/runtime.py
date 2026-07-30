@@ -4,7 +4,6 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import shutil
-import threading
 import time
 from typing import Any
 from uuid import uuid4
@@ -30,6 +29,8 @@ from agent_factory.model_pool.runtime_override import (
     runtime_reasoning_intensity_from_user_config,
 )
 from agent_factory.paths import factory_artifact_path, project_root
+from agent_factory.package_runtime.stop_signal import RuntimeStopRegistry, RuntimeStopSignal
+from agent_factory.package_runtime.stopped_turn import close_stopped_message_checkpoint
 from agent_factory.runtime_attachments import (
     ATTACHMENT_INPUT_DIR,
     import_runtime_attachments,
@@ -43,6 +44,7 @@ from agent_factory.runtime_protocol.chat_parts import build_chat_turn_messages
 @dataclass(frozen=True, slots=True)
 class CreateAgentStreamRun:
     session_id: str
+    request_id: str
     workspace: CreateAgentWorkspace
     events: Iterator[tuple[str, Any]]
 
@@ -59,28 +61,26 @@ class CreateAgentRuntime:
         self.checkpointer = checkpointer or build_factory_checkpointer_handle().saver
         self.model = model
         self._active_graph_by_session: dict[str, str] = {}
-        self._cancel_lock = threading.Lock()
-        self._active_cancel_tokens: dict[str, threading.Event] = {}
+        self._stop_registry = RuntimeStopRegistry()
 
-    def cancel_active_requests(self, *, reason: str = "user_cancelled", request_id: str | None = None) -> int:
-        del reason
-        target = (request_id or "").strip()
-        with self._cancel_lock:
-            request_ids = [target] if target and target in self._active_cancel_tokens else list(self._active_cancel_tokens)
-            for active_request_id in request_ids:
-                self._active_cancel_tokens[active_request_id].set()
-            return len(request_ids)
+    def cancel_active_requests(
+        self,
+        *,
+        reason: str = "user_cancelled",
+        request_id: str | None = None,
+        visible_output: Any = None,
+    ) -> int:
+        return self._stop_registry.request(
+            reason=reason,
+            request_id=request_id,
+            visible_output=visible_output,
+        )
 
-    def _register_cancel_token(self, request_id: str) -> threading.Event:
-        token = threading.Event()
-        with self._cancel_lock:
-            self._active_cancel_tokens[request_id] = token
-        return token
+    def _register_cancel_token(self, request_id: str) -> RuntimeStopSignal:
+        return self._stop_registry.register(request_id)
 
-    def _forget_cancel_token(self, request_id: str, token: threading.Event) -> None:
-        with self._cancel_lock:
-            if self._active_cancel_tokens.get(request_id) is token:
-                self._active_cancel_tokens.pop(request_id, None)
+    def _forget_cancel_token(self, request_id: str, token: RuntimeStopSignal) -> None:
+        self._stop_registry.release(request_id, token)
 
     def load_session_snapshot(self, session_id: str) -> dict[str, Any]:
         manufacture = self._checkpoint_snapshot(session_id=session_id, graph_kind="manufacture")
@@ -118,32 +118,43 @@ class CreateAgentRuntime:
     ) -> CreateAgentStreamRun:
         resolved_session_id = session_id or uuid4().hex
         resolved_request_id = request_id or uuid4().hex
-        workspace = CreateAgentWorkspace.for_session(resolved_session_id)
-        attachment_scope = time_named_attachment_scope()
-        attachment_result = import_runtime_attachments(
-            user_input,
-            attachments,
-            storage_root=workspace.root / ".factory" / ATTACHMENT_INPUT_DIR / attachment_scope,
-            runtime_path_root=f".factory/{ATTACHMENT_INPUT_DIR}/{attachment_scope}",
-            base_dir=project_root(),
-            scope=attachment_scope,
-        )
-        user_input = attachment_result.message
-        runtime_main_model_profile_id = main_model_profile_id_from_user_config(user_config)
-        runtime_reasoning_intensity = runtime_reasoning_intensity_from_user_config(user_config)
-        return CreateAgentStreamRun(
-            session_id=resolved_session_id,
-            workspace=workspace,
-            events=self._preflight_events(
-                user_input=user_input,
+        cancel_token = self._register_cancel_token(resolved_request_id)
+        try:
+            workspace = CreateAgentWorkspace.for_session(resolved_session_id)
+            attachment_scope = time_named_attachment_scope()
+            attachment_result = import_runtime_attachments(
+                user_input,
+                attachments,
+                storage_root=workspace.root / ".factory" / ATTACHMENT_INPUT_DIR / attachment_scope,
+                runtime_path_root=f".factory/{ATTACHMENT_INPUT_DIR}/{attachment_scope}",
+                base_dir=project_root(),
+                scope=attachment_scope,
+            )
+            runtime_main_model_profile_id = main_model_profile_id_from_user_config(user_config)
+            runtime_reasoning_intensity = runtime_reasoning_intensity_from_user_config(user_config)
+            events = self._preflight_events(
+                user_input=attachment_result.message,
                 session_id=resolved_session_id,
                 request_id=resolved_request_id,
                 workspace=workspace,
                 attachments=attachment_result.attachments,
                 runtime_main_model_profile_id=runtime_main_model_profile_id,
                 runtime_reasoning_intensity=runtime_reasoning_intensity,
-            ),
-        )
+                cancel_token=cancel_token,
+            )
+            return CreateAgentStreamRun(
+                session_id=resolved_session_id,
+                request_id=resolved_request_id,
+                workspace=workspace,
+                events=self._owned_events(
+                    request_id=resolved_request_id,
+                    cancel_token=cancel_token,
+                    events=events,
+                ),
+            )
+        except Exception:
+            self._forget_cancel_token(resolved_request_id, cancel_token)
+            raise
 
     def _preflight_events(
         self,
@@ -155,6 +166,7 @@ class CreateAgentRuntime:
         attachments: list[dict[str, Any]],
         runtime_main_model_profile_id: str | None,
         runtime_reasoning_intensity: int | None,
+        cancel_token: RuntimeStopSignal,
     ) -> Iterator[tuple[str, Any]]:
         pending_events: list[FactoryFrontendEvent] = []
         normalizer = RuntimeEventNormalizer(
@@ -169,6 +181,29 @@ class CreateAgentRuntime:
         def drain_events() -> Iterator[tuple[str, FactoryFrontendEvent]]:
             while pending_events:
                 yield "frontend_event", pending_events.pop(0)
+
+        def emit_cancelled(phase: str) -> Iterator[tuple[str, FactoryFrontendEvent]]:
+            normalizer.complete_open_model_streams(reason="user_stopped")
+            normalizer.runtime_event(
+                "node_completed",
+                node_id=phase,
+                node_label="Intent Analysis" if phase == "create_agent_intent_analysis" else "Task Analysis",
+                node_kind="control",
+                payload={
+                    "status": "stopped",
+                    "stop_reason": cancel_token.reason,
+                    "visible_to_user": True,
+                },
+            )
+            normalizer.emit_run_completed(
+                {
+                    "status": "stopped",
+                    "stop_reason": cancel_token.reason,
+                    "workspace_path": str(workspace.root),
+                    "agent_session": {"session_id": session_id},
+                }
+            )
+            yield from drain_events()
 
         normalizer.emit_run_started(
             {
@@ -187,6 +222,9 @@ class CreateAgentRuntime:
             payload={"status_key": "intent_analysis", "visible_to_user": True},
         )
         yield from drain_events()
+        if cancel_token.is_set():
+            yield from emit_cancelled("create_agent_intent_analysis")
+            return
 
         intent_started_at = time.monotonic()
         retained_graph_kind = self._session_graph_kind(session_id=session_id, workspace=workspace)
@@ -209,6 +247,9 @@ class CreateAgentRuntime:
                 )
                 normalizer.emit_run_failed(exc)
                 yield from drain_events()
+                return
+            if cancel_token.is_set():
+                yield from emit_cancelled("create_agent_intent_analysis")
                 return
             graph_kind = "manufacture" if intent.intent == "manufacture_agent" else "assist"
             intent_payload = intent.model_dump(mode="json")
@@ -248,9 +289,29 @@ class CreateAgentRuntime:
                 payload={"status_key": "task_analysis", "visible_to_user": True},
             )
             yield from drain_events()
+            if cancel_token.is_set():
+                yield from emit_cancelled("create_agent_task_analysis")
+                return
             task_started_at = time.monotonic()
             try:
                 task_analysis = analyze_create_agent_task(user_input=user_input, model=self.model)
+            except Exception as exc:
+                normalizer.runtime_event(
+                    "node_failed",
+                    node_id="create_agent_task_analysis",
+                    node_label="Task Analysis",
+                    node_kind="control",
+                    severity="error",
+                    message=str(exc),
+                    payload={"status_key": "task_analysis", "visible_to_user": True},
+                )
+                normalizer.emit_run_failed(exc)
+                yield from drain_events()
+                return
+            if cancel_token.is_set():
+                yield from emit_cancelled("create_agent_task_analysis")
+                return
+            try:
                 workspace.initialize(user_input=user_input, task_analysis=task_analysis)
             except Exception as exc:
                 normalizer.runtime_event(
@@ -302,6 +363,7 @@ class CreateAgentRuntime:
             run_id=normalizer.run_id,
             run_span_id=normalizer.run_span_id,
             initial_event_sequence=normalizer.sequence,
+            cancel_token=cancel_token,
         )
 
     def _session_graph_kind(self, *, session_id: str, workspace: CreateAgentWorkspace) -> str | None:
@@ -378,22 +440,41 @@ class CreateAgentRuntime:
         workspace = CreateAgentWorkspace.for_session(session_id)
         graph_kind = self._session_graph_kind(session_id=session_id, workspace=workspace) or "manufacture"
         resolved_request_id = request_id or uuid4().hex
+        cancel_token = self._register_cancel_token(resolved_request_id)
         return CreateAgentStreamRun(
             session_id=session_id,
+            request_id=resolved_request_id,
             workspace=workspace,
-            events=self._events(
-                user_input="",
-                session_id=session_id,
+            events=self._owned_events(
                 request_id=resolved_request_id,
-                workspace=workspace,
-                resume_payload=resume_payload or {},
-                graph_kind=graph_kind,
-                attachments=[],
-                runtime_main_model_profile_id=None,
-                runtime_reasoning_intensity=None,
-                intent=None,
+                cancel_token=cancel_token,
+                events=self._events(
+                    user_input="",
+                    session_id=session_id,
+                    request_id=resolved_request_id,
+                    workspace=workspace,
+                    resume_payload=resume_payload or {},
+                    graph_kind=graph_kind,
+                    attachments=[],
+                    runtime_main_model_profile_id=None,
+                    runtime_reasoning_intensity=None,
+                    intent=None,
+                    cancel_token=cancel_token,
+                ),
             ),
         )
+
+    def _owned_events(
+        self,
+        *,
+        request_id: str,
+        cancel_token: RuntimeStopSignal,
+        events: Iterator[tuple[str, Any]],
+    ) -> Iterator[tuple[str, Any]]:
+        try:
+            yield from events
+        finally:
+            self._forget_cancel_token(request_id, cancel_token)
 
     def _events(
         self,
@@ -408,13 +489,13 @@ class CreateAgentRuntime:
         runtime_main_model_profile_id: str | None,
         runtime_reasoning_intensity: int | None,
         intent: dict[str, Any] | None,
+        cancel_token: RuntimeStopSignal,
         emit_run_started: bool = True,
         run_id: str | None = None,
         run_span_id: str | None = None,
         initial_event_sequence: int = 0,
     ) -> Iterator[tuple[str, Any]]:
         request_id = request_id or uuid4().hex
-        cancel_token = self._register_cancel_token(request_id)
         graph_id = "create_agent_react" if graph_kind == "manufacture" else "create_agent_assist"
         node_label = "Create Agent ReAct" if graph_kind == "manufacture" else "Create Agent Assist"
         if resume_payload is None and graph_kind == "manufacture":
@@ -463,10 +544,19 @@ class CreateAgentRuntime:
             sequence=initial_event_sequence,
         )
         model_trace = _ModelTraceAccumulator(record_trace)
+        workflow: Any | None = None
+        graph_thread_id = f"{session_id}:{graph_kind}"
 
         def emit_cancelled() -> Iterator[tuple[str, FactoryFrontendEvent]]:
             model_trace.flush()
             normalizer.complete_open_model_streams(reason="user_stopped")
+            if workflow is not None:
+                close_stopped_message_checkpoint(
+                    graph_app=workflow,
+                    thread_id=graph_thread_id,
+                    visible_output=cancel_token.resolved_visible_output(normalizer.visible_assistant_output),
+                    stop_reason=cancel_token.reason,
+                )
             normalizer.runtime_event(
                 "node_completed",
                 node_id=graph_id,
@@ -523,7 +613,6 @@ class CreateAgentRuntime:
         yield from drain_events()
         if cancel_token.is_set():
             yield from emit_cancelled()
-            self._forget_cancel_token(request_id, cancel_token)
             return
         normalizer.runtime_event(
             "node_started",
@@ -557,7 +646,7 @@ class CreateAgentRuntime:
                     tools=tool_env.tools,
                     model=self.model,
                 ).compile(checkpointer=self.checkpointer)
-            config = {"configurable": {"thread_id": f"{session_id}:{graph_kind}"}}
+            config = {"configurable": {"thread_id": graph_thread_id}}
             stream_input: Any
             if resume_payload is None:
                 stream_input = {
@@ -745,10 +834,6 @@ class CreateAgentRuntime:
                 },
             )
             yield from drain_events()
-        finally:
-            self._forget_cancel_token(request_id, cancel_token)
-
-
 def _checkpoint_user_input(values: dict[str, Any]) -> str | None:
     request = str(values.get("request") or "").strip()
     if request:

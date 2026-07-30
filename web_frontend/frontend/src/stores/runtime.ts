@@ -131,6 +131,7 @@ export const useRuntimeStore = defineStore('runtime', {
     currentMode: null,
     activeFactorySessionId: null,
     activeAgentSessionId: null,
+    activeWorkspaceId: null,
     currentRunId: null,
     nodes: {},
     stages: {},
@@ -776,6 +777,7 @@ export const useRuntimeStore = defineStore('runtime', {
       if (!event.payload?.agent_session?.session_id) return
       this.activeFactorySessionId = null
       this.activeAgentSessionId = event.payload.agent_session.session_id
+      this.activeWorkspaceId = String(event.payload.agent_session.workspace_id || '') || null
       this._upsertAgentSession(event.payload.agent_session)
       if (!event.payload?.package_id) return
       const nextScope = agentPackageConversationScope(
@@ -1196,6 +1198,7 @@ export const useRuntimeStore = defineStore('runtime', {
     ) {
       this.activeFactorySessionId = null
       this.activeAgentSessionId = String(session.session_id)
+      this.activeWorkspaceId = String(session.workspace_id || '') || null
       if (activate) this.currentMode = 'agent_package'
       if (this._hasLiveConversationState() && this._hasVisibleConversationContent()) {
         return
@@ -1465,6 +1468,7 @@ export const useRuntimeStore = defineStore('runtime', {
       this.modelStreams = restored.modelStreams
       this.activeFactorySessionId = restored.activeFactorySessionId
       this.activeAgentSessionId = restored.activeAgentSessionId
+      this.activeWorkspaceId = restored.activeWorkspaceId
     },
 
     _dispatchEventToConversationScope(scope: string, event: FactoryFrontendEvent) {
@@ -1522,6 +1526,8 @@ export const useRuntimeStore = defineStore('runtime', {
       if (!scopeInfo) return
       this.activeFactorySessionId = null
       this.activeAgentSessionId = scopeInfo.sessionId
+      const workspaceId = String(event.payload?.agent_session?.workspace_id || '').trim()
+      if (workspaceId) this.activeWorkspaceId = workspaceId
       this._renameActiveConversationScope(scopeInfo.scope)
       if (event.request_id && this.activeRequests[event.request_id]) {
         this.activeRequests[event.request_id].conversationScope = scopeInfo.scope
@@ -1626,6 +1632,7 @@ export const useRuntimeStore = defineStore('runtime', {
       this.timeline = []
       this.activeFactorySessionId = null
       this.activeAgentSessionId = null
+      this.activeWorkspaceId = null
     },
 
     _recordDebugEvent(event: FactoryFrontendEvent) {

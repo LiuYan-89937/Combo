@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent, event
+from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent, FactoryMode, event
 from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
 
 
@@ -87,6 +87,27 @@ def run_cancelled_event(request_id: str, payload: dict[str, Any]) -> FactoryFron
         producer_type="agent_runtime_host",
         message=str(payload.get("message") or "Runtime request was cancelled."),
         payload=payload,
+    )
+
+
+def run_stopped_event(
+    request_id: str,
+    *,
+    session_id: str | None,
+    mode: FactoryMode | None,
+    reason: str,
+) -> FactoryFrontendEvent:
+    return event(
+        "run_completed",
+        request_id=request_id,
+        session_id=session_id,
+        mode=mode,
+        graph_id="factory_runtime",
+        producer_type="factory_runtime",
+        payload={
+            "status": "stopped",
+            "stop_reason": reason,
+        },
     )
 
 

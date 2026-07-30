@@ -15,6 +15,7 @@ class RunState(BaseModel):
     run_id: str = Field(default_factory=lambda: uuid4().hex)
     agent_id: str = "unknown-agent"
     session_id: str = "default"
+    workspace_id: str | None = None
     pattern_id: str = "unknown-pattern"
     pattern_version: int = 1
     runtime_kernel_version: str = RUNTIME_KERNEL_VERSION

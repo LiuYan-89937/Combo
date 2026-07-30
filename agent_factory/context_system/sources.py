@@ -37,12 +37,20 @@ class CrossSessionMemorySource:
         memory_system = getattr(runtime_context.services, "memory_system", None) if runtime_context.services else None
         if memory_system is None or not getattr(getattr(memory_system, "config", None), "enabled", False):
             return []
-        pack = memory_system.retrieve_context(query=query.text)
+        workspace_id = str(
+            getattr(getattr(runtime_context.state, "run", None), "workspace_id", None) or ""
+        ).strip()
+        retrieve_scoped = getattr(memory_system, "retrieve_scoped_context", None)
+        pack = (
+            retrieve_scoped(query=query.text, workspace_id=workspace_id or None)
+            if callable(retrieve_scoped)
+            else memory_system.retrieve_context(query=query.text)
+        )
         candidates: list[ContextCandidate] = []
         for item in pack.items:
             candidates.append(
                 ContextCandidate(
-                    candidate_id=f"memory:{item.memory_id}",
+                    candidate_id=f"memory:{':'.join(item.namespace)}:{item.memory_id}",
                     source_id=self.source_id,
                     kind="memory",
                     content=item.content,
@@ -52,6 +60,7 @@ class CrossSessionMemorySource:
                         "memory_id": item.memory_id,
                         "memory_type": item.memory_type,
                         "kind": item.kind,
+                        "source_scope": item.source_scope,
                         "namespace": list(item.namespace),
                     },
                 )

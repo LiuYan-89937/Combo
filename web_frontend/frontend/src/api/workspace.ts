@@ -3,6 +3,25 @@ import { resolvedBackendUrl } from './backendUrl'
 import { requestEvent, requestJson, withQuery } from './http'
 
 export const workspaceApi = {
+  projects: () =>
+    requestJson<{ workspaces: WorkspaceProjectView[] }>('/api/workspace/projects'),
+  createProject: (payload: {
+    title?: string | null
+    mode?: WorkspaceProjectMode
+    owner_package_id?: string | null
+  }) =>
+    requestJson<{ workspace: WorkspaceProjectView }>('/api/workspace/projects', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateProject: (
+    workspaceId: string,
+    payload: { title?: string; mode?: WorkspaceProjectMode; archived?: boolean },
+  ) =>
+    requestJson<{ workspace: WorkspaceProjectView }>(
+      `/api/workspace/projects/${encodeURIComponent(workspaceId)}`,
+      { method: 'PATCH', body: JSON.stringify(payload) },
+    ),
   roots: (context?: WorkspaceContextInput) =>
     requestEvent(withQuery('/api/workspace/roots', workspaceQuery(context))),
   entries: (scope: WorkspaceScope, path: string, context?: WorkspaceContextInput) =>
@@ -17,6 +36,20 @@ export const workspaceApi = {
       { method: 'DELETE' },
     ),
 }
+
+export type WorkspaceProjectMode = 'isolated' | 'project'
+
+export interface WorkspaceProjectView {
+  workspace_id: string
+  title: string
+  mode: WorkspaceProjectMode
+  owner_package_id: string | null
+  workdir_root: string
+  archived: boolean
+  created_at: string
+  updated_at: string
+}
+
 
 function workspaceQuery(context: WorkspaceContextInput): Record<string, string | undefined | null> {
   if (typeof context === 'string') {

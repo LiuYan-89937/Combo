@@ -14,6 +14,7 @@ from agent_factory.factory_graph.frontend_bridge.protocol import (
 from agent_factory.factory_graph.frontend_bridge.runtime_events import (
     INTERRUPT_TERMINAL_EVENT_TYPES,
     RUN_TERMINAL_EVENT_TYPES,
+    run_stopped_event,
     runtime_stream_status,
 )
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import (
@@ -325,7 +326,7 @@ class RuntimeAgentPackageCommandMixin:
                 result=result,
                 request_id=command.request_id,
             )
-            if result.status in {"completed", "failed", "cancelled"}:
+            if result.status in {"completed", "failed", "cancelled", "stopped"}:
                 store.update_run(group_run_id, {"status": result.status})
         except Exception as exc:
             self.agent_package_runtime.finish_session_turn(
@@ -373,6 +374,7 @@ class RuntimeAgentPackageCommandMixin:
                 runtime_request=_runtime_request(command),
                 require_ready=require_ready,
                 attachments=command.payload.get("attachments"),
+                workspace_id=str(command.payload.get("workspace_id") or "").strip() or None,
             )
             result = self._consume_agent_package_stream(package_id=package_id, run=run, normalizer=normalizer)
             self._persist_agent_package_stream_result(
@@ -455,6 +457,7 @@ class RuntimeAgentPackageCommandMixin:
         )
 
     def _consume_evolution_stream(self, *, package_id: str, run: Any) -> RuntimeStreamConsumeResult:
+        request_id = run.request_id
         terminal_event: FactoryFrontendEvent | None = None
         visible_output = VisibleAssistantOutputAccumulator()
         for stream_mode, chunk in run.events:
@@ -462,36 +465,62 @@ class RuntimeAgentPackageCommandMixin:
                 continue
             if stream_mode != "frontend_event":
                 continue
+            if self.request_commit_fence.is_cancelled(request_id):
+                continue
             item = chunk if isinstance(chunk, FactoryFrontendEvent) else FactoryFrontendEvent.model_validate(chunk)
             visible_output.accept(item)
             if item.event_type in INTERRUPT_TERMINAL_EVENT_TYPES:
                 session_id = self._session_id()
                 if not session_id:
                     raise RuntimeError("agent evolution interrupt missing session_id")
-                self._finish_evolution_turn(
-                    request_id=item.request_id,
-                    final_answer=visible_output.content,
-                    reasoning_content=visible_output.reasoning_content,
-                    status="interrupted",
-                    tool_activities=visible_output.tool_activities,
-                )
-                self.pending_evolution_run = PendingEvolutionRun(
-                    package_id=package_id,
-                    session_id=session_id,
-                    request_id=item.request_id,
-                    trace_id=run.trace_id,
-                    interrupt_id=_interrupt_id_from_event(item),
-                    interrupt_event_id=item.event_id,
-                )
-                self.emit(
-                    _frontend_scoped_agent_event(
-                        item,
-                        mode="evolve_agent",
-                        session_id=session_id,
-                        package_id=package_id,
+                def commit_interrupt() -> None:
+                    self._finish_evolution_turn(
+                        request_id=item.request_id,
+                        final_answer=visible_output.content,
+                        reasoning_content=visible_output.reasoning_content,
+                        status="interrupted",
+                        tool_activities=visible_output.tool_activities,
                     )
-                )
-                terminal_event = item
+                    self.pending_evolution_run = PendingEvolutionRun(
+                        package_id=package_id,
+                        session_id=session_id,
+                        request_id=item.request_id,
+                        trace_id=run.trace_id,
+                        interrupt_id=_interrupt_id_from_event(item),
+                        interrupt_event_id=item.event_id,
+                    )
+                    self.emit(
+                        _frontend_scoped_agent_event(
+                            item,
+                            mode="evolve_agent",
+                            session_id=session_id,
+                            package_id=package_id,
+                        )
+                    )
+
+                if self.request_commit_fence.commit(request_id, commit_interrupt):
+                    terminal_event = item
+                continue
+            if item.event_type in RUN_TERMINAL_EVENT_TYPES:
+                def commit_terminal() -> None:
+                    self.emit(
+                        _frontend_scoped_agent_event(
+                            item,
+                            mode="evolve_agent",
+                            session_id=self._session_id(),
+                            package_id=package_id,
+                        )
+                    )
+                    self._finish_evolution_turn(
+                        request_id=item.request_id,
+                        final_answer=visible_output.content,
+                        reasoning_content=visible_output.reasoning_content,
+                        status=runtime_stream_status(item),
+                        tool_activities=visible_output.tool_activities,
+                    )
+
+                if self.request_commit_fence.commit(request_id, commit_terminal):
+                    terminal_event = item
                 continue
             self.emit(
                 _frontend_scoped_agent_event(
@@ -501,15 +530,13 @@ class RuntimeAgentPackageCommandMixin:
                     package_id=package_id,
                 )
             )
-            if item.event_type in RUN_TERMINAL_EVENT_TYPES:
-                self._finish_evolution_turn(
-                    request_id=item.request_id,
-                    final_answer=visible_output.content,
-                    reasoning_content=visible_output.reasoning_content,
-                    status=runtime_stream_status(item),
-                    tool_activities=visible_output.tool_activities,
-                )
-                terminal_event = item
+        if self.request_commit_fence.is_cancelled(request_id):
+            return RuntimeStreamConsumeResult(
+                status="stopped",
+                final_answer=visible_output.content,
+                reasoning_content=visible_output.reasoning_content,
+                tool_activities=list(visible_output.tool_activities),
+            )
         if terminal_event is not None:
             return RuntimeStreamConsumeResult(
                 status=runtime_stream_status(terminal_event),
@@ -656,6 +683,7 @@ class RuntimeAgentPackageCommandMixin:
         reason = str(command.payload.get("reason") or "user_cancelled")
         target_request_id = str(command.payload.get("target_request_id") or "").strip() or None
         visible_output = command.payload.get("visible_output") if isinstance(command.payload.get("visible_output"), dict) else None
+        fenced_requests = self.request_commit_fence.cancel(target_request_id)
         cancelled = (
             self.agent_package_runtime.cancel_active_requests(
                 reason=reason,
@@ -666,9 +694,17 @@ class RuntimeAgentPackageCommandMixin:
             else 0
         )
         if self.evolution_runtime is not None:
-            cancelled += self.evolution_runtime.cancel_active_requests(reason=reason, request_id=target_request_id)
+            cancelled += self.evolution_runtime.cancel_active_requests(
+                reason=reason,
+                request_id=target_request_id,
+                visible_output=visible_output,
+            )
         if self.create_agent_runtime is not None:
-            cancelled += self.create_agent_runtime.cancel_active_requests(reason=reason, request_id=target_request_id)
+            cancelled += self.create_agent_runtime.cancel_active_requests(
+                reason=reason,
+                request_id=target_request_id,
+                visible_output=visible_output,
+            )
         if self.agent_package_runtime is not None:
             cancelled += int(self.agent_package_runtime.cancel_extension_request(target_request_id))
         cancelled += self._discard_pending_agent_package_runs(request_id=target_request_id)
@@ -681,6 +717,15 @@ class RuntimeAgentPackageCommandMixin:
             target_request_id=target_request_id,
             visible_output=visible_output,
         )
+        if target_request_id and (fenced_requests or cancelled or session_turn_stopped):
+            self.emit(
+                run_stopped_event(
+                    target_request_id,
+                    session_id=str(command.session_id or self._session_id() or "").strip() or None,
+                    mode=command.mode or self.mode,
+                    reason=reason,
+                )
+            )
         self.emit(
             event(
                 "debug_patch",
@@ -694,6 +739,7 @@ class RuntimeAgentPackageCommandMixin:
                     "reason": reason,
                     "target_request_id": target_request_id,
                     "cancelled_requests": cancelled,
+                    "fenced_requests": fenced_requests,
                     "session_turn_stopped": session_turn_stopped,
                 },
             )
@@ -712,12 +758,12 @@ class RuntimeAgentPackageCommandMixin:
         mode = command.mode or self.mode
         final_answer = str((visible_output or {}).get("content") or "").strip() or None
         reasoning_content = str((visible_output or {}).get("reasoning_content") or "").strip() or None
-        if mode == "agent_package":
+        if mode in {"agent_package", "agent_group"}:
             package_id = str(command.payload.get("package_id") or "").strip()
             if not package_id or not session_id or self.agent_package_runtime is None:
                 return False
             session = self.agent_package_runtime.load_session(package_id, session_id)
-            if not _session_payload_has_request(session, target_request_id):
+            if not _session_payload_has_active_request(session, target_request_id):
                 return False
             self.agent_package_runtime.finish_session_turn(
                 package_id,
@@ -731,7 +777,7 @@ class RuntimeAgentPackageCommandMixin:
         if mode not in {"create_agent", "evolve_agent"} or not session_id:
             return False
         current_record = self.session_manager.load(session_id)
-        if not _factory_record_has_request(current_record, mode, target_request_id):
+        if not _factory_record_has_active_request(current_record, mode, target_request_id):
             return False
         record = self.session_manager.finish_turn(
             session_id,
@@ -755,12 +801,15 @@ class RuntimeAgentPackageCommandMixin:
         frontend_session_id: str | None = None,
         extra_payload: dict[str, Any] | None = None,
     ) -> RuntimeStreamConsumeResult:
+        request_id = run.request_id
         normalizer.default_payload = {**normalizer.default_payload, "package_id": package_id}
         final_state = None
         terminal_event: FactoryFrontendEvent | None = None
         visible_output = VisibleAssistantOutputAccumulator()
         for stream_mode, chunk in run.events:
             if terminal_event is not None:
+                continue
+            if self.request_commit_fence.is_cancelled(request_id):
                 continue
             if stream_mode == "frontend_event":
                 item = chunk if isinstance(chunk, FactoryFrontendEvent) else FactoryFrontendEvent.model_validate(chunk)
@@ -779,21 +828,36 @@ class RuntimeAgentPackageCommandMixin:
                         interrupt_id=_interrupt_id_from_event(item),
                         interrupt_event_id=item.event_id,
                     )
-                    if frontend_mode == "agent_group" and extra_payload:
-                        from agent_factory.agent_group_system.store import AgentGroupStore
+                    def commit_interrupt() -> None:
+                        if frontend_mode == "agent_group" and extra_payload:
+                            from agent_factory.agent_group_system.store import AgentGroupStore
 
-                        pending.group_id = str(extra_payload.get("group_id") or "") or None
-                        pending.group_run_id = str(extra_payload.get("group_run_id") or "") or None
-                        if pending.group_id and pending.group_run_id:
-                            pending.workdir_root = AgentGroupStore().group_staging_root(
-                                pending.group_id,
-                                pending.group_run_id,
-                            )
-                            self.pending_agent_group_runs[pending.group_run_id] = pending
+                            pending.group_id = str(extra_payload.get("group_id") or "") or None
+                            pending.group_run_id = str(extra_payload.get("group_run_id") or "") or None
+                            if pending.group_id and pending.group_run_id:
+                                pending.workdir_root = AgentGroupStore().group_staging_root(
+                                    pending.group_id,
+                                    pending.group_run_id,
+                                )
+                                self.pending_agent_group_runs[pending.group_run_id] = pending
+                            else:
+                                self._remember_pending_agent_package_run(pending)
                         else:
                             self._remember_pending_agent_package_run(pending)
-                    else:
-                        self._remember_pending_agent_package_run(pending)
+
+                        self.emit(
+                            _frontend_scoped_agent_event(
+                                item,
+                                mode=frontend_mode,
+                                session_id=frontend_session_id,
+                                package_id=package_id,
+                                extra_payload=extra_payload,
+                            )
+                        )
+
+                    if self.request_commit_fence.commit(request_id, commit_interrupt):
+                        terminal_event = item
+                    continue
                 self.emit(
                     _frontend_scoped_agent_event(
                         item,
@@ -803,7 +867,7 @@ class RuntimeAgentPackageCommandMixin:
                         extra_payload=extra_payload,
                     )
                 )
-                if item.event_type in INTERRUPT_TERMINAL_EVENT_TYPES or item.event_type in RUN_TERMINAL_EVENT_TYPES:
+                if item.event_type in RUN_TERMINAL_EVENT_TYPES:
                     terminal_event = item
                 continue
             if stream_mode == "stderr":
@@ -824,21 +888,32 @@ class RuntimeAgentPackageCommandMixin:
                     normalizer=normalizer,
                     interrupt_id=_interrupt_id_from_payload(interrupt_payload),
                 )
-                self._remember_pending_agent_package_run(pending)
                 payload = json_safe(interrupt_payload)
                 if isinstance(payload, dict):
                     payload = {**payload, "package_id": package_id}
-                normalizer.emit_interrupt(payload)
-                return RuntimeStreamConsumeResult(
-                    status="interrupted",
-                    final_answer=visible_output.content,
-                    reasoning_content=visible_output.reasoning_content,
-                    tool_activities=list(visible_output.tool_activities),
-                )
+                def commit_interrupt() -> None:
+                    self._remember_pending_agent_package_run(pending)
+                    normalizer.emit_interrupt(payload)
+
+                if self.request_commit_fence.commit(request_id, commit_interrupt):
+                    return RuntimeStreamConsumeResult(
+                        status="interrupted",
+                        final_answer=visible_output.content,
+                        reasoning_content=visible_output.reasoning_content,
+                        tool_activities=list(visible_output.tool_activities),
+                    )
+                continue
             if stream_mode == "runtime_final":
                 final_state = chunk
                 continue
             normalizer.emit_stream_item(stream_mode, chunk, updates_payload_key="agent_package_update")
+        if self.request_commit_fence.is_cancelled(request_id):
+            return RuntimeStreamConsumeResult(
+                status="stopped",
+                final_answer=visible_output.content,
+                reasoning_content=visible_output.reasoning_content,
+                tool_activities=list(visible_output.tool_activities),
+            )
         if terminal_event is not None:
             return RuntimeStreamConsumeResult(
                 status=runtime_stream_status(terminal_event),
@@ -885,6 +960,8 @@ class RuntimeAgentPackageCommandMixin:
         result: RuntimeStreamConsumeResult,
         request_id: str | None,
     ) -> None:
+        if self.request_commit_fence.is_cancelled(request_id):
+            return
         terminal_payload = (
             result.terminal_event.payload
             if result.terminal_event is not None and isinstance(result.terminal_event.payload, dict)
@@ -1022,6 +1099,7 @@ class RuntimeAgentPackageCommandMixin:
         )
 
     def _consume_create_agent_stream(self, *, run: Any) -> RuntimeStreamConsumeResult:
+        request_id = run.request_id
         terminal_event: FactoryFrontendEvent | None = None
         visible_output = VisibleAssistantOutputAccumulator()
         for stream_mode, chunk in run.events:
@@ -1029,36 +1107,53 @@ class RuntimeAgentPackageCommandMixin:
                 continue
             if stream_mode != "frontend_event":
                 raise RuntimeError(f"create-agent runtime emitted non-frontend event stream: {stream_mode}")
+            if self.request_commit_fence.is_cancelled(request_id):
+                continue
             item = chunk if isinstance(chunk, FactoryFrontendEvent) else FactoryFrontendEvent.model_validate(chunk)
             visible_output.accept(item)
             if item.event_type in INTERRUPT_TERMINAL_EVENT_TYPES:
-                self._finish_host_create_agent_turn(
-                    request_id=item.request_id,
-                    final_answer=visible_output.content,
-                    reasoning_content=visible_output.reasoning_content,
-                    status="interrupted",
-                    tool_activities=visible_output.tool_activities,
-                )
-                self.pending_create_agent_run = PendingCreateAgentRun(
-                    session_id=run.session_id,
-                    factory_session_id=self._session_id(),
-                    request_id=item.request_id,
-                    interrupt_id=_interrupt_id_from_event(item),
-                    interrupt_event_id=item.event_id,
-                )
-                self.emit(_frontend_scoped_agent_event(item, mode="create_agent", session_id=self._session_id()))
-                terminal_event = item
+                def commit_interrupt() -> None:
+                    self._finish_host_create_agent_turn(
+                        request_id=item.request_id,
+                        final_answer=visible_output.content,
+                        reasoning_content=visible_output.reasoning_content,
+                        status="interrupted",
+                        tool_activities=visible_output.tool_activities,
+                    )
+                    self.pending_create_agent_run = PendingCreateAgentRun(
+                        session_id=run.session_id,
+                        factory_session_id=self._session_id(),
+                        request_id=item.request_id,
+                        interrupt_id=_interrupt_id_from_event(item),
+                        interrupt_event_id=item.event_id,
+                    )
+                    self.emit(_frontend_scoped_agent_event(item, mode="create_agent", session_id=self._session_id()))
+
+                if self.request_commit_fence.commit(request_id, commit_interrupt):
+                    terminal_event = item
+                continue
+            if item.event_type in RUN_TERMINAL_EVENT_TYPES:
+                def commit_terminal() -> None:
+                    self.emit(_frontend_scoped_agent_event(item, mode="create_agent", session_id=self._session_id()))
+                    self._finish_host_create_agent_turn(
+                        request_id=item.request_id,
+                        final_answer=visible_output.content,
+                        reasoning_content=visible_output.reasoning_content,
+                        status=runtime_stream_status(item),
+                        tool_activities=visible_output.tool_activities,
+                    )
+
+                if self.request_commit_fence.commit(request_id, commit_terminal):
+                    terminal_event = item
                 continue
             self.emit(_frontend_scoped_agent_event(item, mode="create_agent", session_id=self._session_id()))
-            if item.event_type in RUN_TERMINAL_EVENT_TYPES:
-                self._finish_host_create_agent_turn(
-                    request_id=item.request_id,
-                    final_answer=visible_output.content,
-                    reasoning_content=visible_output.reasoning_content,
-                    status=runtime_stream_status(item),
-                    tool_activities=visible_output.tool_activities,
-                )
-                terminal_event = item
+        if self.request_commit_fence.is_cancelled(request_id):
+            return RuntimeStreamConsumeResult(
+                status="stopped",
+                final_answer=visible_output.content,
+                reasoning_content=visible_output.reasoning_content,
+                tool_activities=list(visible_output.tool_activities),
+            )
         if terminal_event is not None:
             return RuntimeStreamConsumeResult(
                 status=runtime_stream_status(terminal_event),
@@ -1091,18 +1186,23 @@ class RuntimeAgentPackageCommandMixin:
         )
 
 
-def _factory_record_has_request(record: Any, mode: str, request_id: str) -> bool:
+def _factory_record_has_active_request(record: Any, mode: str, request_id: str) -> bool:
     turns_by_mode = {
         "create_agent": getattr(record, "create_agent_turns", ()),
         "evolve_agent": getattr(record, "evolve_agent_turns", ()),
     }
-    return any(str(getattr(turn, "request_id", "") or "").strip() == request_id for turn in turns_by_mode.get(mode, ()))
+    return any(
+        str(getattr(turn, "request_id", "") or "").strip() == request_id
+        and str(getattr(turn, "status", "") or "").strip() in {"running", "interrupted"}
+        for turn in turns_by_mode.get(mode, ())
+    )
 
 
-def _session_payload_has_request(session: dict[str, Any], request_id: str) -> bool:
+def _session_payload_has_active_request(session: dict[str, Any], request_id: str) -> bool:
     turns = session.get("turns") if isinstance(session.get("turns"), list) else []
     return any(
         str(turn.get("request_id") or "").strip() == request_id
+        and str(turn.get("status") or "").strip() in {"running", "interrupted"}
         for turn in turns
         if isinstance(turn, dict)
     )

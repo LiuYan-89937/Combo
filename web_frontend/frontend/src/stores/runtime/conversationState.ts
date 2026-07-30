@@ -13,6 +13,7 @@ type ConversationScopeSource = Pick<
   | 'modelStreams'
   | 'activeFactorySessionId'
   | 'activeAgentSessionId'
+  | 'activeWorkspaceId'
   | 'activeRequestId'
   | 'runStatus'
   | 'pendingInterrupt'
@@ -53,6 +54,7 @@ export function buildConversationScopeState(source: ConversationScopeSource): Co
     ),
     activeFactorySessionId: source.activeFactorySessionId,
     activeAgentSessionId: source.activeAgentSessionId,
+    activeWorkspaceId: source.activeWorkspaceId,
     activeRequestId: source.activeRequestId,
     runStatus: source.runStatus,
     pendingInterrupt: source.pendingInterrupt
@@ -103,6 +105,7 @@ export function normalizeConversationScopeState(saved: ConversationScopeState): 
     ),
     activeFactorySessionId: saved.activeFactorySessionId ?? null,
     activeAgentSessionId: saved.activeAgentSessionId,
+    activeWorkspaceId: saved.activeWorkspaceId ?? null,
     activeRequestId: saved.activeRequestId ?? null,
     runStatus: saved.runStatus ?? 'idle',
     pendingInterrupt: saved.pendingInterrupt

@@ -26,7 +26,7 @@ class MemoryRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     memory_id: str = Field(default_factory=lambda: uuid4().hex)
-    scope: Literal["factory", "agent", "user"]
+    scope: Literal["factory", "agent", "user", "workspace"]
     kind: Literal["fact", "preference", "decision", "constraint", "artifact"]
     memory_type: Literal["semantic", "episodic", "procedural"] = "semantic"
     content: str

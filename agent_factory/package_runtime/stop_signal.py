@@ -27,6 +27,45 @@ class RuntimeStopSignal:
         return self.visible_output
 
 
+class RuntimeStopRegistry:
+    """Thread-safe ownership of cancellation signals for active runtime requests."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._signals: dict[str, RuntimeStopSignal] = {}
+
+    def register(self, request_id: str) -> RuntimeStopSignal:
+        signal = RuntimeStopSignal()
+        with self._lock:
+            self._signals[request_id] = signal
+        return signal
+
+    def request(
+        self,
+        *,
+        reason: str,
+        request_id: str | None = None,
+        visible_output: Any = None,
+    ) -> int:
+        target = (request_id or "").strip()
+        with self._lock:
+            if target:
+                request_ids = [target] if target in self._signals else []
+            else:
+                request_ids = list(self._signals)
+            for active_request_id in request_ids:
+                self._signals[active_request_id].request(
+                    reason=reason,
+                    visible_output=visible_output,
+                )
+            return len(request_ids)
+
+    def release(self, request_id: str, signal: RuntimeStopSignal) -> None:
+        with self._lock:
+            if self._signals.get(request_id) is signal:
+                self._signals.pop(request_id, None)
+
+
 def _visible_output_message(value: Any) -> VisibleAssistantMessage | None:
     if not isinstance(value, dict):
         return None

@@ -27,6 +27,7 @@ def rank_memory_items(
         candidates.append(
             MemoryContextItem(
                 memory_id=str(value.get("memory_id") or item.key),
+                source_scope=_source_scope(value=value, namespace=tuple(item.namespace)),
                 memory_type=_memory_type(value.get("memory_type")),
                 kind=kind if kind in {"fact", "preference", "decision", "constraint", "artifact"} else "fact",
                 content=content,
@@ -90,3 +91,12 @@ def _memory_type(value: Any) -> str:
     if value in {"semantic", "episodic", "procedural"}:
         return str(value)
     return "semantic"
+
+
+def _source_scope(*, value: dict[str, Any], namespace: tuple[str, ...]) -> str:
+    scope = str(value.get("scope") or "")
+    if scope in {"factory", "workspace", "agent", "user"}:
+        return scope
+    if len(namespace) >= 2 and namespace[0] == "memory" and namespace[1] in {"factory", "workspace", "agent", "user"}:
+        return namespace[1]
+    return "none"

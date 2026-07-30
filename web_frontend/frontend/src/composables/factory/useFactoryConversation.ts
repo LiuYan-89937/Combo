@@ -207,7 +207,9 @@ export function useFactoryConversation() {
         message,
         agentSessionId,
         payloadAttachments,
-        runtimeModelOptions()
+        runtimeModelOptions(),
+        undefined,
+        agentSessionId ? null : runtimeStore.activeWorkspaceId,
       )
       runtimeStore.addUserMessage(message, command.request_id, {
         mode: 'agent_package',

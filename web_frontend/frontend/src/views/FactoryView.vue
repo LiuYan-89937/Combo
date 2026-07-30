@@ -403,6 +403,7 @@ async function openRoutedAgentSession(version: number): Promise<boolean> {
     ) return true
     agentStore.enterAgentChat(packageId, null)
     runtimeStore.showEmptyAgentPackageSession(packageId)
+    runtimeStore.activeWorkspaceId = routeQueryText(route.query.workspace_id) || null
     await commands.selectAgentPackage(packageId, 'run')
     return true
   }

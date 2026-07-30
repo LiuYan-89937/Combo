@@ -6,9 +6,13 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from agent_factory.memory_system.config import MemorySystemConfig
-from agent_factory.memory_system.namespace import agent_memory_namespace, factory_memory_namespace
-from agent_factory.memory_system.retrieval import retrieve_memory_context
+from agent_factory.memory_system.namespace import (
+    agent_memory_namespace,
+    factory_memory_namespace,
+)
+from agent_factory.memory_system.retrieval import retrieve_memory_context, retrieve_scoped_memory_context
 from agent_factory.memory_system.schema import MemoryContextPack, MemoryInjectionReport
+from agent_factory.memory_system.scopes import MemoryScopeContext, local_memory_user_id
 
 
 class MemorySystemRuntime(BaseModel):
@@ -18,12 +22,39 @@ class MemorySystemRuntime(BaseModel):
     store: object | None = None
     scope: str = "agent"
     namespace: tuple[str, ...] = ()
+    agent_id: str | None = None
+    user_id: str | None = None
     writer: object | None = None
 
-    def retrieve_context(self, *, query: str) -> MemoryContextPack:
+    def retrieve_context(
+        self,
+        *,
+        query: str,
+        namespace: tuple[str, ...] | None = None,
+    ) -> MemoryContextPack:
         return retrieve_memory_context(
             store=self.store,
-            namespace=self.namespace,
+            namespace=namespace or self.namespace,
+            query=query,
+            config=self.config,
+        )
+
+    def retrieve_scoped_context(
+        self,
+        *,
+        query: str,
+        workspace_id: str | None = None,
+    ) -> MemoryContextPack:
+        if not self.agent_id or not self.user_id:
+            return self.retrieve_context(query=query)
+        context = MemoryScopeContext(
+            agent_id=self.agent_id,
+            user_id=self.user_id,
+            workspace_id=workspace_id,
+        )
+        return retrieve_scoped_memory_context(
+            store=self.store,
+            sources=context.retrieval_sources(),
             query=query,
             config=self.config,
         )
@@ -42,7 +73,8 @@ def inject_runtime_cross_session_memory(
         )
     query = _runtime_memory_query(state)
     try:
-        pack = runtime.retrieve_context(query=query)
+        workspace_id = str(getattr(getattr(state, "run", None), "workspace_id", None) or "").strip()
+        pack = runtime.retrieve_scoped_context(query=query, workspace_id=workspace_id or None)
         updated = state.model_copy(deep=True)
         updated.context.model_context = {
             **updated.context.model_context,
@@ -54,6 +86,7 @@ def inject_runtime_cross_session_memory(
             MemoryInjectionReport(
                 status="injected",
                 namespace=pack.namespace,
+                namespaces=[tuple(item) for item in pack.report.get("namespaces", [])],
                 item_count=len(pack.items),
                 token_estimate=pack.token_estimate,
                 min_score=runtime.config.ranking.min_score,
@@ -108,8 +141,21 @@ def inject_factory_cross_session_memory(
         )
 
 
-def default_agent_runtime(*, agent_id: str, config: MemorySystemConfig, store: object | None) -> MemorySystemRuntime:
-    return MemorySystemRuntime(config=config, store=store, scope="agent", namespace=agent_memory_namespace(agent_id))
+def default_agent_runtime(
+    *,
+    agent_id: str,
+    config: MemorySystemConfig,
+    store: object | None,
+    user_id: str | None = None,
+) -> MemorySystemRuntime:
+    return MemorySystemRuntime(
+        config=config,
+        store=store,
+        scope="agent",
+        namespace=agent_memory_namespace(agent_id),
+        agent_id=agent_id,
+        user_id=user_id or local_memory_user_id(),
+    )
 
 
 def default_factory_runtime(*, project_id: str, config: MemorySystemConfig, store: object | None) -> MemorySystemRuntime:

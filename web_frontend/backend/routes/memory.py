@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
@@ -10,6 +10,7 @@ from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import Ag
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import SYSTEM_CHAT_PACKAGE_ID
 from agent_factory.memory_system.config import MemorySystemConfig
 from agent_factory.memory_system.injection import MemorySystemRuntime, default_agent_runtime
+from agent_factory.memory_system.scopes import MemoryScopeContext
 from agent_factory.memory_system.retrieval import retrieve_memory_context
 from agent_factory.memory_system.schema import MemoryContextPack
 from agent_factory.memory_system.store_index import build_memory_store_index
@@ -25,6 +26,8 @@ class MemoryDeleteRequest(BaseModel):
 
     memory_id: str = Field(min_length=1)
     package_id: str | None = None
+    workspace_id: str | None = None
+    scope: Literal["workspace", "agent", "user"] | None = None
 
 
 def create_memory_router(runtime_bridge: RuntimeBridge) -> APIRouter:
@@ -34,22 +37,35 @@ def create_memory_router(runtime_bridge: RuntimeBridge) -> APIRouter:
     def query_memory(
         query: str = Query(default=""),
         package_id: str | None = None,
+        workspace_id: str | None = None,
+        scope: Literal["combined", "workspace", "agent", "user"] = "combined",
         limit: int = Query(default=8, ge=1, le=32),
     ):
         resolved_package_id = _memory_package_id(package_id)
         runtime = _memory_runtime_for_scope(runtime_bridge, package_id=resolved_package_id, limit=limit)
-        pack = retrieve_memory_context(
-            store=runtime.store,
-            namespace=runtime.namespace,
-            query=query,
-            config=runtime.config,
-        )
+        context = _scope_context(runtime, workspace_id=workspace_id)
+        if scope == "combined":
+            pack = runtime.retrieve_scoped_context(query=query, workspace_id=workspace_id)
+        else:
+            namespace = context.namespaces().get(scope)
+            if namespace is None:
+                raise HTTPException(status_code=400, detail=f"{scope} memory requires an active workspace")
+            pack = retrieve_memory_context(
+                store=runtime.store,
+                namespace=namespace,
+                query=query,
+                config=runtime.config,
+            )
         return _pack_response(pack, package_id=resolved_package_id)
 
     @router.delete("/items")
     def delete_memory_item(payload: MemoryDeleteRequest):
         resolved_package_id = _memory_package_id(payload.package_id)
         runtime = _memory_runtime_for_scope(runtime_bridge, package_id=resolved_package_id)
+        scope = payload.scope or ("workspace" if payload.workspace_id else "agent")
+        namespace = _scope_context(runtime, workspace_id=payload.workspace_id).namespaces().get(scope)
+        if namespace is None:
+            raise HTTPException(status_code=400, detail=f"{scope} memory requires an active workspace")
         store = runtime.store
         if store is None:
             raise HTTPException(status_code=400, detail="memory store is not available")
@@ -57,14 +73,16 @@ def create_memory_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         if not memory_id:
             raise HTTPException(status_code=400, detail="memory_id is required")
         try:
-            store.delete(runtime.namespace, memory_id)
+            store.delete(namespace, memory_id)
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
         return {
             "deleted": True,
             "memory_id": memory_id,
             "package_id": resolved_package_id,
-            "namespace": list(runtime.namespace),
+            "workspace_id": payload.workspace_id,
+            "scope": scope,
+            "namespace": list(namespace),
         }
 
     return router
@@ -92,6 +110,16 @@ def _memory_runtime_for_scope(
 
 def _memory_package_id(package_id: str | None) -> str:
     return str(package_id or "").strip() or SYSTEM_CHAT_PACKAGE_ID
+
+
+def _scope_context(runtime: MemorySystemRuntime, *, workspace_id: str | None) -> MemoryScopeContext:
+    if not runtime.agent_id or not runtime.user_id:
+        raise HTTPException(status_code=500, detail="memory scope identity is not available")
+    return MemoryScopeContext(
+        agent_id=runtime.agent_id,
+        user_id=runtime.user_id,
+        workspace_id=str(workspace_id or "").strip() or None,
+    )
 
 
 def _agent_memory_runtime(runtime_bridge: RuntimeBridge, *, package_id: str) -> MemorySystemRuntime:
@@ -165,6 +193,7 @@ def _pack_response(pack: MemoryContextPack, *, package_id: str | None) -> dict[s
     return {
         "package_id": package_id,
         "namespace": list(pack.namespace),
+        "namespaces": list(pack.report.get("namespaces") or [list(pack.namespace)]),
         "query": pack.query,
         "items": items,
         "token_estimate": pack.token_estimate,

@@ -127,7 +127,8 @@ export function runAgentPackageCommand(
   sessionId?: string,
   attachments?: RuntimeAttachmentInput[],
   runtimeOptions?: RuntimeMainModelOptions,
-  displayUserInput?: string | null
+  displayUserInput?: string | null,
+  workspaceId?: string | null,
 ): FactoryFrontendCommand {
   const requestId = generateRequestId()
   return createCommand('run_agent_package', {
@@ -138,6 +139,7 @@ export function runAgentPackageCommand(
         package_id: packageId,
         message,
         session_id: sessionId,
+        ...(workspaceId ? { workspace_id: workspaceId } : {}),
         ...(attachments && attachments.length > 0 ? { attachments } : {}),
         ...(displayUserInput ? { display_user_input: displayUserInput } : {}),
       },
@@ -147,12 +149,13 @@ export function runAgentPackageCommand(
 }
 
 export function sendAgentPackageMessageCommand(
-  packageId: string,
-  message: string,
-  sessionId?: string,
-  attachments?: RuntimeAttachmentInput[],
-  runtimeOptions?: RuntimeMainModelOptions,
-  displayUserInput?: string | null
+    packageId: string,
+    message: string,
+    sessionId?: string,
+    attachments?: RuntimeAttachmentInput[],
+    runtimeOptions?: RuntimeMainModelOptions,
+    displayUserInput?: string | null,
+    workspaceId?: string | null,
 ): FactoryFrontendCommand {
   const requestId = generateRequestId()
   return createCommand('send_agent_package_message', {
@@ -163,6 +166,7 @@ export function sendAgentPackageMessageCommand(
         package_id: packageId,
         message,
         session_id: sessionId,
+        ...(workspaceId ? { workspace_id: workspaceId } : {}),
         ...(attachments && attachments.length > 0 ? { attachments } : {}),
         ...(displayUserInput ? { display_user_input: displayUserInput } : {}),
       },

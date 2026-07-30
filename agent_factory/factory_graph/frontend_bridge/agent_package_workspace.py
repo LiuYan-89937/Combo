@@ -9,12 +9,15 @@ from typing import Any
 
 from agent_factory.document_processing import EMAIL_EXTENSIONS, OFFICE_EXTENSIONS, parse_file
 from agent_factory.runtime_contracts import LoadedAgentPackage
+from agent_factory.runtime_kernel.session import AgentSessionConfig, AgentSessionManager
 from agent_factory.factory_graph.frontend_bridge.agent_package_paths import (
     extension_root_for_package,
     host_session_workdir,
     package_runtime_workspace,
 )
 from agent_factory.factory_graph.frontend_bridge.agent_package_utils import humanize_identifier
+from agent_factory.workspace_mounts import WorkspaceMountRecord
+from agent_factory.workspace_system import WorkspaceStore
 
 
 WORKSPACE_BINARY_PREVIEW_EXTENSIONS = {
@@ -105,11 +108,9 @@ def workspace_roots(package_id: str, package: LoadedAgentPackage, *, session_id:
     return {
         "package": package.package_root,
         "runtime": workspace.root,
-        "workdir": (
-            host_session_workdir(package_id, normalized_session_id)
-            if normalized_session_id
-            else workspace.workdir
-        ),
+        "workdir": _session_workspace_workdir(package_id, package, normalized_session_id)
+        if normalized_session_id
+        else workspace.workdir,
         "artifacts": workspace.artifacts,
         "extensions": extension_root_for_package(package_id, package),
     }
@@ -121,10 +122,44 @@ def workspace_scope_root(package_id: str, package: LoadedAgentPackage, scope: st
 
 def _workspace_context(package_id: str, session_id: str | None) -> dict[str, str]:
     normalized_session_id = str(session_id or "").strip()
+    workspace_id = _session_workspace_id(package_id, normalized_session_id) if normalized_session_id else ""
     return {
         "package_id": package_id,
         **({"package_session_id": normalized_session_id} if normalized_session_id else {}),
+        **({"workspace_id": workspace_id} if workspace_id else {}),
     }
+
+
+def _session_workspace_id(package_id: str, session_id: str) -> str:
+    if not session_id:
+        return ""
+    manager = AgentSessionManager(
+        AgentSessionConfig(root=package_runtime_workspace(package_id).root / "sessions")
+    )
+    return manager.load(session_id).workspace_id
+
+
+def _session_workspace_workdir(
+    package_id: str,
+    package: LoadedAgentPackage,
+    session_id: str,
+) -> Path:
+    workspace_id = _session_workspace_id(package_id, session_id)
+    store = WorkspaceStore()
+    record = store.load_optional(workspace_id)
+    if record is None:
+        legacy = host_session_workdir(package_id, session_id)
+        session = AgentSessionManager(
+            AgentSessionConfig(root=package_runtime_workspace(package_id).root / "sessions")
+        ).load(session_id)
+        record = store.create(
+            workspace_id=workspace_id,
+            title=session.display_title or session.first_user_input or "新工作区",
+            mode="isolated",
+            owner_package_id=package_id,
+            workdir_root=legacy if legacy.exists() else None,
+        )
+    return store.workdir(record.workspace_id)
 
 
 def workspace_roots_payload(*, context: dict[str, Any], roots: dict[str, Path]) -> dict[str, Any]:

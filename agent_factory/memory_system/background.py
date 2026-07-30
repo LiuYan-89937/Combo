@@ -12,9 +12,14 @@ from langgraph.store.base import BaseStore
 
 from agent_factory.memory_system.config import MemorySystemConfig
 from agent_factory.memory_system.extraction import extract_memory_actions
-from agent_factory.memory_system.retrieval import retrieve_memory_context
+from agent_factory.memory_system.retrieval import retrieve_scoped_memory_context
 from agent_factory.memory_system.segment import segment_query_text
-from agent_factory.memory_system.schema import MemoryConversationMessage, MemoryWriteJob, MemoryWriteReport
+from agent_factory.memory_system.schema import (
+    MemoryConversationMessage,
+    MemoryRetrievalSource,
+    MemoryWriteJob,
+    MemoryWriteReport,
+)
 from agent_factory.memory_system.writer import MemoryStoreWriter
 
 
@@ -161,6 +166,7 @@ class MemoryBackgroundWorker:
                 {
                     "job_id": job.job_id,
                     "namespace": list(job.namespace),
+                    "namespaces": [list(namespace) for namespace in job.available_namespaces.values()],
                     "segment_id": segment.segment_id,
                     "start_turn": segment.start_turn,
                     "end_turn": segment.end_turn,
@@ -168,9 +174,9 @@ class MemoryBackgroundWorker:
                 },
             )
             query = segment_query_text(segment)
-            related = retrieve_memory_context(
+            related = retrieve_scoped_memory_context(
                 store=self.store,
-                namespace=job.namespace,
+                sources=_job_retrieval_sources(job),
                 query=query,
                 config=self.config,
             )
@@ -184,8 +190,10 @@ class MemoryBackgroundWorker:
                 {
                     "job_id": job.job_id,
                     "namespace": list(job.namespace),
+                    "namespaces": [list(namespace) for namespace in job.available_namespaces.values()],
                     "status": extraction.status,
                     "action_count": len(extraction.actions),
+                    "target_scopes": [action.target_scope for action in extraction.actions],
                     "segment_id": segment.segment_id,
                 },
             )
@@ -197,7 +205,11 @@ class MemoryBackgroundWorker:
                     error="memory extraction failed" if extraction.status == "failed" else None,
                     duration_ms=int((perf_counter() - started) * 1000),
                 )
-            return MemoryStoreWriter(self.store).apply(job=job, decision=extraction)
+            return MemoryStoreWriter(self.store).apply(
+                job=job,
+                decision=extraction,
+                related_memories=related,
+            )
         except Exception as exc:
             return MemoryWriteReport(
                 job_id=job.job_id,
@@ -212,3 +224,16 @@ def _safe_report(report: MemoryWriteReport) -> dict:
     return report.model_dump(mode="json")
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _job_retrieval_sources(job: MemoryWriteJob) -> list[MemoryRetrievalSource]:
+    ordered_scopes = ("factory", "workspace", "agent", "user")
+    selected = [scope for scope in ordered_scopes if scope in job.available_namespaces]
+    return [
+        MemoryRetrievalSource(
+            scope=scope,
+            namespace=job.available_namespaces[scope],
+            priority=len(selected) - index,
+        )
+        for index, scope in enumerate(selected)
+    ]
