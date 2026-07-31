@@ -317,4 +317,4 @@ The repository does not distribute a model-training dataset. Market data, web-se
 
 ### Project-owned source
 
-The repository root does not currently declare a single project-wide source-code license. Until the owner adds a root `LICENSE`, no MIT, Apache-2.0, or other open-source license should be inferred for project-owned code from licenses present in third-party directories.
+Project-owned source in this repository is licensed under the Apache License, Version 2.0, in the root [`LICENSE`](LICENSE). That license applies only to project-owned source and does not relicense vendored third-party source, model weights, external data, or online services; those materials remain subject to their own terms.
