@@ -416,7 +416,7 @@ Worker 租约以协作任务为唯一边界。同一个 AgentPackage 可以在�
 
 Image Profile 在推理节点和 Web 端都默认启用并设为 active。部署会启动 `sd-server` 并等待 FLUX 进入 `ready`，因此完成后可以直接调用图片模型。图片运行配置默认启用 `eager_load`；默认 `coexist_if_fit` 允许 Chat 与 Image 在显存预算足够时同时驻留。模型工具复用 `main` 的 `image_output` 抽象，只把 `sd-server` 当作调用接口，图片产物由 ArtifactStore 保存到当前 Agent Workspace。
 
-FLUX.1-dev 使用 Non-Commercial License，不等同于 Apache/MIT。比赛演示和提交前应保留模型来源、revision、SHA256 与许可证说明。
+FLUX.1-dev 受 Non-Commercial License 约束，该许可不等同于 Apache 或 MIT，也不自动授予商业使用、再分发或衍生输出权利。比赛演示和提交前应保留模型来源、revision、SHA256 以及适用许可证说明，并按具体使用场景核验许可边界。
 
 ### 5.2 幂等与续传
 

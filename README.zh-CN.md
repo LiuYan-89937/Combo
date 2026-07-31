@@ -487,30 +487,30 @@ npm run type-check
 
 ## 第三方组件与许可证
 
-本节区分项目源码、随仓库分发的第三方源码、运行时下载的模型权重以及外部数据服务。第三方组件继续受各自许可证和使用条款约束；以下内容是工程清单，不替代上游许可证正文或法律意见。
+本节记录截至文档编制日已知的项目源码、随仓库分发的第三方源码、运行时下载模型权重及外部数据服务的来源和许可边界。第三方组件仍受其上游许可证及使用条款约束；本清单不构成许可授予、合规保证或法律意见，具体以上游许可证、模型卡和服务条款为准。
 
 ### 随仓库分发的原生推理源码
 
 | 组件 | 上游 | 固定版本 | 许可证 | 仓库位置 |
 | --- | --- | --- | --- | --- |
 | llama.cpp Official | [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) | `f955e394bf94e01e5e36186d13c985727e5ef5b5` | MIT | `vendor/llama.cpp-official/` |
-| llama.cpp AMD derivative | 基于同一 llama.cpp revision | 同上 | MIT；项目修改不改变上游许可声明 | `vendor/llama.cpp-amd/` |
+| llama.cpp AMD 实现 | 基于固定 llama.cpp revision 的项目修改派生实现 | 同上 | 上游 MIT 条款和声明继续适用；项目修改不重新许可上游代码 | `vendor/llama.cpp-amd/` |
 | stable-diffusion.cpp | [leejet/stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) | `833369da848e8e2f960fe1896a825e3a08ef9733` | MIT | `vendor/stable-diffusion.cpp/` |
 | libwebm | stable-diffusion.cpp 子模块 | 随固定源码树 | BSD 3-Clause | `vendor/stable-diffusion.cpp/thirdparty/libwebm/LICENSE.TXT` |
 | libwebp | stable-diffusion.cpp 子模块 | 随固定源码树 | BSD 3-Clause | `vendor/stable-diffusion.cpp/thirdparty/libwebp/COPYING` |
 
-完整许可证正文保留在对应源码目录。分发二进制或修改后的源码时，必须同时保留相应版权和许可证文件。
+完整许可证正文保留在对应源码目录。分发二进制或修改后的源码时，必须同时保留全部适用的版权、许可证、专利和 NOTICE 文件。AMD 实现属于项目修改派生实现，仅保留上游署名和许可边界，不扩展或重新授予上游代码权利。
 
 ### 运行时模型
 
-模型由部署脚本下载，不作为本仓库源码的一部分。模型托管站点、量化工具和下载镜像不会改变上游模型许可证。
+模型由部署脚本下载，不作为本仓库源码的一部分。派生或量化发布物、托管页面和下载镜像仅用于说明来源，不构成独立的权利授予；模型使用和再分发必须同时核对上游及派生发布方的适用条款。
 
 | 用途 | 模型与来源 | 已核对许可证 | 重要边界 |
 | --- | --- | --- | --- |
-| Chat | [SC117/Qwen3.6-35B-A3B APEX GGUF](https://huggingface.co/SC117/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-APEX-GGUF) | Apache-2.0（以模型卡当前声明为准） | 属于第三方衍生、去审查和量化模型；部署前仍应核对其 Base Model、衍生过程和当前模型卡 |
+| Chat | [SC117/Qwen3.6-35B-A3B APEX GGUF](https://huggingface.co/SC117/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-APEX-GGUF) | 当前模型卡声明为 Apache-2.0 | 该文件属于第三方派生及量化发布物；再分发前应独立核验基础模型谱系、派生授权、模型卡 revision 及适用声明 |
 | Embedding | [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3) | MIT | 使用者应保留模型来源和引用信息 |
-| Image Generation | [black-forest-labs/FLUX.1-dev](https://huggingface.co/black-forest-labs/FLUX.1-dev) | FLUX.1-dev Non-Commercial License | 不是通用开源商用许可证；商业使用、再分发和衍生输出场景必须单独核验 |
-| FLUX GGUF | [city96/FLUX.1-dev-gguf](https://modelscope.cn/models/city96/FLUX.1-dev-gguf) | 量化文件不改变 FLUX.1-dev 上游许可 | ModelScope 仅作为当前下载源 |
+| Image Generation | [black-forest-labs/FLUX.1-dev](https://huggingface.co/black-forest-labs/FLUX.1-dev) | 受 FLUX.1-dev Non-Commercial License 约束 | 该许可不等同于不受限制的商业使用许可，也不是 OSI 认可的通用开源许可证；商业使用、再分发及衍生输出应单独核验 |
+| FLUX GGUF | [city96/FLUX.1-dev-gguf](https://modelscope.cn/models/city96/FLUX.1-dev-gguf) | 量化发布物仍受 FLUX.1-dev 上游许可边界约束 | 量化形式和 ModelScope 下载镜像不替代、缩小或扩大上游许可；ModelScope 仅为当前下载来源 |
 
 `CLIP-L`、`T5XXL` 和 VAE 文件来自 FLUX 推理栈的第三方镜像。镜像下载地址不能作为独立授权依据，应同时遵守原始模型和打包仓库声明。
 
@@ -530,4 +530,4 @@ Python 直接依赖声明在 `pyproject.toml`，精确解析版本记录在 `uv.
 
 ### 项目自身许可证
 
-当前仓库根目录尚未声明统一的项目源码许可证。在项目所有者正式添加 `LICENSE` 前，不应推断项目自有代码采用 MIT、Apache-2.0 或其他开源许可证。第三方目录中存在的许可证只覆盖对应第三方代码。
+当前仓库根目录尚未声明统一的项目源码许可证。在项目所有者正式添加根目录 `LICENSE` 前，不应根据第三方目录中的许可证推断项目自有代码采用 MIT、Apache-2.0 或其他开源许可证；第三方许可证仅覆盖其对应的第三方代码或材料。

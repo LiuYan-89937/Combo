@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from agent_factory.runtime_defaults import DEFAULT_BUILTIN_WORKSPACE_ROOT
 from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolSpec
+from agent_factory.tooling.builtins.filesystem.guidance import WRITE_STRATEGY_GUIDANCE
 
 
 _STRING = {"type": "string"}
@@ -166,13 +167,9 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
     ToolSpec(
         id="write",
         description=(
-            "在 workspace 边界内创建或覆盖指定文本文件，调用前必须主动选择写入策略。"
-            "当最终正文已经完整成型、能够可靠地在一次工具调用中提供时，使用 action=write_once；"
-            "当正文需要按章节或模块逐步生成、接近单轮输出能力、存在截断风险，或希望中途保留生成进度时，"
-            "使用 action=start 获取 write_id，按语义边界多次 action=append，最后 action=commit 原子替换目标。"
-            "文件大小本身不是强制规则：完整且稳定的内容可以一次写入，渐进生成的内容应使用分段写入。"
-            "commit 会复核开始时的目标快照，失败不会留下半写目标；放弃时调用 action=abort。"
-            "工具不会自动读取 assistant 消息中的正文。"
+            "在 workspace 边界内创建或整体替换指定文本文件。"
+            f"{WRITE_STRATEGY_GUIDANCE}"
+            "分段提交会复核开始时的目标快照并原子替换目标；失败不会留下半写目标。工具不会自动读取 assistant 消息中的正文。"
         ),
         schema_error_guidance=(
             "必须显式选择写入策略。一次性写入使用 action=write_once，并同时提供 path 和完整 content；"
@@ -188,7 +185,7 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
                     "properties": {
                         "action": {
                             "const": "write_once",
-                            "description": "最终正文已经完整成型并能在本次调用中可靠提供时选择。",
+                            "description": "单个文件的完整最终正文已经成型，并能在本次调用中可靠提供全部内容时选择；会整体替换目标文件。",
                         },
                         "path": {"type": "string", "description": _WRITE_PATH_DESCRIPTION},
                         "content": {
@@ -205,7 +202,7 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
                     "properties": {
                         "action": {
                             "const": "start",
-                            "description": "正文需要分章节或模块渐进生成，或存在单轮截断风险时选择。",
+                            "description": "正文需要分章节或模块渐进生成、一次调用存在截断风险，或需要保留中间进度时选择。",
                         },
                         "path": {"type": "string", "description": _WRITE_PATH_DESCRIPTION},
                         "expected_hash": {
@@ -220,7 +217,10 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
                 {
                     "type": "object",
                     "properties": {
-                        "action": {"const": "append"},
+                        "action": {
+                            "const": "append",
+                            "description": "向同一个 staged write 按顺序追加一个完整语义块；不要拆成随机 token 或零散行。",
+                        },
                         "write_id": {"type": "string"},
                         "content": {
                             "type": "string",
@@ -233,7 +233,10 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
                 {
                     "type": "object",
                     "properties": {
-                        "action": {"const": "commit"},
+                        "action": {
+                            "const": "commit",
+                            "description": "所有语义块追加完成后仅提交一次，原子替换目标文件。",
+                        },
                         "write_id": {"type": "string"},
                     },
                     "required": ["action", "write_id"],
@@ -242,7 +245,10 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
                 {
                     "type": "object",
                     "properties": {
-                        "action": {"const": "abort"},
+                        "action": {
+                            "const": "abort",
+                            "description": "放弃当前 staged write 或无法继续生成时调用，不会修改目标文件。",
+                        },
                         "write_id": {"type": "string"},
                     },
                     "required": ["action", "write_id"],

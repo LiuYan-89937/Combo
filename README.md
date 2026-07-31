@@ -284,30 +284,30 @@ cd web_frontend/frontend && npm run type-check
 
 ## Third-party Components and Licenses
 
-This section distinguishes project-owned source, vendored native source, runtime-downloaded model weights, and external data services. Each third-party component remains governed by its own license and terms. This inventory does not replace the complete upstream license text or constitute legal advice.
+This section records the provenance and known license boundaries of project-owned source, vendored native source, runtime-downloaded model weights, and external data services as of the documentation date. Each third-party component remains governed by its own upstream license and terms. This inventory is not a license grant, a compliance warranty, or legal advice; the applicable upstream license, model card, and service terms take precedence.
 
 ### Vendored native source
 
 | Component | Upstream | Pinned revision | License | License location |
 | --- | --- | --- | --- | --- |
 | llama.cpp Official | [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) | `f955e394bf94e01e5e36186d13c985727e5ef5b5` | MIT | `vendor/llama.cpp-official/LICENSE` |
-| llama.cpp AMD derivative | Based on the same llama.cpp revision | Same as Official | MIT; project modifications do not change the upstream notice | `vendor/llama.cpp-amd/LICENSE` |
+| llama.cpp AMD implementation | Project-modified derivative of the pinned llama.cpp revision | Same as Official | Upstream MIT terms and notices remain applicable; project modifications do not relicense the upstream code | `vendor/llama.cpp-amd/LICENSE` |
 | stable-diffusion.cpp | [leejet/stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) | `833369da848e8e2f960fe1896a825e3a08ef9733` | MIT | `vendor/stable-diffusion.cpp/LICENSE` |
 | libwebm | stable-diffusion.cpp submodule | Included in the pinned source tree | BSD 3-Clause | `vendor/stable-diffusion.cpp/thirdparty/libwebm/LICENSE.TXT` |
 | libwebp | stable-diffusion.cpp submodule | Included in the pinned source tree | BSD 3-Clause | `vendor/stable-diffusion.cpp/thirdparty/libwebp/COPYING` |
 
-Source or binary redistribution must preserve the applicable copyright, license, patent, and notice files. The AMD derivative retains upstream attribution; its modifications do not relicense upstream code.
+Source or binary redistribution must preserve all applicable copyright, license, patent, and notice files. The AMD implementation is a project-modified derivative and retains the upstream attribution and license boundary; its modifications do not relicense or expand the rights in upstream code.
 
 ### Runtime-downloaded models
 
 | Purpose | Model | License status and boundary |
 | --- | --- | --- |
-| Chat | [SC117/Qwen3.6-35B-A3B APEX GGUF](https://huggingface.co/SC117/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-APEX-GGUF) | The current model card declares Apache-2.0. It is a third-party derivative and quantization; verify its base-model lineage and current card before redistribution. |
+| Chat | [SC117/Qwen3.6-35B-A3B APEX GGUF](https://huggingface.co/SC117/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-APEX-GGUF) | The current model card states Apache-2.0. This is a third-party derived and quantized distribution; before redistribution, independently verify the base-model lineage, derivative permissions, model-card revision, and applicable notices. |
 | Embedding | [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3) | MIT; retain model provenance and citation information. |
-| Image generation | [black-forest-labs/FLUX.1-dev](https://huggingface.co/black-forest-labs/FLUX.1-dev) | FLUX.1-dev Non-Commercial License. It is not an unrestricted OSI-approved commercial-use license. |
-| FLUX GGUF | [city96/FLUX.1-dev-gguf](https://modelscope.cn/models/city96/FLUX.1-dev-gguf) | Quantization and the download mirror do not replace or broaden the upstream FLUX license. |
+| Image generation | [black-forest-labs/FLUX.1-dev](https://huggingface.co/black-forest-labs/FLUX.1-dev) | Subject to the FLUX.1-dev Non-Commercial License; this is not an unrestricted commercial-use or OSI-approved open-source license. |
+| FLUX GGUF | [city96/FLUX.1-dev-gguf](https://modelscope.cn/models/city96/FLUX.1-dev-gguf) | The quantized distribution and download mirror do not replace, narrow, or broaden the upstream FLUX.1-dev license. |
 
-Model weights are downloaded during deployment and are not distributed as repository source. Mirrors and packaging repositories are not independent grants of rights.
+Model weights are downloaded during deployment and are not distributed as repository source. A quantized or otherwise derived artifact, a hosting page, and a download mirror are provenance references rather than independent grants of rights; redistribution requires review of the applicable upstream and derivative terms.
 
 ### Language, web, data, and service dependencies
 
@@ -317,4 +317,4 @@ The repository does not distribute a model-training dataset. Market data, web-se
 
 ### Project-owned source
 
-The repository root does not currently declare a single project-wide source-code license. Until the owner adds a root `LICENSE`, do not infer MIT, Apache-2.0, or another license for project-owned code from licenses present in third-party directories.
+The repository root does not currently declare a single project-wide source-code license. Until the owner adds a root `LICENSE`, no MIT, Apache-2.0, or other open-source license should be inferred for project-owned code from licenses present in third-party directories.
