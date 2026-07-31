@@ -8,4 +8,3 @@ WRITE_STRATEGY_GUIDANCE = (
     "传输可靠性，不是文件在磁盘上的字节数；append 不应拆成随机 token 或零散行。已有文件的局部修改、多文件变更、"
     "移动、复制和删除使用 edit。禁止省略 action，不能只传 path 和 content。"
 )
-
