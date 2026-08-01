@@ -16,7 +16,11 @@ from agent_factory.models.capabilities import resolve_provider_profile
 from agent_factory.models.protocol import ModelReasoningSettings, StructuredOutputMethod
 
 
-ModelPoolProfileKind = Literal["chat", "image_generation"]
+# ``ModelBindingRole`` is used by agent package contracts and intentionally
+# remains chat-only.  The model pool has one additional infrastructure role
+# for the embedding model used by RAG and semantic memory.
+ModelPoolProfileKind = Literal["chat", "embedding", "image_generation"]
+ModelPoolRole = Literal["main", "task", "compression", "embedding"]
 ModelBindingRole = Literal["main", "task", "compression"]
 ModelBindingSource = Literal["model_pool", "runtime"]
 ModelPoolModality = Literal["text", "image", "audio"]
@@ -182,6 +186,7 @@ class ModelPoolProfile(BaseModel):
     provider: str
     credential_id: str
     model_name: str
+    embedding_dimensions: int | None = Field(default=None, ge=1)
     enabled: bool = True
     capabilities: ModelPoolCapabilities = Field(default_factory=ModelPoolCapabilities)
     settings: ModelPoolRuntimeSettings = Field(default_factory=ModelPoolRuntimeSettings)
@@ -214,6 +219,25 @@ class ModelPoolProfile(BaseModel):
     def _provider_matches_kind(self) -> "ModelPoolProfile":
         if not provider_supports_kind(self.provider, self.kind):
             raise ValueError(f"provider {self.provider!r} does not support model kind {self.kind}")
+        if self.kind == "embedding":
+            if self.embedding_dimensions is None:
+                raise ValueError("embedding profiles require embedding_dimensions")
+            # Embedding profiles do not expose chat/image capabilities. Keep
+            # their serialized capability surface deterministic even when a
+            # client omitted the optional capabilities object.
+            self.capabilities = provider_default_capabilities(self.provider, kind="embedding")
+            self.limits = self.limits.model_copy(
+                update={
+                    "max_input_tokens": None,
+                    "compression_trigger_tokens": None,
+                    "max_output_tokens": None,
+                }
+            )
+            self.settings = self.settings.model_copy(update={"temperature": None})
+            self.pricing = self.pricing.model_copy(update={"output_per_1m_tokens": None})
+            return self
+        if self.embedding_dimensions is not None:
+            self.embedding_dimensions = None
         if self.kind == "chat" and (
             self.limits.max_input_tokens is None
             or self.limits.compression_trigger_tokens is None
@@ -245,6 +269,7 @@ class ModelPoolProfilePublic(BaseModel):
     provider: str
     credential_id: str
     model_name: str
+    embedding_dimensions: int | None = Field(default=None, ge=1)
     enabled: bool = True
     capabilities: ModelPoolCapabilities = Field(default_factory=ModelPoolCapabilities)
     settings: ModelPoolRuntimeSettings = Field(default_factory=ModelPoolRuntimeSettings)
@@ -259,7 +284,7 @@ class ModelPoolProfilePublic(BaseModel):
 class ModelSelectionRequirement(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    role: ModelBindingRole
+    role: ModelPoolRole
     purpose: str = ""
     kind: ModelPoolProfileKind | None = None
     input_modalities: list[ModelPoolModality] = Field(default_factory=lambda: ["text"])
@@ -288,7 +313,7 @@ class ModelSelectionRequirement(BaseModel):
     def _default_kind(self) -> "ModelSelectionRequirement":
         if self.kind is not None:
             return self
-        return self.model_copy(update={"kind": "chat"})
+        return self.model_copy(update={"kind": "embedding" if self.role == "embedding" else "chat"})
 
 
 class ModelSelectionCandidate(BaseModel):
@@ -307,7 +332,7 @@ class ModelSelectionCandidate(BaseModel):
 class ModelSelectionRecommendation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    role: ModelBindingRole
+    role: ModelPoolRole
     profile_id: str
     display_name: str
     description: str = ""
@@ -449,6 +474,19 @@ def api_key_fingerprint(value: str | None) -> str:
 
 
 def provider_default_capabilities(provider: str, *, kind: ModelPoolProfileKind = "chat") -> ModelPoolCapabilities:
+    if kind == "embedding":
+        return ModelPoolCapabilities(
+            input_modalities=["text"],
+            output_modalities=["text"],
+            tool_calling=False,
+            streaming_tool_calls=False,
+            strict_tool_schema=False,
+            structured_output_methods=[],
+            reasoning_supported=False,
+            reasoning_efforts=[],
+            reasoning_content=False,
+            cache_usage=False,
+        )
     if kind == "image_generation":
         capabilities = image_generation_provider_capabilities(provider)
         return ModelPoolCapabilities(

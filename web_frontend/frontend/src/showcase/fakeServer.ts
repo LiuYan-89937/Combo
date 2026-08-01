@@ -126,7 +126,7 @@ export function installShowcaseServer(): void {
     }
     if (url.pathname === '/api/model-pool/role-bindings') {
       return jsonResponse({
-        bindings: { main: modelProfile.profile_id, task: null, compression: null },
+        bindings: { main: modelProfile.profile_id, task: null, compression: null, embedding: null },
         defaults: { context_window_tokens: 262144, compression_trigger_tokens: 204800 },
       })
     }

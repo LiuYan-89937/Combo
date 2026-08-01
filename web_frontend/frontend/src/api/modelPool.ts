@@ -1,7 +1,7 @@
 import { requestJson, withQuery } from './http'
 
 export type ModelUsageGroupBy = 'model' | 'provider' | 'agent'
-export type ModelRole = 'main' | 'task' | 'compression'
+export type ModelRole = 'main' | 'task' | 'compression' | 'embedding'
 export type ModelRoleBindings = Record<ModelRole, string | null>
 export interface ModelPoolDefaults {
   context_window_tokens: number
@@ -11,7 +11,8 @@ export interface ModelPoolDefaults {
 export interface ModelProviderProfile {
   provider_id: string
   display_name: string
-  kind: 'chat' | 'image_generation'
+  kind: 'chat' | 'embedding' | 'image_generation'
+  supported_kinds?: Array<'chat' | 'embedding' | 'image_generation'>
   adapter_id: string
   transport: string
   default_base_url?: string
@@ -42,10 +43,11 @@ export interface ModelPoolProfile {
   profile_id: string
   display_name: string
   description: string
-  kind: 'chat' | 'image_generation'
+  kind: 'chat' | 'embedding' | 'image_generation'
   provider: string
   credential_id: string
   model_name: string
+  embedding_dimensions?: number | null
   enabled: boolean
   capabilities: {
     input_modalities: string[]
@@ -169,7 +171,7 @@ export interface ModelUsageSeries {
 }
 
 export interface ModelSelectionRecommendation {
-  role: 'main' | 'task' | 'compression'
+  role: 'main' | 'task' | 'compression' | 'embedding'
   profile_id: string
 }
 
@@ -233,7 +235,7 @@ export const modelPoolApi = {
       method: 'DELETE',
     }),
   pingProfile: (profileId: string) =>
-    requestJson<{ status: 'ok'; profile_id: string; latency_ms: number; response_preview: string }>(
+    requestJson<{ status: 'ok'; profile_id: string; latency_ms: number; response_preview?: string; dimensions?: number }>(
       `/api/model-pool/profiles/${encodeURIComponent(profileId)}/ping`,
       { method: 'POST' },
     ),

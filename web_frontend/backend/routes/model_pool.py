@@ -8,6 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from langchain_core.messages import HumanMessage
+from agent_factory.models import resolve_embedding_model_profile, reset_embedding_model
 
 from agent_factory.model_pool import (
     ModelPoolCredential,
@@ -44,6 +45,7 @@ def create_model_pool_router() -> APIRouter:
         store = ModelPoolStore()
         try:
             credential = store.upsert_credential(_credential_from_payload(payload, store=store))
+            reset_embedding_model()
         except Exception as exc:
             raise _http_error(exc) from exc
         return {"credential": credential.to_public().model_dump(mode="json")}
@@ -53,6 +55,7 @@ def create_model_pool_router() -> APIRouter:
         store = ModelPoolStore()
         try:
             credential = store.patch_credential(credential_id, payload)
+            reset_embedding_model()
         except Exception as exc:
             raise _http_error(exc) from exc
         return {"credential": credential.to_public().model_dump(mode="json")}
@@ -61,7 +64,10 @@ def create_model_pool_router() -> APIRouter:
     def delete_credential(credential_id: str):
         store = ModelPoolStore()
         try:
-            return {"deleted": store.delete_credential(credential_id)}
+            deleted = store.delete_credential(credential_id)
+            if deleted:
+                reset_embedding_model()
+            return {"deleted": deleted}
         except Exception as exc:
             raise _http_error(exc) from exc
 
@@ -70,7 +76,7 @@ def create_model_pool_router() -> APIRouter:
         store = ModelPoolStore()
         credentials = {item.credential_id: item for item in store.list_credentials()}
         profile_kind = (kind or "").strip().lower() or None
-        if profile_kind not in {None, "chat", "image_generation"}:
+        if profile_kind not in {None, "chat", "embedding", "image_generation"}:
             raise HTTPException(status_code=400, detail="unsupported model profile kind")
         profiles = [
             profile.to_public(credentials.get(profile.credential_id)).model_dump(mode="json")
@@ -93,7 +99,7 @@ def create_model_pool_router() -> APIRouter:
         raw = payload.get("bindings")
         if not isinstance(raw, dict):
             raise HTTPException(status_code=400, detail="bindings must be an object")
-        expected_roles = {"main", "task", "compression"}
+        expected_roles = {"main", "task", "compression", "embedding"}
         unexpected = set(raw) - expected_roles
         if unexpected:
             raise HTTPException(
@@ -106,6 +112,7 @@ def create_model_pool_router() -> APIRouter:
         }
         try:
             saved = ModelPoolStore().save_role_bindings(bindings)
+            reset_embedding_model()
         except Exception as exc:
             raise _http_error(exc) from exc
         return {"bindings": saved}
@@ -123,6 +130,7 @@ def create_model_pool_router() -> APIRouter:
         try:
             profile = store.upsert_profile(_profile_from_payload(payload, store=store))
             credential = store.get_credential(profile.credential_id)
+            reset_embedding_model()
         except Exception as exc:
             raise _http_error(exc) from exc
         return {"profile": profile.to_public(credential).model_dump(mode="json")}
@@ -133,6 +141,7 @@ def create_model_pool_router() -> APIRouter:
         try:
             profile = store.patch_profile(profile_id, payload)
             credential = store.get_credential(profile.credential_id)
+            reset_embedding_model()
         except Exception as exc:
             raise _http_error(exc) from exc
         return {"profile": profile.to_public(credential).model_dump(mode="json")}
@@ -140,7 +149,10 @@ def create_model_pool_router() -> APIRouter:
     @router.delete("/profiles/{profile_id}")
     def delete_profile(profile_id: str):
         try:
-            return {"deleted": ModelPoolStore().delete_profile(profile_id)}
+            deleted = ModelPoolStore().delete_profile(profile_id)
+            if deleted:
+                reset_embedding_model()
+            return {"deleted": deleted}
         except Exception as exc:
             raise _http_error(exc) from exc
 
@@ -149,9 +161,12 @@ def create_model_pool_router() -> APIRouter:
         store = ModelPoolStore()
         try:
             profile = store.require_profile(profile_id)
-            if profile.kind != "chat":
-                raise ValueError("connection testing currently supports chat model profiles only")
-            result = await asyncio.to_thread(_ping_chat_profile, profile_id, store)
+            if profile.kind == "chat":
+                result = await asyncio.to_thread(_ping_chat_profile, profile_id, store)
+            elif profile.kind == "embedding":
+                result = await asyncio.to_thread(_ping_embedding_profile, profile_id, store)
+            else:
+                raise ValueError("connection testing does not support image generation profiles")
         except Exception as exc:
             raise HTTPException(status_code=502, detail=_probe_error_detail(exc)) from exc
         return result
@@ -160,7 +175,10 @@ def create_model_pool_router() -> APIRouter:
     def delete_profiles(payload: dict[str, Any]):
         ids = [str(item).strip() for item in payload.get("profile_ids", []) if str(item).strip()]
         store = ModelPoolStore()
-        return {"deleted": {profile_id: store.delete_profile(profile_id) for profile_id in ids}}
+        deleted = {profile_id: store.delete_profile(profile_id) for profile_id in ids}
+        if any(deleted.values()):
+            reset_embedding_model()
+        return {"deleted": deleted}
 
     @router.post("/select")
     def select_models(payload: dict[str, Any]):
@@ -188,7 +206,7 @@ def _credential_from_payload(payload: dict[str, Any], *, store: ModelPoolStore) 
 def _profile_from_payload(payload: dict[str, Any], *, store: ModelPoolStore) -> ModelPoolProfile:
     data = dict(payload)
     requested_kind = str(data.get("kind") or "chat").strip().lower()
-    if requested_kind not in {"chat", "image_generation"}:
+    if requested_kind not in {"chat", "embedding", "image_generation"}:
         raise ValueError("unsupported model profile kind")
     data["kind"] = requested_kind
     if not str(data.get("profile_id") or "").strip():
@@ -220,6 +238,25 @@ def _ping_chat_profile(profile_id: str, store: ModelPoolStore) -> dict[str, Any]
         "profile_id": profile_id,
         "latency_ms": latency_ms,
         "response_preview": content[:500],
+    }
+
+
+def _ping_embedding_profile(profile_id: str, store: ModelPoolStore) -> dict[str, Any]:
+    resolved = resolve_embedding_model_profile(profile_id, store=store)
+    started_at = perf_counter()
+    vector = resolved.model.embed_query("HelloWorld")
+    latency_ms = round((perf_counter() - started_at) * 1000)
+    actual_dims = len(vector)
+    expected_dims = resolved.settings.dims
+    if expected_dims is None or actual_dims != expected_dims:
+        raise ValueError(
+            f"embedding dimensions mismatch: configured={expected_dims}, returned={actual_dims}"
+        )
+    return {
+        "status": "ok",
+        "profile_id": profile_id,
+        "latency_ms": latency_ms,
+        "dimensions": actual_dims,
     }
 
 

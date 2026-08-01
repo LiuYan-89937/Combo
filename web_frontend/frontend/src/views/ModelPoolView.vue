@@ -33,7 +33,11 @@
                   <n-space align="center">
                     <n-text strong>{{ profile.display_name }}</n-text>
                     <n-tag size="small" :bordered="false">{{ profile.model_name }}</n-tag>
-                    <n-tag size="small" :bordered="false">{{ profile.kind === 'image_generation' ? t('modelPool.imageGenerationModel') : t('modelPool.chatModel') }}</n-tag>
+                    <n-tag size="small" :bordered="false">
+                      {{ profile.kind === 'image_generation'
+                        ? t('modelPool.imageGenerationModel')
+                        : profile.kind === 'embedding' ? t('modelPool.embeddingModel') : t('modelPool.chatModel') }}
+                    </n-tag>
                     <n-tag size="small" :type="profile.enabled ? 'success' : 'default'">
                       {{ profile.enabled ? t('common.enabled') : t('common.disabled') }}
                     </n-tag>
@@ -54,7 +58,7 @@
                   <n-space>
                     <n-switch :value="profile.enabled" @update:value="(value) => setProfileEnabled(profile, value)" />
                     <n-button
-                      v-if="profile.kind === 'chat'"
+                      v-if="profile.kind !== 'image_generation'"
                       size="small"
                       :loading="testingProfileId === profile.profile_id"
                       @click="pingProfile(profile)"
@@ -79,6 +83,32 @@
               <n-button type="primary" @click="openProfile()">{{ t('modelPool.addProfile') }}</n-button>
             </template>
           </n-empty>
+
+          <div class="role-binding-panel">
+            <div class="content-header">
+              <div class="context-title">
+                <n-text strong>{{ t('modelPool.defaultBindings') }}</n-text>
+                <n-text depth="3" class="context-subtitle">{{ t('modelPool.defaultBindingsHint') }}</n-text>
+              </div>
+              <n-button type="primary" :loading="savingBindings" @click="saveRoleBindings">
+                {{ t('common.save') }}
+              </n-button>
+            </div>
+            <div class="form-grid role-binding-grid">
+              <n-form-item :label="t('modelPool.mainRole')">
+                <n-select v-model:value="roleBindings.main" clearable :options="bindingOptions('chat')" />
+              </n-form-item>
+              <n-form-item :label="t('modelPool.taskRole')">
+                <n-select v-model:value="roleBindings.task" clearable :options="bindingOptions('chat')" />
+              </n-form-item>
+              <n-form-item :label="t('modelPool.compressionRole')">
+                <n-select v-model:value="roleBindings.compression" clearable :options="bindingOptions('chat')" />
+              </n-form-item>
+              <n-form-item :label="t('modelPool.embeddingRole')">
+                <n-select v-model:value="roleBindings.embedding" clearable :options="bindingOptions('embedding')" />
+              </n-form-item>
+            </div>
+          </div>
         </div>
       </n-tab-pane>
 
@@ -274,7 +304,7 @@
             <n-checkbox v-model:checked="profileForm.reasoning_supported">{{ t('modelPool.reasoning') }}</n-checkbox>
           </n-space>
         </n-form-item>
-        <n-form-item v-else :label="t('modelPool.imageCapabilities')">
+        <n-form-item v-else-if="profileForm.kind === 'image_generation'" :label="t('modelPool.imageCapabilities')">
           <n-space vertical>
             <n-checkbox v-model:checked="profileForm.text_to_image">{{ t('modelPool.textToImage') }}</n-checkbox>
             <n-checkbox v-model:checked="profileForm.image_to_image">{{ t('modelPool.imageToImage') }}</n-checkbox>
@@ -313,6 +343,17 @@
           </n-form-item>
           <n-form-item :label="t('modelPool.outputPrice')">
             <n-input-number v-model:value="profileForm.output_per_1m_tokens" :min="0" clearable />
+          </n-form-item>
+        </div>
+        <div v-else-if="profileForm.kind === 'embedding'" class="form-grid">
+          <n-form-item :label="t('modelPool.embeddingDimensions')" path="embedding_dimensions">
+            <n-input-number v-model:value="profileForm.embedding_dimensions" :min="1" clearable />
+          </n-form-item>
+          <n-form-item :label="t('modelPool.timeoutSeconds')">
+            <n-input-number v-model:value="profileForm.timeout_seconds" :min="1" clearable />
+          </n-form-item>
+          <n-form-item :label="t('modelPool.inputPrice')">
+            <n-input-number v-model:value="profileForm.input_per_1m_tokens" :min="0" clearable />
           </n-form-item>
         </div>
         <div v-else class="form-grid">
@@ -406,11 +447,18 @@ const dialog = useDialog()
 
 const loading = ref(false)
 const saving = ref(false)
+const savingBindings = ref(false)
 const testingProfileId = ref<string | null>(null)
 const providers = ref<ModelProviderProfile[]>([])
 const credentials = ref<ModelPoolCredential[]>([])
 const profiles = ref<ModelPoolProfile[]>([])
 const modelDefaults = ref<ModelPoolDefaults | null>(null)
+const roleBindings = reactive<Record<'main' | 'task' | 'compression' | 'embedding', string | null>>({
+  main: null,
+  task: null,
+  compression: null,
+  embedding: null,
+})
 const usageLoading = ref(false)
 const usageGroupBy = ref<ModelUsageGroupBy>('model')
 const usageChartType = ref<'line' | 'bar'>('line')
@@ -431,11 +479,12 @@ const credentialForm = reactive({
 })
 
 const profileForm = reactive({
-  kind: 'chat' as 'chat' | 'image_generation',
+  kind: 'chat' as 'chat' | 'embedding' | 'image_generation',
   display_name: '',
   description: '',
   credential_id: '',
   model_name: '',
+  embedding_dimensions: null as number | null,
   tool_calling: true,
   reasoning_supported: false,
   image_input: false,
@@ -462,6 +511,7 @@ const profileForm = reactive({
 
 const modelKindOptions = computed(() => [
   { label: t('modelPool.chatModel'), value: 'chat' },
+  { label: t('modelPool.embeddingModel'), value: 'embedding' },
   { label: t('modelPool.imageGenerationModel'), value: 'image_generation' },
 ])
 const providerOptions = computed(() =>
@@ -496,6 +546,9 @@ const profileRules = computed<FormRules>(() => ({
   kind: [requiredValueRule(t('validation.selectionRequired'))],
   credential_id: [requiredValueRule(t('modelPool.selectCredentialFirst'))],
   model_name: [requiredTextRule(t('validation.required'))],
+  embedding_dimensions: profileForm.kind === 'embedding'
+    ? [requiredValueRule(t('validation.required'))]
+    : [],
 }))
 const usageColumns = computed<DataTableColumns<ModelUsageGroup>>(() => [
   { title: t('modelPool.usageName'), key: 'label', minWidth: 180, ellipsis: { tooltip: true } },
@@ -591,6 +644,10 @@ async function refresh(): Promise<void> {
     credentials.value = credentialData.credentials
     profiles.value = profileData.profiles
     modelDefaults.value = defaultsData.defaults
+    roleBindings.main = defaultsData.bindings.main || null
+    roleBindings.task = defaultsData.bindings.task || null
+    roleBindings.compression = defaultsData.bindings.compression || null
+    roleBindings.embedding = defaultsData.bindings.embedding || null
     usageSummary.value = usageData
   } catch (error) {
     message.error(error instanceof Error ? error.message : t('common.requestFailed'))
@@ -607,6 +664,22 @@ async function loadUsage(): Promise<void> {
     message.error(error instanceof Error ? error.message : t('common.requestFailed'))
   } finally {
     usageLoading.value = false
+  }
+}
+
+async function saveRoleBindings(): Promise<void> {
+  savingBindings.value = true
+  try {
+    const response = await modelPoolApi.saveRoleBindings({ ...roleBindings })
+    roleBindings.main = response.bindings.main || null
+    roleBindings.task = response.bindings.task || null
+    roleBindings.compression = response.bindings.compression || null
+    roleBindings.embedding = response.bindings.embedding || null
+    message.success(t('modelPool.bindingsSaved'))
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : t('common.requestFailed'))
+  } finally {
+    savingBindings.value = false
   }
 }
 
@@ -652,6 +725,7 @@ function openProfile(item?: ModelPoolProfile): void {
   profileForm.description = item?.description || ''
   profileForm.credential_id = item?.credential_id || firstCredentialForKind(profileForm.kind)?.credential_id || ''
   profileForm.model_name = item?.model_name || ''
+  profileForm.embedding_dimensions = item?.embedding_dimensions ?? null
   profileForm.tool_calling = item?.capabilities.tool_calling ?? true
   profileForm.reasoning_supported = item?.capabilities.reasoning_supported ?? false
   profileForm.image_input = item?.capabilities.input_modalities.includes('image') ?? false
@@ -694,12 +768,13 @@ async function saveProfile(): Promise<void> {
   saving.value = true
   try {
     const isImageModel = profileForm.kind === 'image_generation'
+    const isEmbeddingModel = profileForm.kind === 'embedding'
     const inputModalities = ['text']
     const outputModalities = isImageModel ? ['image'] : ['text']
-    if (!isImageModel && profileForm.image_input) inputModalities.push('image')
-    if (!isImageModel && profileForm.image_output) outputModalities.push('image')
-    if (!isImageModel && profileForm.audio_input) inputModalities.push('audio')
-    if (!isImageModel && profileForm.audio_output) outputModalities.push('audio')
+    if (!isImageModel && !isEmbeddingModel && profileForm.image_input) inputModalities.push('image')
+    if (!isImageModel && !isEmbeddingModel && profileForm.image_output) outputModalities.push('image')
+    if (!isImageModel && !isEmbeddingModel && profileForm.audio_input) inputModalities.push('audio')
+    if (!isImageModel && !isEmbeddingModel && profileForm.audio_output) outputModalities.push('audio')
     if (isImageModel && (profileForm.image_to_image || profileForm.image_edit)) inputModalities.push('image')
     const payload = {
       display_name: profileForm.display_name,
@@ -708,17 +783,18 @@ async function saveProfile(): Promise<void> {
       provider: credential.provider,
       credential_id: profileForm.credential_id,
       model_name: profileForm.model_name,
+      embedding_dimensions: isEmbeddingModel ? profileForm.embedding_dimensions : null,
       enabled: profileEditing.value?.enabled ?? true,
       capabilities: {
         input_modalities: inputModalities,
         output_modalities: outputModalities,
-        tool_calling: !isImageModel && profileForm.tool_calling,
+        tool_calling: !isImageModel && !isEmbeddingModel && profileForm.tool_calling,
         streaming_tool_calls: false,
         strict_tool_schema: false,
-        structured_output_methods: isImageModel ? [] : ['json_mode', 'function_calling'],
-        reasoning_supported: !isImageModel && profileForm.reasoning_supported,
+        structured_output_methods: isImageModel || isEmbeddingModel ? [] : ['json_mode', 'function_calling'],
+        reasoning_supported: !isImageModel && !isEmbeddingModel && profileForm.reasoning_supported,
         reasoning_efforts: [],
-        reasoning_content: !isImageModel && profileForm.reasoning_supported,
+        reasoning_content: !isImageModel && !isEmbeddingModel && profileForm.reasoning_supported,
         cache_usage: false,
         text_to_image: isImageModel && profileForm.text_to_image,
         image_to_image: isImageModel && profileForm.image_to_image,
@@ -728,18 +804,18 @@ async function saveProfile(): Promise<void> {
         async_job: isImageModel && profileForm.async_job,
       },
       limits: {
-        max_input_tokens: isImageModel ? null : profileForm.max_input_tokens,
-        compression_trigger_tokens: isImageModel ? null : profileForm.compression_trigger_tokens,
-        max_output_tokens: profileForm.max_output_tokens,
+        max_input_tokens: isImageModel || isEmbeddingModel ? null : profileForm.max_input_tokens,
+        compression_trigger_tokens: isImageModel || isEmbeddingModel ? null : profileForm.compression_trigger_tokens,
+        max_output_tokens: isImageModel || isEmbeddingModel ? null : profileForm.max_output_tokens,
         timeout_seconds: profileForm.timeout_seconds,
       },
       settings: {
-        temperature: isImageModel ? null : profileForm.temperature,
+        temperature: isImageModel || isEmbeddingModel ? null : profileForm.temperature,
       },
       pricing: {
         currency: 'CNY',
         input_per_1m_tokens: isImageModel ? null : profileForm.input_per_1m_tokens,
-        output_per_1m_tokens: isImageModel ? null : profileForm.output_per_1m_tokens,
+        output_per_1m_tokens: isImageModel || isEmbeddingModel ? null : profileForm.output_per_1m_tokens,
         image_output_unit_price: isImageModel ? profileForm.image_output_unit_price : null,
         image_edit_unit_price: isImageModel ? profileForm.image_edit_unit_price : null,
       },
@@ -781,7 +857,9 @@ async function pingProfile(profile: ModelPoolProfile): Promise<void> {
   testingProfileId.value = profile.profile_id
   try {
     const result = await modelPoolApi.pingProfile(profile.profile_id)
-    message.success(t('modelPool.connectionSucceeded', { latency: result.latency_ms }))
+    message.success(profile.kind === 'embedding'
+      ? t('modelPool.embeddingConnectionSucceeded', { latency: result.latency_ms, dimensions: result.dimensions || '-' })
+      : t('modelPool.connectionSucceeded', { latency: result.latency_ms }))
   } catch (error) {
     message.error(error instanceof Error ? error.message : t('common.requestFailed'))
   } finally {
@@ -819,12 +897,21 @@ function providerLabel(providerId: string): string {
   return providers.value.find((item) => item.provider_id === providerId)?.display_name || providerId
 }
 
-function providerSupportsKind(providerId: string, kind: 'chat' | 'image_generation'): boolean {
-  return providers.value.some((item) => item.provider_id === providerId && item.kind === kind)
+function providerSupportsKind(providerId: string, kind: 'chat' | 'embedding' | 'image_generation'): boolean {
+  return providers.value.some((item) => {
+    if (item.provider_id !== providerId) return false
+    return item.supported_kinds?.includes(kind) ?? item.kind === kind
+  })
 }
 
-function firstCredentialForKind(kind: 'chat' | 'image_generation'): ModelPoolCredential | undefined {
+function firstCredentialForKind(kind: 'chat' | 'embedding' | 'image_generation'): ModelPoolCredential | undefined {
   return credentials.value.find((item) => providerSupportsKind(item.provider, kind))
+}
+
+function bindingOptions(kind: 'chat' | 'embedding'): Array<{ label: string; value: string }> {
+  return profiles.value
+    .filter((item) => item.kind === kind && item.enabled && item.credential?.enabled !== false && item.credential?.has_api_key)
+    .map((item) => ({ label: `${item.display_name} · ${item.model_name}`, value: item.profile_id }))
 }
 
 function uniqueProviders(): ModelProviderProfile[] {
@@ -840,6 +927,10 @@ function uniqueProviders(): ModelProviderProfile[] {
 
 function capabilityTags(profile: ModelPoolProfile): string[] {
   const tags: string[] = []
+  if (profile.kind === 'embedding') {
+    if (profile.embedding_dimensions) tags.push(`${t('modelPool.embeddingDimensions')}: ${profile.embedding_dimensions}`)
+    return tags
+  }
   if (profile.kind === 'image_generation') {
     if (profile.capabilities.text_to_image) tags.push(t('modelPool.textToImage'))
     if (profile.capabilities.image_to_image) tags.push(t('modelPool.imageToImage'))
@@ -921,6 +1012,20 @@ function formatCost(value: number | null | undefined): string {
 
 .model-list {
   background: var(--app-panel);
+}
+
+.role-binding-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-panel);
+}
+
+.role-binding-grid {
+  margin: 0;
 }
 
 .usage-range-select {

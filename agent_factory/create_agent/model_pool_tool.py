@@ -16,8 +16,9 @@ def build_model_pool_select_tool_spec() -> ToolSpec:
         description=(
             "Select runnable model profiles from the local model pool for the AgentPackage being manufactured. "
             "This is the first capability-assembly step after task analysis: run it before inherited MCP "
-            "candidate evaluation, SkillHub search/install, and package tool authoring. Pass requirements for main/task/compression models and "
-            "tool_requirements for auxiliary image/audio model tools. Structural capabilities are hard constraints; each result also includes "
+            "candidate evaluation, SkillHub search/install, and package tool authoring. Pass requirements for main/task/compression models, "
+            "tool_requirements for auxiliary image/audio model tools, and an embedding requirement when the package uses RAG or semantic memory. "
+            "Structural capabilities are hard constraints; each result also includes "
             "a ranked candidates list with every profile description. Inspect those descriptions against the requested purpose before choosing "
             "the final profile id; the first candidate is only the deterministic capability-based default. Never write provider credentials "
             "into the package."
@@ -31,9 +32,9 @@ def build_model_pool_select_tool_spec() -> ToolSpec:
                     "items": {
                         "type": "object",
                         "properties": {
-                            "role": {"type": "string", "enum": ["main", "task", "compression"]},
+                            "role": {"type": "string", "enum": ["main", "task", "compression", "embedding"]},
                             "purpose": {"type": "string"},
-                            "kind": {"type": "string", "enum": ["chat", "image_generation"]},
+                            "kind": {"type": "string", "enum": ["chat", "embedding", "image_generation"]},
                             "input_modalities": {
                                 "type": "array",
                                 "items": {"type": "string", "enum": ["text", "image", "audio"]},

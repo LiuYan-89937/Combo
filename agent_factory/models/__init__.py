@@ -14,8 +14,10 @@ from agent_factory.models.capabilities import (
 )
 from agent_factory.models.embedding_model import (
     EmbeddingModelSettings,
+    ResolvedEmbeddingModel,
     get_embedding_model,
     get_embedding_model_settings,
+    resolve_embedding_model_profile,
     reset_embedding_model,
 )
 from agent_factory.models.protocol import (
@@ -33,6 +35,7 @@ __all__ = [
     "ChatModelSettings",
     "create_chat_model_from_settings",
     "EmbeddingModelSettings",
+    "ResolvedEmbeddingModel",
     "ModelContentPart",
     "ModelMessage",
     "ModelProviderCapabilities",
@@ -45,6 +48,7 @@ __all__ = [
     "StructuredOutputMethod",
     "get_embedding_model",
     "get_embedding_model_settings",
+    "resolve_embedding_model_profile",
     "get_compression_model",
     "get_main_model",
     "get_task_model",

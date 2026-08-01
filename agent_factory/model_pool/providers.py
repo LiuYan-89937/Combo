@@ -6,7 +6,7 @@ from typing import Any, Literal
 from agent_factory.models import list_supported_chat_model_profiles
 
 
-ModelPoolProviderKind = Literal["chat", "image_generation"]
+ModelPoolProviderKind = Literal["chat", "embedding", "image_generation"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +25,7 @@ class ModelPoolProviderProfile:
             "provider_id": self.provider_id,
             "display_name": self.display_name,
             "kind": self.kind,
+            "supported_kinds": [self.kind],
             "adapter_id": self.adapter_id,
             "transport": self.transport,
             "default_base_url": self.default_base_url,
@@ -99,6 +100,9 @@ def list_model_pool_provider_profiles() -> list[dict[str, Any]]:
     for item in list_supported_chat_model_profiles():
         payload = dict(item)
         payload["kind"] = "chat"
+        payload["supported_kinds"] = ["chat"]
+        if _chat_provider_supports_embedding(payload):
+            payload["supported_kinds"].append("embedding")
         payload.setdefault("default_base_url", "")
         payload.setdefault("capabilities", {})
         chat_profiles.append(payload)
@@ -121,8 +125,11 @@ def provider_supports_kind(provider: str, kind: ModelPoolProviderKind) -> bool:
     if kind == "image_generation":
         return provider_id in IMAGE_GENERATION_PROVIDERS
     for item in list_supported_chat_model_profiles():
-        if str(item.get("provider_id") or "").strip().lower() == provider_id:
+        if str(item.get("provider_id") or "").strip().lower() != provider_id:
+            continue
+        if kind == "chat":
             return True
+        return _chat_provider_supports_embedding(item)
     return False
 
 
@@ -146,3 +153,11 @@ def image_generation_provider_capabilities(provider: str) -> dict[str, bool]:
 
 def _canonical_image_provider(provider: str) -> str:
     return _IMAGE_GENERATION_PROVIDER_ALIASES.get(provider, provider)
+
+
+def _chat_provider_supports_embedding(provider: dict[str, Any]) -> bool:
+    # External embeddings use the same OpenAI-compatible credential and
+    # transport as chat. Native Messages providers (for example Anthropic)
+    # are deliberately excluded because their credential cannot be sent to
+    # an /embeddings endpoint.
+    return str(provider.get("transport") or "").strip().lower() == "openai_chat_completions"

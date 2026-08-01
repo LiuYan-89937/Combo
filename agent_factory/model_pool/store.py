@@ -9,9 +9,9 @@ from typing import Any
 
 from agent_factory.model_pool.config import model_pool_store_read_only, resolve_model_pool_store_path
 from agent_factory.model_pool.schema import (
-    ModelBindingRole,
     ModelPoolCredential,
     ModelPoolProfile,
+    ModelPoolRole,
     provider_default_capabilities,
     utc_now_text,
 )
@@ -144,7 +144,9 @@ class ModelPoolStore:
                 )
         now = utc_now_text()
         capabilities = profile.capabilities
-        if (
+        if profile.kind == "embedding":
+            capabilities = provider_default_capabilities(profile.provider, kind="embedding")
+        elif (
             profile.kind == "chat"
             and not capabilities.structured_output_methods
         ) or (
@@ -236,11 +238,12 @@ class ModelPoolStore:
             cursor = conn.execute("delete from model_pool_profiles where profile_id = ?", (profile_id,))
         return cursor.rowcount > 0
 
-    def role_bindings(self) -> dict[ModelBindingRole, str | None]:
-        result: dict[ModelBindingRole, str | None] = {
+    def role_bindings(self) -> dict[ModelPoolRole, str | None]:
+        result: dict[ModelPoolRole, str | None] = {
             "main": None,
             "task": None,
             "compression": None,
+            "embedding": None,
         }
         try:
             with self._connect() as conn:
@@ -257,22 +260,23 @@ class ModelPoolStore:
                 result[role] = str(row["profile_id"])
         return result
 
-    def role_binding(self, role: ModelBindingRole) -> str | None:
+    def role_binding(self, role: ModelPoolRole) -> str | None:
         return self.role_bindings()[role]
 
     def save_role_bindings(
         self,
-        bindings: dict[ModelBindingRole, str | None],
-    ) -> dict[ModelBindingRole, str | None]:
-        normalized: dict[ModelBindingRole, str | None] = {}
-        for role in ("main", "task", "compression"):
+        bindings: dict[ModelPoolRole, str | None],
+    ) -> dict[ModelPoolRole, str | None]:
+        normalized: dict[ModelPoolRole, str | None] = {}
+        for role in ("main", "task", "compression", "embedding"):
             profile_id = bindings.get(role)
             if profile_id is None:
                 normalized[role] = None
                 continue
             profile = self.require_profile(profile_id)
-            if profile.kind != "chat":
-                raise ModelPoolStoreError(f"{role} role requires a chat model profile: {profile_id}")
+            expected_kind = "embedding" if role == "embedding" else "chat"
+            if profile.kind != expected_kind:
+                raise ModelPoolStoreError(f"{role} role requires a {expected_kind} model profile: {profile_id}")
             if not profile.enabled:
                 raise ModelPoolStoreError(f"{role} role requires an enabled model profile: {profile_id}")
             credential = self.require_credential(profile.credential_id)
@@ -373,13 +377,37 @@ class ModelPoolStore:
                 create index if not exists idx_model_pool_profiles_enabled on model_pool_profiles(enabled);
 
                 create table if not exists model_role_bindings (
-                  role text primary key check (role in ('main', 'task', 'compression')),
+                  role text primary key check (role in ('main', 'task', 'compression', 'embedding')),
                   profile_id text not null,
                   updated_at text not null
                 );
                 create index if not exists idx_model_role_bindings_profile on model_role_bindings(profile_id);
                 """
             )
+            self._migrate_role_binding_schema(conn)
+
+    @staticmethod
+    def _migrate_role_binding_schema(conn: sqlite3.Connection) -> None:
+        row = conn.execute(
+            "select sql from sqlite_master where type = 'table' and name = 'model_role_bindings'"
+        ).fetchone()
+        schema_sql = str(row["sql"] or "") if row else ""
+        if "'embedding'" in schema_sql.lower():
+            return
+        conn.executescript(
+            """
+            create table model_role_bindings_v2 (
+              role text primary key check (role in ('main', 'task', 'compression', 'embedding')),
+              profile_id text not null,
+              updated_at text not null
+            );
+            insert into model_role_bindings_v2 (role, profile_id, updated_at)
+              select role, profile_id, updated_at from model_role_bindings;
+            drop table model_role_bindings;
+            alter table model_role_bindings_v2 rename to model_role_bindings;
+            create index if not exists idx_model_role_bindings_profile on model_role_bindings(profile_id);
+            """
+        )
 
 
 def _credential_row(credential: ModelPoolCredential) -> tuple[Any, ...]:
