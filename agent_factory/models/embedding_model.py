@@ -104,7 +104,7 @@ def _model_pool_settings(
             from agent_factory.model_pool.store import ModelPoolStore
 
             store = ModelPoolStore(setup=False)
-        selected_profile_id = profile_id or store.role_binding("embedding")
+        selected_profile_id = profile_id or store.embedding_binding()
         if not selected_profile_id:
             selected_profile_id = next(
                 (

@@ -11,7 +11,6 @@ from agent_factory.model_pool.config import model_pool_store_read_only, resolve_
 from agent_factory.model_pool.schema import (
     ModelPoolCredential,
     ModelPoolProfile,
-    ModelPoolRole,
     provider_default_capabilities,
     utc_now_text,
 )
@@ -238,59 +237,49 @@ class ModelPoolStore:
             cursor = conn.execute("delete from model_pool_profiles where profile_id = ?", (profile_id,))
         return cursor.rowcount > 0
 
-    def role_bindings(self) -> dict[ModelPoolRole, str | None]:
-        result: dict[ModelPoolRole, str | None] = {
-            "main": None,
-            "task": None,
-            "compression": None,
-            "embedding": None,
-        }
+    def embedding_binding(self) -> str | None:
+        """Return the model used for knowledge-base and memory embeddings."""
+
         try:
             with self._connect() as conn:
-                rows = conn.execute(
-                    "select role, profile_id from model_role_bindings order by role"
-                ).fetchall()
+                row = conn.execute(
+                    "select profile_id from model_role_bindings where role = ?",
+                    ("embedding",),
+                ).fetchone()
         except sqlite3.OperationalError as exc:
             if "no such table" not in str(exc).lower():
                 raise
-            return result
-        for row in rows:
-            role = str(row["role"])
-            if role in result:
-                result[role] = str(row["profile_id"])
-        return result
+            return None
+        return str(row["profile_id"]) if row else None
 
-    def role_binding(self, role: ModelPoolRole) -> str | None:
-        return self.role_bindings()[role]
+    def save_embedding_binding(self, profile_id: str | None) -> str | None:
+        """Persist only the infrastructure embedding binding.
 
-    def save_role_bindings(
-        self,
-        bindings: dict[ModelPoolRole, str | None],
-    ) -> dict[ModelPoolRole, str | None]:
-        normalized: dict[ModelPoolRole, str | None] = {}
-        for role in ("main", "task", "compression", "embedding"):
-            profile_id = bindings.get(role)
-            if profile_id is None:
-                normalized[role] = None
-                continue
-            profile = self.require_profile(profile_id)
-            expected_kind = "embedding" if role == "embedding" else "chat"
-            if profile.kind != expected_kind:
-                raise ModelPoolStoreError(f"{role} role requires a {expected_kind} model profile: {profile_id}")
+        Chat-role defaults are intentionally not part of the model-pool UI or
+        runtime routing. They remain in the legacy table only so older local
+        databases can be opened without a destructive migration.
+        """
+
+        normalized = str(profile_id or "").strip() or None
+        if normalized is not None:
+            profile = self.require_profile(normalized)
+            if profile.kind != "embedding":
+                raise ModelPoolStoreError(
+                    f"embedding binding requires an embedding model profile: {normalized}"
+                )
             if not profile.enabled:
-                raise ModelPoolStoreError(f"{role} role requires an enabled model profile: {profile_id}")
+                raise ModelPoolStoreError(
+                    f"embedding binding requires an enabled model profile: {normalized}"
+                )
             credential = self.require_credential(profile.credential_id)
             if not credential.enabled or not credential.api_key:
                 raise ModelPoolStoreError(
-                    f"{role} role requires an enabled credential with an API key: {profile_id}"
+                    f"embedding binding requires an enabled credential with an API key: {normalized}"
                 )
-            normalized[role] = profile_id
-        now = utc_now_text()
         with self._connect(write=True) as conn:
-            for role, profile_id in normalized.items():
-                if profile_id is None:
-                    conn.execute("delete from model_role_bindings where role = ?", (role,))
-                    continue
+            if normalized is None:
+                conn.execute("delete from model_role_bindings where role = ?", ("embedding",))
+            else:
                 conn.execute(
                     """
                     insert into model_role_bindings (role, profile_id, updated_at)
@@ -299,15 +288,15 @@ class ModelPoolStore:
                       profile_id=excluded.profile_id,
                       updated_at=excluded.updated_at
                     """,
-                    (role, profile_id, now),
+                    ("embedding", normalized, utc_now_text()),
                 )
-        return self.role_bindings()
+        return self.embedding_binding()
 
     def roles_for_profile(self, profile_id: str) -> list[str]:
         with self._connect() as conn:
             rows = conn.execute(
-                "select role from model_role_bindings where profile_id = ? order by role",
-                (profile_id,),
+                "select role from model_role_bindings where role = ? and profile_id = ? order by role",
+                ("embedding", profile_id),
             ).fetchall()
         return [str(row["role"]) for row in rows]
 

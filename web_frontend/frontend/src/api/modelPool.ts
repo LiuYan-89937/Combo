@@ -1,8 +1,6 @@
 import { requestJson, withQuery } from './http'
 
 export type ModelUsageGroupBy = 'model' | 'provider' | 'agent'
-export type ModelRole = 'main' | 'task' | 'compression' | 'embedding'
-export type ModelRoleBindings = Record<ModelRole, string | null>
 export interface ModelPoolDefaults {
   context_window_tokens: number
   compression_trigger_tokens: number
@@ -110,14 +108,6 @@ export async function resolveRuntimeMainModelProfileId(
   if (availableIds.has(preferredId)) return preferredId
 
   try {
-    const roleBindings = await modelPoolApi.roleBindings()
-    const configuredId = String(roleBindings.bindings.main || '').trim()
-    if (availableIds.has(configuredId)) return configuredId
-  } catch {
-    // The loaded profiles remain usable even if optional role bindings are unavailable.
-  }
-
-  try {
     const selection = await modelPoolApi.select({
       requirements: [{
         role: 'main',
@@ -208,12 +198,12 @@ export const modelPoolApi = {
       method: 'DELETE',
     }),
   profiles: () => requestJson<{ profiles: ModelPoolProfile[] }>('/api/model-pool/profiles'),
-  roleBindings: () =>
-    requestJson<{ bindings: ModelRoleBindings; defaults: ModelPoolDefaults }>('/api/model-pool/role-bindings'),
-  saveRoleBindings: (bindings: ModelRoleBindings) =>
-    requestJson<{ bindings: ModelRoleBindings }>('/api/model-pool/role-bindings', {
+  embeddingBinding: () =>
+    requestJson<{ binding: string | null; defaults: ModelPoolDefaults }>('/api/model-pool/embedding-binding'),
+  saveEmbeddingBinding: (profileId: string | null) =>
+    requestJson<{ binding: string | null }>('/api/model-pool/embedding-binding', {
       method: 'PUT',
-      body: JSON.stringify({ bindings }),
+      body: JSON.stringify({ profile_id: profileId }),
     }),
   select: (payload: Record<string, unknown>) =>
     requestJson<ModelSelectionResult>('/api/model-pool/select', {

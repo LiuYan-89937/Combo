@@ -124,9 +124,12 @@ export function installShowcaseServer(): void {
     if (url.pathname === '/api/model-pool/profiles') {
       return jsonResponse({ profiles: [modelProfile] })
     }
-    if (url.pathname === '/api/model-pool/role-bindings') {
+    if (url.pathname === '/api/model-pool/embedding-binding') {
+      if (method === 'PUT') {
+        return jsonResponse({ binding: body.profile_id || null })
+      }
       return jsonResponse({
-        bindings: { main: modelProfile.profile_id, task: null, compression: null, embedding: null },
+        binding: null,
         defaults: { context_window_tokens: 262144, compression_trigger_tokens: 204800 },
       })
     }

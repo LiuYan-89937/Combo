@@ -87,25 +87,16 @@
           <div class="role-binding-panel">
             <div class="content-header">
               <div class="context-title">
-                <n-text strong>{{ t('modelPool.defaultBindings') }}</n-text>
-                <n-text depth="3" class="context-subtitle">{{ t('modelPool.defaultBindingsHint') }}</n-text>
+                <n-text strong>{{ t('modelPool.embeddingBinding') }}</n-text>
+                <n-text depth="3" class="context-subtitle">{{ t('modelPool.embeddingBindingHint') }}</n-text>
               </div>
-              <n-button type="primary" :loading="savingBindings" @click="saveRoleBindings">
+              <n-button type="primary" :loading="savingBindings" @click="saveEmbeddingBinding">
                 {{ t('common.save') }}
               </n-button>
             </div>
             <div class="form-grid role-binding-grid">
-              <n-form-item :label="t('modelPool.mainRole')">
-                <n-select v-model:value="roleBindings.main" clearable :options="bindingOptions('chat')" />
-              </n-form-item>
-              <n-form-item :label="t('modelPool.taskRole')">
-                <n-select v-model:value="roleBindings.task" clearable :options="bindingOptions('chat')" />
-              </n-form-item>
-              <n-form-item :label="t('modelPool.compressionRole')">
-                <n-select v-model:value="roleBindings.compression" clearable :options="bindingOptions('chat')" />
-              </n-form-item>
-              <n-form-item :label="t('modelPool.embeddingRole')">
-                <n-select v-model:value="roleBindings.embedding" clearable :options="bindingOptions('embedding')" />
+              <n-form-item :label="t('modelPool.embeddingModel')">
+                <n-select v-model:value="embeddingBinding" clearable :options="bindingOptions('embedding')" />
               </n-form-item>
             </div>
           </div>
@@ -453,12 +444,7 @@ const providers = ref<ModelProviderProfile[]>([])
 const credentials = ref<ModelPoolCredential[]>([])
 const profiles = ref<ModelPoolProfile[]>([])
 const modelDefaults = ref<ModelPoolDefaults | null>(null)
-const roleBindings = reactive<Record<'main' | 'task' | 'compression' | 'embedding', string | null>>({
-  main: null,
-  task: null,
-  compression: null,
-  embedding: null,
-})
+const embeddingBinding = ref<string | null>(null)
 const usageLoading = ref(false)
 const usageGroupBy = ref<ModelUsageGroupBy>('model')
 const usageChartType = ref<'line' | 'bar'>('line')
@@ -637,17 +623,14 @@ async function refresh(): Promise<void> {
       modelPoolApi.providers(),
       modelPoolApi.credentials(),
       modelPoolApi.profiles(),
-      modelPoolApi.roleBindings(),
+      modelPoolApi.embeddingBinding(),
       modelPoolApi.usage({ groupBy: usageGroupBy.value, days: usageDays.value }),
     ])
     providers.value = providerData.providers
     credentials.value = credentialData.credentials
     profiles.value = profileData.profiles
     modelDefaults.value = defaultsData.defaults
-    roleBindings.main = defaultsData.bindings.main || null
-    roleBindings.task = defaultsData.bindings.task || null
-    roleBindings.compression = defaultsData.bindings.compression || null
-    roleBindings.embedding = defaultsData.bindings.embedding || null
+    embeddingBinding.value = defaultsData.binding || null
     usageSummary.value = usageData
   } catch (error) {
     message.error(error instanceof Error ? error.message : t('common.requestFailed'))
@@ -667,14 +650,11 @@ async function loadUsage(): Promise<void> {
   }
 }
 
-async function saveRoleBindings(): Promise<void> {
+async function saveEmbeddingBinding(): Promise<void> {
   savingBindings.value = true
   try {
-    const response = await modelPoolApi.saveRoleBindings({ ...roleBindings })
-    roleBindings.main = response.bindings.main || null
-    roleBindings.task = response.bindings.task || null
-    roleBindings.compression = response.bindings.compression || null
-    roleBindings.embedding = response.bindings.embedding || null
+    const response = await modelPoolApi.saveEmbeddingBinding(embeddingBinding.value)
+    embeddingBinding.value = response.binding || null
     message.success(t('modelPool.bindingsSaved'))
   } catch (error) {
     message.error(error instanceof Error ? error.message : t('common.requestFailed'))
