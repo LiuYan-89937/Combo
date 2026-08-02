@@ -143,6 +143,9 @@ export function useFactoryConversation() {
       ...(reasoningIntensity.value !== null ? { reasoningIntensity: reasoningIntensity.value } : {}),
       requestTimeoutSeconds: runtimePreferences.requestTimeoutSeconds,
       maxRetries: runtimePreferences.maxRetries,
+      userConfig: {
+        max_parallel_sub_agents: runtimePreferences.maxParallelSubAgents,
+      },
     }
   }
 

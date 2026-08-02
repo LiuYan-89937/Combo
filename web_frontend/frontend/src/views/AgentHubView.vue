@@ -109,11 +109,9 @@
 
           <n-alert v-if="!auth.authenticated" type="info" class="login-panel">
             {{ t('agentHub.loginHint') }}
-            <template #action>
-              <n-button size="small" type="primary" @click="startLogin">
-                {{ t('agentHub.login') }}
-              </n-button>
-            </template>
+            <n-button size="small" type="primary" class="login-action" @click="startLogin">
+              {{ t('agentHub.login') }}
+            </n-button>
           </n-alert>
 
           <template v-else>

@@ -17,7 +17,12 @@ from agent_factory.collaboration_system.delivery import (
     validate_worker_delivery,
 )
 from agent_factory.collaboration_system.prompting import build_main_agent_collaboration_prompt
-from agent_factory.collaboration_runtime_policy import collaboration_runtime_tool_access
+from agent_factory.collaboration_system.parent_controller import parent_workspace_root
+from agent_factory.collaboration_system.result_delivery import DELIVERY_PROTOCOL
+from agent_factory.collaboration_runtime_policy import (
+    collaboration_runtime_tool_access,
+    delegated_result_runtime_tool_access,
+)
 from agent_factory.collaboration_system.store import CollaborationStore
 from agent_factory.collaboration_system.store import SYSTEM_CHAT_PACKAGE_ID
 from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import AgentPackageRuntimeManager
@@ -186,6 +191,7 @@ class CollaborationOrchestrator:
             session=session,
         )
         execution_config = session.get("execution_config") if isinstance(session.get("execution_config"), dict) else {}
+        parent_session_controller = execution_config.get("controller") == "parent_session"
         run = self.runtime.stream(
             package_id,
             user_input=prompt,
@@ -208,8 +214,8 @@ class CollaborationOrchestrator:
                 ),
             },
             require_ready=True,
-            session_kind="collaboration_main",
-            collaboration_id=collaboration_id,
+            session_kind="normal" if parent_session_controller else "collaboration_main",
+            collaboration_id=None if parent_session_controller else collaboration_id,
             visible_in_agent_session_list=True,
         )
         main_session_id = str((run.session or {}).get("session_id") or "").strip()
@@ -227,6 +233,7 @@ class CollaborationOrchestrator:
                     item,
                     package_id=package_id,
                     collaboration_id=collaboration_id,
+                    include_collaboration_scope=not parent_session_controller,
                 )
             )
             output.accept(item)
@@ -406,6 +413,7 @@ class CollaborationOrchestrator:
         worker_workdir = self.runtime.workdir_for_session(package_id, assignee_session_id)
         shared_materials = _materialize_authorized_artifacts(
             shared_workspace=self.store.session_workdir(collaboration_id),
+            parent_workspace=parent_workspace_root(session),
             worker_workdir=worker_workdir,
             artifacts=task.get("input_artifacts") or [],
         )
@@ -452,6 +460,20 @@ class CollaborationOrchestrator:
             user_input=prompt,
             session_id=assignee_session_id,
             request_id=run_request_id,
+            user_config=(
+                {
+                    "delegation_context": {
+                        "collaboration_id": collaboration_id,
+                        "task_id": task_id,
+                        "parent_package_id": str(session.get("main_agent_package_id") or ""),
+                        "parent_session_id": str(session.get("main_agent_package_session_id") or ""),
+                        "child_package_id": package_id,
+                    },
+                    "runtime_tool_access": delegated_result_runtime_tool_access(),
+                }
+                if _uses_agent_result_protocol(task)
+                else {}
+            ),
             require_ready=True,
             session_kind="collaboration_worker",
             collaboration_id=collaboration_id,
@@ -728,6 +750,14 @@ class CollaborationOrchestrator:
         if cancelled_result is not None:
             return cancelled_result
 
+        protocol_result = self._agent_result_protocol_outcome(
+            collaboration_id=collaboration_id,
+            task_id=task_id,
+            assignee_session_id=outcome.assignee_session_id or assignee_session_id,
+        )
+        if protocol_result is not None:
+            return protocol_result
+
         delivery_validation: WorkerDeliveryValidation | None = None
         if outcome.status == "completed":
             delivery_validation = validate_worker_delivery(
@@ -826,6 +856,27 @@ class CollaborationOrchestrator:
             before_snapshot=before_snapshot,
             shared_materials_snapshot=shared_materials_snapshot,
             delivery_validation=delivery_validation,
+        )
+
+    def _agent_result_protocol_outcome(
+        self,
+        *,
+        collaboration_id: str,
+        task_id: str,
+        assignee_session_id: str,
+    ) -> CollaborationRunTaskResult | None:
+        task = _task_by_id(self.store.get_session(collaboration_id), task_id)
+        payload = task.get("result_payload") if isinstance(task.get("result_payload"), dict) else {}
+        delivery = payload.get("delivery_protocol")
+        if not isinstance(delivery, dict) or delivery.get("protocol") != DELIVERY_PROTOCOL:
+            return None
+        return CollaborationRunTaskResult(
+            collaboration_id=collaboration_id,
+            task_id=task_id,
+            status=str(task.get("status") or "submitted"),
+            assignee_session_id=assignee_session_id,
+            result_summary=str(task.get("result_summary") or delivery.get("summary") or ""),
+            artifact_refs=list(task.get("artifact_refs") or []),
         )
 
     def _cancelled_worker_result(
@@ -987,15 +1038,13 @@ def _main_agent_frontend_event(
     *,
     package_id: str,
     collaboration_id: str,
+    include_collaboration_scope: bool = True,
 ) -> FactoryFrontendEvent:
     payload = item.payload if isinstance(item.payload, dict) else {}
-    updates: dict[str, Any] = {
-        "payload": {
-            **payload,
-            "package_id": package_id,
-            "collaboration_id": collaboration_id,
-        }
-    }
+    scoped_payload = {**payload, "package_id": package_id}
+    if include_collaboration_scope:
+        scoped_payload["collaboration_id"] = collaboration_id
+    updates: dict[str, Any] = {"payload": scoped_payload}
     return item.model_copy(update=updates)
 
 
@@ -1108,6 +1157,7 @@ def _worker_prompt(*, session: dict[str, Any], task: dict[str, Any], shared_mate
         if recovery_context is not None
         else ""
     )
+    delivery_protocol_guidance = _agent_result_protocol_prompt(visible_context)
     return "\n\n".join(
         item
         for item in [
@@ -1126,6 +1176,7 @@ def _worker_prompt(*, session: dict[str, Any], task: dict[str, Any], shared_mate
             f"可见上下文：{visible_context}",
             retry_guidance,
             recovery_guidance,
+            delivery_protocol_guidance,
             materials,
             "交付要求：给出可由主 Agent 验收的完整结果。你在工作区中新建或修改的普通文件会被系统收集到协作共享工作区作为任务交付物。",
         ]
@@ -1133,9 +1184,27 @@ def _worker_prompt(*, session: dict[str, Any], task: dict[str, Any], shared_mate
     )
 
 
+def _uses_agent_result_protocol(task: dict[str, Any]) -> bool:
+    visible_context = task.get("visible_context") if isinstance(task.get("visible_context"), dict) else {}
+    return visible_context.get("delivery_protocol") == DELIVERY_PROTOCOL
+
+
+def _agent_result_protocol_prompt(visible_context: dict[str, Any]) -> str:
+    if visible_context.get("delivery_protocol") != DELIVERY_PROTOCOL:
+        return ""
+    expected_artifacts = visible_context.get("expected_artifacts")
+    return (
+        "本任务使用 Agent 正式交付协议。完成工作后必须调用 deliver_result，提交任务状态、简明总结、关键发现、"
+        "遗留问题以及需要传给父 Agent 的真实文件或目录。普通最终回复不等于完成交付；不要创建"
+        " `.agent_delivery/result.json`，该路径仅用于宿主检测未正式交付的异常结束。"
+        f"\n父 Agent 期望的产物：{expected_artifacts if isinstance(expected_artifacts, list) else []}"
+    )
+
+
 def _materialize_authorized_artifacts(
     *,
     shared_workspace: Path,
+    parent_workspace: Path | None,
     worker_workdir: Path,
     artifacts: list[Any],
 ) -> dict[str, Any]:
@@ -1143,45 +1212,117 @@ def _materialize_authorized_artifacts(
     if materialized_root.exists():
         shutil.rmtree(materialized_root)
     materialized_root.mkdir(parents=True, exist_ok=True)
-    requested_paths = _authorized_artifact_paths(artifacts)
     items: list[dict[str, Any]] = []
-    for relative in requested_paths:
-        source = _safe_shared_path(shared_workspace, relative)
+    for artifact in _authorized_artifacts(artifacts):
+        relative = artifact["path"]
+        workspace_scope = artifact["workspace_scope"]
+        source_root = parent_workspace if workspace_scope == "parent" else shared_workspace
         target_relative = _share_file_runtime_path(relative)
         target = worker_workdir / target_relative
         item = {
             "source_path": relative,
+            "workspace_scope": workspace_scope,
             "path": target_relative.as_posix(),
             "status": "missing",
         }
-        if source.is_file():
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, target)
-            stat = target.stat()
-            mime_type, _ = mimetypes.guess_type(target.name)
-            item.update(
-                {
-                    "status": "available",
-                    "kind": _artifact_kind(target),
-                    "mime_type": mime_type or "application/octet-stream",
-                    "size_bytes": stat.st_size,
-                    "sha256": _file_sha256(target),
-                }
-            )
+        if source_root is None:
+            item["reason"] = "parent workspace is not configured"
+            items.append(item)
+            continue
+        source = _safe_material_source(source_root, relative)
+        if source.exists():
+            copied_files = _copy_authorized_material(source, target)
+            size_bytes = sum(path.stat().st_size for path in copied_files)
+            if source.is_dir():
+                item.update(
+                    {
+                        "status": "available",
+                        "kind": "directory",
+                        "mime_type": "application/x-directory",
+                        "file_count": len(copied_files),
+                        "size_bytes": size_bytes,
+                    }
+                )
+            else:
+                mime_type, _ = mimetypes.guess_type(target.name)
+                item.update(
+                    {
+                        "status": "available",
+                        "kind": _artifact_kind(target),
+                        "mime_type": mime_type or "application/octet-stream",
+                        "file_count": 1,
+                        "size_bytes": size_bytes,
+                        "sha256": _file_sha256(target),
+                    }
+                )
         items.append(item)
     return {"items": items}
 
 
-def _authorized_artifact_paths(artifacts: list[Any]) -> list[str]:
-    paths: list[str] = []
+def _authorized_artifacts(artifacts: list[Any]) -> list[dict[str, str]]:
+    result: list[dict[str, str]] = []
     seen: set[str] = set()
     for raw in artifacts:
         relative = str(raw.get("path") if isinstance(raw, dict) else raw or "").strip()
+        workspace_scope = (
+            str(raw.get("workspace_scope") or "collaboration").strip()
+            if isinstance(raw, dict)
+            else "collaboration"
+        )
+        if workspace_scope not in {"collaboration", "parent"}:
+            raise ValueError(f"unsupported collaboration artifact workspace_scope: {workspace_scope}")
         if not relative or relative in seen:
             continue
         seen.add(relative)
-        paths.append(relative)
-    return paths
+        result.append({"path": relative, "workspace_scope": workspace_scope})
+    return result
+
+
+def _safe_material_source(root: Path, relative: str) -> Path:
+    relative_path = PurePosixPath(str(relative).replace("\\", "/"))
+    parts = [part for part in relative_path.parts if part not in {"", "."}]
+    if relative_path.is_absolute() or not parts or any(part == ".." for part in parts):
+        raise ValueError(f"invalid collaboration material path: {relative}")
+    resolved_root = root.resolve()
+    candidate = resolved_root.joinpath(*parts)
+    current = resolved_root
+    for part in parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError(f"collaboration material path contains a symbolic link: {relative}")
+    resolved_candidate = candidate.resolve(strict=False)
+    if resolved_root != resolved_candidate and resolved_root not in resolved_candidate.parents:
+        raise ValueError(f"collaboration material path escapes workspace: {relative}")
+    return candidate
+
+
+def _copy_authorized_material(source: Path, target: Path) -> list[Path]:
+    if source.is_symlink():
+        raise ValueError(f"collaboration material must not be a symbolic link: {source}")
+    if source.is_file():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        return [target]
+    if not source.is_dir():
+        raise ValueError(f"unsupported collaboration material type: {source}")
+    target.mkdir(parents=True, exist_ok=True)
+    copied_files: list[Path] = []
+    for child in sorted(source.rglob("*")):
+        if child.is_symlink():
+            raise ValueError(
+                f"collaboration material directory contains a symbolic link: {child.relative_to(source)}"
+            )
+        relative = child.relative_to(source)
+        destination = target / relative
+        if child.is_dir():
+            destination.mkdir(parents=True, exist_ok=True)
+            continue
+        if not child.is_file():
+            raise ValueError(f"unsupported collaboration material entry: {relative}")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(child, destination)
+        copied_files.append(destination)
+    return copied_files
 
 
 def _share_file_runtime_path(relative: str) -> Path:

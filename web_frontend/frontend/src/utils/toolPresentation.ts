@@ -40,6 +40,10 @@ const TOOL_PRESENTATIONS: Record<string, Pick<ToolPresentation, 'category' | 'la
   agent_list: { category: 'agent', labelKey: 'tool.names.agentList' },
   agent_search: { category: 'agent', labelKey: 'tool.names.agentSearch' },
   agent_manufacture: { category: 'agent', labelKey: 'tool.names.agentManufacture' },
+  agent_delegate: { category: 'agent', labelKey: 'tool.names.agentDelegate' },
+  agent_evolve: { category: 'agent', labelKey: 'tool.names.agentEvolve' },
+  agent_team: { category: 'agent', labelKey: 'tool.names.agentTeam' },
+  background_tasks: { category: 'agent', labelKey: 'backgroundTask.title' },
   skillhub: { category: 'extension', labelKey: 'tool.names.skillhub' },
   tool_output: { category: 'read', labelKey: 'tool.names.toolOutput' },
 }

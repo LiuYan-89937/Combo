@@ -176,10 +176,32 @@ def _stable_system_prompt(*, prompt_binding: dict[str, Any], state: Any, node_id
         parts.append(FINAL_ANSWER_TOOL_POLICY)
     parts.append(RUNTIME_REACT_PROTOCOL)
     parts.extend(runtime_prompt_fragments_from_state(state))
+    delegation_guidance = _delegation_system_guidance(state)
+    if delegation_guidance:
+        parts.append(delegation_guidance)
     mount_guidance = _workspace_mount_guidance(state)
     if mount_guidance:
         parts.append(mount_guidance)
     return "\n\n".join(parts)
+
+
+def _delegation_system_guidance(state: Any) -> str:
+    user_config = getattr(getattr(state, "runtime_config", None), "user_config", {}) or {}
+    if not isinstance(user_config, dict):
+        return ""
+    context = user_config.get("delegation_context")
+    if not isinstance(context, dict):
+        return ""
+    collaboration_id = str(context.get("collaboration_id") or "").strip()
+    task_id = str(context.get("task_id") or "").strip()
+    if not collaboration_id or not task_id:
+        return ""
+    return (
+        "You are executing a delegated child-Agent task. Work only within the assigned task boundary. "
+        "Before ending, call deliver_result exactly once with the truthful completion state, a concise report, "
+        "and every file or directory that must be transferred to the parent Agent. A normal final response is not "
+        f"a formal delivery. Delegation identity: collaboration_id={collaboration_id}, task_id={task_id}."
+    )
 
 
 def _executor_tool_policy(state: Any) -> str:

@@ -66,7 +66,6 @@ export const zh = {
     ctaHub: '探索 AgentHub',
     ctaGithub: 'GitHub 仓库',
     showcaseTitle: '看见 Agent 从想法变成结果',
-    showcaseSubtitle: '这不是截图或录屏。官网正在运行与桌面应用相同的界面组件，自动演示制造、装配、执行与交付。',
     pipelineTitle: '从模型到分发的一体化链路',
     pipelineSubtitle: '每一步都在本地工作区中完成，过程可见、结果可控。',
     steps: {
@@ -294,7 +293,6 @@ export const en = {
     ctaHub: 'Explore AgentHub',
     ctaGithub: 'GitHub repo',
     showcaseTitle: 'Watch an agent become a deliverable',
-    showcaseSubtitle: 'This is not a screenshot or video. The site runs the same interface components as the desktop app to demonstrate building, assembling, running, and delivering an agent.',
     pipelineTitle: 'From model to distribution, in one loop',
     pipelineSubtitle: 'Every step runs in a local workspace — visible process, controllable results.',
     steps: {

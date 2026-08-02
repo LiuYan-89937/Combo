@@ -18,7 +18,12 @@
         <n-scrollbar ref="scrollbarRef" class="messages-scrollbar">
           <div class="messages-list">
             <n-empty
-              v-if="runtimeStore.transcript.length === 0 && !hasActiveStreams"
+              v-if="
+                timelineItems.length === 0
+                && thinkingMessages.length === 0
+                && activeSchedulerRunCards.length === 0
+                && !hasActiveStreams
+              "
               :description="emptyDescription"
               class="chat-empty"
             >
@@ -148,7 +153,6 @@ import { useResourceContext } from '@/composables/useResourceContext'
 import { useConversationSessionNavigation } from '@/composables/useConversationSessionNavigation'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { isAgentSessionsLanding as routeIsAgentSessionsLanding } from '@/utils/agentSessionRoute'
-import { agentPackageConversationScope } from '@/stores/runtime/scopes'
 import { SYSTEM_CHAT_PACKAGE_ID } from '@/utils/resourceScope'
 
 const runtimeStore = useRuntimeStore()
@@ -427,17 +431,6 @@ async function openRoutedAgentSession(version: number): Promise<boolean> {
   }
   const collaborationId = routeQueryText(route.query.collaboration_id)
   const collaborationTaskId = routeQueryText(route.query.collaboration_task_id)
-  const routedConversationScope = agentPackageConversationScope(packageId, sessionId, {
-    collaborationId,
-    collaborationTaskId,
-  })
-  if (
-    agentStore.activeChatPackageId === packageId
-    && agentStore.selectedSessionId === sessionId
-    && runtimeStore.activeAgentSessionId === sessionId
-    && runtimeStore.currentMode === 'agent_package'
-    && runtimeStore.activeConversationScope === routedConversationScope
-  ) return true
   agentStore.enterAgentChat(packageId, sessionId)
   if (collaborationId) {
     runtimeStore.enterCollaborationConversation(

@@ -238,6 +238,11 @@ const collaborationReport = computed(() => {
 })
 const collaborationReportTitle = computed(() => {
   const packageId = String(collaborationReport.value?.assignee_package_id || '').trim()
+  if (collaborationReport.value?.kind === 'evolution_report') {
+    return packageId
+      ? t('collaboration.evolutionReportWithAgent', { agent: packageId })
+      : t('collaboration.evolutionReport')
+  }
   return packageId
     ? t('collaboration.workerReportWithAgent', { agent: packageId })
     : t('collaboration.workerReport')
@@ -245,6 +250,7 @@ const collaborationReportTitle = computed(() => {
 const collaborationReportStatus = computed(() => {
   const status = String(collaborationReport.value?.status || '').trim()
   if (status === 'submitted') return t('collaboration.reportSubmitted')
+  if (status === 'completed') return t('collaboration.reportCompleted')
   if (status === 'failed') return t('collaboration.reportFailed')
   if (status === 'cancelled') return t('collaboration.reportCancelled')
   if (status === 'blocked') return t('collaboration.reportBlocked')

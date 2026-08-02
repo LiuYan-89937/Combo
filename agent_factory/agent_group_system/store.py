@@ -87,6 +87,7 @@ class AgentGroupStore:
     def _ensure_schema(self) -> None:
         """确保所有表结构存在"""
         with self._connect() as conn:
+            conn.execute("begin immediate")
             # 1. 群聊会话表
             conn.execute("""
                 create table if not exists agent_group_sessions (
@@ -161,6 +162,7 @@ class AgentGroupStore:
                         on delete cascade
                 )
             """)
+            _migrate_session_identity_columns(conn)
 
             # 5. 共享上下文版本表
             conn.execute("""
@@ -212,6 +214,7 @@ class AgentGroupStore:
             """)
 
             # 8. 成员会话索引（session_id 唯一）
+            conn.execute("drop index if exists idx_agent_group_members_conversation")
             conn.execute("""
                 create unique index if not exists idx_agent_group_members_session
                 on agent_group_members(package_session_id)
@@ -1079,6 +1082,33 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition
     columns = {str(row["name"]) for row in conn.execute(f"pragma table_info({table})")}
     if column not in columns:
         conn.execute(f"alter table {table} add column {column} {definition}")
+
+
+def _migrate_session_identity_columns(conn: sqlite3.Connection) -> None:
+    """Migrate the abandoned conversation identity schema to runtime session IDs.
+
+    The unified-orchestration prototype renamed these persisted columns to
+    ``conversation_id``. The production runtime was subsequently restored to
+    package sessions, so existing databases created by that prototype must be
+    migrated before any canonical index or query is evaluated.
+    """
+    for table in ("agent_group_members", "agent_group_member_runs"):
+        columns = {str(row["name"]) for row in conn.execute(f"pragma table_info({table})")}
+        has_session_id = "package_session_id" in columns
+        has_conversation_id = "conversation_id" in columns
+        if has_session_id and has_conversation_id:
+            raise AgentGroupStoreError(
+                f"ambiguous agent-group session identity schema in {table}"
+            )
+        if has_session_id:
+            continue
+        if not has_conversation_id:
+            raise AgentGroupStoreError(
+                f"agent-group session identity column is missing from {table}"
+            )
+        conn.execute(
+            f"alter table {table} rename column conversation_id to package_session_id"
+        )
 
 
 def utc_now_text() -> str:

@@ -24,7 +24,6 @@ const source = computed(() => (
       <header class="product-showcase__head">
         <span class="eyebrow">Inside FastAgentFactory</span>
         <h2 id="product-showcase-title">{{ t('home.showcaseTitle') }}</h2>
-        <p>{{ t('home.showcaseSubtitle') }}</p>
       </header>
 
       <div class="product-showcase__stage">

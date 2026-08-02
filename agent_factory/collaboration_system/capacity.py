@@ -5,7 +5,8 @@ import os
 from typing import Any
 
 
-COLLABORATION_MAX_PARALLEL_WORKERS_ENV = "AGENTFACTORY_COLLABORATION_MAX_PARALLEL_WORKERS"
+MAX_PARALLEL_SUB_AGENTS_ENV = "AGENTFACTORY_MAX_PARALLEL_SUB_AGENTS"
+DEFAULT_MAX_PARALLEL_SUB_AGENTS = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,15 +34,23 @@ class ChatInferenceCapacity:
 
 
 def inspect_configured_inference_capacity() -> ChatInferenceCapacity:
-    raw = str(os.getenv(COLLABORATION_MAX_PARALLEL_WORKERS_ENV) or "").strip()
+    raw = str(os.getenv(MAX_PARALLEL_SUB_AGENTS_ENV) or "").strip()
     if not raw:
-        return _unavailable(f"{COLLABORATION_MAX_PARALLEL_WORKERS_ENV} is not configured")
+        return ChatInferenceCapacity(
+            profile_id="",
+            total_slots=DEFAULT_MAX_PARALLEL_SUB_AGENTS,
+            busy_slots=0,
+            deferred_requests=0,
+            available_slots=DEFAULT_MAX_PARALLEL_SUB_AGENTS,
+            source="default_sub_agent_limit",
+            live=False,
+        )
     try:
         total_slots = int(raw)
     except ValueError:
-        return _unavailable(f"{COLLABORATION_MAX_PARALLEL_WORKERS_ENV} must be a positive integer")
+        return _unavailable(f"{MAX_PARALLEL_SUB_AGENTS_ENV} must be a positive integer")
     if total_slots <= 0:
-        return _unavailable(f"{COLLABORATION_MAX_PARALLEL_WORKERS_ENV} must be a positive integer")
+        return _unavailable(f"{MAX_PARALLEL_SUB_AGENTS_ENV} must be a positive integer")
     return ChatInferenceCapacity(
         profile_id="",
         total_slots=total_slots,
@@ -51,6 +60,24 @@ def inspect_configured_inference_capacity() -> ChatInferenceCapacity:
         source="configured_limit",
         live=False,
     )
+
+
+def normalize_max_parallel_sub_agents(
+    value: Any,
+    *,
+    fallback: int = DEFAULT_MAX_PARALLEL_SUB_AGENTS,
+) -> int:
+    if value is None or str(value).strip() == "":
+        return fallback
+    if isinstance(value, bool):
+        raise ValueError("max_parallel_sub_agents must be a positive integer")
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("max_parallel_sub_agents must be a positive integer") from exc
+    if normalized <= 0:
+        raise ValueError("max_parallel_sub_agents must be a positive integer")
+    return normalized
 
 
 def _unavailable(detail: str) -> ChatInferenceCapacity:

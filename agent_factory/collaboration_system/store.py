@@ -10,18 +10,32 @@ from typing import Any, Iterator
 from uuid import uuid4
 
 from agent_factory.builtin_packages import DEFAULT_AGENT_PACKAGE_ID
+from agent_factory.collaboration_system.background_task_contract import normalize_background_task_metadata
 from agent_factory.collaboration_system.delivery import normalize_delivery_standard
 from agent_factory.paths import factory_artifact_path, resolve_project_path
 from agent_factory.sqlite_runtime import connect_sqlite, initialize_sqlite_store
 
 
 SYSTEM_CHAT_PACKAGE_ID = DEFAULT_AGENT_PACKAGE_ID
+SUB_AGENT_TASK_TYPE_AGENT = "agent"
+SUB_AGENT_TASK_TYPE_MANUFACTURE = "manufacture"
+SUB_AGENT_TASK_TYPE_EVOLVE = "evolve"
+SUB_AGENT_TASK_TYPES = {
+    SUB_AGENT_TASK_TYPE_AGENT,
+    SUB_AGENT_TASK_TYPE_MANUFACTURE,
+    SUB_AGENT_TASK_TYPE_EVOLVE,
+}
+UNIFIED_SUB_AGENT_TASKS_MIGRATION = "unified_sub_agent_tasks.v1"
+LEGACY_MANUFACTURING_TASKS_BACKUP_TABLE = "collaboration_manufacturing_requests_backup_v1"
+LEGACY_EVOLUTION_TASKS_BACKUP_TABLE = "collaboration_evolution_requests_backup_v1"
 DEFAULT_APPROVAL_MODE = "main_agent_delegated"
 APPROVAL_MODES = {"user_controlled", "main_agent_delegated"}
 SESSION_STATUSES = {"draft", "running", "completed", "failed", "cancelled"}
 TERMINAL_SESSION_STATUSES = {"completed", "failed", "cancelled"}
 MANUFACTURING_REQUEST_STATUSES = {"requested", "running", "ready_for_publish", "completed", "failed", "blocked"}
 MANUFACTURING_REQUEST_ACTIVE_STATUSES = {"requested", "running"}
+EVOLUTION_REQUEST_STATUSES = {"requested", "running", "blocked", "resume_requested", "completed", "failed", "cancelled"}
+EVOLUTION_REQUEST_ACTIVE_STATUSES = {"requested", "running", "resume_requested"}
 MAIN_AGENT_EVENT_STATUSES = {"pending", "processing", "completed", "failed"}
 TASK_STATUSES = {
     "assigned",
@@ -90,6 +104,7 @@ class CollaborationStore:
             session for session in sessions
             if self.ready_tasks(str(session.get("collaboration_id") or ""))
             or self.list_active_manufacturing_requests(str(session.get("collaboration_id") or ""))
+            or self.list_active_evolution_requests(str(session.get("collaboration_id") or ""))
             or self.pending_main_agent_event_count(str(session.get("collaboration_id") or "")) > 0
             or self.list_pending_task_approval_decisions(str(session.get("collaboration_id") or ""))
         ]
@@ -179,7 +194,7 @@ class CollaborationStore:
                 f"""
                 select task_id, collaboration_id, assignee_package_id, status, visible_context_json
                 from collaboration_tasks
-                where status in ({placeholders})
+                where type = 'agent' and status in ({placeholders})
                 """,
                 tuple(statuses),
             ).fetchall()
@@ -198,7 +213,7 @@ class CollaborationStore:
                     update collaboration_tasks
                     set status = ?, visible_context_json = ?, result_summary = ?,
                         result_payload_json = ?, updated_at = ?
-                    where collaboration_id = ? and task_id = ?
+                    where collaboration_id = ? and task_id = ? and type = 'agent'
                     """,
                     (
                         "queued",
@@ -237,7 +252,7 @@ class CollaborationStore:
                 """
                 select collaboration_id, task_id, assignee_package_id
                 from collaboration_tasks
-                where status = ?
+                where type = 'agent' and status = ?
                 order by created_at asc, task_id asc
                 """,
                 ("blocked",),
@@ -346,7 +361,7 @@ class CollaborationStore:
                 for item in conn.execute(
                     """
                     select * from collaboration_tasks
-                    where collaboration_id = ?
+                    where collaboration_id = ? and type = 'agent'
                     order by created_at asc, task_id asc
                     """,
                     (collaboration_id,),
@@ -356,14 +371,30 @@ class CollaborationStore:
                 self._manufacturing_request_view(item)
                 for item in conn.execute(
                     """
-                    select * from collaboration_manufacturing_requests
-                    where collaboration_id = ?
-                    order by created_at asc, request_id asc
+                    select * from collaboration_tasks
+                    where collaboration_id = ? and type = 'manufacture'
+                    order by created_at asc, task_id asc
+                    """,
+                    (collaboration_id,),
+                ).fetchall()
+            ]
+            session["evolution_requests"] = [
+                self._evolution_request_view(item)
+                for item in conn.execute(
+                    """
+                    select * from collaboration_tasks
+                    where collaboration_id = ? and type = 'evolve'
+                    order by created_at asc, task_id asc
                     """,
                     (collaboration_id,),
                 ).fetchall()
             ]
             self._attach_runtime_status(conn, session)
+            from agent_factory.collaboration_system.background_tasks import maybe_background_task_view
+
+            background_task = maybe_background_task_view(session)
+            if background_task is not None:
+                session["background_task"] = background_task
         return session
 
     def update_session(self, collaboration_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -860,7 +891,7 @@ class CollaborationStore:
             if session_row is None:
                 raise CollaborationStoreError(f"collaboration session not found: {collaboration_id}")
             task_rows = conn.execute(
-                "select * from collaboration_tasks where collaboration_id = ? order by created_at, task_id",
+                "select * from collaboration_tasks where collaboration_id = ? and type = 'agent' order by created_at, task_id",
                 (collaboration_id,),
             ).fetchall()
             current_row = next((row for row in task_rows if str(row["task_id"]) == task_id), None)
@@ -954,7 +985,7 @@ class CollaborationStore:
             dependent_rows = conn.execute(
                 """
                 select task_id, depends_on_json from collaboration_tasks
-                where collaboration_id = ? and task_id not in (?, ?)
+                where collaboration_id = ? and type = 'agent' and task_id not in (?, ?)
                 """,
                 (collaboration_id, task_id, replacement_task_id),
             ).fetchall()
@@ -966,14 +997,14 @@ class CollaborationStore:
                 conn.execute(
                     """
                     update collaboration_tasks set depends_on_json = ?, updated_at = ?
-                    where collaboration_id = ? and task_id = ?
+                    where collaboration_id = ? and task_id = ? and type = 'agent'
                     """,
                     (json_dumps(migrated), now, collaboration_id, dependent["task_id"]),
                 )
             conn.execute(
                 """
                 update collaboration_tasks set parent_task_id = ?, updated_at = ?
-                where collaboration_id = ? and parent_task_id = ?
+                where collaboration_id = ? and type = 'agent' and parent_task_id = ?
                 """,
                 (replacement_task_id, now, collaboration_id, task_id),
             )
@@ -982,7 +1013,7 @@ class CollaborationStore:
                 (collaboration_id, task_id),
             )
             conn.execute(
-                "delete from collaboration_tasks where collaboration_id = ? and task_id = ?",
+                "delete from collaboration_tasks where collaboration_id = ? and task_id = ? and type = 'agent'",
                 (collaboration_id, task_id),
             )
             if retry_cleanup_id is not None:
@@ -1145,20 +1176,22 @@ class CollaborationStore:
         with self._connect() as conn:
             conn.execute(
                 """
-                insert into collaboration_manufacturing_requests (
-                  request_id, collaboration_id, create_agent_session_id, status,
-                  agent_name, purpose, request_payload_json, result_payload_json,
+                insert into collaboration_tasks (
+                  task_id, collaboration_id, type, parent_task_id,
+                  assignee_package_id, assignee_session_id, task_text,
+                  request_payload_json, depends_on_json, delivery_standard_json,
+                  visible_context_json, input_artifacts_json, status,
+                  result_summary, result_payload_json, artifact_refs_json, review_notes,
                   created_at, updated_at
-                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) values (?, ?, 'manufacture', null, '', ?, ?, ?, '[]', '{}', '{}', '[]', ?, '', ?, '[]', '', ?, ?)
                 """,
                 (
                     request_id,
                     collaboration_id,
                     None,
-                    "requested",
-                    agent_name,
                     purpose,
                     json_dumps(payload),
+                    "requested",
                     json_dumps({}),
                     now,
                     now,
@@ -1182,8 +1215,8 @@ class CollaborationStore:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                select * from collaboration_manufacturing_requests
-                where collaboration_id = ? and request_id = ?
+                select * from collaboration_tasks
+                where collaboration_id = ? and task_id = ? and type = 'manufacture'
                 """,
                 (collaboration_id, request_id),
             ).fetchone()
@@ -1195,16 +1228,16 @@ class CollaborationStore:
         statuses = sorted(MANUFACTURING_REQUEST_ACTIVE_STATUSES)
         placeholders = ", ".join("?" for _ in statuses)
         params: list[Any] = [*statuses]
-        where = f"status in ({placeholders})"
+        where = f"type = 'manufacture' and status in ({placeholders})"
         if collaboration_id:
             where += " and collaboration_id = ?"
             params.append(collaboration_id)
         with self._connect() as conn:
             rows = conn.execute(
                 f"""
-                select * from collaboration_manufacturing_requests
+                select * from collaboration_tasks
                 where {where}
-                order by created_at asc, request_id asc
+                order by created_at asc, task_id asc
                 """,
                 tuple(params),
             ).fetchall()
@@ -1229,9 +1262,9 @@ class CollaborationStore:
         with self._connect() as conn:
             conn.execute(
                 """
-                update collaboration_manufacturing_requests
-                set create_agent_session_id = ?, status = ?, result_payload_json = ?, updated_at = ?
-                where collaboration_id = ? and request_id = ?
+                update collaboration_tasks
+                set assignee_session_id = ?, status = ?, result_payload_json = ?, updated_at = ?
+                where collaboration_id = ? and task_id = ? and type = 'manufacture'
                 """,
                 (
                     normalize_optional_text(payload.get("create_agent_session_id"))
@@ -1260,13 +1293,226 @@ class CollaborationStore:
             self._mark_session_running_conn(conn, collaboration_id, now)
         return self.get_manufacturing_request(collaboration_id, request_id)
 
+    def create_evolution_request(self, collaboration_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        self.get_session(collaboration_id)
+        package_id = str(payload.get("package_id") or "").strip()
+        goal = str(payload.get("goal") or "").strip()
+        if not package_id:
+            raise CollaborationStoreError("evolution package_id must not be empty")
+        if not goal:
+            raise CollaborationStoreError("evolution goal must not be empty")
+        request_id = uuid4().hex
+        evolution_session_id = f"parent_evolve_{request_id}"
+        now = utc_now_text()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                insert into collaboration_tasks (
+                  task_id, collaboration_id, type, parent_task_id,
+                  assignee_package_id, assignee_session_id, task_text,
+                  request_payload_json, depends_on_json, delivery_standard_json,
+                  visible_context_json, input_artifacts_json, status,
+                  result_summary, result_payload_json, artifact_refs_json, review_notes,
+                  created_at, updated_at
+                ) values (?, ?, 'evolve', null, ?, ?, ?, ?, '[]', '{}', '{}', '[]', ?, '', ?, '[]', '', ?, ?)
+                """,
+                (
+                    request_id,
+                    collaboration_id,
+                    package_id,
+                    evolution_session_id,
+                    goal,
+                    json_dumps(payload),
+                    "requested",
+                    json_dumps({}),
+                    now,
+                    now,
+                ),
+            )
+            self._insert_message_conn(
+                conn,
+                collaboration_id=collaboration_id,
+                speaker_type="main_agent",
+                speaker_package_id=None,
+                message_kind="evolution_requested",
+                content=f"已请求进化 Agent：{package_id}。目标：{goal}",
+                task_id=None,
+                event_ref=f"evolution:{request_id}:requested",
+                created_at=now,
+            )
+            self._mark_session_running_conn(conn, collaboration_id, now)
+        return self.get_evolution_request(collaboration_id, request_id)
+
+    def get_evolution_request(self, collaboration_id: str, request_id: str) -> dict[str, Any]:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                select * from collaboration_tasks
+                where collaboration_id = ? and task_id = ? and type = 'evolve'
+                """,
+                (collaboration_id, request_id),
+            ).fetchone()
+        if row is None:
+            raise CollaborationStoreError(f"collaboration evolution request not found: {request_id}")
+        return self._evolution_request_view(row)
+
+    def list_active_evolution_requests(self, collaboration_id: str | None = None) -> list[dict[str, Any]]:
+        statuses = sorted(EVOLUTION_REQUEST_ACTIVE_STATUSES)
+        placeholders = ", ".join("?" for _ in statuses)
+        params: list[Any] = [*statuses]
+        where = f"type = 'evolve' and status in ({placeholders})"
+        if collaboration_id:
+            where += " and collaboration_id = ?"
+            params.append(collaboration_id)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                select * from collaboration_tasks
+                where {where}
+                order by created_at asc, task_id asc
+                """,
+                tuple(params),
+            ).fetchall()
+        return [self._evolution_request_view(row) for row in rows]
+
+    def list_sub_agent_queue(self, collaboration_id: str) -> list[dict[str, Any]]:
+        session = self.get_session(collaboration_id)
+        ready_agent_task_ids = {
+            str(task.get("task_id") or "")
+            for task in self._ready_tasks_from_session(session)
+        }
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                select task_id, collaboration_id, type, status, created_at, updated_at
+                from collaboration_tasks
+                where collaboration_id = ?
+                  and (
+                    (type = 'agent' and status in ('assigned', 'queued'))
+                    or (type = 'manufacture' and status = 'requested')
+                    or (type = 'evolve' and status in ('requested', 'resume_requested'))
+                  )
+                order by created_at asc, task_id asc
+                """,
+                (collaboration_id,),
+            ).fetchall()
+        return [
+            dict(row)
+            for row in rows
+            if str(row["type"]) != SUB_AGENT_TASK_TYPE_AGENT
+            or str(row["task_id"]) in ready_agent_task_ids
+        ]
+
+    def recover_interrupted_evolution_requests(self) -> int:
+        now = utc_now_text()
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                select task_id as request_id, collaboration_id, result_payload_json
+                from collaboration_tasks
+                where type = 'evolve' and status in ('running', 'blocked', 'resume_requested')
+                """
+            ).fetchall()
+            for row in rows:
+                result_payload = json_loads(row["result_payload_json"], {})
+                conn.execute(
+                    """
+                    update collaboration_tasks
+                    set status = 'failed', result_payload_json = ?, updated_at = ?
+                    where task_id = ? and type = 'evolve'
+                    """,
+                    (
+                        json_dumps(
+                            {
+                                **result_payload,
+                                "error": "进化运行因宿主服务重启而失去可恢复的运行上下文，请重新发起进化。",
+                                "runtime_status": "host_restarted",
+                            }
+                        ),
+                        now,
+                        row["request_id"],
+                    ),
+                )
+                self._insert_message_conn(
+                    conn,
+                    collaboration_id=str(row["collaboration_id"]),
+                    speaker_type="system",
+                    speaker_package_id=None,
+                    message_kind="evolution_failed",
+                    content="进化运行因宿主服务重启而终止，请重新发起进化。",
+                    task_id=None,
+                    event_ref=f"evolution:{row['request_id']}:host-restarted",
+                    created_at=now,
+                )
+        for row in rows:
+            self.enqueue_main_agent_event(
+                str(row["collaboration_id"]),
+                user_message=(
+                    f"进化请求 {row['request_id']} 因宿主服务重启而终止，"
+                    "原运行上下文已失效，请向用户说明并在需要时重新发起进化。"
+                ),
+                message_metadata={
+                    "collaboration_report": {
+                        "kind": "evolution_report",
+                        "status": "failed",
+                        "summary": "进化运行因宿主服务重启而终止。",
+                        "evolution_request_id": str(row["request_id"]),
+                        "artifact_count": 0,
+                    }
+                },
+                task_id=None,
+                event_ref=f"evolution:{row['request_id']}:host-restarted",
+            )
+        return len(rows)
+
+    def update_evolution_request(
+        self,
+        collaboration_id: str,
+        request_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        current = self.get_evolution_request(collaboration_id, request_id)
+        status = str(payload.get("status") if "status" in payload else current["status"]).strip()
+        if status not in EVOLUTION_REQUEST_STATUSES:
+            raise CollaborationStoreError(f"unsupported evolution request status: {status}")
+        result_payload = (
+            payload.get("result_payload")
+            if "result_payload" in payload
+            else current.get("result_payload") or {}
+        )
+        now = utc_now_text()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                update collaboration_tasks
+                set status = ?, result_payload_json = ?, updated_at = ?
+                where collaboration_id = ? and task_id = ? and type = 'evolve'
+                """,
+                (status, json_dumps(result_payload), now, collaboration_id, request_id),
+            )
+            message = str(payload.get("message") or "").strip()
+            if message:
+                self._insert_message_conn(
+                    conn,
+                    collaboration_id=collaboration_id,
+                    speaker_type="system",
+                    speaker_package_id=current.get("package_id"),
+                    message_kind=f"evolution_{status}",
+                    content=message,
+                    task_id=None,
+                    event_ref=f"evolution:{request_id}:{status}:{now}",
+                    created_at=now,
+                )
+            self._mark_session_running_conn(conn, collaboration_id, now)
+        return self.get_evolution_request(collaboration_id, request_id)
+
     def update_task(self, collaboration_id: str, task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         session = self.get_session(collaboration_id)
         with self._connect() as conn:
             row = conn.execute(
                 """
                 select * from collaboration_tasks
-                where collaboration_id = ? and task_id = ?
+                where collaboration_id = ? and task_id = ? and type = 'agent'
                 """,
                 (collaboration_id, task_id),
             ).fetchone()
@@ -1336,6 +1582,7 @@ class CollaborationStore:
                     artifact_refs_json = ?, review_notes = ?, started_at = ?,
                     completed_at = ?, updated_at = ?
                 where collaboration_id = ? and task_id = ?
+                  and type = 'agent'
                 """,
                 (
                     str(payload.get("task_text") if "task_text" in payload else current["task_text"]),
@@ -1407,7 +1654,7 @@ class CollaborationStore:
             if str(session_row["approval_mode"] or "") != "main_agent_delegated":
                 raise CollaborationStoreError("main Agent approval decisions require main_agent_delegated mode")
             row = conn.execute(
-                "select * from collaboration_tasks where collaboration_id = ? and task_id = ?",
+                "select * from collaboration_tasks where collaboration_id = ? and task_id = ? and type = 'agent'",
                 (collaboration_id, task_id),
             ).fetchone()
             if row is None:
@@ -1446,6 +1693,7 @@ class CollaborationStore:
                 update collaboration_tasks
                 set result_summary = ?, result_payload_json = ?, updated_at = ?
                 where collaboration_id = ? and task_id = ?
+                  and type = 'agent'
                 """,
                 (
                     decision_message,
@@ -1485,7 +1733,7 @@ class CollaborationStore:
         now = utc_now_text()
         with self._connect() as conn:
             row = conn.execute(
-                "select * from collaboration_tasks where collaboration_id = ? and task_id = ?",
+                "select * from collaboration_tasks where collaboration_id = ? and task_id = ? and type = 'agent'",
                 (collaboration_id, task_id),
             ).fetchone()
             if row is None:
@@ -1501,6 +1749,7 @@ class CollaborationStore:
                 update collaboration_tasks
                 set result_payload_json = ?, updated_at = ?
                 where collaboration_id = ? and task_id = ?
+                  and type = 'agent'
                 """,
                 (json_dumps({**payload, "approval_decision": claimed}), now, collaboration_id, task_id),
             )
@@ -1510,7 +1759,7 @@ class CollaborationStore:
         now = utc_now_text()
         with self._connect() as conn:
             row = conn.execute(
-                "select result_payload_json from collaboration_tasks where collaboration_id = ? and task_id = ?",
+                "select result_payload_json from collaboration_tasks where collaboration_id = ? and task_id = ? and type = 'agent'",
                 (collaboration_id, task_id),
             ).fetchone()
             if row is None:
@@ -1523,6 +1772,7 @@ class CollaborationStore:
                 update collaboration_tasks
                 set status = ?, result_summary = ?, result_payload_json = ?, updated_at = ?
                 where collaboration_id = ? and task_id = ?
+                  and type = 'agent'
                 """,
                 (
                     "blocked",
@@ -1551,7 +1801,7 @@ class CollaborationStore:
         now = utc_now_text()
         with self._connect() as conn:
             rows = conn.execute(
-                "select task_id, result_payload_json from collaboration_tasks where status = ?",
+                "select task_id, result_payload_json from collaboration_tasks where type = 'agent' and status = ?",
                 ("blocked",),
             ).fetchall()
             for row in rows:
@@ -1561,7 +1811,7 @@ class CollaborationStore:
                     continue
                 pending = {**decision, "status": "pending", "updated_at": now}
                 conn.execute(
-                    "update collaboration_tasks set result_payload_json = ?, updated_at = ? where task_id = ?",
+                    "update collaboration_tasks set result_payload_json = ?, updated_at = ? where task_id = ? and type = 'agent'",
                     (json_dumps({**payload, "approval_decision": pending}), now, row["task_id"]),
                 )
                 recovered += 1
@@ -1626,7 +1876,6 @@ class CollaborationStore:
                 ),
             )
             conn.execute("delete from collaboration_main_agent_events where collaboration_id = ?", (collaboration_id,))
-            conn.execute("delete from collaboration_manufacturing_requests where collaboration_id = ?", (collaboration_id,))
             conn.execute("delete from collaboration_task_retry_cleanups where collaboration_id = ?", (collaboration_id,))
             conn.execute("delete from collaboration_worker_leases where collaboration_id = ?", (collaboration_id,))
             conn.execute("delete from collaboration_tasks where collaboration_id = ?", (collaboration_id,))
@@ -1722,6 +1971,7 @@ class CollaborationStore:
 
     def _ensure_schema(self) -> None:
         with self._connect() as conn:
+            conn.execute("begin immediate")
             self._ensure_collaboration_sessions_schema(conn)
             conn.execute(
                 """
@@ -1743,10 +1993,12 @@ class CollaborationStore:
                 create table if not exists collaboration_tasks (
                   task_id text primary key,
                   collaboration_id text not null,
+                  type text not null default 'agent',
                   parent_task_id text,
                   assignee_package_id text not null,
                   assignee_session_id text,
                   task_text text not null,
+                  request_payload_json text not null default '{}',
                   depends_on_json text not null default '[]',
                   delivery_standard_json text not null,
                   visible_context_json text not null,
@@ -1761,20 +2013,29 @@ class CollaborationStore:
                 )
                 """
             )
+            self._ensure_column(conn, "collaboration_tasks", "type", "text not null default 'agent'")
+            self._ensure_column(
+                conn,
+                "collaboration_tasks",
+                "request_payload_json",
+                "text not null default '{}'",
+            )
+            self._ensure_column(conn, "collaboration_tasks", "depends_on_json", "text not null default '[]'")
+            self._ensure_column(conn, "collaboration_tasks", "started_at", "text")
+            self._ensure_column(conn, "collaboration_tasks", "completed_at", "text")
             conn.execute(
                 """
-                create table if not exists collaboration_manufacturing_requests (
-                  request_id text primary key,
-                  collaboration_id text not null,
-                  create_agent_session_id text,
-                  status text not null,
-                  agent_name text not null,
-                  purpose text not null,
-                  request_payload_json text not null,
-                  result_payload_json text not null,
-                  created_at text not null,
-                  updated_at text not null
+                create table if not exists collaboration_schema_migrations (
+                  migration_id text primary key,
+                  completed_at text not null
                 )
+                """
+            )
+            self._migrate_legacy_sub_agent_task_tables(conn)
+            conn.execute(
+                """
+                create index if not exists idx_collaboration_tasks_queue
+                on collaboration_tasks(collaboration_id, type, status, created_at, task_id)
                 """
             )
             conn.execute(
@@ -1864,9 +2125,172 @@ class CollaborationStore:
                 "next_attempt_at",
                 "text not null default ''",
             )
-            self._ensure_column(conn, "collaboration_tasks", "depends_on_json", "text not null default '[]'")
-            self._ensure_column(conn, "collaboration_tasks", "started_at", "text")
-            self._ensure_column(conn, "collaboration_tasks", "completed_at", "text")
+            conn.execute("update collaboration_tasks set type = 'agent' where type is null or trim(type) = ''")
+
+    @staticmethod
+    def _migrate_legacy_sub_agent_task_tables(conn: sqlite3.Connection) -> None:
+        migrated = conn.execute(
+            "select 1 from collaboration_schema_migrations where migration_id = ?",
+            (UNIFIED_SUB_AGENT_TASKS_MIGRATION,),
+        ).fetchone()
+        if migrated is not None:
+            return
+
+        if CollaborationStore._table_exists(conn, "collaboration_manufacturing_requests"):
+            columns = {
+                str(row["name"])
+                for row in conn.execute("pragma table_info(collaboration_manufacturing_requests)").fetchall()
+            }
+            required_columns = {
+                "request_id",
+                "collaboration_id",
+                "status",
+                "purpose",
+                "request_payload_json",
+                "result_payload_json",
+                "created_at",
+                "updated_at",
+            }
+            missing_columns = sorted(required_columns - columns)
+            if missing_columns:
+                raise CollaborationStoreError(
+                    "cannot migrate collaboration_manufacturing_requests; missing columns: "
+                    + ", ".join(missing_columns)
+                )
+            session_id_expression = (
+                "create_agent_session_id"
+                if "create_agent_session_id" in columns
+                else "conversation_id"
+                if "conversation_id" in columns
+                else "null"
+            )
+            conn.execute(
+                f"""
+                insert into collaboration_tasks (
+                  task_id, collaboration_id, type, parent_task_id,
+                  assignee_package_id, assignee_session_id, task_text,
+                  request_payload_json, depends_on_json, delivery_standard_json,
+                  visible_context_json, input_artifacts_json, status,
+                  result_summary, result_payload_json, artifact_refs_json,
+                  review_notes, started_at, completed_at, created_at, updated_at
+                )
+                select
+                  request_id, collaboration_id, 'manufacture', null,
+                  '', {session_id_expression}, purpose,
+                  request_payload_json, '[]', '{{}}', '{{}}', '[]', status,
+                  '', result_payload_json, '[]', '', null, null, created_at, updated_at
+                from collaboration_manufacturing_requests
+                """
+            )
+            CollaborationStore._verify_legacy_task_migration(
+                conn,
+                source_table="collaboration_manufacturing_requests",
+                task_type=SUB_AGENT_TASK_TYPE_MANUFACTURE,
+            )
+            CollaborationStore._archive_legacy_task_table(
+                conn,
+                source_table="collaboration_manufacturing_requests",
+                backup_table=LEGACY_MANUFACTURING_TASKS_BACKUP_TABLE,
+            )
+
+        if CollaborationStore._table_exists(conn, "collaboration_evolution_requests"):
+            evolution_columns = {
+                str(row["name"])
+                for row in conn.execute("pragma table_info(collaboration_evolution_requests)").fetchall()
+            }
+            required_evolution_columns = {
+                "request_id",
+                "collaboration_id",
+                "package_id",
+                "evolution_session_id",
+                "status",
+                "request_payload_json",
+                "result_payload_json",
+                "created_at",
+                "updated_at",
+            }
+            missing_evolution_columns = sorted(required_evolution_columns - evolution_columns)
+            if missing_evolution_columns:
+                raise CollaborationStoreError(
+                    "cannot migrate collaboration_evolution_requests; missing columns: "
+                    + ", ".join(missing_evolution_columns)
+                )
+            conn.execute(
+                """
+                insert into collaboration_tasks (
+                  task_id, collaboration_id, type, parent_task_id,
+                  assignee_package_id, assignee_session_id, task_text,
+                  request_payload_json, depends_on_json, delivery_standard_json,
+                  visible_context_json, input_artifacts_json, status,
+                  result_summary, result_payload_json, artifact_refs_json,
+                  review_notes, started_at, completed_at, created_at, updated_at
+                )
+                select
+                  request_id, collaboration_id, 'evolve', null,
+                  package_id, evolution_session_id, '',
+                  request_payload_json, '[]', '{}', '{}', '[]', status,
+                  '', result_payload_json, '[]', '', null, null, created_at, updated_at
+                from collaboration_evolution_requests
+                """
+            )
+            CollaborationStore._verify_legacy_task_migration(
+                conn,
+                source_table="collaboration_evolution_requests",
+                task_type=SUB_AGENT_TASK_TYPE_EVOLVE,
+            )
+            CollaborationStore._archive_legacy_task_table(
+                conn,
+                source_table="collaboration_evolution_requests",
+                backup_table=LEGACY_EVOLUTION_TASKS_BACKUP_TABLE,
+            )
+
+        conn.execute(
+            "insert into collaboration_schema_migrations(migration_id, completed_at) values (?, ?)",
+            (UNIFIED_SUB_AGENT_TASKS_MIGRATION, utc_now_text()),
+        )
+
+    @staticmethod
+    def _verify_legacy_task_migration(
+        conn: sqlite3.Connection,
+        *,
+        source_table: str,
+        task_type: str,
+    ) -> None:
+        source_count = int(conn.execute(f"select count(*) from {source_table}").fetchone()[0])
+        migrated_count = int(
+            conn.execute(
+                f"""
+                select count(*)
+                from {source_table} as legacy
+                join collaboration_tasks as task on task.task_id = legacy.request_id
+                where task.type = ?
+                """,
+                (task_type,),
+            ).fetchone()[0]
+        )
+        if migrated_count != source_count:
+            raise CollaborationStoreError(
+                f"legacy task migration verification failed for {source_table}: "
+                f"expected {source_count}, migrated {migrated_count}"
+            )
+
+    @staticmethod
+    def _archive_legacy_task_table(
+        conn: sqlite3.Connection,
+        *,
+        source_table: str,
+        backup_table: str,
+    ) -> None:
+        if CollaborationStore._table_exists(conn, backup_table):
+            raise CollaborationStoreError(f"legacy task backup table already exists: {backup_table}")
+        conn.execute(f"alter table {source_table} rename to {backup_table}")
+
+    @staticmethod
+    def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+        return conn.execute(
+            "select 1 from sqlite_master where type = 'table' and name = ?",
+            (table_name,),
+        ).fetchone() is not None
 
     @staticmethod
     def _ensure_worker_leases_schema(conn: sqlite3.Connection) -> None:
@@ -2045,7 +2469,7 @@ class CollaborationStore:
                 for row in conn.execute(
                     """
                     select * from collaboration_tasks
-                    where collaboration_id = ?
+                    where collaboration_id = ? and type = 'agent'
                     order by created_at asc, task_id asc
                     """,
                     (collaboration_id,),
@@ -2057,9 +2481,22 @@ class CollaborationStore:
                 self._manufacturing_request_view(row)
                 for row in conn.execute(
                     """
-                    select * from collaboration_manufacturing_requests
-                    where collaboration_id = ?
-                    order by created_at asc, request_id asc
+                    select * from collaboration_tasks
+                    where collaboration_id = ? and type = 'manufacture'
+                    order by created_at asc, task_id asc
+                    """,
+                    (collaboration_id,),
+                ).fetchall()
+            ]
+        evolution_requests = session.get("evolution_requests")
+        if not isinstance(evolution_requests, list):
+            evolution_requests = [
+                self._evolution_request_view(row)
+                for row in conn.execute(
+                    """
+                    select * from collaboration_tasks
+                    where collaboration_id = ? and type = 'evolve'
+                    order by created_at asc, task_id asc
                     """,
                     (collaboration_id,),
                 ).fetchall()
@@ -2079,6 +2516,7 @@ class CollaborationStore:
         runtime_status, runtime_payload = collaboration_runtime_status_view(
             tasks=tasks,
             manufacturing_requests=manufacturing_requests,
+            evolution_requests=evolution_requests,
             pending_event_count=event_counts.get("pending", 0),
             processing_event_count=event_counts.get("processing", 0),
         )
@@ -2087,6 +2525,7 @@ class CollaborationStore:
 
     def _task_view(self, row: sqlite3.Row) -> dict[str, Any]:
         data = dict(row)
+        data["request_payload"] = json_loads(data.pop("request_payload_json", "{}"), {})
         data["depends_on"] = json_loads(data.pop("depends_on_json", "[]"), [])
         data["delivery_standard"] = json_loads(data.pop("delivery_standard_json"), {})
         data["visible_context"] = json_loads(data.pop("visible_context_json"), {})
@@ -2099,9 +2538,19 @@ class CollaborationStore:
         return dict(row)
 
     def _manufacturing_request_view(self, row: sqlite3.Row) -> dict[str, Any]:
-        data = dict(row)
-        data["request_payload"] = json_loads(data.pop("request_payload_json"), {})
-        data["result_payload"] = json_loads(data.pop("result_payload_json"), {})
+        data = self._task_view(row)
+        request_payload = data.get("request_payload") if isinstance(data.get("request_payload"), dict) else {}
+        data["request_id"] = data["task_id"]
+        data["create_agent_session_id"] = data.get("assignee_session_id")
+        data["agent_name"] = str(request_payload.get("agent_name") or "")
+        data["purpose"] = str(request_payload.get("purpose") or data.get("task_text") or "")
+        return data
+
+    def _evolution_request_view(self, row: sqlite3.Row) -> dict[str, Any]:
+        data = self._task_view(row)
+        data["request_id"] = data["task_id"]
+        data["package_id"] = data.get("assignee_package_id")
+        data["evolution_session_id"] = data.get("assignee_session_id")
         return data
 
     def _main_agent_event_view(self, row: sqlite3.Row) -> dict[str, Any]:
@@ -2207,7 +2656,7 @@ class CollaborationStore:
                 f"""
                 select collaboration_id, task_id
                 from collaboration_tasks
-                where status in ({placeholders})
+                where type = 'agent' and status in ({placeholders})
                 """,
                 tuple(statuses),
             ).fetchall()
@@ -2259,6 +2708,7 @@ class CollaborationStore:
                     update collaboration_tasks
                     set result_summary = ?, result_payload_json = ?, updated_at = ?
                     where collaboration_id = ? and task_id = ?
+                      and type = 'agent'
                       and status in ({READY_TO_START_STATUS_PLACEHOLDERS})
                     """,
                     (
@@ -2355,7 +2805,7 @@ class CollaborationStore:
                 """
                 select assignee_package_id
                 from collaboration_tasks
-                where collaboration_id = ? and task_id = ?
+                where collaboration_id = ? and task_id = ? and type = 'agent'
                 """,
                 (collaboration_id, task_id),
             ).fetchone()
@@ -2376,7 +2826,7 @@ class CollaborationStore:
                 """
                 select assignee_package_id, status
                 from collaboration_tasks
-                where collaboration_id = ? and task_id = ?
+                where collaboration_id = ? and task_id = ? and type = 'agent'
                 """,
                 (collaboration_id, task_id),
             ).fetchone()
@@ -2424,7 +2874,7 @@ class CollaborationStore:
                         """
                         update collaboration_tasks
                         set status = ?, result_summary = ?, result_payload_json = ?, updated_at = ?
-                        where collaboration_id = ? and task_id = ?
+                        where collaboration_id = ? and task_id = ? and type = 'agent'
                         """,
                         (
                             "failed",
@@ -2457,6 +2907,7 @@ class CollaborationStore:
                     update collaboration_tasks
                     set status = ?, input_artifacts_json = ?, result_summary = ?, result_payload_json = ?, updated_at = ?
                     where collaboration_id = ? and task_id = ?
+                      and type = 'agent'
                       and status in ({READY_TO_START_STATUS_PLACEHOLDERS})
                     """,
                     (
@@ -2613,6 +3064,7 @@ def collaboration_runtime_status_view(
     *,
     tasks: list[dict[str, Any]],
     manufacturing_requests: list[dict[str, Any]],
+    evolution_requests: list[dict[str, Any]],
     pending_event_count: int,
     processing_event_count: int,
 ) -> tuple[str | None, dict[str, Any]]:
@@ -2681,13 +3133,33 @@ def collaboration_runtime_status_view(
         if str(request.get("status") or "") in MANUFACTURING_REQUEST_ACTIVE_STATUSES
         and str(request.get("request_id") or "")
     ]
-    if active_task_ids or active_manufacturing_ids:
+    active_evolution_ids = [
+        str(request.get("request_id") or "")
+        for request in evolution_requests
+        if str(request.get("status") or "") in EVOLUTION_REQUEST_ACTIVE_STATUSES
+        and str(request.get("request_id") or "")
+    ]
+    blocked_evolution_ids = [
+        str(request.get("request_id") or "")
+        for request in evolution_requests
+        if str(request.get("status") or "") == "blocked"
+        and str(request.get("request_id") or "")
+    ]
+    if blocked_evolution_ids:
+        return "waiting_for_input", {
+            "reason": "evolution_question",
+            "evolution_request_ids": blocked_evolution_ids,
+            "evolution_request_count": len(blocked_evolution_ids),
+        }
+    if active_task_ids or active_manufacturing_ids or active_evolution_ids:
         return "waiting_for_workers", {
-            "reason": "worker_activity",
+            "reason": "sub_agent_activity",
             "task_ids": active_task_ids,
             "task_count": len(active_task_ids),
             "manufacturing_request_ids": active_manufacturing_ids,
             "manufacturing_request_count": len(active_manufacturing_ids),
+            "evolution_request_ids": active_evolution_ids,
+            "evolution_request_count": len(active_evolution_ids),
         }
 
     if dependency_task_ids:
@@ -2851,7 +3323,15 @@ def validate_execution_config(value: Any) -> dict[str, Any]:
         return {}
     if not isinstance(value, dict):
         raise CollaborationStoreError("execution_config must be an object")
-    allowed = {"model_profile_id", "reasoning_intensity"}
+    allowed = {
+        "model_profile_id",
+        "reasoning_intensity",
+        "controller",
+        "parent_workspace_root",
+        "delivery_protocol",
+        "background_task",
+        "max_parallel_sub_agents",
+    }
     unsupported = sorted(str(key) for key in value if key not in allowed)
     if unsupported:
         raise CollaborationStoreError(
@@ -2868,6 +3348,43 @@ def validate_execution_config(value: Any) -> dict[str, Any]:
             if isinstance(intensity, bool) or not isinstance(intensity, int) or not 0 <= intensity <= 4:
                 raise CollaborationStoreError("reasoning_intensity must be an integer from 0 to 4 or null")
             result["reasoning_intensity"] = intensity
+    if "max_parallel_sub_agents" in value:
+        count = value.get("max_parallel_sub_agents")
+        if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
+            raise CollaborationStoreError("max_parallel_sub_agents must be a positive integer")
+        result["max_parallel_sub_agents"] = count
+    if "controller" in value:
+        controller = str(value.get("controller") or "").strip()
+        if controller not in {"dedicated", "parent_session"}:
+            raise CollaborationStoreError("controller must be dedicated or parent_session")
+        result["controller"] = controller
+    if "parent_workspace_root" in value:
+        workspace = Path(str(value.get("parent_workspace_root") or "")).expanduser()
+        if not workspace.is_absolute():
+            raise CollaborationStoreError("parent_workspace_root must be an absolute path")
+        resolved = workspace.resolve(strict=False)
+        if resolved == Path(resolved.anchor):
+            raise CollaborationStoreError("parent_workspace_root must not be a filesystem root")
+        result["parent_workspace_root"] = str(resolved)
+    if "delivery_protocol" in value:
+        protocol = str(value.get("delivery_protocol") or "").strip()
+        if protocol != "agent_result.v1":
+            raise CollaborationStoreError("unsupported delivery_protocol")
+        result["delivery_protocol"] = protocol
+    if "background_task" in value:
+        try:
+            result["background_task"] = normalize_background_task_metadata(value.get("background_task"))
+        except ValueError as exc:
+            raise CollaborationStoreError(str(exc)) from exc
+    if result.get("controller") == "parent_session":
+        if not result.get("parent_workspace_root") or not result.get("delivery_protocol"):
+            raise CollaborationStoreError(
+                "parent_session controller requires parent_workspace_root and delivery_protocol"
+            )
+    elif result.get("parent_workspace_root") or result.get("delivery_protocol"):
+        raise CollaborationStoreError(
+            "parent_workspace_root and delivery_protocol require controller=parent_session"
+        )
     return result
 
 

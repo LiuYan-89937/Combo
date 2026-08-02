@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_factory.collaboration_system.store import CollaborationStore, resolve_collaboration_store_path
+from agent_factory.collaboration_system.parent_controller import parent_workspace_root
 from agent_factory.collaboration_system.activity import inspect_activity_policy, recent_task_activity
 from agent_factory.document_processing import accepted_file_extensions, parse_file
 from agent_factory.tooling.envelope import runtime_wait_evidence, tool_envelope
@@ -23,7 +24,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     evidence = (
         runtime_wait_evidence(
             status="waiting_for_workers",
-            reason="collaboration workers are still running",
+            reason="sub-Agents are still running",
             message=summary,
         )
         if output.get("status") == "deferred"
@@ -56,7 +57,7 @@ def _run_action(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[st
             "message": "子任务已创建。宿主协作调度器会启动依赖已满足的任务。",
             "session": _session_state_view(session),
             "task": _task_state_view(task),
-            "dispatch_hint": "任务已进入协作队列；依赖满足后可由 dispatch-ready 或右侧任务启动按钮调度 worker。",
+            "dispatch_hint": "任务已进入统一子 Agent 队列；依赖满足且有并发容量时由宿主自动调度。",
         }
     if action == "update_task":
         task_id = _required_text(arguments, "task_id")
@@ -75,10 +76,10 @@ def _run_action(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[st
         return {
             "action": action,
             "status": "completed",
-            "message": "旧任务已删除并由新的重跑任务替换；旧 worker 会话清理已进入宿主队列。",
+            "message": "旧任务已删除并由新的重跑任务替换；旧子 Agent 会话清理已进入宿主队列。",
             "session": _session_state_view(replacement["session"]),
             "task": _task_state_view(replacement["task"]),
-            "dispatch_hint": "重跑任务已进入协作队列，并使用全新 worker 会话执行。",
+            "dispatch_hint": "重跑任务已进入统一子 Agent 队列，并使用全新会话执行。",
         }
     if action == "cancel_task":
         task_id = _required_text(arguments, "task_id")
@@ -104,7 +105,7 @@ def _run_action(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[st
         return {
             "action": action,
             "status": "completed",
-            "message": "子任务已标记停止；宿主协作服务会取消对应 worker 请求。",
+            "message": "子任务已标记停止；宿主协作服务会取消对应子 Agent 请求。",
             "session": _session_state_view(session),
             "task": _task_state_view(task),
         }
@@ -126,7 +127,7 @@ def _run_action(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[st
         return {
             "action": action,
             "status": "completed",
-            "message": "主 Agent 工具审批决定已记录；宿主将恢复原 worker。",
+            "message": "主 Agent 工具审批决定已记录；宿主将恢复原子 Agent。",
             "session": _session_state_view(session),
             "task": _task_state_view(task),
             "approval": {
@@ -157,6 +158,7 @@ def _run_action(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[st
         artifacts = _read_task_artifacts(
             task=task,
             root=store.session_workdir(collaboration_id),
+            parent_root=parent_workspace_root(session),
             requested_path=requested_path,
             max_chars=max_chars,
         )
@@ -458,7 +460,7 @@ def _artifact_state_view(item: Any) -> dict[str, Any]:
         return {"path": str(item or "").strip()}
     return {
         key: item[key]
-        for key in ("path", "kind", "mime_type", "size_bytes", "sha256", "created_by", "task_id", "source", "worker_path")
+        for key in ("path", "kind", "mime_type", "size_bytes", "sha256", "created_by", "task_id", "source", "worker_path", "workspace_scope", "description")
         if key in item
     }
 
@@ -467,6 +469,7 @@ def _read_task_artifacts(
     *,
     task: dict[str, Any],
     root: Path,
+    parent_root: Path | None,
     requested_path: str | None,
     max_chars: int,
 ) -> list[dict[str, Any]]:
@@ -489,8 +492,22 @@ def _read_task_artifacts(
     remaining = max_chars
     artifacts: list[dict[str, Any]] = []
     for relative, metadata in selected:
-        path = _safe_shared_path(root, relative)
-        record = {**metadata, "path": relative, "available": path.is_file()}
+        artifact_root = parent_root if metadata.get("workspace_scope") == "parent" else root
+        if artifact_root is None:
+            record = {**metadata, "path": relative, "available": False, "error": "parent workspace is unavailable"}
+            artifacts.append(record)
+            continue
+        path = _safe_shared_path(artifact_root, relative)
+        record = {**metadata, "path": relative, "available": path.exists()}
+        if path.is_dir():
+            record["content"] = "目录交付物：" + ", ".join(
+                item.relative_to(path).as_posix()
+                for item in sorted(path.rglob("*"))
+                if item.is_file()
+            )
+            record["content_truncated"] = False
+            artifacts.append(record)
+            continue
         if not path.is_file():
             record["error"] = "referenced artifact file is missing"
             artifacts.append(record)
@@ -498,7 +515,7 @@ def _read_task_artifacts(
         stat = path.stat()
         record.setdefault("size_bytes", stat.st_size)
         if remaining > 0:
-            content, truncated = _shared_artifact_content(path, root, max_chars=remaining)
+            content, truncated = _shared_artifact_content(path, artifact_root, max_chars=remaining)
             record["content"] = content
             record["content_truncated"] = truncated
             remaining = max(0, remaining - len(content))

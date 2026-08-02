@@ -11,6 +11,12 @@ export interface CollaborationScopeIdentity {
   collaborationTaskId?: string | null
 }
 
+const REQUEST_ROUTING_EVENT_TYPES = new Set([
+  'runtime_request_queued',
+  'runtime_request_steering',
+  'runtime_request_dispatched',
+])
+
 const COLLABORATION_SCOPE_PREFIX = 'collaboration:'
 const EMPTY_COLLABORATION_SCOPE = 'collaboration:new'
 
@@ -76,10 +82,14 @@ export function scopeFromEventPayload(event: FactoryFrontendEvent): string | nul
     const packageId = String(event.payload?.package_id || agentSession.package_id || '').trim()
     const sessionId = String(event.payload?.session_id || agentSession.session_id || loadedSession.session_id || '').trim()
     if (packageId) {
-      return agentPackageConversationScope(packageId, sessionId || null, {
-        collaborationId: collaborationIdFromPayload({ ...(event.payload || {}), agent_session: agentSession, session: loadedSession }),
-        collaborationTaskId: collaborationTaskIdFromPayload({ ...(event.payload || {}), agent_session: agentSession, session: loadedSession }),
-      })
+      return agentPackageConversationScope(
+        packageId,
+        sessionId || null,
+        collaborationScopeIdentityFromEvent(event, {
+          agent_session: agentSession,
+          session: loadedSession,
+        }),
+      )
     }
   }
   return conversationScopeForMode(event.mode, {
@@ -102,11 +112,31 @@ export function agentPackageScopeInfoFromEvent(event: FactoryFrontendEvent): Age
   return {
     packageId,
     sessionId,
-    scope: agentPackageConversationScope(packageId, sessionId, {
-      collaborationId: collaborationIdFromPayload({ ...(event.payload || {}), agent_session: agentSession, session: loadedSession }),
-      collaborationTaskId: collaborationTaskIdFromPayload({ ...(event.payload || {}), agent_session: agentSession, session: loadedSession }),
-    }),
+    scope: agentPackageConversationScope(
+      packageId,
+      sessionId,
+      collaborationScopeIdentityFromSessionPayload({
+        agent_session: agentSession,
+        session: loadedSession,
+      }),
+    ),
   }
+}
+
+export function scopeFromRequestPayload(
+  mode: FactoryMode | null,
+  payload: Record<string, any>,
+): string | null {
+  if (mode !== 'agent_package') {
+    return conversationScopeForMode(mode, payload)
+  }
+  const packageId = cleanText(payload.package_id)
+  if (!packageId) return null
+  return agentPackageConversationScope(
+    packageId,
+    cleanText(payload.session_id),
+    collaborationScopeIdentityFromRequestPayload(payload),
+  )
 }
 
 export function scopeFromMessageMetadata(
@@ -142,16 +172,39 @@ function factorySessionIdFromPayload(payload: Record<string, any>): string | nul
   return text || null
 }
 
-function collaborationIdFromPayload(payload: Record<string, any>): string | null {
+export function collaborationScopeIdentityFromSessionPayload(
+  payload: Record<string, any>,
+): CollaborationScopeIdentity {
   const session = payload?.session && typeof payload.session === 'object' ? payload.session : {}
   const agentSession = payload?.agent_session && typeof payload.agent_session === 'object' ? payload.agent_session : {}
-  return cleanText(payload?.collaboration_id || agentSession.collaboration_id || session.collaboration_id)
+  return {
+    collaborationId: cleanText(agentSession.collaboration_id || session.collaboration_id),
+    collaborationTaskId: cleanText(agentSession.collaboration_task_id || session.collaboration_task_id),
+  }
 }
 
-function collaborationTaskIdFromPayload(payload: Record<string, any>): string | null {
-  const session = payload?.session && typeof payload.session === 'object' ? payload.session : {}
-  const agentSession = payload?.agent_session && typeof payload.agent_session === 'object' ? payload.agent_session : {}
-  return cleanText(payload?.collaboration_task_id || agentSession.collaboration_task_id || session.collaboration_task_id)
+function collaborationScopeIdentityFromRequestPayload(
+  payload: Record<string, any>,
+): CollaborationScopeIdentity {
+  return {
+    collaborationId: cleanText(payload.collaboration_id),
+    collaborationTaskId: cleanText(payload.collaboration_task_id),
+  }
+}
+
+function collaborationScopeIdentityFromEvent(
+  event: FactoryFrontendEvent,
+  sessionPayload: Record<string, any>,
+): CollaborationScopeIdentity {
+  const sessionIdentity = collaborationScopeIdentityFromSessionPayload(sessionPayload)
+  if (!REQUEST_ROUTING_EVENT_TYPES.has(event.event_type)) {
+    return sessionIdentity
+  }
+  const requestIdentity = collaborationScopeIdentityFromRequestPayload(event.payload)
+  return {
+    collaborationId: sessionIdentity.collaborationId || requestIdentity.collaborationId,
+    collaborationTaskId: sessionIdentity.collaborationTaskId || requestIdentity.collaborationTaskId,
+  }
 }
 
 function cleanText(value: unknown): string | null {

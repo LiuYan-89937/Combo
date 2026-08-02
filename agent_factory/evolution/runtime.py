@@ -181,6 +181,39 @@ class AgentEvolutionRuntime:
             request_id=request_id,
         )
 
+    def abort_session(self, *, package_id: str, session_id: str, reason: str) -> dict[str, Any]:
+        safe_package_id = _safe_id(package_id, label="package_id")
+        safe_session_id = str(session_id or "").strip()
+        if not safe_session_id:
+            raise RuntimeError("session_id must not be empty")
+        active_context = self._active_runs.pop(
+            _active_run_key(safe_session_id, safe_package_id),
+            None,
+        )
+        restored = False
+        if active_context is not None and active_context.backup_path is not None:
+            if active_context.backup_path.exists():
+                _restore_package(active_context.backup_path, active_context.package_path)
+                restored = True
+        checkpoint_threads = _evolution_checkpoint_threads(
+            session_id=safe_session_id,
+            package_id=safe_package_id,
+            request_ids=[active_context.request_id] if active_context is not None else [],
+            active_context=active_context,
+        )
+        deleted_checkpoint_count = sum(
+            1
+            for thread_id in checkpoint_threads
+            if delete_checkpoint_thread(self.checkpointer, thread_id)
+        )
+        return {
+            "package_id": safe_package_id,
+            "session_id": safe_session_id,
+            "reason": str(reason or "cancelled"),
+            "restored": restored,
+            "deleted_checkpoint_count": deleted_checkpoint_count,
+        }
+
     def _register_run_control(self, request_id: str) -> RunControl:
         return self._run_controls.register(request_id)
 
@@ -395,6 +428,8 @@ class AgentEvolutionRuntime:
             def emit_cancelled() -> Iterator[tuple[str, FactoryFrontendEvent]]:
                 model_trace.flush()
                 normalizer.complete_open_model_streams(reason="user_stopped")
+                if context.backup_path is not None and context.backup_path.exists():
+                    _restore_package(context.backup_path, context.package_path)
                 self._active_runs.pop(active_run_key, None)
                 normalizer.runtime_event(
                     "node_completed",

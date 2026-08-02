@@ -67,6 +67,18 @@ if [[ -d "${frontend_dist}" ]]; then
   # Atomic-ish swap: stage then rsync/copy over the live root.
   rm -rf /var/www/fastagenthub.next
   install -d -o root -g root -m 0755 /var/www/fastagenthub.next
+
+  # The public site embeds the separately built desktop showcase at
+  # /app-showcase/showcase.html. It is intentionally not part of the AgentHub
+  # Vite bundle, so keep it (and its shared hashed assets) across website
+  # bundle swaps instead of letting the SPA fallback turn the iframe into a
+  # false 404 page.
+  if [[ -d /var/www/fastagenthub/app-showcase ]]; then
+    cp -a /var/www/fastagenthub/app-showcase /var/www/fastagenthub.next/
+  fi
+  if [[ -d /var/www/fastagenthub/assets ]]; then
+    cp -a /var/www/fastagenthub/assets /var/www/fastagenthub.next/
+  fi
   cp -a "${frontend_dist}/." /var/www/fastagenthub.next/
   rm -rf /var/www/fastagenthub.previous
   if [[ -d /var/www/fastagenthub && -n "$(ls -A /var/www/fastagenthub 2>/dev/null)" ]]; then

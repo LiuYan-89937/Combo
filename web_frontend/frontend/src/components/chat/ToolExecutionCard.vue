@@ -1,5 +1,11 @@
 <template>
+  <BackgroundTaskCard
+    v-if="backgroundTaskId"
+    :background-task-id="backgroundTaskId"
+    :fallback-title="displayName"
+  />
   <details
+    v-else
     class="tool-execution-card"
     :class="[`tool-state-${state}`]"
     :open="active || state === 'failed'"
@@ -123,6 +129,7 @@ import {
   ToolBox,
 } from '@vicons/carbon'
 import ResourceIcon from '@/components/common/ResourceIcon.vue'
+import BackgroundTaskCard from '@/components/chat/BackgroundTaskCard.vue'
 import { useI18n } from '@/composables/useI18n'
 import { workspaceResourceUrl } from '@/utils/workspaceResources'
 import { toolPresentation } from '@/utils/toolPresentation'
@@ -196,6 +203,10 @@ const resultRecord = computed<Record<string, any> | null>(() => {
   return record.output && typeof record.output === 'object' && !Array.isArray(record.output)
     ? record.output as Record<string, any>
     : record
+})
+const backgroundTaskId = computed(() => {
+  if (!['agent_manufacture', 'agent_delegate', 'agent_evolve', 'agent_team'].includes(props.part.toolName)) return ''
+  return String(resultRecord.value?.background_task_id || '').trim()
 })
 const resultFacts = computed(() => {
   const result = resultRecord.value

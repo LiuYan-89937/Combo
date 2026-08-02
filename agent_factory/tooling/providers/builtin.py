@@ -8,6 +8,7 @@ from agent_factory.tooling.builtins.registry import (
     get_always_available_system_tool_ids,
     get_builtin_tool_ids,
     get_builtin_tool_specs,
+    get_contextual_system_tool_ids,
     get_read_only_system_tool_ids,
 )
 from agent_factory.tooling.providers.base import ToolProviderContext, ToolProviderResult
@@ -46,15 +47,17 @@ class BuiltinToolProvider:
             specs = [spec for spec in specs if spec.id != "skillhub"]
         if self._tool_ids:
             always_available = get_always_available_system_tool_ids()
+            contextual = get_contextual_system_tool_ids()
             specs = [
                 spec
                 for spec in specs
-                if spec.id in self._tool_ids or spec.id in always_available
+                if spec.id in self._tool_ids or spec.id in always_available or spec.id in contextual
             ]
         always_available = get_always_available_system_tool_ids()
+        contextual = get_contextual_system_tool_ids()
         return ToolProviderResult(
             tool_specs=specs,
-            system_tool_ids=[spec.id for spec in specs if spec.id in always_available],
+            system_tool_ids=[spec.id for spec in specs if spec.id in always_available or spec.id in contextual],
             runtime_resources=runtime_resources,
         )
 

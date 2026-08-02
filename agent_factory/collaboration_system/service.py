@@ -13,19 +13,30 @@ from typing import Any
 from agent_factory.create_agent.publish_tool import confirm_and_publish
 from agent_factory.create_agent.runtime import CreateAgentRuntime
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
+from agent_factory.evolution.runtime import AgentEvolutionRuntime
 from agent_factory.collaboration_system.orchestrator import CollaborationOrchestrator
 from agent_factory.collaboration_runtime_policy import collaboration_runtime_tool_access
 from agent_factory.collaboration_system.store import (
     CollaborationStore,
+    SUB_AGENT_TASK_TYPE_AGENT,
+    SUB_AGENT_TASK_TYPE_EVOLVE,
+    SUB_AGENT_TASK_TYPE_MANUFACTURE,
     TASK_STATUSES,
     TERMINAL_TASK_STATUSES,
 )
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent
-from agent_factory.factory_graph.frontend_bridge.runtime_events import RUN_TERMINAL_EVENT_TYPES, runtime_stream_status
+from agent_factory.factory_graph.frontend_bridge.protocol import event
+from agent_factory.factory_graph.frontend_bridge.runtime_events import (
+    INTERRUPT_TERMINAL_EVENT_TYPES,
+    RUN_TERMINAL_EVENT_TYPES,
+    runtime_stream_status,
+)
+from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import VisibleAssistantOutputAccumulator
 from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import AgentPackageRuntimeManager
 from agent_factory.collaboration_system.capacity import (
     ChatInferenceCapacity,
     inspect_configured_inference_capacity,
+    normalize_max_parallel_sub_agents,
 )
 from agent_factory.model_pool.usage import ModelUsageStore
 
@@ -41,16 +52,16 @@ DEFAULT_MAIN_AGENT_EVENT_BATCH_LIMIT = 64
 @dataclass(frozen=True, slots=True)
 class CollaborationDispatchCapacity:
     capacity: int
-    max_parallel_workers: int
-    active_worker_tasks: int
+    max_parallel_sub_agents: int
+    active_sub_agents: int
     inference: ChatInferenceCapacity
     reason: str
 
     def payload(self) -> dict[str, Any]:
         return {
             "capacity": self.capacity,
-            "max_parallel_workers": self.max_parallel_workers,
-            "active_worker_tasks": self.active_worker_tasks,
+            "max_parallel_sub_agents": self.max_parallel_sub_agents,
+            "active_sub_agents": self.active_sub_agents,
             "reason": self.reason,
             "inference": self.inference.payload(),
         }
@@ -111,7 +122,10 @@ class CollaborationService:
         self._dispatch_lock = threading.Lock()
         self._dispatching_sessions: set[str] = set()
         self._reserved_worker_tasks: set[tuple[str, str]] = set()
-        self._manufacturing_requests: set[str] = set()
+        self._active_sub_agent_requests: set[tuple[str, str]] = set()
+        self._evolution_runtimes: dict[str, AgentEvolutionRuntime] = {}
+        self._evolution_collaboration_ids: dict[str, str] = {}
+        self._evolution_threads: dict[str, threading.Thread] = {}
         self._main_agent_event_timers: dict[str, threading.Timer] = {}
 
     def start(self) -> None:
@@ -137,6 +151,9 @@ class CollaborationService:
         recovered_approval_count = self.store.recover_processing_task_approval_decisions()
         if recovered_approval_count:
             self.logger.info("Recovered %s collaboration task approval decision(s)", recovered_approval_count)
+        recovered_evolution_count = self.store.recover_interrupted_evolution_requests()
+        if recovered_evolution_count:
+            self.logger.info("Marked %s interrupted evolution request(s) as failed", recovered_evolution_count)
         self._stop_event.clear()
         self._thread = threading.Thread(
             target=self._run_loop,
@@ -157,8 +174,25 @@ class CollaborationService:
         with self._lock:
             timers = list(self._main_agent_event_timers.values())
             self._main_agent_event_timers.clear()
+            evolution_items = list(self._evolution_runtimes.items())
+            evolution_threads = dict(self._evolution_threads)
         for timer in timers:
             timer.cancel()
+        for request_id, runtime in evolution_items:
+            requested = runtime.cancel_active_requests(reason="collaboration_service_stopped")
+            thread = evolution_threads.get(request_id)
+            if requested == 0 and (thread is None or not thread.is_alive()):
+                collaboration_id = self._evolution_collaboration_ids.get(request_id)
+                if collaboration_id:
+                    request = self.store.get_evolution_request(collaboration_id, request_id)
+                    runtime.abort_session(
+                        package_id=str(request.get("package_id") or ""),
+                        session_id=str(request.get("evolution_session_id") or ""),
+                        reason="collaboration_service_stopped",
+                    )
+        for thread in evolution_threads.values():
+            if thread.is_alive():
+                thread.join(timeout=5)
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=5)
         self._thread = None
@@ -313,6 +347,7 @@ class CollaborationService:
     def delete_session(self, collaboration_id: str) -> dict[str, Any]:
         session = self.store.get_session(collaboration_id)
         cancelled = self._cancel_session_active_requests(session)
+        cancelled += self._cancel_session_evolutions(session)
         session_targets = _collaboration_runtime_session_targets(session)
         runtime_cleanup = self.runtime_factory().delete_collaboration_sessions(
             collaboration_id,
@@ -406,21 +441,45 @@ class CollaborationService:
                 "session": self.store.get_session(collaboration_id),
                 "message": "协作会话正在调度中。",
             }
+        claimed_tasks: list[dict[str, Any]] = []
+        launches: list[tuple[str, str]] = []
         try:
             with self._dispatch_lock:
-                dispatch_capacity = self._dispatch_capacity(limit=limit)
-                ready_tasks = self.store.ready_tasks(collaboration_id)
-                tasks = self.store.claim_ready_tasks(
-                    collaboration_id,
-                    limit=dispatch_capacity.capacity,
-                )
+                dispatch_capacity = self._dispatch_capacity(collaboration_id, limit=limit)
+                queued_tasks = self.store.list_sub_agent_queue(collaboration_id)
+                for queued_task in queued_tasks:
+                    if len(claimed_tasks) >= dispatch_capacity.capacity:
+                        break
+                    task_type = str(queued_task.get("type") or "")
+                    task_id = str(queued_task.get("task_id") or "").strip()
+                    if not task_id:
+                        continue
+                    if task_type == SUB_AGENT_TASK_TYPE_AGENT:
+                        claimed_agent_tasks = self.store.claim_ready_tasks(collaboration_id, limit=1)
+                        if not claimed_agent_tasks:
+                            continue
+                        claimed_task = claimed_agent_tasks[0]
+                        claimed_task_id = str(claimed_task.get("task_id") or "").strip()
+                        if not claimed_task_id:
+                            continue
+                        claimed_tasks.append({**claimed_task, "type": SUB_AGENT_TASK_TYPE_AGENT})
+                        launches.append((SUB_AGENT_TASK_TYPE_AGENT, claimed_task_id))
+                        continue
+                    with self._lock:
+                        request_key = (task_type, task_id)
+                        if request_key in self._active_sub_agent_requests:
+                            continue
+                        self._active_sub_agent_requests.add(request_key)
+                    claimed_tasks.append(dict(queued_task))
+                    launches.append((task_type, task_id))
                 session = self.store.get_session(collaboration_id)
-                if tasks:
+                if claimed_tasks:
                     self.runtime_factory().emit_collaboration_session_updated(
                         collaboration_id=collaboration_id,
                         session=session,
                     )
-                if not tasks and ready_tasks and dispatch_capacity.capacity == 0:
+                if not claimed_tasks and queued_tasks and dispatch_capacity.capacity == 0:
+                    ready_tasks = self.store.ready_tasks(collaboration_id)
                     waiting_tasks = [
                         task
                         for task in ready_tasks
@@ -440,24 +499,34 @@ class CollaborationService:
                         )
         finally:
             self._release_session(collaboration_id)
-        for task in tasks:
-            task_id = str(task.get("task_id") or "").strip()
-            if not task_id:
-                continue
-            threading.Thread(
-                target=self._run_worker_task,
+        for task_type, task_id in launches:
+            if task_type == SUB_AGENT_TASK_TYPE_AGENT:
+                target = self._run_worker_task
+                name = f"collaboration-agent-{task_id[:8]}"
+            elif task_type == SUB_AGENT_TASK_TYPE_MANUFACTURE:
+                target = self._manufacturing_worker
+                name = f"collaboration-manufacture-{task_id[:8]}"
+            else:
+                target = self._evolution_worker
+                name = f"collaboration-evolve-{task_id[:8]}"
+            thread = threading.Thread(
+                target=target,
                 args=(collaboration_id, task_id),
-                name=f"collaboration-worker-{task_id[:8]}",
+                name=name,
                 daemon=True,
-            ).start()
+            )
+            if task_type == SUB_AGENT_TASK_TYPE_EVOLVE:
+                with self._lock:
+                    self._evolution_threads[task_id] = thread
+            thread.start()
         return {
             "collaboration_id": collaboration_id,
-            "started_count": len(tasks),
+            "started_count": len(claimed_tasks),
             "results": [],
-            "claimed_tasks": tasks,
+            "claimed_tasks": claimed_tasks,
             "session": self.store.get_session(collaboration_id),
             "dispatch_capacity": dispatch_capacity.payload(),
-            "message": dispatch_capacity.reason if not tasks else "协作 worker 已进入执行队列。",
+            "message": dispatch_capacity.reason if not claimed_tasks else "子 Agent 任务已进入统一执行队列。",
         }
 
     def start_task(self, collaboration_id: str, task_id: str) -> dict[str, Any]:
@@ -476,7 +545,7 @@ class CollaborationService:
             }
             if task_id in ready_task_ids:
                 with self._dispatch_lock:
-                    dispatch_capacity = self._dispatch_capacity(limit=1)
+                    dispatch_capacity = self._dispatch_capacity(collaboration_id, limit=1)
                     if dispatch_capacity.capacity == 0:
                         session = self.store.mark_tasks_waiting_for_inference_capacity(
                             collaboration_id,
@@ -547,13 +616,13 @@ class CollaborationService:
     def dispatch_delegated_sessions(self) -> None:
         self.cleanup_retried_task_sessions()
         self.cancel_requested_tasks()
+        self.cancel_requested_evolutions()
         for session in self.store.list_auto_dispatch_sessions():
             collaboration_id = str(session.get("collaboration_id") or "").strip()
             if not collaboration_id:
                 continue
             try:
                 self.process_task_approval_decisions(collaboration_id)
-                self.process_manufacturing_requests(collaboration_id)
                 self._drain_main_agent_events(collaboration_id)
                 self.dispatch_ready(collaboration_id)
             except Exception as exc:
@@ -564,18 +633,6 @@ class CollaborationService:
                     exc,
                 )
 
-    def process_manufacturing_requests(self, collaboration_id: str) -> None:
-        for request in self.store.list_active_manufacturing_requests(collaboration_id):
-            request_id = str(request.get("request_id") or "").strip()
-            if not request_id or not self._claim_manufacturing_request(request_id):
-                continue
-            threading.Thread(
-                target=self._manufacturing_worker,
-                args=(collaboration_id, request_id),
-                name=f"collaboration-manufacture-{request_id[:8]}",
-                daemon=True,
-            ).start()
-
     def cancel_requested_tasks(self) -> int:
         cancelled = 0
         for session in self.store.list_sessions():
@@ -583,6 +640,28 @@ class CollaborationService:
             if not collaboration_id:
                 continue
             cancelled += self._cancel_cancelled_task_requests(self.store.get_session(collaboration_id))
+        return cancelled
+
+    def cancel_requested_evolutions(self) -> int:
+        cancelled = 0
+        for request_id, runtime in list(self._evolution_runtimes.items()):
+            collaboration_id = self._evolution_collaboration_ids.get(request_id)
+            if not collaboration_id:
+                continue
+            request = self.store.get_evolution_request(collaboration_id, request_id)
+            if str(request.get("status") or "") != "cancelled":
+                continue
+            requested = runtime.cancel_active_requests(reason="parent_agent_cancelled_evolution")
+            cancelled += requested
+            thread = self._evolution_threads.get(request_id)
+            if requested == 0 and (thread is None or not thread.is_alive()):
+                runtime.abort_session(
+                    package_id=str(request.get("package_id") or ""),
+                    session_id=str(request.get("evolution_session_id") or ""),
+                    reason="parent_agent_cancelled_evolution",
+                )
+                self._evolution_runtimes.pop(request_id, None)
+                self._evolution_collaboration_ids.pop(request_id, None)
         return cancelled
 
     def _run_loop(self) -> None:
@@ -606,7 +685,7 @@ class CollaborationService:
     def process_task_approval_decisions(self, collaboration_id: str) -> None:
         claimed_decisions: list[tuple[str, dict[str, Any]]] = []
         with self._dispatch_lock:
-            capacity = self._dispatch_capacity().capacity
+            capacity = self._dispatch_capacity(collaboration_id).capacity
             if capacity <= 0:
                 return
             pending = self.store.list_pending_task_approval_decisions(collaboration_id)
@@ -699,24 +778,40 @@ class CollaborationService:
         )
         return session
 
-    def _dispatch_capacity(self, *, limit: int | None = None) -> CollaborationDispatchCapacity:
+    def _dispatch_capacity(
+        self,
+        collaboration_id: str,
+        *,
+        limit: int | None = None,
+    ) -> CollaborationDispatchCapacity:
         inference = self.inference_capacity_probe()
-        max_parallel = _max_parallel_worker_tasks(inference)
+        session = self.store.get_session(collaboration_id)
+        execution_config = session.get("execution_config") if isinstance(session.get("execution_config"), dict) else {}
+        max_parallel = normalize_max_parallel_sub_agents(
+            execution_config.get("max_parallel_sub_agents"),
+            fallback=inference.total_slots,
+        )
         active_keys = self.store.active_worker_task_keys() | self._reserved_worker_tasks
-        active = len(active_keys)
-        worker_capacity = max(0, max_parallel - active)
-        capacity = min(worker_capacity, inference.available_slots)
+        with self._lock:
+            active_background_requests = len(self._active_sub_agent_requests)
+        active = len(active_keys) + active_background_requests
+        sub_agent_capacity = max(0, max_parallel - active)
+        capacity = (
+            min(sub_agent_capacity, inference.available_slots)
+            if inference.live
+            else sub_agent_capacity
+        )
         if limit is not None:
             capacity = min(capacity, max(0, limit))
         return CollaborationDispatchCapacity(
             capacity=capacity,
-            max_parallel_workers=max_parallel,
-            active_worker_tasks=active,
+            max_parallel_sub_agents=max_parallel,
+            active_sub_agents=active,
             inference=inference,
             reason=_dispatch_capacity_reason(
                 capacity=capacity,
-                max_parallel_workers=max_parallel,
-                active_worker_tasks=active,
+                max_parallel_sub_agents=max_parallel,
+                active_sub_agents=active,
                 inference=inference,
             ),
         )
@@ -769,6 +864,7 @@ class CollaborationService:
         fallback_message: str | None = None,
     ) -> None:
         if result is not None:
+            self._publish_parent_workspace_delivery(collaboration_id, result)
             user_message = _main_agent_continuation_message_from_result(result)
             task_id = str(getattr(result, "task_id", "") or "").strip()
             message_metadata = _main_agent_continuation_metadata_from_result(
@@ -794,6 +890,46 @@ class CollaborationService:
             event_ref=None,
         )
         self.dispatch_soon(collaboration_id)
+
+    def _publish_parent_workspace_delivery(self, collaboration_id: str, result: Any) -> None:
+        artifact_refs = getattr(result, "artifact_refs", []) or []
+        if not any(
+            isinstance(item, dict) and item.get("workspace_scope") == "parent"
+            for item in artifact_refs
+        ):
+            return
+        session = self.store.get_session(collaboration_id)
+        package_id = str(session.get("main_agent_package_id") or SYSTEM_CHAT_PACKAGE_ID).strip()
+        package_session_id = str(session.get("main_agent_package_session_id") or "").strip()
+        if not package_id or not package_session_id:
+            return
+        runtime = self.runtime_factory()
+        try:
+            payload = runtime.list_workspace_entries(
+                package_id,
+                scope="workdir",
+                relative_path="",
+                session_id=package_session_id,
+            )
+        except Exception as exc:
+            self.logger.debug(
+                "Failed to refresh parent workspace after Agent delivery %s: %s: %s",
+                collaboration_id,
+                type(exc).__name__,
+                exc,
+            )
+            return
+        runtime.emit_frontend_event(
+            event(
+                "workspace_entries_listed",
+                request_id=None,
+                session_id=package_session_id,
+                mode="agent_package",
+                graph_id="agent_delivery",
+                producer_type="collaboration_service",
+                payload=payload,
+            )
+        )
 
     def _release_completed_worker_runtime(self, collaboration_id: str, task_id: str) -> None:
         try:
@@ -828,16 +964,9 @@ class CollaborationService:
                 task_id=task_id,
             )
 
-    def _claim_manufacturing_request(self, request_id: str) -> bool:
+    def _release_sub_agent_request(self, task_type: str, request_id: str) -> None:
         with self._lock:
-            if request_id in self._manufacturing_requests:
-                return False
-            self._manufacturing_requests.add(request_id)
-            return True
-
-    def _release_manufacturing_request(self, request_id: str) -> None:
-        with self._lock:
-            self._manufacturing_requests.discard(request_id)
+            self._active_sub_agent_requests.discard((task_type, request_id))
 
     def _manufacturing_worker(self, collaboration_id: str, request_id: str) -> None:
         try:
@@ -867,7 +996,7 @@ class CollaborationService:
             except Exception:
                 self.logger.exception("Failed to record manufacturing failure for %s", request_id)
         finally:
-            self._release_manufacturing_request(request_id)
+            self._release_sub_agent_request(SUB_AGENT_TASK_TYPE_MANUFACTURE, request_id)
 
     def _run_manufacturing_request(self, collaboration_id: str, request_id: str) -> None:
         request = self.store.get_manufacturing_request(collaboration_id, request_id)
@@ -942,6 +1071,192 @@ class CollaborationService:
             collaboration_id,
             user_message=user_message,
             message_metadata=None,
+            task_id=None,
+            event_ref=None,
+        )
+
+    def _evolution_worker(self, collaboration_id: str, request_id: str) -> None:
+        keep_runtime = False
+        request_package_id = ""
+        try:
+            request = self.store.get_evolution_request(collaboration_id, request_id)
+            request_package_id = str(request.get("package_id") or "")
+            status = str(request.get("status") or "")
+            runtime = self._evolution_runtimes.get(request_id)
+            if status == "requested":
+                runtime = AgentEvolutionRuntime(
+                    package_restart_handler=(
+                        lambda package_id, runtime_request_id: self.runtime_factory().restart_package_instance(
+                            package_id,
+                            request_id=runtime_request_id,
+                        )
+                    )
+                )
+                self._evolution_runtimes[request_id] = runtime
+                self._evolution_collaboration_ids[request_id] = collaboration_id
+                self.store.update_evolution_request(
+                    collaboration_id,
+                    request_id,
+                    {
+                        "status": "running",
+                        "message": f"开始进化 Agent：{request.get('package_id')}",
+                        "result_payload": {"runtime_status": "running"},
+                    },
+                )
+                payload = request.get("request_payload") if isinstance(request.get("request_payload"), dict) else {}
+                run = runtime.stream(
+                    package_id=str(request.get("package_id") or ""),
+                    user_input=str(payload.get("goal") or ""),
+                    request_id=f"parent-evolve-{request_id}",
+                    session_id=str(request.get("evolution_session_id") or ""),
+                    attachments=None,
+                    user_config=(
+                        payload.get("runtime_user_config")
+                        if isinstance(payload.get("runtime_user_config"), dict)
+                        else None
+                    ),
+                )
+            elif status == "resume_requested":
+                if runtime is None:
+                    raise RuntimeError("进化运行上下文已不可用，请重新发起进化")
+                result_payload = request.get("result_payload") if isinstance(request.get("result_payload"), dict) else {}
+                resume_payload = result_payload.get("resume_payload")
+                if not isinstance(resume_payload, dict) or not resume_payload:
+                    raise ValueError("resume_requested evolution is missing resume_payload")
+                self.store.update_evolution_request(
+                    collaboration_id,
+                    request_id,
+                    {
+                        "status": "running",
+                        "message": f"继续进化 Agent：{request.get('package_id')}",
+                        "result_payload": {**result_payload, "runtime_status": "running"},
+                    },
+                )
+                run = runtime.resume_stream(
+                    package_id=str(request.get("package_id") or ""),
+                    session_id=str(request.get("evolution_session_id") or ""),
+                    resume_payload=resume_payload,
+                    request_id=f"parent-evolve-resume-{request_id}",
+                )
+            else:
+                return
+            outcome = _consume_evolution_run(run)
+            current = self.store.get_evolution_request(collaboration_id, request_id)
+            if str(current.get("status") or "") == "cancelled":
+                self._continue_after_evolution(
+                    collaboration_id,
+                    request_id=request_id,
+                    package_id=str(request.get("package_id") or ""),
+                    status="cancelled",
+                    summary="进化请求已取消。",
+                )
+                return
+            if outcome["status"] == "blocked":
+                keep_runtime = True
+                result_payload = {
+                    "runtime_status": "blocked",
+                    "pending_interrupt": outcome["interrupt"],
+                    "summary": outcome["summary"],
+                }
+                self.store.update_evolution_request(
+                    collaboration_id,
+                    request_id,
+                    {
+                        "status": "blocked",
+                        "message": outcome["message"],
+                        "result_payload": result_payload,
+                    },
+                )
+                self._continue_after_evolution(
+                    collaboration_id,
+                    request_id=request_id,
+                    package_id=str(request.get("package_id") or ""),
+                    status="blocked",
+                    summary=outcome["message"],
+                )
+                return
+            terminal_status = "completed" if outcome["status"] == "completed" else "failed"
+            self.store.update_evolution_request(
+                collaboration_id,
+                request_id,
+                {
+                    "status": terminal_status,
+                    "message": outcome["message"],
+                    "result_payload": {
+                        "runtime_status": outcome["status"],
+                        "summary": outcome["summary"],
+                        "terminal_payload": outcome["terminal_payload"],
+                    },
+                },
+            )
+            self._continue_after_evolution(
+                collaboration_id,
+                request_id=request_id,
+                package_id=str(request.get("package_id") or ""),
+                status=terminal_status,
+                summary=outcome["message"],
+            )
+        except Exception as exc:
+            self.logger.warning(
+                "Collaboration evolution failed for %s/%s: %s: %s",
+                collaboration_id,
+                request_id,
+                type(exc).__name__,
+                exc,
+            )
+            try:
+                self.store.update_evolution_request(
+                    collaboration_id,
+                    request_id,
+                    {
+                        "status": "failed",
+                        "message": f"Agent 进化失败：{type(exc).__name__}: {exc}",
+                        "result_payload": {"error": f"{type(exc).__name__}: {exc}"},
+                    },
+                )
+                self._continue_after_evolution(
+                    collaboration_id,
+                    request_id=request_id,
+                    package_id=request_package_id,
+                    status="failed",
+                    summary=f"Agent 进化失败：{type(exc).__name__}: {exc}",
+                )
+            except Exception:
+                self.logger.exception("Failed to record evolution failure for %s", request_id)
+        finally:
+            if not keep_runtime:
+                self._evolution_runtimes.pop(request_id, None)
+                self._evolution_collaboration_ids.pop(request_id, None)
+            with self._lock:
+                self._evolution_threads.pop(request_id, None)
+            self._release_sub_agent_request(SUB_AGENT_TASK_TYPE_EVOLVE, request_id)
+
+    def _continue_after_evolution(
+        self,
+        collaboration_id: str,
+        *,
+        request_id: str,
+        package_id: str,
+        status: str,
+        summary: str,
+    ) -> None:
+        self._trigger_main_agent_from_event(
+            collaboration_id,
+            user_message=(
+                f"Agent 进化状态更新：request_id={request_id}, package_id={package_id or 'unknown'}, "
+                f"status={status}。\n{summary}\n"
+                "请根据当前状态继续：需要用户补充时明确提问；完成后向用户说明进化结果。"
+            ),
+            message_metadata={
+                "collaboration_report": {
+                    "kind": "evolution_report",
+                    "status": status,
+                    "assignee_package_id": package_id,
+                    "summary": summary,
+                    "evolution_request_id": request_id,
+                    "artifact_count": 0,
+                }
+            },
             task_id=None,
             event_ref=None,
         )
@@ -1076,6 +1391,38 @@ class CollaborationService:
             )
         return cancelled
 
+    def _cancel_session_evolutions(self, session: dict[str, Any]) -> int:
+        cancelled = 0
+        threads: list[threading.Thread] = []
+        for request in session.get("evolution_requests") or []:
+            request_id = str(request.get("request_id") or "").strip()
+            runtime = self._evolution_runtimes.get(request_id)
+            if not request_id or runtime is None:
+                continue
+            requested = runtime.cancel_active_requests(reason="collaboration_session_deleted")
+            cancelled += requested
+            thread = self._evolution_threads.get(request_id)
+            if requested == 0 and (thread is None or not thread.is_alive()):
+                runtime.abort_session(
+                    package_id=str(request.get("package_id") or ""),
+                    session_id=str(request.get("evolution_session_id") or ""),
+                    reason="collaboration_session_deleted",
+                )
+                self._evolution_runtimes.pop(request_id, None)
+                self._evolution_collaboration_ids.pop(request_id, None)
+            elif thread is not None:
+                threads.append(thread)
+        for thread in threads:
+            if thread.is_alive():
+                thread.join(timeout=5)
+        still_running = [thread.name for thread in threads if thread.is_alive()]
+        if still_running:
+            raise RuntimeError(
+                "evolution runtime did not stop before collaboration deletion: "
+                + ", ".join(still_running)
+            )
+        return cancelled
+
     def _cancel_cancelled_task_requests(self, session: dict[str, Any]) -> int:
         cancelled = 0
         for task in session.get("tasks") or []:
@@ -1139,19 +1486,6 @@ def _collaboration_runtime_session_targets(session: dict[str, Any]) -> list[dict
             "source": "worker_task",
         }
     return [targets[key] for key in sorted(targets)]
-
-
-def _max_parallel_worker_tasks(inference: ChatInferenceCapacity) -> int:
-    raw = str(os.getenv("AGENTFACTORY_COLLABORATION_MAX_PARALLEL_WORKERS") or "").strip()
-    if raw:
-        try:
-            value = int(raw)
-        except ValueError as exc:
-            raise ValueError("AGENTFACTORY_COLLABORATION_MAX_PARALLEL_WORKERS must be a positive integer") from exc
-        if value <= 0:
-            raise ValueError("AGENTFACTORY_COLLABORATION_MAX_PARALLEL_WORKERS must be a positive integer")
-        return value
-    return inference.total_slots
 
 
 def _main_agent_event_coalesce_window_seconds() -> float:
@@ -1258,20 +1592,20 @@ def _parse_utc_datetime(value: str) -> datetime:
 def _dispatch_capacity_reason(
     *,
     capacity: int,
-    max_parallel_workers: int,
-    active_worker_tasks: int,
+    max_parallel_sub_agents: int,
+    active_sub_agents: int,
     inference: ChatInferenceCapacity,
 ) -> str:
     if capacity > 0:
-        source = "推理服务实时容量" if inference.live else "显式协作并发配置"
-        return f"可启动 {capacity} 个协作 worker，容量来源：{source}。"
-    if max_parallel_workers <= 0:
+        source = "推理服务实时容量" if inference.live else "可并行子 Agent 数量设置"
+        return f"还可启动 {capacity} 个子 Agent，容量来源：{source}。"
+    if max_parallel_sub_agents <= 0:
         detail = f"（{inference.detail}）" if inference.detail else ""
-        return f"未找到可用的聊天推理并发配置，协作任务正在等待推理服务{detail}。"
-    if active_worker_tasks >= max_parallel_workers:
+        return f"未找到可用的子 Agent 并发配置，任务正在等待{detail}。"
+    if active_sub_agents >= max_parallel_sub_agents:
         return (
-            f"协作任务正在等待推理容量：{active_worker_tasks}/{max_parallel_workers} "
-            "个 worker 槽位已占用。"
+            f"任务正在等待可并行子 Agent 名额：{active_sub_agents}/{max_parallel_sub_agents} "
+            "个名额已占用。"
         )
     if inference.deferred_requests > 0:
         return (
@@ -1499,3 +1833,67 @@ def _consume_create_agent_run(run: Any) -> tuple[str, str, dict[str, Any] | None
                 publish_ready = item.payload["publish_ready"]
             break
     return status, message, publish_ready
+
+
+def _consume_evolution_run(run: Any) -> dict[str, Any]:
+    visible = VisibleAssistantOutputAccumulator()
+    for stream_mode, chunk in run.events:
+        if stream_mode != "frontend_event":
+            continue
+        item = chunk if isinstance(chunk, FactoryFrontendEvent) else FactoryFrontendEvent.model_validate(chunk)
+        visible.accept(item)
+        if item.event_type in INTERRUPT_TERMINAL_EVENT_TYPES:
+            payload = item.payload if isinstance(item.payload, dict) else {}
+            message = _evolution_interrupt_message(payload, fallback=visible.content)
+            return {
+                "status": "blocked",
+                "message": message,
+                "summary": visible.content or message,
+                "interrupt": {
+                    "event_id": item.event_id,
+                    "event_type": item.event_type,
+                    "request_id": item.request_id,
+                    "payload": payload,
+                },
+                "terminal_payload": {},
+            }
+        if item.event_type in RUN_TERMINAL_EVENT_TYPES:
+            runtime_status = runtime_stream_status(item)
+            payload = item.payload if isinstance(item.payload, dict) else {}
+            published = runtime_status == "completed" and str(payload.get("status") or "") == "published"
+            message = visible.content or str(item.message or payload.get("message") or "").strip()
+            if not message:
+                message = "Agent 进化已完成并发布。" if published else f"Agent 进化未完成：{runtime_status}"
+            if runtime_status == "completed" and not published:
+                message = f"{message}\n\n进化运行结束但没有形成已发布变更。"
+            return {
+                "status": "completed" if published else "failed",
+                "message": message,
+                "summary": visible.content or message,
+                "interrupt": {},
+                "terminal_payload": payload,
+            }
+    return {
+        "status": "failed",
+        "message": "Agent 进化运行流结束但没有终止事件。",
+        "summary": visible.content or "",
+        "interrupt": {},
+        "terminal_payload": {},
+    }
+
+
+def _evolution_interrupt_message(payload: dict[str, Any], *, fallback: str | None) -> str:
+    for key in ("message", "question", "prompt"):
+        text = str(payload.get(key) or "").strip()
+        if text:
+            return text
+    requests = payload.get("requests") if isinstance(payload.get("requests"), list) else []
+    names = [
+        str(item.get("tool_name") or item.get("tool_id") or item.get("name") or "").strip()
+        for item in requests
+        if isinstance(item, dict)
+    ]
+    clean_names = [name for name in names if name]
+    if clean_names:
+        return "进化 Agent 等待工具批准：" + "、".join(clean_names)
+    return str(fallback or "进化 Agent 等待用户补充信息。").strip()

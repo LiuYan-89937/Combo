@@ -67,6 +67,9 @@ export function useRuntimeCommands() {
       {
         requestTimeoutSeconds: runtimePreferences.requestTimeoutSeconds,
         maxRetries: runtimePreferences.maxRetries,
+        userConfig: {
+          max_parallel_sub_agents: runtimePreferences.maxParallelSubAgents,
+        },
       },
     )
     transport.sendRuntimeCommand(command)

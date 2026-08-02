@@ -34,6 +34,7 @@ def runtime_resource_overrides_from_state(state: Any) -> dict[str, Any]:
         RUNTIME_EXECUTION_CONFIG_RESOURCE_ID: {
             "user_config": dict(user_config) if isinstance(user_config, Mapping) else {},
             "runtime_request": _runtime_request_from_state(state),
+            "identity": _runtime_identity_from_state(state),
         }
     }
     if not isinstance(session_config, dict):
@@ -71,8 +72,26 @@ def runtime_resource_overrides_from_state(state: Any) -> dict[str, Any]:
     }
 
 
+def _runtime_identity_from_state(state: Any) -> dict[str, str]:
+    runtime_state = _runtime_state_from_state(state)
+    run = (
+        runtime_state.get("run")
+        if isinstance(runtime_state, Mapping)
+        else getattr(runtime_state, "run", None)
+    )
+    values = {
+        key: run.get(key) if isinstance(run, Mapping) else getattr(run, key, None)
+        for key in ("agent_id", "session_id", "workspace_id", "pattern_id")
+    }
+    return {
+        key: text
+        for key, value in values.items()
+        if (text := str(value or "").strip())
+    }
+
+
 def _runtime_request_from_state(state: Any) -> dict[str, Any]:
-    runtime_state = state.get("runtime") if isinstance(state, Mapping) else state
+    runtime_state = _runtime_state_from_state(state)
     execution = (
         runtime_state.get("execution", {})
         if isinstance(runtime_state, Mapping)
@@ -90,12 +109,19 @@ def _runtime_request_from_state(state: Any) -> dict[str, Any]:
 
 
 def _runtime_config_from_state(state: Any) -> Any:
+    runtime_state = _runtime_state_from_state(state)
+    if isinstance(runtime_state, Mapping):
+        return runtime_state.get("runtime_config")
+    return getattr(runtime_state, "runtime_config", None)
+
+
+def _runtime_state_from_state(state: Any) -> Any:
     if not isinstance(state, Mapping):
-        return getattr(state, "runtime_config", None)
-    runtime = state.get("runtime")
-    if isinstance(runtime, Mapping):
-        return runtime.get("runtime_config")
-    return state.get("runtime_config")
+        return state
+    runtime_state = state.get("runtime")
+    if isinstance(runtime_state, Mapping) or hasattr(runtime_state, "run"):
+        return runtime_state
+    return state
 
 
 def merge_runtime_resource(base: Any, override: Any) -> Any:

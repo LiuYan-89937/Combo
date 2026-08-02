@@ -69,12 +69,14 @@ import {
 import {
   agentPackageConversationScope,
   agentPackageScopeInfoFromEvent,
+  collaborationScopeIdentityFromSessionPayload,
   conversationScopeForMode,
   emptyCollaborationConversationScope,
   isCollaborationConversationScope,
   isMoreSpecificConversationScope,
   scopeFromEventPayload,
   scopeFromMessageMetadata,
+  scopeFromRequestPayload,
 } from './runtime/scopes'
 import {
   agentPackageSessionSnapshotView,
@@ -593,7 +595,10 @@ export const useRuntimeStore = defineStore('runtime', {
           session_id: request.payload?.session_id || null,
           payload: request.payload,
         } satisfies FactoryFrontendEvent
-        request.conversationScope = request.conversationScope || scopeFromEventPayload(scopeEvent) || null
+        request.conversationScope = request.conversationScope
+          || scopeFromRequestPayload(request.mode, request.payload)
+          || scopeFromEventPayload(scopeEvent)
+          || null
         this.activeRequests[request.requestId] = request
       })
 
@@ -776,10 +781,7 @@ export const useRuntimeStore = defineStore('runtime', {
       const nextScope = agentPackageConversationScope(
         String(event.payload.package_id),
         String(event.payload.agent_session.session_id),
-        {
-          collaborationId: event.payload.collaboration_id || event.payload.agent_session.collaboration_id,
-          collaborationTaskId: event.payload.collaboration_task_id || event.payload.agent_session.collaboration_task_id,
-        },
+        collaborationScopeIdentityFromSessionPayload(event.payload),
       )
       this._renameActiveConversationScope(nextScope)
       if (event.request_id && this.activeRequests[event.request_id]) {

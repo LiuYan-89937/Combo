@@ -87,6 +87,18 @@ export function useCollaborationRuntime() {
     const content = message.trim()
     if (!content || !collaborationStore.activeSession) return false
 
+    if (
+      collaborationStore.activeSession.execution_config?.max_parallel_sub_agents
+      !== runtimePreferences.maxParallelSubAgents
+    ) {
+      await collaborationStore.updateSession({
+        execution_config: {
+          ...(collaborationStore.activeSession.execution_config || {}),
+          max_parallel_sub_agents: runtimePreferences.maxParallelSubAgents,
+        },
+      })
+    }
+
     const promptResponse = await collaborationApi.mainAgentPrompt(
       collaborationStore.activeSession.collaboration_id,
       content,
@@ -107,6 +119,7 @@ export function useCollaborationRuntime() {
       userConfig: {
         collaboration_id: collaborationStore.activeSession.collaboration_id,
         runtime_tool_access: promptResponse.runtime_tool_access,
+        max_parallel_sub_agents: runtimePreferences.maxParallelSubAgents,
       },
     }
     const command = runtimeStore.isAwaitingUserInputInterrupt

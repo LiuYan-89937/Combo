@@ -169,6 +169,18 @@ export const useCollaborationStore = defineStore('collaboration', () => {
     }
   }
 
+  async function fetchSessionSnapshot(collaborationId: string): Promise<CollaborationSessionView | null> {
+    const existing = sessions.value.find(item => item.collaboration_id === collaborationId)
+    if (existing?.messages && existing?.tasks) return existing
+    try {
+      const response = await collaborationApi.session(collaborationId)
+      applySessionSnapshot(response.session)
+      return response.session
+    } catch {
+      return null
+    }
+  }
+
   async function updateSession(payload: {
     title?: string
     main_agent_package_id?: string
@@ -440,6 +452,7 @@ export const useCollaborationStore = defineStore('collaboration', () => {
     refreshSessions,
     createSession,
     loadSession,
+    fetchSessionSnapshot,
     updateSession,
     completeSession,
     deleteSession,

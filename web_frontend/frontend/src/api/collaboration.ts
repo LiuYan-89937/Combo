@@ -5,6 +5,7 @@ export type CollaborationSessionStatus = 'draft' | 'running' | 'completed' | 'fa
 export type CollaborationRuntimeStatus =
   | 'waiting_for_workers'
   | 'waiting_for_approval'
+  | 'waiting_for_input'
   | 'waiting_for_dependency'
   | 'resuming_from_event'
 export type CollaborationTaskStatus =
@@ -75,6 +76,50 @@ export interface CollaborationManufacturingRequestView {
   updated_at?: string
 }
 
+export interface CollaborationEvolutionRequestView {
+  request_id: string
+  collaboration_id: string
+  package_id: string
+  evolution_session_id?: string | null
+  status: string
+  request_payload?: Record<string, any>
+  result_payload?: Record<string, any>
+  created_at?: string
+  updated_at?: string
+}
+
+export interface BackgroundTaskView {
+  background_task_id: string
+  kind: 'manufacture' | 'evolve' | 'delegate' | 'team'
+  title: string
+  status: string
+  current_phase: string
+  participants: Array<{
+    package_id?: string
+    name?: string
+    status?: string
+  }>
+  subtasks: Array<{
+    task_id?: string
+    package_id?: string
+    title?: string
+    status?: string
+    summary?: string
+    depends_on?: string[]
+  }>
+  recent_activity: Array<{
+    id?: string
+    kind?: string
+    content?: string
+    created_at?: string
+  }>
+  artifacts: Array<Record<string, any>>
+  pending_action?: Record<string, any> | null
+  error?: { message?: string } | null
+  started_at?: string | null
+  updated_at?: string | null
+}
+
 export interface CollaborationSessionView {
   collaboration_id: string
   title: string
@@ -84,6 +129,13 @@ export interface CollaborationSessionView {
   execution_config?: {
     model_profile_id?: string | null
     reasoning_intensity?: number | null
+    max_parallel_sub_agents?: number
+    background_task?: {
+      id: string
+      kind: 'manufacture' | 'evolve' | 'delegate' | 'team'
+      source_tool: string
+    }
+    [key: string]: any
   }
   round_index?: number
   started_at?: string | null
@@ -102,6 +154,8 @@ export interface CollaborationSessionView {
   messages?: CollaborationMessageView[]
   tasks?: CollaborationTaskView[]
   manufacturing_requests?: CollaborationManufacturingRequestView[]
+  evolution_requests?: CollaborationEvolutionRequestView[]
+  background_task?: BackgroundTaskView
 }
 
 export interface CollaborationStatisticsView {

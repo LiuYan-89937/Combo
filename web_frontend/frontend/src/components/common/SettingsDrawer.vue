@@ -89,6 +89,23 @@
               />
               <p class="field-hint">{{ t('settings.maxRetriesHint') }}</p>
             </div>
+
+            <div class="field-divider" aria-hidden="true"></div>
+
+            <div class="field-block">
+              <div class="field-block-head">
+                <label class="field-label">{{ t('settings.maxParallelSubAgents') }}</label>
+              </div>
+              <n-input-number
+                v-model:value="maxParallelSubAgents"
+                class="field-input"
+                :min="1"
+                :step="1"
+                :precision="0"
+                :show-button="true"
+              />
+              <p class="field-hint">{{ t('settings.maxParallelSubAgentsHint') }}</p>
+            </div>
           </div>
         </section>
 
@@ -237,6 +254,13 @@ const maxRetries = computed({
   get: () => runtimePreferences.maxRetries,
   set: (value: number | null) => {
     if (value !== null) runtimePreferences.setMaxRetries(value)
+  },
+})
+
+const maxParallelSubAgents = computed({
+  get: () => runtimePreferences.maxParallelSubAgents,
+  set: (value: number | null) => {
+    if (value !== null) runtimePreferences.setMaxParallelSubAgents(value)
   },
 })
 
