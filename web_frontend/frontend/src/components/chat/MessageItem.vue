@@ -67,9 +67,13 @@
 
         <span
           v-if="streaming && !thinking"
-          class="streaming-caret"
+          class="streaming-ink-dots"
           aria-hidden="true"
-        ></span>
+        >
+          <span></span>
+          <span></span>
+          <span></span>
+        </span>
       </div>
     </div>
 
@@ -431,20 +435,39 @@ function stableColorIndex(value: string, size: number): number {
   }
 }
 
-.streaming-caret {
-  display: inline-block;
-  width: 2px;
+.streaming-ink-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   height: 18px;
-  margin-left: 4px;
+  margin-left: 6px;
   vertical-align: text-bottom;
-  background: var(--app-text);
-  border-radius: 1px;
-  animation: streaming-caret-blink 1.2s ease-in-out infinite;
 }
 
-@keyframes streaming-caret-blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
+.streaming-ink-dots > span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--app-text);
+  opacity: 0.34;
+  transform: scale(0.78);
+  animation: streaming-ink-breathe 1.2s ease-in-out infinite;
+}
+
+.streaming-ink-dots > span:nth-child(2) { animation-delay: 0.16s; }
+.streaming-ink-dots > span:nth-child(3) { animation-delay: 0.32s; }
+
+@keyframes streaming-ink-breathe {
+  0%, 65%, 100% { opacity: 0.34; transform: scale(0.78); }
+  32% { opacity: 0.9; transform: scale(1.16); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .streaming-ink-dots > span {
+    animation: none;
+    opacity: 0.58;
+    transform: none;
+  }
 }
 
 .thinking-content {
