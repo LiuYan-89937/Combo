@@ -123,6 +123,7 @@ function executionFromCall(part: ToolCallMessagePart): ToolExecutionMessagePart 
     artifacts: [],
     status: part.status,
     createdAt: part.createdAt,
+    startedAt: part.startedAt,
     updatedAt: part.updatedAt,
   }
 }
@@ -139,6 +140,7 @@ function executionFromResult(part: ToolResultMessagePart): ToolExecutionMessageP
     artifacts: [],
     status: part.status,
     createdAt: part.createdAt,
+    startedAt: part.startedAt,
     updatedAt: part.updatedAt,
   }
 }

@@ -8,6 +8,39 @@ interface AgentPackageConfigurationResponse {
   package: any
 }
 
+export type AgentToolApproval = 'inherit' | 'allow' | 'ask' | 'deny'
+export type AgentToolPolicyMode = 'strict' | 'allow_below_high' | 'allow_all' | 'custom'
+
+export interface AgentToolSettingView {
+  tool_id: string
+  name: string
+  description: string
+  base_description: string
+  description_overridden: boolean
+  source: string
+  risk_level: 'low' | 'medium' | 'high'
+  permission_scope: string
+  permission_tags: string[]
+  max_model_chars: number
+  max_model_chars_overridden: boolean
+}
+
+export interface AgentToolSettingsView {
+  policy: {
+    mode: AgentToolPolicyMode
+    low?: string
+    medium?: string
+    high?: string
+    tool_overrides: Record<string, { approval?: AgentToolApproval; risk_level?: string | null }>
+  }
+  default_max_model_chars: number
+  tools: AgentToolSettingView[]
+}
+
+interface AgentToolSettingsResponse {
+  tool_settings: AgentToolSettingsView
+}
+
 export interface AgentPackageResourceDescriptorView {
   resource_id: string
   description: string
@@ -46,18 +79,34 @@ export const agentPackagesApi = {
     requestEvent(`/api/agent-packages/${encodeURIComponent(packageId)}`, { method: 'DELETE' }),
   exportArchive: (packageId: string) =>
     requestBlob(`/api/agent-packages/${encodeURIComponent(packageId)}/export`),
-  updateToolDescription: (
-    packageId: string,
-    toolKind: 'model_tool' | 'package_tool',
-    toolId: string,
-    description: string,
-  ) =>
-    requestJson<AgentPackageConfigurationResponse>(
-      `/api/agent-packages/${encodeURIComponent(packageId)}/tool-descriptions/${toolKind}/${encodeURIComponent(toolId)}`,
+  toolSettings: (packageId: string) =>
+    requestJson<AgentToolSettingsResponse>(
+      `/api/agent-packages/${encodeURIComponent(packageId)}/tool-settings`,
+    ),
+  updateToolPolicy: (packageId: string, mode: AgentToolPolicyMode) =>
+    requestJson<AgentToolSettingsResponse>(
+      `/api/agent-packages/${encodeURIComponent(packageId)}/tool-settings/policy`,
       {
         method: 'PATCH',
-        body: JSON.stringify({ description }),
+        body: JSON.stringify({ policy: { mode } }),
       },
+    ),
+  updateToolSettings: (
+    packageId: string,
+    toolId: string,
+    payload: { description: string; max_model_chars: number; approval: AgentToolApproval },
+  ) =>
+    requestJson<AgentToolSettingsResponse>(
+      `/api/agent-packages/${encodeURIComponent(packageId)}/tool-settings/${encodeURIComponent(toolId)}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      },
+    ),
+  resetToolSettings: (packageId: string, toolId: string) =>
+    requestJson<AgentToolSettingsResponse>(
+      `/api/agent-packages/${encodeURIComponent(packageId)}/tool-settings/${encodeURIComponent(toolId)}`,
+      { method: 'DELETE' },
     ),
   updateContextConfig: (packageId: string, config: Record<string, unknown>) =>
     requestJson<AgentPackageConfigurationResponse>(

@@ -56,7 +56,6 @@ from agent_factory.factory_graph.frontend_bridge.agent_package_repository import
 )
 from agent_factory.factory_graph.frontend_bridge.agent_package_configuration import (
     AgentPackageConfigurationEditor,
-    ToolDescriptionKind,
 )
 from agent_factory.factory_graph.frontend_bridge.agent_package_extensions import (
     AgentPackageExtensionService,
@@ -515,25 +514,6 @@ class AgentPackageRuntimeManager:
 
     def package_summary(self, package_id: str) -> dict[str, Any]:
         return self._package_summary(self._manifest_path(package_id))
-
-    def update_tool_description(
-        self,
-        package_id: str,
-        *,
-        tool_kind: ToolDescriptionKind,
-        tool_id: str,
-        description: str,
-    ) -> dict[str, Any]:
-        package_dir = self.repository.package_dir(package_id)
-        if not (package_dir / "agent_package.json").is_file():
-            raise FileNotFoundError(f"agent package not found: {package_id}")
-        AgentPackageConfigurationEditor().update_tool_description(
-            package_dir,
-            tool_kind=tool_kind,
-            tool_id=tool_id,
-            description=description,
-        )
-        return self.package_summary(package_id)
 
     def update_context_config(
         self,

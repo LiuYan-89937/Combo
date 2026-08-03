@@ -93,29 +93,73 @@ def create_agent_package_router(runtime_bridge: RuntimeBridge, logger: logging.L
             background=BackgroundTask(unlink_file, archive_path),
         )
 
-    @router.patch("/{package_id}/tool-descriptions/{tool_kind}/{tool_id}")
-    def update_agent_package_tool_description(
-        package_id: str,
-        tool_kind: str,
-        tool_id: str,
-        payload: dict[str, Any],
-    ):
-        if tool_kind not in {"model_tool", "package_tool"}:
-            raise HTTPException(status_code=400, detail=f"unsupported tool kind: {tool_kind}")
-        if "description" not in payload:
-            raise HTTPException(status_code=400, detail="description is required")
+    @router.get("/{package_id}/tool-settings")
+    def get_agent_package_tool_settings(package_id: str):
         try:
-            summary = AgentPackageRuntimeManager().update_tool_description(
+            summary = AgentPackageRuntimeManager().extension_config_summary(package_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"tool_settings": summary.get("tool_permissions", {})}
+
+    @router.patch("/{package_id}/tool-settings/policy")
+    def update_agent_package_tool_policy(package_id: str, payload: dict[str, Any]):
+        try:
+            runtime = AgentPackageRuntimeManager()
+            current = runtime.extension_config_summary(package_id)
+            current_policy = current.get("tool_permissions", {}).get("policy", {})
+            requested_policy = payload.get("policy", payload)
+            if not isinstance(requested_policy, dict):
+                raise ValueError("tool policy must be an object")
+            if requested_policy.get("mode") == "allow_all":
+                current_overrides = current_policy.get("tool_overrides", {})
+                current_policy = {
+                    **current_policy,
+                    "tool_overrides": {
+                        tool_id: {**override, "approval": "inherit"}
+                        for tool_id, override in current_overrides.items()
+                        if isinstance(override, dict) and override.get("risk_level") is not None
+                    },
+                }
+            summary = runtime.extensions_manage(
                 package_id,
-                tool_kind=tool_kind,
-                tool_id=tool_id,
-                description=str(payload["description"] or ""),
+                "update_tool_permissions",
+                {"policy": {**current_policy, **requested_policy}},
             )
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except (ValueError, TypeError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"package": summary}
+        return {"tool_settings": summary.get("tool_permissions", {})}
+
+    @router.patch("/{package_id}/tool-settings/{tool_id}")
+    def update_agent_package_tool_settings(package_id: str, tool_id: str, payload: dict[str, Any]):
+        try:
+            summary = AgentPackageRuntimeManager().extensions_manage(
+                package_id,
+                "update_tool_configuration",
+                {**payload, "tool_id": tool_id},
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"tool_settings": summary.get("tool_permissions", {})}
+
+    @router.delete("/{package_id}/tool-settings/{tool_id}")
+    def reset_agent_package_tool_settings(package_id: str, tool_id: str):
+        try:
+            summary = AgentPackageRuntimeManager().extensions_manage(
+                package_id,
+                "reset_tool_configuration",
+                {"tool_id": tool_id},
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"tool_settings": summary.get("tool_permissions", {})}
 
     @router.patch("/{package_id}/context-config")
     def update_agent_package_context_config(package_id: str, payload: dict[str, Any]):

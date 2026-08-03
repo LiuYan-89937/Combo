@@ -174,8 +174,13 @@ def project_tool_output(
     compression_config: ToolOutputCompressionConfig | None = None,
 ) -> ToolOutputProjection:
     effective_policy = policy or default_tool_output_policy()
+    effective_max_chars = (
+        compression_config.max_model_chars
+        if compression_config is not None and compression_config.max_model_chars is not None
+        else effective_policy.max_model_chars
+    )
     raw_text = _json_text(output)
-    if len(raw_text) <= effective_policy.max_model_chars:
+    if len(raw_text) <= effective_max_chars:
         return ToolOutputProjection(output=output)
     output_ref = (
         store.write_output(tool_id=tool_id, tool_call_id=tool_call_id, output=output)
@@ -187,7 +192,7 @@ def project_tool_output(
         output,
         tool_id=tool_id,
         arguments=arguments or {},
-        max_chars=effective_policy.max_model_chars,
+        max_chars=effective_max_chars,
         model=compression_model,
         config=_compression_config_for_arguments(compression_config, arguments or {}),
     )
@@ -199,7 +204,7 @@ def project_tool_output(
         "_tool_output_compacted": {
             "original_chars": compression.original_chars,
             "compressed_chars": compression.compressed_chars,
-            "model_visible_limit_chars": effective_policy.max_model_chars,
+            "model_visible_limit_chars": effective_max_chars,
             "compression_method": compression.method,
             "output_ref": output_ref,
         },

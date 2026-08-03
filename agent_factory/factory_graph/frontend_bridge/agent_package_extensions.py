@@ -23,19 +23,24 @@ from agent_factory.factory_graph.frontend_bridge.agent_package_utils import (
     humanize_identifier,
     read_json_object,
     write_json_object,
+    write_json_objects_atomically,
 )
+from agent_factory.tooling.output_store import default_tool_output_policy
 from agent_factory.tooling.approval_policy import ToolApprovalOverrideConfig, ToolApprovalPolicyConfig
 from agent_factory.tooling.extension_registry import (
     default_extension_registry_root,
     find_registered_mcp_server,
     import_registered_skill_directory,
     load_registered_mcp_servers,
+    load_registered_mcp_tool_catalog,
     load_resolved_registered_skills,
     load_registered_skills,
     registered_agent_extension_bindings,
     registry_mcp_path,
     registry_skills_path,
     remove_registered_extension,
+    remove_registered_mcp_tool_catalog,
+    replace_registered_mcp_tool_catalog,
     set_agent_extension_binding,
     upsert_registered_mcp_servers,
     upsert_registered_skill,
@@ -60,6 +65,12 @@ from agent_factory.tooling.providers import (
 )
 from agent_factory.tooling.skills import parse_skill_directory
 from agent_factory.tooling.skillhub.service import SkillHubService
+from agent_factory.tooling.runtime_settings import (
+    ToolRuntimeOverride,
+    ToolRuntimeSettings,
+    load_tool_runtime_settings,
+    tool_runtime_settings_path,
+)
 
 
 TOOL_PERMISSIONS_FILENAME = "tool_permissions.json"
@@ -220,6 +231,7 @@ def _extension_summary(
             "mcp_servers_paths": [str(registry_mcp_path())],
             "enabled_skills_paths": [str(registry_skills_path())],
             "tool_permissions_path": str(extension_root / TOOL_PERMISSIONS_FILENAME),
+            "tool_settings_path": str(tool_runtime_settings_path(extension_root)),
         },
     }
 
@@ -358,6 +370,101 @@ def _manage_extension_root(
             {"updated": "tool_permissions", **summary()},
             changed=True,
         )
+    if action == "update_tool_configuration":
+        tool_id = _tool_permission_id(payload)
+        current_summary = summary()
+        permission_tools = current_summary.get("tool_permissions", {}).get("tools", [])
+        current_tool = next(
+            (
+                item
+                for item in permission_tools
+                if isinstance(item, dict) and str(item.get("tool_id") or "") == tool_id
+            ),
+            None,
+        )
+        if current_tool is None:
+            raise ValueError(f"tool is not available for this agent: {tool_id}")
+        policy = _load_tool_permission_policy(extension_root)
+        settings = load_tool_runtime_settings(extension_root)
+        existing_permission = policy.tool_overrides.get(tool_id, ToolApprovalOverrideConfig())
+        approval_payload = {
+            "approval": payload.get("approval", existing_permission.approval),
+            "risk_level": payload.get("risk_level", existing_permission.risk_level),
+        }
+        permission_override = ToolApprovalOverrideConfig.model_validate(approval_payload)
+        next_permission_overrides = dict(policy.tool_overrides)
+        if permission_override.approval == "inherit" and permission_override.risk_level is None:
+            next_permission_overrides.pop(tool_id, None)
+        else:
+            next_permission_overrides[tool_id] = permission_override
+        next_policy = ToolApprovalPolicyConfig.model_validate(
+            policy.model_copy(update={"tool_overrides": next_permission_overrides}).model_dump(mode="json")
+        )
+        existing_runtime = settings.tools.get(tool_id, ToolRuntimeOverride())
+        runtime_description = existing_runtime.description
+        if "description" in payload:
+            submitted_description = ToolRuntimeOverride(description=payload.get("description")).description
+            runtime_description = (
+                None
+                if submitted_description == str(current_tool.get("base_description") or "").strip()
+                else submitted_description
+            )
+        runtime_max_model_chars = existing_runtime.max_model_chars
+        if "max_model_chars" in payload:
+            submitted_max_model_chars = ToolRuntimeOverride(
+                max_model_chars=payload.get("max_model_chars")
+            ).max_model_chars
+            runtime_max_model_chars = (
+                None
+                if submitted_max_model_chars == int(current_summary["tool_permissions"]["default_max_model_chars"])
+                else submitted_max_model_chars
+            )
+        runtime_override = ToolRuntimeOverride(
+            description=runtime_description,
+            max_model_chars=runtime_max_model_chars,
+        )
+        next_tool_settings = dict(settings.tools)
+        if runtime_override.description is None and runtime_override.max_model_chars is None:
+            next_tool_settings.pop(tool_id, None)
+        else:
+            next_tool_settings[tool_id] = runtime_override
+        next_settings = ToolRuntimeSettings.model_validate(
+            settings.model_copy(update={"tools": next_tool_settings}).model_dump(mode="json")
+        )
+        write_json_objects_atomically(
+            {
+                extension_root / TOOL_PERMISSIONS_FILENAME: _tool_permission_document(next_policy),
+                tool_runtime_settings_path(extension_root): next_settings.model_dump(mode="json"),
+            }
+        )
+        return ExtensionManageResult(
+            {"updated": "tool_configuration", **summary()},
+            changed=True,
+        )
+    if action == "reset_tool_configuration":
+        tool_id = _tool_permission_id(payload)
+        policy = _load_tool_permission_policy(extension_root)
+        settings = load_tool_runtime_settings(extension_root)
+        next_permission_overrides = dict(policy.tool_overrides)
+        next_permission_overrides.pop(tool_id, None)
+        next_tool_settings = dict(settings.tools)
+        next_tool_settings.pop(tool_id, None)
+        next_policy = ToolApprovalPolicyConfig.model_validate(
+            policy.model_copy(update={"tool_overrides": next_permission_overrides}).model_dump(mode="json")
+        )
+        next_settings = ToolRuntimeSettings.model_validate(
+            settings.model_copy(update={"tools": next_tool_settings}).model_dump(mode="json")
+        )
+        write_json_objects_atomically(
+            {
+                extension_root / TOOL_PERMISSIONS_FILENAME: _tool_permission_document(next_policy),
+                tool_runtime_settings_path(extension_root): next_settings.model_dump(mode="json"),
+            }
+        )
+        return ExtensionManageResult(
+            {"updated": "tool_configuration", **summary()},
+            changed=True,
+        )
     if action == "upsert_skill":
         skill_payload = payload.get("skill") if isinstance(payload.get("skill"), dict) else payload
         replace_skill_id = str(
@@ -446,9 +553,20 @@ def _tool_permissions_view(
     system_owner: SystemAgentExtensionOwner | None = None,
 ) -> dict[str, Any]:
     policy = _load_tool_permission_policy(extension_root)
+    settings = load_tool_runtime_settings(extension_root)
+    tools = _tool_permission_tools(package=package, bundle=bundle, system_owner=system_owner)
+    default_max_model_chars = default_tool_output_policy().max_model_chars
     return {
         "policy": policy.model_dump(mode="json"),
-        "tools": _tool_permission_tools(package=package, bundle=bundle, system_owner=system_owner),
+        "default_max_model_chars": default_max_model_chars,
+        "tools": [
+            _tool_with_runtime_settings(
+                tool,
+                settings.tools.get(str(tool.get("tool_id") or "")),
+                default_max_model_chars=default_max_model_chars,
+            )
+            for tool in tools
+        ],
     }
 
 
@@ -459,13 +577,14 @@ def _load_tool_permission_policy(extension_root: Path) -> ToolApprovalPolicyConf
 
 
 def _write_tool_permission_policy(extension_root: Path, policy: ToolApprovalPolicyConfig) -> None:
-    write_json_object(
-        extension_root / TOOL_PERMISSIONS_FILENAME,
-        {
-            "version": "tool_permissions.v0",
-            "policy": policy.model_dump(mode="json"),
-        },
-    )
+    write_json_object(extension_root / TOOL_PERMISSIONS_FILENAME, _tool_permission_document(policy))
+
+
+def _tool_permission_document(policy: ToolApprovalPolicyConfig) -> dict[str, Any]:
+    return {
+        "version": "tool_permissions.v0",
+        "policy": policy.model_dump(mode="json"),
+    }
 
 
 def _tool_approval_policy_from_payload(payload: dict[str, Any]) -> ToolApprovalPolicyConfig:
@@ -506,6 +625,8 @@ def _tool_permission_tools(
             )
             if item:
                 tools[item["tool_id"]] = item
+        for item in _model_permission_tools(package):
+            tools[item["tool_id"]] = item
     if getattr(bundle.enabled_skills, "skills", None):
         tools["skill"] = _public_tool_permission_item(
             tool_id="skill",
@@ -516,7 +637,47 @@ def _tool_permission_tools(
             permission_scope="extension",
             permission_tags=[],
         )
+    catalog = load_registered_mcp_tool_catalog()
+    for server in getattr(bundle.mcp_servers, "servers", []):
+        for registered_tool in catalog.servers.get(server.server_id, []):
+            item = _public_tool_permission_item(
+                tool_id=registered_tool.tool_id,
+                name=registered_tool.name,
+                description=registered_tool.description,
+                source="mcp",
+                risk_level=registered_tool.risk_level,
+                permission_scope=registered_tool.permission_scope,
+                permission_tags=registered_tool.permission_tags,
+            )
+            if item:
+                tools[item["tool_id"]] = item
     return sorted(tools.values(), key=lambda item: (str(item.get("source") or ""), str(item.get("tool_id") or "")))
+
+
+def _model_permission_tools(package: LoadedAgentPackage) -> list[dict[str, Any]]:
+    contract = package.contracts.get("model") if isinstance(package.contracts, dict) else None
+    config = contract.get("config") if isinstance(contract, dict) else None
+    bindings = config.get("tool_bindings") if isinstance(config, dict) else None
+    tools: list[dict[str, Any]] = []
+    for tool_id, binding in (bindings.items() if isinstance(bindings, dict) else []):
+        if not isinstance(binding, dict):
+            continue
+        display_name = humanize_identifier(str(tool_id)) or str(tool_id)
+        item = _public_tool_permission_item(
+            tool_id=str(tool_id),
+            name=display_name,
+            description=str(
+                binding.get("description")
+                or f"Invoke the {display_name} model capability for this agent."
+            ),
+            source="model",
+            risk_level="low",
+            permission_scope="model",
+            permission_tags=[],
+        )
+        if item:
+            tools.append(item)
+    return tools
 
 
 def _system_agent_permission_tools(system_owner: SystemAgentExtensionOwner | None) -> list[dict[str, Any]]:
@@ -646,6 +807,27 @@ def _public_tool_permission_item(
     }
 
 
+def _tool_with_runtime_settings(
+    tool: dict[str, Any],
+    override: ToolRuntimeOverride | None,
+    *,
+    default_max_model_chars: int,
+) -> dict[str, Any]:
+    base_description = str(tool.get("description") or "").strip()
+    return {
+        **tool,
+        "base_description": base_description,
+        "description": override.description if override is not None and override.description else base_description,
+        "description_overridden": bool(override is not None and override.description),
+        "max_model_chars": (
+            override.max_model_chars
+            if override is not None and override.max_model_chars is not None
+            else default_max_model_chars
+        ),
+        "max_model_chars_overridden": bool(override is not None and override.max_model_chars is not None),
+    }
+
+
 def load_extension_bundle(extension_root: Path, *, package: LoadedAgentPackage | None = None) -> Any:
     return AgentInstanceExtensionConfigLoader(
         extension_root,
@@ -759,6 +941,7 @@ def _load_local_skills_config(extension_root: Path) -> EnabledSkillsConfig:
 
 
 def _save_mcp_server(extension_root: Path, server: MCPServerConfig) -> None:
+    remove_registered_mcp_tool_catalog(server.server_id)
     upsert_registered_mcp_servers([server])
 
 
@@ -1022,7 +1205,7 @@ def _test_mcp_server(
             stderr=client.stderr_logs(),
             sensitive_values=[*server.env.values(), *server.headers.values()],
         )
-    tools: list[dict[str, str]] = []
+    tools: list[dict[str, Any]] = []
     details: list[str] = []
     skipped_tools: list[dict[str, str]] = []
     for discovered_tool in discovered_tools:
@@ -1040,7 +1223,16 @@ def _test_mcp_server(
             skipped_tools.append({"name": tool_name, "message": message})
             details.append(f"{tool_name}: {message}")
             continue
-        tools.append({"name": tool.name, "description": tool.description})
+        tools.append(
+            {
+                "tool_id": prepared.spec.id,
+                "name": humanize_identifier(tool.name) or tool.name,
+                "description": prepared.spec.description,
+                "risk_level": prepared.spec.risk_level,
+                "permission_scope": prepared.spec.permission_scope,
+                "permission_tags": prepared.spec.permission_tags,
+            }
+        )
         for repair in prepared.repairs:
             details.append(
                 f"{tool.name}: normalized {repair['schema']} schema at "
@@ -1182,6 +1374,8 @@ def _install_mcp_servers(
             }
         )
     _save_mcp_servers(extension_root, servers)
+    for server, test in zip(servers, tests, strict=True):
+        replace_registered_mcp_tool_catalog(server.server_id, list(test.get("tools") or []))
     return ExtensionManageResult(
         {
             "install": {

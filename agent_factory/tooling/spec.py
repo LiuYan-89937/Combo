@@ -105,6 +105,7 @@ class ToolOutputCompressionActionConfig(BaseModel):
 class ToolOutputCompressionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    max_model_chars: int | None = Field(default=None, ge=1000, le=1_000_000)
     action_argument: str = "action"
     actions: dict[str, ToolOutputCompressionActionConfig] = Field(default_factory=dict)
 

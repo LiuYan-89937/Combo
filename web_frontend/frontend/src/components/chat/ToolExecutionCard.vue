@@ -109,7 +109,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { NIcon } from 'naive-ui'
 import {
   Bot,
@@ -173,11 +173,38 @@ const formattedArguments = computed(() => valueString(props.part.arguments))
 const formattedOutput = computed(() => valueString(props.part.error || props.part.output))
 const hasArguments = computed(() => hasValue(props.part.arguments))
 const hasOutput = computed(() => hasValue(props.part.output))
+const clockMs = ref(Date.now())
+const timingActive = computed(() => (
+  state.value === 'running'
+  && Number.isFinite(Date.parse(String(props.part.startedAt || '')))
+))
+let clockTimer: ReturnType<typeof setInterval> | null = null
+
+watch(timingActive, (active) => {
+  if (clockTimer) {
+    clearInterval(clockTimer)
+    clockTimer = null
+  }
+  if (!active) return
+  clockMs.value = Date.now()
+  clockTimer = setInterval(() => {
+    clockMs.value = Date.now()
+  }, 200)
+}, { immediate: true })
+
+onBeforeUnmount(() => {
+  if (clockTimer) clearInterval(clockTimer)
+})
+
 const durationMs = computed(() => {
   const direct = resultRecord.value?.duration_ms
   if (typeof direct === 'number' && Number.isFinite(direct)) return direct
-  const startedAt = Date.parse(String(props.part.createdAt || ''))
-  const completedAt = Date.parse(String(props.part.updatedAt || ''))
+  const startedAt = Date.parse(String(
+    props.part.startedAt || (timingActive.value ? '' : props.part.createdAt) || '',
+  ))
+  const completedAt = timingActive.value
+    ? clockMs.value
+    : Date.parse(String(props.part.updatedAt || ''))
   return Number.isFinite(startedAt) && Number.isFinite(completedAt) && completedAt >= startedAt
     ? completedAt - startedAt
     : null

@@ -120,6 +120,8 @@ class RuntimeResourceCommandMixin:
             "update_tool_permissions",
             "set_tool_permission",
             "reset_tool_permission",
+            "update_tool_configuration",
+            "reset_tool_configuration",
             "skillhub_install",
         }:
             install = result.get("install") if isinstance(result.get("install"), dict) else {}

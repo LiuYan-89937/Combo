@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
 import json
-import os
 from pathlib import Path
 from threading import RLock
 from typing import Any, Iterable, Mapping
@@ -30,9 +28,6 @@ from agent_factory.tooling.spec import ToolSpec
 
 class ToolCompileError(ValueError):
     pass
-
-
-_TOOL_CWD_LOCK = RLock()
 
 
 class ToolCompiler:
@@ -99,11 +94,10 @@ class ToolCompiler:
                 _normalize_tool_arguments(dict(kwargs)),
                 schema=spec.input_schema,
             )
-            with _tool_package_cwd(self.package_root):
-                return gateway.execute(
-                    arguments,
-                    tool_call_id=current.tool_call_id if current is not None and current.tool_id == spec.id else None,
-                )
+            return gateway.execute(
+                arguments,
+                tool_call_id=current.tool_call_id if current is not None and current.tool_id == spec.id else None,
+            )
 
         return StructuredTool.from_function(
             func=invoke_tool,
@@ -271,17 +265,3 @@ def _lazy_package_entrypoint(spec: ToolSpec, loader: ToolEntrypointLoader):
         return cached_entrypoint(arguments=arguments, resources=resources)
 
     return invoke
-
-
-@contextmanager
-def _tool_package_cwd(package_root: Path | None):
-    if package_root is None:
-        yield
-        return
-    with _TOOL_CWD_LOCK:
-        previous = Path.cwd()
-        os.chdir(package_root)
-        try:
-            yield
-        finally:
-            os.chdir(previous)

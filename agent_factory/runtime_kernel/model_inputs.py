@@ -209,11 +209,14 @@ def _executor_tool_policy(state: Any) -> str:
     workspace_root = _builtin_workspace_root(state)
     allow_external = _builtin_allow_external_paths(state)
     boundary = (
-        "External absolute paths are enabled, but prefer workspace paths unless the task explicitly needs an external path."
+        "Shell starts in the current session workspace root, so shell commands should use relative paths without "
+        "changing directories first. External absolute paths are enabled, but prefer workspace paths unless the task "
+        "explicitly needs an external path."
         if allow_external
         else (
-            f"Filesystem and process tools are bounded to workspace root {workspace_root}. "
-            "Use relative paths, or absolute paths under that root. "
+            f"Filesystem tools accept relative paths or the logical workspace alias {workspace_root}. "
+            "Shell starts in the current session workspace root and should use relative paths without changing "
+            f"directories first; do not place the logical alias {workspace_root} inside shell commands. "
             "Do not use /tmp, host paths, or arbitrary absolute paths."
         )
     )
@@ -233,7 +236,7 @@ def _executor_tool_policy(state: Any) -> str:
         "affected_files diff, then call action=commit with the exact transaction_id returned by that preview. "
         "Never invent or reuse a transaction_id, and never use shell as a fallback for file creation, movement, "
         "copying, or deletion when edit is available. "
-        f"{boundary} Generated files should be written under the workspace root, for example "
+        f"{boundary} Filesystem-tool outputs should be written under the workspace root, for example "
         f"report.md or {workspace_root.rstrip('/')}/report.md."
     )
 

@@ -70,6 +70,7 @@ export function upsertToolActivityFromEvent(
     eventType: event.event_type,
     timestamp: event.timestamp,
     createdAt: existing?.createdAt || event.timestamp,
+    startedAt: existing?.startedAt || (status === 'started' ? event.timestamp : null),
     stageId: event.stage_id || existing?.stageId || null,
     nodeId: event.node_id || existing?.nodeId || null,
     toolCallId: toolCallId ? String(toolCallId) : existing?.toolCallId || null,

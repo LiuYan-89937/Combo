@@ -82,6 +82,7 @@ export function toolCallPart(tool: ToolActivity): ChatMessagePart {
     approvalState: tool.approvalState,
     status: toolPartStatus(tool),
     createdAt: tool.createdAt,
+    startedAt: tool.startedAt,
     updatedAt: tool.timestamp,
   }
 }
@@ -97,6 +98,7 @@ export function toolResultPart(tool: ToolActivity): ChatMessagePart | null {
     error: tool.payload?.error || null,
     status: tool.status === 'failed' ? 'failed' : 'completed',
     createdAt: tool.createdAt,
+    startedAt: tool.startedAt,
     updatedAt: tool.timestamp,
   }
 }
