@@ -177,6 +177,7 @@
       </div>
 
       <div class="right-actions">
+        <slot name="before-send"></slot>
         <n-button
           type="primary"
           class="send-button"

@@ -83,7 +83,7 @@ export function useShowcaseDirector(options: ShowcaseDirectorOptions) {
     agentStore.enterAgentChat(CHAT_PACKAGE_ID, null)
     runtimeStore.showEmptyAgentPackageSession(CHAT_PACKAGE_ID)
     resetConversation()
-    uiStore.openRightSidebar('workspace')
+    uiStore.setConversationDockPanel('workspace')
     await wait(850)
 
     const input = await waitForElement<HTMLTextAreaElement>('.message-input-container textarea')
@@ -112,11 +112,15 @@ export function useShowcaseDirector(options: ShowcaseDirectorOptions) {
   }
 
   async function manufacturingScene(): Promise<void> {
-    await showcaseRouter.replace({ name: 'Manufacturing' })
+    await showcaseRouter.replace({
+      name: 'Factory',
+      query: { package_id: CHAT_PACKAGE_ID, new: '1' },
+    })
     await waitForView('.message-input-container')
-    runtimeStore.enterFactoryConversation('create_agent')
+    agentStore.enterAgentChat(CHAT_PACKAGE_ID, null)
+    runtimeStore.showEmptyAgentPackageSession(CHAT_PACKAGE_ID)
     resetConversation()
-    uiStore.openRightSidebar('workspace')
+    uiStore.setConversationDockPanel('workspace')
     await wait(900)
 
     const input = await waitForElement<HTMLTextAreaElement>('.message-input-container textarea')
@@ -154,9 +158,13 @@ export function useShowcaseDirector(options: ShowcaseDirectorOptions) {
 
   async function evolutionScene(): Promise<void> {
     agentStore.selectPackage(SHOWCASE_PACKAGE_ID)
-    await showcaseRouter.replace({ name: 'Evolution' })
-    await waitForView('.evolution-target-bar')
-    runtimeStore.enterFactoryConversation('evolve_agent', SHOWCASE_PACKAGE_ID)
+    await showcaseRouter.replace({
+      name: 'Factory',
+      query: { package_id: CHAT_PACKAGE_ID, new: '1' },
+    })
+    await waitForView('.message-input-container')
+    agentStore.enterAgentChat(CHAT_PACKAGE_ID, null)
+    runtimeStore.showEmptyAgentPackageSession(CHAT_PACKAGE_ID)
     resetConversation()
     await wait(1000)
 
@@ -193,7 +201,7 @@ export function useShowcaseDirector(options: ShowcaseDirectorOptions) {
     agentStore.enterAgentChat(CHAT_PACKAGE_ID, null)
     runtimeStore.showEmptyAgentPackageSession(CHAT_PACKAGE_ID)
     resetConversation()
-    uiStore.openRightSidebar('workspace')
+    uiStore.setConversationDockPanel('workspace')
     appendMessage(message('user', [
       textPart('请分工完成东京五日亲子旅行手册，并给出可直接执行的最终版本。'),
     ]))

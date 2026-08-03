@@ -1,9 +1,6 @@
 <template>
   <div class="workspace-sidebar-content">
     <div v-show="!previewLoading && !runtimeStore.workspaceFile" class="workspace-browser">
-      <div class="context-bar">
-        <n-text depth="3">{{ t('workspace.context', { label: workspaceContextLabel }) }}</n-text>
-      </div>
       <WorkspaceExplorer
         v-if="workspaceAvailable"
         class="workspace-sidebar-explorer"
@@ -50,11 +47,10 @@ const previewLoading = ref(false)
 const WORKSPACE_PREVIEW_MAX_CHARS = 1_000_000
 
 const workspaceRequestContext = computed(() => resourceContext.workspaceContext.value)
-const workspaceContextLabel = computed(() => resourceContext.label.value)
 const workspaceAvailable = computed(() => resourceContext.workspaceAvailable.value)
 
 async function handleWorkspaceFileSelect(entry: WorkspaceEntry) {
-  uiStore.setRightSidebarTab('workspace')
+  uiStore.setConversationDockPanel('workspace')
   previewLoading.value = true
   runtimeStore.workspaceFile = null
   await commands.readFile(workspaceStore.currentScope, entry.path, workspaceRequestContext.value, WORKSPACE_PREVIEW_MAX_CHARS)
@@ -98,13 +94,6 @@ watch(
   min-height: 0;
   display: flex;
   flex-direction: column;
-}
-
-.context-bar {
-  padding: var(--app-space-sm) var(--app-space-lg);
-  border-bottom: 1px solid var(--app-divider);
-  background: var(--app-surface-muted);
-  font-size: var(--app-font-sm);
 }
 
 .workspace-sidebar-explorer {

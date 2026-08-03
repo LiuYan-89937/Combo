@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 
 from agent_factory.collaboration_system.task_service import TaskExecutionContext, TaskExecutor
+from agent_factory.collaboration_system.progress_summary import progress_summary_session
 from agent_factory.contracts import BackgroundTask, BackgroundTaskResult
 from agent_factory.create_agent.runtime import CreateAgentRuntime
 from agent_factory.evolution.runtime import AgentEvolutionRuntime
@@ -170,18 +171,15 @@ def _consume_runtime(
     final_event: FactoryFrontendEvent | None = None
     summaries: list[str] = []
     artifacts: list[dict[str, Any]] = []
+    progress = progress_summary_session(task.type, task.task_text)
     events = getattr(run, "events")
     try:
         for item in _frontend_events(events):
             context.raise_if_interrupted()
             final_event = item
-            context.emit(
-                "background_task_runtime_event",
-                {
-                    "runtime_event_type": item.event_type,
-                    "runtime_event": item.model_dump(mode="json"),
-                },
-            )
+            report = progress.observe(item)
+            if report is not None:
+                context.report_progress(report)
             _collect_result(item, summaries, artifacts)
             if item.event_type in INTERRUPT_TERMINAL_EVENT_TYPES:
                 interrupt_payload = {
@@ -221,6 +219,9 @@ def _consume_runtime(
             summary="运行没有产生事件。",
             error={"code": "empty_runtime_stream"},
         )
+    report = progress.flush(final_event)
+    if report is not None:
+        context.report_progress(report)
     if final_event.event_type not in RUN_TERMINAL_EVENT_TYPES:
         return BackgroundTaskResult(
             status="failed",

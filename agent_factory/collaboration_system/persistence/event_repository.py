@@ -13,6 +13,18 @@ from agent_factory.contracts import EventEnvelope, NotFoundError
 from agent_factory.sqlite_runtime import sqlite_session
 
 
+TASK_TIMELINE_EVENT_TYPES = (
+    "background_task_created",
+    "background_task_status_changed",
+    "background_task_progress_report",
+    "background_task_approval_resolved",
+    "background_task_external_resolved",
+    "background_task_requeued",
+    "background_task_recovered",
+    "background_task_result",
+)
+
+
 class EventRepository:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path).expanduser().resolve()
@@ -92,6 +104,35 @@ class EventRepository:
                 "select * from background_task_events "
                 f"where {' and '.join(clauses)} order by seq limit ?",
                 tuple(params),
+            ).fetchall()
+            return [_event_from_row(row) for row in rows]
+
+    def list_task_timeline_after(
+        self,
+        task_id: str,
+        *,
+        after_seq: int = 0,
+        limit: int = 500,
+    ) -> list[EventEnvelope]:
+        """Read the compact user-facing lifecycle, excluding transport and lease events."""
+
+        placeholders = ",".join("?" for _ in TASK_TIMELINE_EVENT_TYPES)
+        with sqlite_session(
+            self.path,
+            timeout_ms=10000,
+            foreign_keys=True,
+            query_only=True,
+        ) as conn:
+            rows = conn.execute(
+                "select * from background_task_events "
+                f"where seq>? and task_id=? and event_type in ({placeholders}) "
+                "order by seq limit ?",
+                (
+                    max(0, int(after_seq)),
+                    str(task_id).strip(),
+                    *TASK_TIMELINE_EVENT_TYPES,
+                    max(1, min(int(limit), 5000)),
+                ),
             ).fetchall()
             return [_event_from_row(row) for row in rows]
 

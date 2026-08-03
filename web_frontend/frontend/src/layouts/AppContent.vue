@@ -12,23 +12,6 @@
 
       <!-- 主内容区 -->
       <div class="app-main">
-        <n-button
-          v-if="uiStore.leftSidebarCollapsed"
-          class="sidebar-restore left"
-          size="small"
-          :title="t('layout.expandLeftSidebar')"
-          :aria-label="t('layout.expandLeftSidebar')"
-          @click="uiStore.toggleLeftSidebar"
-        >
-          <template #icon>
-            <n-icon><ChevronForward /></n-icon>
-          </template>
-        </n-button>
-
-        <!-- 左侧边栏 -->
-        <AppSidebar v-if="!uiStore.leftSidebarCollapsed" />
-
-        <!-- 中间内容 -->
         <main class="app-content">
           <router-view v-slot="{ Component }">
             <transition name="fade" mode="out-in">
@@ -36,22 +19,6 @@
             </transition>
           </router-view>
         </main>
-
-        <!-- 右侧边栏 -->
-        <AppRightSidebar v-if="rightSidebarAvailable && !uiStore.rightSidebarCollapsed" />
-
-        <n-button
-          v-if="rightSidebarAvailable && uiStore.rightSidebarCollapsed"
-          class="sidebar-restore right"
-          size="small"
-          :title="t('layout.expandRightSidebar')"
-          :aria-label="t('layout.expandRightSidebar')"
-          @click="uiStore.toggleRightSidebar"
-        >
-          <template #icon>
-            <n-icon><ChevronBack /></n-icon>
-          </template>
-        </n-button>
       </div>
     </div>
 
@@ -75,15 +42,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
-import { NButton, NIcon } from 'naive-ui'
-import { useRoute } from 'vue-router'
-import { ChevronBack, ChevronForward } from '@/components/icons'
 import { useUiStore } from '@/stores/ui'
-import { useI18n } from '@/composables/useI18n'
 import AppHeader from '@/components/common/AppHeader.vue'
-import AppSidebar from '@/components/common/AppSidebar.vue'
-import AppRightSidebar from '@/components/common/AppRightSidebar.vue'
 import AppLoadingBar from '@/components/common/AppLoadingBar.vue'
 import AppNotifications from '@/components/common/AppNotifications.vue'
 import TaskNotificationManager from '@/components/common/TaskNotificationManager.vue'
@@ -99,9 +59,6 @@ withDefaults(defineProps<{
 })
 
 const uiStore = useUiStore()
-const route = useRoute()
-const { t } = useI18n()
-const rightSidebarAvailable = computed(() => route.meta.rightSidebarAvailable !== false)
 </script>
 
 <style scoped>
@@ -147,40 +104,4 @@ const rightSidebarAvailable = computed(() => route.meta.rightSidebarAvailable !=
   transform: translateY(4px);
 }
 
-.sidebar-restore {
-  position: absolute;
-  z-index: 8;
-  top: 16px;
-  width: 24px;
-  height: 48px;
-  border: 1px solid var(--app-border);
-  background: var(--app-surface);
-  color: var(--app-text);
-  cursor: pointer;
-  box-shadow: var(--app-shadow-sm);
-  transition: background-color 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
-  animation: app-fade-in 0.24s ease both;
-}
-
-.sidebar-restore:active {
-  transform: scale(0.95);
-}
-
-.sidebar-restore.left {
-  left: 0;
-  border-left: 0;
-  border-radius: 0 var(--app-radius-md) var(--app-radius-md) 0;
-}
-
-.sidebar-restore.right {
-  right: 0;
-  border-right: 0;
-  border-radius: var(--app-radius-md) 0 0 var(--app-radius-md);
-}
-
-.sidebar-restore:hover {
-  background: var(--app-surface-muted);
-  border-color: var(--app-border-hover);
-  box-shadow: var(--app-shadow-md);
-}
 </style>

@@ -12,6 +12,7 @@ from typing import Any, Callable, Protocol
 from uuid import uuid4
 
 from agent_factory.collaboration_system.execution_registry import ExecutionRegistry, ManagedProcess
+from agent_factory.collaboration_system.progress_summary import ProgressReport
 from agent_factory.collaboration_system.persistence import (
     EventRepository,
     SchedulerSettingsRepository,
@@ -88,6 +89,12 @@ class TaskExecutionContext:
 
     def emit(self, event_type: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         return self._emit(event_type, dict(payload or {}))
+
+    def report_progress(self, report: ProgressReport) -> dict[str, Any]:
+        """Persist one user-facing semantic progress report for this task."""
+
+        self.raise_if_interrupted()
+        return self._emit("background_task_progress_report", report.model_dump(mode="json"))
 
     def heartbeat(self) -> None:
         self.raise_if_interrupted()

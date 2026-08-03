@@ -1,12 +1,5 @@
 <template>
-  <BackgroundTaskCard
-    v-for="taskId in backgroundTaskIds"
-    :key="taskId"
-    :background-task-id="taskId"
-    :fallback-title="displayName"
-  />
   <details
-    v-if="backgroundTaskIds.length === 0"
     class="tool-execution-card"
     :class="[`tool-state-${state}`]"
     :open="active || state === 'failed'"
@@ -129,7 +122,6 @@ import {
   ToolBox,
 } from '@vicons/carbon'
 import ResourceIcon from '@/components/common/ResourceIcon.vue'
-import BackgroundTaskCard from '@/components/chat/BackgroundTaskCard.vue'
 import { useI18n } from '@/composables/useI18n'
 import { workspaceResourceUrl } from '@/utils/workspaceResources'
 import { toolPresentation } from '@/utils/toolPresentation'
@@ -202,15 +194,6 @@ const resultRecord = computed<Record<string, any> | null>(() => {
   return record.output && typeof record.output === 'object' && !Array.isArray(record.output)
     ? record.output as Record<string, any>
     : record
-})
-const backgroundTaskIds = computed(() => {
-  if (!['agent_manufacture', 'agent_delegate', 'agent_evolve', 'agent_team'].includes(props.part.toolName)) return []
-  const direct = String(resultRecord.value?.task_id || '').trim()
-  if (direct) return [direct]
-  const tasks = Array.isArray(resultRecord.value?.tasks) ? resultRecord.value.tasks : []
-  return tasks
-    .map((task: unknown) => task && typeof task === 'object' ? String((task as Record<string, unknown>).task_id || '').trim() : '')
-    .filter((taskId: string) => taskId.length > 0)
 })
 const resultFacts = computed(() => {
   const result = resultRecord.value

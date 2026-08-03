@@ -101,7 +101,11 @@ def create_background_task_router() -> APIRouter:
         try:
             service = background_task_service()
             service.get(task_id)
-            events = service.events.list_after(after_seq=after, task_id=task_id, limit=limit)
+            events = service.events.list_task_timeline_after(
+                task_id,
+                after_seq=after,
+                limit=limit,
+            )
             return {"events": [event.model_dump(mode="json") for event in events]}
         except Exception as exc:
             raise _http_error(exc) from exc

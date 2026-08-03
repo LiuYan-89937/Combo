@@ -37,9 +37,6 @@ const director = useShowcaseDirector({
 })
 
 uiStore.setThemeMode('light')
-uiStore.leftSidebarWidth = 260
-uiStore.setRightSidebarWidth(260)
-uiStore.rightSidebarCollapsed = false
 applyPaletteToRoot(palette.value)
 document.documentElement.dataset.theme = 'light'
 document.documentElement.lang = 'zh-CN'

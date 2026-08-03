@@ -22,6 +22,10 @@ class ModelPoolStoreError(RuntimeError):
 
 
 SQLITE_BUSY_TIMEOUT_MS = 10000
+INFRASTRUCTURE_MODEL_ROLE_KINDS = {
+    "task": "chat",
+    "embedding": "embedding",
+}
 
 
 class ModelPoolStore:
@@ -240,11 +244,39 @@ class ModelPoolStore:
     def embedding_binding(self) -> str | None:
         """Return the model used for knowledge-base and memory embeddings."""
 
+        return self.role_binding("embedding")
+
+    def task_model_binding(self) -> str | None:
+        """Return the explicitly configured small-task chat model."""
+
+        return self.role_binding("task")
+
+    def infrastructure_bindings(self) -> dict[str, str | None]:
+        """Return infrastructure model bindings as one coherent configuration."""
+
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    "select role, profile_id from model_role_bindings where role in (?, ?)",
+                    tuple(INFRASTRUCTURE_MODEL_ROLE_KINDS),
+                ).fetchall()
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc).lower():
+                raise
+            rows = []
+        resolved = {str(row["role"]): str(row["profile_id"]) for row in rows}
+        return {role: resolved.get(role) for role in INFRASTRUCTURE_MODEL_ROLE_KINDS}
+
+    def role_binding(self, role: str) -> str | None:
+        normalized_role = str(role or "").strip()
+        if normalized_role not in INFRASTRUCTURE_MODEL_ROLE_KINDS:
+            raise ModelPoolStoreError(f"unsupported infrastructure model role: {normalized_role}")
+
         try:
             with self._connect() as conn:
                 row = conn.execute(
                     "select profile_id from model_role_bindings where role = ?",
-                    ("embedding",),
+                    (normalized_role,),
                 ).fetchone()
         except sqlite3.OperationalError as exc:
             if "no such table" not in str(exc).lower():
@@ -253,50 +285,86 @@ class ModelPoolStore:
         return str(row["profile_id"]) if row else None
 
     def save_embedding_binding(self, profile_id: str | None) -> str | None:
-        """Persist only the infrastructure embedding binding.
+        return self.save_role_binding("embedding", profile_id)
 
-        Chat-role defaults are intentionally not part of the model-pool UI or
-        runtime routing. They remain in the legacy table only so older local
-        databases can be opened without a destructive migration.
-        """
+    def save_task_model_binding(self, profile_id: str | None) -> str | None:
+        return self.save_role_binding("task", profile_id)
 
-        normalized = str(profile_id or "").strip() or None
-        if normalized is not None:
-            profile = self.require_profile(normalized)
-            if profile.kind != "embedding":
-                raise ModelPoolStoreError(
-                    f"embedding binding requires an embedding model profile: {normalized}"
-                )
-            if not profile.enabled:
-                raise ModelPoolStoreError(
-                    f"embedding binding requires an enabled model profile: {normalized}"
-                )
-            credential = self.require_credential(profile.credential_id)
-            if not credential.enabled or not credential.api_key:
-                raise ModelPoolStoreError(
-                    f"embedding binding requires an enabled credential with an API key: {normalized}"
-                )
+    def save_role_binding(self, role: str, profile_id: str | None) -> str | None:
+        normalized_role = str(role or "").strip()
+        normalized = self._validated_role_binding(normalized_role, profile_id)
         with self._connect(write=True) as conn:
-            if normalized is None:
-                conn.execute("delete from model_role_bindings where role = ?", ("embedding",))
-            else:
-                conn.execute(
-                    """
-                    insert into model_role_bindings (role, profile_id, updated_at)
-                    values (?, ?, ?)
-                    on conflict(role) do update set
-                      profile_id=excluded.profile_id,
-                      updated_at=excluded.updated_at
-                    """,
-                    ("embedding", normalized, utc_now_text()),
-                )
-        return self.embedding_binding()
+            self._write_role_binding(conn, normalized_role, normalized)
+        return self.role_binding(normalized_role)
+
+    def save_infrastructure_bindings(
+        self,
+        bindings: dict[str, str | None],
+    ) -> dict[str, str | None]:
+        """Validate and save all infrastructure bindings atomically."""
+
+        unknown = set(bindings) - set(INFRASTRUCTURE_MODEL_ROLE_KINDS)
+        if unknown:
+            raise ModelPoolStoreError(
+                "unsupported infrastructure model roles: " + ", ".join(sorted(unknown))
+            )
+        current = self.infrastructure_bindings()
+        requested = {**current, **bindings}
+        validated = {
+            role: self._validated_role_binding(role, requested.get(role))
+            for role in INFRASTRUCTURE_MODEL_ROLE_KINDS
+        }
+        with self._connect(write=True) as conn:
+            for role, profile_id in validated.items():
+                self._write_role_binding(conn, role, profile_id)
+        return self.infrastructure_bindings()
+
+    def _validated_role_binding(self, role: str, profile_id: str | None) -> str | None:
+        expected_kind = INFRASTRUCTURE_MODEL_ROLE_KINDS.get(role)
+        if expected_kind is None:
+            raise ModelPoolStoreError(f"unsupported infrastructure model role: {role}")
+        normalized = str(profile_id or "").strip() or None
+        if normalized is None:
+            return None
+        profile = self.require_profile(normalized)
+        if profile.kind != expected_kind:
+            raise ModelPoolStoreError(
+                f"{role} binding requires a {expected_kind} model profile: {normalized}"
+            )
+        if not profile.enabled:
+            raise ModelPoolStoreError(f"{role} binding requires an enabled model profile: {normalized}")
+        credential = self.require_credential(profile.credential_id)
+        if not credential.enabled or not credential.api_key:
+            raise ModelPoolStoreError(
+                f"{role} binding requires an enabled credential with an API key: {normalized}"
+            )
+        return normalized
+
+    @staticmethod
+    def _write_role_binding(
+        conn: sqlite3.Connection,
+        role: str,
+        profile_id: str | None,
+    ) -> None:
+        if profile_id is None:
+            conn.execute("delete from model_role_bindings where role = ?", (role,))
+            return
+        conn.execute(
+            """
+            insert into model_role_bindings (role, profile_id, updated_at)
+            values (?, ?, ?)
+            on conflict(role) do update set
+              profile_id=excluded.profile_id,
+              updated_at=excluded.updated_at
+            """,
+            (role, profile_id, utc_now_text()),
+        )
 
     def roles_for_profile(self, profile_id: str) -> list[str]:
         with self._connect() as conn:
             rows = conn.execute(
-                "select role from model_role_bindings where role = ? and profile_id = ? order by role",
-                ("embedding", profile_id),
+                "select role from model_role_bindings where profile_id = ? order by role",
+                (profile_id,),
             ).fetchall()
         return [str(row["role"]) for row in rows]
 

@@ -84,27 +84,32 @@ def create_model_pool_router() -> APIRouter:
         ]
         return {"profiles": profiles}
 
-    @router.get("/embedding-binding")
-    def get_embedding_binding():
+    @router.get("/infrastructure-bindings")
+    def get_infrastructure_bindings():
         store = ModelPoolStore()
         return {
-            "binding": store.embedding_binding(),
+            "bindings": store.infrastructure_bindings(),
             "defaults": {
                 "context_window_tokens": DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS,
                 "compression_trigger_tokens": DEFAULT_MODEL_COMPRESSION_TRIGGER_TOKENS,
             },
         }
 
-    @router.put("/embedding-binding")
-    def save_embedding_binding(payload: dict[str, Any]):
-        raw_profile_id = payload.get("profile_id")
-        profile_id = str(raw_profile_id).strip() if raw_profile_id is not None else None
+    @router.put("/infrastructure-bindings")
+    def save_infrastructure_bindings(payload: dict[str, Any]):
+        raw_bindings = payload.get("bindings")
+        if not isinstance(raw_bindings, dict):
+            raise HTTPException(status_code=422, detail="bindings must be an object")
+        bindings = {
+            str(role): (str(profile_id).strip() if profile_id is not None else None)
+            for role, profile_id in raw_bindings.items()
+        }
         try:
-            saved = ModelPoolStore().save_embedding_binding(profile_id)
+            saved = ModelPoolStore().save_infrastructure_bindings(bindings)
             reset_embedding_model()
         except Exception as exc:
             raise _http_error(exc) from exc
-        return {"binding": saved}
+        return {"bindings": saved}
 
     @router.get("/usage")
     async def usage_summary(group_by: str = "model", days: int = 14):

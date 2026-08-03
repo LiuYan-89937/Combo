@@ -45,6 +45,23 @@ const TOOL_PRESENTATIONS: Record<string, Pick<ToolPresentation, 'category' | 'la
   tool_output: { category: 'read', labelKey: 'tool.names.toolOutput' },
 }
 
+const BACKGROUND_TASK_LAUNCH_TOOLS = new Set([
+  'agent_manufacture',
+  'agent_delegate',
+  'agent_evolve',
+  'agent_team',
+])
+
+export function isBackgroundTaskLaunchTool(toolName: unknown): boolean {
+  return BACKGROUND_TASK_LAUNCH_TOOLS.has(String(toolName || '').trim())
+}
+
+export function conversationVisibleParts(parts: ChatMessagePart[]): ChatMessagePart[] {
+  return mergeToolMessageParts(parts).filter((part) => (
+    part.type !== 'tool_execution' || !isBackgroundTaskLaunchTool(part.toolName)
+  ))
+}
+
 export function toolPresentation(
   toolName: string,
   argumentsValue: unknown,

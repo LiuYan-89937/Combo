@@ -4,6 +4,7 @@ import { useRuntimeStore } from '@/stores/runtime'
 import type { ChatMessagePart, ToolActivity, TranscriptItem } from '@/types/protocol'
 import { isToolActivityActive, isToolActivityPendingApproval } from '@/utils/toolActivityState'
 import { textPart } from '@/stores/runtime/messageParts'
+import { conversationVisibleParts } from '@/utils/toolPresentation'
 
 export type FactoryTimelineItem =
   | { kind: 'message'; id: string; timestamp: string; order: number; message: TranscriptItem }
@@ -26,6 +27,7 @@ export function useFactoryMessageProjection() {
     const items: FactoryTimelineItem[] = []
     runtimeStore.transcript.forEach((message, index) => {
       if (['queued', 'steering'].includes(String(message.metadata?.dispatch_state || ''))) return
+      if (conversationVisibleParts(message.parts).length === 0) return
       items.push({
         kind: 'message',
         id: message.id,
@@ -153,7 +155,7 @@ function compareTimelineItems(left: FactoryTimelineItem, right: FactoryTimelineI
 }
 
 function messageHasDisplayParts(message: TranscriptItem): boolean {
-  return message.parts.some(partHasDisplayContent)
+  return conversationVisibleParts(message.parts).some(partHasDisplayContent)
 }
 
 function messagePartsKey(message: TranscriptItem): string {

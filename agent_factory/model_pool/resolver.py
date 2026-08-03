@@ -106,14 +106,31 @@ def resolve_available_chat_model(
     *,
     store: ModelPoolStore | None = None,
 ) -> ResolvedChatModelProfile | None:
+    model_store = store or ModelPoolStore(setup=False)
+    if role == "task":
+        profile_id = model_store.task_model_binding()
+        if not profile_id:
+            return None
+        try:
+            return resolve_chat_model_profile(
+                ModelProfileBinding(
+                    source="model_pool",
+                    profile_id=profile_id,
+                    selection_source="manual",
+                    reason="Use the explicitly configured task model.",
+                ),
+                role=role,
+                store=model_store,
+            )
+        except (LookupError, ValueError):
+            return None
     binding = ModelProfileBinding(
         source="model_pool",
         selection_source="auto",
         reason=f"Select an available {role} model from the configured model pool.",
     )
     try:
-        model_store = store or ModelPoolStore(setup=False)
-        return resolve_chat_model_binding(binding, role=role, store=store)
+        return resolve_chat_model_binding(binding, role=role, store=model_store)
     except LookupError:
         return None
 

@@ -10,8 +10,6 @@ import {
 import type { PluginListener } from '@tauri-apps/api/core'
 import type { Router } from 'vue-router'
 import { translate, type I18nKey } from '@/i18n'
-import { postCommand } from '@/api/http'
-import { switchSessionCommand } from '@/api/commands'
 import { useAgentGroupStore } from '@/stores/agentGroup'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useTaskNotificationPreferencesStore, type TaskNotificationCategory } from '@/stores/taskNotificationPreferences'
@@ -182,7 +180,7 @@ async function isCurrentTargetVisible(target: TaskNotificationTarget): Promise<b
   if (target.kind === 'agentGroup') {
     return routeName === 'AgentGroup' && useAgentGroupStore().activeGroup?.group_id === target.groupId
   }
-  if (!['Factory', 'Manufacturing', 'Evolution'].includes(routeName)) return false
+  if (routeName !== 'Factory') return false
   const runtimeStore = useRuntimeStore()
   if (target.conversationScope) {
     return runtimeStore.activeConversationScope === target.conversationScope
@@ -219,15 +217,7 @@ async function openNotificationTarget(target: TaskNotificationTarget): Promise<v
     await focusPromise
     return
   }
-  const routeName = target.mode === 'create_agent'
-    ? 'Manufacturing'
-    : target.mode === 'evolve_agent'
-      ? 'Evolution'
-      : 'Factory'
-  await router.push({ name: routeName })
-  if (target.sessionId) {
-    await postCommand(switchSessionCommand(target.sessionId, target.mode))
-  }
+  await router.push({ name: 'Factory' })
   await focusPromise
 }
 

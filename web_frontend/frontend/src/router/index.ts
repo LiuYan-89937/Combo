@@ -23,16 +23,6 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/FactoryView.vue'),
   },
   {
-    path: '/manufacturing',
-    name: 'Manufacturing',
-    component: () => import('@/views/FactoryView.vue'),
-  },
-  {
-    path: '/evolution',
-    name: 'Evolution',
-    component: () => import('@/views/FactoryView.vue'),
-  },
-  {
     path: '/agents',
     name: 'Agents',
     component: () => import('@/views/PublishedView.vue'),
@@ -41,7 +31,6 @@ export const routes: RouteRecordRaw[] = [
     path: '/agent-hub',
     name: 'AgentHub',
     component: () => import('@/views/AgentHubView.vue'),
-    meta: { rightSidebarAvailable: false },
   },
   {
     path: '/agent-group',
@@ -52,25 +41,21 @@ export const routes: RouteRecordRaw[] = [
     path: '/knowledge',
     name: 'Knowledge',
     component: () => import('@/views/KnowledgeView.vue'),
-    meta: { rightSidebarAvailable: false },
   },
   {
     path: '/scheduler',
     name: 'Scheduler',
     component: () => import('@/views/SchedulerView.vue'),
-    meta: { rightSidebarAvailable: false },
   },
   {
     path: '/extensions',
     name: 'Extensions',
     component: () => import('@/views/ExtensionsView.vue'),
-    meta: { rightSidebarAvailable: false },
   },
   {
     path: '/model-pool',
     name: 'ModelPool',
     component: () => import('@/views/ModelPoolView.vue'),
-    meta: { rightSidebarAvailable: false },
   },
 ]
 

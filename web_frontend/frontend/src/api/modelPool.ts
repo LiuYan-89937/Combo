@@ -180,6 +180,11 @@ export interface ModelUsageSummary {
   series: ModelUsageSeries[]
 }
 
+export interface InfrastructureModelBindings {
+  task: string | null
+  embedding: string | null
+}
+
 export const modelPoolApi = {
   providers: () => requestJson<{ providers: ModelProviderProfile[] }>('/api/model-pool/providers'),
   credentials: () => requestJson<{ credentials: ModelPoolCredential[] }>('/api/model-pool/credentials'),
@@ -198,12 +203,14 @@ export const modelPoolApi = {
       method: 'DELETE',
     }),
   profiles: () => requestJson<{ profiles: ModelPoolProfile[] }>('/api/model-pool/profiles'),
-  embeddingBinding: () =>
-    requestJson<{ binding: string | null; defaults: ModelPoolDefaults }>('/api/model-pool/embedding-binding'),
-  saveEmbeddingBinding: (profileId: string | null) =>
-    requestJson<{ binding: string | null }>('/api/model-pool/embedding-binding', {
+  infrastructureBindings: () =>
+    requestJson<{ bindings: InfrastructureModelBindings; defaults: ModelPoolDefaults }>(
+      '/api/model-pool/infrastructure-bindings',
+    ),
+  saveInfrastructureBindings: (bindings: InfrastructureModelBindings) =>
+    requestJson<{ bindings: InfrastructureModelBindings }>('/api/model-pool/infrastructure-bindings', {
       method: 'PUT',
-      body: JSON.stringify({ profile_id: profileId }),
+      body: JSON.stringify({ bindings }),
     }),
   select: (payload: Record<string, unknown>) =>
     requestJson<ModelSelectionResult>('/api/model-pool/select', {

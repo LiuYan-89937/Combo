@@ -37,25 +37,16 @@
           </div>
         </section>
 
-        <section v-if="view.subtasks.length" class="task-section">
-          <h4>{{ t('backgroundTask.taskChain') }}</h4>
-          <div class="subtask-list">
-            <div v-for="task in view.subtasks" :key="task.task_id" class="subtask-item">
-              <span class="status-dot" :class="`dot-${normalizeStatus(task.status)}`" />
+        <section v-if="view.reports.length" class="task-section">
+          <h4>{{ t('backgroundTask.progressReports') }}</h4>
+          <div class="progress-report-list">
+            <div v-for="report in view.reports" :key="report.phaseId" class="progress-report-item">
+              <span class="status-dot" :class="`dot-${normalizeStatus(report.status)}`" />
               <span>
-                <strong>{{ task.task_text }}</strong>
-                <small>{{ task.assignee_package_id }} · {{ taskStatusText(task.status) }}</small>
+                <strong>{{ report.title }}</strong>
+                <small>{{ report.summary }}</small>
               </span>
-            </div>
-          </div>
-        </section>
-
-        <section v-if="view.activities.length" class="task-section">
-          <h4>{{ t('backgroundTask.activity') }}</h4>
-          <div class="activity-list">
-            <div v-for="activity in view.activities" :key="activity.message_id" class="activity-item">
-              <span>{{ activity.content }}</span>
-              <time>{{ formatTime(activity.created_at) }}</time>
+              <time>{{ formatTime(report.occurredAt) }}</time>
             </div>
           </div>
         </section>
@@ -108,7 +99,7 @@ import {
 } from '@/api/backgroundTasks'
 
 const props = defineProps<{
-  backgroundTaskId: string
+  task: BackgroundTask
   fallbackTitle?: string
 }>()
 
@@ -118,21 +109,23 @@ const submitting = ref(false)
 const responseText = ref('')
 const actionError = ref('')
 const expanded = ref(true)
-const task = ref<BackgroundTask | null>(null)
+const task = ref<BackgroundTask>(props.task)
 const events = ref<BackgroundTaskEvent[]>([])
 let pollTimer: ReturnType<typeof setTimeout> | null = null
 const kindIcon = computed(() => task.value?.type === 'evolve' ? Upgrade : Bot)
 const view = computed(() => buildView(task.value, events.value, props.fallbackTitle || t('backgroundTask.title')))
 const terminal = computed(() => ['succeeded', 'failed', 'cancelled'].includes(view.value.status))
 const statusLabel = computed(() => t(`backgroundTask.status.${view.value.status}` as any))
-const phaseLabel = computed(() => t(`backgroundTask.phase.${view.value.phase}` as any))
+const phaseLabel = computed(() => view.value.latestSummary || t(`backgroundTask.phase.${view.value.phase}` as any))
 
-onMounted(loadSnapshot)
+onMounted(loadEvents)
 onBeforeUnmount(stopPolling)
-watch(() => props.backgroundTaskId, () => {
-  task.value = null
+watch(() => props.task, (value) => {
+  task.value = value
+}, { deep: true })
+watch(() => props.task.task_id, () => {
   events.value = []
-  loadSnapshot()
+  loadEvents()
 })
 watch(terminal, isTerminal => {
   if (isTerminal) {
@@ -141,20 +134,20 @@ watch(terminal, isTerminal => {
   }
 }, { immediate: true })
 
-async function loadSnapshot() {
-  if (!props.backgroundTaskId) return
-  loading.value = true
+async function loadEvents() {
+  if (!props.task.task_id) return
+  loading.value = events.value.length === 0
   actionError.value = ''
   try {
-    const [taskResponse, eventResponse] = await Promise.all([
-      backgroundTasksApi.get(props.backgroundTaskId),
-      backgroundTasksApi.events(props.backgroundTaskId, events.value.at(-1)?.seq || 0),
-    ])
-    task.value = taskResponse.task
+    const eventResponse = await backgroundTasksApi.events(
+      props.task.task_id,
+      events.value.at(-1)?.seq || 0,
+    )
     if (eventResponse.events.length) {
-      const bySequence = new Map(events.value.map(item => [item.seq, item]))
-      for (const event of eventResponse.events) bySequence.set(event.seq, event)
-      events.value = Array.from(bySequence.values()).sort((left, right) => left.seq - right.seq)
+      const known = new Set(events.value.map(item => item.seq))
+      for (const event of eventResponse.events) {
+        if (!known.has(event.seq)) events.value.push(event)
+      }
     }
   } catch (error) {
     actionError.value = error instanceof Error ? error.message : String(error)
@@ -166,7 +159,7 @@ async function loadSnapshot() {
 
 function schedulePoll() {
   stopPolling()
-  pollTimer = setTimeout(loadSnapshot, 1500)
+  pollTimer = setTimeout(loadEvents, 2000)
 }
 
 function stopPolling() {
@@ -215,7 +208,7 @@ function taskStatusText(status: unknown): string {
 function normalizeStatus(status: unknown): string {
   const value = String(status || '')
   if (value === 'succeeded') return 'succeeded'
-  if (['failed', 'cancelled', 'queued', 'waiting_approval', 'waiting_external', 'cancelling'].includes(value)) {
+  if (['failed', 'cancelled', 'queued', 'claimed', 'waiting_approval', 'waiting_external', 'cancelling'].includes(value)) {
     return value
   }
   return 'running'
@@ -225,17 +218,28 @@ function buildView(task: BackgroundTask | null, events: BackgroundTaskEvent[], f
   const status = task?.status || 'queued'
   const packageId = String(task?.assignee_package_id || '').trim()
   const participants = packageId ? [{ key: packageId, name: packageId, status }] : []
-  const subtasks = task ? [{
-    task_id: task.task_id,
-    task_text: task.task_text || fallbackTitle,
-    assignee_package_id: packageId || task.type,
-    status,
-  }] : []
-  const activities = events.slice(-8).reverse().map(event => ({
-    message_id: event.event_id,
-    content: eventLabel(event),
-    created_at: event.created_at,
-  }))
+  const reportsByPhase = new Map<string, {
+    phaseId: string
+    title: string
+    summary: string
+    status: string
+    occurredAt: string
+  }>()
+  for (const event of events) {
+    if (event.event_type !== 'background_task_progress_report') continue
+    const phaseId = String(event.payload.phase_id || '').trim()
+    const title = String(event.payload.title || '').trim()
+    const summary = String(event.payload.summary || '').trim()
+    if (!phaseId || !title || !summary) continue
+    reportsByPhase.set(phaseId, {
+      phaseId,
+      title,
+      summary,
+      status: String(event.payload.status || 'completed'),
+      occurredAt: String(event.payload.occurred_at || event.created_at),
+    })
+  }
+  const reports = Array.from(reportsByPhase.values())
   const artifacts = artifactViews(task)
   const phase = status
   const pending = status === 'waiting_approval'
@@ -250,12 +254,12 @@ function buildView(task: BackgroundTask | null, events: BackgroundTaskEvent[], f
     phase,
     participants,
     participantCount: participants.length,
-    subtasks,
-    activities,
+    reports,
+    latestSummary: reports.at(-1)?.summary || '',
     artifacts,
     pending,
     error,
-    hasDetails: participants.length > 0 || subtasks.length > 0 || activities.length > 0 || artifacts.length > 0 || !!pending || !!error,
+    hasDetails: participants.length > 0 || reports.length > 0 || artifacts.length > 0 || !!pending || !!error,
   }
 }
 
@@ -266,11 +270,6 @@ function artifactViews(task: BackgroundTask | null): Array<{ key: string; name: 
     if (key) artifacts.set(key, { key, name: String(artifact?.name || artifact?.path || key) })
   }
   return Array.from(artifacts.values())
-}
-
-function eventLabel(event: BackgroundTaskEvent): string {
-  const status = String(event.payload.status || '')
-  return status ? taskStatusText(status) : event.event_type.split('_').join(' ')
 }
 
 function formatTime(value: unknown): string {
@@ -340,20 +339,22 @@ details[open] > summary .task-chevron { transform: rotate(180deg); }
 .participant-item { display: grid; gap: 1px; padding: 6px 9px; border: 1px solid var(--app-border); border-radius: var(--app-radius-md); }
 .participant-item span { font-size: 12px; }
 .participant-item small { color: var(--app-text-muted); font-size: 10px; }
-.subtask-list,
-.activity-list { display: grid; gap: 7px; }
-.subtask-item { display: grid; grid-template-columns: 8px minmax(0, 1fr); align-items: start; gap: 8px; }
-.subtask-item > span:last-child { display: grid; gap: 2px; }
-.subtask-item strong { font-size: 12px; font-weight: 500; }
-.subtask-item small { color: var(--app-text-muted); font-size: 10px; }
+.progress-report-list { display: grid; gap: 10px; }
+.progress-report-item {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+}
+.progress-report-item > span:nth-child(2) { display: grid; gap: 3px; }
+.progress-report-item strong { font-size: 12px; font-weight: 600; }
+.progress-report-item small { color: var(--app-text-muted); font-size: 11px; line-height: 1.45; }
+.progress-report-item time { color: var(--app-text-subtle); font-size: 10px; }
 .status-dot { width: 6px; height: 6px; margin-top: 5px; border-radius: 50%; background: var(--app-text-subtle); }
 .dot-running { background: var(--app-info); }
 .dot-completed { background: var(--app-success); }
 .dot-failed,
 .dot-cancelled { background: var(--app-error); }
-.activity-item { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; }
-.activity-item span { min-width: 0; overflow-wrap: anywhere; }
-.activity-item time { flex: 0 0 auto; color: var(--app-text-subtle); font-size: 10px; }
 .artifact-list { display: flex; flex-wrap: wrap; gap: 6px; }
 .artifact-list span { padding: 4px 8px; border: 1px solid var(--app-border); border-radius: var(--app-radius-md); font-size: 11px; }
 .task-notice { display: grid; gap: 3px; padding: 9px var(--app-space-md); font-size: 11px; }

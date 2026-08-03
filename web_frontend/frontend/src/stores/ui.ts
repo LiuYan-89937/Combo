@@ -13,17 +13,10 @@ import {
 } from '@/i18n'
 
 export type ThemeMode = 'light' | 'dark' | 'auto'
-export type RightSidebarTab = 'workspace' | 'status' | 'sessions'
-
-export const RIGHT_SIDEBAR_WIDTH = {
-  default: 320,
-  min: 280,
-  max: 760,
-} as const
+export type ConversationDockPanel = 'workspace' | 'memory' | 'sessions' | 'tasks'
 
 const STORAGE_KEYS = {
   locale: localeStorageKey,
-  rightSidebarWidth: 'fast-agent-factory.rightSidebarWidth',
   themeMode: 'fast-agent-factory.themeMode',
 } as const
 
@@ -50,17 +43,6 @@ function writeStorage(key: string, value: string): void {
   window.localStorage.setItem(key, value)
 }
 
-function readStoredNumber(key: string, fallback: number, min: number, max: number): number {
-  if (typeof window === 'undefined') return fallback
-  const stored = Number(window.localStorage.getItem(key))
-  if (!Number.isFinite(stored)) return fallback
-  return clampNumber(stored, min, max)
-}
-
-function clampNumber(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), max)
-}
-
 export const useUiStore = defineStore('ui', () => {
   // ========== 主题 ==========
   const themeMode = ref<ThemeMode>(readStoredThemeMode())
@@ -68,18 +50,7 @@ export const useUiStore = defineStore('ui', () => {
   const locale = ref<Locale>(readStoredLocale())
 
   // ========== 布局 ==========
-  const leftSidebarCollapsed = ref(false)
-  const rightSidebarCollapsed = ref(false)
-  const leftSidebarWidth = ref(280)
-  const rightSidebarWidth = ref(
-    readStoredNumber(
-      STORAGE_KEYS.rightSidebarWidth,
-      RIGHT_SIDEBAR_WIDTH.default,
-      RIGHT_SIDEBAR_WIDTH.min,
-      RIGHT_SIDEBAR_WIDTH.max,
-    )
-  )
-  const activeRightSidebarTab = ref<RightSidebarTab>('workspace')
+  const conversationDockPanel = ref<ConversationDockPanel | null>(null)
 
   // ========== 弹窗/抽屉 ==========
   const settingsDrawerOpen = ref(false)
@@ -147,31 +118,12 @@ export const useUiStore = defineStore('ui', () => {
   })
 
   // ========== Actions ==========
-  function toggleLeftSidebar(): void {
-    leftSidebarCollapsed.value = !leftSidebarCollapsed.value
+  function setConversationDockPanel(panel: ConversationDockPanel | null): void {
+    conversationDockPanel.value = panel
   }
 
-  function toggleRightSidebar(): void {
-    rightSidebarCollapsed.value = !rightSidebarCollapsed.value
-  }
-
-  function openRightSidebar(tab: RightSidebarTab = activeRightSidebarTab.value): void {
-    rightSidebarCollapsed.value = false
-    activeRightSidebarTab.value = tab
-  }
-
-  function setRightSidebarTab(tab: RightSidebarTab): void {
-    activeRightSidebarTab.value = tab
-  }
-
-  function setRightSidebarWidth(width: number, maxWidth = RIGHT_SIDEBAR_WIDTH.max): void {
-    const boundedMax = Math.max(
-      RIGHT_SIDEBAR_WIDTH.min,
-      Math.min(maxWidth, RIGHT_SIDEBAR_WIDTH.max),
-    )
-    const nextWidth = Math.round(clampNumber(width, RIGHT_SIDEBAR_WIDTH.min, boundedMax))
-    rightSidebarWidth.value = nextWidth
-    writeStorage(STORAGE_KEYS.rightSidebarWidth, String(nextWidth))
+  function toggleConversationDockPanel(panel: ConversationDockPanel): void {
+    conversationDockPanel.value = conversationDockPanel.value === panel ? null : panel
   }
 
   function setThemeMode(mode: ThemeMode): void {
@@ -236,11 +188,7 @@ export const useUiStore = defineStore('ui', () => {
     themeMode,
     isDarkMode,
     locale,
-    leftSidebarCollapsed,
-    rightSidebarCollapsed,
-    leftSidebarWidth,
-    rightSidebarWidth,
-    activeRightSidebarTab,
+    conversationDockPanel,
     settingsDrawerOpen,
     debugDrawerOpen,
     schedulerActivityDrawerOpen,
@@ -252,11 +200,8 @@ export const useUiStore = defineStore('ui', () => {
     actualTheme,
 
     // Actions
-    toggleLeftSidebar,
-    toggleRightSidebar,
-    openRightSidebar,
-    setRightSidebarTab,
-    setRightSidebarWidth,
+    setConversationDockPanel,
+    toggleConversationDockPanel,
     setThemeMode,
     setLocale,
     toggleSettingsDrawer,

@@ -87,14 +87,18 @@
           <div class="role-binding-panel">
             <div class="content-header">
               <div class="context-title">
-                <n-text strong>{{ t('modelPool.embeddingBinding') }}</n-text>
-                <n-text depth="3" class="context-subtitle">{{ t('modelPool.embeddingBindingHint') }}</n-text>
+                <n-text strong>{{ t('modelPool.infrastructureBindings') }}</n-text>
+                <n-text depth="3" class="context-subtitle">{{ t('modelPool.infrastructureBindingsHint') }}</n-text>
               </div>
-              <n-button type="primary" :loading="savingBindings" @click="saveEmbeddingBinding">
+              <n-button type="primary" :loading="savingBindings" @click="saveInfrastructureBindings">
                 {{ t('common.save') }}
               </n-button>
             </div>
             <div class="form-grid role-binding-grid">
+              <n-form-item :label="t('modelPool.taskModel')">
+                <n-select v-model:value="taskModelBinding" clearable :options="bindingOptions('chat')" />
+                <template #feedback>{{ t('modelPool.taskModelHint') }}</template>
+              </n-form-item>
               <n-form-item :label="t('modelPool.embeddingModel')">
                 <n-select v-model:value="embeddingBinding" clearable :options="bindingOptions('embedding')" />
               </n-form-item>
@@ -444,6 +448,7 @@ const providers = ref<ModelProviderProfile[]>([])
 const credentials = ref<ModelPoolCredential[]>([])
 const profiles = ref<ModelPoolProfile[]>([])
 const modelDefaults = ref<ModelPoolDefaults | null>(null)
+const taskModelBinding = ref<string | null>(null)
 const embeddingBinding = ref<string | null>(null)
 const usageLoading = ref(false)
 const usageGroupBy = ref<ModelUsageGroupBy>('model')
@@ -623,14 +628,15 @@ async function refresh(): Promise<void> {
       modelPoolApi.providers(),
       modelPoolApi.credentials(),
       modelPoolApi.profiles(),
-      modelPoolApi.embeddingBinding(),
+      modelPoolApi.infrastructureBindings(),
       modelPoolApi.usage({ groupBy: usageGroupBy.value, days: usageDays.value }),
     ])
     providers.value = providerData.providers
     credentials.value = credentialData.credentials
     profiles.value = profileData.profiles
     modelDefaults.value = defaultsData.defaults
-    embeddingBinding.value = defaultsData.binding || null
+    taskModelBinding.value = defaultsData.bindings.task || null
+    embeddingBinding.value = defaultsData.bindings.embedding || null
     usageSummary.value = usageData
   } catch (error) {
     message.error(error instanceof Error ? error.message : t('common.requestFailed'))
@@ -650,11 +656,15 @@ async function loadUsage(): Promise<void> {
   }
 }
 
-async function saveEmbeddingBinding(): Promise<void> {
+async function saveInfrastructureBindings(): Promise<void> {
   savingBindings.value = true
   try {
-    const response = await modelPoolApi.saveEmbeddingBinding(embeddingBinding.value)
-    embeddingBinding.value = response.binding || null
+    const response = await modelPoolApi.saveInfrastructureBindings({
+      task: taskModelBinding.value,
+      embedding: embeddingBinding.value,
+    })
+    taskModelBinding.value = response.bindings.task || null
+    embeddingBinding.value = response.bindings.embedding || null
     message.success(t('modelPool.bindingsSaved'))
   } catch (error) {
     message.error(error instanceof Error ? error.message : t('common.requestFailed'))

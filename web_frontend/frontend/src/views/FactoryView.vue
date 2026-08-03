@@ -1,18 +1,6 @@
 <template>
   <div class="factory-view">
     <div class="chat-container">
-      <div v-if="isEvolutionRoute" class="evolution-target-bar">
-        <span class="evolution-target-label">{{ t('factory.evolutionTarget') }}</span>
-        <n-select
-          class="evolution-target-select"
-          :value="selectedEvolutionPackageId"
-          :options="agentPackageOptions"
-          :placeholder="t('factory.evolutionTargetPlaceholder')"
-          filterable
-          @update:value="handleEvolutionPackageSelect"
-        />
-      </div>
-
       <!-- 消息列表 -->
       <div class="messages-section">
         <n-scrollbar ref="scrollbarRef" class="messages-scrollbar">
@@ -106,21 +94,11 @@
           @cancel="handleCancel"
           @steer="handleSteer"
         >
-          <template #auxiliary-action>
-            <n-button
-              text
-              :disabled="!canStartNewConversationSession"
-              @click="startNewConversationSession"
-            >
-              <template #icon>
-                <n-icon><Add /></n-icon>
-              </template>
-              {{ t('agentSessions.newChat') }}
-            </n-button>
-          </template>
+          <template #before-send><ContextProgressControl /></template>
         </MessageInput>
       </div>
     </div>
+    <ConversationFloatingDock :session-id="backgroundTaskSessionId" />
     <TipPanel v-if="tipScopeId" :scope-type="tipScopeType" :scope-id="tipScopeId" />
   </div>
 </template>
@@ -128,8 +106,8 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NButton, NScrollbar, NEmpty, NIcon, NText, NSelect } from 'naive-ui'
-import { Add, ChatbubbleEllipses } from '@/components/icons'
+import { NScrollbar, NEmpty, NIcon, NText } from 'naive-ui'
+import { ChatbubbleEllipses } from '@/components/icons'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useAgentStore } from '@/stores/agent'
 import { useUiStore } from '@/stores/ui'
@@ -143,6 +121,8 @@ import ToolApprovalPanel from '@/components/chat/ToolApprovalPanel.vue'
 import PublishConfirmationPanel from '@/components/chat/PublishConfirmationPanel.vue'
 import ResourceRequestPanel from '@/components/chat/ResourceRequestPanel.vue'
 import SchedulerRunStatusCard from '@/components/scheduler/SchedulerRunStatusCard.vue'
+import ConversationFloatingDock from '@/components/chat/ConversationFloatingDock.vue'
+import ContextProgressControl from '@/components/chat/ContextProgressControl.vue'
 import type { RuntimeAttachmentInput } from '@/types/protocol'
 import type { TranscriptItem } from '@/types/protocol'
 import { useContextReferenceStore } from '@/stores/contextReferences'
@@ -150,10 +130,10 @@ import { messageContextReference } from '@/utils/contextReferences'
 import TipPanel from '@/components/chat/TipPanel.vue'
 import type { TipMessageContext } from '@/stores/tips'
 import { useResourceContext } from '@/composables/useResourceContext'
-import { useConversationSessionNavigation } from '@/composables/useConversationSessionNavigation'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { isAgentSessionsLanding as routeIsAgentSessionsLanding } from '@/utils/agentSessionRoute'
 import { SYSTEM_CHAT_PACKAGE_ID } from '@/utils/resourceScope'
+import { agentPackageConversationScope } from '@/stores/runtime/scopes'
 
 const runtimeStore = useRuntimeStore()
 const agentStore = useAgentStore()
@@ -167,16 +147,13 @@ const scrollbarRef = ref()
 const inputRef = ref()
 const referenceStore = useContextReferenceStore()
 const resourceContext = useResourceContext()
-const { canStartNewConversationSession, startNewConversationSession } = useConversationSessionNavigation()
 const messageWorkspaceContext = computed(() => resourceContext.workspaceContext.value)
 const referenceScope = computed(() => [
   'factory',
   runtimeStore.currentMode,
   runtimeStore.activeFactorySessionId || runtimeStore.activeAgentSessionId || 'new',
 ].join(':'))
-const tipAllowed = computed(() => !['Manufacturing', 'Evolution'].includes(String(route.name || '')))
 const tipScope = computed(() => {
-  if (!tipAllowed.value) return null
   if (runtimeStore.activeAgentSessionId) {
     return { scopeType: 'agent-session', scopeId: runtimeStore.activeAgentSessionId }
   }
@@ -189,10 +166,7 @@ const tipScopeType = computed(() => tipScope.value?.scopeType || 'factory-sessio
 const tipScopeId = computed(() => tipScope.value?.scopeId || '')
 
 const {
-  isEvolutionRoute,
   isAgentSessionLanding,
-  selectedEvolutionPackageId,
-  agentPackageOptions,
   inputPlaceholder,
   inputDisabled,
   loadRuntimeMainModelProfiles,
@@ -203,9 +177,7 @@ const {
   setReasoningIntensity,
   emptyDescription,
   emptyHint,
-  applyRouteMode,
   cancelRequest,
-  handleEvolutionPackageSelect,
   sendMessage,
   steerQueuedRequest,
 } = useFactoryConversation()
@@ -236,6 +208,10 @@ const resourceWorkspaceId = computed(() => String(
     || resourceContext.workspaceContext.value.createAgentSessionId
     || '',
 ).trim())
+
+const backgroundTaskSessionId = computed(() => (
+  runtimeStore.activeAgentSessionId || runtimeStore.activeFactorySessionId || null
+))
 
 const activeSchedulerRunCards = computed(() => {
   const scope = runtimeStore.activeConversationScope
@@ -376,9 +352,7 @@ watch(
 
 async function activateCurrentRoute(): Promise<void> {
   const version = ++routeActivationVersion
-  const openedAgentSession = await openRoutedAgentSession(version)
-  if (version !== routeActivationVersion) return
-  if (!openedAgentSession) applyRouteMode()
+  await openRoutedAgentSession(version)
 }
 
 async function openRoutedAgentSession(version: number): Promise<boolean> {
@@ -429,6 +403,15 @@ async function openRoutedAgentSession(version: number): Promise<boolean> {
     })
     return true
   }
+  const routedScope = agentPackageConversationScope(packageId, sessionId)
+  if (
+    agentStore.activeChatPackageId === packageId
+    && runtimeStore.currentMode === 'agent_package'
+    && runtimeStore.activeAgentSessionId === sessionId
+    && runtimeStore.activeConversationScope === routedScope
+  ) {
+    return true
+  }
   agentStore.enterAgentChat(packageId, sessionId)
   runtimeStore.expectAgentPackageSession(packageId, sessionId)
   await commands.selectAgentPackage(packageId, 'run')
@@ -442,7 +425,6 @@ async function openRoutedAgentSession(version: number): Promise<boolean> {
 
 function activateAgentWorkspace(): void {
   workspaceStore.setScope('workdir')
-  uiStore.openRightSidebar('workspace')
 }
 
 function preferredSessionForPackage(packageId: string, rememberedSessionId: string | null) {
@@ -484,35 +466,11 @@ function routeQueryText(value: unknown): string | null {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  padding: var(--app-space-xl) var(--app-space-xl) var(--app-space-lg);
+  padding: var(--app-space-xl) clamp(54px, 6vw, 80px) var(--app-space-lg);
   max-width: var(--app-chat-max-width);
   margin: 0 auto;
   width: min(100%, var(--app-chat-max-width));
   transition: width .24s var(--app-transition-spring), max-width .24s var(--app-transition-spring);
-}
-
-.evolution-target-bar {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: var(--app-space-md);
-  margin-bottom: var(--app-space-md);
-  padding: var(--app-space-md) var(--app-space-lg);
-  border: 1px solid var(--app-border);
-  border-radius: var(--app-radius-lg);
-  background: var(--app-surface-muted);
-}
-
-.evolution-target-label {
-  flex-shrink: 0;
-  font-size: var(--app-font-md);
-  font-weight: 600;
-  color: var(--app-text-secondary);
-}
-
-.evolution-target-select {
-  min-width: 0;
-  flex: 1;
 }
 
 .messages-section {
@@ -557,19 +515,13 @@ function routeQueryText(value: unknown): string | null {
 
 .input-section {
   margin-top: var(--app-space-lg);
-  padding-top: var(--app-space-md);
-  border-top: 1px solid var(--app-divider);
+  padding-top: var(--app-space-sm);
 }
 
 /* 窄屏适配 */
 @media (max-width: 768px) {
   .chat-container {
     padding: var(--app-space-md);
-  }
-  .evolution-target-bar {
-    flex-direction: column;
-    align-items: stretch;
-    gap: var(--app-space-sm);
   }
 }
 

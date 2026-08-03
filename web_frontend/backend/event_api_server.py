@@ -197,12 +197,7 @@ async def shutdown_event():
 
 def _observe_background_task_event(event_payload: dict) -> None:
     event_type = str(event_payload.get("event_type") or "")
-    payload = event_payload.get("payload") if isinstance(event_payload.get("payload"), dict) else {}
-    should_continue = event_type == "background_task_result" or (
-        event_type == "background_task_status_changed"
-        and payload.get("status") in {"waiting_approval", "waiting_external"}
-    )
-    if not should_continue:
+    if event_type != "background_task_result":
         return
     task_id = str(event_payload.get("task_id") or "").strip()
     if task_id:
