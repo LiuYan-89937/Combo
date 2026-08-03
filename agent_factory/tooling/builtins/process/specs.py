@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from agent_factory.runtime_defaults import DEFAULT_BUILTIN_WORKSPACE_ROOT
 from agent_factory.tooling.builtins.process.runtime import host_shell_display_name
 from agent_factory.tooling.spec import ToolRiskEvaluatorConfig, ToolSpec
 
@@ -11,10 +10,10 @@ _BOOLEAN = {"type": "boolean"}
 _PROCESS_RESOURCE = {"process_runtime": "process_runtime"}
 _PROCESS_MODULE = "agent_factory.tooling.builtins.process"
 _CWD_BOUNDARY_DESCRIPTION = (
-    "可选工作目录；必须是当前 process workspace root 内的相对路径，"
-    "或位于 workspace root 内的绝对路径。"
-    f"默认 sandbox workspace root 是 {DEFAULT_BUILTIN_WORKSPACE_ROOT}。"
-    "不要使用 /tmp、宿主机路径或其他任意绝对路径，除非 runtime 显式允许外部路径。"
+    "可选工作目录。默认值 . 就是当前会话工作区根目录，通常无需提供 cwd 或在 command 中先执行 cd；"
+    "访问工作区文件时直接使用相对路径。指定 cwd 时优先使用工作区内的相对子目录；"
+    "不要在 Shell 命令中使用文件工具的逻辑沙箱根目录别名，也不要使用 /tmp、宿主机路径或其他任意绝对路径，"
+    "除非 runtime 显式允许外部路径。"
 )
 
 _PROCESS_STATUS_VALUES = ["running", "completed", "failed", "stopped"]
@@ -57,6 +56,7 @@ PROCESS_TOOL_SPECS: list[ToolSpec] = [
         id="shell",
         description=(
             f"在 workspace 边界内通过当前平台的 {host_shell_display_name()} 启动命令，"
+            "子进程默认已位于当前会话工作区根目录，命令应直接使用相对路径，无需先执行 cd。"
             "支持前台等待或后台运行；wait 超时只返回状态，不自动终止进程。"
         ),
         entrypoint="agent_factory.tooling.builtins.process.shell:run",

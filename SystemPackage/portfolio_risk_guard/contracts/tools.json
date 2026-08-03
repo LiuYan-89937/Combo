@@ -8,13 +8,12 @@
       "read",
       "write",
       "edit",
-      "multi_edit",
       "glob",
       "grep",
       "ls",
-      "bash",
-      "bash_status",
-      "bash_stop",
+      "shell",
+      "shell_status",
+      "shell_stop",
       "knowledge",
       "scheduler",
       "skillhub"
@@ -23,7 +22,7 @@
     "builtin_allow_external_paths": false,
     "package_tools_enabled": true,
     "instance_extensions_enabled": true,
-    "instance_extension_root": ".agent_runtime/extensions",
+    "instance_extension_root": "/runtime/extensions",
     "approval_policy": {"mode": "allow_all", "tool_overrides": {}}
   }
 }

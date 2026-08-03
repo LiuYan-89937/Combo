@@ -50,7 +50,10 @@ def inspect_chat_inference_capacity(
             slots_response = client.get(endpoint.server_endpoint("/slots"))
             slots_response.raise_for_status()
             slots = _slot_payload(slots_response.json())
-            deferred_requests = _deferred_requests(client, endpoint.server_endpoint("/metrics"))
+            deferred_requests = (
+                _deferred_requests(client, endpoint.server_endpoint("/metrics"))
+                + _admission_pending(client, endpoint.server_endpoint("/inference/admission"))
+            )
         total_slots = len(slots)
         busy_slots = sum(1 for item in slots if item.get("is_processing") is True)
         idle_slots = max(0, total_slots - busy_slots)
@@ -74,6 +77,11 @@ def inspect_chat_inference_capacity(
             live=False,
             detail=f"{type(exc).__name__}: {exc}",
         )
+
+
+def configured_chat_parallel_slots(*, store: ModelPoolStore | None = None) -> int:
+    model_store = store or ModelPoolStore(setup=False)
+    return _configured_parallel_slots(_active_chat_profile(model_store))
 
 
 def _active_chat_profile(store: ModelPoolStore) -> ModelPoolProfile | None:
@@ -126,3 +134,18 @@ def _deferred_requests(client: httpx.Client, metrics_url: str) -> int:
         except ValueError:
             return 0
     return 0
+
+
+def _admission_pending(client: httpx.Client, admission_url: str) -> int:
+    try:
+        response = client.get(admission_url)
+        response.raise_for_status()
+        payload = response.json()
+    except (httpx.HTTPError, ValueError):
+        return 0
+    if not isinstance(payload, dict):
+        return 0
+    try:
+        return max(0, int(payload.get("pending") or 0))
+    except (TypeError, ValueError):
+        return 0

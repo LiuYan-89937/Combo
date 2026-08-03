@@ -54,14 +54,15 @@ FastAgentFactory 将个人智能助手定义为一个长期运行、理解用户
 │   └─ Native Agent Runtime / 独立会话工作区                 │
 │                                                            │
 │ SSH Tunnel                                                 │
-│   18003 -> remote 8003  Chat OpenAI API                    │
+│   18003 -> remote 8003  llama.cpp 直连诊断                │
 │   18002 -> remote 8002  Embedding API                      │
-│   18004 -> remote 8004  Inference control + ROCm telemetry │
+│   18004 -> remote 8004  Chat 准入 + 控制 + ROCm telemetry │
 └──────────────────────────────┬─────────────────────────────┘
                                │ SSH key only
 AMD ROCm inference host       ▼
 ┌────────────────────────────────────────────────────────────┐
 │ FastAgentFactory Inference Node :8004                      │
+│   ├─ 跨会话公平调度 / 优先级 / 排队取消                   │
 │   ├─ llama-server ROCm :8003                               │
 │   ├─ SentenceTransformers + PyTorch HIP :8002              │
 │   └─ ROCm / VRAM / model runtime telemetry                 │
@@ -79,7 +80,7 @@ AMD ROCm inference host       ▼
 
 | 用途 | 模型 | 下载方式 | 默认配置 |
 | --- | --- | --- | --- |
-| Chat | `Qwen3.6-35B-A3B-APEX-I-Quality.gguf` | Hugging Face 国内镜像，断点续传并校验 SHA256 | 256K Context、Q8_0 KV、Flash Attention、单并发、GPU Layers 99 |
+| Chat | `Qwen3.6-35B-A3B-APEX-I-Quality.gguf` | Hugging Face 国内镜像，断点续传并校验 SHA256 | 256K Context、Q8_0 KV、Flash Attention、3 Slots、公平准入调度、GPU Layers 99 |
 | Vision projector | 对应的 `mmproj-...-APEX-F16.gguf` | Hugging Face 国内镜像，断点续传并校验 SHA256 | 随 Chat Profile 加载 |
 | Embedding | `BAAI/bge-m3` | ModelScope | 1024 维、归一化、PyTorch HIP |
 

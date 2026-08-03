@@ -15,6 +15,7 @@ from agent_factory.model_pool.runtime_override import (
     resolve_runtime_reasoning_model,
 )
 from agent_factory.model_pool.schema import ModelBindingRuntimeOverrides
+from agent_factory.local_inference.request_context import inference_request_context
 from agent_factory.runtime_kernel.model_inputs import build_runtime_model_input
 from agent_factory.runtime_kernel.types import ModelInvocationResult
 from agent_factory.tooling.description_context import contextualize_tool_descriptions
@@ -108,9 +109,8 @@ class LangChainModelServiceAdapter:
             tools=contextual_tools,
             image_input_enabled=bool(settings.multimodal),
         )
-        response = bound_model.invoke(
-            envelope.messages
-        )
+        with inference_request_context(session_id=state.run.session_id):
+            response = bound_model.invoke(envelope.messages)
         text = strip_internal_snapshot_blocks(content_to_text(getattr(response, "content", response))).strip()
         tool_calls = _tool_calls_from_response(response)
         reasoning_content = reasoning_content_from_message(response)

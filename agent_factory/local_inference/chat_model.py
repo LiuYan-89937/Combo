@@ -27,9 +27,19 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from agent_factory.local_inference.config import LocalInferenceEndpoint
 from agent_factory.local_inference.http_client import create_private_http_client
+from agent_factory.local_inference.request_context import current_inference_request
 
 
 logger = logging.getLogger(__name__)
+
+
+def _priority_for_role(role: str) -> str:
+    normalized = str(role or "main").strip().lower()
+    if normalized == "compression":
+        return "background"
+    if normalized == "task":
+        return "normal"
+    return "foreground"
 
 
 class LocalLlamaCppChatModel(BaseChatModel):
@@ -40,6 +50,7 @@ class LocalLlamaCppChatModel(BaseChatModel):
     temperature: float | None = None
     max_output_tokens: int | None = None
     reasoning_enabled: bool | None = None
+    model_role: str = "main"
     bound_tools: list[dict[str, Any]] = Field(default_factory=list)
     bound_tool_choice: str | dict[str, Any] | None = None
 
@@ -117,7 +128,11 @@ class LocalLlamaCppChatModel(BaseChatModel):
         payload = self._request_payload(messages, stop=stop, stream=False, kwargs=kwargs)
         self._log_request_started(payload)
         with create_private_http_client(self.endpoint) as client:
-            response = client.post(self.endpoint.endpoint("/chat/completions"), json=payload)
+            response = client.post(
+                self.endpoint.endpoint("/chat/completions"),
+                json=payload,
+                headers=self._admission_headers(),
+            )
             _raise_for_local_inference_error(response)
             body = response.json()
         message = _response_message(body)
@@ -144,6 +159,7 @@ class LocalLlamaCppChatModel(BaseChatModel):
                 "POST",
                 self.endpoint.endpoint("/chat/completions"),
                 json=payload,
+                headers=self._admission_headers(),
             ) as response:
                 if response.is_error:
                     response.read()
@@ -212,6 +228,16 @@ class LocalLlamaCppChatModel(BaseChatModel):
             len(payload.get("tools") or []),
             self.reasoning_enabled,
         )
+
+    def _admission_headers(self) -> dict[str, str]:
+        context = current_inference_request()
+        priority = context.priority if context is not None and context.priority else _priority_for_role(self.model_role)
+        headers = {"x-agentfactory-priority": priority}
+        if context is not None:
+            headers["x-agentfactory-session-id"] = context.session_id
+            if context.request_id:
+                headers["x-agentfactory-request-id"] = context.request_id
+        return headers
 
     def get_token_ids(self, text: str) -> list[int]:
         with create_private_http_client(self.endpoint) as client:

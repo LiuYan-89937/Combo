@@ -67,7 +67,7 @@
         "binding_type": "tool_access",
         "target": {"node_id": "executor", "impl": "cognitive.answer"},
         "payload": {
-          "allowed_tool_ids": ["runtime_plan", "read", "write", "edit", "multi_edit", "glob", "grep", "ls", "bash", "bash_status", "bash_stop", "skill", "knowledge", "scheduler", "skillhub", "analyze_a_share_portfolio"],
+          "allowed_tool_ids": ["runtime_plan", "read", "write", "edit", "glob", "grep", "ls", "shell", "shell_status", "shell_stop", "skill", "knowledge", "scheduler", "skillhub", "analyze_a_share_portfolio"],
           "approval_policy": "allow_all"
         }
       },
@@ -98,7 +98,7 @@
         "binding_id": "casual_react_tool_access",
         "binding_type": "tool_access",
         "target": {"node_id": "casual_react", "impl": "cognitive.answer"},
-        "payload": {"allowed_tool_ids": ["read", "write", "edit", "multi_edit", "glob", "grep", "ls", "bash", "bash_status", "bash_stop", "skill", "knowledge", "scheduler", "skillhub", "analyze_a_share_portfolio"], "approval_policy": "allow_all"}
+        "payload": {"allowed_tool_ids": ["read", "write", "edit", "glob", "grep", "ls", "shell", "shell_status", "shell_stop", "skill", "knowledge", "scheduler", "skillhub", "analyze_a_share_portfolio"], "approval_policy": "allow_all"}
       },
       {
         "binding_id": "casual_react_model_operation",
@@ -127,7 +127,7 @@
         "binding_id": "final_answer_tool_access",
         "binding_type": "tool_access",
         "target": {"node_id": "final_answer", "impl": "cognitive.answer"},
-        "payload": {"allowed_tool_ids": ["read", "write", "edit", "multi_edit", "glob", "grep", "ls", "bash", "bash_status", "bash_stop", "skill", "knowledge", "scheduler", "skillhub", "analyze_a_share_portfolio"], "approval_policy": "allow_all"}
+        "payload": {"allowed_tool_ids": ["read", "write", "edit", "glob", "grep", "ls", "shell", "shell_status", "shell_stop", "skill", "knowledge", "scheduler", "skillhub", "analyze_a_share_portfolio"], "approval_policy": "allow_all"}
       },
       {
         "binding_id": "final_answer_model_operation",

@@ -43,6 +43,10 @@ REQUIRED_SETTINGS = (
     "CHAT_COMPRESSION_THRESHOLD",
     "CHAT_GPU_LAYERS",
     "CHAT_PARALLEL_SLOTS",
+    "CHAT_ADMISSION_MAX_PENDING",
+    "CHAT_ADMISSION_PER_SESSION_ACTIVE",
+    "CHAT_ADMISSION_QUEUE_TIMEOUT_SECONDS",
+    "CHAT_ADMISSION_PRIORITY_AGING_SECONDS",
     "CHAT_CACHE_TYPE_K",
     "CHAT_CACHE_TYPE_V",
     "EMBEDDING_PROFILE_ID",
@@ -162,7 +166,6 @@ class DeploymentConfig:
         environment = dict(os.environ)
         environment.update(self.user_values)
         target_is_local = self.deploy_target == "local"
-        chat_port = self.require("REMOTE_CHAT_PORT" if target_is_local else "LOCAL_CHAT_PORT")
         embedding_port = self.require(
             "REMOTE_EMBEDDING_PORT" if target_is_local else "LOCAL_EMBEDDING_PORT"
         )
@@ -180,7 +183,7 @@ class DeploymentConfig:
             ),
             "AGENTFACTORY_LOCAL_INFERENCE_ENDPOINT": self.get(
                 "AGENTFACTORY_LOCAL_INFERENCE_ENDPOINT",
-                f"http://127.0.0.1:{chat_port}/v1",
+                f"http://127.0.0.1:{telemetry_port}/v1",
             ),
             "AGENTFACTORY_LOCAL_EMBEDDING_ENDPOINT": self.get(
                 "AGENTFACTORY_LOCAL_EMBEDDING_ENDPOINT",
@@ -233,6 +236,10 @@ class DeploymentConfig:
                 raise FileNotFoundError(f"SSH private key is not readable: {key}")
         for name in ("LLAMA_OFFICIAL_BUILD_NUMBER", "LLAMA_AMD_BASE_BUILD_NUMBER"):
             validate_non_negative_integer(name, self.require(name))
+        for name in ("CHAT_ADMISSION_MAX_PENDING", "CHAT_ADMISSION_PER_SESSION_ACTIVE"):
+            validate_positive_integer(name, self.require(name))
+        for name in ("CHAT_ADMISSION_QUEUE_TIMEOUT_SECONDS", "CHAT_ADMISSION_PRIORITY_AGING_SECONDS"):
+            validate_positive_number(name, self.require(name))
         if self.require("REMOTE_REPAIR_CA_TRUST") not in {"0", "1"}:
             raise ValueError("REMOTE_REPAIR_CA_TRUST must be 0 or 1")
         ports = [validate_port(name, self.require(name)) for name in LOCAL_PORT_NAMES]
@@ -291,4 +298,21 @@ def validate_non_negative_integer(name: str, value: str) -> int:
         raise ValueError(f"{name} must be a non-negative integer") from exc
     if number < 0:
         raise ValueError(f"{name} must be a non-negative integer")
+    return number
+
+
+def validate_positive_integer(name: str, value: str) -> int:
+    number = validate_non_negative_integer(name, value)
+    if number == 0:
+        raise ValueError(f"{name} must be greater than zero")
+    return number
+
+
+def validate_positive_number(name: str, value: str) -> float:
+    try:
+        number = float(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a number greater than zero") from exc
+    if number <= 0:
+        raise ValueError(f"{name} must be a number greater than zero")
     return number

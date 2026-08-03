@@ -62,10 +62,23 @@ def workspace_path_record(path: Path, *, workspace_root: Path) -> dict[str, obje
     }
 
 
-def workspace_relative_path(path: Path, *, workspace_root: Path) -> str:
+def workspace_relative_path(
+    path: Path,
+    *,
+    workspace_root: Path,
+    mounts: dict[str, Path] | None = None,
+) -> str:
+    resolved_path = path.resolve(strict=False)
     try:
-        relative = path.resolve(strict=False).relative_to(workspace_root.resolve(strict=False))
+        relative = resolved_path.relative_to(workspace_root.resolve(strict=False))
     except ValueError:
+        for name, mount_root in (mounts or {}).items():
+            try:
+                mount_relative = resolved_path.relative_to(mount_root.resolve(strict=False))
+            except ValueError:
+                continue
+            suffix = mount_relative.as_posix()
+            return f"{name}/{suffix}" if suffix not in {"", "."} else name
         return str(path)
     value = relative.as_posix()
     return value or "."

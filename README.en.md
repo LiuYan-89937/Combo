@@ -51,14 +51,15 @@ Control host
 │   └─ Native Agent Runtime / isolated session workspaces    │
 │                                                            │
 │ Direct loopback or SSH tunnels                             │
-│   18003 -> inference :8003  Chat API                       │
+│   18003 -> inference :8003  direct llama.cpp diagnostics  │
 │   18002 -> inference :8002  Embedding API                  │
-│   18004 -> inference :8004  Control + ROCm telemetry       │
+│   18004 -> inference :8004  Chat admission + control       │
 └──────────────────────────────┬─────────────────────────────┘
                                │
 AMD ROCm inference host        ▼
 ┌────────────────────────────────────────────────────────────┐
 │ Inference control node :8004                               │
+│   ├─ fair admission, priority, and queue cancellation      │
 │   ├─ llama-server ROCm :8003                               │
 │   ├─ SentenceTransformers + PyTorch HIP :8002              │
 │   └─ ROCm telemetry, model lifecycle, and benchmarks       │

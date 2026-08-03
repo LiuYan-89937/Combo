@@ -9,7 +9,7 @@
   },
   "runtime": {
     "system_package": true,
-    "execution_backend": "container",
+    "execution_backend": "host",
     "pattern_id": "plan_and_execute"
   },
   "assembly_spec_path": "assembly_spec.json",

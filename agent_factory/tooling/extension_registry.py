@@ -6,7 +6,7 @@ from pathlib import Path
 import shutil
 import tempfile
 import threading
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -19,6 +19,7 @@ from agent_factory.tooling.skills import parse_skill_directory
 
 EXTENSION_REGISTRY_ROOT_ENV = "AGENTFACTORY_EXTENSION_REGISTRY_ROOT"
 EXTENSION_BINDINGS_FILENAME = "extension_bindings.json"
+MCP_TOOL_CATALOG_FILENAME = "mcp_tool_catalog.json"
 BINDING_COLLECTION_DIRS = (
     "agent_runtime",
     "create_agent_workspaces",
@@ -42,6 +43,25 @@ class AgentExtensionBindings(BaseModel):
         return self.mcp_server_ids if kind == "mcp" else self.skill_ids
 
 
+class RegisteredMCPTool(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tool_id: str
+    name: str
+    description: str = ""
+    risk_level: str = "medium"
+    permission_scope: str = "extension"
+    permission_tags: list[str] = Field(default_factory=list)
+    concurrent: bool = False
+
+
+class MCPToolCatalog(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: str = "mcp_tool_catalog.v1"
+    servers: dict[str, list[RegisteredMCPTool]] = Field(default_factory=dict)
+
+
 def default_extension_registry_root() -> Path:
     configured = os.getenv(EXTENSION_REGISTRY_ROOT_ENV)
     if configured:
@@ -57,6 +77,10 @@ def registry_skills_path() -> Path:
     return default_extension_registry_root() / "enabled_skills.json"
 
 
+def registry_mcp_tool_catalog_path() -> Path:
+    return default_extension_registry_root() / MCP_TOOL_CATALOG_FILENAME
+
+
 def registry_skill_content_root() -> Path:
     return default_extension_registry_root() / "skills"
 
@@ -66,6 +90,36 @@ def load_registered_mcp_servers() -> MCPServersConfig:
     return MCPServersConfig(
         servers=[server.model_copy(update={"enabled": True}) for server in config.servers]
     )
+
+
+def load_registered_mcp_tool_catalog() -> MCPToolCatalog:
+    return MCPToolCatalog.model_validate(_read_json(registry_mcp_tool_catalog_path()))
+
+
+def replace_registered_mcp_tool_catalog(server_id: str, tools: list[dict[str, Any]]) -> None:
+    identifier = str(server_id or "").strip()
+    if not identifier:
+        raise ValueError("MCP catalog server_id is required")
+    with _registry_lock:
+        catalog = load_registered_mcp_tool_catalog()
+        next_servers = dict(catalog.servers)
+        next_servers[identifier] = [RegisteredMCPTool.model_validate(tool) for tool in tools]
+        updated = MCPToolCatalog(servers=next_servers)
+        _write_json(registry_mcp_tool_catalog_path(), updated.model_dump(mode="json"))
+
+
+def remove_registered_mcp_tool_catalog(server_id: str) -> None:
+    identifier = str(server_id or "").strip()
+    with _registry_lock:
+        catalog = load_registered_mcp_tool_catalog()
+        if identifier not in catalog.servers:
+            return
+        next_servers = dict(catalog.servers)
+        next_servers.pop(identifier, None)
+        _write_json(
+            registry_mcp_tool_catalog_path(),
+            MCPToolCatalog(servers=next_servers).model_dump(mode="json"),
+        )
 
 
 def save_registered_mcp_servers(config: MCPServersConfig) -> None:
@@ -271,6 +325,7 @@ def remove_registered_extension(kind: ExtensionKind, identifier: str) -> bool:
         removed = len(retained) != len(current.servers)
         if removed:
             save_registered_mcp_servers(MCPServersConfig(servers=retained))
+            remove_registered_mcp_tool_catalog(target)
             remove_extension_from_all_bindings("mcp", target)
         return removed
     current_skills = load_registered_skills()

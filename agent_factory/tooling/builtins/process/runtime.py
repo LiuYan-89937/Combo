@@ -68,8 +68,7 @@ class PosixBashRuntime(ShellRuntime):
         return {"start_new_session": True}
 
     def analyze(self, command: str) -> ShellCommandAnalysis:
-        parts = shlex.split(command)
-        binary = Path(parts[0]).name if parts else ""
+        binary = Path(_first_shell_word(command)).name
         return ShellCommandAnalysis(
             command_binary=binary,
             contains_shell_control=any(token in command for token in self._CONTROL_TOKENS),
@@ -91,6 +90,13 @@ class PosixBashRuntime(ShellRuntime):
             return
         except OSError:
             process.kill()
+
+
+def _first_shell_word(command: str) -> str:
+    lexer = shlex.shlex(command, posix=True)
+    lexer.commenters = ""
+    lexer.whitespace_split = True
+    return next(lexer, "")
 
 
 class WindowsPowerShellRuntime(ShellRuntime):

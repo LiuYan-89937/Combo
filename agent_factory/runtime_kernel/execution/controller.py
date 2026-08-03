@@ -17,6 +17,7 @@ from agent_factory.runtime_kernel.observability.schema import RuntimeObservation
 from agent_factory.runtime_kernel.state import RuntimeState
 from agent_factory.runtime_kernel.state.checkpoint_projection import runtime_checkpoint_payload
 from agent_factory.tooling.execution_context import tool_output_session_context
+from agent_factory.local_inference.request_context import inference_request_context
 
 
 LANGGRAPH_TECHNICAL_RECURSION_LIMIT = 1000
@@ -27,7 +28,9 @@ class ExecutionController:
         pass
 
     def run(self, compiled_app: Any, state: RuntimeState, *, thread_id: str) -> RuntimeState:
-        with tool_output_session_context(state.run.session_id):
+        with tool_output_session_context(state.run.session_id), inference_request_context(
+            session_id=state.run.session_id,
+        ):
             self._emit(
                 compiled_app,
                 state,
@@ -52,7 +55,9 @@ class ExecutionController:
         thread_id: str,
         control: RunControl | None = None,
     ) -> Iterator[tuple[str, Any]]:
-        with tool_output_session_context(state.run.session_id):
+        with tool_output_session_context(state.run.session_id), inference_request_context(
+            session_id=state.run.session_id,
+        ):
             self._emit(
                 compiled_app,
                 state,
@@ -94,7 +99,9 @@ class ExecutionController:
         resume_payload: dict[str, Any] | None = None,
         control: RunControl | None = None,
     ) -> Iterator[tuple[str, Any]]:
-        with tool_output_session_context(state.run.session_id):
+        with tool_output_session_context(state.run.session_id), inference_request_context(
+            session_id=state.run.session_id,
+        ):
             state = _prepare_resume_state(state, resume_payload=resume_payload)
             self._emit(compiled_app, state, "resume_started", message="Kernel resume started.")
             final_raw: dict[str, Any] = {"runtime": state.model_dump(mode="python")}

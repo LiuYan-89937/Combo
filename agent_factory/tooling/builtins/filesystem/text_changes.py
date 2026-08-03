@@ -3,7 +3,6 @@ from __future__ import annotations
 from difflib import SequenceMatcher
 import os
 from pathlib import Path
-import shutil
 import stat
 from tempfile import NamedTemporaryFile
 
@@ -38,25 +37,6 @@ def atomic_write_bytes(target: Path, content: bytes) -> None:
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
-        if original_mode is not None:
-            temp_path.chmod(original_mode)
-        temp_path.replace(target)
-        temp_path = None
-    finally:
-        if temp_path is not None:
-            temp_path.unlink(missing_ok=True)
-
-
-def atomic_write_file(target: Path, source: Path) -> None:
-    original_mode = stat.S_IMODE(target.stat().st_mode) if target.exists() else None
-    temp_path: Path | None = None
-    try:
-        with source.open("rb") as source_handle:
-            with NamedTemporaryFile("wb", delete=False, dir=str(target.parent)) as target_handle:
-                temp_path = Path(target_handle.name)
-                shutil.copyfileobj(source_handle, target_handle)
-                target_handle.flush()
-                os.fsync(target_handle.fileno())
         if original_mode is not None:
             temp_path.chmod(original_mode)
         temp_path.replace(target)

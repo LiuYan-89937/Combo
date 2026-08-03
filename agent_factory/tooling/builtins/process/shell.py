@@ -6,6 +6,7 @@ from agent_factory.tooling.builtins.process.manager import (
     PROCESS_MANAGER,
     is_read_only_process_path,
     output_limit,
+    process_runtime_allowed_roots,
     process_runtime_boundary,
     required_string,
     resolve_cwd,
@@ -70,7 +71,12 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     if mode not in {"foreground", "background"}:
         raise ValueError("mode must be foreground or background")
     root, allow_external = process_runtime_boundary(resources)
-    cwd = resolve_cwd(cwd=arguments.get("cwd"), root=root, allow_external=allow_external)
+    cwd = resolve_cwd(
+        cwd=arguments.get("cwd"),
+        root=root,
+        allow_external=allow_external,
+        allowed_roots=process_runtime_allowed_roots(resources),
+    )
     if not cwd.exists():
         raise FileNotFoundError(str(cwd))
     if not cwd.is_dir():
@@ -92,7 +98,12 @@ def _evaluate_cwd(arguments: dict[str, Any], context: dict[str, Any]) -> ToolRis
     tool_resources = dict(context.get("resources") or {})
     root, allow_external = process_runtime_boundary(tool_resources)
     try:
-        cwd = resolve_cwd(cwd=arguments.get("cwd"), root=root, allow_external=allow_external)
+        cwd = resolve_cwd(
+            cwd=arguments.get("cwd"),
+            root=root,
+            allow_external=allow_external,
+            allowed_roots=process_runtime_allowed_roots(tool_resources),
+        )
     except Exception as exc:
         return ToolRiskResult(
             action="deny",

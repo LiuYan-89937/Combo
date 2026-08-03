@@ -65,6 +65,7 @@ from agent_factory.tooling.compiler import ToolCompiler
 from agent_factory.tooling.output_store import TOOL_OUTPUT_STORE_RESOURCE, ToolOutputStore
 from agent_factory.tooling.providers import BuiltinToolProvider, PackageToolProvider, ToolProviderContext
 from agent_factory.tooling.registry import ToolRegistry
+from agent_factory.tooling.runtime_settings import apply_tool_runtime_settings, load_tool_runtime_settings
 from agent_factory.trace_system import JSONLTraceStore, TraceDiagnostics, TraceProjector, TraceReader, TraceRecorder
 from agent_factory.trace_system.runtime_log import RuntimeLogStore
 
@@ -205,6 +206,7 @@ class ToolsContractBuilder:
             model_tool_specs = get_model_tool_specs(model_tool_runtime)
             specs.extend(model_tool_specs)
             system_tool_ids.update(spec.id for spec in model_tool_specs)
+        specs = apply_tool_runtime_settings(specs, load_tool_runtime_settings(instance_extension_root))
         registry = ToolRegistry(specs)
         approval_policy = merge_tool_approval_policy(
             resolve_tool_approval_policy(config.approval_policy),

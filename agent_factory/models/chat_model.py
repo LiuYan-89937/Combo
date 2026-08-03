@@ -115,6 +115,7 @@ def create_chat_model_from_settings(settings: ChatModelSettings) -> BaseChatMode
         temperature=settings.temperature,
         max_output_tokens=settings.max_output_tokens,
         reasoning_enabled=settings.reasoning.enabled,
+        model_role=settings.role,
     )
 
 

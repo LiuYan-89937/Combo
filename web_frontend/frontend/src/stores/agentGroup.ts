@@ -384,10 +384,14 @@ export const useAgentGroupStore = defineStore('agentGroup', () => {
       const toolName = String(payload.tool_name || payload.tool_id || payload.name || 'tool')
       const toolCallId = String(payload.tool_call_id || '') || null
       const status = toolStatus(event.event_type)
+      const callPartId = `${messageId}:call`
+      const previousCall = current.parts.find(part => part.id === callPartId)
       const callPart: ChatMessagePart = {
-        id: `${messageId}:call`, type: 'tool_call', toolName, callId: toolCallId,
+        id: callPartId, type: 'tool_call', toolName, callId: toolCallId,
         arguments: payload.arguments || payload.args || {}, status,
-        createdAt: current.timestamp, updatedAt: event.timestamp,
+        createdAt: previousCall?.createdAt || current.timestamp,
+        startedAt: previousCall?.startedAt || (event.event_type === 'tool_call_started' ? event.timestamp : null),
+        updatedAt: event.timestamp,
       }
       let parts = upsertPart(current.parts, callPart)
       if (event.event_type === 'tool_observation_available' || event.event_type === 'tool_call_failed' || event.event_type === 'tool_call_completed') {

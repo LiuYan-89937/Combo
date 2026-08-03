@@ -46,6 +46,8 @@
           </div>
         </section>
 
+        <agent-tool-settings-panel :package-id="agentPackage.package_id" class="detail-section" />
+
         <section v-if="resourceItems.length > 0 || resourceLoadError" class="detail-section resource-section">
           <div class="section-header">
             <div class="section-label">Resource 配置</div>
@@ -420,14 +422,6 @@
                 <div class="item-meta">
                   {{ binding.capability || t('common.unknown') }} · {{ binding.selection_source || t('common.auto') }}
                 </div>
-                <tool-description-editor
-                  :model-value="toolDescriptionDraft('model_tool', binding.tool_id)"
-                  :dirty="toolDescriptionDirty('model_tool', binding.tool_id, binding.description || '')"
-                  :saving="toolDescriptionSavingKey === toolDescriptionKey('model_tool', binding.tool_id)"
-                  :error="toolDescriptionErrors[toolDescriptionKey('model_tool', binding.tool_id)]"
-                  @update:model-value="setToolDescriptionDraft('model_tool', binding.tool_id, $event)"
-                  @save="saveToolDescription('model_tool', binding.tool_id)"
-                />
               </div>
               <n-tag size="small" :bordered="false">
                 {{ agentPackage.model_contract?.version || t('common.unknown') }}
@@ -448,14 +442,6 @@
                 <div class="item-title">{{ tool.name }}</div>
                 <div v-if="tool.description" class="item-description">{{ tool.description }}</div>
                 <div class="item-meta">{{ toolMeta(tool, t) }}</div>
-                <tool-description-editor
-                  :model-value="toolDescriptionDraft('package_tool', tool.id || '')"
-                  :dirty="toolDescriptionDirty('package_tool', tool.id || '', tool.description || '')"
-                  :saving="toolDescriptionSavingKey === toolDescriptionKey('package_tool', tool.id || '')"
-                  :error="toolDescriptionErrors[toolDescriptionKey('package_tool', tool.id || '')]"
-                  @update:model-value="setToolDescriptionDraft('package_tool', tool.id || '', $event)"
-                  @save="saveToolDescription('package_tool', tool.id || '')"
-                />
               </div>
               <n-tag size="small" :bordered="false">{{ tool.risk_level || 'low' }}</n-tag>
             </div>
@@ -623,7 +609,7 @@ import {
 import ResourceSchemaForm from './ResourceSchemaForm.vue'
 import ContextNumberSetting from './ContextNumberSetting.vue'
 import SettingHelpLabel from './SettingHelpLabel.vue'
-import ToolDescriptionEditor from './ToolDescriptionEditor.vue'
+import AgentToolSettingsPanel from './AgentToolSettingsPanel.vue'
 import {
   createResourceDraft,
   resourceDraftComplete,
@@ -692,7 +678,6 @@ const modelToolBindings = computed(() => {
   const bindings = props.agentPackage?.model_contract?.tool_bindings || {}
   return Object.entries(bindings).map(([tool_id, binding]) => ({ tool_id, ...binding }))
 })
-type EditableToolKind = 'model_tool' | 'package_tool'
 type MemoryKind = 'constraint' | 'preference' | 'decision' | 'fact' | 'artifact'
 interface ContextConfigDraft {
   version: 'context_system.v1'
@@ -735,9 +720,6 @@ interface SchedulerConfigDraft {
     action: 'pause'
   }
 }
-const toolDescriptionDrafts = ref<Record<string, string>>({})
-const toolDescriptionErrors = ref<Record<string, string>>({})
-const toolDescriptionSavingKey = ref('')
 const memoryKinds: MemoryKind[] = ['constraint', 'preference', 'decision', 'fact', 'artifact']
 const contextDraft = ref<ContextConfigDraft | null>(null)
 const contextConfigSaving = ref(false)
@@ -830,22 +812,6 @@ watch(
 )
 
 watch(
-  () => props.agentPackage,
-  (agentPackage) => {
-    const drafts: Record<string, string> = {}
-    for (const tool of agentPackage?.tools || []) {
-      if (tool.id) drafts[toolDescriptionKey('package_tool', tool.id)] = tool.description || ''
-    }
-    for (const [toolId, binding] of Object.entries(agentPackage?.model_contract?.tool_bindings || {})) {
-      drafts[toolDescriptionKey('model_tool', toolId)] = binding.description || ''
-    }
-    toolDescriptionDrafts.value = drafts
-    toolDescriptionErrors.value = {}
-  },
-  { immediate: true },
-)
-
-watch(
   () => [detailVisible.value, props.agentPackage?.package_id] as const,
   async ([visible, packageId]) => {
     if (!visible || !packageId) {
@@ -920,50 +886,6 @@ async function removeResource(resourceId: string) {
     resourceErrors.value = { ...resourceErrors.value, [resourceId]: errorMessage(error) }
   } finally {
     resourceSavingId.value = ''
-  }
-}
-
-function toolDescriptionKey(toolKind: EditableToolKind, toolId: string): string {
-  return `${toolKind}:${toolId}`
-}
-
-function toolDescriptionDraft(toolKind: EditableToolKind, toolId: string): string {
-  return toolDescriptionDrafts.value[toolDescriptionKey(toolKind, toolId)] || ''
-}
-
-function setToolDescriptionDraft(toolKind: EditableToolKind, toolId: string, description: string): void {
-  toolDescriptionDrafts.value = {
-    ...toolDescriptionDrafts.value,
-    [toolDescriptionKey(toolKind, toolId)]: description,
-  }
-}
-
-function toolDescriptionDirty(
-  toolKind: EditableToolKind,
-  toolId: string,
-  persistedDescription: string,
-): boolean {
-  return toolDescriptionDraft(toolKind, toolId).trim() !== persistedDescription.trim()
-}
-
-async function saveToolDescription(toolKind: EditableToolKind, toolId: string): Promise<void> {
-  const packageId = props.agentPackage?.package_id
-  if (!packageId || !toolId) return
-  const key = toolDescriptionKey(toolKind, toolId)
-  toolDescriptionSavingKey.value = key
-  toolDescriptionErrors.value = { ...toolDescriptionErrors.value, [key]: '' }
-  try {
-    const response = await agentPackagesApi.updateToolDescription(
-      packageId,
-      toolKind,
-      toolId,
-      toolDescriptionDraft(toolKind, toolId),
-    )
-    emit('packageUpdated', response.package as AgentPackageView)
-  } catch (error) {
-    toolDescriptionErrors.value = { ...toolDescriptionErrors.value, [key]: errorMessage(error) }
-  } finally {
-    toolDescriptionSavingKey.value = ''
   }
 }
 

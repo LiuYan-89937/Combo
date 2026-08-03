@@ -104,6 +104,7 @@ function executionFromCall(part: ToolCallMessagePart): ToolExecutionMessagePart 
     artifacts: [],
     status: part.status,
     createdAt: part.createdAt,
+    startedAt: part.startedAt,
     updatedAt: part.updatedAt,
   }
 }
@@ -120,6 +121,7 @@ function executionFromResult(part: ToolResultMessagePart): ToolExecutionMessageP
     artifacts: [],
     status: part.status,
     createdAt: part.createdAt,
+    startedAt: part.startedAt,
     updatedAt: part.updatedAt,
   }
 }
@@ -144,15 +146,7 @@ function toolArgumentSummary(toolName: string, value: unknown): string {
   if (toolName === 'grep') return compact(args.pattern, args.base_path)
   if (toolName === 'glob') return compact(args.pattern, args.base_path)
   if (toolName === 'edit') {
-    const operations = Array.isArray(args.operations) ? args.operations : []
-    const paths = operations
-      .flatMap(operation => {
-        const record = recordValue(operation)
-        return record ? [record.path, record.source_path, record.destination_path] : []
-      })
-      .filter(Boolean)
-      .slice(0, 2)
-    return compact(args.action, ...paths, args.transaction_id)
+    return compact(args.path)
   }
   if (toolName === 'read' || toolName === 'write' || toolName === 'ls') {
     return compact(args.path)

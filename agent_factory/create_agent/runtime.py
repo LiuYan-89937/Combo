@@ -30,6 +30,7 @@ from agent_factory.model_pool.runtime_override import (
     main_model_profile_id_from_user_config,
     runtime_reasoning_intensity_from_user_config,
 )
+from agent_factory.local_inference.request_context import inference_request_context
 from agent_factory.paths import factory_artifact_path, project_root
 from agent_factory.package_runtime.drained_checkpoint import (
     finalize_drained_message_checkpoint,
@@ -149,10 +150,14 @@ class CreateAgentRuntime:
                 session_id=resolved_session_id,
                 request_id=resolved_request_id,
                 workspace=workspace,
-                events=self._owned_events(
+                events=_inference_scoped_events(
+                    self._owned_events(
+                        request_id=resolved_request_id,
+                        run_control=run_control,
+                        events=events,
+                    ),
+                    session_id=resolved_session_id,
                     request_id=resolved_request_id,
-                    run_control=run_control,
-                    events=events,
                 ),
             )
         except Exception:
@@ -460,22 +465,26 @@ class CreateAgentRuntime:
             session_id=session_id,
             request_id=resolved_request_id,
             workspace=workspace,
-            events=self._owned_events(
-                request_id=resolved_request_id,
-                run_control=run_control,
-                events=self._events(
-                    user_input="",
-                    session_id=session_id,
+            events=_inference_scoped_events(
+                self._owned_events(
                     request_id=resolved_request_id,
-                    workspace=workspace,
-                    resume_payload=resume_payload or {},
-                    graph_kind=graph_kind,
-                    attachments=[],
-                    runtime_main_model_profile_id=None,
-                    runtime_reasoning_intensity=None,
-                    intent=None,
                     run_control=run_control,
+                    events=self._events(
+                        user_input="",
+                        session_id=session_id,
+                        request_id=resolved_request_id,
+                        workspace=workspace,
+                        resume_payload=resume_payload or {},
+                        graph_kind=graph_kind,
+                        attachments=[],
+                        runtime_main_model_profile_id=None,
+                        runtime_reasoning_intensity=None,
+                        intent=None,
+                        run_control=run_control,
+                    ),
                 ),
+                session_id=session_id,
+                request_id=resolved_request_id,
             ),
         )
 
@@ -1066,6 +1075,16 @@ def _tool_trace_records(chunk: Any) -> list[dict[str, Any]]:
 
 def _is_model_cache_chunk(chunk: Any) -> bool:
     return isinstance(chunk, dict) and chunk.get("type") == "create_agent_model_cache" and isinstance(chunk.get("payload"), dict)
+
+
+def _inference_scoped_events(
+    events: Iterator[tuple[str, Any]],
+    *,
+    session_id: str,
+    request_id: str,
+) -> Iterator[tuple[str, Any]]:
+    with inference_request_context(session_id=session_id, request_id=request_id):
+        yield from events
 
 
 def _context_window_payload_from_model_cache(payload: dict[str, Any], *, node_id: str) -> dict[str, Any]:

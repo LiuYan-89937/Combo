@@ -40,6 +40,7 @@ from agent_factory.model_pool.runtime_override import (
     main_model_profile_id_from_user_config,
     runtime_reasoning_intensity_from_user_config,
 )
+from agent_factory.local_inference.request_context import inference_request_context
 from agent_factory.paths import factory_artifact_path, project_root
 from agent_factory.package_runtime.drained_checkpoint import (
     finalize_drained_message_checkpoint,
@@ -117,20 +118,24 @@ class AgentEvolutionRuntime:
             package_id=safe_package_id,
             trace_id=trace_id,
             request_id=resolved_request_id,
-            events=self._owned_events(
-                request_id=resolved_request_id,
-                run_control=run_control,
-                events=self._events(
-                    package_id=safe_package_id,
-                    trace_id=trace_id,
-                    user_input=user_input,
+            events=_inference_scoped_events(
+                self._owned_events(
                     request_id=resolved_request_id,
-                    session_id=session_id,
-                    resume_payload=None,
-                    attachments=attachments,
-                    user_config=user_config,
                     run_control=run_control,
+                    events=self._events(
+                        package_id=safe_package_id,
+                        trace_id=trace_id,
+                        user_input=user_input,
+                        request_id=resolved_request_id,
+                        session_id=session_id,
+                        resume_payload=None,
+                        attachments=attachments,
+                        user_config=user_config,
+                        run_control=run_control,
+                    ),
                 ),
+                session_id=session_id or resolved_request_id,
+                request_id=resolved_request_id,
             ),
         )
 
@@ -153,20 +158,24 @@ class AgentEvolutionRuntime:
             package_id=safe_package_id,
             trace_id=trace_id,
             request_id=resolved_request_id,
-            events=self._owned_events(
-                request_id=resolved_request_id,
-                run_control=run_control,
-                events=self._events(
-                    package_id=safe_package_id,
-                    trace_id=trace_id,
-                    user_input="",
+            events=_inference_scoped_events(
+                self._owned_events(
                     request_id=resolved_request_id,
-                    session_id=session_id,
-                    resume_payload=resume_payload or {},
-                    attachments=None,
-                    user_config=None,
                     run_control=run_control,
+                    events=self._events(
+                        package_id=safe_package_id,
+                        trace_id=trace_id,
+                        user_input="",
+                        request_id=resolved_request_id,
+                        session_id=session_id,
+                        resume_payload=resume_payload or {},
+                        attachments=None,
+                        user_config=None,
+                        run_control=run_control,
+                    ),
                 ),
+                session_id=session_id,
+                request_id=resolved_request_id,
             ),
         )
 
@@ -889,6 +898,16 @@ def _safe_child(root: Path, child: str) -> Path:
 
 def _thread_id(session_id: str, package_id: str) -> str:
     return f"{session_id}:evolution:{package_id}"
+
+
+def _inference_scoped_events(
+    events: Iterator[tuple[str, Any]],
+    *,
+    session_id: str,
+    request_id: str,
+) -> Iterator[tuple[str, Any]]:
+    with inference_request_context(session_id=session_id, request_id=request_id):
+        yield from events
 
 
 def _active_run_key(session_id: str, package_id: str) -> str:

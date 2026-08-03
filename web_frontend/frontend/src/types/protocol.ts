@@ -63,6 +63,7 @@ export interface BaseChatMessagePart {
   type: string
   status?: ChatMessagePartStatus
   createdAt?: string
+  startedAt?: string | null
   updatedAt?: string
 }
 
@@ -315,6 +316,7 @@ export interface ToolActivity {
   eventType: string
   timestamp: string
   createdAt: string
+  startedAt?: string | null
   stageId: string | null
   nodeId: string | null
   toolCallId: string | null

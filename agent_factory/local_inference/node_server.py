@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict
 import os
 from pathlib import Path
@@ -11,9 +11,18 @@ import subprocess
 import sys
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import StreamingResponse
 
-from agent_factory.local_inference.capacity import inspect_chat_inference_capacity
+from agent_factory.local_inference.admission import (
+    AdmissionQueueFull,
+    AdmissionQueueTimeout,
+    InferenceAdmissionScheduler,
+    InferenceAdmissionSettings,
+)
+from agent_factory.local_inference.capacity import configured_chat_parallel_slots, inspect_chat_inference_capacity
+from agent_factory.local_inference.config import load_local_inference_endpoint
+from agent_factory.local_inference.http_client import create_private_async_http_client
 from agent_factory.local_inference.context_allocation import resolve_llama_context_plan
 from agent_factory.env import load_agentfactory_dotenv
 from agent_factory.local_inference.memory_budget import (
@@ -50,6 +59,12 @@ def create_app() -> FastAPI:
         restore_enabled_fallback=False,
     )
     chat_maintenance_lock = asyncio.Lock()
+    chat_endpoint = load_local_inference_endpoint()
+    admission = InferenceAdmissionScheduler(
+        InferenceAdmissionSettings.from_environment(
+            total_slots=configured_chat_parallel_slots() or 1,
+        )
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -66,6 +81,83 @@ def create_app() -> FastAPI:
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/inference/admission")
+    async def inference_admission() -> dict[str, object]:
+        return admission.snapshot()
+
+    @app.post("/v1/chat/completions")
+    async def chat_completions(request: Request) -> Response:
+        try:
+            payload = await request.json()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="request body must be valid JSON") from exc
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="request body must be a JSON object")
+        identity = _admission_identity(request)
+        lease = admission.admit(**identity)
+        try:
+            ticket = await _acquire_admission(request, lease)
+        except AdmissionQueueFull as exc:
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
+        except AdmissionQueueTimeout as exc:
+            raise HTTPException(status_code=504, detail=str(exc)) from exc
+        if bool(payload.get("stream")):
+            client = create_private_async_http_client(chat_endpoint)
+            upstream_context = client.stream(
+                "POST",
+                chat_endpoint.endpoint("/chat/completions"),
+                json=payload,
+            )
+            try:
+                upstream = await upstream_context.__aenter__()
+            except BaseException:
+                await client.aclose()
+                await lease.__aexit__(*sys.exc_info())
+                raise
+
+            async def stream_body():
+                try:
+                    async for chunk in upstream.aiter_raw():
+                        yield chunk
+                finally:
+                    await upstream_context.__aexit__(None, None, None)
+                    await client.aclose()
+                    await lease.__aexit__(None, None, None)
+
+            return StreamingResponse(
+                stream_body(),
+                status_code=upstream.status_code,
+                headers={
+                    "content-type": upstream.headers.get("content-type", "text/event-stream"),
+                    "x-agentfactory-queue-wait-ms": str(round(ticket.queue_wait_seconds * 1000)),
+                },
+            )
+        try:
+            async with create_private_async_http_client(chat_endpoint) as client:
+                upstream = await client.post(chat_endpoint.endpoint("/chat/completions"), json=payload)
+            return Response(
+                content=upstream.content,
+                status_code=upstream.status_code,
+                headers={
+                    "content-type": upstream.headers.get("content-type", "application/json"),
+                    "x-agentfactory-queue-wait-ms": str(round(ticket.queue_wait_seconds * 1000)),
+                },
+            )
+        finally:
+            await lease.__aexit__(None, None, None)
+
+    @app.post("/tokenize")
+    async def tokenize(request: Request) -> Response:
+        return await _proxy_request(request, chat_endpoint.server_endpoint("/tokenize"))
+
+    @app.get("/slots")
+    async def slots(request: Request) -> Response:
+        return await _proxy_request(request, chat_endpoint.server_endpoint("/slots"))
+
+    @app.get("/metrics")
+    async def metrics(request: Request) -> Response:
+        return await _proxy_request(request, chat_endpoint.server_endpoint("/metrics"))
 
     @app.get("/runtime/rocm")
     async def rocm_runtime() -> dict[str, Any]:
@@ -175,7 +267,10 @@ def create_app() -> FastAPI:
     async def load_runtime(request: InferenceNodeAction) -> dict[str, Any]:
         _reject_chat_runtime_action_during_maintenance(request, chat_maintenance_lock)
         profile = _resolve_profile(request, apply_configuration=True)
-        return {"runtime": _runtime_payload(await runtime_manager.load(profile.profile_id))}
+        runtime = await runtime_manager.load(profile.profile_id)
+        if request.kind == "chat":
+            await admission.configure_total_slots(configured_chat_parallel_slots() or 1)
+        return {"runtime": _runtime_payload(runtime)}
 
     @app.post("/runtimes/unload")
     async def unload_runtime(request: InferenceNodeAction) -> dict[str, Any]:
@@ -187,7 +282,10 @@ def create_app() -> FastAPI:
     async def restart_runtime(request: InferenceNodeAction) -> dict[str, Any]:
         _reject_chat_runtime_action_during_maintenance(request, chat_maintenance_lock)
         profile = _resolve_profile(request, apply_configuration=True)
-        return {"runtime": _runtime_payload(await runtime_manager.restart(profile.profile_id))}
+        runtime = await runtime_manager.restart(profile.profile_id)
+        if request.kind == "chat":
+            await admission.configure_total_slots(configured_chat_parallel_slots() or 1)
+        return {"runtime": _runtime_payload(runtime)}
 
     @app.post("/benchmarks/operator-analysis")
     async def operator_analysis(request: InferenceOperatorAnalysisRequest) -> dict[str, Any]:
@@ -200,6 +298,66 @@ def create_app() -> FastAPI:
             return await _execute_operator_analysis(runtime_manager, request)
 
     return app
+
+
+def _admission_identity(request: Request) -> dict[str, str]:
+    priority = str(request.headers.get("x-agentfactory-priority") or "foreground").strip().lower()
+    if priority not in {"foreground", "normal", "background"}:
+        raise HTTPException(status_code=400, detail="invalid inference admission priority")
+    session_id = str(request.headers.get("x-agentfactory-session-id") or "").strip()
+    if not session_id:
+        client_host = request.client.host if request.client is not None else "unknown"
+        session_id = f"anonymous:{client_host}"
+    return {
+        "session_id": session_id,
+        "request_id": str(request.headers.get("x-agentfactory-request-id") or "").strip(),
+        "priority": priority,
+    }
+
+
+async def _proxy_request(request: Request, url: str) -> Response:
+    body = await request.body()
+    endpoint = load_local_inference_endpoint()
+    async with create_private_async_http_client(endpoint) as client:
+        upstream = await client.request(request.method, url, content=body or None)
+    return Response(
+        content=upstream.content,
+        status_code=upstream.status_code,
+        headers={"content-type": upstream.headers.get("content-type", "application/octet-stream")},
+    )
+
+
+async def _acquire_admission(request: Request, lease: Any) -> Any:
+    acquire_task = asyncio.create_task(lease.__aenter__())
+    disconnect_task = asyncio.create_task(_wait_for_disconnect(request))
+    done, _pending = await asyncio.wait(
+        {acquire_task, disconnect_task},
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    if disconnect_task in done:
+        acquire_task.cancel()
+        lease_acquired = False
+        try:
+            await acquire_task
+            lease_acquired = True
+        except asyncio.CancelledError:
+            pass
+        if lease_acquired:
+            await lease.__aexit__(None, None, None)
+        raise HTTPException(status_code=499, detail="client disconnected while waiting for inference")
+
+    ticket = await acquire_task
+    disconnect_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await disconnect_task
+    return ticket
+
+
+async def _wait_for_disconnect(request: Request) -> None:
+    while True:
+        message = await request.receive()
+        if message.get("type") == "http.disconnect":
+            return
 
 
 def _reject_chat_runtime_action_during_maintenance(
