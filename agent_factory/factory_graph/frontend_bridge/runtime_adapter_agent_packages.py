@@ -769,6 +769,9 @@ class RuntimeAgentPackageCommandMixin:
                 agent_session_id = item.session_id
                 if agent_session_id:
                     run.session["session_id"] = agent_session_id
+                event_extra_payload = dict(extra_payload or {})
+                if item.event_type == "run_started" and isinstance(run.session, dict):
+                    event_extra_payload["agent_session"] = dict(run.session)
                 if item.event_type in INTERRUPT_TERMINAL_EVENT_TYPES:
                     session_id = str(agent_session_id or (run.session or {}).get("session_id") or "")
                     if not session_id:
@@ -804,7 +807,7 @@ class RuntimeAgentPackageCommandMixin:
                                 mode=frontend_mode,
                                 session_id=frontend_session_id,
                                 package_id=package_id,
-                                extra_payload=extra_payload,
+                                extra_payload=event_extra_payload,
                             )
                         )
 
@@ -817,7 +820,7 @@ class RuntimeAgentPackageCommandMixin:
                         mode=frontend_mode,
                         session_id=frontend_session_id,
                         package_id=package_id,
-                        extra_payload=extra_payload,
+                        extra_payload=event_extra_payload,
                     )
                 )
                 if item.event_type in RUN_TERMINAL_EVENT_TYPES:

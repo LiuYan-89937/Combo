@@ -635,6 +635,7 @@ export const useRuntimeStore = defineStore('runtime', {
         return
       }
       this._registerActiveRequest(event, 'running')
+      this._syncAgentSessionFromRunEvent(event)
       this._setRequestDispatchState(event.request_id, 'running', event.payload)
       // 清空当前 run 的临时状态
       this.activeRequestId = event.request_id || null

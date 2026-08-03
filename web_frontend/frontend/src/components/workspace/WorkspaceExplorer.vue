@@ -141,6 +141,7 @@ import {
   UnlinkOutline,
 } from '@/components/icons'
 import ResourceIcon from '@/components/common/ResourceIcon.vue'
+import { useRuntimeStore } from '@/stores/runtime'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
@@ -178,6 +179,7 @@ const props = defineProps<{
   fixedScope?: WorkspaceScope | null
 }>()
 
+const runtimeStore = useRuntimeStore()
 const workspaceStore = useWorkspaceStore()
 const commands = useCommand()
 const { t } = useI18n()
@@ -198,6 +200,13 @@ const requestContext = computed<WorkspaceRequestContext | string | undefined>(()
   props.workspaceContext || props.packageId || undefined
 ))
 const effectiveScope = computed<WorkspaceScope>(() => props.fixedScope || 'workdir')
+const completedToolKeys = computed(() => (
+  runtimeStore.tools
+    .filter(tool => ['completed', 'failed', 'observed'].includes(tool.status))
+    .map(tool => tool.activityKey)
+    .sort()
+    .join('\u0000')
+))
 const canMountDirectory = computed(() => {
   if (!desktopDirectoryPickerAvailable() || effectiveScope.value !== 'workdir') return false
   const context = props.workspaceContext
@@ -492,6 +501,11 @@ watch(
     void loadDirectory('')
   },
 )
+
+watch(completedToolKeys, (next, previous) => {
+  if (next === previous) return
+  refreshTree()
+})
 
 function syncWorkspaceScope() {
   if (workspaceStore.currentScope !== effectiveScope.value) {
