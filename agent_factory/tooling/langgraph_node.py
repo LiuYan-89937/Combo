@@ -522,18 +522,19 @@ def _tool_call_batches(
     concurrent_by_name: Mapping[str, bool],
 ) -> list[list[dict[str, Any]]]:
     batches: list[list[dict[str, Any]]] = []
-    current: list[dict[str, Any]] = []
     for call in tool_calls:
         tool_id = str(call.get("name") or "")
         if concurrent_by_name.get(tool_id, True):
-            current.append(call)
+            if not batches:
+                batches.append([])
+            batches[0].append(call)
             continue
-        if current:
-            batches.append(current)
-            current = []
-        batches.append([call])
-    if current:
-        batches.append(current)
+        for batch in batches:
+            if all(str(item.get("name") or "") != tool_id for item in batch):
+                batch.append(call)
+                break
+        else:
+            batches.append([call])
     return batches
 
 

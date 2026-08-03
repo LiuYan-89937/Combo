@@ -46,6 +46,9 @@
                 </div>
                 <div class="summary-tags">
                   <n-tag size="small" :bordered="false">{{ sourceLabel(tool.source) }}</n-tag>
+                  <n-tag size="small" :bordered="false">
+                    {{ tool.concurrent ? t('agentTools.concurrent') : t('agentTools.serial') }}
+                  </n-tag>
                   <n-tag size="small" :type="approvalTagType(tool)">{{ approvalLabel(toolApproval(tool)) }}</n-tag>
                 </div>
               </div>
@@ -91,6 +94,20 @@
                     <template #suffix>{{ t('agentTools.characters') }}</template>
                   </n-input-number>
                 </div>
+                <div class="field-block">
+                  <div class="field-label">
+                    <strong>{{ t('agentTools.concurrentExecution') }}</strong>
+                    <span>{{ t('agentTools.concurrentExecutionHint') }}</span>
+                  </div>
+                  <div class="concurrency-control">
+                    <n-switch v-model:value="drafts[tool.tool_id].concurrent" />
+                    <span>
+                      {{ drafts[tool.tool_id].concurrent
+                        ? t('agentTools.concurrentEnabled')
+                        : t('agentTools.concurrentDisabled') }}
+                    </span>
+                  </div>
+                </div>
               </div>
 
               <div v-if="toolErrors[tool.tool_id]" class="tool-error">{{ toolErrors[tool.tool_id] }}</div>
@@ -135,6 +152,7 @@ import {
   NRadioGroup,
   NSelect,
   NSpin,
+  NSwitch,
   NTag,
 } from 'naive-ui'
 import {
@@ -159,6 +177,7 @@ interface ToolDraft {
   description: string
   approval: AgentToolApproval
   maxModelChars: number | null
+  concurrent: boolean
 }
 
 const drafts = reactive<Record<string, ToolDraft>>({})
@@ -206,6 +225,7 @@ function applySettings(next: AgentToolSettingsView): void {
       description: tool.description,
       approval: toolApproval(tool),
       maxModelChars: tool.max_model_chars,
+      concurrent: tool.concurrent,
     }
   }
   toolErrors.value = {}
@@ -245,6 +265,7 @@ async function saveTool(tool: AgentToolSettingView): Promise<void> {
       description,
       max_model_chars: maxModelChars,
       approval: draft.approval,
+      concurrent: draft.concurrent,
     })
     const persisted = response.tool_settings.tools.find(item => item.tool_id === tool.tool_id)
     const persistedApproval = response.tool_settings.policy.tool_overrides?.[tool.tool_id]?.approval || 'inherit'
@@ -252,6 +273,7 @@ async function saveTool(tool: AgentToolSettingView): Promise<void> {
       !persisted
       || persisted.description !== description
       || persisted.max_model_chars !== maxModelChars
+      || persisted.concurrent !== draft.concurrent
       || persistedApproval !== draft.approval
     ) {
       throw new Error(t('agentTools.persistenceMismatch'))
@@ -285,6 +307,7 @@ function toolDirty(tool: AgentToolSettingView): boolean {
   return Boolean(draft) && (
     draft.description.trim() !== tool.description
     || draft.maxModelChars !== tool.max_model_chars
+    || draft.concurrent !== tool.concurrent
     || draft.approval !== toolApproval(tool)
   )
 }
@@ -333,6 +356,7 @@ function errorMessage(reason: unknown): string {
 .tool-editor { display: flex; flex-direction: column; gap: 14px; padding: 4px 0 12px; }
 .field-block, .field-label { display: flex; flex-direction: column; gap: 6px; }
 .field-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+.concurrency-control { display: flex; min-height: 34px; align-items: center; gap: 10px; color: var(--app-text-secondary); font-size: 12px; }
 .tool-error { color: var(--app-danger); font-size: 12px; }
 @media (max-width: 560px) { .field-grid { grid-template-columns: 1fr; } }
 </style>

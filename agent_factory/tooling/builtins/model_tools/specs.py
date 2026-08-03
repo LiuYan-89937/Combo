@@ -30,7 +30,7 @@ def get_model_tool_specs(runtime_tools: Mapping[str, Any] | None) -> list[ToolSp
                 output_schema=_output_schema(capability),
                 resources=tool_resources,
                 risk_level="low",
-                concurrent=True,
+                concurrent=capability not in {"image_output", "image_edit"},
                 permission_scope="model",
             )
         )

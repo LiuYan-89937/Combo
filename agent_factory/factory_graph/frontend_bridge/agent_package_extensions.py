@@ -419,12 +419,25 @@ def _manage_extension_root(
                 if submitted_max_model_chars == int(current_summary["tool_permissions"]["default_max_model_chars"])
                 else submitted_max_model_chars
             )
+        runtime_concurrent = existing_runtime.concurrent
+        if "concurrent" in payload:
+            submitted_concurrent = ToolRuntimeOverride(concurrent=payload.get("concurrent")).concurrent
+            runtime_concurrent = (
+                None
+                if submitted_concurrent == bool(current_tool.get("base_concurrent", True))
+                else submitted_concurrent
+            )
         runtime_override = ToolRuntimeOverride(
             description=runtime_description,
             max_model_chars=runtime_max_model_chars,
+            concurrent=runtime_concurrent,
         )
         next_tool_settings = dict(settings.tools)
-        if runtime_override.description is None and runtime_override.max_model_chars is None:
+        if (
+            runtime_override.description is None
+            and runtime_override.max_model_chars is None
+            and runtime_override.concurrent is None
+        ):
             next_tool_settings.pop(tool_id, None)
         else:
             next_tool_settings[tool_id] = runtime_override
@@ -622,6 +635,7 @@ def _tool_permission_tools(
                 risk_level=str(getattr(spec, "risk_level", "") or "low"),
                 permission_scope=str(getattr(spec, "permission_scope", "") or "package"),
                 permission_tags=list(getattr(spec, "permission_tags", []) or []),
+                concurrent=bool(getattr(spec, "concurrent", True)),
             )
             if item:
                 tools[item["tool_id"]] = item
@@ -636,6 +650,7 @@ def _tool_permission_tools(
             risk_level="medium",
             permission_scope="extension",
             permission_tags=[],
+            concurrent=True,
         )
     catalog = load_registered_mcp_tool_catalog()
     for server in getattr(bundle.mcp_servers, "servers", []):
@@ -648,6 +663,7 @@ def _tool_permission_tools(
                 risk_level=registered_tool.risk_level,
                 permission_scope=registered_tool.permission_scope,
                 permission_tags=registered_tool.permission_tags,
+                concurrent=registered_tool.concurrent,
             )
             if item:
                 tools[item["tool_id"]] = item
@@ -674,6 +690,7 @@ def _model_permission_tools(package: LoadedAgentPackage) -> list[dict[str, Any]]
             risk_level="low",
             permission_scope="model",
             permission_tags=[],
+            concurrent=str(binding.get("capability") or "") not in {"image_output", "image_edit"},
         )
         if item:
             tools.append(item)
@@ -685,12 +702,12 @@ def _system_agent_permission_tools(system_owner: SystemAgentExtensionOwner | Non
         from agent_factory.create_agent.tooling import (
             CREATE_AGENT_ASSIST_TOOL_IDS,
             CREATE_AGENT_BUILTIN_TOOL_IDS,
-            CREATE_AGENT_AUTHORING_TOOL_ID,
-            CREATE_AGENT_CONTROL_TOOL_ID,
-            CREATE_AGENT_MODEL_POOL_TOOL_ID,
-            CREATE_AGENT_PROBE_TOOL_ID,
-            CREATE_AGENT_STAGE_TOOL_ID,
-            CREATE_AGENT_VALIDATE_TOOL_ID,
+            build_create_agent_authoring_tool_spec,
+            build_create_agent_control_tool_spec,
+            build_create_agent_probe_tool_spec,
+            build_create_agent_stage_tool_spec,
+            build_create_agent_validate_tool_spec,
+            build_model_pool_select_tool_spec,
         )
         from agent_factory.tooling.builtins.registry import (
             get_always_available_system_tool_ids,
@@ -699,15 +716,15 @@ def _system_agent_permission_tools(system_owner: SystemAgentExtensionOwner | Non
         )
     except Exception:
         return []
-    authoring_tool_ids = {
-        CREATE_AGENT_AUTHORING_TOOL_ID,
-        CREATE_AGENT_CONTROL_TOOL_ID,
-        CREATE_AGENT_MODEL_POOL_TOOL_ID,
-        CREATE_AGENT_PROBE_TOOL_ID,
-        CREATE_AGENT_VALIDATE_TOOL_ID,
-    }
+    authoring_specs = [
+        build_create_agent_authoring_tool_spec(),
+        build_create_agent_control_tool_spec(),
+        build_model_pool_select_tool_spec(),
+        build_create_agent_probe_tool_spec(),
+        build_create_agent_validate_tool_spec(),
+    ]
     if system_owner == "create_agent":
-        authoring_tool_ids.add(CREATE_AGENT_STAGE_TOOL_ID)
+        authoring_specs.append(build_create_agent_stage_tool_spec())
     builtin_ids = CREATE_AGENT_BUILTIN_TOOL_IDS if system_owner in {"create_agent", "evolve_agent"} else CREATE_AGENT_ASSIST_TOOL_IDS
     read_only_ids = get_read_only_system_tool_ids()
     allowed_builtin_ids = set(builtin_ids) | set(get_always_available_system_tool_ids())
@@ -723,18 +740,20 @@ def _system_agent_permission_tools(system_owner: SystemAgentExtensionOwner | Non
             risk_level=spec.risk_level,
             permission_scope="system",
             permission_tags=["read_only"] if spec.id in read_only_ids else [],
+            concurrent=spec.concurrent,
         )
         if item:
             tools.append(item)
-    for tool_id in sorted(authoring_tool_ids):
+    for spec in sorted(authoring_specs, key=lambda item: item.id):
         item = _public_tool_permission_item(
-            tool_id=tool_id,
-            name=humanize_identifier(tool_id) or tool_id,
-            description="System authoring tool used by this workflow.",
+            tool_id=spec.id,
+            name=humanize_identifier(spec.id) or spec.id,
+            description=spec.description,
             source="system",
-            risk_level="high",
-            permission_scope="system",
-            permission_tags=[],
+            risk_level=spec.risk_level,
+            permission_scope=spec.permission_scope,
+            permission_tags=spec.permission_tags,
+            concurrent=spec.concurrent,
         )
         if item:
             tools.append(item)
@@ -771,6 +790,7 @@ def _builtin_permission_tools(package: LoadedAgentPackage) -> list[dict[str, Any
             risk_level=spec.risk_level,
             permission_scope="system",
             permission_tags=["read_only"] if spec.id in read_only_ids else [],
+            concurrent=spec.concurrent,
         )
         if item:
             tools.append(item)
@@ -792,6 +812,7 @@ def _public_tool_permission_item(
     risk_level: str,
     permission_scope: str,
     permission_tags: list[str],
+    concurrent: bool,
 ) -> dict[str, Any] | None:
     normalized_tool_id = str(tool_id or "").strip()
     if not normalized_tool_id:
@@ -804,6 +825,7 @@ def _public_tool_permission_item(
         "risk_level": risk_level,
         "permission_scope": permission_scope,
         "permission_tags": permission_tags,
+        "concurrent": concurrent,
     }
 
 
@@ -814,11 +836,15 @@ def _tool_with_runtime_settings(
     default_max_model_chars: int,
 ) -> dict[str, Any]:
     base_description = str(tool.get("description") or "").strip()
+    base_concurrent = bool(tool.get("concurrent", True))
     return {
         **tool,
         "base_description": base_description,
         "description": override.description if override is not None and override.description else base_description,
         "description_overridden": bool(override is not None and override.description),
+        "base_concurrent": base_concurrent,
+        "concurrent": override.concurrent if override is not None and override.concurrent is not None else base_concurrent,
+        "concurrent_overridden": bool(override is not None and override.concurrent is not None),
         "max_model_chars": (
             override.max_model_chars
             if override is not None and override.max_model_chars is not None
@@ -1231,6 +1257,7 @@ def _test_mcp_server(
                 "risk_level": prepared.spec.risk_level,
                 "permission_scope": prepared.spec.permission_scope,
                 "permission_tags": prepared.spec.permission_tags,
+                "concurrent": prepared.spec.concurrent,
             }
         )
         for repair in prepared.repairs:

@@ -52,6 +52,7 @@ class RegisteredMCPTool(BaseModel):
     risk_level: str = "medium"
     permission_scope: str = "extension"
     permission_tags: list[str] = Field(default_factory=list)
+    concurrent: bool = False
 
 
 class MCPToolCatalog(BaseModel):

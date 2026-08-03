@@ -18,6 +18,7 @@ class ToolRuntimeOverride(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     description: str | None = None
+    concurrent: bool | None = None
     max_model_chars: int | None = Field(
         default=None,
         ge=MIN_TOOL_OUTPUT_MAX_MODEL_CHARS,
@@ -83,6 +84,7 @@ def apply_tool_runtime_settings(
             spec.model_copy(
                 update={
                     "description": override.description or spec.description,
+                    "concurrent": spec.concurrent if override.concurrent is None else override.concurrent,
                     "output_compression": output_compression,
                 }
             )

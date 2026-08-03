@@ -23,6 +23,9 @@ export interface AgentToolSettingView {
   permission_tags: string[]
   max_model_chars: number
   max_model_chars_overridden: boolean
+  base_concurrent: boolean
+  concurrent: boolean
+  concurrent_overridden: boolean
 }
 
 export interface AgentToolSettingsView {
@@ -94,7 +97,12 @@ export const agentPackagesApi = {
   updateToolSettings: (
     packageId: string,
     toolId: string,
-    payload: { description: string; max_model_chars: number; approval: AgentToolApproval },
+    payload: {
+      description: string
+      max_model_chars: number
+      approval: AgentToolApproval
+      concurrent: boolean
+    },
   ) =>
     requestJson<AgentToolSettingsResponse>(
       `/api/agent-packages/${encodeURIComponent(packageId)}/tool-settings/${encodeURIComponent(toolId)}`,

@@ -28,84 +28,6 @@ _CHANGE_SUMMARY_SCHEMA = {
     ],
     "additionalProperties": False,
 }
-_FILE_HASH_SCHEMA = {
-    "type": "string",
-    "pattern": "^[0-9a-fA-F]{64}$",
-    "description": "可选的文件 SHA-256；用于在生成预览前校验调用方读取到的版本。",
-}
-_TRANSACTION_OPERATION_SCHEMA = {
-    "oneOf": [
-        {
-            "type": "object",
-            "properties": {
-                "type": {"const": "create"},
-                "path": _STRING,
-                "content": _STRING,
-                "expected_hash": _FILE_HASH_SCHEMA,
-            },
-            "required": ["type", "path", "content"],
-            "additionalProperties": False,
-        },
-        {
-            "type": "object",
-            "properties": {
-                "type": {"const": "write"},
-                "path": _STRING,
-                "content": _STRING,
-                "expected_hash": _FILE_HASH_SCHEMA,
-            },
-            "required": ["type", "path", "content"],
-            "additionalProperties": False,
-        },
-        {
-            "type": "object",
-            "properties": {
-                "type": {"const": "replace"},
-                "path": _STRING,
-                "old_text": _STRING,
-                "new_text": _STRING,
-                "replace_all": {"type": "boolean", "default": False},
-                "expected_hash": _FILE_HASH_SCHEMA,
-            },
-            "required": ["type", "path", "old_text", "new_text"],
-            "additionalProperties": False,
-        },
-        {
-            "type": "object",
-            "properties": {
-                "type": {"enum": ["move", "copy"]},
-                "source_path": _STRING,
-                "destination_path": _STRING,
-                "overwrite": {"type": "boolean", "default": False},
-                "expected_hash": _FILE_HASH_SCHEMA,
-            },
-            "required": ["type", "source_path", "destination_path"],
-            "additionalProperties": False,
-        },
-        {
-            "type": "object",
-            "properties": {
-                "type": {"const": "delete"},
-                "path": _STRING,
-                "expected_hash": _FILE_HASH_SCHEMA,
-            },
-            "required": ["type", "path"],
-            "additionalProperties": False,
-        },
-    ],
-}
-_AFFECTED_FILE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "path": _STRING,
-        "change_type": {"type": "string", "enum": ["created", "modified", "deleted"]},
-        "before_hash": {"type": ["string", "null"]},
-        "after_hash": {"type": ["string", "null"]},
-        "change_summary": _CHANGE_SUMMARY_SCHEMA,
-    },
-    "required": ["path", "change_type", "before_hash", "after_hash", "change_summary"],
-    "additionalProperties": False,
-}
 _FILESYSTEM_RESOURCE = {"filesystem": "filesystem"}
 _FS_MODULE = "agent_factory.tooling.builtins.filesystem"
 _PATH_BOUNDARY_DESCRIPTION = (
@@ -264,74 +186,37 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
     ),
     ToolSpec(
         id="edit",
-        description=(
-            "对 workspace 内多个文件执行事务式变更。支持 create、write、replace、move、copy、delete；"
-            "必须先用 action=preview 验证所有路径和文件快照并生成结构化 diff，"
-            "再使用预览返回的 transaction_id 调用 action=commit。"
-            "提交前会重新验证 SHA-256 和文件状态；任一步失败时回滚整批变更。"
-        ),
+        description="对 workspace 边界内的单个 UTF-8 文件执行精确文本替换。",
         schema_error_guidance=(
-            "事务式 edit 仅接受两种调用："
-            "action=preview 时提供非空 operations；"
-            "action=commit 时只提供真实 preview 返回的 transaction_id。"
-            "不要继续使用旧的 path/old_text/new_text 顶层参数。"
+            "提供 path、old_text 和 new_text。old_text 默认必须只匹配一处；"
+            "需要替换全部匹配时显式设置 replace_all=true。"
         ),
         entrypoint="agent_factory.tooling.builtins.filesystem.edit:run",
         input_schema={
-            "oneOf": [
-                {
-                    "type": "object",
-                    "properties": {
-                        "action": {"const": "preview"},
-                        "operations": {
-                            "type": "array",
-                            "minItems": 1,
-                            "items": _TRANSACTION_OPERATION_SCHEMA,
-                            "description": (
-                                "按数组顺序应用到虚拟工作区；同一路径可在一次事务中连续变更。"
-                                f"{_PATH_BOUNDARY_DESCRIPTION}"
-                            ),
-                        },
-                    },
-                    "required": ["action", "operations"],
-                    "additionalProperties": False,
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": _WRITE_PATH_DESCRIPTION},
+                "old_text": {"type": "string", "description": "需要被替换的完整原文本。"},
+                "new_text": {"type": "string", "description": "替换后的文本，可为空字符串。"},
+                "replace_all": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "是否替换全部匹配项。",
                 },
-                {
-                    "type": "object",
-                    "properties": {
-                        "action": {"const": "commit"},
-                        "transaction_id": {
-                            "type": "string",
-                            "minLength": 1,
-                            "description": "必须使用 edit preview 实际返回且仍在有效期内的事务 ID。",
-                        },
-                    },
-                    "required": ["action", "transaction_id"],
-                    "additionalProperties": False,
-                },
-            ],
+            },
+            "required": ["path", "old_text", "new_text"],
+            "additionalProperties": False,
         },
         output_schema={
             "type": "object",
             "properties": {
-                "transaction_id": _STRING,
-                "status": {"type": "string", "enum": ["preview_ready", "committed"]},
-                "created_at": _STRING,
-                "expires_at": _STRING,
-                "operations_count": _INTEGER,
-                "affected_files": {
-                    "type": "array",
-                    "items": _AFFECTED_FILE_SCHEMA,
-                },
+                "path": _STRING,
+                "replacements": _INTEGER,
+                "before_hash": _STRING,
+                "after_hash": _STRING,
+                "change_summary": _CHANGE_SUMMARY_SCHEMA,
             },
-            "required": [
-                "transaction_id",
-                "status",
-                "created_at",
-                "expires_at",
-                "operations_count",
-                "affected_files",
-            ],
+            "required": ["path", "replacements", "before_hash", "after_hash", "change_summary"],
             "additionalProperties": False,
         },
         resources=_FILESYSTEM_RESOURCE,

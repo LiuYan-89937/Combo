@@ -88,17 +88,25 @@
           v-for="artifact in part.artifacts"
           :key="artifact.id"
           class="tool-artifact"
+          :class="{ 'tool-artifact-image': isImageArtifact(artifact) }"
           :href="artifactUrl(artifact)"
           :target="artifactUrl(artifact) ? '_blank' : undefined"
           :rel="artifactUrl(artifact) ? 'noopener noreferrer' : undefined"
           @click="preventUnavailableArtifact($event, artifact)"
         >
+          <img
+            v-if="isImageArtifact(artifact) && artifactUrl(artifact)"
+            class="tool-artifact-preview"
+            :src="artifactUrl(artifact)"
+            :alt="artifact.name"
+          />
           <ResourceIcon
+            v-else
             :name="artifact.name"
             :mime-type="artifact.mimeType"
             :size="22"
           />
-          <span>
+          <span class="tool-artifact-details">
             <strong>{{ artifact.name }}</strong>
             <small>{{ artifactMeta(artifact) }}</small>
           </span>
@@ -123,7 +131,7 @@ import {
 } from '@vicons/carbon'
 import ResourceIcon from '@/components/common/ResourceIcon.vue'
 import { useI18n } from '@/composables/useI18n'
-import { workspaceResourceUrl } from '@/utils/workspaceResources'
+import { isImageResource, workspaceResourceUrl } from '@/utils/workspaceResources'
 import { toolPresentation } from '@/utils/toolPresentation'
 import type {
   ArtifactMessagePart,
@@ -277,6 +285,10 @@ const shellOutput = computed(() => {
 
 function artifactUrl(artifact: ArtifactMessagePart): string {
   return artifact.path ? workspaceResourceUrl(artifact.path, props.workspaceContext) || '' : ''
+}
+
+function isImageArtifact(artifact: ArtifactMessagePart): boolean {
+  return isImageResource(artifact.path || artifact.name, artifact.mimeType)
 }
 
 function workspacePathUrl(path: unknown, kind?: unknown): string {
@@ -619,6 +631,26 @@ details[open] > summary .summary-chevron {
 .tool-artifact > span:last-child {
   display: grid;
   min-width: 0;
+}
+
+.tool-artifact-image {
+  display: grid;
+  width: min(420px, 100%);
+  padding: 0;
+  overflow: hidden;
+}
+
+.tool-artifact-preview {
+  display: block;
+  width: 100%;
+  max-height: 320px;
+  border-bottom: 1px solid var(--app-border);
+  background: var(--app-surface-muted);
+  object-fit: contain;
+}
+
+.tool-artifact-image .tool-artifact-details {
+  padding: 9px 11px;
 }
 
 .tool-artifact strong,
