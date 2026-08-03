@@ -9,7 +9,7 @@
 
 两种拓扑复用同一套模型 Profile、推理控制、Benchmark 和部署脚本。
 
-项目入口和功能说明见 [中文 README](../README.zh-CN.md)。
+项目入口和功能说明见 [中文 README](../README.md)。
 
 ## 1. 部署结果
 
@@ -79,6 +79,8 @@ AgentPackage 会话使用受宿主监督的 Native Runtime，不要求 Docker。
 ### 2.2 AMD ROCm 推理节点要求
 
 推理节点必须提供 Linux、AMD GPU、可用的 ROCm 驱动与用户态组件、`/dev/kfd` 访问权限，以及与 ROCm 版本兼容的 PyTorch HIP。SSH 模式还需要 sshd 和 Public Key 登录；主机或端口变化后，需要同步修改控制端部署配置。
+
+> **服务器镜像提示**：在 RadeonCloud/AMD 云平台创建推理服务器时，请选择 `ROCm vLLM-dev (Navi) (vllm-dev:rocm7.2.1_navi_ubuntu22.04_py3.10_pytorch_2.9_vllm_0.16.0)`。该镜像作为本项目远端 ROCm 推理节点的基线；如果选择其他镜像，请先确认 ROCm、PyTorch HIP、`/dev/kfd` 和 Python ABI 兼容。
 
 在本机先验证：
 

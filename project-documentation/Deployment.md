@@ -79,6 +79,8 @@ AgentPackage sessions use a supervised Native Runtime and do not require Docker.
 
 The deployment process may install missing user-space build dependencies when configured. It does not install or replace the host GPU driver.
 
+> **Server image tip:** When creating a RadeonCloud/AMD cloud inference server, select `ROCm vLLM-dev (Navi) (vllm-dev:rocm7.2.1_navi_ubuntu22.04_py3.10_pytorch_2.9_vllm_0.16.0)`. This image is the baseline for the project's remote ROCm inference node. If you choose another image, first verify ROCm, PyTorch HIP, `/dev/kfd`, and Python ABI compatibility.
+
 ## 3. Get the Source
 
 ```bash
