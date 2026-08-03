@@ -13,7 +13,6 @@ import { translate, type I18nKey } from '@/i18n'
 import { postCommand } from '@/api/http'
 import { switchSessionCommand } from '@/api/commands'
 import { useAgentGroupStore } from '@/stores/agentGroup'
-import { useCollaborationStore } from '@/stores/collaboration'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useTaskNotificationPreferencesStore, type TaskNotificationCategory } from '@/stores/taskNotificationPreferences'
 import { useUiStore } from '@/stores/ui'
@@ -26,11 +25,8 @@ export type TaskNotificationTarget =
       mode: 'create_agent' | 'evolve_agent' | 'agent_package'
       sessionId: string | null
       packageId: string | null
-      collaborationId?: string | null
-      collaborationTaskId?: string | null
       conversationScope?: string | null
     }
-  | { kind: 'collaboration'; collaborationId: string; taskId?: string | null }
   | { kind: 'agentGroup'; groupId: string }
   | { kind: 'scheduler' }
 
@@ -186,10 +182,6 @@ async function isCurrentTargetVisible(target: TaskNotificationTarget): Promise<b
   if (target.kind === 'agentGroup') {
     return routeName === 'AgentGroup' && useAgentGroupStore().activeGroup?.group_id === target.groupId
   }
-  if (target.kind === 'collaboration') {
-    return routeName === 'Collaboration'
-      && useCollaborationStore().activeSession?.collaboration_id === target.collaborationId
-  }
   if (!['Factory', 'Manufacturing', 'Evolution'].includes(routeName)) return false
   const runtimeStore = useRuntimeStore()
   if (target.conversationScope) {
@@ -216,20 +208,12 @@ async function openNotificationTarget(target: TaskNotificationTarget): Promise<v
     await focusPromise
     return
   }
-  if (target.kind === 'collaboration') {
-    await router.push({ name: 'Collaboration' })
-    await useCollaborationStore().loadSession(target.collaborationId)
-    await focusPromise
-    return
-  }
   if (target.mode === 'agent_package' && target.packageId && target.sessionId) {
     await router.push({
       name: 'Factory',
       query: {
         package_id: target.packageId,
         session_id: target.sessionId,
-        collaboration_id: target.collaborationId || undefined,
-        collaboration_task_id: target.collaborationTaskId || undefined,
       },
     })
     await focusPromise
@@ -284,7 +268,6 @@ function notificationTitle(notification: TaskTerminalNotification): string {
 function categoryTitleKey(category: TaskNotificationCategory): I18nKey {
   const keys: Record<TaskNotificationCategory, I18nKey> = {
     conversation: 'taskNotification.conversation',
-    collaboration: 'taskNotification.collaboration',
     agentGroup: 'taskNotification.agentGroup',
     scheduler: 'taskNotification.scheduler',
   }
@@ -397,7 +380,7 @@ function parseNotificationTarget(value: unknown): TaskNotificationTarget | null 
   }
   if (!value || typeof value !== 'object') return null
   const target = value as Partial<TaskNotificationTarget>
-  return ['conversation', 'collaboration', 'agentGroup', 'scheduler'].includes(
+  return ['conversation', 'agentGroup', 'scheduler'].includes(
     String(target.kind || ''),
   )
     ? target as TaskNotificationTarget

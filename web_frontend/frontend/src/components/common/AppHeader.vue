@@ -272,7 +272,7 @@ const runStatusText = computed(() => {
     idle: t('run.idle'),
     running: t('run.running'),
     stopping: t('run.stopping'),
-    waiting_for_workers: t('collaboration.runtimeStatus.waiting_for_workers'),
+    waiting_for_workers: t('run.waitingForBackgroundTasks'),
     interrupted: t('run.interrupted'),
     completed: t('run.completed'),
     stopped: t('run.stopped'),

@@ -67,11 +67,20 @@ def get_agent_manufacture_tool_specs() -> list[ToolSpec]:
                 "properties": {
                     "status": {
                         "type": "string",
-                        "enum": ["requested", "running", "ready_for_publish", "completed", "failed"],
+                        "enum": [
+                            "queued",
+                            "claimed",
+                            "running",
+                            "waiting_approval",
+                            "waiting_external",
+                            "cancelling",
+                            "succeeded",
+                            "failed",
+                            "cancelled"
+                        ],
                     },
                     "request_id": {"type": "string"},
-                    "collaboration_id": {"type": "string"},
-                    "background_task_id": {"type": "string"},
+                    "task_id": {"type": "string"},
                     "create_agent_session_id": {"type": ["string", "null"]},
                     "message": {"type": "string"},
                     "next_step": {"type": "string"},
@@ -79,14 +88,13 @@ def get_agent_manufacture_tool_specs() -> list[ToolSpec]:
                 "required": [
                     "status",
                     "request_id",
-                    "collaboration_id",
-                    "background_task_id",
+                    "task_id",
                     "message",
                     "next_step"
                 ],
             },
             resources={
-                "collaboration_root": "collaboration_root",
+                "background_task_root": "background_task_root",
                 "runtime_execution_config": "runtime_execution_config",
                 "workdir_root": "workdir_root",
             },

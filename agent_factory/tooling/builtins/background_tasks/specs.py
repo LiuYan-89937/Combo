@@ -20,20 +20,24 @@ def get_background_tasks_tool_specs() -> list[ToolSpec]:
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "action": {"type": "string", "enum": ["list", "get"]},
-                    "background_task_id": {"type": "string", "minLength": 1},
+                    "action": {"type": "string", "enum": ["list", "get", "cancel"]},
+                    "task_id": {"type": "string", "minLength": 1},
+                    "reason": {"type": "string"},
                 },
                 "required": ["action"],
                 "allOf": [
                     {
-                        "if": {"properties": {"action": {"const": "get"}}, "required": ["action"]},
-                        "then": {"required": ["background_task_id"]},
+                        "if": {
+                            "properties": {"action": {"enum": ["get", "cancel"]}},
+                            "required": ["action"]
+                        },
+                        "then": {"required": ["task_id"]},
                     }
                 ],
             },
             output_schema={"type": "object", "additionalProperties": True},
             resources={
-                "collaboration_root": "collaboration_root",
+                "background_task_root": "background_task_root",
                 "runtime_execution_config": "runtime_execution_config",
                 "workdir_root": "workdir_root",
             },

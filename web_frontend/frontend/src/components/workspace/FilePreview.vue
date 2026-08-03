@@ -107,7 +107,6 @@ const workspaceContext = computed<WorkspaceRequestContext>(() => {
     packageSessionId: String(payload.package_session_id || payload.packageSessionId || '').trim() || null,
     factorySessionId: String(payload.factory_session_id || payload.factorySessionId || '').trim() || null,
     createAgentSessionId: String(payload.create_agent_session_id || payload.createAgentSessionId || '').trim() || null,
-    collaborationId: String(payload.collaboration_id || payload.collaborationId || '').trim() || null,
     groupId: String(payload.group_id || payload.groupId || '').trim() || null,
   }
 })

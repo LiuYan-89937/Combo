@@ -10,7 +10,6 @@ import {
   GitCompare,
   Layers,
   Library,
-  People,
   PersonCircleOutline,
   Rocket,
   Time,
@@ -50,11 +49,6 @@ export function sidebarMenuOptions(t: Translate): MenuOption[] {
       label: t('route.agentHub'),
       key: '/agent-hub',
       icon: renderIcon(CloudDownload),
-    },
-    {
-      label: t('route.collaboration'),
-      key: '/collaboration',
-      icon: renderIcon(People),
     },
     {
       label: t('route.agentGroup'),

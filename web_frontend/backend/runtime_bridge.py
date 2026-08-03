@@ -11,6 +11,8 @@ from typing import Any, Callable
 
 from fastapi import HTTPException
 
+from agent_factory.collaboration_system.task_runtime import background_task_service
+from agent_factory.contracts import NotFoundError, ServiceUnavailableError
 from agent_factory.factory_graph.frontend_bridge.protocol import (
     FactoryFrontendCommand,
     event,
@@ -352,6 +354,10 @@ class RuntimeBridge:
                 await asyncio.gather(
                     *(asyncio.to_thread(thread.join) for _request_id, thread in active)
                 )
+            try:
+                await asyncio.to_thread(background_task_service().delete_session, session_id)
+            except (NotFoundError, ServiceUnavailableError):
+                pass
             cleanup_command = command.model_copy(
                 update={"request_id": f"{command.request_id or uuid.uuid4().hex}:cleanup"}
             )
@@ -800,8 +806,6 @@ def _runtime_request_dispatch_event(
         key: command_payload[key]
         for key in (
             "package_id",
-            "collaboration_id",
-            "collaboration_task_id",
             "factory_session_id",
         )
         if command_payload.get(key) is not None

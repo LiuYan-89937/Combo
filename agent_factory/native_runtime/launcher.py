@@ -131,9 +131,9 @@ class NativeAgentRuntimeLauncher:
         _copy_sqlite_snapshot(model_pool_path, model_pool_snapshot)
         _copy_sqlite_snapshot(resource_store.path, resource_store_snapshot)
 
-        # Prepare collaboration root
-        collaboration_root = factory_artifact_path("collaboration")
-        collaboration_root.mkdir(parents=True, exist_ok=True)
+        # Prepare the cross-process background-task control plane.
+        background_task_root = factory_artifact_path("background_tasks")
+        background_task_root.mkdir(parents=True, exist_ok=True)
 
         # Prepare dependency pool
         dependency_pool = dependency_pool_path()
@@ -150,7 +150,7 @@ class NativeAgentRuntimeLauncher:
             runtime_instance_id=runtime_instance_id,
             model_pool_snapshot=model_pool_snapshot,
             resource_store_snapshot=resource_store_snapshot,
-            collaboration_root=collaboration_root,
+            background_task_root=background_task_root,
             dependency_pool=dependency_pool,
             mcp_gateway_url=mcp_gateway_url,
             skillhub_gateway_url=skillhub_gateway_url,
@@ -222,7 +222,7 @@ class NativeAgentRuntimeLauncher:
         runtime_instance_id: str,
         model_pool_snapshot: Path,
         resource_store_snapshot: Path,
-        collaboration_root: Path,
+        background_task_root: Path,
         dependency_pool: Path,
         mcp_gateway_url: str | None,
         skillhub_gateway_url: str | None,
@@ -269,8 +269,8 @@ class NativeAgentRuntimeLauncher:
         if ResourceStore().key_available:
             env[RESOURCE_MASTER_KEY_ENV] = os.environ[RESOURCE_MASTER_KEY_ENV]
 
-        # Collaboration root
-        env["AGENTFACTORY_COLLABORATION_ROOT"] = str(collaboration_root.resolve())
+        # Background-task control plane
+        env["AGENTFACTORY_BACKGROUND_TASK_ROOT"] = str(background_task_root.resolve())
 
         # Gateway URLs
         if mcp_gateway_url:

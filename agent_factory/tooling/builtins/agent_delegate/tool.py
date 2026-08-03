@@ -1,30 +1,30 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from agent_factory.collaboration_system.parent_controller import (
-    create_parent_controlled_session,
+    background_task_client,
+    background_task_request_id,
     parent_agent_context,
-    require_parent_owned_session,
+    runtime_user_config,
 )
 from agent_factory.collaboration_system.result_delivery import DELIVERY_PROTOCOL
-from agent_factory.collaboration_system.store import CollaborationStore, resolve_collaboration_store_path
+from agent_factory.collaboration_system.task_client import task_id_for_request
 from agent_factory.factory_graph.frontend_bridge.agent_package_repository import AgentPackageRepository
 from agent_factory.tooling.envelope import tool_envelope
 from agent_factory.tooling.spec import ToolRiskResult
 
 
 PROTOCOL_OUTPUT_PATH = ".agent_delivery/result.json"
+TOOL_ID = "agent_delegate"
 
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     action = str(arguments.get("action") or "").strip()
-    store = CollaborationStore(_store_path(resources))
     if action == "start":
-        output = _start(arguments, resources, store)
+        output = _start(arguments, resources)
     elif action == "cancel":
-        output = _cancel(arguments, resources, store)
+        output = _cancel(arguments, resources)
     else:
         raise ValueError(f"unsupported agent_delegate action: {action}")
     return tool_envelope(output, summary=str(output.get("message") or ""))
@@ -44,92 +44,71 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
     ).model_dump(mode="json")
 
 
-def _start(arguments: dict[str, Any], resources: dict[str, Any], store: CollaborationStore) -> dict[str, Any]:
+def _start(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     task_text = _required_text(arguments, "task")
-    parent = parent_agent_context(resources, tool_id="agent_delegate")
+    parent = parent_agent_context(resources, tool_id=TOOL_ID)
     package_id = _required_text(arguments, "package_id")
     if package_id == parent.package_id:
         raise ValueError("agent_delegate cannot delegate a task back to the current Agent")
     AgentPackageRepository.from_paths().load(package_id)
-    session, parent = create_parent_controlled_session(
-        store,
-        resources,
-        title=f"{package_id}: {task_text[:80]}",
-        tool_id="agent_delegate",
-        task_kind="delegate",
-        context=parent,
-    )
     criteria = _string_list(arguments.get("acceptance_criteria"))
     if not criteria:
         raise ValueError("acceptance_criteria must contain at least one item")
     expected_artifacts = _artifact_expectations(arguments.get("expected_artifacts"))
-    collaboration_id = str(session["collaboration_id"])
-    session = store.create_task(
-        collaboration_id,
-        {
-            "assignee_package_id": package_id,
-            "task_text": task_text,
-            "delivery_standard": {
-                "output_path": PROTOCOL_OUTPUT_PATH,
-                "acceptance_criteria": criteria,
-            },
-            "visible_context": {
-                "delivery_protocol": DELIVERY_PROTOCOL,
-                "expected_artifacts": expected_artifacts,
-                "parent_context": arguments.get("context") if isinstance(arguments.get("context"), dict) else {},
-            },
+    request_id = background_task_request_id(tool_id=TOOL_ID)
+    task_id = task_id_for_request(parent.session_id, request_id)
+    user_config = runtime_user_config(resources)
+    user_config["delegation_context"] = {
+        "task_id": task_id,
+        "parent_session_id": parent.session_id,
+        "parent_workspace_root": str(parent.workspace_root),
+        "child_package_id": package_id,
+        "delivery_protocol": DELIVERY_PROTOCOL,
+    }
+    task = background_task_client(resources).submit(
+        parent.task_owner(),
+        type="sub_agent",
+        request_id=request_id,
+        task_text=task_text,
+        assignee_package_id=package_id,
+        payload={"user_config": user_config},
+        delivery_standard={
+            "output_path": PROTOCOL_OUTPUT_PATH,
+            "acceptance_criteria": criteria,
+        },
+        visible_context={
+            "delivery_protocol": DELIVERY_PROTOCOL,
+            "expected_artifacts": expected_artifacts,
+            "parent_context": arguments.get("context")
+            if isinstance(arguments.get("context"), dict)
+            else {},
         },
     )
-    task = (session.get("tasks") or [])[-1]
     return {
         "action": "start",
-        "status": "accepted",
-        "delegation_id": collaboration_id,
-        "background_task_id": collaboration_id,
-        "task_id": task.get("task_id"),
+        "status": task.status,
+        "task_id": task.task_id,
         "package_id": package_id,
-        "child_session_id": task.get("assignee_session_id"),
-        "message": f"任务已交给 {package_id} 异步执行；完成后会自动交付并唤醒当前会话。",
+        "child_session_id": task.assignee_session_id,
+        "message": f"任务已交给 {package_id} 异步执行；完成后会自动交付并通知当前会话。",
     }
 
 
-def _cancel(arguments: dict[str, Any], resources: dict[str, Any], store: CollaborationStore) -> dict[str, Any]:
-    delegation_id = _required_text(arguments, "delegation_id")
-    session = require_parent_owned_session(store, resources, delegation_id, tool_id="agent_delegate")
+def _cancel(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
+    parent = parent_agent_context(resources, tool_id=TOOL_ID)
+    task_id = _required_text(arguments, "task_id")
     reason = str(arguments.get("reason") or "主 Agent 取消了委派任务。").strip()
-    cancelled: list[str] = []
-    for task in session.get("tasks") or []:
-        if str(task.get("status") or "") in {"completed", "failed", "cancelled"}:
-            continue
-        task_id = str(task.get("task_id") or "")
-        result_payload = task.get("result_payload") if isinstance(task.get("result_payload"), dict) else {}
-        store.update_task(
-            delegation_id,
-            task_id,
-            {
-                "status": "cancelled",
-                "result_summary": reason,
-                "review_notes": reason,
-                "result_payload": {
-                    **result_payload,
-                    "runtime_status": "cancelled",
-                    "cancellation_requested": True,
-                },
-            },
-        )
-        cancelled.append(task_id)
+    task = background_task_client(resources).cancel_owned(
+        parent.session_id,
+        task_id,
+        reason=reason,
+    )
     return {
         "action": "cancel",
-        "status": "cancelled" if cancelled else "unchanged",
-        "delegation_id": delegation_id,
-        "cancelled_task_ids": cancelled,
-        "message": f"{reason} 宿主正在停止对应子 Agent 请求。" if cancelled else "没有可取消的委派任务。",
+        "status": task.status,
+        "task_id": task.task_id,
+        "message": reason if task.status in {"cancelling", "cancelled"} else "任务已经结束。",
     }
-
-
-def _store_path(resources: dict[str, Any]) -> Path:
-    root = Path(_required_text(resources, "collaboration_root")).expanduser()
-    return resolve_collaboration_store_path(root / "factory.sqlite")
 
 
 def _required_text(values: dict[str, Any], key: str) -> str:

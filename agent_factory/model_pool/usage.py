@@ -54,7 +54,6 @@ class ModelUsageStore:
                 """
                 insert or ignore into model_usage_events (
                   usage_id, event_id, created_at, request_id, run_id, session_id,
-                  collaboration_id, collaboration_task_id,
                   mode, graph_id, node_id, agent_id, agent_label, package_id,
                   model_role, model_profile_id, provider, provider_display_name,
                   model_name, input_tokens, output_tokens, total_tokens,
@@ -62,7 +61,6 @@ class ModelUsageStore:
                   estimated_cost, payload_json
                 ) values (
                   :usage_id, :event_id, :created_at, :request_id, :run_id, :session_id,
-                  :collaboration_id, :collaboration_task_id,
                   :mode, :graph_id, :node_id, :agent_id, :agent_label, :package_id,
                   :model_role, :model_profile_id, :provider, :provider_display_name,
                   :model_name, :input_tokens, :output_tokens, :total_tokens,
@@ -102,58 +100,6 @@ class ModelUsageStore:
             "series": _series(records, group_by=group_by, visible_keys=visible_keys),
         }
 
-    def collaboration_summary(
-        self,
-        collaboration_id: str,
-        *,
-        task_by_session_id: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
-        clean_id = str(collaboration_id or "").strip()
-        if not clean_id:
-            raise ValueError("collaboration_id is required")
-        session_task_map = {
-            str(session_id).strip(): str(task_id or "").strip()
-            for session_id, task_id in (task_by_session_id or {}).items()
-            if str(session_id).strip()
-        }
-        with self._connect() as conn:
-            session_ids = sorted(session_task_map)
-            if session_ids:
-                placeholders = ", ".join("?" for _ in session_ids)
-                rows = conn.execute(
-                    f"""
-                    select * from model_usage_events
-                    where collaboration_id = ? or session_id in ({placeholders})
-                    order by created_at asc, usage_id asc
-                    """,
-                    (clean_id, *session_ids),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    """
-                    select * from model_usage_events
-                    where collaboration_id = ?
-                    order by created_at asc, usage_id asc
-                    """,
-                    (clean_id,),
-                ).fetchall()
-        records = [dict(row) for row in rows]
-        for record in records:
-            session_id = str(record.get("session_id") or "").strip()
-            if not record.get("collaboration_id") and session_id in session_task_map:
-                record["collaboration_id"] = clean_id
-            if not record.get("collaboration_task_id") and session_task_map.get(session_id):
-                record["collaboration_task_id"] = session_task_map[session_id]
-        return {
-            "collaboration_id": clean_id,
-            "totals": _totals(records),
-            "by_agent": _group_records(records, group_by="agent"),
-            "by_model": _group_records(records, group_by="model"),
-            "by_task": _group_records_by_field(records, field="collaboration_task_id", unknown_key="main_agent"),
-            "first_model_call_at": records[0]["created_at"] if records else None,
-            "last_model_call_at": records[-1]["created_at"] if records else None,
-        }
-
     @contextmanager
     def _connect(self):
         conn = connect_sqlite(self.path, timeout_ms=SQLITE_BUSY_TIMEOUT_MS)
@@ -174,8 +120,6 @@ class ModelUsageStore:
                   request_id text,
                   run_id text,
                   session_id text,
-                  collaboration_id text,
-                  collaboration_task_id text,
                   mode text not null,
                   graph_id text,
                   node_id text,
@@ -206,14 +150,6 @@ class ModelUsageStore:
                   completed_at text not null
                 );
                 """
-            )
-            self._ensure_column(conn, "model_usage_events", "collaboration_id", "text")
-            self._ensure_column(conn, "model_usage_events", "collaboration_task_id", "text")
-            conn.execute(
-                "create index if not exists idx_model_usage_collaboration on model_usage_events(collaboration_id, created_at)"
-            )
-            conn.execute(
-                "create index if not exists idx_model_usage_collaboration_task on model_usage_events(collaboration_task_id, created_at)"
             )
 
     @staticmethod
@@ -315,8 +251,6 @@ def usage_record_from_frontend_event(
         "request_id": _text(event_payload.get("request_id")),
         "run_id": _text(payload.get("run_id") or event_payload.get("run_id")),
         "session_id": _text(payload.get("session_id") or event_payload.get("session_id")),
-        "collaboration_id": _text(payload.get("collaboration_id")),
-        "collaboration_task_id": _text(payload.get("collaboration_task_id")),
         "mode": mode,
         "graph_id": _text(event_payload.get("graph_id")),
         "node_id": _text(payload.get("node_id") or event_payload.get("node_id")),
@@ -418,24 +352,6 @@ def _group_records(records: list[dict[str, Any]], *, group_by: ModelUsageGroupBy
         )
         _add_totals(item["totals"], record)
     return list(buckets.values())
-
-
-def _group_records_by_field(
-    records: list[dict[str, Any]],
-    *,
-    field: str,
-    unknown_key: str,
-) -> list[dict[str, Any]]:
-    buckets: dict[str, dict[str, Any]] = {}
-    for record in records:
-        key = str(record.get(field) or unknown_key)
-        item = buckets.setdefault(key, {"key": key, "totals": _empty_totals()})
-        _add_totals(item["totals"], record)
-    return sorted(
-        buckets.values(),
-        key=lambda item: int(item["totals"]["total_tokens"] or 0),
-        reverse=True,
-    )
 
 
 def _table_columns(conn: Any, database: str, table: str) -> list[str]:

@@ -1,5 +1,4 @@
 import type {
-  ArtifactMessagePart,
   ChatMessagePart,
   ToolCallMessagePart,
   ToolExecutionMessagePart,
@@ -13,7 +12,6 @@ export type ToolCategory =
   | 'process'
   | 'knowledge'
   | 'scheduler'
-  | 'collaboration'
   | 'agent'
   | 'extension'
   | 'generic'
@@ -36,7 +34,6 @@ const TOOL_PRESENTATIONS: Record<string, Pick<ToolPresentation, 'category' | 'la
   shell_stop: { category: 'process', labelKey: 'tool.names.shellStop' },
   knowledge: { category: 'knowledge', labelKey: 'tool.names.knowledge' },
   scheduler: { category: 'scheduler', labelKey: 'tool.names.scheduler' },
-  collaboration: { category: 'collaboration', labelKey: 'tool.names.collaboration' },
   agent_list: { category: 'agent', labelKey: 'tool.names.agentList' },
   agent_search: { category: 'agent', labelKey: 'tool.names.agentSearch' },
   agent_manufacture: { category: 'agent', labelKey: 'tool.names.agentManufacture' },
@@ -166,7 +163,6 @@ function toolArgumentSummary(toolName: string, value: unknown): string {
   if (toolName === 'knowledge') return compact(args.action, args.query)
   if (toolName === 'scheduler') return compact(args.action, args.job_id)
   if (toolName === 'skillhub') return compact(args.action, args.query || args.slug)
-  if (toolName === 'collaboration') return compact(args.action, args.task_id)
   if (toolName.startsWith('agent_')) return compact(args.query, args.package_id || args.agent_id)
   return ''
 }

@@ -429,26 +429,13 @@ async function openRoutedAgentSession(version: number): Promise<boolean> {
     })
     return true
   }
-  const collaborationId = routeQueryText(route.query.collaboration_id)
-  const collaborationTaskId = routeQueryText(route.query.collaboration_task_id)
   agentStore.enterAgentChat(packageId, sessionId)
-  if (collaborationId) {
-    runtimeStore.enterCollaborationConversation(
-      collaborationId,
-      packageId,
-      sessionId,
-      collaborationTaskId,
-    )
-  } else {
-    runtimeStore.expectAgentPackageSession(packageId, sessionId)
-  }
+  runtimeStore.expectAgentPackageSession(packageId, sessionId)
   await commands.selectAgentPackage(packageId, 'run')
   if (version !== routeActivationVersion || !routeMatchesAgentSession(packageId, sessionId)) return true
   await commands.loadAgentPackageSession(
     packageId,
     sessionId,
-    collaborationId,
-    collaborationTaskId,
   )
   return true
 }

@@ -44,11 +44,6 @@ export const routes: RouteRecordRaw[] = [
     meta: { rightSidebarAvailable: false },
   },
   {
-    path: '/collaboration',
-    name: 'Collaboration',
-    component: () => import('@/views/CollaborationView.vue'),
-  },
-  {
     path: '/agent-group',
     name: 'AgentGroup',
     component: () => import('@/views/AgentGroupView.vue'),

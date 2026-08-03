@@ -70,7 +70,22 @@
         <section v-if="view.pending" class="task-notice task-notice-pending">
           <strong>{{ t('backgroundTask.pendingAction') }}</strong>
           <span>{{ view.pending }}</span>
+          <div v-if="task?.status === 'waiting_approval'" class="task-actions">
+            <n-button size="small" type="primary" :loading="submitting" @click="resolveApproval('approve')">
+              {{ t('backgroundTask.approve') }}
+            </n-button>
+            <n-button size="small" :disabled="submitting" @click="resolveApproval('deny')">
+              {{ t('backgroundTask.deny') }}
+            </n-button>
+          </div>
+          <div v-else-if="task?.status === 'waiting_external'" class="task-response">
+            <n-input v-model:value="responseText" type="textarea" :placeholder="t('backgroundTask.responsePlaceholder')" />
+            <n-button size="small" type="primary" :loading="submitting" @click="resumeTask">
+              {{ t('backgroundTask.submitResponse') }}
+            </n-button>
+          </div>
         </section>
+        <p v-if="actionError" class="task-notice task-notice-error">{{ actionError }}</p>
         <section v-if="view.error" class="task-notice task-notice-error">
           <strong>{{ t('common.error') }}</strong>
           <span>{{ view.error }}</span>
@@ -82,12 +97,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
-import { NIcon } from 'naive-ui'
-import { Bot, Collaborate, Upgrade } from '@vicons/carbon'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { NButton, NIcon, NInput } from 'naive-ui'
+import { Bot, Upgrade } from '@vicons/carbon'
 import { useI18n } from '@/composables/useI18n'
-import { useCollaborationStore } from '@/stores/collaboration'
-import type { BackgroundTaskView, CollaborationSessionView } from '@/api/collaboration'
+import {
+  backgroundTasksApi,
+  type BackgroundTask,
+  type BackgroundTaskEvent,
+} from '@/api/backgroundTasks'
 
 const props = defineProps<{
   backgroundTaskId: string
@@ -95,29 +113,94 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
-const store = useCollaborationStore()
 const loading = ref(false)
+const submitting = ref(false)
+const responseText = ref('')
+const actionError = ref('')
 const expanded = ref(true)
-const session = computed(() => store.sessions.find(item => item.collaboration_id === props.backgroundTaskId) || null)
-const metadata = computed(() => session.value?.execution_config?.background_task)
-const kind = computed(() => metadata.value?.kind || 'delegate')
-const kindIcon = computed(() => kind.value === 'team' ? Collaborate : kind.value === 'evolve' ? Upgrade : Bot)
-const view = computed(() => buildView(session.value, props.fallbackTitle || t('backgroundTask.title')))
-const terminal = computed(() => ['completed', 'failed', 'cancelled'].includes(view.value.status))
+const task = ref<BackgroundTask | null>(null)
+const events = ref<BackgroundTaskEvent[]>([])
+let pollTimer: ReturnType<typeof setTimeout> | null = null
+const kindIcon = computed(() => task.value?.type === 'evolve' ? Upgrade : Bot)
+const view = computed(() => buildView(task.value, events.value, props.fallbackTitle || t('backgroundTask.title')))
+const terminal = computed(() => ['succeeded', 'failed', 'cancelled'].includes(view.value.status))
 const statusLabel = computed(() => t(`backgroundTask.status.${view.value.status}` as any))
 const phaseLabel = computed(() => t(`backgroundTask.phase.${view.value.phase}` as any))
 
 onMounted(loadSnapshot)
-watch(() => props.backgroundTaskId, loadSnapshot)
+onBeforeUnmount(stopPolling)
+watch(() => props.backgroundTaskId, () => {
+  task.value = null
+  events.value = []
+  loadSnapshot()
+})
 watch(terminal, isTerminal => {
-  if (isTerminal) expanded.value = false
+  if (isTerminal) {
+    expanded.value = false
+    stopPolling()
+  }
 }, { immediate: true })
 
 async function loadSnapshot() {
-  if (!props.backgroundTaskId || session.value) return
+  if (!props.backgroundTaskId) return
   loading.value = true
-  await store.fetchSessionSnapshot(props.backgroundTaskId)
-  loading.value = false
+  actionError.value = ''
+  try {
+    const [taskResponse, eventResponse] = await Promise.all([
+      backgroundTasksApi.get(props.backgroundTaskId),
+      backgroundTasksApi.events(props.backgroundTaskId, events.value.at(-1)?.seq || 0),
+    ])
+    task.value = taskResponse.task
+    if (eventResponse.events.length) {
+      const bySequence = new Map(events.value.map(item => [item.seq, item]))
+      for (const event of eventResponse.events) bySequence.set(event.seq, event)
+      events.value = Array.from(bySequence.values()).sort((left, right) => left.seq - right.seq)
+    }
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    loading.value = false
+  }
+  if (!terminal.value) schedulePoll()
+}
+
+function schedulePoll() {
+  stopPolling()
+  pollTimer = setTimeout(loadSnapshot, 1500)
+}
+
+function stopPolling() {
+  if (pollTimer) clearTimeout(pollTimer)
+  pollTimer = null
+}
+
+async function resolveApproval(decision: 'approve' | 'deny') {
+  if (!task.value) return
+  submitting.value = true
+  actionError.value = ''
+  try {
+    task.value = (await backgroundTasksApi.approve(task.value.task_id, decision)).task
+    schedulePoll()
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    submitting.value = false
+  }
+}
+
+async function resumeTask() {
+  if (!task.value || !responseText.value.trim()) return
+  submitting.value = true
+  actionError.value = ''
+  try {
+    task.value = (await backgroundTasksApi.resume(task.value.task_id, { response: responseText.value.trim() })).task
+    responseText.value = ''
+    schedulePoll()
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    submitting.value = false
+  }
 }
 
 function onToggle(event: Event) {
@@ -131,48 +214,38 @@ function taskStatusText(status: unknown): string {
 
 function normalizeStatus(status: unknown): string {
   const value = String(status || '')
-  if (['completed', 'failed', 'cancelled'].includes(value)) return value
-  if (value === 'blocked') return 'waiting_input'
-  if (['submitted', 'revision_requested'].includes(value)) return 'awaiting_review'
-  if (['assigned', 'queued', 'requested'].includes(value)) return 'queued'
+  if (value === 'succeeded') return 'succeeded'
+  if (['failed', 'cancelled', 'queued', 'waiting_approval', 'waiting_external', 'cancelling'].includes(value)) {
+    return value
+  }
   return 'running'
 }
 
-function buildView(session: CollaborationSessionView | null, fallbackTitle: string) {
-  const task = session?.background_task
-  const status = String(task?.status || 'queued')
-  const participants = (task?.participants || []).map((participant, index) => {
-    const packageId = String(participant.package_id || '').trim()
-    const name = String(participant.name || packageId || t('backgroundTask.memberFallback'))
-    return {
-      key: packageId || `participant:${index}:${name}`,
-      name,
-      status: String(participant.status || 'queued'),
-    }
-  })
-  const subtasks = (task?.subtasks || []).map((subtask, index) => ({
-    task_id: String(subtask.task_id || `subtask:${index}`),
-    task_text: String(subtask.title || t('backgroundTask.subtaskFallback')),
-    assignee_package_id: String(subtask.package_id || t('backgroundTask.memberFallback')),
-    status: String(subtask.status || 'queued'),
-  }))
-  const activities = (task?.recent_activity || []).slice(-8).reverse().map((activity, index) => ({
-    message_id: String(activity.id || `activity:${index}`),
-    content: String(activity.content || ''),
-    created_at: activity.created_at,
+function buildView(task: BackgroundTask | null, events: BackgroundTaskEvent[], fallbackTitle: string) {
+  const status = task?.status || 'queued'
+  const packageId = String(task?.assignee_package_id || '').trim()
+  const participants = packageId ? [{ key: packageId, name: packageId, status }] : []
+  const subtasks = task ? [{
+    task_id: task.task_id,
+    task_text: task.task_text || fallbackTitle,
+    assignee_package_id: packageId || task.type,
+    status,
+  }] : []
+  const activities = events.slice(-8).reverse().map(event => ({
+    message_id: event.event_id,
+    content: eventLabel(event),
+    created_at: event.created_at,
   }))
   const artifacts = artifactViews(task)
-  const phase = String(task?.current_phase || status)
+  const phase = status
   const pending = status === 'waiting_approval'
     ? t('backgroundTask.pendingApproval')
-    : status === 'waiting_input'
+    : status === 'waiting_external'
       ? t('backgroundTask.pendingInput')
-      : status === 'waiting_dependency'
-        ? t('backgroundTask.pendingDependency')
-        : task?.pending_action ? t('backgroundTask.pendingAction') : ''
+      : ''
   const error = String(task?.error?.message || '')
   return {
-    title: task?.title || session?.title || fallbackTitle,
+    title: task?.task_text || fallbackTitle,
     status,
     phase,
     participants,
@@ -182,17 +255,22 @@ function buildView(session: CollaborationSessionView | null, fallbackTitle: stri
     artifacts,
     pending,
     error,
-    hasDetails: participants.length > 0 || tasks.length > 0 || activities.length > 0 || artifacts.length > 0 || !!pending || !!error,
+    hasDetails: participants.length > 0 || subtasks.length > 0 || activities.length > 0 || artifacts.length > 0 || !!pending || !!error,
   }
 }
 
-function artifactViews(task: BackgroundTaskView | undefined): Array<{ key: string; name: string }> {
+function artifactViews(task: BackgroundTask | null): Array<{ key: string; name: string }> {
   const artifacts = new Map<string, { key: string; name: string }>()
-  for (const artifact of task?.artifacts || []) {
+  for (const artifact of task?.artifact_refs || []) {
     const key = String(artifact?.path || artifact?.id || '')
     if (key) artifacts.set(key, { key, name: String(artifact?.name || artifact?.path || key) })
   }
   return Array.from(artifacts.values())
+}
+
+function eventLabel(event: BackgroundTaskEvent): string {
+  const status = String(event.payload.status || '')
+  return status ? taskStatusText(status) : event.event_type.split('_').join(' ')
 }
 
 function formatTime(value: unknown): string {
@@ -247,6 +325,10 @@ function formatTime(value: unknown): string {
   font-size: 11px;
 }
 .task-state-running .task-status { border-color: var(--app-info); color: var(--app-info); }
+.task-state-claimed .task-status,
+.task-state-waiting_approval .task-status,
+.task-state-waiting_external .task-status { border-color: var(--app-info); color: var(--app-info); }
+.task-state-succeeded .task-status { border-color: var(--app-success); color: var(--app-success); }
 .task-state-completed .task-status { border-color: var(--app-success); color: var(--app-success); }
 .task-state-failed .task-status { border-color: var(--app-error); color: var(--app-error); }
 .task-chevron { transition: transform var(--app-transition-base); }
@@ -277,5 +359,7 @@ details[open] > summary .task-chevron { transform: rotate(180deg); }
 .task-notice { display: grid; gap: 3px; padding: 9px var(--app-space-md); font-size: 11px; }
 .task-notice-pending { color: var(--app-warning); }
 .task-notice-error { color: var(--app-error); }
+.task-actions { display: flex; gap: 8px; margin-top: 6px; }
+.task-response { display: grid; gap: 8px; margin-top: 6px; }
 .task-empty { margin: 0; padding: 12px var(--app-space-md); color: var(--app-text-muted); font-size: 11px; }
 </style>

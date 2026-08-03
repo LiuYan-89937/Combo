@@ -196,7 +196,6 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         factory_session_id: str | None = None,
         package_session_id: str | None = None,
         create_agent_session_id: str | None = None,
-        collaboration_id: str | None = None,
         group_id: str | None = None,
     ):
         event = await resource_command(
@@ -210,7 +209,6 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
                     factory_session_id=factory_session_id,
                     package_session_id=package_session_id,
                     create_agent_session_id=create_agent_session_id,
-                    collaboration_id=collaboration_id,
                     group_id=group_id,
                 ),
             },
@@ -227,7 +225,6 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         factory_session_id: str | None = None,
         package_session_id: str | None = None,
         create_agent_session_id: str | None = None,
-        collaboration_id: str | None = None,
         group_id: str | None = None,
     ):
         event = await resource_command(
@@ -243,7 +240,6 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
                     factory_session_id=factory_session_id,
                     package_session_id=package_session_id,
                     create_agent_session_id=create_agent_session_id,
-                    collaboration_id=collaboration_id,
                     group_id=group_id,
                 ),
             },
@@ -261,7 +257,6 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         factory_session_id: str | None = None,
         package_session_id: str | None = None,
         create_agent_session_id: str | None = None,
-        collaboration_id: str | None = None,
         group_id: str | None = None,
     ):
         event = await resource_command(
@@ -278,7 +273,6 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
                     factory_session_id=factory_session_id,
                     package_session_id=package_session_id,
                     create_agent_session_id=create_agent_session_id,
-                    collaboration_id=collaboration_id,
                     group_id=group_id,
                 ),
             },
@@ -295,7 +289,6 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         factory_session_id: str | None = None,
         package_session_id: str | None = None,
         create_agent_session_id: str | None = None,
-        collaboration_id: str | None = None,
         group_id: str | None = None,
     ):
         service = FrontendWorkspaceService(
@@ -310,7 +303,6 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
                     factory_session_id=factory_session_id,
                     package_session_id=package_session_id,
                     create_agent_session_id=create_agent_session_id,
-                    collaboration_id=collaboration_id,
                     group_id=group_id,
                 ),
                 scope=scope,
@@ -339,7 +331,6 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         factory_session_id: str | None = None,
         package_session_id: str | None = None,
         create_agent_session_id: str | None = None,
-        collaboration_id: str | None = None,
         group_id: str | None = None,
     ):
         service = FrontendWorkspaceService(
@@ -354,7 +345,6 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
                     factory_session_id=factory_session_id,
                     package_session_id=package_session_id,
                     create_agent_session_id=create_agent_session_id,
-                    collaboration_id=collaboration_id,
                     group_id=group_id,
                 ),
                 scope=scope,
@@ -378,7 +368,6 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         factory_session_id: str | None = None,
         package_session_id: str | None = None,
         create_agent_session_id: str | None = None,
-        collaboration_id: str | None = None,
         group_id: str | None = None,
     ):
         service = FrontendWorkspaceService(
@@ -393,7 +382,6 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
                     factory_session_id=factory_session_id,
                     package_session_id=package_session_id,
                     create_agent_session_id=create_agent_session_id,
-                    collaboration_id=collaboration_id,
                     group_id=group_id,
                 ),
                 scope=scope,
@@ -414,7 +402,6 @@ def workspace_context_payload(
     factory_session_id: str | None,
     package_session_id: str | None,
     create_agent_session_id: str | None,
-    collaboration_id: str | None,
     group_id: str | None,
 ) -> dict[str, str]:
     return {
@@ -423,7 +410,6 @@ def workspace_context_payload(
         **({"factory_session_id": factory_session_id} if factory_session_id else {}),
         **({"package_session_id": package_session_id} if package_session_id else {}),
         **({"create_agent_session_id": create_agent_session_id} if create_agent_session_id else {}),
-        **({"collaboration_id": collaboration_id} if collaboration_id else {}),
         **({"group_id": group_id} if group_id else {}),
     }
 

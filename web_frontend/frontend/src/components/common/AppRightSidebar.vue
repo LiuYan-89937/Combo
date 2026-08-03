@@ -22,9 +22,7 @@
       </n-button>
     </div>
 
-    <CollaborationSidebarPanel v-if="isCollaborationRoute" class="right-panel-body" />
-
-    <AgentGroupSidebarPanel v-else-if="isAgentGroupRoute" class="right-panel-body" />
+    <AgentGroupSidebarPanel v-if="isAgentGroupRoute" class="right-panel-body" />
 
     <AgentPackageDetailDrawer
       v-else-if="isPublishedRoute && agentStore.selectedPackage"
@@ -63,7 +61,6 @@ import AgentPackageDetailDrawer from '@/components/agent/AgentPackageDetailDrawe
 import { useAgentStore } from '@/stores/agent'
 import { RIGHT_SIDEBAR_WIDTH, useUiStore } from '@/stores/ui'
 import AgentGroupSidebarPanel from './right-sidebar/AgentGroupSidebarPanel.vue'
-import CollaborationSidebarPanel from './right-sidebar/CollaborationSidebarPanel.vue'
 import SessionsSidebarPanel from './right-sidebar/SessionsSidebarPanel.vue'
 import StatusSidebarPanel from './right-sidebar/StatusSidebarPanel.vue'
 import WorkspaceSidebarPanel from './right-sidebar/WorkspaceSidebarPanel.vue'
@@ -85,7 +82,6 @@ let previousBodyUserSelect = ''
 const displayedRightSidebarWidth = computed(() => {
   return Math.min(uiStore.rightSidebarWidth, availableRightSidebarWidth())
 })
-const isCollaborationRoute = computed(() => route.name === 'Collaboration')
 const isAgentGroupRoute = computed(() => route.name === 'AgentGroup')
 const isPublishedRoute = computed(() => route.name === 'Agents')
 

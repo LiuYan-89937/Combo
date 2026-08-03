@@ -1,30 +1,30 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from agent_factory.collaboration_system.parent_controller import (
-    create_parent_controlled_session,
+    background_task_client,
+    background_task_request_id,
     parent_agent_context,
-    require_parent_owned_session,
+    runtime_user_config,
 )
 from agent_factory.collaboration_system.result_delivery import DELIVERY_PROTOCOL
-from agent_factory.collaboration_system.store import CollaborationStore, resolve_collaboration_store_path
+from agent_factory.collaboration_system.task_client import task_id_for_request
 from agent_factory.factory_graph.frontend_bridge.agent_package_repository import AgentPackageRepository
 from agent_factory.tooling.envelope import tool_envelope
 from agent_factory.tooling.spec import ToolRiskResult
 
 
 PROTOCOL_OUTPUT_PATH = ".agent_delivery/result.json"
+TOOL_ID = "agent_team"
 
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     action = str(arguments.get("action") or "").strip()
-    store = CollaborationStore(_store_path(resources))
     if action == "start":
-        output = _start(arguments, resources, store)
+        output = _start(arguments, resources)
     elif action == "cancel":
-        output = _cancel(arguments, resources, store)
+        output = _cancel(arguments, resources)
     else:
         raise ValueError(f"unsupported agent_team action: {action}")
     return tool_envelope(output, summary=str(output.get("message") or ""))
@@ -44,103 +44,91 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
     ).model_dump(mode="json")
 
 
-def _start(arguments: dict[str, Any], resources: dict[str, Any], store: CollaborationStore) -> dict[str, Any]:
-    strategy = _required_text(arguments, "strategy")
-    tasks = _normalized_tasks(arguments.get("tasks"), strategy=strategy)
+def _start(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
+    tasks = _normalized_tasks(arguments.get("tasks"))
     ordered_tasks = _topological_tasks(tasks)
-    parent = parent_agent_context(resources, tool_id="agent_team")
-    package_repository = AgentPackageRepository.from_paths()
-    for task in tasks:
-        package_id = task["package_id"]
-        if package_id == parent.package_id:
+    parent = parent_agent_context(resources, tool_id=TOOL_ID)
+    repository = AgentPackageRepository.from_paths()
+    for item in tasks:
+        if item["package_id"] == parent.package_id:
             raise ValueError("agent_team cannot assign the current Agent as its own worker")
-        package_repository.load(package_id)
-    session, parent = create_parent_controlled_session(
-        store,
-        resources,
-        title=_required_text(arguments, "title"),
-        tool_id="agent_team",
-        task_kind="team",
-        context=parent,
-    )
-    team_id = str(session["collaboration_id"])
-    task_ids: dict[str, str] = {}
-    for task in ordered_tasks:
-        session = store.create_task(
-            team_id,
-            {
-                "assignee_package_id": task["package_id"],
-                "task_text": task["task"],
-                "depends_on": [task_ids[key] for key in task["depends_on"]],
-                "delivery_standard": {
-                    "output_path": PROTOCOL_OUTPUT_PATH,
-                    "acceptance_criteria": task["acceptance_criteria"],
-                },
-                "visible_context": {
-                    "delivery_protocol": DELIVERY_PROTOCOL,
-                    "team_strategy": strategy,
-                    "task_key": task["task_key"],
-                    "expected_artifacts": task["expected_artifacts"],
-                    "parent_context": task["context"],
-                },
+        repository.load(item["package_id"])
+    client = background_task_client(resources)
+    call_id = background_task_request_id(tool_id=TOOL_ID)
+    task_ids = {
+        item["task_key"]: task_id_for_request(parent.session_id, f"{call_id}:{item['task_key']}")
+        for item in tasks
+    }
+    created = []
+    for item in ordered_tasks:
+        task_id = task_ids[item["task_key"]]
+        user_config = runtime_user_config(resources)
+        user_config["delegation_context"] = {
+            "task_id": task_id,
+            "parent_session_id": parent.session_id,
+            "parent_workspace_root": str(parent.workspace_root),
+            "child_package_id": item["package_id"],
+            "delivery_protocol": DELIVERY_PROTOCOL,
+        }
+        task = client.submit(
+            parent.task_owner(),
+            type="sub_agent",
+            request_id=f"{call_id}:{item['task_key']}",
+            task_text=item["task"],
+            assignee_package_id=item["package_id"],
+            payload={"user_config": user_config},
+            depends_on=[task_ids[key] for key in item["depends_on"]],
+            delivery_standard={
+                "output_path": PROTOCOL_OUTPUT_PATH,
+                "acceptance_criteria": item["acceptance_criteria"],
+            },
+            visible_context={
+                "team_title": _required_text(arguments, "title"),
+                "task_key": item["task_key"],
+                "delivery_protocol": DELIVERY_PROTOCOL,
+                "expected_artifacts": item["expected_artifacts"],
+                "parent_context": item["context"],
             },
         )
-        created = (session.get("tasks") or [])[-1]
-        task_ids[task["task_key"]] = str(created.get("task_id") or "")
+        created.append(task)
     return {
         "action": "start",
-        "status": "accepted",
-        "team_id": team_id,
-        "background_task_id": team_id,
-        "strategy": strategy,
+        "status": "queued",
         "tasks": [
             {
-                "task_key": task["task_key"],
-                "task_id": task_ids[task["task_key"]],
-                "package_id": task["package_id"],
-                "depends_on": task["depends_on"],
+                "task_key": item["task_key"],
+                "task_id": task_ids[item["task_key"]],
+                "package_id": item["package_id"],
+                "depends_on": [task_ids[key] for key in item["depends_on"]],
             }
-            for task in tasks
+            for item in tasks
         ],
-        "message": f"已组建 {len(tasks)} 个子 Agent 的{('讨论' if strategy == 'discussion' else '交付')}团队；状态变化会自动回到当前会话。",
+        "message": f"{len(created)} 个子 Agent 任务已进入统一后台队列。",
     }
 
 
-def _cancel(arguments: dict[str, Any], resources: dict[str, Any], store: CollaborationStore) -> dict[str, Any]:
-    team_id = _required_text(arguments, "team_id")
-    session = require_parent_owned_session(store, resources, team_id, tool_id="agent_team")
+def _cancel(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
+    parent = parent_agent_context(resources, tool_id=TOOL_ID)
+    task_ids = _string_list(arguments.get("task_ids"))
+    if not task_ids:
+        raise ValueError("agent_team cancel requires task_ids")
     reason = str(arguments.get("reason") or "主 Agent 取消了团队任务。").strip()
-    cancelled: list[str] = []
-    for task in session.get("tasks") or []:
-        if str(task.get("status") or "") in {"completed", "failed", "cancelled"}:
-            continue
-        task_id = str(task.get("task_id") or "")
-        result_payload = task.get("result_payload") if isinstance(task.get("result_payload"), dict) else {}
-        store.update_task(
-            team_id,
-            task_id,
-            {
-                "status": "cancelled",
-                "result_summary": reason,
-                "review_notes": reason,
-                "result_payload": {
-                    **result_payload,
-                    "runtime_status": "cancelled",
-                    "cancellation_requested": True,
-                },
-            },
-        )
-        cancelled.append(task_id)
+    client = background_task_client(resources)
+    tasks = [
+        client.cancel_owned(parent.session_id, task_id, reason=reason)
+        for task_id in task_ids
+    ]
     return {
         "action": "cancel",
-        "status": "cancelled" if cancelled else "unchanged",
-        "team_id": team_id,
-        "cancelled_task_ids": cancelled,
-        "message": f"{reason} 宿主正在停止对应子 Agent 请求。" if cancelled else "没有可取消的团队任务。",
+        "status": "cancelling"
+        if any(task.status == "cancelling" for task in tasks)
+        else "cancelled",
+        "task_ids": [task.task_id for task in tasks],
+        "message": reason,
     }
 
 
-def _normalized_tasks(value: Any, *, strategy: str) -> list[dict[str, Any]]:
+def _normalized_tasks(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list) or len(value) < 2:
         raise ValueError("agent_team requires at least two tasks")
     tasks: list[dict[str, Any]] = []
@@ -152,9 +140,6 @@ def _normalized_tasks(value: Any, *, strategy: str) -> list[dict[str, Any]]:
         if task_key in keys:
             raise ValueError(f"duplicate team task_key: {task_key}")
         keys.add(task_key)
-        depends_on = _string_list(item.get("depends_on"))
-        if strategy == "discussion" and depends_on:
-            raise ValueError("discussion tasks must be independent and cannot declare depends_on")
         criteria = _string_list(item.get("acceptance_criteria"))
         if not criteria:
             raise ValueError(f"team task {task_key} requires acceptance_criteria")
@@ -164,19 +149,24 @@ def _normalized_tasks(value: Any, *, strategy: str) -> list[dict[str, Any]]:
                 "package_id": _required_text(item, "package_id"),
                 "task": _required_text(item, "task"),
                 "acceptance_criteria": criteria,
-                "depends_on": depends_on,
+                "depends_on": _string_list(item.get("depends_on")),
                 "expected_artifacts": _artifact_expectations(item.get("expected_artifacts")),
                 "context": item.get("context") if isinstance(item.get("context"), dict) else {},
             }
         )
-    missing = sorted({dependency for task in tasks for dependency in task["depends_on"] if dependency not in keys})
+    missing = sorted(
+        dependency
+        for item in tasks
+        for dependency in item["depends_on"]
+        if dependency not in keys
+    )
     if missing:
         raise ValueError("unknown team task dependencies: " + ", ".join(missing))
     return tasks
 
 
 def _topological_tasks(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    by_key = {task["task_key"]: task for task in tasks}
+    by_key = {item["task_key"]: item for item in tasks}
     pending = set(by_key)
     ordered: list[dict[str, Any]] = []
     completed: set[str] = set()
@@ -189,11 +179,6 @@ def _topological_tasks(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
             completed.add(key)
             pending.remove(key)
     return ordered
-
-
-def _store_path(resources: dict[str, Any]) -> Path:
-    root = Path(_required_text(resources, "collaboration_root")).expanduser()
-    return resolve_collaboration_store_path(root / "factory.sqlite")
 
 
 def _required_text(values: dict[str, Any], key: str) -> str:

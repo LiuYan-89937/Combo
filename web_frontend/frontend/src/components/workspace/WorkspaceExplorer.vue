@@ -508,7 +508,6 @@ function workspaceContextKey(context: WorkspaceRequestContext | string | undefin
     context.packageSessionId || '',
     context.factorySessionId || '',
     context.createAgentSessionId || '',
-    context.collaborationId || '',
     context.groupId || '',
   ].join(':')
 }

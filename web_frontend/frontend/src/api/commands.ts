@@ -48,25 +48,22 @@ export function listSessionsCommand(): FactoryFrontendCommand {
 export function switchSessionCommand(
   sessionId: string,
   mode?: FactoryMode | null,
-  collaborationId?: string | null,
 ): FactoryFrontendCommand {
   return createCommand('switch_session', {
     session_id: sessionId,
     mode,
-    payload: collaborationId ? { collaboration_id: collaborationId } : {},
+    payload: {},
   })
 }
 
 export function newSessionCommand(
   mode?: FactoryMode | null,
   packageId?: string | null,
-  collaborationId?: string | null,
 ): FactoryFrontendCommand {
   return createCommand('new_session', {
     mode,
     payload: {
       ...(packageId ? { package_id: packageId } : {}),
-      ...(collaborationId ? { collaboration_id: collaborationId } : {}),
     },
   })
 }

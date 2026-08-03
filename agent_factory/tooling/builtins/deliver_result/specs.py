@@ -20,7 +20,7 @@ def get_deliver_result_tool_specs() -> list[ToolSpec]:
             input_schema=_input_schema(),
             output_schema={"type": "object", "additionalProperties": True},
             resources={
-                "collaboration_root": "collaboration_root",
+                "background_task_root": "background_task_root",
                 "runtime_execution_config": "runtime_execution_config",
                 "workdir_root": "workdir_root",
             },

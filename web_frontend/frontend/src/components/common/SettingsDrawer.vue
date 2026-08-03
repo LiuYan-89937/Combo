@@ -105,6 +105,9 @@
                 :show-button="true"
               />
               <p class="field-hint">{{ t('settings.maxParallelSubAgentsHint') }}</p>
+              <p v-if="runtimePreferences.maxParallelSubAgentsSaveFailed" class="field-error">
+                {{ t('settings.maxParallelSubAgentsSaveFailed') }}
+              </p>
             </div>
           </div>
         </section>
@@ -275,7 +278,6 @@ const taskNotificationCategoryOptions = computed<Array<{
   label: string
 }>>(() => [
   { category: 'conversation', label: t('settings.notificationConversation') },
-  { category: 'collaboration', label: t('settings.notificationCollaboration') },
   { category: 'agentGroup', label: t('settings.notificationAgentGroup') },
   { category: 'scheduler', label: t('settings.notificationScheduler') },
 ])

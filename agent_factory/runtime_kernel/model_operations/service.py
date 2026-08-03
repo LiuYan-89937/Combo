@@ -671,18 +671,12 @@ def _model_cache_metrics_payload(
     hit_ratio = None
     if input_tokens and cached_input_tokens is not None:
         hit_ratio = round(float(cached_input_tokens) / float(input_tokens), 6)
-    session_config = getattr(getattr(state, "runtime_config", None), "session_config", {}) or {}
-    user_config = getattr(getattr(state, "runtime_config", None), "user_config", {}) or {}
     return {
         "version": "runtime_model_cache_metrics.v0",
         "node_id": node_id,
         "agent_id": str(getattr(getattr(state, "run", None), "agent_id", "") or ""),
         "session_id": str(getattr(getattr(state, "run", None), "session_id", "") or ""),
         "run_id": str(getattr(getattr(state, "run", None), "run_id", "") or ""),
-        "collaboration_id": str(
-            session_config.get("collaboration_id") or user_config.get("collaboration_id") or ""
-        ),
-        "collaboration_task_id": str(session_config.get("collaboration_task_id") or ""),
         "pattern_id": str(getattr(getattr(state, "run", None), "pattern_id", "") or ""),
         "model_role": model_metadata.get("model_role"),
         "model": model_metadata.get("model"),

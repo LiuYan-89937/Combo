@@ -11,8 +11,7 @@ def get_agent_team_tool_specs() -> list[ToolSpec]:
         ToolSpec(
             id=AGENT_TEAM_TOOL_ID,
             description=(
-                "组建多个已发布 Agent 共同处理一个目标。strategy=discussion 用于并行观点、评审或讨论；"
-                "strategy=delivery 用于带任务依赖、文件产物和逐项验收的协作交付。"
+                "将一个目标拆给多个已发布 Agent 并行或按依赖顺序执行。"
                 "每个成员保留独立会话和工作区，并通过 deliver_result 把结果送回当前工作区。"
                 "先用 agent_search 确认每个 package_id；启动后不要轮询，成员状态变化会主动唤醒当前会话。"
             ),
@@ -20,7 +19,7 @@ def get_agent_team_tool_specs() -> list[ToolSpec]:
             input_schema=_input_schema(),
             output_schema={"type": "object", "additionalProperties": True},
             resources={
-                "collaboration_root": "collaboration_root",
+                "background_task_root": "background_task_root",
                 "runtime_execution_config": "runtime_execution_config",
                 "workdir_root": "workdir_root",
             },
@@ -68,21 +67,24 @@ def _input_schema() -> dict:
         "additionalProperties": False,
         "properties": {
             "action": {"type": "string", "enum": ["start", "cancel"]},
-            "strategy": {"type": "string", "enum": ["discussion", "delivery"]},
             "title": {"type": "string", "minLength": 1},
             "tasks": {"type": "array", "items": task, "minItems": 2, "maxItems": 12},
-            "team_id": {"type": "string", "minLength": 1},
+            "task_ids": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+                "minItems": 1
+            },
             "reason": {"type": "string"},
         },
         "required": ["action"],
         "allOf": [
             {
                 "if": {"properties": {"action": {"const": "start"}}, "required": ["action"]},
-                "then": {"required": ["strategy", "title", "tasks"]},
+                "then": {"required": ["title", "tasks"]},
             },
             {
                 "if": {"properties": {"action": {"const": "cancel"}}, "required": ["action"]},
-                "then": {"required": ["team_id"]},
+                "then": {"required": ["task_ids"]},
             },
         ],
     }

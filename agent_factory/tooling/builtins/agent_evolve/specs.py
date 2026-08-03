@@ -19,7 +19,7 @@ def get_agent_evolve_tool_specs() -> list[ToolSpec]:
             input_schema=_input_schema(),
             output_schema={"type": "object", "additionalProperties": True},
             resources={
-                "collaboration_root": "collaboration_root",
+                "background_task_root": "background_task_root",
                 "runtime_execution_config": "runtime_execution_config",
                 "workdir_root": "workdir_root",
             },
@@ -44,8 +44,7 @@ def _input_schema() -> dict:
                 "type": "array",
                 "items": {"type": "string", "minLength": 1},
             },
-            "evolution_id": {"type": "string", "minLength": 1},
-            "request_id": {"type": "string", "minLength": 1},
+            "task_id": {"type": "string", "minLength": 1},
             "response": {"type": "string"},
             "decision": {"type": "string", "enum": ["approve", "deny", "revise"]},
             "reason": {"type": "string"},
@@ -61,7 +60,7 @@ def _input_schema() -> dict:
                     "properties": {"action": {"enum": ["respond", "cancel"]}},
                     "required": ["action"],
                 },
-                "then": {"required": ["evolution_id", "request_id"]},
+                "then": {"required": ["task_id"]},
             },
         ],
     }

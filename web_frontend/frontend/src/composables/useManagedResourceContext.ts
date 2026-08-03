@@ -77,7 +77,6 @@ export function useManagedResourceContext(capability: ResourceTargetCapability) 
     workspaceContext.value.packageSessionId || '',
     workspaceContext.value.factorySessionId || '',
     workspaceContext.value.createAgentSessionId || '',
-    workspaceContext.value.collaborationId || '',
     workspaceContext.value.groupId || '',
   ].join(':'))
 
@@ -149,7 +148,7 @@ function targetAllowed(target: ResourceTarget, capability: ResourceTargetCapabil
 
 function contextAllowed(context: WorkspaceRequestContext, capability: ResourceTargetCapability): boolean {
   if (capability === 'system_and_package') {
-    return context.resourceMode !== 'collaboration' && context.resourceMode !== 'agent_group'
+    return context.resourceMode !== 'agent_group'
   }
   return context.resourceMode === 'package' || !context.resourceMode
 }
@@ -174,6 +173,5 @@ function contextIdentityKey(context: WorkspaceRequestContext): string {
   if (context.resourceMode === 'evolve_agent') {
     return `evolve_agent:${context.packageId || ''}:${context.factorySessionId || ''}`
   }
-  if (context.resourceMode === 'collaboration') return `collaboration:${context.collaborationId || ''}`
   return `agent_group:${context.groupId || ''}`
 }

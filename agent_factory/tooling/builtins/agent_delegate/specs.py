@@ -21,7 +21,7 @@ def get_agent_delegate_tool_specs() -> list[ToolSpec]:
             input_schema=_input_schema(),
             output_schema={"type": "object", "additionalProperties": True},
             resources={
-                "collaboration_root": "collaboration_root",
+                "background_task_root": "background_task_root",
                 "runtime_execution_config": "runtime_execution_config",
                 "workdir_root": "workdir_root",
             },
@@ -60,7 +60,7 @@ def _input_schema() -> dict:
                 },
             },
             "context": {"type": "object", "additionalProperties": True},
-            "delegation_id": {"type": "string", "minLength": 1},
+            "task_id": {"type": "string", "minLength": 1},
             "reason": {"type": "string"},
         },
         "required": ["action"],
@@ -71,7 +71,7 @@ def _input_schema() -> dict:
             },
             {
                 "if": {"properties": {"action": {"const": "cancel"}}, "required": ["action"]},
-                "then": {"required": ["delegation_id"]},
+                "then": {"required": ["task_id"]},
             },
         ],
     }

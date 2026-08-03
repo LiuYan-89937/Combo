@@ -192,15 +192,15 @@ def _delegation_system_guidance(state: Any) -> str:
     context = user_config.get("delegation_context")
     if not isinstance(context, dict):
         return ""
-    collaboration_id = str(context.get("collaboration_id") or "").strip()
+    parent_session_id = str(context.get("parent_session_id") or "").strip()
     task_id = str(context.get("task_id") or "").strip()
-    if not collaboration_id or not task_id:
+    if not parent_session_id or not task_id:
         return ""
     return (
         "You are executing a delegated child-Agent task. Work only within the assigned task boundary. "
         "Before ending, call deliver_result exactly once with the truthful completion state, a concise report, "
         "and every file or directory that must be transferred to the parent Agent. A normal final response is not "
-        f"a formal delivery. Delegation identity: collaboration_id={collaboration_id}, task_id={task_id}."
+        f"a formal delivery. Background-task identity: parent_session_id={parent_session_id}, task_id={task_id}."
     )
 
 

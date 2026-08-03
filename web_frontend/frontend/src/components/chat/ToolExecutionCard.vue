@@ -1,11 +1,12 @@
 <template>
   <BackgroundTaskCard
-    v-if="backgroundTaskId"
-    :background-task-id="backgroundTaskId"
+    v-for="taskId in backgroundTaskIds"
+    :key="taskId"
+    :background-task-id="taskId"
     :fallback-title="displayName"
   />
   <details
-    v-else
+    v-if="backgroundTaskIds.length === 0"
     class="tool-execution-card"
     :class="[`tool-state-${state}`]"
     :open="active || state === 'failed'"
@@ -120,7 +121,6 @@ import { NIcon } from 'naive-ui'
 import {
   Bot,
   Calendar,
-  Collaborate,
   Document,
   Edit,
   Folder,
@@ -149,7 +149,7 @@ const props = withDefaults(defineProps<{
 const { t } = useI18n()
 const presentation = computed(() => toolPresentation(props.part.toolName, props.part.arguments))
 const displayName = computed(() => (
-  presentation.value.labelKey ? t(presentation.value.labelKey) : props.part.toolName
+  presentation.value.labelKey ? t(presentation.value.labelKey as any) : props.part.toolName
 ))
 const state = computed(() => {
   if (props.part.error || props.part.status === 'failed') return 'failed'
@@ -173,7 +173,6 @@ const categoryIcon = computed(() => ({
   process: Terminal,
   knowledge: Folder,
   scheduler: Calendar,
-  collaboration: Collaborate,
   agent: Bot,
   extension: ToolBox,
   generic: ToolBox,
@@ -204,9 +203,14 @@ const resultRecord = computed<Record<string, any> | null>(() => {
     ? record.output as Record<string, any>
     : record
 })
-const backgroundTaskId = computed(() => {
-  if (!['agent_manufacture', 'agent_delegate', 'agent_evolve', 'agent_team'].includes(props.part.toolName)) return ''
-  return String(resultRecord.value?.background_task_id || '').trim()
+const backgroundTaskIds = computed(() => {
+  if (!['agent_manufacture', 'agent_delegate', 'agent_evolve', 'agent_team'].includes(props.part.toolName)) return []
+  const direct = String(resultRecord.value?.task_id || '').trim()
+  if (direct) return [direct]
+  const tasks = Array.isArray(resultRecord.value?.tasks) ? resultRecord.value.tasks : []
+  return tasks
+    .map((task: unknown) => task && typeof task === 'object' ? String((task as Record<string, unknown>).task_id || '').trim() : '')
+    .filter((taskId: string) => taskId.length > 0)
 })
 const resultFacts = computed(() => {
   const result = resultRecord.value

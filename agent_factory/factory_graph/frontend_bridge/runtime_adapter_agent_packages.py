@@ -379,6 +379,11 @@ class RuntimeAgentPackageCommandMixin:
                 request_id=command.request_id,
                 user_config=_runtime_user_config(command),
                 runtime_request=_runtime_request(command),
+                message_metadata=(
+                    dict(command.payload["message_metadata"])
+                    if isinstance(command.payload.get("message_metadata"), dict)
+                    else None
+                ),
                 require_ready=require_ready,
                 attachments=command.payload.get("attachments"),
                 workspace_id=str(command.payload.get("workspace_id") or "").strip() or None,

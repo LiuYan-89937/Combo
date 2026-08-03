@@ -1,7 +1,6 @@
 import { nextTick } from 'vue'
 import { knowledgeSourceView, schedulerJobView } from '@/stores/runtime/viewMappers'
 import { useAgentStore } from '@/stores/agent'
-import { useCollaborationStore } from '@/stores/collaboration'
 import { useKnowledgeStore } from '@/stores/knowledge'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useRuntimePreferencesStore } from '@/stores/runtimePreferences'
@@ -23,14 +22,12 @@ type ExtensionKind = 'mcp' | 'skill'
 
 const BASE_TIME = '2026-07-29T02:20:00.000Z'
 const CHAT_PACKAGE_ID = 'factory_chat'
-const COLLABORATION_ID = 'showcase-collaboration'
 const SCENE_GAP_MS = 950
 const READING_PAUSE_MS = 2200
 
 export function useShowcaseDirector(options: ShowcaseDirectorOptions) {
   const runtimeStore = useRuntimeStore()
   const agentStore = useAgentStore()
-  const collaborationStore = useCollaborationStore()
   const knowledgeStore = useKnowledgeStore()
   const schedulerStore = useSchedulerStore()
   const uiStore = useUiStore()
@@ -188,32 +185,41 @@ export function useShowcaseDirector(options: ShowcaseDirectorOptions) {
   }
 
   async function collaborationScene(): Promise<void> {
-    seedCollaboration()
-    await showcaseRouter.replace({ name: 'Collaboration' })
-    await waitForView('.collaboration-view')
+    await showcaseRouter.replace({
+      name: 'Factory',
+      query: { package_id: CHAT_PACKAGE_ID, new: '1' },
+    })
+    await waitForView('.factory-view')
+    agentStore.enterAgentChat(CHAT_PACKAGE_ID, null)
+    runtimeStore.showEmptyAgentPackageSession(CHAT_PACKAGE_ID)
     resetConversation()
-    seedCollaboration()
-    uiStore.openRightSidebar('status')
+    uiStore.openRightSidebar('workspace')
     appendMessage(message('user', [
       textPart('请分工完成东京五日亲子旅行手册，并给出可直接执行的最终版本。'),
     ]))
     await wait(1000)
     appendMessage(message('assistant', [
       textPart('我已拆分任务：调研员核对实时资料，行程编排师处理路线与节奏，文档交付员负责最终手册。'),
+      toolPart('agent_team', 'running', {
+        tasks: [
+          { assignee_package_id: 'destination_researcher', task_text: '核对实时资料' },
+          { assignee_package_id: 'itinerary_designer', task_text: '编排行程路线' },
+          { assignee_package_id: 'document_assistant', task_text: '生成最终手册' },
+        ],
+      }, null),
     ], { display_name: '主 Agent' }))
     runtimeStore.runStatus = 'waiting_for_workers'
     await wait(1800)
 
-    collaborationStore.applyRuntimeStatus(COLLABORATION_ID, 'waiting_for_workers', {
-      active_workers: 2,
-      completed_workers: 1,
+    completeLastTool({
+      status: 'submitted',
+      submitted_count: 3,
     })
     appendMessage(message('assistant', [
       textPart('实时资料与路线编排已经汇总，文档交付员正在生成最终 PDF。'),
     ], { display_name: '主 Agent' }))
     await wait(1700)
     runtimeStore.runStatus = 'completed'
-    collaborationStore.applyRuntimeStatus(COLLABORATION_ID, null, {})
     appendMessage(message('assistant', [
       textPart('协作完成。最终版本包含每日路线、交通换乘、预算、预约清单与雨天备选。'),
       artifactPart('东京五日亲子旅行手册.pdf', 'output/东京五日亲子旅行手册.pdf'),
@@ -310,19 +316,6 @@ export function useShowcaseDirector(options: ShowcaseDirectorOptions) {
       visible_in_agent_session_list: true,
     }])
     runtimeStore.connectionStatus = 'connected'
-  }
-
-  function seedCollaboration(): void {
-    const session = collaborationSession()
-    collaborationStore.agents = [
-      collaborationAgent(CHAT_PACKAGE_ID, '主 Agent', true, false),
-      collaborationAgent('destination_researcher', '目的地调研员', false, true),
-      collaborationAgent('itinerary_designer', '行程编排师', false, true),
-      collaborationAgent('document_assistant', '文档交付员', false, true),
-    ]
-    collaborationStore.sessions = [session]
-    collaborationStore.setActiveSession(session)
-    collaborationStore.bootstrapped = true
   }
 
   function seedKnowledge(): void {
@@ -527,70 +520,6 @@ export function useShowcaseDirector(options: ShowcaseDirectorOptions) {
       change_type: changeType,
       change_summary: { added_lines: addedLines, removed_lines: 0 },
     }
-  }
-}
-
-function collaborationAgent(
-  packageId: string,
-  name: string,
-  availableAsMain: boolean,
-  availableAsWorker: boolean,
-) {
-  return {
-    package_id: packageId,
-    agent_name: name,
-    agent_description: `${name}负责旅行计划中的专业环节。`,
-    source: 'published',
-    available_as_main: availableAsMain,
-    available_as_worker: availableAsWorker,
-    status: 'ready',
-  }
-}
-
-function collaborationSession() {
-  return {
-    collaboration_id: COLLABORATION_ID,
-    title: '东京五日亲子旅行手册',
-    main_agent_package_id: CHAT_PACKAGE_ID,
-    main_agent_package_session_id: 'showcase-main-session',
-    approval_mode: 'main_agent_delegated' as const,
-    status: 'running' as const,
-    runtime_status: 'waiting_for_workers' as const,
-    created_at: BASE_TIME,
-    updated_at: BASE_TIME,
-    messages: [],
-    manufacturing_requests: [],
-    tasks: [
-      collaborationTask('research', 'destination_researcher', '核对景点开放时间、票价与预约要求', 'completed'),
-      collaborationTask('route', 'itinerary_designer', '根据亲子节奏编排五日路线', 'submitted'),
-      collaborationTask('document', 'document_assistant', '汇总资料并生成可分享的 PDF 手册', 'working'),
-    ],
-  }
-}
-
-function collaborationTask(
-  taskId: string,
-  assigneePackageId: string,
-  taskText: string,
-  status: 'completed' | 'submitted' | 'working',
-) {
-  return {
-    task_id: taskId,
-    collaboration_id: COLLABORATION_ID,
-    assignee_package_id: assigneePackageId,
-    assignee_session_id: `showcase-${taskId}-session`,
-    task_text: taskText,
-    depends_on: [],
-    delivery_standard: {},
-    visible_context: {},
-    input_artifacts: [],
-    status,
-    result_summary: status === 'completed' ? '已完成并交付结构化结果。' : '',
-    result_payload: {},
-    artifact_refs: [],
-    review_notes: '',
-    created_at: BASE_TIME,
-    updated_at: BASE_TIME,
   }
 }
 

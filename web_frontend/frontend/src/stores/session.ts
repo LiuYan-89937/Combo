@@ -13,7 +13,6 @@ export interface SessionView {
   first_user_input: string | null
   current_mode: string | null
   session_kind?: string | null
-  collaboration_id?: string | null
   visible_in_factory_session_list?: boolean | null
   create_agent_session_id?: string | null
   evolve_agent_package_id?: string | null

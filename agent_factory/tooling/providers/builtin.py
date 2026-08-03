@@ -82,7 +82,8 @@ def _runtime_resources(context: ToolProviderContext) -> dict[str, object]:
             "allow_external": allow_external,
             "read_only_paths": read_only_paths,
         },
-        "collaboration_root": os.getenv("AGENTFACTORY_COLLABORATION_ROOT") or str(factory_artifact_path("collaboration")),
+        "background_task_root": os.getenv("AGENTFACTORY_BACKGROUND_TASK_ROOT")
+        or str(factory_artifact_path("background_tasks")),
     }
     skillhub = build_skillhub_runtime_resource(context.extension_root)
     if skillhub is not None:

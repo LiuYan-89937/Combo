@@ -15,7 +15,6 @@ from uuid import uuid4
 from agent_factory.knowledge_system import KnowledgeIngestionWorker, KnowledgeRuntime, build_knowledge_runtime
 from agent_factory.knowledge_system.schema import KnowledgeRuntimeConfig
 from agent_factory.agent_registry import refresh_agent_registry_index
-from agent_factory.collaboration_system.store import CollaborationStore
 from agent_factory.runtime_contracts import ContextContract, LoadedAgentPackage
 from agent_factory.model_pool.resolver import (
     resolve_available_chat_model,
@@ -183,36 +182,6 @@ class AgentPackageRuntimeManager:
         if self._emit is None:
             return
         self._emit(item)
-
-    def emit_collaboration_session_updated(self, *, collaboration_id: str, session: dict[str, Any]) -> None:
-        if self._emit is None:
-            return
-        session_id = str(session.get("main_agent_package_session_id") or "") or None
-        common = {
-            "request_id": None,
-            "session_id": session_id,
-            "mode": "agent_package",
-            "graph_id": "collaboration",
-            "producer_type": "collaboration_service",
-        }
-        self._emit(
-            event(
-                "collaboration_session_updated",
-                **common,
-                payload={"collaboration_id": collaboration_id, "session": session},
-            )
-        )
-        self._emit(
-            event(
-                "collaboration_runtime_status_changed",
-                **common,
-                payload={
-                    "collaboration_id": collaboration_id,
-                    "runtime_status": session.get("runtime_status"),
-                    "runtime_status_payload": session.get("runtime_status_payload") or {},
-                },
-            )
-        )
 
     def list_packages(self) -> list[dict[str, Any]]:
         packages = [
@@ -788,8 +757,6 @@ class AgentPackageRuntimeManager:
         self,
         package_id: str,
         session_id: str,
-        *,
-        unlink_collaboration: bool = True,
     ) -> dict[str, Any]:
         package = self.load_package(package_id)
         cancelled_active_request_count = self.cancel_active_requests(
@@ -801,14 +768,6 @@ class AgentPackageRuntimeManager:
         record = manager.load_optional(session_id)
         if record is None:
             deleted_workdir = _delete_agent_session_workdir(package_id, session_id)
-            collaboration_unlink = (
-                CollaborationStore().unlink_runtime_session(
-                    package_id=package_id,
-                    session_id=session_id,
-                )
-                if unlink_collaboration
-                else None
-            )
             return {
                 "package_id": package_id,
                 "session_id": session_id,
@@ -817,7 +776,6 @@ class AgentPackageRuntimeManager:
                 "deleted_trace_count": 0,
                 "deleted_checkpoint_count": 0,
                 "deleted_workdir": deleted_workdir,
-                "collaboration_unlink": collaboration_unlink,
                 "cancelled_active_request_count": cancelled_active_request_count,
                 "sessions": self._list_sessions_for_loaded_package(package_id, package),
                 "recent_agent_sessions": self.list_recent_sessions(),
@@ -843,14 +801,6 @@ class AgentPackageRuntimeManager:
             )
             WorkspaceStore().delete(workspace.record.workspace_id, delete_files=True)
             deleted_workdir = True
-        collaboration_unlink = (
-            CollaborationStore().unlink_runtime_session(
-                package_id=package_id,
-                session_id=result.record.session_id,
-            )
-            if unlink_collaboration
-            else None
-        )
         return {
             "package_id": package_id,
             "session_id": result.record.session_id,
@@ -858,102 +808,9 @@ class AgentPackageRuntimeManager:
             "deleted_trace_count": result.deleted_trace_count,
             "deleted_checkpoint_count": deleted_checkpoint_count,
             "deleted_workdir": deleted_workdir,
-            "collaboration_unlink": collaboration_unlink,
             "cancelled_active_request_count": cancelled_active_request_count,
             "sessions": self._list_sessions_for_loaded_package(package_id, package),
             "recent_agent_sessions": self.list_recent_sessions(),
-        }
-
-    def delete_collaboration_sessions(
-        self,
-        collaboration_id: str,
-        *,
-        session_targets: list[dict[str, str]] | None = None,
-    ) -> dict[str, Any]:
-        clean_collaboration_id = str(collaboration_id or "").strip()
-        if not clean_collaboration_id:
-            raise ValueError("collaboration_id is required")
-        targets: dict[tuple[str, str], dict[str, str]] = {}
-        for target in session_targets or []:
-            package_id = str(target.get("package_id") or "").strip()
-            session_id = str(target.get("session_id") or "").strip()
-            if package_id and session_id:
-                targets[(package_id, session_id)] = {
-                    "package_id": package_id,
-                    "session_id": session_id,
-                    "source": str(target.get("source") or "collaboration_reference"),
-                }
-
-        errors: list[dict[str, str]] = []
-        discovery_warnings: list[dict[str, str]] = []
-        for manifest_path in self.repository.manifest_paths():
-            package_id = manifest_path.parent.name
-            try:
-                package = self.repository.load_manifest(manifest_path)
-                records = self._session_manager_for_package(package_id, package).list_sessions(
-                    include_internal=True,
-                )
-            except Exception as exc:
-                discovery_warnings.append(
-                    {
-                        "package_id": package_id,
-                        "session_id": "",
-                        "error": f"{type(exc).__name__}: {exc}",
-                    }
-                )
-                continue
-            for record in records:
-                if str(record.collaboration_id or "").strip() != clean_collaboration_id:
-                    continue
-                targets[(package_id, record.session_id)] = {
-                    "package_id": package_id,
-                    "session_id": record.session_id,
-                    "source": "session_metadata",
-                }
-
-        cleanups: list[dict[str, Any]] = []
-        for package_id, session_id in sorted(targets):
-            try:
-                package = self.load_package(package_id)
-                manager = self._session_manager_for_package(package_id, package)
-                record = manager.load_optional(session_id)
-                owner = str(record.collaboration_id or "").strip() if record is not None else ""
-                if owner and owner != clean_collaboration_id:
-                    raise ValueError(
-                        f"session belongs to another collaboration: {owner}"
-                    )
-                result = self.delete_session(
-                    package_id,
-                    session_id,
-                    unlink_collaboration=False,
-                )
-                cleanups.append({**targets[(package_id, session_id)], **result})
-                self.emit_frontend_event(
-                    event(
-                        "agent_package_session_deleted",
-                        request_id=None,
-                        session_id=None,
-                        mode="agent_package",
-                        producer_type="collaboration_service",
-                        payload=result,
-                    )
-                )
-            except Exception as exc:
-                errors.append(
-                    {
-                        "package_id": package_id,
-                        "session_id": session_id,
-                        "error": f"{type(exc).__name__}: {exc}",
-                    }
-                )
-        return {
-            "collaboration_id": clean_collaboration_id,
-            "target_count": len(targets),
-            "processed_count": len(cleanups),
-            "deleted_count": sum(1 for item in cleanups if item.get("deleted") is True),
-            "cleanups": cleanups,
-            "errors": errors,
-            "discovery_warnings": discovery_warnings,
         }
 
     def workspace_roots(self, package_id: str, *, session_id: str | None = None) -> dict[str, Any]:
@@ -1207,8 +1064,6 @@ class AgentPackageRuntimeManager:
         session_id: str | None = None,
         first_user_input: str | None = None,
         session_kind: str = "normal",
-        collaboration_id: str | None = None,
-        collaboration_task_id: str | None = None,
         agent_group_id: str | None = None,
         visible_in_agent_session_list: bool | None = None,
         workspace_id: str | None = None,
@@ -1234,8 +1089,6 @@ class AgentPackageRuntimeManager:
             session_id=session_id,
             first_user_input=first_user_input,
             session_kind=session_kind,
-            collaboration_id=collaboration_id,
-            collaboration_task_id=collaboration_task_id,
             agent_group_id=agent_group_id,
             visible_in_agent_session_list=visible_in_agent_session_list,
         )
@@ -1261,8 +1114,6 @@ class AgentPackageRuntimeManager:
         message_metadata: dict[str, Any] | None = None,
         require_ready: bool = False,
         session_kind: str = "normal",
-        collaboration_id: str | None = None,
-        collaboration_task_id: str | None = None,
         agent_group_id: str | None = None,
         visible_in_agent_session_list: bool | None = None,
         workdir_root: Path | None = None,
@@ -1286,23 +1137,17 @@ class AgentPackageRuntimeManager:
                 workspace_id=workspace.workspace_id,
                 first_user_input=session_user_input,
                 session_kind=session_kind,
-                collaboration_id=collaboration_id,
-                collaboration_task_id=collaboration_task_id,
                 agent_group_id=agent_group_id,
                 visible_in_agent_session_list=visible_in_agent_session_list,
             )
         if session_id and (
             session_kind != "normal"
-            or collaboration_id
-            or collaboration_task_id
             or agent_group_id
             or visible_in_agent_session_list is not None
         ):
             session = session_manager.update_metadata(
                 session.session_id,
                 session_kind=session_kind,
-                collaboration_id=collaboration_id,
-                collaboration_task_id=collaboration_task_id,
                 agent_group_id=agent_group_id,
                 visible_in_agent_session_list=visible_in_agent_session_list,
             )
