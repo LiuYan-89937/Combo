@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_factory.collaboration_system.task_runtime import background_task_service
+from agent_factory.collaboration_system.interactions import public_task_payload
 from agent_factory.contracts import (
     BackgroundTaskStatus,
     BackgroundTaskType,
@@ -30,16 +31,10 @@ class TaskCancelRequest(BaseModel):
     reason: str = Field(default="user_cancelled", min_length=1, max_length=256)
 
 
-class TaskApprovalRequest(BaseModel):
+class TaskInteractionResolution(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    decision: Literal["approve", "deny", "revise"]
-    payload: dict[str, Any] = Field(default_factory=dict)
-
-
-class TaskResumeRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+    action: Literal["approve", "deny", "trust_tool", "revise", "answer", "continue"]
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -62,7 +57,7 @@ def create_background_task_router() -> APIRouter:
                 limit=limit,
                 offset=offset,
             )
-            return {"tasks": [task.model_dump(mode="json") for task in tasks]}
+            return {"tasks": [public_task_payload(task) for task in tasks]}
         except Exception as exc:
             raise _http_error(exc) from exc
 
@@ -88,7 +83,7 @@ def create_background_task_router() -> APIRouter:
     @router.get("/{task_id}")
     def get_task(task_id: str):
         try:
-            return {"task": background_task_service().get(task_id).model_dump(mode="json")}
+            return {"task": public_task_payload(background_task_service().get(task_id))}
         except Exception as exc:
             raise _http_error(exc) from exc
 
@@ -115,27 +110,20 @@ def create_background_task_router() -> APIRouter:
         try:
             reason = payload.reason if payload is not None else "user_cancelled"
             task = background_task_service().cancel(task_id, reason=reason)
-            return {"task": task.model_dump(mode="json")}
+            return {"task": public_task_payload(task)}
         except Exception as exc:
             raise _http_error(exc) from exc
 
-    @router.post("/{task_id}/approval")
-    def approve_task(task_id: str, payload: TaskApprovalRequest):
+    @router.post("/{task_id}/interactions/{interaction_id}/resolve")
+    def resolve_interaction(task_id: str, interaction_id: str, payload: TaskInteractionResolution):
         try:
-            task = background_task_service().approve(
+            task = background_task_service().resolve_interaction(
                 task_id,
-                decision=payload.decision,
+                interaction_id=interaction_id,
+                action=payload.action,
                 payload=payload.payload,
             )
-            return {"task": task.model_dump(mode="json")}
-        except Exception as exc:
-            raise _http_error(exc) from exc
-
-    @router.post("/{task_id}/resume")
-    def resume_task(task_id: str, payload: TaskResumeRequest):
-        try:
-            task = background_task_service().resume_external(task_id, payload.payload)
-            return {"task": task.model_dump(mode="json")}
+            return {"task": public_task_payload(task)}
         except Exception as exc:
             raise _http_error(exc) from exc
 
@@ -143,7 +131,7 @@ def create_background_task_router() -> APIRouter:
     def delete_task(task_id: str):
         try:
             task = background_task_service().delete_task(task_id)
-            return {"task": task.model_dump(mode="json"), "deleted": True}
+            return {"task": public_task_payload(task), "deleted": True}
         except Exception as exc:
             raise _http_error(exc) from exc
 

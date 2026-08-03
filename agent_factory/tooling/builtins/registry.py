@@ -7,6 +7,7 @@ from agent_factory.tooling.builtins.agent_delegate.specs import get_agent_delega
 from agent_factory.tooling.builtins.agent_evolve.specs import get_agent_evolve_tool_specs
 from agent_factory.tooling.builtins.agent_team.specs import get_agent_team_tool_specs
 from agent_factory.tooling.builtins.background_tasks.specs import get_background_tasks_tool_specs
+from agent_factory.tooling.builtins.ask_user.specs import get_ask_user_tool_specs
 from agent_factory.tooling.builtins.deliver_result.specs import get_deliver_result_tool_specs
 from agent_factory.tooling.builtins.filesystem.specs import get_filesystem_tool_specs
 from agent_factory.tooling.builtins.knowledge.specs import get_knowledge_tool_specs
@@ -41,11 +42,12 @@ IMPLEMENTED_BUILTIN_TOOL_IDS = {
     "agent_evolve",
     "agent_team",
     "background_tasks",
+    "ask_user",
     "deliver_result",
 }
 
 ALWAYS_AVAILABLE_SYSTEM_TOOL_IDS = {"tool_output"}
-CONTEXTUAL_SYSTEM_TOOL_IDS = {"deliver_result"}
+CONTEXTUAL_SYSTEM_TOOL_IDS = {"ask_user", "deliver_result"}
 READ_ONLY_SYSTEM_TOOL_IDS = {
     "read",
     "glob",
@@ -80,6 +82,7 @@ def get_builtin_tool_specs() -> list[ToolSpec]:
         *get_agent_evolve_tool_specs(),
         *get_agent_team_tool_specs(),
         *get_background_tasks_tool_specs(),
+        *get_ask_user_tool_specs(),
         *get_deliver_result_tool_specs(),
     ]
     return [tool for tool in catalog if tool.id in IMPLEMENTED_BUILTIN_TOOL_IDS]

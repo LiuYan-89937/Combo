@@ -12,7 +12,12 @@ from typing import Any, Callable, Protocol
 from uuid import uuid4
 
 from agent_factory.collaboration_system.execution_registry import ExecutionRegistry, ManagedProcess
-from agent_factory.collaboration_system.progress_summary import ProgressReport
+from agent_factory.collaboration_system.progress_summary import (
+    ProgressReport,
+    ProgressSummaryCandidate,
+    ProgressSummaryDispatcher,
+    deterministic_progress_report,
+)
 from agent_factory.collaboration_system.persistence import (
     EventRepository,
     SchedulerSettingsRepository,
@@ -26,6 +31,7 @@ from agent_factory.contracts import (
     BackgroundTask,
     BackgroundTaskResult,
     ConflictError,
+    DomainValidationError,
     TaskCancelledError,
     TERMINAL_TASK_STATUSES,
 )
@@ -68,6 +74,7 @@ class TaskExecutionContext:
         register_cleanup: Callable[[Callable[[], None]], None],
         register_process: Callable[[ManagedProcess], None],
         set_waiting: Callable[[str | None], None],
+        submit_progress: Callable[[ProgressSummaryCandidate], bool],
     ) -> None:
         self.task_id = task_id
         self.session_id = session_id
@@ -80,6 +87,7 @@ class TaskExecutionContext:
         self._register_cleanup = register_cleanup
         self._register_process = register_process
         self._set_waiting = set_waiting
+        self._submit_progress = submit_progress
 
     def raise_if_interrupted(self) -> None:
         if self.cancel_event.is_set():
@@ -95,6 +103,9 @@ class TaskExecutionContext:
 
         self.raise_if_interrupted()
         return self._emit("background_task_progress_report", report.model_dump(mode="json"))
+
+    def submit_progress(self, candidate: ProgressSummaryCandidate) -> bool:
+        return self._submit_progress(candidate)
 
     def heartbeat(self) -> None:
         self.raise_if_interrupted()
@@ -170,6 +181,7 @@ class BackgroundTaskService:
         self.max_lease_requeues = max(1, int(max_lease_requeues))
         self.owner = f"{os.getpid()}:{uuid4().hex}"
         self.logger = logger or logging.getLogger(__name__)
+        self.progress_summaries = ProgressSummaryDispatcher(logger=self.logger)
         self._stop_event = threading.Event()
         self._wake_event = threading.Event()
         self._dispatcher: threading.Thread | None = None
@@ -217,6 +229,7 @@ class BackgroundTaskService:
             if self._dispatcher is not None and self._dispatcher.is_alive():
                 return
             self._stop_event.clear()
+            self.progress_summaries.start()
             self._publish_recovery(self.tasks.recover_expired(max_requeues=self.max_lease_requeues))
             self._dispatcher = threading.Thread(
                 target=self._dispatch_loop,
@@ -264,8 +277,8 @@ class BackgroundTaskService:
                 "后台任务当前不在等待批准状态。",
                 details={"task_id": task_id, "status": task.status},
             )
-        if decision not in {"approve", "deny", "revise"}:
-            raise ValueError("decision must be approve, deny, or revise")
+        if decision not in {"approve", "deny", "trust_tool", "revise"}:
+            raise DomainValidationError("审批动作无效。", details={"decision": decision})
         request_id = str(task.pending_approval.get("request_id") or "").strip()
         decision_payload = {**dict(payload or {}), "decision": decision}
         resume = {
@@ -277,7 +290,7 @@ class BackgroundTaskService:
             request_id=request_id,
             decision=decision,
             decision_payload=decision_payload,
-            resume_payload=resume if decision != "deny" else None,
+            resume_payload=resume,
         )
         self._publish_task("background_task_approval_resolved", queued, decision_payload)
         self._wake_event.set()
@@ -296,6 +309,41 @@ class BackgroundTaskService:
         self._publish_task("background_task_external_resolved", queued, dict(payload))
         self._wake_event.set()
         return queued
+
+    def resolve_interaction(
+        self,
+        task_id: str,
+        *,
+        interaction_id: str,
+        action: str,
+        payload: dict[str, Any],
+    ) -> BackgroundTask:
+        task = self.tasks.get(task_id)
+        pending = task.pending_approval if task.status == "waiting_approval" else task.pending_external
+        pending_id = str((pending or {}).get("request_id") or "").strip()
+        if not pending_id or pending_id != str(interaction_id or "").strip():
+            raise ConflictError(
+                "待处理交互不存在或已经被处理。",
+                details={"task_id": task_id, "interaction_id": interaction_id},
+            )
+        if task.status == "waiting_approval":
+            return self.approve(task_id, decision=action, payload=payload)
+        if task.status != "waiting_external":
+            raise ConflictError(
+                "后台任务当前没有等待用户处理的交互。",
+                details={"task_id": task_id, "status": task.status},
+            )
+        if action not in {"answer", "continue"}:
+            raise DomainValidationError("等待交互动作无效。", details={"action": action})
+        answer_payload = dict(payload)
+        if action == "answer":
+            answer = str(payload.get("answer") or payload.get("input_text") or "").strip()
+            if not answer:
+                raise DomainValidationError("回答内容不能为空。")
+            answer_payload.update({"action": "answer", "answer": answer, "input_text": answer, "message": answer})
+        else:
+            answer_payload["action"] = "continue"
+        return self.resume_external(task_id, answer_payload)
 
     def delete_task(self, task_id: str, *, timeout: float = 15.0) -> BackgroundTask:
         task = self.cancel(task_id, reason="delete_requested")
@@ -570,7 +618,25 @@ class BackgroundTaskService:
             register_cleanup=lambda callback: self.registry.register_cleanup(task.task_id, callback),
             register_process=lambda process: self.registry.register_process(task.task_id, process),
             set_waiting=lambda waiting_for: self.registry.set_waiting(task.task_id, waiting_for),
+            submit_progress=lambda candidate: self._submit_progress_summary(task, candidate),
         )
+
+    def _submit_progress_summary(
+        self,
+        task: BackgroundTask,
+        candidate: ProgressSummaryCandidate,
+    ) -> bool:
+        def publish(report: ProgressReport) -> None:
+            self._publish(
+                "background_task_progress_report",
+                task_id=task.task_id,
+                session_id=task.session_id,
+                request_id=task.request_id,
+                payload=report.model_dump(mode="json"),
+            )
+
+        publish(deterministic_progress_report(candidate))
+        return self.progress_summaries.submit(candidate, publish)
 
     def _heartbeat_loop(self, task_id: str, owner: str, token: str, stop: threading.Event) -> None:
         while not stop.wait(self.lease_seconds / 3):

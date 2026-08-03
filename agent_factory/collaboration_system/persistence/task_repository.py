@@ -703,13 +703,18 @@ class TaskRepository:
     ) -> BackgroundTask:
         """Resolve an approval and move its task in the same transaction."""
 
-        if decision not in {"approve", "deny", "revise"}:
+        if decision not in {"approve", "deny", "trust_tool", "revise"}:
             raise DomainValidationError("审批结果无效。", details={"decision": decision})
         identifier = _required(task_id, "task_id")
         clean_request_id = _required(request_id, "request_id")
         now = utc_now_text()
-        approval_status = {"approve": "approved", "deny": "denied", "revise": "revised"}[decision]
-        target_status = "cancelled" if decision == "deny" else "queued"
+        approval_status = {
+            "approve": "approved",
+            "deny": "denied",
+            "trust_tool": "approved",
+            "revise": "revised",
+        }[decision]
+        target_status = "queued"
         with self._connect() as conn:
             conn.execute("begin immediate")
             current = self._get(conn, identifier)
@@ -733,23 +738,11 @@ class TaskRepository:
                 """update background_tasks
                    set status=?,pending_approval_json=null,resume_payload_json=?,
                        lease_owner=null,lease_token=null,lease_expires_at=null,heartbeat_at=null,
-                       cancel_requested_at=case when ?='cancelled' then ? else cancel_requested_at end,
-                       cancel_reason=case when ?='cancelled' then ? else cancel_reason end,
-                       completed_at=case when ?='cancelled' then ? else completed_at end,
-                       resources_released_at=case when ?='cancelled' then coalesce(resources_released_at,?) else resources_released_at end,
                        updated_at=?,revision=revision+1
                    where task_id=? and status='waiting_approval' and revision=?""",
                 (
                     target_status,
                     _json(resume_payload) if resume_payload is not None else None,
-                    target_status,
-                    now,
-                    target_status,
-                    str(decision_payload.get("reason") or "approval_denied"),
-                    target_status,
-                    now,
-                    target_status,
-                    now,
                     now,
                     identifier,
                     current.revision,

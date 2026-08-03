@@ -96,6 +96,15 @@ export function isAvailableChatModelProfile(profile: ModelPoolProfile): boolean 
   )
 }
 
+export function isAvailableEmbeddingModelProfile(profile: ModelPoolProfile): boolean {
+  return (
+    profile.kind === 'embedding'
+    && profile.enabled
+    && profile.credential?.enabled !== false
+    && profile.credential?.has_api_key === true
+  )
+}
+
 export async function resolveRuntimeMainModelProfileId(
   profiles: ModelPoolProfile[],
   preferredProfileId?: string | null,

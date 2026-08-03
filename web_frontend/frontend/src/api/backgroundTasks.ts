@@ -32,14 +32,35 @@ export interface BackgroundTask {
   result_summary: string
   result?: Record<string, unknown> | null
   error?: { code?: string; message?: string; details?: Record<string, unknown> } | null
-  pending_approval?: Record<string, unknown> | null
-  pending_external?: Record<string, unknown> | null
+  pending_interaction?: PendingInteraction | null
   created_at: string
   updated_at: string
   started_at?: string | null
   completed_at?: string | null
   revision: number
 }
+
+export type PendingInteractionKind =
+  | 'ask_user'
+  | 'resource_request'
+  | 'tool_approval'
+  | 'external_condition'
+  | 'internal_wait'
+
+export interface PendingInteraction {
+  interaction_id: string
+  kind: PendingInteractionKind
+  title: string
+  message: string
+  source: Record<string, string>
+  options: Array<{ value?: string; label?: string; description?: string }>
+  requests: Array<Record<string, unknown>>
+  resource_requests: Array<Record<string, unknown>>
+  workspace_id?: string | null
+  payload: Record<string, unknown>
+}
+
+export type InteractionAction = 'approve' | 'deny' | 'trust_tool' | 'revise' | 'answer' | 'continue'
 
 export interface BackgroundTaskEvent {
   seq: number
@@ -89,14 +110,20 @@ export const backgroundTasksApi = {
       method: 'POST',
       body: JSON.stringify({ reason }),
     }),
-  approve: (taskId: string, decision: 'approve' | 'deny' | 'revise', payload: Record<string, unknown> = {}) =>
-    requestJson<{ task: BackgroundTask }>(`/api/background-tasks/${encodeURIComponent(taskId)}/approval`, {
+  delete: (taskId: string) =>
+    requestJson<{ task: BackgroundTask; deleted: boolean }>(
+      `/api/background-tasks/${encodeURIComponent(taskId)}`,
+      { method: 'DELETE' },
+    ),
+  resolveInteraction: (
+    taskId: string,
+    interactionId: string,
+    action: InteractionAction,
+    payload: Record<string, unknown> = {},
+  ) =>
+    requestJson<{ task: BackgroundTask }>(
+      `/api/background-tasks/${encodeURIComponent(taskId)}/interactions/${encodeURIComponent(interactionId)}/resolve`, {
       method: 'POST',
-      body: JSON.stringify({ decision, payload }),
-    }),
-  resume: (taskId: string, payload: Record<string, unknown>) =>
-    requestJson<{ task: BackgroundTask }>(`/api/background-tasks/${encodeURIComponent(taskId)}/resume`, {
-      method: 'POST',
-      body: JSON.stringify({ payload }),
+      body: JSON.stringify({ action, payload }),
     }),
 }

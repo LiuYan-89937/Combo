@@ -125,9 +125,7 @@ class BackgroundTaskClient:
             resume_payload={
                 "runtime_request_id": pending.get("runtime_request_id"),
                 "resume": decision_payload,
-            }
-            if decision != "deny"
-            else None,
+            },
         )
 
     def resume_owned(

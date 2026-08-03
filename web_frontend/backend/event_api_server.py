@@ -47,6 +47,7 @@ from web_frontend.backend.routes.model_pool import create_model_pool_router
 from web_frontend.backend.routes.runtime import create_runtime_router
 from web_frontend.backend.routes.scheduler import create_scheduler_router
 from web_frontend.backend.routes.tips import create_tip_router
+from web_frontend.backend.routes.storage import create_storage_router
 from web_frontend.backend.routes.workspace import create_workspace_router
 from web_frontend.backend.runtime_bridge import RuntimeBridge
 from web_frontend.backend.event_loop_watchdog import EventLoopWatchdog
@@ -108,6 +109,7 @@ app.include_router(create_extensions_router(runtime_bridge))
 app.include_router(create_scheduler_router(runtime_bridge))
 app.include_router(create_model_pool_router())
 app.include_router(create_tip_router())
+app.include_router(create_storage_router(runtime_bridge))
 
 
 async def _ensure_skillhub_cli() -> None:

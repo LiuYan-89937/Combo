@@ -637,9 +637,13 @@ class AgentPackageRuntimeManager:
         self._environment_preparation_errors.pop(expected_package_id, None)
         return self._package_summary(package.manifest_path)
 
-    def list_sessions(self, package_id: str) -> list[dict[str, Any]]:
+    def list_sessions(self, package_id: str, *, include_internal: bool = False) -> list[dict[str, Any]]:
         package = self.load_package(package_id)
-        return self._list_sessions_for_loaded_package(package_id, package)
+        return self._list_sessions_for_loaded_package(
+            package_id,
+            package,
+            include_internal=include_internal,
+        )
 
     def list_recent_sessions(self, *, limit: int = 5) -> list[dict[str, Any]]:
         sessions: list[dict[str, Any]] = []
@@ -1389,6 +1393,8 @@ class AgentPackageRuntimeManager:
         self,
         package_id: str,
         package: LoadedAgentPackage,
+        *,
+        include_internal: bool = False,
     ) -> list[dict[str, Any]]:
         manager = self._session_manager_for_package(package_id, package)
         return [
@@ -1399,7 +1405,10 @@ class AgentPackageRuntimeManager:
                 ),
                 "package_id": package_id,
             }
-            for record in manager.list_sessions(agent_id=package.assembly_spec.agent.id)
+            for record in manager.list_sessions(
+                agent_id=package.assembly_spec.agent.id,
+                include_internal=include_internal,
+            )
         ]
 
     def _session_with_workspace(

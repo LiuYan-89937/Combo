@@ -5,25 +5,24 @@
       <div class="messages-section">
         <n-scrollbar ref="scrollbarRef" class="messages-scrollbar">
           <div class="messages-list">
-            <n-empty
+            <div
               v-if="
                 timelineItems.length === 0
                 && thinkingMessages.length === 0
                 && activeSchedulerRunCards.length === 0
                 && !hasActiveStreams
               "
-              :description="emptyDescription"
               class="chat-empty"
+              role="status"
+              :aria-label="t('factory.emptyChat')"
             >
-              <template #icon>
-                <n-icon size="56" class="chat-empty-icon">
-                  <ChatbubbleEllipses />
-                </n-icon>
-              </template>
-              <template #extra>
-                <n-text depth="3" class="chat-empty-hint">{{ emptyHint }}</n-text>
-              </template>
-            </n-empty>
+              <svg class="chat-empty-icon" viewBox="0 0 136 112" role="img" aria-hidden="true">
+                <path class="chat-empty-bubble chat-empty-bubble-back" d="M22 27.5C22 16.7 30.7 8 41.5 8h52C104.3 8 113 16.7 113 27.5v24C113 62.3 104.3 71 93.5 71H65l-15.8 17.5c-2.5 2.8-7.2 1-7.2-2.7V71h-.5C30.7 71 22 62.3 22 51.5v-24Z" />
+                <path class="chat-empty-bubble chat-empty-bubble-front" d="M8 45.5C8 34.7 16.7 26 27.5 26h52C90.3 26 99 34.7 99 45.5v24C99 80.3 90.3 89 79.5 89H51L35.2 106.5c-2.5 2.8-7.2 1-7.2-2.7V89h-.5C16.7 89 8 80.3 8 69.5v-24Z" />
+                <path class="chat-empty-line" d="M29 51h38M29 63h25" />
+                <circle class="chat-empty-dot" cx="77" cy="63" r="2.2" />
+              </svg>
+            </div>
 
             <template v-for="item in timelineItems" :key="`${item.kind}-${item.id}`">
               <MessageItem
@@ -78,6 +77,8 @@
           ref="inputRef"
           :placeholder="inputPlaceholder"
           :disabled="inputDisabled"
+          :disabled-hint="modelConfigurationMissing ? t('chat.configureModelLink') : ''"
+          :disabled-hint-route="{ name: 'ModelPool' }"
           :is-running="runtimeStore.hasActiveRun"
           :queued-count="runtimeStore.queuedRequestCount"
           :queued-messages="runtimeStore.queuedMessages"
@@ -106,8 +107,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NScrollbar, NEmpty, NIcon, NText } from 'naive-ui'
-import { ChatbubbleEllipses } from '@/components/icons'
+import { NScrollbar } from 'naive-ui'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useAgentStore } from '@/stores/agent'
 import { useUiStore } from '@/stores/ui'
@@ -169,14 +169,13 @@ const {
   isAgentSessionLanding,
   inputPlaceholder,
   inputDisabled,
+  modelConfigurationMissing,
   loadRuntimeMainModelProfiles,
   runtimeMainModelOptions,
   reasoningIntensity,
   selectedMainModelProfileId,
   setSelectedMainModelProfileId,
   setReasoningIntensity,
-  emptyDescription,
-  emptyHint,
   cancelRequest,
   sendMessage,
   steerQueuedRequest,
@@ -310,8 +309,9 @@ watch(
 let routeActivationVersion = 0
 
 onMounted(async () => {
-  await activateCurrentRoute()
+  // Model availability controls the input state and must not wait for session restoration.
   void loadRuntimeMainModelProfiles()
+  await activateCurrentRoute()
 
   if (!route.meta.showcaseMode) {
     nextTick(() => {
@@ -488,25 +488,50 @@ function routeQueryText(value: unknown): string | null {
 }
 
 .chat-empty {
+  display: grid;
+  place-items: center;
   margin-top: 15vh;
   animation: app-fade-in-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .chat-empty-icon {
-  display: block;
-  color: var(--app-text-muted);
-  opacity: 0.6;
-  line-height: 1;
-  animation: app-pulse-soft 2.4s ease-in-out infinite;
+  width: 112px;
+  height: auto;
+  overflow: visible;
+  color: var(--app-text);
+  opacity: 0.72;
+  animation: empty-conversation-breathe 3.2s ease-in-out infinite;
 }
 
-.chat-empty-hint {
-  display: block;
-  margin-top: var(--app-space-sm);
-  font-size: var(--app-font-md);
-  text-align: center;
-  line-height: var(--app-leading-relaxed);
-  max-width: 360px;
+.chat-empty-bubble {
+  fill: var(--app-surface);
+  stroke: currentColor;
+  stroke-linejoin: round;
+  stroke-width: 2.5;
+}
+
+.chat-empty-bubble-back {
+  opacity: 0.32;
+}
+
+.chat-empty-bubble-front {
+  opacity: 0.92;
+}
+
+.chat-empty-line {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-width: 3;
+}
+
+.chat-empty-dot {
+  fill: currentColor;
+}
+
+@keyframes empty-conversation-breathe {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
 }
 
 .approval-section {

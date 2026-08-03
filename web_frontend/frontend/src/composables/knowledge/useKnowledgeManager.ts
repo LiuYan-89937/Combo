@@ -5,6 +5,7 @@ import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
 import { useManagedResourceContext } from '@/composables/useManagedResourceContext'
 import { useKnowledgeStore } from '@/stores/knowledge'
+import { isAvailableEmbeddingModelProfile, modelPoolApi } from '@/api/modelPool'
 import type { KnowledgeDocumentView, KnowledgeSourceView } from '@/types/protocol'
 
 export function useKnowledgeManager() {
@@ -22,6 +23,28 @@ export function useKnowledgeManager() {
   const selectedSourceIds = ref<Set<string>>(new Set())
   const busyAction = ref<'create' | 'delete' | 'reindex' | null>(null)
   const busySourceId = ref<string | null>(null)
+  const embeddingConfigurationMissing = ref(false)
+  const embeddingConfigurationLoading = ref(false)
+
+  async function refreshEmbeddingConfiguration(): Promise<void> {
+    embeddingConfigurationLoading.value = true
+    try {
+      const [bindingData, profileData] = await Promise.all([
+        modelPoolApi.infrastructureBindings(),
+        modelPoolApi.profiles(),
+      ])
+      const embeddingProfileId = String(bindingData.bindings.embedding || '').trim()
+      embeddingConfigurationMissing.value = !embeddingProfileId
+        || !profileData.profiles.some((profile) => (
+          profile.profile_id === embeddingProfileId
+          && isAvailableEmbeddingModelProfile(profile)
+        ))
+    } catch {
+      embeddingConfigurationMissing.value = true
+    } finally {
+      embeddingConfigurationLoading.value = false
+    }
+  }
 
   const selectedSources = computed(() => {
     return knowledgeStore.sources.filter((source) => {
@@ -180,11 +203,14 @@ export function useKnowledgeManager() {
     commands.listAgentPackages()
     resetCurrentKnowledgeView()
     void commands.refreshKnowledge(resourceContext.workspaceContext.value)
+    void refreshEmbeddingConfiguration()
   })
 
   return {
     busyAction,
     busySourceId,
+    embeddingConfigurationLoading,
+    embeddingConfigurationMissing,
     confirmDeleteSources,
     documentsDrawerOpen,
     documentsTitle,
@@ -200,6 +226,7 @@ export function useKnowledgeManager() {
     openDocument,
     knowledgeStore,
     resourceContext,
+    refreshEmbeddingConfiguration,
     selectedCount,
     selectedSourceIds,
     selectedDocument,

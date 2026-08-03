@@ -26,6 +26,7 @@ export function useFactoryConversation() {
   const commands = useCommand()
   const { t } = useI18n()
   const chatModelProfiles = ref<ModelPoolProfile[]>([])
+  const modelProfilesLoaded = ref(false)
   const {
     mainModelProfileId: selectedMainModelProfileId,
     reasoningIntensity,
@@ -56,14 +57,13 @@ export function useFactoryConversation() {
     || (requiresRuntimeMainModel.value && !selectedMainModelProfileId.value)
     || (isAgentSessionLanding.value && !isAgentChatActive.value)
   ))
-  const emptyDescription = computed(() => {
-    if (isAgentSessionLanding.value) return t('factory.emptyAgentSelection')
-    return t('factory.emptyChat')
-  })
-  const emptyHint = computed(() => {
-    if (isAgentSessionLanding.value) return t('factory.emptyAgentSelectionHint')
-    return t('factory.emptyChatHint')
-  })
+  const modelConfigurationMissing = computed(() => (
+    modelProfilesLoaded.value
+    && (
+      chatModelProfiles.value.length === 0
+      || (requiresRuntimeMainModel.value && !selectedMainModelProfileId.value)
+    )
+  ))
 
   async function loadRuntimeMainModelProfiles() {
     try {
@@ -81,6 +81,8 @@ export function useFactoryConversation() {
         message: error instanceof Error ? error.message : String(error),
         duration: 3000,
       })
+    } finally {
+      modelProfilesLoaded.value = true
     }
   }
 
@@ -185,8 +187,7 @@ export function useFactoryConversation() {
     isAgentSessionLanding,
     inputPlaceholder,
     inputDisabled,
-    emptyDescription,
-    emptyHint,
+    modelConfigurationMissing,
     cancelRequest,
     loadRuntimeMainModelProfiles,
     runtimeMainModelOptions,

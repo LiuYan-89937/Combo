@@ -198,6 +198,7 @@ def _delegation_system_guidance(state: Any) -> str:
         return ""
     return (
         "You are executing a delegated child-Agent task. Work only within the assigned task boundary. "
+        "If essential user input is missing, call ask_user and continue from the resumed answer. "
         "Before ending, call deliver_result exactly once with the truthful completion state, a concise report, "
         "and every file or directory that must be transferred to the parent Agent. A normal final response is not "
         f"a formal delivery. Background-task identity: parent_session_id={parent_session_id}, task_id={task_id}."

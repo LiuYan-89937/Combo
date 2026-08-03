@@ -179,7 +179,7 @@ def _consume_runtime(
             final_event = item
             report = progress.observe(item)
             if report is not None:
-                context.report_progress(report)
+                context.submit_progress(report)
             _collect_result(item, summaries, artifacts)
             if item.event_type in INTERRUPT_TERMINAL_EVENT_TYPES:
                 interrupt_payload = {
@@ -221,7 +221,7 @@ def _consume_runtime(
         )
     report = progress.flush(final_event)
     if report is not None:
-        context.report_progress(report)
+        context.submit_progress(report)
     if final_event.event_type not in RUN_TERMINAL_EVENT_TYPES:
         return BackgroundTaskResult(
             status="failed",

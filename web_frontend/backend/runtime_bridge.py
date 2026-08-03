@@ -86,7 +86,7 @@ class RuntimeBridge:
         self._session_dispatch_queues: dict[str, deque[str]] = {}
         self._session_running_requests: dict[str, str] = {}
         self._deleting_session_ids: set[str] = set()
-        self._session_cleanup_tasks: set[asyncio.Task[None]] = set()
+        self._session_cleanup_tasks: dict[str, asyncio.Task[None]] = {}
         self._background_lock = threading.Lock()
         self._dispatch_condition = threading.Condition(self._background_lock)
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -214,6 +214,30 @@ class RuntimeBridge:
         finally:
             self.unsubscribe(event_queue)
 
+    async def delete_session_and_wait(
+        self,
+        command: FactoryFrontendCommand,
+        *,
+        timeout_seconds: float = 30.0,
+    ) -> None:
+        session_id = _deleted_session_id(command)
+        if not session_id:
+            raise ValueError("session deletion requires session_id")
+        if self.adapter is None:
+            raise RuntimeError("Runtime service not started")
+        cleanup_task = await self._cancel_and_join_deleted_session_requests(
+            self._resolve_cancel_command(command)
+        )
+        if cleanup_task is None:
+            return
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(cleanup_task),
+                timeout=max(0.1, float(timeout_seconds)),
+            )
+        except asyncio.TimeoutError as exc:
+            raise TimeoutError(f"session cleanup timed out: {session_id}") from exc
+
     def subscribe(
         self,
         *,
@@ -300,12 +324,15 @@ class RuntimeBridge:
     async def _cancel_and_join_deleted_session_requests(
         self,
         command: FactoryFrontendCommand,
-    ) -> None:
+    ) -> asyncio.Task[None] | None:
         session_id = _deleted_session_id(command)
         if not session_id:
             await asyncio.to_thread(self._handle_command, command)
-            return
+            return None
         with self._background_lock:
+            existing_cleanup = self._session_cleanup_tasks.get(session_id)
+            if existing_cleanup is not None:
+                return existing_cleanup
             self._deleting_session_ids.add(session_id)
             active = [
                 (request_id, thread)
@@ -324,8 +351,26 @@ class RuntimeBridge:
             ),
             name=f"session-cleanup-{session_id}",
         )
-        self._session_cleanup_tasks.add(cleanup_task)
-        cleanup_task.add_done_callback(self._session_cleanup_tasks.discard)
+        with self._background_lock:
+            self._session_cleanup_tasks[session_id] = cleanup_task
+        cleanup_task.add_done_callback(
+            lambda completed, cleanup_session_id=session_id: self._finish_cleanup_task(
+                cleanup_session_id,
+                completed,
+            )
+        )
+        return cleanup_task
+
+    def _finish_cleanup_task(
+        self,
+        session_id: str,
+        completed: asyncio.Task[None],
+    ) -> None:
+        with self._background_lock:
+            if self._session_cleanup_tasks.get(session_id) is completed:
+                self._session_cleanup_tasks.pop(session_id, None)
+        if not completed.cancelled():
+            completed.exception()
 
     async def _finish_deleted_session_cleanup(
         self,
@@ -364,6 +409,7 @@ class RuntimeBridge:
             await asyncio.to_thread(self._handle_command, cleanup_command)
         except Exception:
             logger.exception("Deferred session cleanup failed: %s", session_id)
+            raise
         finally:
             with self._background_lock:
                 self._deleting_session_ids.discard(session_id)

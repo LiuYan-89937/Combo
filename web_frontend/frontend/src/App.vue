@@ -9,7 +9,6 @@
       <n-notification-provider>
         <n-dialog-provider>
           <n-loading-bar-provider>
-            <AppHeader v-if="!startupStore.ready" />
             <AppContent v-if="startupStore.ready" />
             <SelectionReferenceMenu v-if="startupStore.ready" />
             <AppUpdateDialog />
@@ -58,7 +57,6 @@ import { getPalette } from '@/theme/palette'
 import { applyPaletteToRoot } from '@/theme/cssVariables'
 import { createThemeOverrides } from '@/theme/naiveTheme'
 import AppContent from '@/layouts/AppContent.vue'
-import AppHeader from '@/components/common/AppHeader.vue'
 import SelectionReferenceMenu from '@/components/chat/SelectionReferenceMenu.vue'
 import AppUpdateDialog from '@/components/common/AppUpdateDialog.vue'
 
