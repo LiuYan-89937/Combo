@@ -198,7 +198,7 @@ export const useRuntimeStore = defineStore('runtime', {
 
     queuedRequestCount: (state): number => {
       return Object.values(state.activeRequests).filter((request) => (
-        !request.background
+        request.source === 'user'
         && request.status === 'running'
         && ['queued', 'steering'].includes(String(request.payload?.dispatch_state || ''))
         && (!state.activeConversationScope || request.conversationScope === state.activeConversationScope)
@@ -208,7 +208,7 @@ export const useRuntimeStore = defineStore('runtime', {
     queuedMessages: (state) => {
       return Object.values(state.activeRequests)
         .filter((request) => (
-          !request.background
+          request.source === 'user'
           && request.status === 'running'
           && ['queued', 'steering'].includes(String(request.payload?.dispatch_state || ''))
           && (!state.activeConversationScope || request.conversationScope === state.activeConversationScope)
@@ -1018,14 +1018,15 @@ export const useRuntimeStore = defineStore('runtime', {
         existing?.conversationScope ||
         scopeFromEventPayload(event) ||
         this.activeConversationScope
+      const source = activeRequestSource(event.payload?.request_source, existing?.source, requestId)
       this.activeRequests[requestId] = {
         requestId,
         status,
         mode: event.mode || existing?.mode || null,
         runId: event.run_id || event.payload?.run_id || existing?.runId || null,
         conversationScope,
-        background: isSchedulerRequest(requestId),
-        source: isSchedulerRequest(requestId) ? 'scheduler' : 'user',
+        background: source === 'scheduler',
+        source,
         startedAt: existing?.startedAt || event.timestamp,
         completedAt: status === 'running' ? existing?.completedAt || null : event.timestamp,
         payload: {
@@ -1781,7 +1782,7 @@ function activeRequestViewFromPayload(value: unknown): ActiveRequestView | null 
     ? { ...payload.payload }
     : {}
   const status = String(payload.status || 'running') as RunStatus
-  const source = payload.source === 'scheduler' ? 'scheduler' : 'user'
+  const source = activeRequestSource(payload.source, undefined, requestId)
   return {
     requestId,
     status,
@@ -1794,6 +1795,16 @@ function activeRequestViewFromPayload(value: unknown): ActiveRequestView | null 
     completedAt: payload.completedAt || payload.completed_at || null,
     payload: requestPayload,
   }
+}
+
+function activeRequestSource(
+  value: unknown,
+  existing: ActiveRequestView['source'] | undefined,
+  requestId: string,
+): ActiveRequestView['source'] {
+  if (value === 'internal' || value === 'scheduler' || value === 'user') return value
+  if (existing) return existing
+  return requestId.startsWith('scheduler-') ? 'scheduler' : 'user'
 }
 
 function normalizeFactoryMode(value: unknown): FactoryMode | null {

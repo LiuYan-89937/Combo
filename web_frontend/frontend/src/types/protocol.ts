@@ -270,7 +270,7 @@ export interface ActiveRequestView {
   runId: string | null
   conversationScope?: string | null
   background: boolean
-  source: 'user' | 'scheduler'
+  source: 'user' | 'internal' | 'scheduler'
   startedAt: string
   completedAt: string | null
   payload: Record<string, any>
