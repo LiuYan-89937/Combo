@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pathlib import PurePath, PurePosixPath, PureWindowsPath
+from pathlib import PurePosixPath
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -8,6 +8,7 @@ from pydantic.json_schema import SkipJsonSchema
 
 from agent_factory.context_system import ContextContractConfig
 from agent_factory.model_pool.schema import ModelBindingRole, ModelProfileBinding, ModelToolBinding
+from agent_factory.paths import cross_platform_absolute_path
 from agent_factory.scheduler_system.schema import SchedulerContractConfig, SchedulerSeedContractConfig
 from agent_factory.trace_system.schema import TraceContractConfig
 from agent_factory.tooling.approval_policy import ToolApprovalPolicyConfig
@@ -133,7 +134,7 @@ class ToolsContractConfig(BaseModel):
         root = str(value).strip()
         if not root:
             raise ValueError("builtin_workspace_root must not be empty")
-        path = _cross_platform_absolute_path(root)
+        path = cross_platform_absolute_path(root)
         if path is None:
             raise ValueError("builtin_workspace_root must be an absolute workspace path")
         if path == type(path)(path.anchor):
@@ -385,11 +386,3 @@ def _validate_package_relative_path(value: str, *, field_name: str) -> str:
     if any(part in {"", ".", ".."} for part in path.parts):
         raise ValueError(f"{field_name} must not contain empty, current, or parent segments")
     return value
-
-
-def _cross_platform_absolute_path(value: str) -> PurePath | None:
-    for path_type in (PurePosixPath, PureWindowsPath):
-        path = path_type(value)
-        if path.is_absolute():
-            return path
-    return None
