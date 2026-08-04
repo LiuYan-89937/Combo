@@ -54,6 +54,7 @@ from agent_factory.trace_system.diagnostics import TraceDiagnostics
 from agent_factory.trace_system.projector import TraceProjector
 from agent_factory.trace_system.reader import TraceReader
 from agent_factory.trace_system.schema import RepairTracePack, TraceRunFilter
+from agent_factory.tooling.execution_context import runtime_run_control_context
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,6 +137,7 @@ class AgentEvolutionRuntime:
                 ),
                 session_id=session_id or resolved_request_id,
                 request_id=resolved_request_id,
+                run_control=run_control,
             ),
         )
 
@@ -176,6 +178,7 @@ class AgentEvolutionRuntime:
                 ),
                 session_id=session_id,
                 request_id=resolved_request_id,
+                run_control=run_control,
             ),
         )
 
@@ -759,6 +762,40 @@ class AgentEvolutionRuntime:
                 },
             )
             yield from drain_events()
+        except GraphDrained:
+            stopped_trace_payload = _evolution_trace_payload_with_record(
+                workspace,
+                {
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "kind": "lifecycle",
+                    "session_id": session_id,
+                    "request_id": request_id,
+                    "graph_id": "agent_evolution",
+                    "package_id": package_id,
+                    "event_type": "run_completed",
+                    "success": True,
+                    "payload": {
+                        "status": "stopped",
+                        "stop_reason": run_control.drain_reason or "user_cancelled",
+                    },
+                },
+            )
+            normalizer.complete_open_model_streams(reason="user_stopped")
+            if context.backup_path is not None and context.backup_path.exists():
+                _restore_package(context.backup_path, package_path)
+            if stopped_trace_payload is not None:
+                _write_evolution_trace_payload(workspace, stopped_trace_payload)
+            self._active_runs.pop(active_run_key, None)
+            normalizer.emit_run_completed(
+                {
+                    "status": "stopped",
+                    "package_id": package_id,
+                    "trace_id": context.trace_id,
+                    "stop_reason": run_control.drain_reason or "user_cancelled",
+                    "agent_session": {"session_id": session_id} if session_id else {},
+                }
+            )
+            yield from drain_events()
         except Exception as exc:
             failed_trace_payload = _evolution_trace_payload_with_record(
                 workspace,
@@ -940,8 +977,12 @@ def _inference_scoped_events(
     *,
     session_id: str,
     request_id: str,
+    run_control: RunControl,
 ) -> Iterator[tuple[str, Any]]:
-    with inference_request_context(session_id=session_id, request_id=request_id):
+    with (
+        inference_request_context(session_id=session_id, request_id=request_id),
+        runtime_run_control_context(run_control),
+    ):
         yield from events
 
 

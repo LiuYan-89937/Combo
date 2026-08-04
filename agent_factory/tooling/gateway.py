@@ -13,6 +13,7 @@ from agent_factory.tooling.execution_context import (
     current_tool_call,
     current_tool_event_sink,
     current_tool_runtime_resource_overrides,
+    current_runtime_run_control,
 )
 from agent_factory.tooling.output_store import (
     ToolOutputPolicy,
@@ -194,7 +195,7 @@ class ToolExecutionGateway:
                 errors=["output is not a dict"],
             )
         try:
-            output, evidence, summary = unpack_tool_envelope(output)
+            envelope = unpack_tool_envelope(output)
         except Exception as exc:
             return self._observation(
                 "invalid_output",
@@ -202,10 +203,26 @@ class ToolExecutionGateway:
                 tool_call_id=tool_call_id,
                 arguments=arguments,
                 output=output,
-                execution_status="completed",
+                execution_status="failed",
                 contract_status="invalid",
                 errors=[f"{type(exc).__name__}: {exc}"],
             )
+        if envelope.execution_status == "failed":
+            return self._observation(
+                "execution_failed",
+                envelope.summary or f"Tool execution failed: {envelope.error}",
+                tool_call_id=tool_call_id,
+                arguments=arguments,
+                output=envelope.output,
+                evidence=envelope.evidence,
+                execution_status="failed",
+                contract_status="valid",
+                retryable=envelope.retryable,
+                errors=[envelope.error],
+            )
+        output = envelope.output
+        evidence = envelope.evidence
+        summary = envelope.summary
         output_errors = self.output_schema.errors_for(output)
         if output_errors:
             return self._observation(
@@ -233,7 +250,11 @@ class ToolExecutionGateway:
                 arguments=self._public_arguments(arguments),
                 store=self.output_store,
                 policy=self.output_policy,
-                compression_model=get_compression_model(),
+                compression_model=(
+                    None
+                    if _runtime_stop_requested()
+                    else get_compression_model()
+                ),
                 compression_config=self.spec.output_compression,
             )
         )
@@ -468,6 +489,11 @@ class ToolExecutionGateway:
     def _public_arguments(self, arguments: dict[str, Any]) -> dict[str, Any]:
         redacted = redact_json_pointer_paths(arguments, self.spec.sensitive_argument_paths)
         return redacted if isinstance(redacted, dict) else {}
+
+
+def _runtime_stop_requested() -> bool:
+    control = current_runtime_run_control()
+    return bool(control is not None and getattr(control, "drain_requested", False))
 
 
 def default_tool_max_revisions() -> int:

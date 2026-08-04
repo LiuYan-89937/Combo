@@ -88,6 +88,7 @@ const primaryTask = computed(() => visibleTasks.value[0] || null)
 const hasActiveTasks = computed(() => visibleTasks.value.some(task => !isTerminal(task.status)))
 const requiresAction = computed(() => visibleTasks.value.some(task => (
   task.pending_interaction?.kind === 'tool_approval'
+  || task.pending_interaction?.kind === 'publish_confirmation'
   || task.pending_interaction?.kind === 'ask_user'
   || task.pending_interaction?.kind === 'resource_request'
 )))
@@ -96,6 +97,8 @@ const capsuleTitle = computed(() => {
   if (!task) return t('backgroundTask.stackTitle')
   const prefix = task.pending_interaction?.kind === 'tool_approval'
     ? t('backgroundTask.capsule.approval')
+    : task.pending_interaction?.kind === 'publish_confirmation'
+      ? t('publish.confirm')
     : task.pending_interaction?.kind === 'ask_user' || task.pending_interaction?.kind === 'resource_request'
       ? t('backgroundTask.capsule.answer')
       : taskTypeLabel(task.type, task.status)
@@ -162,6 +165,7 @@ function isTerminal(status: BackgroundTask['status']): boolean {
 }
 
 function terminalStillVisible(task: BackgroundTask): boolean {
+  if (task.pending_interaction?.kind === 'publish_confirmation') return true
   const timestamp = Date.parse(task.completed_at || task.updated_at || task.created_at)
   return Number.isFinite(timestamp) && Date.now() - timestamp < TERMINAL_TASK_VISIBILITY_MS
 }

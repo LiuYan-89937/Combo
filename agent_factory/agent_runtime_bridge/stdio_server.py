@@ -1001,14 +1001,21 @@ def _emit_stopped_runtime(
         fallback_user_input=fallback_user_input or run_context.first_user_input,
         stop_reason=stop_reason or "user_cancelled",
     )
+    visible_output = normalizer.visible_assistant_output
     agent_session = run_context.session_manager.touch_turn(
         session_id or run_context.session_id,
         request_id=request_id,
         first_user_input=fallback_user_input or run_context.first_user_input,
         user_input=fallback_user_input or run_context.first_user_input,
         attachments=fallback_attachments,
-        reasoning_content=drained_checkpoint.state.conversation.reasoning_content,
-        final_answer=drained_checkpoint.state.conversation.final_answer,
+        reasoning_content=(
+            visible_output.reasoning_content
+            or drained_checkpoint.state.conversation.reasoning_content
+        ),
+        final_answer=(
+            visible_output.content
+            or drained_checkpoint.state.conversation.final_answer
+        ),
         status="stopped",
         trace_ref=session_trace_ref(compiled, drained_checkpoint.state),
     )

@@ -1,7 +1,11 @@
 import { useRouter } from 'vue-router'
 import { useCommand } from '@/composables/useCommand'
 import { useAgentStore, type AgentRecentSessionView } from '@/stores/agent'
-import { agentSessionsLandingQuery } from '@/utils/agentSessionRoute'
+import {
+  agentSessionsLandingQuery,
+  newAgentSessionQuery,
+  type NewAgentSessionRouteOptions,
+} from '@/utils/agentSessionRoute'
 
 export function useAgentSessionNavigation() {
   const router = useRouter()
@@ -18,17 +22,19 @@ export function useAgentSessionNavigation() {
     })
   }
 
-  async function startNewAgentSession(packageId: string, workspaceId?: string | null): Promise<void> {
+  async function startNewAgentSession(
+    packageId: string,
+    options: Omit<NewAgentSessionRouteOptions, 'packageId'> = {},
+  ): Promise<void> {
     const normalizedPackageId = String(packageId || '').trim()
     if (!normalizedPackageId) return
-    const normalizedWorkspaceId = String(workspaceId || '').trim() || null
     await router.push({
       name: 'Factory',
-      query: {
-        package_id: normalizedPackageId,
-        new: '1',
-        ...(normalizedWorkspaceId ? { workspace_id: normalizedWorkspaceId } : {}),
-      },
+      query: newAgentSessionQuery({
+        packageId: normalizedPackageId,
+        workspaceId: options.workspaceId,
+        workspaceSelectionConfirmed: options.workspaceSelectionConfirmed,
+      }),
     })
   }
 

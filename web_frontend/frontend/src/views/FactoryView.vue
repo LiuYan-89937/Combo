@@ -143,7 +143,10 @@ import TipPanel from '@/components/chat/TipPanel.vue'
 import type { TipMessageContext } from '@/stores/tips'
 import { useResourceContext } from '@/composables/useResourceContext'
 import { useWorkspaceStore } from '@/stores/workspace'
-import { isAgentSessionsLanding as routeIsAgentSessionsLanding } from '@/utils/agentSessionRoute'
+import {
+  isAgentSessionsLanding as routeIsAgentSessionsLanding,
+  isNewAgentWorkspaceSelectionConfirmed,
+} from '@/utils/agentSessionRoute'
 import { SYSTEM_CHAT_PACKAGE_ID } from '@/utils/resourceScope'
 import { agentPackageConversationScope } from '@/stores/runtime/scopes'
 import { useAgentSessionNavigation } from '@/composables/agent/useAgentSessionNavigation'
@@ -245,10 +248,12 @@ const activeSchedulerRunCards = computed(() => {
 
 function handleSend(message: string, attachments: RuntimeAttachmentInput[]) {
   const packageId = agentStore.activeChatPackageId
+  const routedWorkspaceSelection = newAgentWorkspaceSelectionFromRoute()
   if (
     packageId
     && !agentStore.selectedSessionId
     && !runtimeStore.activeWorkspaceId
+    && !routedWorkspaceSelection.confirmed
   ) {
     pendingWorkspaceAction.value = {
       kind: 'first_message',
@@ -259,7 +264,11 @@ function handleSend(message: string, attachments: RuntimeAttachmentInput[]) {
     }
     return
   }
-  sendAndFollow(message, attachments)
+  sendAndFollow(
+    message,
+    attachments,
+    routedWorkspaceSelection.confirmed ? routedWorkspaceSelection.workspaceId : undefined,
+  )
 }
 
 function requestNewAgentSession(packageId: string, initialWorkspaceId: string | null) {
@@ -280,7 +289,10 @@ async function completeWorkspaceSelection(workspaceId: string | null) {
   const action = pendingWorkspaceAction.value
   if (!action) return
   pendingWorkspaceAction.value = null
-  await startNewAgentSession(action.packageId, workspaceId)
+  await startNewAgentSession(action.packageId, {
+    workspaceId,
+    workspaceSelectionConfirmed: true,
+  })
   if (action.kind === 'first_message' && !sendAndFollow(action.message, action.attachments, workspaceId)) {
     inputRef.value?.restoreDraft(action.message, action.attachments)
   }
@@ -531,6 +543,16 @@ function routeQueryText(value: unknown): string | null {
   const raw = Array.isArray(value) ? value[0] : value
   const text = String(raw || '').trim()
   return text || null
+}
+
+function newAgentWorkspaceSelectionFromRoute(): { confirmed: boolean; workspaceId: string | null } {
+  const confirmed = route.name === 'Factory'
+    && routeQueryText(route.query.new) === '1'
+    && isNewAgentWorkspaceSelectionConfirmed(route.query)
+  return {
+    confirmed,
+    workspaceId: confirmed ? routeQueryText(route.query.workspace_id) : null,
+  }
 }
 </script>
 

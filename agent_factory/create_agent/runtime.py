@@ -45,6 +45,7 @@ from agent_factory.runtime_attachments import (
 )
 from agent_factory.runtime_kernel.persistence import delete_checkpoint_thread
 from agent_factory.runtime_protocol.chat_parts import build_chat_turn_messages
+from agent_factory.tooling.execution_context import runtime_run_control_context
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,19 +147,12 @@ class CreateAgentRuntime:
                 runtime_reasoning_intensity=runtime_reasoning_intensity,
                 run_control=run_control,
             )
-            return CreateAgentStreamRun(
+            return self._stream_run(
                 session_id=resolved_session_id,
                 request_id=resolved_request_id,
                 workspace=workspace,
-                events=_inference_scoped_events(
-                    self._owned_events(
-                        request_id=resolved_request_id,
-                        run_control=run_control,
-                        events=events,
-                    ),
-                    session_id=resolved_session_id,
-                    request_id=resolved_request_id,
-                ),
+                run_control=run_control,
+                events=events,
             )
         except Exception:
             self._forget_run_control(resolved_request_id, run_control)
@@ -246,6 +240,9 @@ class CreateAgentRuntime:
                     workspace=workspace,
                     model=self.model,
                 )
+            except GraphDrained:
+                yield from emit_cancelled("create_agent_intent_analysis")
+                return
             except Exception as exc:
                 normalizer.runtime_event(
                     "node_failed",
@@ -309,6 +306,9 @@ class CreateAgentRuntime:
             task_started_at = time.monotonic()
             try:
                 task_analysis = analyze_create_agent_task(user_input=user_input, model=self.model)
+            except GraphDrained:
+                yield from emit_cancelled("create_agent_task_analysis")
+                return
             except Exception as exc:
                 normalizer.runtime_event(
                     "node_failed",
@@ -461,30 +461,49 @@ class CreateAgentRuntime:
         ) or "manufacture"
         resolved_request_id = request_id or uuid4().hex
         run_control = self._register_run_control(resolved_request_id)
-        return CreateAgentStreamRun(
+        return self._stream_run(
             session_id=session_id,
             request_id=resolved_request_id,
             workspace=workspace,
-            events=_inference_scoped_events(
-                self._owned_events(
-                    request_id=resolved_request_id,
-                    run_control=run_control,
-                    events=self._events(
-                        user_input="",
-                        session_id=session_id,
-                        request_id=resolved_request_id,
-                        workspace=workspace,
-                        resume_payload=resume_payload or {},
-                        graph_kind=graph_kind,
-                        attachments=[],
-                        runtime_main_model_profile_id=None,
-                        runtime_reasoning_intensity=None,
-                        intent=None,
-                        run_control=run_control,
-                    ),
-                ),
+            run_control=run_control,
+            events=self._events(
+                user_input="",
                 session_id=session_id,
                 request_id=resolved_request_id,
+                workspace=workspace,
+                resume_payload=resume_payload or {},
+                graph_kind=graph_kind,
+                attachments=[],
+                runtime_main_model_profile_id=None,
+                runtime_reasoning_intensity=None,
+                intent=None,
+                run_control=run_control,
+            ),
+        )
+
+    def _stream_run(
+        self,
+        *,
+        session_id: str,
+        request_id: str,
+        workspace: CreateAgentWorkspace,
+        run_control: RunControl,
+        events: Iterator[tuple[str, Any]],
+    ) -> CreateAgentStreamRun:
+        owned_events = self._owned_events(
+            request_id=request_id,
+            run_control=run_control,
+            events=events,
+        )
+        return CreateAgentStreamRun(
+            session_id=session_id,
+            request_id=request_id,
+            workspace=workspace,
+            events=_inference_scoped_events(
+                owned_events,
+                session_id=session_id,
+                request_id=request_id,
+                run_control=run_control,
             ),
         )
 
@@ -1082,8 +1101,12 @@ def _inference_scoped_events(
     *,
     session_id: str,
     request_id: str,
+    run_control: RunControl,
 ) -> Iterator[tuple[str, Any]]:
-    with inference_request_context(session_id=session_id, request_id=request_id):
+    with (
+        inference_request_context(session_id=session_id, request_id=request_id),
+        runtime_run_control_context(run_control),
+    ):
         yield from events
 
 

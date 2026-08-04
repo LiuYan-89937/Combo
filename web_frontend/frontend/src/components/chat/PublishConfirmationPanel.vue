@@ -35,7 +35,7 @@
       <small>这些配置不阻断发布；对应工具在包详情中完成配置前不可执行。</small>
     </div>
 
-    <div class="revision-row">
+    <div v-if="revisionEnabled" class="revision-row">
       <n-input
         v-model:value="revisionGuidance"
         type="textarea"
@@ -48,6 +48,7 @@
     <div class="publish-actions">
       <n-space justify="end" :wrap="true">
         <n-button
+          v-if="revisionEnabled"
           size="small"
           :disabled="!revisionGuidance.trim()"
           @click="handleContinueRevision"
@@ -90,7 +91,18 @@ const { t } = useI18n()
 const revisionGuidance = ref('')
 const publishSubmitting = ref(false)
 
-const payload = computed(() => runtimeStore.publishConfirmationPayload || {})
+const props = withDefaults(defineProps<{
+  publishPayload?: Record<string, any> | null
+  revisionEnabled?: boolean
+}>(), {
+  publishPayload: null,
+  revisionEnabled: true,
+})
+const emit = defineEmits<{
+  published: [result: Record<string, any>]
+}>()
+
+const payload = computed(() => props.publishPayload || runtimeStore.publishConfirmationPayload || {})
 const workspacePath = computed(() => String(
   payload.value.source_workspace || payload.value.workspace_path || '',
 ).trim())
@@ -131,9 +143,10 @@ async function handleConfirmPublish() {
   }
   publishSubmitting.value = true
   try {
-    await createAgentApi.publish(workspaceId)
+    const response = await createAgentApi.publish(workspaceId)
     runtimeStore.clearCreateAgentPublishReady()
     commands.listAgentPackages()
+    emit('published', response.published)
     uiStore.addNotification({
       type: 'success',
       title: t('publish.successTitle'),

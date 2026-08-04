@@ -234,6 +234,55 @@ class SQLiteSchedulerStore:
         with self._connect() as conn:
             conn.execute(query, args)
 
+    def acquire_worker_lease(
+        self,
+        *,
+        owner_type: str,
+        owner_id: str,
+        holder_id: str,
+        ttl_seconds: int,
+    ) -> bool:
+        now = utc_now()
+        expires_at = utc_after(ttl_seconds).isoformat()
+        lease_key = _worker_lease_key(owner_type=owner_type, owner_id=owner_id)
+        with self._connect() as conn:
+            conn.execute("begin immediate")
+            row = conn.execute(
+                "select holder_id,expires_at from scheduler_worker_leases where lease_key=?",
+                (lease_key,),
+            ).fetchone()
+            if row is not None:
+                current_holder = str(row["holder_id"] or "")
+                current_expiry = str(row["expires_at"] or "")
+                if current_holder != holder_id and current_expiry > now.isoformat():
+                    return False
+            conn.execute(
+                """
+                insert into scheduler_worker_leases(lease_key,holder_id,expires_at,updated_at)
+                values(?,?,?,?)
+                on conflict(lease_key) do update set
+                  holder_id=excluded.holder_id,
+                  expires_at=excluded.expires_at,
+                  updated_at=excluded.updated_at
+                """,
+                (lease_key, holder_id, expires_at, now.isoformat()),
+            )
+        return True
+
+    def release_worker_lease(
+        self,
+        *,
+        owner_type: str,
+        owner_id: str,
+        holder_id: str,
+    ) -> None:
+        lease_key = _worker_lease_key(owner_type=owner_type, owner_id=owner_id)
+        with self._connect() as conn:
+            conn.execute(
+                "delete from scheduler_worker_leases where lease_key=? and holder_id=?",
+                (lease_key, holder_id),
+            )
+
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
         conn = connect_sqlite(self.path, timeout_ms=SQLITE_BUSY_TIMEOUT_MS)
@@ -293,8 +342,22 @@ class SQLiteSchedulerStore:
                   expires_at text not null,
                   payload_json text not null
                 );
+                create table if not exists scheduler_worker_leases (
+                  lease_key text primary key,
+                  holder_id text not null,
+                  expires_at text not null,
+                  updated_at text not null
+                );
                 """
             )
+
+
+def _worker_lease_key(*, owner_type: str, owner_id: str) -> str:
+    normalized_type = str(owner_type or "").strip()
+    normalized_id = str(owner_id or "").strip()
+    if not normalized_type or not normalized_id:
+        raise ValueError("scheduler worker lease requires owner_type and owner_id")
+    return f"{normalized_type}:{normalized_id}"
 
 
 def _job_row(job: SchedulerJob) -> tuple[Any, ...]:

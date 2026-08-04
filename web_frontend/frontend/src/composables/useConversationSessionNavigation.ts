@@ -25,7 +25,7 @@ export function useConversationSessionNavigation() {
     if (!canStartNewConversationSession.value) return
     const packageId = agentStore.activeChatPackageId
     if (packageId) {
-      await startNewAgentSession(packageId)
+      await startNewAgentSession(packageId, { workspaceSelectionConfirmed: false })
       return
     }
     const mode = factoryMode.value

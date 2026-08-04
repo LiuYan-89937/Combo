@@ -60,6 +60,13 @@
         @resolve="resolveApproval"
       />
 
+      <PublishConfirmationPanel
+        v-else-if="interaction.kind === 'publish_confirmation'"
+        :publish-payload="interaction.payload"
+        :revision-enabled="false"
+        @published="refreshAfterPublish"
+      />
+
       <template v-else-if="interaction.kind === 'resource_request' && interaction.workspace_id">
         <div class="interaction-copy">
           <strong>{{ interaction.title }}</strong>
@@ -145,6 +152,7 @@ import {
 } from '@/api/backgroundTasks'
 import ToolApprovalPanel from './ToolApprovalPanel.vue'
 import ResourceRequestPanel from './ResourceRequestPanel.vue'
+import PublishConfirmationPanel from './PublishConfirmationPanel.vue'
 
 const props = defineProps<{ task: BackgroundTask; fallbackTitle?: string }>()
 const emit = defineEmits<{ updated: [task: BackgroundTask]; deleted: [taskId: string] }>()
@@ -226,6 +234,16 @@ function selectOption(value: string) {
 
 async function continueAfterResources(resourceIds: string[]) {
   await resolveInteraction('continue', { configured_resource_ids: resourceIds })
+}
+
+async function refreshAfterPublish() {
+  actionError.value = ''
+  try {
+    task.value = (await backgroundTasksApi.get(task.value.task_id)).task
+    emit('updated', task.value)
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : String(error)
+  }
 }
 
 async function resolveInteraction(action: InteractionAction, payload: Record<string, unknown>) {

@@ -44,6 +44,7 @@ export type PendingInteractionKind =
   | 'ask_user'
   | 'resource_request'
   | 'tool_approval'
+  | 'publish_confirmation'
   | 'external_condition'
   | 'internal_wait'
 

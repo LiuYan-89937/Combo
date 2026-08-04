@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import logging
 import re
+import sys
+import threading
 from operator import itemgetter
 from typing import Any, Iterator, Sequence
 from uuid import uuid4
 
 import httpx
-from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.language_models.chat_models import BaseChatModel, generate_from_stream
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
@@ -24,10 +26,12 @@ from langchain_core.runnables import RunnableMap, RunnablePassthrough
 from langchain_core.tools import BaseTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from pydantic import BaseModel, ConfigDict, Field
+from langgraph.errors import GraphDrained
 
 from agent_factory.local_inference.config import LocalInferenceEndpoint
 from agent_factory.local_inference.http_client import create_private_http_client
 from agent_factory.local_inference.request_context import current_inference_request
+from agent_factory.tooling.execution_context import current_runtime_run_control
 
 
 logger = logging.getLogger(__name__)
@@ -125,24 +129,13 @@ class LocalLlamaCppChatModel(BaseChatModel):
         run_manager=None,
         **kwargs: Any,
     ) -> ChatResult:
-        payload = self._request_payload(messages, stop=stop, stream=False, kwargs=kwargs)
-        self._log_request_started(payload)
-        with create_private_http_client(self.endpoint) as client:
-            response = client.post(
-                self.endpoint.endpoint("/chat/completions"),
-                json=payload,
-                headers=self._admission_headers(),
+        return generate_from_stream(
+            self._stream(
+                messages,
+                stop=stop,
+                run_manager=run_manager,
+                **kwargs,
             )
-            _raise_for_local_inference_error(response)
-            body = response.json()
-        message = _response_message(body)
-        generation_info = {
-            "finish_reason": _choice(body).get("finish_reason"),
-            "model": str(body.get("model") or self.model_name),
-        }
-        return ChatResult(
-            generations=[ChatGeneration(message=message, generation_info=generation_info)],
-            llm_output={"usage": dict(body.get("usage") or {}), "model": generation_info["model"]},
         )
 
     def _stream(
@@ -152,37 +145,74 @@ class LocalLlamaCppChatModel(BaseChatModel):
         run_manager=None,
         **kwargs: Any,
     ) -> Iterator[ChatGenerationChunk]:
+        _raise_if_runtime_stopped()
         payload = self._request_payload(messages, stop=stop, stream=True, kwargs=kwargs)
         self._log_request_started(payload)
-        with create_private_http_client(self.endpoint) as client:
-            with client.stream(
-                "POST",
-                self.endpoint.endpoint("/chat/completions"),
-                json=payload,
-                headers=self._admission_headers(),
-            ) as response:
-                if response.is_error:
-                    response.read()
-                    _raise_for_local_inference_error(response)
-                for line in response.iter_lines():
-                    data = _sse_data(line)
-                    if data is None:
-                        continue
-                    if data == "[DONE]":
-                        return
-                    try:
-                        event = json.loads(data)
-                    except json.JSONDecodeError as exc:
-                        raise RuntimeError("llama.cpp returned an invalid SSE JSON event") from exc
-                    if not isinstance(event, dict):
-                        raise RuntimeError("llama.cpp returned a non-object SSE event")
-                    error = event.get("error")
-                    if error is not None:
-                        detail = _stream_error_detail(error)
-                        raise RuntimeError(f"llama.cpp streaming request failed: {detail}")
-                    chunk = _chat_generation_chunk(event)
-                    if chunk is not None:
-                        yield chunk
+        client = create_private_http_client(self.endpoint)
+        stream_context = client.stream(
+            "POST",
+            self.endpoint.endpoint("/chat/completions"),
+            json=payload,
+            headers=self._admission_headers(),
+        )
+        detached = False
+        lines: Iterator[str] | None = None
+        try:
+            response = stream_context.__enter__()
+            if response.is_error:
+                response.read()
+                _raise_for_local_inference_error(response)
+            lines = response.iter_lines()
+            stop_reason = _runtime_stop_reason()
+            if stop_reason is not None:
+                _drain_stream_in_background(
+                    lines=lines,
+                    stream_context=stream_context,
+                    client=client,
+                )
+                detached = True
+                raise GraphDrained(stop_reason)
+            for line in lines:
+                stop_reason = _runtime_stop_reason()
+                if stop_reason is not None:
+                    _drain_stream_in_background(
+                        lines=lines,
+                        stream_context=stream_context,
+                        client=client,
+                    )
+                    detached = True
+                    raise GraphDrained(stop_reason)
+                data = _sse_data(line)
+                if data is None:
+                    continue
+                if data == "[DONE]":
+                    return
+                try:
+                    event = json.loads(data)
+                except json.JSONDecodeError as exc:
+                    raise RuntimeError("llama.cpp returned an invalid SSE JSON event") from exc
+                if not isinstance(event, dict):
+                    raise RuntimeError("llama.cpp returned a non-object SSE event")
+                error = event.get("error")
+                if error is not None:
+                    detail = _stream_error_detail(error)
+                    raise RuntimeError(f"llama.cpp streaming request failed: {detail}")
+                chunk = _chat_generation_chunk(event)
+                if chunk is not None:
+                    yield chunk
+        finally:
+            if not detached and lines is not None and _runtime_stop_reason() is not None:
+                _drain_stream_in_background(
+                    lines=lines,
+                    stream_context=stream_context,
+                    client=client,
+                )
+                detached = True
+            if not detached:
+                try:
+                    stream_context.__exit__(*sys.exc_info())
+                finally:
+                    client.close()
 
     def _request_payload(
         self,
@@ -273,6 +303,52 @@ class LocalLlamaCppChatModel(BaseChatModel):
                 )
             )
         return len(self.get_token_ids(rendered))
+
+
+def _raise_if_runtime_stopped() -> None:
+    reason = _runtime_stop_reason()
+    if reason is None:
+        return
+    raise GraphDrained(reason)
+
+
+def _runtime_stop_reason() -> str | None:
+    control = current_runtime_run_control()
+    if control is None or not bool(getattr(control, "drain_requested", False)):
+        return None
+    return str(getattr(control, "drain_reason", None) or "user_cancelled")
+
+
+def _drain_stream_in_background(
+    *,
+    lines: Iterator[str],
+    stream_context: Any,
+    client: httpx.Client,
+) -> None:
+    request = current_inference_request()
+    request_id = str(request.request_id or "runtime") if request is not None else "runtime"
+
+    def drain() -> None:
+        try:
+            for _line in lines:
+                pass
+        except Exception as exc:
+            logger.warning(
+                "detached llama.cpp stream drain ended with %s: %s",
+                type(exc).__name__,
+                exc,
+            )
+        finally:
+            try:
+                stream_context.__exit__(None, None, None)
+            finally:
+                client.close()
+
+    threading.Thread(
+        target=drain,
+        name=f"llama-stream-drain-{request_id}",
+        daemon=True,
+    ).start()
 
 
 def _message_payload(message: BaseMessage) -> dict[str, Any]:

@@ -15,7 +15,12 @@ from langgraph.types import interrupt
 
 from agent_factory.runtime_kernel.observability.tool_events import emit_runtime_tool_activity
 from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
-from agent_factory.tooling.execution_context import current_tool_approval_override, tool_approval_override, tool_call_context
+from agent_factory.tooling.execution_context import (
+    current_runtime_run_control,
+    current_tool_approval_override,
+    tool_approval_override,
+    tool_call_context,
+)
 from agent_factory.tooling.gateway import (
     DEFAULT_TOOL_APPROVAL_TRUST_STORE,
     TRUST_TOOL_ACTIONS,
@@ -92,7 +97,11 @@ class AgentFactoryToolNode:
         outputs: list[ToolMessage] = []
         invalid_calls, executable_calls = _partition_invalid_tool_calls(tool_calls)
         outputs.extend(_invalid_tool_call_messages(invalid_calls))
-        for batch in _tool_call_batches(executable_calls, self._concurrent_by_name):
+        batches = _tool_call_batches(executable_calls, self._concurrent_by_name)
+        for batch_index, batch in enumerate(batches):
+            if _runtime_stop_requested():
+                outputs.extend(_cancelled_tool_messages(_remaining_batches(batches, batch_index)))
+                break
             approval_requests = self._approval_requests_for_batch(batch, state=state)
             if approval_requests:
                 decision = interrupt(_batch_approval_payload(approval_requests))
@@ -113,6 +122,9 @@ class AgentFactoryToolNode:
             with approval_context:
                 raw_output = self._invoke_native_tool_node(batch_state, config=config, runtime=runtime)
             outputs.extend(_messages_from_tool_node_output(raw_output, self.messages_key))
+            if _runtime_stop_requested():
+                outputs.extend(_cancelled_tool_messages(_remaining_batches(batches, batch_index + 1)))
+                break
         return {self.messages_key: _complete_tool_message_set(tool_calls, outputs)}
 
     def _approval_requests_for_batch(
@@ -334,6 +346,32 @@ def _approval_rejection_messages(
             message=message,
             arguments=dict(call.get("args") or {}),
             retryable=True,
+        )
+        for call in tool_calls
+    ]
+
+
+def _runtime_stop_requested() -> bool:
+    control = current_runtime_run_control()
+    return bool(control is not None and getattr(control, "drain_requested", False))
+
+
+def _remaining_batches(
+    batches: Sequence[Sequence[dict[str, Any]]],
+    start: int,
+) -> list[dict[str, Any]]:
+    return [dict(call) for batch in batches[start:] for call in batch]
+
+
+def _cancelled_tool_messages(tool_calls: Sequence[dict[str, Any]]) -> list[ToolMessage]:
+    return [
+        tool_observation_message(
+            status="cancelled",
+            tool_id=str(call.get("name") or ""),
+            tool_call_id=str(call.get("id") or call.get("name") or ""),
+            message="Tool call was cancelled before execution because the user stopped the run.",
+            arguments=dict(call.get("args") or {}),
+            retryable=False,
         )
         for call in tool_calls
     ]

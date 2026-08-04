@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -8,36 +9,96 @@ RUNTIME_CONTROL_EVIDENCE_KEY = "runtime_control"
 RUNTIME_CONTROL_WAIT_ACTION = "wait"
 
 
+@dataclass(frozen=True, slots=True)
+class ToolEnvelopePayload:
+    output: dict[str, Any]
+    evidence: dict[str, Any]
+    summary: str
+    execution_status: str
+    error: str
+    retryable: bool
+
+
 def tool_envelope(
     output: dict[str, Any] | None = None,
     *,
     evidence: dict[str, Any] | None = None,
     summary: str = "",
+    execution_status: str = "completed",
+    error: str = "",
+    retryable: bool = False,
 ) -> dict[str, Any]:
+    normalized_status = str(execution_status or "").strip()
+    if normalized_status not in {"completed", "failed"}:
+        raise ValueError("tool envelope execution_status must be completed or failed")
+    normalized_error = str(error or "").strip()
+    if normalized_status == "failed" and not normalized_error:
+        raise ValueError("failed tool envelope requires error")
+    if normalized_status == "completed" and normalized_error:
+        raise ValueError("completed tool envelope cannot contain error")
     return {
         "version": TOOL_ENVELOPE_VERSION,
+        "execution": {
+            "status": normalized_status,
+            "error": normalized_error,
+            "retryable": bool(retryable),
+        },
         "output": dict(output or {}),
         "evidence": dict(evidence or {}),
         "summary": summary,
     }
 
 
+def tool_failure(
+    error: str,
+    *,
+    output: dict[str, Any] | None = None,
+    evidence: dict[str, Any] | None = None,
+    summary: str = "",
+    retryable: bool = False,
+) -> dict[str, Any]:
+    return tool_envelope(
+        output,
+        evidence=evidence,
+        summary=summary,
+        execution_status="failed",
+        error=error,
+        retryable=retryable,
+    )
+
+
 def is_tool_envelope(value: Any) -> bool:
     return (
         isinstance(value, dict)
         and value.get("version") == TOOL_ENVELOPE_VERSION
+        and isinstance(value.get("execution"), dict)
         and isinstance(value.get("output"), dict)
     )
 
 
-def unpack_tool_envelope(value: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], str]:
+def unpack_tool_envelope(value: dict[str, Any]) -> ToolEnvelopePayload:
     if not is_tool_envelope(value):
         raise ValueError("tool entrypoint must return tool_execution_envelope.v0")
+    execution = dict(value.get("execution") or {})
+    execution_status = str(execution.get("status") or "").strip()
+    error = str(execution.get("error") or "").strip()
+    retryable = execution.get("retryable")
+    if execution_status not in {"completed", "failed"}:
+        raise ValueError("tool envelope execution.status must be completed or failed")
+    if not isinstance(retryable, bool):
+        raise ValueError("tool envelope execution.retryable must be boolean")
+    if execution_status == "failed" and not error:
+        raise ValueError("failed tool envelope requires execution.error")
+    if execution_status == "completed" and error:
+        raise ValueError("completed tool envelope cannot contain execution.error")
     evidence = value.get("evidence")
-    return (
-        dict(value.get("output") or {}),
-        dict(evidence) if isinstance(evidence, dict) else {},
-        str(value.get("summary") or "").strip(),
+    return ToolEnvelopePayload(
+        output=dict(value.get("output") or {}),
+        evidence=dict(evidence) if isinstance(evidence, dict) else {},
+        summary=str(value.get("summary") or "").strip(),
+        execution_status=execution_status,
+        error=error,
+        retryable=retryable,
     )
 
 

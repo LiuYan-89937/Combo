@@ -293,6 +293,40 @@ class KnowledgeSourcePreview(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class KnowledgeSourceInput(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "anyOf": [
+                {"required": ["uri"]},
+                {"required": ["path"]},
+                {"required": ["url"]},
+                {"required": ["content"]},
+            ]
+        },
+    )
+
+    source_id: str | None = None
+    source_type: SourceType = "filesystem"
+    display_name: str | None = None
+    mount_mode: MountMode = "index_only"
+    uri: str | None = None
+    path: str | None = None
+    url: str | None = None
+    content: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    ingestion_plan: KnowledgeIngestionPlan | None = None
+
+    @model_validator(mode="after")
+    def _requires_source_locator(self) -> "KnowledgeSourceInput":
+        locators = (self.uri, self.path, self.url, self.content)
+        if not any(str(value or "").strip() for value in locators):
+            raise ValueError("knowledge source requires uri, path, url, or content")
+        if self.source_type == "manual_note" and not str(self.content or self.uri or "").strip():
+            raise ValueError("manual_note knowledge source requires content or uri")
+        return self
+
+
 class KnowledgeResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -311,7 +345,7 @@ class KnowledgeToolInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     action: KnowledgeAction
-    source: dict[str, Any] = Field(default_factory=dict)
+    source: KnowledgeSourceInput | None = None
     source_id: str | None = None
     document_id: str | None = None
     chunk_id: str | None = None

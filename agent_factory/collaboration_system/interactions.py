@@ -13,6 +13,7 @@ InteractionKind = Literal[
     "ask_user",
     "resource_request",
     "tool_approval",
+    "publish_confirmation",
     "external_condition",
     "internal_wait",
 ]
@@ -36,7 +37,7 @@ class PendingInteraction(BaseModel):
 def project_pending_interaction(task: BackgroundTask) -> PendingInteraction | None:
     pending = task.pending_approval if task.status == "waiting_approval" else task.pending_external
     if not isinstance(pending, dict):
-        return None
+        return _project_publish_confirmation(task)
     interaction_id = str(pending.get("request_id") or "").strip()
     event = _mapping(pending.get("payload"))
     event_type = str(event.get("event_type") or "").strip()
@@ -88,6 +89,46 @@ def project_pending_interaction(task: BackgroundTask) -> PendingInteraction | No
         resource_requests=resource_requests,
         workspace_id=_optional_text(payload.get("workspace_id")),
         payload=payload,
+    )
+
+
+def _project_publish_confirmation(task: BackgroundTask) -> PendingInteraction | None:
+    task_type = getattr(task.type, "value", task.type)
+    if task.status != "succeeded" or task_type != "manufacture":
+        return None
+    result = _mapping(task.result)
+    runtime_event = _mapping(result.get("runtime_event"))
+    runtime_payload = _mapping(runtime_event.get("payload"))
+    completed_publish_state = _mapping(runtime_payload.get("publish_ready"))
+    workspace_id = str(
+        completed_publish_state.get("workspace_id")
+        or task.assignee_session_id
+        or ""
+    ).strip()
+    if not workspace_id:
+        return None
+
+    from agent_factory.create_agent.workspace import CreateAgentWorkspace
+
+    try:
+        publish_state = CreateAgentWorkspace.for_session(workspace_id).read_publish_report()
+    except (FileNotFoundError, ValueError):
+        return None
+    if str(publish_state.get("status") or "").strip() != "ready":
+        return None
+
+    return PendingInteraction(
+        interaction_id=f"{task.task_id}:publish:{workspace_id}",
+        kind="publish_confirmation",
+        title="Agent 已完成制造，等待发布",
+        message=str(publish_state.get("message") or "请检查校验结果并确认是否发布。"),
+        source={
+            "task_id": task.task_id,
+            "task_type": str(task_type),
+            "workspace_id": workspace_id,
+        },
+        workspace_id=workspace_id,
+        payload=publish_state,
     )
 
 

@@ -35,6 +35,7 @@ from agent_factory.contracts import (
     TaskCancelledError,
     TERMINAL_TASK_STATUSES,
 )
+from agent_factory.exception_details import exception_summary
 
 
 DEFAULT_LEASE_SECONDS = 30
@@ -550,7 +551,11 @@ class BackgroundTaskService:
                 task_id,
                 handle.lease_owner,
                 handle.lease_token,
-                {"code": "executor_error", "message": "后台任务执行失败。", "details": {"type": type(exc).__name__}},
+                {
+                    "code": "executor_error",
+                    "message": exception_summary(exc),
+                    "details": {"type": type(exc).__name__},
+                },
             )
             terminal = True
         finally:
