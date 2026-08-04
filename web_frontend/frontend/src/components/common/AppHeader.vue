@@ -148,6 +148,7 @@ const currentRouteName = computed(() => {
 const connectionStatusText = computed(() => ({
   disconnected: t('connection.disconnected'),
   connecting: t('connection.connecting'),
+  reconnecting: t('connection.reconnecting'),
   connected: t('connection.connected'),
   error: t('connection.error'),
 })[runtimeStore.connectionStatus])

@@ -198,13 +198,13 @@ const dialog = useDialog()
 const { locale, t } = useI18n()
 
 const searchQuery = ref('')
-const filterStatus = ref<string | null>(null)
+const filterStatus = ref('')
 const selectedPackageIds = ref<Set<string>>(new Set())
 const busyAction = ref<'delete' | 'export' | 'instance' | null>(null)
 const busyInstancePackageId = ref<string | null>(null)
 
 const statusOptions = computed(() => [
-  { label: t('common.all'), value: null },
+  { label: t('common.all'), value: '' },
   { label: t('agents.statusReady'), value: 'ready' },
   { label: t('agents.statusRunning'), value: 'running' },
 ])

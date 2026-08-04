@@ -49,6 +49,7 @@
 import { computed, watchEffect } from 'vue'
 import { useRoute } from 'vue-router'
 import { darkTheme, dateEnUS, dateZhCN, enUS, zhCN } from 'naive-ui'
+import type { GlobalThemeOverrides } from 'naive-ui'
 import { routeTitleKey } from '@/i18n'
 import { useI18n } from '@/composables/useI18n'
 import { useUiStore } from '@/stores/ui'

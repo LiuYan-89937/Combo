@@ -121,9 +121,9 @@ function memorySort(left: MemoryContextItemView, right: MemoryContextItemView): 
 }
 
 function memoryScopeLabel(scope: string): string {
-  if (scope === 'workspace') return t('status.memoryScopeWorkspace')
-  if (scope === 'global') return t('status.memoryScopeGlobal')
-  return t('status.memoryScopeAgent')
+  if (scope === 'workspace') return t('status.memoryScope.workspace')
+  if (scope === 'global') return t('status.memoryScope.user')
+  return t('status.memoryScope.agent')
 }
 
 function formatTime(value: string): string {

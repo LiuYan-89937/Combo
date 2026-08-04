@@ -134,8 +134,8 @@ export const agentPackagesApi = {
     ),
   updateModelOverrides: (
     packageId: string,
-    bindings: Record<string, Record<string, number | null>>,
-    toolBindings: Record<string, Record<string, number | null>>,
+    bindings: Record<string, { temperature: number | null; max_output_tokens: number | null }>,
+    toolBindings: Record<string, { temperature: number | null; max_output_tokens: number | null }>,
   ) =>
     requestJson<AgentPackageConfigurationResponse>(
       `/api/agent-packages/${encodeURIComponent(packageId)}/model-overrides`,

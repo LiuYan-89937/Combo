@@ -12,7 +12,7 @@
       </span>
       <n-select
         v-if="field.schema.enum?.length"
-        :value="fieldValue(field.name)"
+        :value="enumFieldValue(field.name)"
         :options="enumOptions(field.schema.enum)"
         clearable
         size="small"
@@ -131,6 +131,11 @@ function fieldValue(name: string): unknown {
   return draftObject()[name] ?? null
 }
 
+function enumFieldValue(name: string): string | number | null {
+  const value = fieldValue(name)
+  return typeof value === 'string' || typeof value === 'number' ? value : null
+}
+
 function stringFieldValue(name: string): string {
   const value = fieldValue(name)
   return value == null ? '' : String(value)
@@ -183,7 +188,7 @@ function childSecretFields(name: string): string[] {
   const pointerPrefix = `/${name}/`
   return props.secretFields.flatMap((path) => {
     if (path.startsWith(dottedPrefix)) return [path.slice(dottedPrefix.length)]
-    if (path.startsWith(pointerPrefix)) return [path.slice(pointerPrefix.length).replaceAll('/', '.')]
+    if (path.startsWith(pointerPrefix)) return [path.slice(pointerPrefix.length).split('/').join('.')]
     return []
   })
 }
