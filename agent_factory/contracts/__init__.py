@@ -2,6 +2,7 @@
 
 from agent_factory.contracts.background_tasks import (
     ACTIVE_TASK_STATUSES,
+    BACKGROUND_TASK_NOTIFICATION_BATCH_KEY,
     BACKGROUND_TASK_STATUSES,
     BACKGROUND_TASK_TYPES,
     LEASE_TASK_STATUSES,
@@ -25,6 +26,7 @@ from agent_factory.contracts.events import EventEnvelope
 
 __all__ = [
     "ACTIVE_TASK_STATUSES",
+    "BACKGROUND_TASK_NOTIFICATION_BATCH_KEY",
     "BACKGROUND_TASK_STATUSES",
     "BACKGROUND_TASK_TYPES",
     "LEASE_TASK_STATUSES",

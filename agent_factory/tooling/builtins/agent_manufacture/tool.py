@@ -8,7 +8,8 @@ from agent_factory.collaboration_system.parent_controller import (
     parent_agent_context,
     runtime_user_config,
 )
-from agent_factory.tooling.envelope import tool_envelope
+from agent_factory.contracts import BACKGROUND_TASK_NOTIFICATION_BATCH_KEY
+from agent_factory.tooling.envelope import runtime_wait_evidence, tool_envelope
 from agent_factory.tooling.spec import ToolRiskResult
 
 
@@ -18,17 +19,21 @@ TOOL_ID = "agent_manufacture"
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     request_payload = _request_payload(arguments)
     parent = parent_agent_context(resources, tool_id=TOOL_ID)
+    request_id = background_task_request_id(tool_id=TOOL_ID)
     task = background_task_client(resources).submit(
         parent.task_owner(),
         type="manufacture",
-        request_id=background_task_request_id(tool_id=TOOL_ID),
+        request_id=request_id,
         task_text=_manufacturing_prompt(request_payload),
         payload={
             "request": request_payload,
             "user_config": runtime_user_config(resources),
         },
         delivery_standard={"requirements": request_payload["delivery_standards"]},
-        visible_context={"source_agent_search": request_payload["source_agent_search"]},
+        visible_context={
+            BACKGROUND_TASK_NOTIFICATION_BATCH_KEY: request_id,
+            "source_agent_search": request_payload["source_agent_search"],
+        },
     )
     output = {
         "status": task.status,
@@ -37,7 +42,14 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         "message": "制造请求已进入统一后台任务队列，完成后会通知当前会话。",
         "next_step": "等待后台任务完成；发布完成后再次调用 agent_search 获取新 package_id。",
     }
-    return tool_envelope(output, summary=output["message"])
+    return tool_envelope(
+        output,
+        evidence=runtime_wait_evidence(
+            status="waiting_for_workers",
+            reason="已启动异步 Agent 制造，等待完成通知。",
+        ),
+        summary=output["message"],
+    )
 
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:

@@ -1,5 +1,6 @@
 <template>
   <n-popover
+    ref="popoverRef"
     v-if="visibleTasks.length && primaryTask"
     trigger="click"
     :show="expanded"
@@ -67,11 +68,14 @@ const props = withDefaults(defineProps<{
 })
 
 const { t } = useI18n()
+const popoverRef = ref<{ syncPosition: () => void } | null>(null)
 const tasks = ref<BackgroundTask[]>([])
 const expanded = ref(false)
 let pollTimer: ReturnType<typeof setTimeout> | null = null
 let requestVersion = 0
 const TERMINAL_TASK_VISIBILITY_MS = 60_000
+
+defineExpose({ syncPosition })
 
 const visibleTasks = computed(() => {
   const active = tasks.value.filter(task => !isTerminal(task.status)).sort(compareNewest)
@@ -147,6 +151,10 @@ function removeTask(taskId: string) {
 function stopPolling() {
   if (pollTimer) clearTimeout(pollTimer)
   pollTimer = null
+}
+
+function syncPosition() {
+  popoverRef.value?.syncPosition()
 }
 
 function isTerminal(status: BackgroundTask['status']): boolean {

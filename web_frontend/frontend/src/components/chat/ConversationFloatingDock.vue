@@ -79,6 +79,7 @@
 
       <BackgroundTaskStack
         v-else
+        :ref="setTaskStackRef"
         :session-id="sessionId"
         compact
         :side="position(item.id).side"
@@ -114,6 +115,7 @@ interface DragState {
   originClientY: number
   moved: boolean
 }
+interface TaskStackInstance { syncPosition: () => void }
 
 defineProps<{ sessionId?: string | null }>()
 const emit = defineEmits<{
@@ -122,10 +124,12 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const uiStore = useUiStore()
 const layerRef = ref<HTMLElement | null>(null)
+const taskStackRef = ref<TaskStackInstance | null>(null)
 const itemElements = new Map<FloatingItemId, HTMLElement>()
 const dragging = ref<DragState | null>(null)
 const suppressNextClick = ref(false)
 const positions = ref<Record<FloatingItemId, DockPosition>>(loadPositions())
+let taskPanelSyncFrame: number | null = null
 const floatingItems: Array<{ id: FloatingItemId }> = [
   { id: 'sessions' },
   { id: 'workspace' },
@@ -209,6 +213,12 @@ function setItemElement(id: FloatingItemId, value: Element | ComponentPublicInst
   else itemElements.delete(id)
 }
 
+function setTaskStackRef(value: Element | ComponentPublicInstance | null) {
+  taskStackRef.value = value && 'syncPosition' in value
+    ? value as unknown as TaskStackInstance
+    : null
+}
+
 function startDrag(id: FloatingItemId, event: PointerEvent) {
   if (event.button !== 0 || !layerRef.value) return
   if ((event.target as HTMLElement).closest('.task-stack-list')) return
@@ -245,6 +255,7 @@ function handleDrag(event: PointerEvent) {
   state.x = nextX
   state.y = nextY
   dragging.value = { ...state }
+  scheduleTaskPanelSync(state.id)
 }
 
 function finishDrag(event: PointerEvent) {
@@ -270,11 +281,12 @@ function finishDrag(event: PointerEvent) {
   }
   savePositions()
   dragging.value = null
-  void nextTick(() => animateSnap(element, currentRect, layerRect, side))
+  void nextTick(() => animateSnap(state.id, element, currentRect, layerRect, side))
   window.setTimeout(() => { suppressNextClick.value = false }, 160)
 }
 
 function animateSnap(
+  id: FloatingItemId,
   element: HTMLElement | undefined,
   from: DOMRect | undefined,
   layerRect: DOMRect,
@@ -285,7 +297,7 @@ function animateSnap(
   const edgeDistance = side === 'left'
     ? Math.max(0, from.left - layerRect.left)
     : Math.max(0, layerRect.right - from.right)
-  element.animate(
+  const animation = element.animate(
     [
       { transform: `translate3d(${from.left - target.left}px, ${from.top - target.top}px, 0) scale(1.035)` },
       { transform: `translate3d(${(from.left - target.left) * 0.12}px, ${(from.top - target.top) * 0.12}px, 0) scale(${edgeDistance < 70 ? 0.985 : 1})`, offset: .78 },
@@ -293,6 +305,29 @@ function animateSnap(
     ],
     { duration: 440, easing: 'cubic-bezier(.16, 1, .3, 1)' },
   )
+  trackTaskPanelAnimation(id, animation)
+}
+
+function scheduleTaskPanelSync(id: FloatingItemId) {
+  if (id !== 'tasks' || taskPanelSyncFrame !== null) return
+  taskPanelSyncFrame = window.requestAnimationFrame(() => {
+    taskPanelSyncFrame = null
+    void nextTick(() => taskStackRef.value?.syncPosition())
+  })
+}
+
+function trackTaskPanelAnimation(id: FloatingItemId, animation: Animation) {
+  if (id !== 'tasks') return
+  const sync = () => {
+    taskStackRef.value?.syncPosition()
+    if (animation.pending || animation.playState === 'running') {
+      taskPanelSyncFrame = window.requestAnimationFrame(sync)
+    } else {
+      taskPanelSyncFrame = null
+    }
+  }
+  if (taskPanelSyncFrame !== null) window.cancelAnimationFrame(taskPanelSyncFrame)
+  taskPanelSyncFrame = window.requestAnimationFrame(sync)
 }
 
 function captureClick(event: MouseEvent) {
@@ -326,6 +361,7 @@ function refreshPositions() {
 onMounted(() => window.addEventListener('resize', refreshPositions))
 onBeforeUnmount(() => {
   stopDragListeners()
+  if (taskPanelSyncFrame !== null) window.cancelAnimationFrame(taskPanelSyncFrame)
   window.removeEventListener('resize', refreshPositions)
 })
 </script>
