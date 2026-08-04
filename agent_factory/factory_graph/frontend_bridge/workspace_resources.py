@@ -16,6 +16,7 @@ from agent_factory.factory_graph.frontend_bridge.agent_package_workspace import 
     workspace_roots_payload,
 )
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import SYSTEM_CHAT_PACKAGE_ID
+from agent_factory.workspace_system import WorkspaceStore
 
 
 WORKSPACE_RESOURCE_MODES = {"package", "create_agent", "evolve_agent", "agent_group"}
@@ -153,30 +154,45 @@ class FrontendWorkspaceService:
     def _package_target(self, payload: dict[str, Any]) -> FrontendWorkspaceTarget:
         package_id = str(payload.get("package_id") or "").strip() or SYSTEM_CHAT_PACKAGE_ID
         package_session_id = self._package_session_id(payload)
+        workspace_id = (
+            str(payload.get("workspace_id") or "").strip()
+            if not package_session_id
+            else ""
+        )
         context = {
             "resource_mode": "package",
             "package_id": package_id,
             **({"package_session_id": package_session_id} if package_session_id else {}),
+            **({"workspace_id": workspace_id} if workspace_id else {}),
         }
-        if not package_session_id:
+        if package_session_id:
+            runtime_roots = self.agent_package_runtime.workspace_root_paths(
+                package_id,
+                session_id=package_session_id,
+            )
             return FrontendWorkspaceTarget(
                 resource_mode="package",
                 context=context,
-                roots={},
-                unavailable_reason="select or create a session before opening its workspace",
+                roots={"workdir": runtime_roots["workdir"]},
+                mounts=self.agent_package_runtime.workspace_mount_records(
+                    package_id,
+                    package_session_id,
+                ),
             )
-        runtime_roots = self.agent_package_runtime.workspace_root_paths(
-            package_id,
-            session_id=package_session_id,
-        )
+        if workspace_id:
+            store = WorkspaceStore()
+            record = store.load(workspace_id)
+            return FrontendWorkspaceTarget(
+                resource_mode="package",
+                context=context,
+                roots={"workdir": store.workdir(record.workspace_id)},
+                mounts={mount.name: mount for mount in record.mounts},
+            )
         return FrontendWorkspaceTarget(
             resource_mode="package",
             context=context,
-            roots={"workdir": runtime_roots["workdir"]},
-            mounts=self.agent_package_runtime.workspace_mount_records(
-                package_id,
-                package_session_id,
-            ),
+            roots={},
+            unavailable_reason="select or create a session before opening its workspace",
         )
 
     def _create_agent_target(

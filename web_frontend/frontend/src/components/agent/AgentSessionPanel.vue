@@ -8,7 +8,7 @@
         </n-text>
       </div>
       <div class="header-actions">
-        <n-button size="small" type="primary" @click="showNewSessionDialog = true">
+        <n-button size="small" type="primary" @click="requestNewSession">
           {{ t('agentSessions.newChat') }}
         </n-button>
         <n-button size="small" @click="refreshSessions">
@@ -98,11 +98,6 @@
         style="margin-top: 40px"
       />
     </n-scrollbar>
-    <NewAgentSessionDialog
-      v-model:show="showNewSessionDialog"
-      :package-id="packageId"
-      @create="enterNewSession"
-    />
   </div>
 </template>
 
@@ -114,19 +109,20 @@ import { useI18n } from '@/composables/useI18n'
 import { useAgentStore } from '@/stores/agent'
 import { useCommand } from '@/composables/useCommand'
 import { useAgentSessionNavigation } from '@/composables/agent/useAgentSessionNavigation'
-import NewAgentSessionDialog from '@/components/agent/NewAgentSessionDialog.vue'
 
 const props = defineProps<{
   packageId: string
 }>()
+const emit = defineEmits<{
+  requestNewSession: [packageId: string, initialWorkspaceId: string | null]
+}>()
 
 const agentStore = useAgentStore()
 const commands = useCommand()
-const { openAgentSession, startNewAgentSession } = useAgentSessionNavigation()
+const { openAgentSession } = useAgentSessionNavigation()
 const { locale, t } = useI18n()
 const searchQuery = ref('')
 const dialog = useDialog()
-const showNewSessionDialog = ref(false)
 
 const currentPackage = computed(() => {
   return agentStore.agentPackages.find((pkg) => pkg.package_id === props.packageId) || null
@@ -150,8 +146,8 @@ function refreshSessions() {
   commands.listAgentPackageSessions(props.packageId)
 }
 
-function enterNewSession(workspaceId: string | null) {
-  void startNewAgentSession(props.packageId, workspaceId)
+function requestNewSession() {
+  emit('requestNewSession', props.packageId, null)
 }
 
 function enterExistingSession(sessionId: string) {

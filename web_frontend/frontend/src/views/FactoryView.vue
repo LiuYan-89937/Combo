@@ -376,8 +376,7 @@ async function openRoutedAgentSession(version: number): Promise<boolean> {
     const workspaceId = routeQueryText(route.query.workspace_id)
     if (emptyAgentRouteIsActive(packageId, workspaceId)) return true
     agentStore.enterAgentChat(packageId, null)
-    runtimeStore.showEmptyAgentPackageSession(packageId)
-    runtimeStore.activeWorkspaceId = workspaceId
+    runtimeStore.showEmptyAgentPackageSession(packageId, workspaceId)
     await commands.selectAgentPackage(packageId, 'run')
     return true
   }

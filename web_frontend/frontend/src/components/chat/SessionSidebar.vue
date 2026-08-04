@@ -101,13 +101,6 @@
       />
     </n-scrollbar>
 
-    <NewAgentSessionDialog
-      v-if="activeAgentPackageId"
-      v-model:show="showNewSessionDialog"
-      :package-id="activeAgentPackageId"
-      :initial-workspace-id="runtimeStore.activeWorkspaceId"
-      @create="createAgentSession"
-    />
   </div>
 </template>
 
@@ -125,7 +118,6 @@ import { useAgentSessionNavigation } from '@/composables/agent/useAgentSessionNa
 import type { SessionView } from '@/stores/session'
 import type { AgentSessionView } from '@/stores/agent'
 import type { WorkspaceProjectView } from '@/api/workspace'
-import NewAgentSessionDialog from '@/components/agent/NewAgentSessionDialog.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -135,17 +127,19 @@ const props = withDefaults(
     title: '',
   }
 )
+const emit = defineEmits<{
+  requestNewAgentSession: [packageId: string, initialWorkspaceId: string | null]
+}>()
 
 const sessionStore = useSessionStore()
 const runtimeStore = useRuntimeStore()
 const agentStore = useAgentStore()
 const commands = useCommand()
 const { canStartNewConversationSession, startNewConversationSession } = useConversationSessionNavigation()
-const { openAgentSession, startNewAgentSession } = useAgentSessionNavigation()
+const { openAgentSession } = useAgentSessionNavigation()
 const { locale, t } = useI18n()
 const searchQuery = ref('')
 const dialog = useDialog()
-const showNewSessionDialog = ref(false)
 
 const panelTitle = computed(() => props.title || t('sessions.main'))
 
@@ -177,13 +171,9 @@ function handleNewSession() {
 }
 
 function openNewSessionDialog() {
-  showNewSessionDialog.value = true
-}
-
-function createAgentSession(workspaceId: string | null) {
   const packageId = activeAgentPackageId.value
   if (!packageId) return
-  void startNewAgentSession(packageId, workspaceId)
+  emit('requestNewAgentSession', packageId, runtimeStore.activeWorkspaceId)
 }
 
 type ConversationSession = SessionView | AgentSessionView

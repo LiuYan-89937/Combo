@@ -56,6 +56,7 @@ export function useResourceContext() {
         resourceMode: 'package',
         packageId: agentStore.activeChatPackageId,
         packageSessionId: agentStore.selectedSessionId || runtimeStore.activeAgentSessionId,
+        workspaceId: runtimeStore.activeWorkspaceId,
       }
     }
     return {
@@ -68,6 +69,7 @@ export function useResourceContext() {
     workspaceContext.value.resourceMode || '',
     workspaceContext.value.packageId || '',
     workspaceContext.value.packageSessionId || '',
+    workspaceContext.value.workspaceId || '',
     workspaceContext.value.factorySessionId || '',
     workspaceContext.value.createAgentSessionId || '',
     workspaceContext.value.groupId || '',
@@ -75,7 +77,7 @@ export function useResourceContext() {
   const workspaceDefaultScope = computed<WorkspaceScope>(() => 'workdir')
   const workspaceAvailable = computed(() => (
     workspaceContext.value.resourceMode !== 'package'
-    || Boolean(workspaceContext.value.packageSessionId)
+    || Boolean(workspaceContext.value.packageSessionId || workspaceContext.value.workspaceId)
   ))
   const packageIdForApi = computed(() => packageId.value || SYSTEM_CHAT_PACKAGE_ID)
   const isAgentSessionContext = computed(() => (

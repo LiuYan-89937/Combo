@@ -1243,10 +1243,12 @@ export const useRuntimeStore = defineStore('runtime', {
 
     showEmptyAgentPackageSession(
       packageId: string | null = null,
+      workspaceId: string | null = null,
     ) {
       this._resetConversationScope(agentPackageConversationScope(packageId, null))
       this.activeFactorySessionId = null
       this.activeAgentSessionId = null
+      this.activeWorkspaceId = String(workspaceId || '').trim() || null
       this.currentMode = 'agent_package'
       this.workspaceFile = null
       this.workspaceEntries = []

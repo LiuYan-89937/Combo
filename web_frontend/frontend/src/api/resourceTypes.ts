@@ -5,6 +5,7 @@ export interface WorkspaceRequestContext {
   resourceMode?: WorkspaceResourceMode
   packageId?: string | null
   packageSessionId?: string | null
+  workspaceId?: string | null
   factorySessionId?: string | null
   createAgentSessionId?: string | null
   groupId?: string | null

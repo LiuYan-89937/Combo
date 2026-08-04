@@ -21,12 +21,13 @@ export function useAgentSessionNavigation() {
   async function startNewAgentSession(packageId: string, workspaceId?: string | null): Promise<void> {
     const normalizedPackageId = String(packageId || '').trim()
     if (!normalizedPackageId) return
+    const normalizedWorkspaceId = String(workspaceId || '').trim() || null
     await router.push({
       name: 'Factory',
       query: {
         package_id: normalizedPackageId,
         new: '1',
-        ...(workspaceId ? { workspace_id: workspaceId } : {}),
+        ...(normalizedWorkspaceId ? { workspace_id: normalizedWorkspaceId } : {}),
       },
     })
   }

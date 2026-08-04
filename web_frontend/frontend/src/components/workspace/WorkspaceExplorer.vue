@@ -148,10 +148,7 @@ import { useI18n } from '@/composables/useI18n'
 import { workspaceEntryView } from '@/stores/runtime/viewMappers'
 import { workspaceFileView } from '@/stores/runtime/viewMappers'
 import { workspaceApi } from '@/api/workspace'
-import {
-  desktopDirectoryPickerAvailable,
-  selectDesktopDirectory,
-} from '@/api/desktopDialogs'
+import { selectLocalDirectory } from '@/api/desktopDialogs'
 import {
   desktopWorkspaceFileActionsAvailable,
   revealWorkspaceEntry,
@@ -208,7 +205,7 @@ const completedToolKeys = computed(() => (
     .join('\u0000')
 ))
 const canMountDirectory = computed(() => {
-  if (!desktopDirectoryPickerAvailable() || effectiveScope.value !== 'workdir') return false
+  if (effectiveScope.value !== 'workdir') return false
   const context = props.workspaceContext
   return Boolean(
     context
@@ -398,7 +395,7 @@ async function mountLocalDirectory() {
   if (!canMountDirectory.value || mountingDirectory.value) return
   mountingDirectory.value = true
   try {
-    const sourcePath = await selectDesktopDirectory()
+    const sourcePath = await selectLocalDirectory()
     if (!sourcePath) return
     const result = await workspaceApi.mountDirectory(
       sourcePath,
@@ -520,6 +517,7 @@ function workspaceContextKey(context: WorkspaceRequestContext | string | undefin
     context.resourceMode || '',
     context.packageId || '',
     context.packageSessionId || '',
+    context.workspaceId || '',
     context.factorySessionId || '',
     context.createAgentSessionId || '',
     context.groupId || '',
