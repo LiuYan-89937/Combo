@@ -135,7 +135,6 @@ class WebRuntimeSupervisor:
             self._sync_frontend_dependencies()
             self._ensure_builtin_web_search_mcp()
             self._start_backend()
-            self._build_frontend()
             self._start_frontend()
             self._print_ready()
             self._supervise()
@@ -344,20 +343,15 @@ class WebRuntimeSupervisor:
         )
         self._wait_for_ready(self.backend, BACKEND_HEALTH_URL)
 
-    def _build_frontend(self) -> None:
-        print("Building frontend production assets...")
-        npm = require_command("npm")
-        run([npm, "run", "build"], cwd=self.frontend_dir, environment=self.environment)
-
     def _start_frontend(self) -> None:
-        print(f"Starting frontend preview server on port {FRONTEND_PORT}...")
+        print(f"Starting frontend development server on port {FRONTEND_PORT}...")
         npm = require_command("npm")
         self.frontend = ManagedProcess.start_logged(
             "frontend",
             [
                 npm,
                 "run",
-                "preview",
+                "dev",
                 "--",
                 "--host",
                 "127.0.0.1",

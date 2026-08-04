@@ -197,7 +197,7 @@ Windows 入口直接运行同一套跨平台 Python 部署核心，不要求 WSL
 11. 幂等同步 Chat、Embedding、Image Generation 的推理节点 Profile 和 Web 端 external Profile，并清理不属于当前部署清单的旧模型与推理配置。
 12. 激活配置指定的 llama.cpp 实现并启动推理节点，等待 Chat、Embedding 与已启用的 Image Generation 都进入 `ready`。
 13. 从统一的 `.env` 派生本机节点连接参数并按需生成资源加密密钥；SSH 模式使用隧道，本机模式直连回环端口。
-14. 按 `uv.lock` 与 `package-lock.json` 准备本机 Python、前端依赖和 Native Agent Runtime，完成前端类型检查与生产构建后启动后端；前端 Preview 显式绑定 `127.0.0.1:3000`，后端与前端 readiness 都通过后才报告应用就绪。
+14. 按 `uv.lock` 与 `package-lock.json` 准备本机 Python、前端依赖和 Native Agent Runtime，启动后端与支持热更新的 Vite 开发服务；前端显式绑定 `127.0.0.1:3000`，后端与前端 readiness 都通过后才报告应用就绪。生产构建仍通过前端目录中的 `npm run build` 独立执行。
 
 模型下载支持续传。已校验文件会通过旁路校验标记直接复用，重复执行不会重新下载 20 GB 以上的 GGUF。
 
@@ -207,7 +207,7 @@ Windows 入口直接运行同一套跨平台 Python 部署核心，不要求 WSL
 http://localhost:3000
 ```
 
-Web 控制端固定使用后端 `8000` 和前端 `3000`。正常启动日志应依次出现 `Backend is ready`、`Frontend is ready` 和 `Application ready`。如果 Vite 显示默认端口 `4173`，说明使用了旧部署脚本或直接执行了未带端口参数的 `npm run preview`；不要把 `4173` 写入配置，应更新代码后重新运行 `./deploy.sh up`。
+Web 控制端固定使用后端 `8000` 和前端 `3000`。正常启动日志应依次出现 `Backend is ready`、`Frontend is ready` 和 `Application ready`。`./deploy.sh up` 和 `./deploy.sh web` 都启动 Vite 开发服务并支持 HMR；生产预览或打包应显式执行前端项目对应命令，不与日常 Web 启动共用进程。
 
 SSH 拓扑下，模型配置页面展示的是本机 ModelPoolStore 保存的 external profile 和默认角色，但 Chat、Embedding 与 Image 的实际推理均通过 SSH 隧道发生在 AMD ROCm 节点。Web 控制端不会另外加载一套比赛模型。
 
