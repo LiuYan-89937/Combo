@@ -9,7 +9,7 @@
             readonly
           />
           <n-button
-            :disabled="!directoryPickerAvailable || formData.source !== 'local'"
+            :disabled="formData.source !== 'local'"
             :loading="selectingDirectory"
             @click="handleSelectDirectory"
           >
@@ -39,10 +39,7 @@ import { NButton, NForm, NFormItem, NInput, NInputGroup, NModal, NSelect, NSpace
 import type { FormInst, FormRules } from 'naive-ui'
 import type { SkillConfig } from '@/api/resourceTypes'
 import type { ExtensionItemView } from '@/types/protocol'
-import {
-  desktopDirectoryPickerAvailable,
-  selectDesktopDirectory,
-} from '@/api/desktopDialogs'
+import { selectLocalDirectory } from '@/api/desktopDialogs'
 import { useI18n } from '@/composables/useI18n'
 import { requiredTextRule } from '@/utils/formValidation'
 
@@ -71,7 +68,6 @@ const formRef = ref<FormInst | null>(null)
 const formData = ref<SkillFormData>(emptyForm())
 const { t } = useI18n()
 const message = useMessage()
-const directoryPickerAvailable = desktopDirectoryPickerAvailable()
 const selectingDirectory = ref(false)
 const modalTitle = computed(() => (props.item ? t('extensions.skillEditTitle') : t('extensions.skillAddTitle')))
 const submitText = computed(() => (props.item ? t('common.save') : t('common.add')))
@@ -126,7 +122,7 @@ watch(
 async function handleSelectDirectory(): Promise<void> {
   selectingDirectory.value = true
   try {
-    const selected = await selectDesktopDirectory(formData.value.path)
+    const selected = await selectLocalDirectory(formData.value.path)
     if (selected) {
       formData.value.path = selected
       await formRef.value?.validate()

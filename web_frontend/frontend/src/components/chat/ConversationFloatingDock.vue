@@ -36,7 +36,9 @@
             <span>{{ t('right.sessions') }}</span>
           </button>
         </template>
-        <div class="dock-panel session-panel-shell"><SessionsSidebarPanel /></div>
+        <div class="dock-panel session-panel-shell">
+          <SessionsSidebarPanel @request-new-agent-session="openNewAgentSessionDialog" />
+        </div>
       </n-popover>
 
       <n-popover
@@ -82,6 +84,15 @@
         :side="position(item.id).side"
       />
     </div>
+
+    <NewAgentSessionDialog
+      v-if="newAgentSessionRequest"
+      :show="true"
+      :package-id="newAgentSessionRequest.packageId"
+      :initial-workspace-id="newAgentSessionRequest.initialWorkspaceId"
+      @update:show="handleNewAgentSessionDialogVisibility"
+      @create="createNewAgentSession"
+    />
   </div>
 </template>
 
@@ -96,6 +107,8 @@ import SessionsSidebarPanel from '@/components/common/right-sidebar/SessionsSide
 import WorkspaceSidebarPanel from '@/components/common/right-sidebar/WorkspaceSidebarPanel.vue'
 import ConversationMemoryPanel from './ConversationMemoryPanel.vue'
 import BackgroundTaskStack from './BackgroundTaskStack.vue'
+import NewAgentSessionDialog from '@/components/agent/NewAgentSessionDialog.vue'
+import { useAgentSessionNavigation } from '@/composables/agent/useAgentSessionNavigation'
 
 type FloatingItemId = 'sessions' | 'workspace' | 'memory' | 'tasks'
 type DockSide = 'left' | 'right'
@@ -115,7 +128,12 @@ interface DragState {
 defineProps<{ sessionId?: string | null }>()
 const { t } = useI18n()
 const uiStore = useUiStore()
+const { startNewAgentSession } = useAgentSessionNavigation()
 const layerRef = ref<HTMLElement | null>(null)
+const newAgentSessionRequest = ref<{
+  packageId: string
+  initialWorkspaceId: string | null
+} | null>(null)
 const itemElements = new Map<FloatingItemId, HTMLElement>()
 const dragging = ref<DragState | null>(null)
 const suppressNextClick = ref(false)
@@ -186,6 +204,22 @@ function panelPlacement(id: FloatingItemId) {
 function setPanelVisibility(panel: ConversationDockPanel, visible: boolean) {
   if (suppressNextClick.value) return
   uiStore.setConversationDockPanel(visible ? panel : null)
+}
+
+function openNewAgentSessionDialog(packageId: string, initialWorkspaceId: string | null) {
+  newAgentSessionRequest.value = { packageId, initialWorkspaceId }
+  uiStore.setConversationDockPanel(null)
+}
+
+function handleNewAgentSessionDialogVisibility(show: boolean) {
+  if (!show) newAgentSessionRequest.value = null
+}
+
+function createNewAgentSession(workspaceId: string | null) {
+  const request = newAgentSessionRequest.value
+  if (!request) return
+  newAgentSessionRequest.value = null
+  void startNewAgentSession(request.packageId, workspaceId)
 }
 
 function setItemElement(id: FloatingItemId, value: Element | ComponentPublicInstance | null) {

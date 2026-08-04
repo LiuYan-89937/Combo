@@ -2,13 +2,26 @@
   <n-modal
     :show="show"
     preset="card"
-    :title="dialogTitle"
     class="new-agent-session-modal"
-    :closable="dialogClosable"
+    :closable="false"
     :mask-closable="false"
-    :close-on-esc="dialogClosable"
-    @update:show="handleDialogVisibility"
+    :close-on-esc="false"
   >
+    <template #header>
+      <div class="new-session-header">
+        <span>{{ dialogTitle }}</span>
+        <n-button
+          quaternary
+          circle
+          :disabled="!dialogClosable"
+          :aria-label="t('common.close')"
+          @click="closeDialog"
+        >
+          <template #icon><n-icon><CloseOutline /></n-icon></template>
+        </n-button>
+      </div>
+    </template>
+
     <div v-if="directoryStep" class="directory-picker">
       <div class="directory-picker-toolbar">
         <n-button
@@ -117,8 +130,11 @@ import {
   NText,
   useMessage,
 } from 'naive-ui'
-import { FolderOutline } from '@/components/icons'
-import { desktopDirectoryPickerAvailable, selectDesktopDirectory } from '@/api/desktopDialogs'
+import { CloseOutline, FolderOutline } from '@/components/icons'
+import {
+  NativeDirectoryPickerUnavailableError,
+  selectLocalDirectory,
+} from '@/api/desktopDialogs'
 import {
   workspaceApi,
   type WorkspaceDirectoryView,
@@ -194,17 +210,17 @@ function selectWorkspace(workspaceId: string | null) {
 
 async function chooseLinkedWorkspace() {
   if (linkedWorkspaceBusy.value) return
-  if (!desktopDirectoryPickerAvailable()) {
-    directoryStep.value = true
-    await loadDirectoryRoots()
-    return
-  }
   selectingLinkedWorkspace.value = true
   try {
-    const sourcePath = await selectDesktopDirectory()
+    const sourcePath = await selectLocalDirectory()
     if (sourcePath) await registerLinkedWorkspace(sourcePath)
   } catch (error) {
-    showError(error)
+    if (error instanceof NativeDirectoryPickerUnavailableError) {
+      directoryStep.value = true
+      await loadDirectoryRoots()
+    } else {
+      showError(error)
+    }
   } finally {
     selectingLinkedWorkspace.value = false
   }
@@ -251,10 +267,6 @@ function leaveDirectoryStep() {
   directoryStep.value = false
 }
 
-function handleDialogVisibility(show: boolean) {
-  if (show || dialogClosable.value) emit('update:show', show)
-}
-
 function closeDialog() {
   if (dialogClosable.value) emit('update:show', false)
 }
@@ -275,8 +287,7 @@ async function registerLinkedWorkspace(sourcePath: string) {
         workspace => workspace.workspace_id !== response.workspace.workspace_id,
       ),
     ]
-    selectedWorkspaceId.value = response.workspace.workspace_id
-    directoryStep.value = false
+    selectWorkspace(response.workspace.workspace_id)
   } catch (error) {
     showError(error)
   } finally {
@@ -296,6 +307,14 @@ function showError(error: unknown) {
 
 .new-session-options {
   display: grid;
+  gap: var(--app-space-md);
+}
+
+.new-session-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: var(--app-space-md);
 }
 
