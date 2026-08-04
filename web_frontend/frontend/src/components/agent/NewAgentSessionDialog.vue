@@ -61,7 +61,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { NButton, NModal, NSelect, useMessage } from 'naive-ui'
 import { desktopDirectoryPickerAvailable, selectDesktopDirectory } from '@/api/desktopDialogs'
 import { workspaceApi, type WorkspaceProjectView } from '@/api/workspace'
@@ -122,6 +122,7 @@ function selectWorkspace(workspaceId: string | null) {
 async function chooseLinkedWorkspace() {
   if (linkedWorkspaceBusy.value) return
   if (!desktopDirectoryPickerAvailable()) {
+    await nextTick()
     showServerDirectoryPicker.value = true
     return
   }
