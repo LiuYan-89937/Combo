@@ -79,6 +79,7 @@ export function toolCallPart(tool: ToolActivity): ChatMessagePart {
     toolName: tool.toolName,
     callId: tool.toolCallId,
     arguments: tool.payload?.arguments || tool.payload?.args || {},
+    liveOutput: tool.payload?.output ?? null,
     approvalState: tool.approvalState,
     status: toolPartStatus(tool),
     createdAt: tool.createdAt,

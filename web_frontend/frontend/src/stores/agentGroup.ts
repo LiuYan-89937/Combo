@@ -379,6 +379,9 @@ export const useAgentGroupStore = defineStore('agentGroup', () => {
       const callPart: ChatMessagePart = {
         id: callPartId, type: 'tool_call', toolName, callId: toolCallId,
         arguments: payload.arguments || payload.args || {}, status,
+        liveOutput: event.event_type === 'tool_call_output_delta'
+          ? payload.output || null
+          : previousCall?.type === 'tool_call' ? previousCall.liveOutput : undefined,
         createdAt: previousCall?.createdAt || current.timestamp,
         startedAt: previousCall?.startedAt || (event.event_type === 'tool_call_started' ? event.timestamp : null),
         updatedAt: event.timestamp,
@@ -547,7 +550,7 @@ function textContent(parts: ChatMessagePart[]): string {
 }
 
 function isToolEvent(eventType: string): boolean {
-  return ['tool_call_proposed', 'tool_call_started', 'tool_call_completed', 'tool_observation_available', 'tool_call_failed', 'tool_approval_requested'].includes(eventType)
+  return ['tool_call_proposed', 'tool_call_started', 'tool_call_output_delta', 'tool_call_completed', 'tool_observation_available', 'tool_call_failed', 'tool_approval_requested'].includes(eventType)
 }
 
 function toolStatus(eventType: string): ChatMessagePart['status'] {

@@ -118,7 +118,7 @@ function executionFromCall(part: ToolCallMessagePart): ToolExecutionMessagePart 
     toolName: part.toolName,
     callId: part.callId,
     arguments: part.arguments,
-    output: null,
+    output: part.liveOutput ?? null,
     approvalState: part.approvalState,
     artifacts: [],
     status: part.status,

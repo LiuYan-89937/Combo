@@ -55,6 +55,7 @@ TOOL_ACTIVITY_EVENT_STATUS = {
     "tool_approval_requested": "approval",
     "tool_approval_resolved": "approval",
     "tool_call_started": "started",
+    "tool_call_output_delta": "started",
     "tool_call_completed": "completed",
     "tool_call_failed": "failed",
     "tool_contract_invalid": "failed",

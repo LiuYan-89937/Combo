@@ -25,6 +25,8 @@ def _frontend_tool_events(payload: dict[str, Any], *, node_id: str | None) -> li
         return [_event("tool_call_proposed", payload, node_id=node_id)]
     if event_type == "tool_started":
         return [_event("tool_call_started", payload, node_id=node_id)]
+    if event_type == "tool_output_delta":
+        return [_event("tool_call_output_delta", payload, node_id=node_id)]
     if event_type == "tool_completed":
         completed = _event("tool_call_completed", payload, node_id=node_id)
         observation = _event("tool_observation_available", payload, node_id=node_id)
@@ -71,6 +73,8 @@ def _event(event_type: str, payload: dict[str, Any], *, node_id: str | None) -> 
 
 def _status_for_event(event_type: str) -> str:
     if event_type == "tool_call_started":
+        return "running"
+    if event_type == "tool_call_output_delta":
         return "running"
     if event_type == "tool_call_completed":
         return "completed"

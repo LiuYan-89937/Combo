@@ -57,7 +57,7 @@ PROCESS_TOOL_SPECS: list[ToolSpec] = [
         description=(
             f"在 workspace 边界内通过当前平台的 {host_shell_display_name()} 启动命令，"
             "子进程默认已位于当前会话工作区根目录，命令应直接使用相对路径，无需先执行 cd。"
-            "支持前台等待或后台运行；wait 超时只返回状态，不自动终止进程。"
+            "前台执行会在工具卡片中持续显示 stdout/stderr；支持后台运行，wait 超时只返回状态，不自动终止进程。"
         ),
         entrypoint="agent_factory.tooling.builtins.process.shell:run",
         input_schema={

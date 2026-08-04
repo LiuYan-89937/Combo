@@ -83,6 +83,7 @@ export interface ToolCallMessagePart extends BaseChatMessagePart {
   toolName: string
   callId: string | null
   arguments: unknown
+  liveOutput?: unknown
   approvalState?: ToolActivity['approvalState']
 }
 

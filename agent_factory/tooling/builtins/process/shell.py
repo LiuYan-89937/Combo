@@ -4,6 +4,7 @@ from typing import Any
 
 from agent_factory.tooling.builtins.process.manager import (
     PROCESS_MANAGER,
+    ProcessOutputObserver,
     is_read_only_process_path,
     output_limit,
     process_runtime_allowed_roots,
@@ -14,6 +15,7 @@ from agent_factory.tooling.builtins.process.manager import (
 )
 from agent_factory.tooling.builtins.process.runtime import resolve_shell_runtime
 from agent_factory.tooling.envelope import tool_envelope
+from agent_factory.tooling.execution_context import current_tool_call, current_tool_event_sink
 from agent_factory.tooling.executor_fallback import executor_fallback_risk
 from agent_factory.tooling.risk import merge_risk_results
 from agent_factory.tooling.spec import ToolRiskResult
@@ -83,6 +85,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         raise NotADirectoryError(str(cwd))
     if is_read_only_process_path(cwd, root=root, resources=resources):
         raise PermissionError(f"cwd is read-only runtime input: {cwd}")
+    output_observer = _output_observer()
     return tool_envelope(
         PROCESS_MANAGER.start(
             command=command,
@@ -90,8 +93,30 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
             mode=mode,
             wait_seconds=wait_seconds(arguments),
             max_output_chars=output_limit(arguments),
+            on_output=output_observer,
         )
     )
+
+
+def _output_observer() -> ProcessOutputObserver | None:
+    current = current_tool_call()
+    sink = current_tool_event_sink()
+    if current is None or sink is None:
+        return None
+
+    def publish(output: dict[str, Any]) -> None:
+        sink(
+            {
+                "event_type": "tool_output_delta",
+                "tool_id": current.tool_id,
+                "tool_call_id": current.tool_call_id,
+                "status": "running",
+                "output": output,
+                "message": "Command output updated.",
+            }
+        )
+
+    return publish
 
 
 def _evaluate_cwd(arguments: dict[str, Any], context: dict[str, Any]) -> ToolRiskResult:

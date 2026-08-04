@@ -124,7 +124,7 @@ class MCPRuntimeClient:
                 timeout_seconds=self.server.timeout_seconds,
                 operation=f"call MCP tool {self.server.server_id}/{tool_name}",
             )
-            return _normalize_call_result(result)
+        return _normalize_call_result(result)
 
     @asynccontextmanager
     async def _session(self) -> AsyncIterator[Any]:
@@ -391,7 +391,7 @@ def _mcp_tool_error_message(payload: dict[str, Any]) -> str:
     content = payload.get("content")
     if isinstance(content, list):
         messages = [
-            str(item.get("text") or "").strip()
+            _mcp_error_text_content(str(item.get("text") or "").strip())
             for item in content
             if isinstance(item, dict) and str(item.get("text") or "").strip()
         ]
@@ -400,6 +400,19 @@ def _mcp_tool_error_message(payload: dict[str, Any]) -> str:
     if content:
         return _mcp_error_value_text(content)
     return "MCP tool returned isError=true without an error message"
+
+
+def _mcp_error_text_content(value: str) -> str:
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError:
+        return value
+    if isinstance(decoded, dict):
+        for key in ("error", "message", "detail"):
+            detail = decoded.get(key)
+            if detail:
+                return _mcp_error_value_text(detail)
+    return _mcp_error_value_text(decoded)
 
 
 def _mcp_error_value_text(value: Any) -> str:

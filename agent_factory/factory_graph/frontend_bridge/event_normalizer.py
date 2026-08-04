@@ -508,6 +508,7 @@ class RuntimeEventNormalizer:
             if event_type not in {
                 "tool_call_proposed",
                 "tool_call_started",
+                "tool_call_output_delta",
                 "tool_call_completed",
                 "tool_contract_invalid",
                 "tool_call_failed",
@@ -1308,6 +1309,7 @@ def _canonical_tool_event_type(event_type: str) -> str:
     return {
         "tool_proposed": "tool_call_proposed",
         "tool_started": "tool_call_started",
+        "tool_output_delta": "tool_call_output_delta",
         "tool_completed": "tool_call_completed",
         "tool_contract_invalid": "tool_contract_invalid",
         "tool_failed": "tool_call_failed",

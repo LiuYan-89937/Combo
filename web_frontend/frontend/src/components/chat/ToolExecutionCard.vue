@@ -70,7 +70,7 @@
       </div>
 
       <div v-if="shellOutput" class="structured-results shell-output">
-        <pre>{{ shellOutput }}</pre>
+        <pre ref="shellOutputElement" @scroll="handleShellOutputScroll">{{ shellOutput }}</pre>
       </div>
 
       <details v-if="hasArguments" class="tool-section">
@@ -117,7 +117,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { NIcon } from 'naive-ui'
 import {
   Bot,
@@ -282,6 +282,21 @@ const shellOutput = computed(() => {
   const stderr = String(resultRecord.value?.stderr || '').trim()
   return [stdout, stderr].filter(Boolean).join('\n')
 })
+const shellOutputElement = ref<HTMLElement | null>(null)
+const shellOutputPinned = ref(true)
+
+watch(shellOutput, async () => {
+  await nextTick()
+  const element = shellOutputElement.value
+  if (!element || !shellOutputPinned.value) return
+  element.scrollTop = element.scrollHeight
+})
+
+function handleShellOutputScroll() {
+  const element = shellOutputElement.value
+  if (!element) return
+  shellOutputPinned.value = element.scrollHeight - element.scrollTop - element.clientHeight < 24
+}
 
 function artifactUrl(artifact: ArtifactMessagePart): string {
   return artifact.path ? workspaceResourceUrl(artifact.path, props.workspaceContext) || '' : ''
