@@ -3,7 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 from agent_factory.tooling.builtins.filesystem.common import (
+    filesystem_allowed_roots,
     filesystem_boundary,
+    filesystem_mounts,
     path_risk_result,
     positive_int,
     required_string,
@@ -36,7 +38,12 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     if max_results > 5000:
         raise ValueError("max_results must be less than or equal to 5000")
     root, allow_external = filesystem_boundary(resources)
-    target = resolve_path(path=base_path, root=root, allow_external=allow_external)
+    target = resolve_path(
+        path=base_path,
+        root=root,
+        allow_external=allow_external,
+        allowed_roots=filesystem_allowed_roots(resources),
+    )
     if not target.exists():
         raise FileNotFoundError(str(target))
     if not target.is_dir():
@@ -49,5 +56,11 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         if len(matches) >= max_results:
             truncated = True
             break
-        matches.append(workspace_path_record(item, workspace_root=root))
+        matches.append(
+            workspace_path_record(
+                item,
+                workspace_root=root,
+                mounts=filesystem_mounts(resources),
+            )
+        )
     return tool_envelope({"matches": matches, "truncated": truncated})

@@ -811,6 +811,7 @@ watch(
   { immediate: true },
 )
 
+
 watch(
   () => [detailVisible.value, props.agentPackage?.package_id] as const,
   async ([visible, packageId]) => {

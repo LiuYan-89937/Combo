@@ -293,8 +293,21 @@ export function isAvailableChatModelProfile(
   profile: LocalModelProfile,
 ): profile is LocalChatModelProfile {
   if (profile.kind !== 'chat' || !profile.enabled) return false
-  const artifact = profile.artifact
-  if (!artifact?.enabled || artifact.kind !== 'chat') return false
+  return isAvailableModelArtifact(profile.artifact, 'chat')
+}
+
+export function isAvailableEmbeddingModelProfile(
+  profile: LocalModelProfile,
+): profile is LocalEmbeddingModelProfile {
+  if (profile.kind !== 'embedding' || !profile.enabled) return false
+  return isAvailableModelArtifact(profile.artifact, 'embedding')
+}
+
+function isAvailableModelArtifact(
+  artifact: LocalModelArtifact | null | undefined,
+  kind: LocalModelKind,
+): boolean {
+  if (!artifact?.enabled || artifact.kind !== kind) return false
   if (artifact.source === 'local_storage') {
     return Boolean(artifact.local_path?.trim())
   }

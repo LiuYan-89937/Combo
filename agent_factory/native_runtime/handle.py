@@ -225,7 +225,6 @@ class NativeAgentRuntimeHandle:
         reason: str,
         request_id: str | None = None,
         session_id: str | None = None,
-        visible_output: Any = None,
     ) -> int:
         """Cancel active requests matching filters."""
         with self._condition:
@@ -248,7 +247,6 @@ class NativeAgentRuntimeHandle:
                         "payload": {
                             "reason": reason,
                             "target_request_id": active_request_id,
-                            "visible_output": visible_output,
                         },
                     }
                 )

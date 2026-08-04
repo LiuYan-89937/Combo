@@ -1,19 +1,11 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
+from pathlib import Path
 
 
 PROJECT_ROOT_ENV = "AGENTFACTORY_PROJECT_ROOT"
 SYSTEM_PACKAGE_ROOT_ENV = "AGENTFACTORY_SYSTEM_PACKAGE_ROOT"
-
-
-def cross_platform_absolute_path(value: str) -> PurePath | None:
-    for path_type in (PurePosixPath, PureWindowsPath):
-        path = path_type(value)
-        if path.is_absolute():
-            return path
-    return None
 
 
 def project_root() -> Path:

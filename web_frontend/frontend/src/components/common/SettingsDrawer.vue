@@ -89,6 +89,26 @@
               />
               <p class="field-hint">{{ t('settings.maxRetriesHint') }}</p>
             </div>
+
+            <div class="field-divider" aria-hidden="true"></div>
+
+            <div class="field-block">
+              <div class="field-block-head">
+                <label class="field-label">{{ t('settings.maxParallelSubAgents') }}</label>
+              </div>
+              <n-input-number
+                v-model:value="maxParallelSubAgents"
+                class="field-input"
+                :min="1"
+                :step="1"
+                :precision="0"
+                :show-button="true"
+              />
+              <p class="field-hint">{{ t('settings.maxParallelSubAgentsHint') }}</p>
+              <p v-if="runtimePreferences.maxParallelSubAgentsSaveFailed" class="field-error">
+                {{ t('settings.maxParallelSubAgentsSaveFailed') }}
+              </p>
+            </div>
           </div>
         </section>
 
@@ -132,10 +152,61 @@
           </div>
         </section>
 
+        <section class="settings-group">
+          <header class="group-header">
+            <div class="group-icon" aria-hidden="true">
+              <n-icon size="18"><TrashOutline /></n-icon>
+            </div>
+            <div class="group-title-block">
+              <div class="group-title">{{ t('settings.groupData') }}</div>
+              <div class="group-desc">{{ t('settings.groupDataDesc') }}</div>
+            </div>
+          </header>
+
+          <div class="group-body">
+            <div class="field-row">
+              <div class="field-copy">
+                <label class="field-label">{{ t('settings.conversationStorage') }}</label>
+                <p class="field-hint">{{ conversationUsageText }}</p>
+              </div>
+              <n-button
+                type="error"
+                secondary
+                :loading="clearingConversations"
+                :disabled="loadingConversationUsage"
+                @click="confirmClearConversations"
+              >
+                <template #icon><n-icon><TrashOutline /></n-icon></template>
+                {{ t('settings.clearConversations') }}
+              </n-button>
+            </div>
+            <p v-if="conversationStorageError" class="field-error">{{ conversationStorageError }}</p>
+          </div>
+        </section>
+
         <!-- 页脚：关于 -->
         <footer class="settings-footer">
           <div class="footer-title">{{ t('settings.about') }}</div>
-          <div class="footer-brand">FastAgentFactory <span class="footer-version">v1.0</span></div>
+          <div class="footer-brand-row">
+            <div class="footer-brand">
+              FastAgentFactory
+              <span class="footer-version">v{{ appUpdateStore.currentVersion || '—' }}</span>
+            </div>
+            <n-button
+              size="small"
+              secondary
+              :loading="appUpdateStore.status === 'checking'"
+              @click="checkForUpdates"
+            >
+              <template #icon>
+                <n-icon><Refresh /></n-icon>
+              </template>
+              {{ t('settings.checkForUpdates') }}
+            </n-button>
+          </div>
+          <div v-if="updateCheckMessage" class="footer-update-status" role="status">
+            {{ updateCheckMessage }}
+          </div>
           <div class="footer-desc">{{ t('settings.description') }}</div>
         </footer>
       </div>
@@ -144,8 +215,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import {
+  NButton,
   NDrawer,
   NDrawerContent,
   NIcon,
@@ -153,8 +225,9 @@ import {
   NRadioButton,
   NRadioGroup,
   NSwitch,
+  useDialog,
 } from 'naive-ui'
-import { ColorPalette, NotificationsOutline, Time } from '@/components/icons'
+import { ColorPalette, NotificationsOutline, Refresh, Time, TrashOutline } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import { useUiStore } from '@/stores/ui'
 import { useRuntimePreferencesStore } from '@/stores/runtimePreferences'
@@ -164,7 +237,9 @@ import {
 } from '@/stores/taskNotificationPreferences'
 import type { Locale } from '@/i18n'
 import type { ThemeMode } from '@/stores/ui'
-import { requestTaskNotificationPermission } from '@/services/taskNotifications'
+import { requestNativeTaskNotificationPermission } from '@/services/taskNotifications'
+import { useAppUpdateStore } from '@/stores/appUpdate'
+import { storageApi, type ConversationStorageUsage } from '@/api/storage'
 
 const props = defineProps<{
   show: boolean
@@ -177,7 +252,23 @@ const emit = defineEmits<{
 const uiStore = useUiStore()
 const runtimePreferences = useRuntimePreferencesStore()
 const taskNotificationPreferences = useTaskNotificationPreferencesStore()
+const appUpdateStore = useAppUpdateStore()
 const { localeOptions, t } = useI18n()
+const updateCheckMessage = ref('')
+const dialog = useDialog()
+const conversationUsage = ref<ConversationStorageUsage | null>(null)
+const loadingConversationUsage = ref(false)
+const clearingConversations = ref(false)
+const conversationStorageError = ref('')
+
+onMounted(() => {
+  void appUpdateStore.loadCurrentVersion()
+  void loadConversationUsage()
+})
+
+watch(() => props.show, visible => {
+  if (visible) void loadConversationUsage()
+})
 
 const show = computed({
   get: () => props.show,
@@ -213,6 +304,13 @@ const maxRetries = computed({
   },
 })
 
+const maxParallelSubAgents = computed({
+  get: () => runtimePreferences.maxParallelSubAgents,
+  set: (value: number | null) => {
+    if (value !== null) runtimePreferences.setMaxParallelSubAgents(value)
+  },
+})
+
 const themeOptions = computed<Array<{ label: string; value: ThemeMode }>>(() => [
   { label: t('settings.themeLight'), value: 'light' },
   { label: t('settings.themeDark'), value: 'dark' },
@@ -224,14 +322,89 @@ const taskNotificationCategoryOptions = computed<Array<{
   label: string
 }>>(() => [
   { category: 'conversation', label: t('settings.notificationConversation') },
-  { category: 'collaboration', label: t('settings.notificationCollaboration') },
   { category: 'agentGroup', label: t('settings.notificationAgentGroup') },
   { category: 'scheduler', label: t('settings.notificationScheduler') },
 ])
 
+const conversationUsageText = computed(() => {
+  if (loadingConversationUsage.value && !conversationUsage.value) return t('settings.storageLoading')
+  const usage = conversationUsage.value
+  if (!usage) return t('settings.storageUnavailable')
+  return t('settings.conversationStorageUsage', {
+    size: formatBytes(usage.bytes_used),
+    count: usage.session_count,
+  })
+})
+
 function setTaskNotificationsEnabled(value: boolean): void {
   taskNotificationPreferences.setEnabled(value)
-  if (value) void requestTaskNotificationPermission()
+  if (value) void requestNativeTaskNotificationPermission()
+}
+
+async function checkForUpdates(): Promise<void> {
+  updateCheckMessage.value = ''
+  const result = await appUpdateStore.checkForUpdate()
+  if (result === 'available') {
+    updateCheckMessage.value = t('settings.updateAvailable')
+  } else if (result === 'up-to-date') {
+    updateCheckMessage.value = t('settings.upToDate')
+  } else {
+    updateCheckMessage.value = t('settings.updateCheckUnavailable')
+  }
+}
+
+async function loadConversationUsage(): Promise<void> {
+  if (loadingConversationUsage.value) return
+  loadingConversationUsage.value = true
+  conversationStorageError.value = ''
+  try {
+    conversationUsage.value = await storageApi.conversationUsage()
+  } catch (error) {
+    conversationStorageError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    loadingConversationUsage.value = false
+  }
+}
+
+function confirmClearConversations(): void {
+  const usage = conversationUsage.value
+  dialog.warning({
+    title: t('settings.clearConversationsConfirmTitle'),
+    content: t('settings.clearConversationsConfirmContent', {
+      size: formatBytes(usage?.bytes_used || 0),
+      count: usage?.session_count || 0,
+    }),
+    positiveText: t('settings.clearConversationsConfirmAction'),
+    negativeText: t('common.cancel'),
+    onPositiveClick: clearConversations,
+  })
+}
+
+async function clearConversations(): Promise<void> {
+  if (clearingConversations.value) return
+  clearingConversations.value = true
+  conversationStorageError.value = ''
+  try {
+    const result = await storageApi.clearConversations()
+    conversationUsage.value = result.after
+  } catch (error) {
+    conversationStorageError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    clearingConversations.value = false
+  }
+}
+
+function formatBytes(value: number): string {
+  const bytes = Math.max(0, Number(value) || 0)
+  if (bytes < 1024) return `${bytes} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let amount = bytes / 1024
+  let index = 0
+  while (amount >= 1024 && index < units.length - 1) {
+    amount /= 1024
+    index += 1
+  }
+  return `${amount >= 10 ? amount.toFixed(1) : amount.toFixed(2)} ${units[index]}`
 }
 </script>
 
@@ -366,6 +539,13 @@ function setTaskNotificationsEnabled(value: boolean): void {
   line-height: var(--app-leading-normal);
 }
 
+.field-error {
+  margin: 0;
+  color: var(--app-error);
+  font-size: var(--app-font-sm);
+  line-height: var(--app-leading-normal);
+}
+
 .field-current {
   display: flex;
   align-items: baseline;
@@ -443,6 +623,18 @@ function setTaskNotificationsEnabled(value: boolean): void {
   display: flex;
   align-items: baseline;
   gap: var(--app-space-sm);
+}
+
+.footer-brand-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-space-md);
+}
+
+.footer-update-status {
+  color: var(--app-text-secondary);
+  font-size: var(--app-font-sm);
 }
 
 .footer-version {

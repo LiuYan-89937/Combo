@@ -12,7 +12,6 @@ export type ToolCategory =
   | 'process'
   | 'knowledge'
   | 'scheduler'
-  | 'collaboration'
   | 'agent'
   | 'extension'
   | 'generic'
@@ -35,12 +34,32 @@ const TOOL_PRESENTATIONS: Record<string, Pick<ToolPresentation, 'category' | 'la
   shell_stop: { category: 'process', labelKey: 'tool.names.shellStop' },
   knowledge: { category: 'knowledge', labelKey: 'tool.names.knowledge' },
   scheduler: { category: 'scheduler', labelKey: 'tool.names.scheduler' },
-  collaboration: { category: 'collaboration', labelKey: 'tool.names.collaboration' },
   agent_list: { category: 'agent', labelKey: 'tool.names.agentList' },
   agent_search: { category: 'agent', labelKey: 'tool.names.agentSearch' },
   agent_manufacture: { category: 'agent', labelKey: 'tool.names.agentManufacture' },
+  agent_delegate: { category: 'agent', labelKey: 'tool.names.agentDelegate' },
+  agent_evolve: { category: 'agent', labelKey: 'tool.names.agentEvolve' },
+  agent_team: { category: 'agent', labelKey: 'tool.names.agentTeam' },
+  background_tasks: { category: 'agent', labelKey: 'backgroundTask.title' },
   skillhub: { category: 'extension', labelKey: 'tool.names.skillhub' },
   tool_output: { category: 'read', labelKey: 'tool.names.toolOutput' },
+}
+
+const BACKGROUND_TASK_LAUNCH_TOOLS = new Set([
+  'agent_manufacture',
+  'agent_delegate',
+  'agent_evolve',
+  'agent_team',
+])
+
+export function isBackgroundTaskLaunchTool(toolName: unknown): boolean {
+  return BACKGROUND_TASK_LAUNCH_TOOLS.has(String(toolName || '').trim())
+}
+
+export function conversationVisibleParts(parts: ChatMessagePart[]): ChatMessagePart[] {
+  return mergeToolMessageParts(parts).filter((part) => (
+    part.type !== 'tool_execution' || !isBackgroundTaskLaunchTool(part.toolName)
+  ))
 }
 
 export function toolPresentation(
@@ -146,7 +165,15 @@ function toolArgumentSummary(toolName: string, value: unknown): string {
   if (toolName === 'grep') return compact(args.pattern, args.base_path)
   if (toolName === 'glob') return compact(args.pattern, args.base_path)
   if (toolName === 'edit') {
-    return compact(args.path)
+    const operations = Array.isArray(args.operations) ? args.operations : []
+    const paths = operations
+      .flatMap(operation => {
+        const record = recordValue(operation)
+        return record ? [record.path, record.source_path, record.destination_path] : []
+      })
+      .filter(Boolean)
+      .slice(0, 2)
+    return compact(args.action, ...paths, args.transaction_id)
   }
   if (toolName === 'read' || toolName === 'write' || toolName === 'ls') {
     return compact(args.path)
@@ -155,7 +182,6 @@ function toolArgumentSummary(toolName: string, value: unknown): string {
   if (toolName === 'knowledge') return compact(args.action, args.query)
   if (toolName === 'scheduler') return compact(args.action, args.job_id)
   if (toolName === 'skillhub') return compact(args.action, args.query || args.slug)
-  if (toolName === 'collaboration') return compact(args.action, args.task_id)
   if (toolName.startsWith('agent_')) return compact(args.query, args.package_id || args.agent_id)
   return ''
 }

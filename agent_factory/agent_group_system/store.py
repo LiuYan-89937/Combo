@@ -27,15 +27,7 @@ from agent_factory.workspace_system import WorkspaceStore
 SQLITE_BUSY_TIMEOUT_MS = 10000
 
 GROUP_STATUSES = {"draft", "active", "archived"}
-MEMBER_RUN_STATUSES = {
-    "queued",
-    "running",
-    "awaiting_approval",
-    "cancelling",
-    "completed",
-    "failed",
-    "cancelled",
-}
+MEMBER_RUN_STATUSES = {"queued", "running", "awaiting_approval", "completed", "failed", "cancelled"}
 MESSAGE_SPEAKER_TYPES = {"user", "agent", "system"}
 MESSAGE_KINDS = {
     "user_message",
@@ -95,6 +87,7 @@ class AgentGroupStore:
     def _ensure_schema(self) -> None:
         """确保所有表结构存在"""
         with self._connect() as conn:
+            conn.execute("begin immediate")
             # 1. 群聊会话表
             conn.execute("""
                 create table if not exists agent_group_sessions (
@@ -161,7 +154,6 @@ class AgentGroupStore:
                     base_workspace_revision integer not null,
                     request_id text,
                     response_message_id text,
-                    pending_approval_json text,
                     created_at text not null,
                     updated_at text not null,
                     foreign key (group_id) references agent_group_sessions(group_id)
@@ -170,6 +162,7 @@ class AgentGroupStore:
                         on delete cascade
                 )
             """)
+            _migrate_session_identity_columns(conn)
 
             # 5. 共享上下文版本表
             conn.execute("""
@@ -221,6 +214,7 @@ class AgentGroupStore:
             """)
 
             # 8. 成员会话索引（session_id 唯一）
+            conn.execute("drop index if exists idx_agent_group_members_conversation")
             conn.execute("""
                 create unique index if not exists idx_agent_group_members_session
                 on agent_group_members(package_session_id)
@@ -231,7 +225,6 @@ class AgentGroupStore:
             _ensure_column(conn, "agent_group_messages", "context_references_json", "text not null default '[]'")
             _ensure_column(conn, "agent_group_member_runs", "request_id", "text")
             _ensure_column(conn, "agent_group_sessions", "workspace_id", "text not null default ''")
-            _ensure_column(conn, "agent_group_member_runs", "pending_approval_json", "text")
 
 
     # ===== 群聊会话 CRUD =====
@@ -329,7 +322,7 @@ class AgentGroupStore:
             run_rows = conn.execute("""
                 select group_run_id, group_id, message_id, speaker_package_id, package_session_id,
                        status, base_context_version, base_workspace_revision, request_id, response_message_id,
-                       pending_approval_json, created_at, updated_at
+                       created_at, updated_at
                 from agent_group_member_runs
                 where group_id = ?
                 order by created_at desc
@@ -654,7 +647,7 @@ class AgentGroupStore:
             row = conn.execute("""
                 select group_run_id, group_id, message_id, speaker_package_id, package_session_id,
                        status, base_context_version, base_workspace_revision, request_id, response_message_id,
-                       pending_approval_json, created_at, updated_at
+                       created_at, updated_at
                 from agent_group_member_runs
                 where group_run_id = ?
             """, (group_run_id,)).fetchone()
@@ -685,11 +678,6 @@ class AgentGroupStore:
             updates.append("request_id = ?")
             params.append(payload["request_id"])
 
-        if "pending_approval" in payload:
-            updates.append("pending_approval_json = ?")
-            pending_approval = payload["pending_approval"]
-            params.append(json_dumps(pending_approval) if isinstance(pending_approval, dict) else None)
-
         if not updates:
             return
 
@@ -704,62 +692,13 @@ class AgentGroupStore:
                 where group_run_id = ?
             """, params)
 
-    def transition_run_status(
-        self,
-        group_run_id: str,
-        *,
-        expected_statuses: set[str],
-        status: str,
-    ) -> bool:
-        """Apply one status transition without overwriting a concurrent terminal event."""
-        if status not in MEMBER_RUN_STATUSES:
-            raise AgentGroupStoreError(f"invalid run status: {status}")
-        expected = sorted({str(value) for value in expected_statuses if value in MEMBER_RUN_STATUSES})
-        if not expected:
-            raise AgentGroupStoreError("expected_statuses must contain at least one valid run status")
-        placeholders = ", ".join("?" for _ in expected)
-        now = utc_now_text()
-        with self._connect() as conn:
-            cursor = conn.execute(
-                f"""
-                update agent_group_member_runs
-                set status = ?,
-                    pending_approval_json = case
-                        when ? = 'awaiting_approval' then pending_approval_json
-                        else null
-                    end,
-                    updated_at = ?
-                where group_run_id = ? and status in ({placeholders})
-                """,
-                (status, status, now, group_run_id, *expected),
-            )
-            return cursor.rowcount > 0
-
-    def set_pending_approval(
-        self,
-        group_run_id: str,
-        approval_event: dict[str, Any],
-    ) -> bool:
-        """Persist the complete approval event while atomically entering the approval state."""
-        now = utc_now_text()
-        with self._connect() as conn:
-            cursor = conn.execute(
-                """
-                update agent_group_member_runs
-                set status = 'awaiting_approval', pending_approval_json = ?, updated_at = ?
-                where group_run_id = ? and status in ('running', 'awaiting_approval')
-                """,
-                (json_dumps(approval_event), now, group_run_id),
-            )
-            return cursor.rowcount > 0
-
     def list_queued_runs(self, group_id: str) -> list[dict[str, Any]]:
         """列出所有 queued 状态的 runs"""
         with self._connect() as conn:
             rows = conn.execute("""
                 select group_run_id, group_id, message_id, speaker_package_id, package_session_id,
                        status, base_context_version, base_workspace_revision, request_id, response_message_id,
-                       pending_approval_json, created_at, updated_at
+                       created_at, updated_at
                 from agent_group_member_runs
                 where group_id = ? and status = 'queued'
                 order by created_at
@@ -767,13 +706,9 @@ class AgentGroupStore:
 
             return [self._run_view(r) for r in rows]
 
-    def cancel_run(self, group_run_id: str) -> bool:
+    def cancel_run(self, group_run_id: str) -> None:
         """取消运行"""
-        return self.transition_run_status(
-            group_run_id,
-            expected_statuses={"queued", "running", "awaiting_approval", "cancelling"},
-            status="cancelled",
-        )
+        self.update_run(group_run_id, {"status": "cancelled"})
 
     def requeue_run(self, group_run_id: str) -> None:
         run = self.get_run(group_run_id)
@@ -928,7 +863,7 @@ class AgentGroupStore:
                 values (?, ?, ?, ?, ?)
             """, (group_id, new_revision, parent_revision, json_dumps(file_manifest), now))
 
-            return new_revision
+        return new_revision
 
     def replace_initial_workspace_manifest(
         self,
@@ -1099,14 +1034,7 @@ class AgentGroupStore:
 
     def _session_view(self, row: sqlite3.Row) -> dict[str, Any]:
         """会话视图"""
-        data = dict(row)
-        pending_approval_json = data.pop("pending_approval_json", None)
-        data["pending_approval"] = (
-            json_loads(pending_approval_json, None)
-            if pending_approval_json
-            else None
-        )
-        return data
+        return dict(row)
 
     def _member_view(self, row: sqlite3.Row) -> dict[str, Any]:
         """成员视图"""
@@ -1154,6 +1082,33 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition
     columns = {str(row["name"]) for row in conn.execute(f"pragma table_info({table})")}
     if column not in columns:
         conn.execute(f"alter table {table} add column {column} {definition}")
+
+
+def _migrate_session_identity_columns(conn: sqlite3.Connection) -> None:
+    """Migrate the abandoned conversation identity schema to runtime session IDs.
+
+    The unified-orchestration prototype renamed these persisted columns to
+    ``conversation_id``. The production runtime was subsequently restored to
+    package sessions, so existing databases created by that prototype must be
+    migrated before any canonical index or query is evaluated.
+    """
+    for table in ("agent_group_members", "agent_group_member_runs"):
+        columns = {str(row["name"]) for row in conn.execute(f"pragma table_info({table})")}
+        has_session_id = "package_session_id" in columns
+        has_conversation_id = "conversation_id" in columns
+        if has_session_id and has_conversation_id:
+            raise AgentGroupStoreError(
+                f"ambiguous agent-group session identity schema in {table}"
+            )
+        if has_session_id:
+            continue
+        if not has_conversation_id:
+            raise AgentGroupStoreError(
+                f"agent-group session identity column is missing from {table}"
+            )
+        conn.execute(
+            f"alter table {table} rename column conversation_id to package_session_id"
+        )
 
 
 def utc_now_text() -> str:

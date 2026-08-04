@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from agent_factory.create_agent.workspace import CreateAgentWorkspace
-from agent_factory.collaboration_system import CollaborationStore
 from agent_factory.agent_group_system.store import AgentGroupStore
+from agent_factory.workspace_mounts import WorkspaceMountRecord
 from agent_factory.factory_graph.frontend_bridge.agent_package_workspace import (
     list_workspace_entries_from_roots,
     delete_workspace_file_from_roots,
@@ -18,7 +18,7 @@ from agent_factory.factory_graph.frontend_bridge.agent_package_workspace import 
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import SYSTEM_CHAT_PACKAGE_ID
 
 
-WORKSPACE_RESOURCE_MODES = {"package", "create_agent", "evolve_agent", "collaboration", "agent_group"}
+WORKSPACE_RESOURCE_MODES = {"package", "create_agent", "evolve_agent", "agent_group"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +26,7 @@ class FrontendWorkspaceTarget:
     resource_mode: str
     context: dict[str, Any]
     roots: dict[str, Path]
+    mounts: dict[str, WorkspaceMountRecord] = field(default_factory=dict)
     unavailable_reason: str | None = None
 
     @property
@@ -60,6 +61,7 @@ class FrontendWorkspaceService:
             roots=target.roots,
             scope=scope,
             relative_path=relative_path,
+            mounts=target.mounts,
         )
 
     def read_file(
@@ -80,6 +82,7 @@ class FrontendWorkspaceService:
             scope=scope,
             relative_path=relative_path,
             max_chars=max_chars,
+            mounts=target.mounts,
         )
 
     def resolve_file(
@@ -97,6 +100,7 @@ class FrontendWorkspaceService:
             roots=target.roots,
             scope=scope,
             relative_path=relative_path,
+            mounts=target.mounts,
         )
 
     def resolve_entry(
@@ -114,6 +118,7 @@ class FrontendWorkspaceService:
             roots=target.roots,
             scope=scope,
             relative_path=relative_path,
+            mounts=target.mounts,
         )
 
     def delete_file(
@@ -132,6 +137,7 @@ class FrontendWorkspaceService:
             roots=target.roots,
             scope=scope,
             relative_path=relative_path,
+            mounts=target.mounts,
         )
 
     def _target(self, payload: dict[str, Any], *, session_record: Any | None = None) -> FrontendWorkspaceTarget:
@@ -140,8 +146,6 @@ class FrontendWorkspaceService:
             return self._create_agent_target(payload, session_record=session_record)
         if resource_mode == "evolve_agent":
             return self._evolution_target(payload, session_record=session_record)
-        if resource_mode == "collaboration":
-            return self._collaboration_target(payload)
         if resource_mode == "agent_group":
             return self._agent_group_target(payload)
         return self._package_target(payload)
@@ -169,6 +173,10 @@ class FrontendWorkspaceService:
             resource_mode="package",
             context=context,
             roots={"workdir": runtime_roots["workdir"]},
+            mounts=self.agent_package_runtime.workspace_mount_records(
+                package_id,
+                package_session_id,
+            ),
         )
 
     def _create_agent_target(
@@ -229,37 +237,6 @@ class FrontendWorkspaceService:
             resource_mode="evolve_agent",
             context=context,
             roots=_factory_workspace_roots(package.package_root),
-        )
-
-    def _collaboration_target(self, payload: dict[str, Any]) -> FrontendWorkspaceTarget:
-        collaboration_id = str(payload.get("collaboration_id") or "").strip()
-        context = {
-            "resource_mode": "collaboration",
-            **({"collaboration_id": collaboration_id} if collaboration_id else {}),
-        }
-        if not collaboration_id:
-            return FrontendWorkspaceTarget(
-                resource_mode="collaboration",
-                context=context,
-                roots={},
-                unavailable_reason="select a collaboration session before opening the acceptance workspace",
-            )
-        session = CollaborationStore().get_session(collaboration_id)
-        workspace = session.get("acceptance_workspace") if isinstance(session, dict) else None
-        workdir_text = str((workspace or {}).get("workdir") or "").strip()
-        if not workdir_text:
-            return FrontendWorkspaceTarget(
-                resource_mode="collaboration",
-                context=context,
-                roots={},
-                unavailable_reason="collaboration acceptance workspace is not available",
-            )
-        workdir = Path(workdir_text).expanduser()
-        workdir.mkdir(parents=True, exist_ok=True)
-        return FrontendWorkspaceTarget(
-            resource_mode="collaboration",
-            context=context,
-            roots=_factory_workspace_roots(workdir),
         )
 
     def _agent_group_target(self, payload: dict[str, Any]) -> FrontendWorkspaceTarget:

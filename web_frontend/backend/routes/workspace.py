@@ -196,7 +196,6 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         factory_session_id: str | None = None,
         package_session_id: str | None = None,
         create_agent_session_id: str | None = None,
-        collaboration_id: str | None = None,
         group_id: str | None = None,
     ):
         event = await resource_command(
@@ -210,7 +209,6 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
                     factory_session_id=factory_session_id,
                     package_session_id=package_session_id,
                     create_agent_session_id=create_agent_session_id,
-                    collaboration_id=collaboration_id,
                     group_id=group_id,
                 ),
             },
@@ -227,7 +225,6 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         factory_session_id: str | None = None,
         package_session_id: str | None = None,
         create_agent_session_id: str | None = None,
-        collaboration_id: str | None = None,
         group_id: str | None = None,
     ):
         event = await resource_command(
@@ -243,7 +240,6 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
                     factory_session_id=factory_session_id,
                     package_session_id=package_session_id,
                     create_agent_session_id=create_agent_session_id,
-                    collaboration_id=collaboration_id,
                     group_id=group_id,
                 ),
             },
@@ -261,7 +257,6 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         factory_session_id: str | None = None,
         package_session_id: str | None = None,
         create_agent_session_id: str | None = None,
-        collaboration_id: str | None = None,
         group_id: str | None = None,
     ):
         event = await resource_command(
@@ -278,7 +273,6 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
                     factory_session_id=factory_session_id,
                     package_session_id=package_session_id,
                     create_agent_session_id=create_agent_session_id,
-                    collaboration_id=collaboration_id,
                     group_id=group_id,
                 ),
             },
@@ -295,7 +289,6 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         factory_session_id: str | None = None,
         package_session_id: str | None = None,
         create_agent_session_id: str | None = None,
-        collaboration_id: str | None = None,
         group_id: str | None = None,
     ):
         service = FrontendWorkspaceService(
@@ -310,7 +303,6 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
                     factory_session_id=factory_session_id,
                     package_session_id=package_session_id,
                     create_agent_session_id=create_agent_session_id,
-                    collaboration_id=collaboration_id,
                     group_id=group_id,
                 ),
                 scope=scope,
@@ -330,6 +322,43 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
             headers={"Content-Disposition": f"inline; filename*=UTF-8''{quoted_filename}"},
         )
 
+    @router.get("/native-path")
+    def workspace_native_path(
+        scope: str = "workdir",
+        path: str = "",
+        package_id: str | None = None,
+        resource_mode: str | None = None,
+        factory_session_id: str | None = None,
+        package_session_id: str | None = None,
+        create_agent_session_id: str | None = None,
+        group_id: str | None = None,
+    ):
+        service = FrontendWorkspaceService(
+            agent_package_runtime=AgentPackageRuntimeManager(),
+            session_manager=FactorySessionManager.from_env(),
+        )
+        try:
+            target = service.resolve_entry(
+                workspace_context_payload(
+                    package_id=package_id,
+                    resource_mode=resource_mode,
+                    factory_session_id=factory_session_id,
+                    package_session_id=package_session_id,
+                    create_agent_session_id=create_agent_session_id,
+                    group_id=group_id,
+                ),
+                scope=scope,
+                relative_path=path,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "native_path": str(target),
+            "kind": "directory" if target.is_dir() else "file",
+        }
+
     @router.delete("/file")
     def delete_workspace_file(
         scope: str = "workdir",
@@ -339,7 +368,6 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         factory_session_id: str | None = None,
         package_session_id: str | None = None,
         create_agent_session_id: str | None = None,
-        collaboration_id: str | None = None,
         group_id: str | None = None,
     ):
         service = FrontendWorkspaceService(
@@ -354,7 +382,6 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
                     factory_session_id=factory_session_id,
                     package_session_id=package_session_id,
                     create_agent_session_id=create_agent_session_id,
-                    collaboration_id=collaboration_id,
                     group_id=group_id,
                 ),
                 scope=scope,
@@ -375,7 +402,6 @@ def workspace_context_payload(
     factory_session_id: str | None,
     package_session_id: str | None,
     create_agent_session_id: str | None,
-    collaboration_id: str | None,
     group_id: str | None,
 ) -> dict[str, str]:
     return {
@@ -384,7 +410,6 @@ def workspace_context_payload(
         **({"factory_session_id": factory_session_id} if factory_session_id else {}),
         **({"package_session_id": package_session_id} if package_session_id else {}),
         **({"create_agent_session_id": create_agent_session_id} if create_agent_session_id else {}),
-        **({"collaboration_id": collaboration_id} if collaboration_id else {}),
         **({"group_id": group_id} if group_id else {}),
     }
 

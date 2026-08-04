@@ -70,7 +70,6 @@ export function useResourceContext() {
     workspaceContext.value.packageSessionId || '',
     workspaceContext.value.factorySessionId || '',
     workspaceContext.value.createAgentSessionId || '',
-    workspaceContext.value.collaborationId || '',
     workspaceContext.value.groupId || '',
   ].join(':'))
   const workspaceDefaultScope = computed<WorkspaceScope>(() => 'workdir')

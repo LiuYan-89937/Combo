@@ -18,17 +18,19 @@
         {{ currentPath || t('workspace.selectDirectoryRoot') }}
       </n-text>
     </div>
+
     <n-spin :show="loading">
       <n-list bordered clickable class="directory-picker-list">
         <n-list-item
           v-for="directory in visibleDirectories"
           :key="directory.path"
+          @dblclick="loadDirectory(directory.path)"
         >
           <button
             type="button"
             class="directory-row"
             @click="selectedPath = directory.path"
-            @dblclick="loadDirectory(directory.path)"
+            @dblclick.stop="loadDirectory(directory.path)"
           >
             <n-icon><FolderOutline /></n-icon>
             <span>{{ directory.name }}</span>
@@ -36,9 +38,12 @@
         </n-list-item>
       </n-list>
     </n-spin>
+
     <template #footer>
       <div class="directory-picker-actions">
-        <n-button @click="emit('update:show', false)">{{ t('common.cancel') }}</n-button>
+        <n-button @click="emit('update:show', false)">
+          {{ t('common.cancel') }}
+        </n-button>
         <n-button
           type="primary"
           :disabled="!selectedPath && !currentPath"
@@ -73,9 +78,12 @@ const selectedPath = ref('')
 const loading = ref(false)
 const visibleDirectories = computed(() => currentPath.value ? directories.value : roots.value)
 
-watch(() => props.show, show => {
-  if (show) void loadRoots()
-})
+watch(
+  () => props.show,
+  show => {
+    if (show) void loadRoots()
+  },
+)
 
 async function loadRoots() {
   loading.value = true
@@ -119,28 +127,41 @@ function selectDirectory() {
 :global(.workspace-directory-picker) {
   width: min(620px, calc(100vw - 32px));
 }
-.directory-picker-toolbar,
-.directory-picker-actions,
-.directory-row {
+
+.directory-picker-toolbar {
   display: flex;
   align-items: center;
   gap: var(--app-space-sm);
+  margin-bottom: var(--app-space-md);
 }
-.directory-picker-toolbar { margin-bottom: var(--app-space-md); }
+
 .directory-picker-path {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.directory-picker-list { height: min(420px, 55vh); overflow: auto; }
+
+.directory-picker-list {
+  height: min(420px, 55vh);
+  overflow: auto;
+}
+
 .directory-row {
   width: 100%;
   border: 0;
   background: transparent;
   color: var(--app-text);
+  display: flex;
+  align-items: center;
+  gap: var(--app-space-sm);
   text-align: left;
   cursor: pointer;
 }
-.directory-picker-actions { justify-content: flex-end; }
+
+.directory-picker-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--app-space-sm);
+}
 </style>

@@ -919,8 +919,6 @@ def _merge_dependency_config(
     verification_commands: list[list[str]],
     install_timeout_seconds: Any,
 ) -> None:
-    config["system_packages"] = []
-    config["base_image"] = "local-python"
     requirements = merge_python_requirements(
         _dependency_list(config, "python_requirements"),
         python_requirements,

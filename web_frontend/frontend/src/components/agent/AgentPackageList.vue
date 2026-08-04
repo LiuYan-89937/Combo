@@ -128,9 +128,6 @@
             >
               {{ t('agents.run') }}
             </n-button>
-            <n-button size="small" @click.stop="handleEvolve(pkg)">
-              {{ t('agents.evolve') }}
-            </n-button>
             <n-dropdown :options="getPackageActions(pkg)" @select="(key) => handleAction(key, pkg)">
               <n-button size="small" quaternary circle>
                 <n-icon><EllipsisHorizontal /></n-icon>
@@ -158,7 +155,6 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
 import {
   NAvatar,
   NButton,
@@ -178,9 +174,7 @@ import {
 import { Search, Refresh, Build, ChatbubbleEllipses, EllipsisHorizontal, Rocket } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import { useAgentStore } from '@/stores/agent'
-import { useRuntimeStore } from '@/stores/runtime'
 import { useUiStore } from '@/stores/ui'
-import { useWorkspaceStore } from '@/stores/workspace'
 import { useCommand } from '@/composables/useCommand'
 import { useAgentSessionNavigation } from '@/composables/agent/useAgentSessionNavigation'
 import type { AgentPackageView } from '@/stores/agent'
@@ -197,12 +191,9 @@ import {
 } from './agentPackagePresentation'
 
 const agentStore = useAgentStore()
-const runtimeStore = useRuntimeStore()
 const uiStore = useUiStore()
-const workspaceStore = useWorkspaceStore()
 const commands = useCommand()
 const { openPackageAgentChat } = useAgentSessionNavigation()
-const router = useRouter()
 const dialog = useDialog()
 const { locale, t } = useI18n()
 
@@ -258,7 +249,6 @@ function handleRefresh() {
 
 function handleSelectPackage(pkg: AgentPackageView) {
   agentStore.selectPackage(pkg.package_id)
-  uiStore.openRightSidebar('status')
 }
 
 function handleRun(pkg: AgentPackageView) {
@@ -296,21 +286,6 @@ async function handleShutdownInstance(pkg: AgentPackageView) {
     busyAction.value = null
     busyInstancePackageId.value = null
   }
-}
-
-function handleEvolve(pkg: AgentPackageView) {
-  agentStore.leaveAgentChat()
-  runtimeStore.enterFactoryConversation('evolve_agent', pkg.package_id)
-  void enterPackageContext(pkg, 'evolution').then(() => {
-    void router.push({ name: 'Evolution' })
-  })
-}
-
-function enterPackageContext(pkg: AgentPackageView, purpose: 'run' | 'evolution') {
-  agentStore.selectPackage(pkg.package_id)
-  workspaceStore.setScope('package')
-  uiStore.openRightSidebar('workspace')
-  return commands.selectAgentPackage(pkg.package_id, purpose)
 }
 
 function handleAction(key: string, pkg: AgentPackageView) {

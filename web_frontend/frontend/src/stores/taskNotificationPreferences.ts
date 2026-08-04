@@ -1,7 +1,7 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 
-export type TaskNotificationCategory = 'conversation' | 'collaboration' | 'agentGroup' | 'scheduler'
+export type TaskNotificationCategory = 'conversation' | 'agentGroup' | 'scheduler'
 
 interface StoredTaskNotificationPreferences {
   enabled: boolean
@@ -14,7 +14,6 @@ const DEFAULT_PREFERENCES: StoredTaskNotificationPreferences = {
   enabled: true,
   categories: {
     conversation: true,
-    collaboration: true,
     agentGroup: true,
     scheduler: true,
   },
@@ -31,7 +30,6 @@ function readPreferences(): StoredTaskNotificationPreferences {
       enabled: stored?.enabled !== false,
       categories: {
         conversation: storedCategories.conversation !== false,
-        collaboration: storedCategories.collaboration !== false,
         agentGroup: storedCategories.agentGroup !== false,
         scheduler: storedCategories.scheduler !== false,
       },

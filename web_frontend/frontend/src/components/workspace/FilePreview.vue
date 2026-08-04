@@ -21,7 +21,13 @@
           <template #icon>
             <n-icon><Download /></n-icon>
           </template>
-          {{ t('common.download') }}
+          {{ desktopFileActionsAvailable ? t('workspace.saveAs') : t('common.download') }}
+        </n-button>
+        <n-button v-if="desktopFileActionsAvailable" size="small" @click="handleReveal">
+          <template #icon>
+            <n-icon><FolderOpenOutline /></n-icon>
+          </template>
+          {{ t('workspace.revealInFileManager') }}
         </n-button>
         <n-popconfirm @positive-click="handleDelete">
           <template #trigger>
@@ -48,8 +54,13 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { NButton, NIcon, NPopconfirm, NText } from 'naive-ui'
-import { AddCircleOutline, Close, Download, TrashOutline } from '@/components/icons'
+import { AddCircleOutline, Close, Download, FolderOpenOutline, TrashOutline } from '@/components/icons'
 import { workspaceApi } from '@/api/workspace'
+import {
+  desktopWorkspaceFileActionsAvailable,
+  revealWorkspaceEntry,
+  saveWorkspaceFileAs,
+} from '@/api/desktopWorkspaceFiles'
 import { useI18n } from '@/composables/useI18n'
 import type { WorkspaceRequestContext, WorkspaceScope } from '@/api/resourceTypes'
 import type { WorkspaceFileView } from '@/types/protocol'
@@ -72,6 +83,7 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const message = useMessage()
 const referenceStore = useContextReferenceStore()
+const desktopFileActionsAvailable = desktopWorkspaceFileActionsAvailable()
 const extension = computed(() => fileExtension(props.file))
 const previewKind = computed(() => filePreviewKind(props.file))
 const previewLabel = computed(() => {
@@ -95,7 +107,6 @@ const workspaceContext = computed<WorkspaceRequestContext>(() => {
     packageSessionId: String(payload.package_session_id || payload.packageSessionId || '').trim() || null,
     factorySessionId: String(payload.factory_session_id || payload.factorySessionId || '').trim() || null,
     createAgentSessionId: String(payload.create_agent_session_id || payload.createAgentSessionId || '').trim() || null,
-    collaborationId: String(payload.collaboration_id || payload.collaborationId || '').trim() || null,
     groupId: String(payload.group_id || payload.groupId || '').trim() || null,
   }
 })
@@ -112,6 +123,23 @@ function formatFileSize(bytes: number): string {
 }
 
 async function handleDownload() {
+  if (desktopFileActionsAvailable && props.file.path) {
+    try {
+      const scope = (props.file.scope || 'workdir') as WorkspaceScope
+      const destination = await saveWorkspaceFileAs(
+        scope,
+        props.file.path,
+        workspaceContext.value,
+      )
+      if (destination) {
+        message.success(t('workspace.fileSavedAs', { path: destination }))
+      }
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : String(error))
+    }
+    return
+  }
+
   if (rawFileUrl.value) {
     const anchor = document.createElement('a')
     anchor.href = rawFileUrl.value
@@ -129,6 +157,16 @@ async function handleDownload() {
   anchor.download = props.file.name
   anchor.click()
   URL.revokeObjectURL(url)
+}
+
+async function handleReveal() {
+  if (!props.file.path) return
+  try {
+    const scope = (props.file.scope || 'workdir') as WorkspaceScope
+    await revealWorkspaceEntry(scope, props.file.path, workspaceContext.value)
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : String(error))
+  }
 }
 
 async function handleDelete() {

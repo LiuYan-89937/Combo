@@ -91,8 +91,6 @@ export function agentPackageSessionSnapshotView(
     mode: 'agent_package',
     packageId: sessionPackageId,
     agentSessionId: session.session_id,
-    collaborationId: String(session?.collaboration_id || '').trim() || null,
-    collaborationTaskId: String(session?.collaboration_task_id || '').trim() || null,
     fallbackTimestamp: session.updated_at,
   })
   const processEvents = normalizedProcessEvents(session?.process_events)
@@ -107,10 +105,7 @@ export function agentPackageSessionSnapshotView(
     processEvents,
     tools: toolsFromTurns(restored.conversationTurns),
     pendingInterrupt: pendingInterruptFrom(processEvents, restored.activeTurn),
-    scope: agentPackageConversationScope(sessionPackageId, session.session_id, {
-      collaborationId: session?.collaboration_id,
-      collaborationTaskId: session?.collaboration_task_id,
-    }),
+    scope: agentPackageConversationScope(sessionPackageId, session.session_id),
   }
 }
 
@@ -163,8 +158,6 @@ interface TurnRestoreContext {
   mode: FactoryMode | null
   packageId: string | null
   agentSessionId: string | null
-  collaborationId?: string | null
-  collaborationTaskId?: string | null
   fallbackTimestamp?: string | null
 }
 
@@ -217,8 +210,6 @@ function restoreTurnMessages(options: {
     mode: options.context.mode,
     package_id: options.context.packageId,
     agent_session_id: options.context.agentSessionId,
-    collaboration_id: options.context.collaborationId || null,
-    collaboration_task_id: options.context.collaborationTaskId || null,
   }
   const conversationTurn: ConversationTurn = {
     id: `${options.context.keyPrefix}-turn-${options.turnIndex}`,
@@ -233,6 +224,9 @@ function restoreTurnMessages(options: {
     metadata,
   }
   for (const rawMessage of options.rawMessages) {
+    const internalUserMessage = rawMessage?.role === 'user'
+      && rawMessage?.metadata?.visibility === 'internal'
+    if (internalUserMessage) continue
     const item = transcriptItemFromPartMessage(rawMessage, {
       fallbackId: `${options.context.keyPrefix}-${options.turnIndex}-${options.transcript.length}`,
       fallbackTimestamp: rawMessage?.timestamp || options.updatedAt,

@@ -4,13 +4,16 @@ from hashlib import sha256
 from typing import Any
 
 from agent_factory.tooling.builtins.filesystem.common import (
+    filesystem_allowed_roots,
     filesystem_boundary,
+    filesystem_mounts,
     path_risk_result,
     positive_int,
     required_string,
     resolve_path,
 )
 from agent_factory.tooling.envelope import tool_envelope
+from agent_factory.tooling.builtins.filesystem.workspace_search import workspace_relative_path
 
 
 def _missing_file_message(*, requested: str, resolved: str, parent: str) -> str:
@@ -39,7 +42,12 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     if limit > 2000:
         raise ValueError("limit must be less than or equal to 2000")
     root, allow_external = filesystem_boundary(resources)
-    target = resolve_path(path=path, root=root, allow_external=allow_external)
+    target = resolve_path(
+        path=path,
+        root=root,
+        allow_external=allow_external,
+        allowed_roots=filesystem_allowed_roots(resources),
+    )
     if not target.exists():
         raise FileNotFoundError(
             _missing_file_message(requested=path, resolved=str(target), parent=str(target.parent))
@@ -58,7 +66,11 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     selected = lines[start_index:end_index] if start_index < total_lines else []
     end_line = start_line + len(selected) - 1 if selected else max(start_line - 1, 0)
     return tool_envelope({
-        "path": str(target),
+        "path": workspace_relative_path(
+            target,
+            workspace_root=root,
+            mounts=filesystem_mounts(resources),
+        ),
         "content": "".join(selected),
         "start_line": start_line,
         "end_line": end_line,

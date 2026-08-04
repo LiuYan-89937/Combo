@@ -8,7 +8,8 @@ from typing import Any
 from langchain_core.messages import HumanMessage
 
 from agent_factory.artifact_system import ArtifactStore
-from agent_factory.models.image_generation import ImageGenerationRequest, ImageInput, image_input_from_path
+from agent_factory.models.image_generation import ImageGenerationRequest, ImageInput
+from agent_factory.models.image_generation.service import image_input_from_path
 from agent_factory.tooling.envelope import tool_envelope
 
 

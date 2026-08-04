@@ -39,7 +39,7 @@
           "text_to_image": true
         },
         "overrides": {},
-        "description": "Generate images from a text prompt with the selected image model."
+        "description": "Use Wanx to generate images from a text prompt."
       }
     }
   }

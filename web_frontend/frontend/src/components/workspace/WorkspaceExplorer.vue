@@ -23,7 +23,7 @@
           circle
           :loading="mountingDirectory"
           :title="t('workspace.mountDirectory')"
-          @click="showDirectoryPicker = true"
+          @click="mountLocalDirectory"
         >
           <template #icon>
             <n-icon><FolderOpenOutline /></n-icon>
@@ -114,10 +114,6 @@
       </div>
     </n-scrollbar>
   </div>
-  <WorkspaceDirectoryPicker
-    v-model:show="showDirectoryPicker"
-    @select="mountLocalDirectory"
-  />
 </template>
 
 <script setup lang="ts">
@@ -145,7 +141,6 @@ import {
   UnlinkOutline,
 } from '@/components/icons'
 import ResourceIcon from '@/components/common/ResourceIcon.vue'
-import WorkspaceDirectoryPicker from '@/components/workspace/WorkspaceDirectoryPicker.vue'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useCommand } from '@/composables/useCommand'
@@ -153,6 +148,15 @@ import { useI18n } from '@/composables/useI18n'
 import { workspaceEntryView } from '@/stores/runtime/viewMappers'
 import { workspaceFileView } from '@/stores/runtime/viewMappers'
 import { workspaceApi } from '@/api/workspace'
+import {
+  desktopDirectoryPickerAvailable,
+  selectDesktopDirectory,
+} from '@/api/desktopDialogs'
+import {
+  desktopWorkspaceFileActionsAvailable,
+  revealWorkspaceEntry,
+  saveWorkspaceFileAs,
+} from '@/api/desktopWorkspaceFiles'
 import { useContextReferenceStore } from '@/stores/contextReferences'
 import { workspaceFileContextReference } from '@/utils/contextReferences'
 import type { WorkspaceRequestContext } from '@/api/resourceTypes'
@@ -191,7 +195,6 @@ const contextMenuVisible = ref(false)
 const contextMenuX = ref(0)
 const contextMenuY = ref(0)
 const mountingDirectory = ref(false)
-const showDirectoryPicker = ref(false)
 const rootLoading = computed(() => loadingPaths.value.has('') && !entriesByPath.value[''])
 const requestContext = computed<WorkspaceRequestContext | string | undefined>(() => (
   props.workspaceContext || props.packageId || undefined
@@ -205,7 +208,7 @@ const completedToolKeys = computed(() => (
     .join('\u0000')
 ))
 const canMountDirectory = computed(() => {
-  if (effectiveScope.value !== 'workdir') return false
+  if (!desktopDirectoryPickerAvailable() || effectiveScope.value !== 'workdir') return false
   const context = props.workspaceContext
   return Boolean(
     context
@@ -222,6 +225,18 @@ const contextMenuOptions = computed<DropdownOption[]>(() => {
       key: 'open',
     },
   ]
+  if (desktopWorkspaceFileActionsAvailable()) {
+    options.push({
+      label: t('workspace.revealInFileManager'),
+      key: 'reveal',
+    })
+    if (entry.kind === 'file') {
+      options.push({
+        label: t('workspace.saveAs'),
+        key: 'save-as',
+      })
+    }
+  }
   if (entry.kind === 'file') {
     options.push(
       { type: 'divider', key: 'file-actions-divider' },
@@ -348,6 +363,25 @@ async function handleContextMenuSelect(key: string | number) {
       handleEntryClick(entry)
       return
     }
+    if (key === 'reveal') {
+      await revealWorkspaceEntry(
+        effectiveScope.value,
+        entry.path,
+        requestContext.value,
+      )
+      return
+    }
+    if (key === 'save-as' && entry.kind === 'file') {
+      const destination = await saveWorkspaceFileAs(
+        effectiveScope.value,
+        entry.path,
+        requestContext.value,
+      )
+      if (destination) {
+        message.success(t('workspace.fileSavedAs', { path: destination }))
+      }
+      return
+    }
     if (key === 'add-reference' && entry.kind === 'file') {
       await addFileReference(entry)
       return
@@ -360,10 +394,12 @@ async function handleContextMenuSelect(key: string | number) {
   }
 }
 
-async function mountLocalDirectory(sourcePath: string) {
+async function mountLocalDirectory() {
   if (!canMountDirectory.value || mountingDirectory.value) return
   mountingDirectory.value = true
   try {
+    const sourcePath = await selectDesktopDirectory()
+    if (!sourcePath) return
     const result = await workspaceApi.mountDirectory(
       sourcePath,
       props.workspaceContext,
@@ -486,7 +522,6 @@ function workspaceContextKey(context: WorkspaceRequestContext | string | undefin
     context.packageSessionId || '',
     context.factorySessionId || '',
     context.createAgentSessionId || '',
-    context.collaborationId || '',
     context.groupId || '',
   ].join(':')
 }
@@ -591,13 +626,6 @@ function workspaceContextKey(context: WorkspaceRequestContext | string | undefin
   white-space: nowrap;
 }
 
-.entry-size {
-  flex-shrink: 0;
-  color: var(--app-text-muted);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-}
-
 .mount-badge {
   display: inline-flex;
   flex: 0 0 auto;
@@ -606,6 +634,13 @@ function workspaceContextKey(context: WorkspaceRequestContext | string | undefin
 
 .mount-badge.disconnected {
   color: var(--app-danger);
+}
+
+.entry-size {
+  flex-shrink: 0;
+  color: var(--app-text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 .entry-actions {

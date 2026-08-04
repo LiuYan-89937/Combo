@@ -18,19 +18,18 @@ export function useRuntimeCommands() {
     transport.sendRuntimeCommand(commands.listSessionsCommand())
   }
 
-  const switchSession = (sessionId: string, mode?: FactoryMode | null, collaborationId?: string | null) => {
+  const switchSession = (sessionId: string, mode?: FactoryMode | null) => {
     if (mode === 'create_agent' || mode === 'evolve_agent') {
-      runtimeStore.expectFactorySession(sessionId, mode, collaborationId || null)
+      runtimeStore.expectFactorySession(sessionId, mode)
     }
-    transport.sendRuntimeCommand(commands.switchSessionCommand(sessionId, mode, collaborationId))
+    transport.sendRuntimeCommand(commands.switchSessionCommand(sessionId, mode))
   }
 
   const newSession = (
     mode?: FactoryMode | null,
     packageId?: string | null,
-    collaborationId?: string | null,
   ) => {
-    transport.sendRuntimeCommand(commands.newSessionCommand(mode, packageId, collaborationId))
+    transport.sendRuntimeCommand(commands.newSessionCommand(mode, packageId))
   }
 
   const deleteSession = (sessionId: string, mode?: FactoryMode | null) => {
@@ -67,6 +66,9 @@ export function useRuntimeCommands() {
       {
         requestTimeoutSeconds: runtimePreferences.requestTimeoutSeconds,
         maxRetries: runtimePreferences.maxRetries,
+        userConfig: {
+          max_parallel_sub_agents: runtimePreferences.maxParallelSubAgents,
+        },
       },
     )
     transport.sendRuntimeCommand(command)

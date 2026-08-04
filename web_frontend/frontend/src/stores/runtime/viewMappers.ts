@@ -48,6 +48,10 @@ export function workspaceEntryView(entry: any): WorkspaceEntry {
     kind: entry.kind === 'directory' ? 'directory' : 'file',
     sizeBytes: entry.size_bytes ?? entry.sizeBytes ?? null,
     updatedAt: entry.updated_at || entry.updatedAt || null,
+    mount: entry.mount === true,
+    mountId: entry.mount_id || entry.mountId || null,
+    mountSource: entry.mount_source || entry.mountSource || null,
+    connected: typeof entry.connected === 'boolean' ? entry.connected : null,
   }
 }
 

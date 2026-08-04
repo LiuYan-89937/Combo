@@ -151,14 +151,11 @@ def create_agent_group_router(
 
     @router.post("/groups/{group_id}/runs/{run_id}/cancel")
     async def cancel_run(group_id: str, run_id: str) -> dict[str, Any]:
-        """Request cancellation and expose the acknowledgement state until runtime termination."""
+        """Request cancellation; terminal runtime events remain the state transition source."""
         try:
             run = await asyncio.to_thread(service.get_run, run_id)
             if run is None or str(run.get("group_id") or "") != group_id:
                 raise HTTPException(status_code=404, detail="group run not found")
-            status = str(run.get("status") or "")
-            if status in {"completed", "failed", "cancelled", "cancelling"}:
-                return {"group": await asyncio.to_thread(service.get_group, group_id)}
             request_id = str(run.get("request_id") or "").strip()
             if request_id:
                 await runtime_bridge.send_frontend_command(
@@ -168,14 +165,6 @@ def create_agent_group_router(
                         payload={"target_request_id": request_id, "reason": "user_cancelled"},
                     )
                 )
-                await asyncio.to_thread(
-                    service.transition_run_status,
-                    run_id,
-                    expected_statuses={"running"},
-                    status="cancelling",
-                )
-                if status in {"queued", "awaiting_approval"}:
-                    await asyncio.to_thread(service.cancel_run, run_id)
             else:
                 await asyncio.to_thread(service.cancel_run, run_id)
             group = await asyncio.to_thread(service.get_group, group_id)
@@ -200,12 +189,6 @@ def create_agent_group_router(
                     mode="agent_group",
                     payload={**payload, "group_run_id": run_id, "mode": "agent_group"},
                 )
-            )
-            await asyncio.to_thread(
-                service.transition_run_status,
-                run_id,
-                expected_statuses={"awaiting_approval"},
-                status="running",
             )
             return {"group": await asyncio.to_thread(service.get_group, group_id)}
         except Exception as e:

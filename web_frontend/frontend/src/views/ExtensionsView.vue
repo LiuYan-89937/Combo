@@ -25,7 +25,7 @@
     <main class="workbench-grid">
       <section class="registry-panel">
         <div class="panel-glow" />
-        <n-tabs type="segment" animated class="registry-tabs">
+        <n-tabs v-model:value="activeRegistryTab" type="segment" animated class="registry-tabs">
           <n-tab-pane name="mcp" :tab="`MCP · ${extensionStore.mcpItems.length}`">
             <div class="registry-toolbar">
               <div>
@@ -293,6 +293,16 @@
         <span>{{ pointerDrag.kind === 'mcp' ? 'MCP' : 'SKILL' }}</span>
         <strong>{{ pointerDrag.name }}</strong>
       </div>
+      <div
+        v-if="showcaseFlight.active"
+        class="showcase-extension-flight"
+        :class="{ 'is-moving': showcaseFlight.moving }"
+        :style="showcaseFlightStyle"
+      >
+        <span>{{ showcaseFlight.kind === 'mcp' ? 'MCP' : 'SKILL' }}</span>
+        <strong>{{ showcaseFlight.name }}</strong>
+        <small>装配中</small>
+      </div>
     </Teleport>
   </div>
 </template>
@@ -365,6 +375,8 @@ const {
 } = useExtensionsManager()
 
 const WHEEL_ITEM_HEIGHT = 72
+const SHOWCASE_BIND_EVENT = 'fastagentfactory:showcase-extension-bind'
+const activeRegistryTab = ref<'mcp' | 'skills'>('mcp')
 const agentPicker = ref<HTMLElement | null>(null)
 const pickerPosition = ref(0)
 const pickerScrollFrame = ref<number | null>(null)
@@ -389,8 +401,23 @@ const pickerPointer = reactive({
   startScrollTop: 0,
   moved: false,
 })
+const showcaseFlight = reactive({
+  active: false,
+  moving: false,
+  kind: 'mcp' as 'mcp' | 'skill',
+  name: '',
+  x: 0,
+  y: 0,
+  width: 0,
+  height: 0,
+})
 const pointerDragPreviewStyle = computed<CSSProperties>(() => ({
   transform: `translate3d(${pointerDrag.x + 16}px, ${pointerDrag.y + 16}px, 0)`,
+}))
+const showcaseFlightStyle = computed<CSSProperties>(() => ({
+  width: `${showcaseFlight.width}px`,
+  height: `${showcaseFlight.height}px`,
+  transform: `translate3d(${showcaseFlight.x}px, ${showcaseFlight.y}px, 0)`,
 }))
 
 function wheelItemStyle(index: number): CSSProperties {
@@ -526,6 +553,60 @@ async function finishPointerBinding(targetId: string): Promise<void> {
   }
 }
 
+async function playShowcaseBinding(event: Event): Promise<void> {
+  const detail = (event as CustomEvent<{
+    kind?: 'mcp' | 'skill'
+    identifier?: string
+    targetId?: string
+  }>).detail
+  const kind = detail?.kind === 'skill' ? 'skill' : 'mcp'
+  const identifier = String(detail?.identifier || '').trim()
+  const targetId = String(detail?.targetId || '').trim()
+  if (!identifier || !targetId || showcaseFlight.active) return
+
+  activeRegistryTab.value = kind === 'skill' ? 'skills' : 'mcp'
+  selectedAssemblyTargetId.value = targetId
+  await nextTick()
+  await new Promise<void>((resolve) => window.setTimeout(resolve, 520))
+
+  const source = document.querySelector<HTMLElement>(
+    `.registry-card.${kind === 'skill' ? 'skill-card' : 'mcp-card'}`,
+  )
+  const target = document.querySelector<HTMLElement>(
+    `[data-agent-target-id="${CSS.escape(targetId)}"]`,
+  )
+  if (!source || !target) return
+
+  const sourceRect = source.getBoundingClientRect()
+  const targetRect = target.getBoundingClientRect()
+  showcaseFlight.kind = kind
+  showcaseFlight.name = source.querySelector<HTMLElement>('.card-title-row strong')?.textContent?.trim()
+    || (kind === 'skill' ? 'Skill' : 'MCP')
+  showcaseFlight.x = sourceRect.left
+  showcaseFlight.y = sourceRect.top
+  showcaseFlight.width = sourceRect.width
+  showcaseFlight.height = sourceRect.height
+  showcaseFlight.active = true
+  showcaseFlight.moving = false
+  startExtensionDrag(kind, identifier)
+  dragHoverTargetId.value = targetId
+
+  await nextTick()
+  await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+  showcaseFlight.moving = true
+  showcaseFlight.x = targetRect.left + Math.max(0, targetRect.width - Math.min(sourceRect.width, 210)) / 2
+  showcaseFlight.y = targetRect.top + Math.max(0, targetRect.height - Math.min(sourceRect.height, 72)) / 2
+  showcaseFlight.width = Math.min(sourceRect.width, 210)
+  showcaseFlight.height = Math.min(sourceRect.height, 72)
+
+  await new Promise<void>((resolve) => window.setTimeout(resolve, 1700))
+  await handleWheelDrop(targetId)
+  showcaseFlight.active = false
+  showcaseFlight.moving = false
+  finishExtensionDrag()
+  await new Promise<void>((resolve) => window.setTimeout(resolve, 950))
+}
+
 function detachPointerDragListeners(): void {
   window.removeEventListener('pointermove', handleExtensionPointerMove)
   window.removeEventListener('pointerup', handleExtensionPointerUp)
@@ -578,6 +659,7 @@ function handlePickerPointerUp(event: PointerEvent): void {
 }
 
 onMounted(() => {
+  window.addEventListener(SHOWCASE_BIND_EVENT, playShowcaseBinding)
   void nextTick(() => {
     const selectedIndex = Math.max(
       0,
@@ -589,6 +671,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener(SHOWCASE_BIND_EVENT, playShowcaseBinding)
   detachPointerDragListeners()
   document.body.classList.remove('is-extension-pointer-dragging')
 })
@@ -1075,6 +1158,55 @@ h2 { font-size: 20px; }
 :global(.extension-drag-preview strong) {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+:global(.showcase-extension-flight) {
+  position: fixed;
+  z-index: 100001;
+  top: 0;
+  left: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  overflow: hidden;
+  padding: 12px 14px;
+  border: 1px solid var(--app-text);
+  border-radius: 16px;
+  color: var(--app-text);
+  background: var(--app-surface);
+  box-shadow: 0 18px 42px color-mix(in srgb, var(--app-text) 22%, transparent);
+  pointer-events: none;
+  transform-origin: center;
+  will-change: transform, width, height, border-radius, box-shadow;
+}
+:global(.showcase-extension-flight.is-moving) {
+  border-radius: 20px;
+  box-shadow: 0 28px 62px color-mix(in srgb, var(--app-text) 28%, transparent);
+  transition:
+    transform 1.65s cubic-bezier(.18, .84, .24, 1),
+    width 1.65s cubic-bezier(.18, .84, .24, 1),
+    height 1.65s cubic-bezier(.18, .84, .24, 1),
+    border-radius 1.65s ease,
+    box-shadow 1.65s ease;
+}
+:global(.showcase-extension-flight span) {
+  padding: 5px 7px;
+  border-radius: 7px;
+  color: var(--app-surface);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  background: var(--app-text);
+}
+:global(.showcase-extension-flight strong) {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:global(.showcase-extension-flight small) {
+  color: var(--app-text-muted);
+  font-size: 10px;
 }
 :global(body.is-extension-pointer-dragging) {
   cursor: grabbing !important;

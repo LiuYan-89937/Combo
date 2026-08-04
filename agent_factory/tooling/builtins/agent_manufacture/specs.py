@@ -11,18 +11,17 @@ def get_agent_manufacture_tool_specs() -> list[ToolSpec]:
         ToolSpec(
             id=AGENT_MANUFACTURE_TOOL_ID,
             description=(
-                "多 Agent 协作中的新 Agent 制造委托工具。仅当 agent_search 没有返回可复用候选，"
+                "异步制造并发布新 Agent。仅当 agent_search 没有返回可复用候选，"
                 "且现有 Agent 不足以完成任务时使用。"
-                "本工具只登记制造请求并交给宿主制造服务执行；不会检索 Agent。"
-                "协作主 Agent 代理制造通过 full_static 后会自动物理发布 package；发布成功后 Agent Registry 会刷新，"
-                "主 Agent 必须再次调用 agent_search 确认可用 package_id 后再创建子任务。"
+                "本工具只登记制造请求并交给宿主制造服务执行，不会阻塞当前对话。"
+                "制造通过 full_static 后会自动发布 package，并主动把结果送回当前主 Agent 会话；"
+                "收到完成报告后必须再次调用 agent_search 确认可用 package_id。"
             ),
             entrypoint="agent_factory.tooling.builtins.agent_manufacture.tool:run",
             input_schema={
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "collaboration_id": {"type": "string", "description": "当前协作会话 ID。"},
                     "agent_name": {"type": "string", "description": "希望制造的新 Agent 名称。"},
                     "purpose": {"type": "string", "description": "新 Agent 的清晰用途。"},
                     "target_tasks": {
@@ -56,7 +55,6 @@ def get_agent_manufacture_tool_specs() -> list[ToolSpec]:
                     },
                 },
                 "required": [
-                    "collaboration_id",
                     "agent_name",
                     "purpose",
                     "delivery_standards",
@@ -67,16 +65,39 @@ def get_agent_manufacture_tool_specs() -> list[ToolSpec]:
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "status": {"type": "string", "enum": ["requested", "running", "ready_for_publish", "failed"]},
+                    "status": {
+                        "type": "string",
+                        "enum": [
+                            "queued",
+                            "claimed",
+                            "running",
+                            "waiting_approval",
+                            "waiting_external",
+                            "cancelling",
+                            "succeeded",
+                            "failed",
+                            "cancelled"
+                        ],
+                    },
                     "request_id": {"type": "string"},
-                    "collaboration_id": {"type": "string"},
+                    "task_id": {"type": "string"},
                     "create_agent_session_id": {"type": ["string", "null"]},
                     "message": {"type": "string"},
                     "next_step": {"type": "string"},
                 },
-                "required": ["status", "request_id", "collaboration_id", "message", "next_step"],
+                "required": [
+                    "status",
+                    "request_id",
+                    "task_id",
+                    "message",
+                    "next_step"
+                ],
             },
-            resources={"collaboration_root": "collaboration_root"},
+            resources={
+                "background_task_root": "background_task_root",
+                "runtime_execution_config": "runtime_execution_config",
+                "workdir_root": "workdir_root",
+            },
             risk_level="medium",
             risk_evaluator=ToolRiskEvaluatorConfig(
                 hard="agent_factory.tooling.builtins.agent_manufacture.tool:evaluate_risk"

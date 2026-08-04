@@ -40,24 +40,7 @@
 
       <div ref="messageBodyRef" class="message-body">
         <div
-          v-if="collaborationReport"
-          class="collaboration-report-card"
-        >
-          <div class="collaboration-report-title">
-            <span class="collaboration-report-dot" aria-hidden="true"></span>
-            <span>{{ collaborationReportTitle }}</span>
-          </div>
-          <div class="collaboration-report-meta">
-            <span>{{ collaborationReportStatus }}</span>
-            <span v-if="collaborationReport.task_id">{{ t('collaboration.reportTask', { id: shortId(collaborationReport.task_id) }) }}</span>
-            <span v-if="collaborationReport.artifact_count">{{ t('collaboration.reportArtifacts', { count: collaborationReport.artifact_count }) }}</span>
-          </div>
-          <div v-if="collaborationReport.summary" class="collaboration-report-summary">
-            {{ compactSummary(collaborationReport.summary) }}
-          </div>
-        </div>
-        <div
-          v-else-if="thinking"
+          v-if="thinking"
           class="thinking-content"
           role="status"
           aria-live="polite"
@@ -117,7 +100,7 @@ import { ReturnUpBackOutline } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import MessagePartRenderer from './MessagePartRenderer.vue'
 import type { TranscriptItem } from '@/types/protocol'
-import { mergeToolMessageParts } from '@/utils/toolPresentation'
+import { conversationVisibleParts } from '@/utils/toolPresentation'
 import type { WorkspaceRequestContext } from '@/api/resourceTypes'
 import { useTipStore, type TipMessageContext } from '@/stores/tips'
 import TipingIcon from './TipingIcon.vue'
@@ -187,7 +170,6 @@ function openTip(tipId: string, event: MouseEvent) {
 
 
 const roleLabel = computed(() => {
-  if (collaborationReport.value) return collaborationReportTitle.value
   const displayName = String(props.message.metadata?.display_name || '').trim()
   if (displayName) return displayName
   if (props.message.role === 'user') return t('roles.user')
@@ -196,13 +178,6 @@ const roleLabel = computed(() => {
 })
 
 const avatarStyle = computed<CSSProperties>(() => {
-  if (collaborationReport.value) {
-    return {
-      background: 'var(--app-surface-muted)',
-      color: 'var(--app-text)',
-      border: '1px solid var(--app-border-hover)',
-    }
-  }
   if (props.message.role === 'assistant') {
     if (Boolean(props.message.metadata?.agent_group_speaker)) {
       return groupAgentAvatarStyle(props.message.metadata)
@@ -220,7 +195,6 @@ const avatarStyle = computed<CSSProperties>(() => {
 })
 
 const avatarText = computed(() => {
-  if (collaborationReport.value) return 'A'
   const avatarLabel = String(props.message.metadata?.avatar_label || '').trim()
   if (avatarLabel) return avatarLabel.slice(0, 2)
   if (props.message.role === 'user') return 'U'
@@ -228,31 +202,13 @@ const avatarText = computed(() => {
   return 'A'
 })
 
-const visibleParts = computed(() => mergeToolMessageParts(props.message.parts))
+const visibleParts = computed(() => conversationVisibleParts(props.message.parts))
 const isGroupUserMessage = computed(() => (
   props.message.role === 'user' && Boolean(props.message.metadata?.agent_group_message)
 ))
 const mentionNames = computed(() => {
   const value = props.message.metadata?.mention_names
   return Array.isArray(value) ? value.map(item => String(item)).filter(Boolean) : []
-})
-const collaborationReport = computed(() => {
-  const report = props.message.metadata?.collaboration_report
-  return report && typeof report === 'object' ? report as Record<string, any> : null
-})
-const collaborationReportTitle = computed(() => {
-  const packageId = String(collaborationReport.value?.assignee_package_id || '').trim()
-  return packageId
-    ? t('collaboration.workerReportWithAgent', { agent: packageId })
-    : t('collaboration.workerReport')
-})
-const collaborationReportStatus = computed(() => {
-  const status = String(collaborationReport.value?.status || '').trim()
-  if (status === 'submitted') return t('collaboration.reportSubmitted')
-  if (status === 'failed') return t('collaboration.reportFailed')
-  if (status === 'cancelled') return t('collaboration.reportCancelled')
-  if (status === 'blocked') return t('collaboration.reportBlocked')
-  return status || t('collaboration.reportUpdated')
 })
 const dispatchStatusLabel = computed(() => {
   if (props.message.role !== 'user') return ''
@@ -301,17 +257,6 @@ function formatTime(timestamp: string): string {
     hour: '2-digit',
     minute: '2-digit',
   })
-}
-
-function shortId(value: unknown): string {
-  const text = String(value || '').trim()
-  return text.length > 8 ? text.slice(0, 8) : text
-}
-
-function compactSummary(value: unknown): string {
-  const text = String(value || '').replace(/\s+/g, ' ').trim()
-  if (text.length <= 220) return text
-  return `${text.slice(0, 220)}...`
 }
 
 function groupAgentAvatarStyle(metadata: Record<string, unknown>): CSSProperties {
@@ -411,13 +356,7 @@ function stableColorIndex(value: string, size: number): number {
 
 .message-item.streaming {
   position: relative;
-  animation: app-fade-in-up 0.55s var(--app-transition-spring) both,
-             message-pulse 3s ease-in-out infinite;
-}
-
-@keyframes message-pulse {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.005); }
+  animation: none;
 }
 
 .message-item.streaming::before {
@@ -494,53 +433,6 @@ function stableColorIndex(value: string, size: number): number {
   .tip-marker-answering {
     animation: none;
   }
-}
-
-.collaboration-report-card {
-  display: flex;
-  flex-direction: column;
-  gap: var(--app-space-xs);
-  padding: var(--app-space-md);
-  border: 1px solid var(--app-border);
-  border-radius: var(--app-radius-md);
-  background: var(--app-surface-muted);
-}
-
-.collaboration-report-title {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--app-space-xs);
-  color: var(--app-text-strong);
-  font-size: var(--app-font-md);
-  font-weight: 600;
-}
-
-.collaboration-report-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--app-success);
-}
-
-.collaboration-report-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--app-space-xs);
-  color: var(--app-text-secondary);
-  font-size: var(--app-font-sm);
-}
-
-.collaboration-report-meta span {
-  padding: 2px 8px;
-  border: 1px solid var(--app-border);
-  border-radius: var(--app-radius-pill);
-  background: var(--app-surface);
-}
-
-.collaboration-report-summary {
-  color: var(--app-text);
-  font-size: var(--app-font-md);
-  line-height: var(--app-leading-relaxed);
 }
 
 .streaming-ink-dots {

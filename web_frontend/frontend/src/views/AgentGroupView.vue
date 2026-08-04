@@ -9,12 +9,11 @@
             description="暂无群聊消息"
           />
           <MessageItem
-            v-for="message in visibleTranscript"
+            v-for="message in store.transcript"
             :key="message.id"
             :message="message"
             :streaming="message.status === 'streaming'"
-            :thinking="Boolean(message.metadata?.agent_group_activity)"
-            :quoteable="!message.metadata?.agent_group_activity"
+            quoteable
             :tip-context="tipContextFor(message)"
             :workspace-context="messageWorkspaceContext"
             @quote="quoteMessage"
@@ -32,25 +31,16 @@
       </section>
 
       <section v-if="store.activeRuns.length" class="active-runs">
-        <div
+        <n-button
           v-for="run in store.activeRuns"
           :key="run.group_run_id"
-          class="active-run"
+          size="small"
+          secondary
+          type="error"
+          @click="store.cancelRun(run.group_run_id)"
         >
-          <span>{{ agentName(run.speaker_package_id) }}</span>
-          <n-tag v-if="run.status === 'cancelling'" size="small">
-            {{ runStatusLabel(run.status) }}
-          </n-tag>
-          <n-button
-            v-else
-            size="small"
-            secondary
-            type="error"
-            @click="store.cancelRun(run.group_run_id)"
-          >
-            {{ t('agentGroup.stopAgent') }}
-          </n-button>
-        </div>
+          停止 {{ agentName(run.speaker_package_id) }}
+        </n-button>
       </section>
 
       <section v-if="retryableRuns.length" class="active-runs">
@@ -125,7 +115,6 @@ import { useContextReferenceStore } from '@/stores/contextReferences'
 import { messageContextReference } from '@/utils/contextReferences'
 import TipPanel from '@/components/chat/TipPanel.vue'
 import type { TipMessageContext } from '@/stores/tips'
-import { useI18n } from '@/composables/useI18n'
 
 const store = useAgentGroupStore()
 const inputRef = ref()
@@ -135,7 +124,6 @@ const showMentionPicker = ref(false)
 const mentionQuery = ref('')
 const quotedMessage = ref<TranscriptItem | null>(null)
 const referenceStore = useContextReferenceStore()
-const { t } = useI18n()
 const referenceScope = computed(() => `agent-group:${store.activeGroup?.group_id || 'new'}`)
 const messageWorkspaceContext = computed(() => ({
   resourceMode: 'agent_group' as const,
@@ -145,31 +133,6 @@ const tipScopeId = computed(() => store.activeGroup?.group_id || '')
 
 const activeRunKey = computed(() => store.activeRuns.map(run => `${run.group_run_id}:${run.status}`).join('|'))
 const retryableRuns = computed(() => store.runs.filter(run => ['failed', 'cancelled'].includes(run.status)))
-const visibleTranscript = computed<TranscriptItem[]>(() => {
-  const visibleRunIds = new Set(
-    store.transcript
-      .filter(message => message.role === 'assistant')
-      .map(message => String(message.metadata?.group_run_id || '').trim())
-      .filter(Boolean),
-  )
-  const activities = store.activeRuns
-    .filter(run => !visibleRunIds.has(run.group_run_id))
-    .map<TranscriptItem>(run => ({
-      id: `group-run-activity-${run.group_run_id}`,
-      role: 'assistant',
-      content: runStatusLabel(run.status),
-      timestamp: run.created_at,
-      status: 'streaming',
-      parts: [],
-      metadata: {
-        group_run_id: run.group_run_id,
-        package_id: run.speaker_package_id,
-        display_name: agentName(run.speaker_package_id),
-        agent_group_activity: true,
-      },
-    }))
-  return [...store.transcript, ...activities].sort((left, right) => left.timestamp.localeCompare(right.timestamp))
-})
 const filteredMentionMembers = computed(() => {
   const query = mentionQuery.value.toLocaleLowerCase()
   return store.members.filter(member => (
@@ -183,7 +146,7 @@ onMounted(async () => {
   nextTick(() => inputRef.value?.focus())
 })
 
-watch(() => visibleTranscript.value.map(message => `${message.id}:${message.timestamp}:${message.status}:${message.content}`).join('|'), () => {
+watch(() => store.transcript.map(message => `${message.id}:${message.timestamp}:${message.status}`).join('|'), () => {
   const container = scrollbarRef.value?.scrollbarInstRef?.containerRef || scrollbarRef.value?.containerRef
   if (!container || container.scrollHeight - container.scrollTop - container.clientHeight < 96) {
     nextTick(() => scrollbarRef.value?.scrollTo({ position: 'bottom' }))
@@ -192,13 +155,6 @@ watch(() => visibleTranscript.value.map(message => `${message.id}:${message.time
 
 function agentName(packageId: string): string {
   return store.agentById(packageId)?.agent_name || packageId
-}
-
-function runStatusLabel(status: string): string {
-  if (status === 'queued') return t('agentGroup.runQueued')
-  if (status === 'awaiting_approval') return t('agentGroup.runAwaitingApproval')
-  if (status === 'cancelling') return t('agentGroup.runCancelling')
-  return t('agentGroup.runRunning')
 }
 
 function selectMention(packageId: string) {
@@ -288,5 +244,4 @@ watch(() => activeRunKey.value, () => undefined)
 .approval-section { border-top: 1px solid var(--app-border); padding: var(--app-space-sm) var(--app-space-md); max-height: 38vh; overflow: auto; }
 .group-approval + .group-approval { margin-top: var(--app-space-sm); }
 .active-runs { display: flex; gap: var(--app-space-xs); flex-wrap: wrap; padding: var(--app-space-sm) var(--app-space-md); border-top: 1px solid var(--app-border); }
-.active-run { display: inline-flex; align-items: center; gap: var(--app-space-xs); padding-left: var(--app-space-sm); border-left: 2px solid var(--app-border-strong); color: var(--app-text-muted); font-size: 12px; }
 </style>

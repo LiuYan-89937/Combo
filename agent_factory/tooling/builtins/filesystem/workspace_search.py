@@ -51,14 +51,33 @@ def iter_workspace_files(root: Path) -> Iterator[Path]:
             yield item
 
 
-def workspace_path_record(path: Path, *, workspace_root: Path) -> dict[str, object]:
-    stat = path.stat()
+def workspace_path_record(
+    path: Path,
+    *,
+    workspace_root: Path,
+    mounts: dict[str, Path] | None = None,
+) -> dict[str, object]:
+    virtual_path = workspace_relative_path(path, workspace_root=workspace_root, mounts=mounts)
+    mount_name = virtual_path.split("/", 1)[0]
+    mounted = mount_name in (mounts or {})
+    try:
+        file_stat = path.stat()
+        entry_type = path_type(path)
+        size_bytes = file_stat.st_size if path.is_file() else None
+        modified_at = datetime.fromtimestamp(file_stat.st_mtime, tz=UTC).isoformat()
+        connected = True
+    except OSError:
+        entry_type = "directory" if mounted else "other"
+        size_bytes = None
+        modified_at = None
+        connected = False
     return {
-        "path": workspace_relative_path(path, workspace_root=workspace_root),
+        "path": virtual_path,
         "name": path.name,
-        "type": path_type(path),
-        "size_bytes": stat.st_size if path.is_file() else None,
-        "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=UTC).isoformat(),
+        "type": entry_type,
+        "size_bytes": size_bytes,
+        "modified_at": modified_at,
+        **({"mounted": True, "connected": connected} if mounted else {}),
     }
 
 

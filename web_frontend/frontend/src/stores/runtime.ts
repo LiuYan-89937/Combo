@@ -70,11 +70,10 @@ import {
   agentPackageConversationScope,
   agentPackageScopeInfoFromEvent,
   conversationScopeForMode,
-  emptyCollaborationConversationScope,
-  isCollaborationConversationScope,
   isMoreSpecificConversationScope,
   scopeFromEventPayload,
   scopeFromMessageMetadata,
+  scopeFromRequestPayload,
 } from './runtime/scopes'
 import {
   agentPackageSessionSnapshotView,
@@ -170,10 +169,6 @@ export const useRuntimeStore = defineStore('runtime', {
   }),
 
   getters: {
-    isCollaborationConversationActive: (state): boolean => {
-      return isCollaborationConversationScope(state.activeConversationScope)
-    },
-
     // 输入只因需要专门 UI 处理的中断锁定；运行中不再作为跨会话输入锁。
     isInputLocked: (state): boolean => {
       return state.runStatus === 'interrupted' && !isUserInputInterrupt(state.pendingInterrupt)
@@ -593,7 +588,10 @@ export const useRuntimeStore = defineStore('runtime', {
           session_id: request.payload?.session_id || null,
           payload: request.payload,
         } satisfies FactoryFrontendEvent
-        request.conversationScope = request.conversationScope || scopeFromEventPayload(scopeEvent) || null
+        request.conversationScope = request.conversationScope
+          || scopeFromRequestPayload(request.mode, request.payload)
+          || scopeFromEventPayload(scopeEvent)
+          || null
         this.activeRequests[request.requestId] = request
       })
 
@@ -777,10 +775,6 @@ export const useRuntimeStore = defineStore('runtime', {
       const nextScope = agentPackageConversationScope(
         String(event.payload.package_id),
         String(event.payload.agent_session.session_id),
-        {
-          collaborationId: event.payload.collaboration_id || event.payload.agent_session.collaboration_id,
-          collaborationTaskId: event.payload.collaboration_task_id || event.payload.agent_session.collaboration_task_id,
-        },
       )
       this._renameActiveConversationScope(nextScope)
       if (event.request_id && this.activeRequests[event.request_id]) {
@@ -1247,13 +1241,8 @@ export const useRuntimeStore = defineStore('runtime', {
 
     showEmptyAgentPackageSession(
       packageId: string | null = null,
-      collaborationId: string | null = null,
-      collaborationTaskId: string | null = null,
     ) {
-      this._resetConversationScope(agentPackageConversationScope(packageId, null, {
-        collaborationId,
-        collaborationTaskId,
-      }))
+      this._resetConversationScope(agentPackageConversationScope(packageId, null))
       this.activeFactorySessionId = null
       this.activeAgentSessionId = null
       this.currentMode = 'agent_package'
@@ -1275,33 +1264,9 @@ export const useRuntimeStore = defineStore('runtime', {
       this.activeAgentSessionId = null
     },
 
-    enterCollaborationConversation(
-      collaborationId: string,
-      packageId: string,
-      sessionId: string | null,
-      collaborationTaskId: string | null = null,
-    ) {
-      this._switchConversationScope(agentPackageConversationScope(packageId, sessionId, {
-        collaborationId,
-        collaborationTaskId,
-      }))
-      this.currentMode = 'agent_package'
-      this.activeFactorySessionId = null
-      this.activeAgentSessionId = sessionId
-    },
-
-    showEmptyCollaborationConversation() {
-      this._clearAgentPackageSelectionIntent()
-      this._resetConversationScope(emptyCollaborationConversationScope())
-      this.currentMode = 'agent_package'
-      this.activeFactorySessionId = null
-      this.activeAgentSessionId = null
-    },
-
     expectFactorySession(
       sessionId: string,
       mode: 'create_agent' | 'evolve_agent',
-      collaborationId: string | null = null,
     ) {
       if (mode !== 'evolve_agent') this._clearAgentPackageSelectionIntent()
       const session = this.sessions.find((item: any) => String(item?.session_id || '') === sessionId)
@@ -1311,7 +1276,6 @@ export const useRuntimeStore = defineStore('runtime', {
       const scope = conversationScopeForMode(mode, {
         session_id: sessionId,
         package_id: packageId,
-        collaboration_id: collaborationId,
       })
       if (scope) this._switchConversationScope(scope)
       this.currentMode = mode
@@ -1322,14 +1286,9 @@ export const useRuntimeStore = defineStore('runtime', {
     expectAgentPackageSession(
       packageId: string,
       sessionId: string,
-      collaborationId: string | null = null,
-      collaborationTaskId: string | null = null,
     ) {
       this.expectAgentPackageSelection(packageId, 'run')
-      this._switchConversationScope(agentPackageConversationScope(packageId, sessionId, {
-        collaborationId,
-        collaborationTaskId,
-      }))
+      this._switchConversationScope(agentPackageConversationScope(packageId, sessionId))
       this.currentMode = 'agent_package'
       this.activeFactorySessionId = null
       this.activeAgentSessionId = sessionId
@@ -1338,13 +1297,11 @@ export const useRuntimeStore = defineStore('runtime', {
     showEmptyFactoryConversation(
       mode: 'create_agent' | 'evolve_agent',
       packageId: string | null = null,
-      collaborationId: string | null = null,
     ) {
       if (mode !== 'evolve_agent') this._clearAgentPackageSelectionIntent()
       const scope = conversationScopeForMode(mode, {
         package_id: packageId,
         session_id: null,
-        collaboration_id: collaborationId,
       })
       if (scope) {
         this._resetConversationScope(scope)

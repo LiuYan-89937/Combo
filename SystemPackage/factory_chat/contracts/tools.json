@@ -16,7 +16,13 @@
       "shell_stop",
       "knowledge",
       "scheduler",
-      "skillhub"
+      "skillhub",
+      "agent_search",
+      "agent_manufacture",
+      "agent_delegate",
+      "agent_evolve",
+      "agent_team",
+      "background_tasks"
     ],
     "builtin_workspace_root": "/workdir",
     "builtin_allow_external_paths": false,

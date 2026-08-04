@@ -7,7 +7,6 @@
 
 import type { FactoryFrontendEvent } from '@/types/protocol'
 import { useAgentStore } from './agent'
-import { useCollaborationStore } from './collaboration'
 import { useExtensionStore } from './extension'
 import { useKnowledgeStore } from './knowledge'
 import { useRuntimeStore } from './runtime'
@@ -25,18 +24,6 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
   const runtimeStore = useRuntimeStore()
   if (event.event_type === 'agent_package_selected' && !runtimeStore.ownsAgentPackageSelection(event)) {
     return
-  }
-  if (event.event_type === 'collaboration_session_updated' && event.payload?.session) {
-    const collaborationStore = useCollaborationStore()
-    collaborationStore.applySessionSnapshot(event.payload.session as any)
-  }
-  if (event.event_type === 'collaboration_runtime_status_changed' && event.payload?.collaboration_id) {
-    const collaborationStore = useCollaborationStore()
-    collaborationStore.applyRuntimeStatus(
-      String(event.payload.collaboration_id),
-      event.payload.runtime_status || null,
-      event.payload.runtime_status_payload || {},
-    )
   }
   const hasRunAgentSession =
     (

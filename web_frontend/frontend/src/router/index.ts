@@ -12,7 +12,7 @@ import {
   translate,
 } from '@/i18n'
 
-const routes: RouteRecordRaw[] = [
+export const routes: RouteRecordRaw[] = [
   {
     path: '/',
     redirect: '/factory',
@@ -23,24 +23,14 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/FactoryView.vue'),
   },
   {
-    path: '/manufacturing',
-    name: 'Manufacturing',
-    component: () => import('@/views/FactoryView.vue'),
-  },
-  {
-    path: '/evolution',
-    name: 'Evolution',
-    component: () => import('@/views/FactoryView.vue'),
-  },
-  {
     path: '/agents',
     name: 'Agents',
     component: () => import('@/views/PublishedView.vue'),
   },
   {
-    path: '/collaboration',
-    name: 'Collaboration',
-    component: () => import('@/views/CollaborationView.vue'),
+    path: '/agent-hub',
+    name: 'AgentHub',
+    component: () => import('@/views/AgentHubView.vue'),
   },
   {
     path: '/agent-group',
@@ -51,25 +41,21 @@ const routes: RouteRecordRaw[] = [
     path: '/knowledge',
     name: 'Knowledge',
     component: () => import('@/views/KnowledgeView.vue'),
-    meta: { rightSidebarAvailable: false },
   },
   {
     path: '/scheduler',
     name: 'Scheduler',
     component: () => import('@/views/SchedulerView.vue'),
-    meta: { rightSidebarAvailable: false },
   },
   {
     path: '/extensions',
     name: 'Extensions',
     component: () => import('@/views/ExtensionsView.vue'),
-    meta: { rightSidebarAvailable: false },
   },
   {
     path: '/model-pool',
     name: 'ModelPool',
     component: () => import('@/views/ModelPoolView.vue'),
-    meta: { rightSidebarAvailable: false },
   },
   {
     path: '/benchmarks',

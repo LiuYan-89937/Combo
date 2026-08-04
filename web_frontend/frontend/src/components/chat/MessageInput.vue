@@ -1,5 +1,15 @@
 <template>
   <div class="message-input-container" @dragover.prevent @drop.prevent="handleFileDrop">
+    <div v-if="disabled && disabledHint" class="input-disabled-guidance" aria-live="polite">
+      <RouterLink
+        v-if="disabledHintRoute"
+        class="input-disabled-guidance-link"
+        :to="disabledHintRoute"
+      >
+        <span>{{ disabledHint }}</span>
+        <n-icon size="14"><ArrowForward /></n-icon>
+      </RouterLink>
+    </div>
     <div v-if="queuedMessages.length > 0" class="queued-message-tray">
       <div
         v-for="queuedMessage in queuedMessages"
@@ -177,21 +187,28 @@
       </div>
 
       <div class="right-actions">
-        <n-button
-          type="primary"
-          class="send-button"
-          :disabled="!canSend"
-          :aria-label="t('common.send')"
-          @click="handleSend"
+        <slot name="before-send"></slot>
+        <span
+          class="send-control"
+          :class="{ 'has-queued': queuedCount > 0 }"
+          :title="isRunning ? t('chat.queueSend') : t('common.send')"
         >
-          {{ isRunning ? t('chat.queueSend') : t('common.send') }}
-          <span v-if="queuedCount > 0" class="queued-count">
-            {{ t('chat.queuedCount', { count: queuedCount }) }}
+          <n-button
+            type="primary"
+            circle
+            class="send-button"
+            :disabled="!canSend"
+            :aria-label="isRunning ? t('chat.queueSend') : t('common.send')"
+            @click="handleSend"
+          >
+            <template #icon>
+              <n-icon><Send /></n-icon>
+            </template>
+          </n-button>
+          <span v-if="queuedCount > 0" class="queued-count" aria-hidden="true">
+            {{ queuedCount > 9 ? '9+' : queuedCount }}
           </span>
-          <template #icon>
-            <n-icon><Send /></n-icon>
-          </template>
-        </n-button>
+        </span>
 
         <n-button
           v-if="isRunning"
@@ -214,8 +231,9 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted } from 'vue'
+import { RouterLink, type RouteLocationRaw } from 'vue-router'
 import { NInput, NButton, NIcon, NText, NPopover, NRadioButton, NRadioGroup, NSelect, useMessage } from 'naive-ui'
-import { AttachOutline, BulbOutline, CaretDown, Close, CodeSlash, Send, Stop } from '@/components/icons'
+import { ArrowForward, AttachOutline, BulbOutline, CaretDown, Close, CodeSlash, Send, Stop } from '@/components/icons'
 import ResourceIcon from '@/components/common/ResourceIcon.vue'
 import { useI18n } from '@/composables/useI18n'
 import { useFileCapabilities } from '@/composables/useFileCapabilities'
@@ -249,6 +267,8 @@ const props = withDefaults(
     reasoningControlEnabled?: boolean
     reasoningIntensity?: number | null
     referenceScope?: string
+    disabledHint?: string
+    disabledHintRoute?: RouteLocationRaw
   }>(),
   {
     placeholder: '',
@@ -265,6 +285,7 @@ const props = withDefaults(
     reasoningControlEnabled: false,
     reasoningIntensity: null,
     referenceScope: 'global',
+    disabledHint: '',
   }
 )
 
@@ -506,6 +527,49 @@ defineExpose({
   box-shadow: 0 0 0 3px var(--app-focus-shadow);
 }
 
+.input-disabled-guidance {
+  position: absolute;
+  top: -42px;
+  right: var(--app-space-md);
+  z-index: 3;
+  opacity: 0;
+  transform: translateY(5px);
+  transition: opacity var(--app-transition-fast), transform var(--app-transition-fast);
+}
+
+.input-disabled-guidance::after {
+  position: absolute;
+  right: 0;
+  bottom: -18px;
+  left: 0;
+  height: 18px;
+  content: '';
+}
+
+.message-input-container:hover .input-disabled-guidance,
+.input-disabled-guidance:focus-within {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.input-disabled-guidance-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 2px;
+  border: 0;
+  border-bottom: 1px solid var(--app-text);
+  background: transparent;
+  color: var(--app-text);
+  font-size: var(--app-font-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.input-disabled-guidance-link:hover {
+  opacity: 0.68;
+}
+
 .queued-message-tray {
   display: flex;
   flex-direction: column;
@@ -741,16 +805,44 @@ defineExpose({
   text-align: center;
 }
 
+.send-control {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+}
+
 .send-button,
 .cancel-button {
   min-width: 0;
-  border-radius: var(--app-radius-md);
   transition: transform var(--app-transition-fast);
 }
 
+.send-button {
+  border-radius: 50%;
+}
+
+.cancel-button {
+  border-radius: var(--app-radius-md);
+}
+
 .queued-count {
-  margin-left: var(--app-space-xs);
-  font-size: var(--app-font-xs);
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  display: grid;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  place-items: center;
+  border: 2px solid var(--app-surface);
+  border-radius: 999px;
+  background: var(--app-text);
+  color: var(--app-surface);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
   opacity: 0.78;
 }
 

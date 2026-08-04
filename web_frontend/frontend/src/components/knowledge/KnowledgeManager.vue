@@ -27,6 +27,17 @@
       </div>
     </div>
 
+    <div v-if="embeddingConfigurationMissing && !embeddingConfigurationLoading" class="embedding-guidance">
+      <div class="embedding-guidance-copy">
+        <n-text strong>{{ t('knowledge.embeddingModelMissing') }}</n-text>
+        <n-text depth="3">{{ t('knowledge.embeddingModelMissingHint') }}</n-text>
+      </div>
+      <button type="button" class="embedding-guidance-link" @click="openModelPool">
+        <span>{{ t('knowledge.configureEmbeddingModel') }}</span>
+        <n-icon size="14"><ArrowForward /></n-icon>
+      </button>
+    </div>
+
     <n-scrollbar class="source-list">
       <div class="source-grid">
         <n-card
@@ -178,6 +189,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useRouter } from 'vue-router'
 import {
   NButton,
   NCard,
@@ -195,7 +207,7 @@ import {
   NTag,
   NText,
 } from 'naive-ui'
-import { Add, Document, Library, Settings, EllipsisHorizontal } from '@/components/icons'
+import { Add, ArrowForward, Document, Library, Settings, EllipsisHorizontal } from '@/components/icons'
 import { useKnowledgeManager } from '@/composables/knowledge/useKnowledgeManager'
 import KnowledgeSourceFormModal from './KnowledgeSourceFormModal.vue'
 import ResourceTargetSelector from '@/components/resources/ResourceTargetSelector.vue'
@@ -205,10 +217,13 @@ import type { KnowledgeSourceView, WorkspaceFileView } from '@/types/protocol'
 import type { KnowledgeIngestionProgress } from '@/stores/knowledge'
 
 const { t } = useI18n()
+const router = useRouter()
 
 const {
   busyAction,
   busySourceId,
+  embeddingConfigurationLoading,
+  embeddingConfigurationMissing,
   confirmDeleteSources,
   documentsDrawerOpen,
   documentsTitle,
@@ -233,6 +248,10 @@ const {
   sourceIdOf,
   sourceKey,
 } = useKnowledgeManager()
+
+function openModelPool(): void {
+  void router.push({ name: 'ModelPool' })
+}
 
 const knowledgePreviewFile = computed<WorkspaceFileView | null>(() => {
   const content = String(knowledgeStore.currentDocument?.content || '')
@@ -333,6 +352,45 @@ function ingestionProgressStatus(source: KnowledgeSourceView): 'default' | 'succ
   flex-direction: column;
   gap: var(--app-space-xs);
   min-width: 0;
+}
+
+.embedding-guidance {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-space-md);
+  margin: calc(var(--app-space-md) * -1) 0 var(--app-space-lg);
+  padding: 10px 14px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface-muted);
+}
+
+.embedding-guidance-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--app-font-sm);
+}
+
+.embedding-guidance-link {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 2px;
+  border: 0;
+  border-bottom: 1px solid var(--app-text);
+  background: transparent;
+  color: var(--app-text);
+  font-size: var(--app-font-sm);
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.embedding-guidance-link:hover {
+  opacity: 0.68;
 }
 
 .manager-controls {
@@ -573,6 +631,10 @@ function ingestionProgressStatus(source: KnowledgeSourceView): 'default' | 'succ
 @media (max-width: 640px) {
   .knowledge-manager {
     padding: var(--app-space-md);
+  }
+  .embedding-guidance {
+    align-items: flex-start;
+    flex-direction: column;
   }
   .source-grid {
     grid-template-columns: 1fr;

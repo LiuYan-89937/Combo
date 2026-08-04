@@ -21,7 +21,7 @@ export function useWorkspaceFileOpener() {
     const reference = workspaceFileReference(source, defaultScope)
     if (!reference || !context) return false
 
-    uiStore.openRightSidebar('workspace')
+    uiStore.setConversationDockPanel('workspace')
     workspaceStore.setScope(reference.scope)
     runtimeStore.workspaceFile = null
     await commands.readFile(

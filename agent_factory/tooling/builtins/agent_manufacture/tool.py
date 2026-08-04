@@ -1,40 +1,47 @@
 from __future__ import annotations
 
-import os
 from typing import Any
 
-from agent_factory.collaboration_system.store import CollaborationStore, resolve_collaboration_store_path
+from agent_factory.collaboration_system.parent_controller import (
+    background_task_client,
+    background_task_request_id,
+    parent_agent_context,
+    runtime_user_config,
+)
 from agent_factory.tooling.envelope import tool_envelope
 from agent_factory.tooling.spec import ToolRiskResult
 
 
-COLLABORATION_ROOT_ENV = "AGENTFACTORY_COLLABORATION_ROOT"
+TOOL_ID = "agent_manufacture"
 
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
-    store = CollaborationStore(_store_path(resources))
-    collaboration_id = _required_text(arguments, "collaboration_id")
-    request = store.create_manufacturing_request(collaboration_id, _request_payload(arguments))
+    request_payload = _request_payload(arguments)
+    parent = parent_agent_context(resources, tool_id=TOOL_ID)
+    task = background_task_client(resources).submit(
+        parent.task_owner(),
+        type="manufacture",
+        request_id=background_task_request_id(tool_id=TOOL_ID),
+        task_text=_manufacturing_prompt(request_payload),
+        payload={
+            "request": request_payload,
+            "user_config": runtime_user_config(resources),
+        },
+        delivery_standard={"requirements": request_payload["delivery_standards"]},
+        visible_context={"source_agent_search": request_payload["source_agent_search"]},
+    )
     output = {
-        "status": request["status"],
-        "request_id": request["request_id"],
-        "collaboration_id": collaboration_id,
-        "create_agent_session_id": request.get("create_agent_session_id"),
-        "message": "制造请求已登记，宿主协作服务会自动执行制造并在通过验证后发布。",
-        "next_step": "等待 manufacturing_completed 协作消息；发布完成后再次调用 agent_search 获取新 package_id。",
+        "status": task.status,
+        "task_id": task.task_id,
+        "create_agent_session_id": task.assignee_session_id,
+        "message": "制造请求已进入统一后台任务队列，完成后会通知当前会话。",
+        "next_step": "等待后台任务完成；发布完成后再次调用 agent_search 获取新 package_id。",
     }
     return tool_envelope(output, summary=output["message"])
 
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     del context
-    collaboration_id = str(arguments.get("collaboration_id") or "").strip()
-    if not collaboration_id:
-        return ToolRiskResult(
-            action="deny",
-            risk_level="medium",
-            reasons=["agent_manufacture requires collaboration_id"],
-        ).model_dump(mode="json")
     missing = [
         key
         for key in (
@@ -54,8 +61,24 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
     return ToolRiskResult(
         action="inherit",
         risk_level="medium",
-        reasons=["agent manufacturing creates and publishes a new package in collaboration delegated mode"],
+        reasons=["agent manufacturing creates and publishes a new package"],
     ).model_dump(mode="json")
+
+
+def _manufacturing_prompt(payload: dict[str, Any]) -> str:
+    lines = [
+        f"制造 Agent：{payload['agent_name']}",
+        f"用途：{payload['purpose']}",
+        f"现有 Agent 不足原因：{payload['reason_existing_agents_insufficient']}",
+    ]
+    if payload["target_tasks"]:
+        lines.append("目标任务：\n- " + "\n- ".join(payload["target_tasks"]))
+    lines.append("交付标准：\n- " + "\n- ".join(payload["delivery_standards"]))
+    if payload["constraints"]:
+        lines.append("约束：\n- " + "\n- ".join(payload["constraints"]))
+    if payload["preferred_pattern"]:
+        lines.append(f"偏好运行模式：{payload['preferred_pattern']}")
+    return "\n\n".join(lines)
 
 
 def _request_payload(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -63,19 +86,16 @@ def _request_payload(arguments: dict[str, Any]) -> dict[str, Any]:
         "agent_name": _required_text(arguments, "agent_name"),
         "purpose": _required_text(arguments, "purpose"),
         "target_tasks": _string_list(arguments.get("target_tasks")),
-        "delivery_standards": _string_list(arguments.get("delivery_standards")),
-        "reason_existing_agents_insufficient": _required_text(arguments, "reason_existing_agents_insufficient"),
+        "delivery_standards": _required_string_list(arguments, "delivery_standards"),
+        "reason_existing_agents_insufficient": _required_text(
+            arguments, "reason_existing_agents_insufficient"
+        ),
         "preferred_pattern": _optional_text(arguments.get("preferred_pattern")),
         "constraints": _string_list(arguments.get("constraints")),
-        "source_agent_search": arguments.get("source_agent_search") if isinstance(arguments.get("source_agent_search"), dict) else {},
+        "source_agent_search": arguments.get("source_agent_search")
+        if isinstance(arguments.get("source_agent_search"), dict)
+        else {},
     }
-
-
-def _store_path(resources: dict[str, Any]) -> str | None:
-    root = str(resources.get("collaboration_root") or os.getenv(COLLABORATION_ROOT_ENV) or "").strip()
-    if not root:
-        return None
-    return str(resolve_collaboration_store_path(os.path.join(root, "factory.sqlite")))
 
 
 def _required_text(arguments: dict[str, Any], key: str) -> str:
@@ -92,11 +112,13 @@ def _optional_text(value: Any) -> str:
 def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
-    result: list[str] = []
-    for item in value:
-        text = str(item or "").strip()
-        if text and text not in result:
-            result.append(text)
+    return list(dict.fromkeys(text for item in value if (text := str(item or "").strip())))
+
+
+def _required_string_list(arguments: dict[str, Any], key: str) -> list[str]:
+    result = _string_list(arguments.get(key))
+    if not result:
+        raise ValueError(f"{key} must contain at least one item")
     return result
 
 

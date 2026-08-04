@@ -22,6 +22,9 @@ export function useSchedulerCommands() {
       reasoningIntensity: runtimePreferences.reasoningIntensity,
       requestTimeoutSeconds: runtimePreferences.requestTimeoutSeconds,
       maxRetries: runtimePreferences.maxRetries,
+      userConfig: {
+        max_parallel_sub_agents: runtimePreferences.maxParallelSubAgents,
+      },
     })
     return transport.applyEventRequest(schedulerApi.createJob({
       ...job,

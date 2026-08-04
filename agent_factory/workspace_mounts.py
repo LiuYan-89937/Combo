@@ -48,14 +48,15 @@ class WorkspaceMountService:
                 return record, False
 
         mount_name = _mount_name(name or source.name)
-        comparable_name = _comparable_mount_name(mount_name)
-        if any(_comparable_mount_name(record.name) == comparable_name for record in records):
+        normalized_mount_name = _comparable_mount_name(mount_name)
+        if any(_comparable_mount_name(record.name) == normalized_mount_name for record in records):
             raise ValueError(f"workspace mount name is already in use: {mount_name}")
 
         self.workdir_root.mkdir(parents=True, exist_ok=True)
         destination = self.workdir_root / mount_name
         if os.path.lexists(destination):
             raise ValueError(f"workspace entry is already in use: {mount_name}")
+
         _create_directory_link(source=source, destination=destination)
         return (
             WorkspaceMountRecord(
@@ -69,8 +70,9 @@ class WorkspaceMountService:
 
     def unmount(self, record: WorkspaceMountRecord) -> None:
         destination = self.workdir_root / record.name
-        if os.path.lexists(destination):
-            _remove_directory_link(destination)
+        if not os.path.lexists(destination):
+            return
+        _remove_directory_link(destination)
 
     def ensure_projection(self, record: WorkspaceMountRecord) -> bool:
         source = Path(record.source_path).expanduser().resolve(strict=False)

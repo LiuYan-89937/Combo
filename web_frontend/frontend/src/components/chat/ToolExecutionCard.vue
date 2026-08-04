@@ -122,7 +122,6 @@ import { NIcon } from 'naive-ui'
 import {
   Bot,
   Calendar,
-  Collaborate,
   Document,
   Edit,
   Folder,
@@ -150,7 +149,7 @@ const props = withDefaults(defineProps<{
 const { t } = useI18n()
 const presentation = computed(() => toolPresentation(props.part.toolName, props.part.arguments))
 const displayName = computed(() => (
-  presentation.value.labelKey ? t(presentation.value.labelKey) : props.part.toolName
+  presentation.value.labelKey ? t(presentation.value.labelKey as any) : props.part.toolName
 ))
 const state = computed(() => {
   if (props.part.error || props.part.status === 'failed') return 'failed'
@@ -174,7 +173,6 @@ const categoryIcon = computed(() => ({
   process: Terminal,
   knowledge: Folder,
   scheduler: Calendar,
-  collaboration: Collaborate,
   agent: Bot,
   extension: ToolBox,
   generic: ToolBox,

@@ -5,13 +5,11 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, watch } from 'vue'
+import { watch } from 'vue'
 import AgentPackageList from '@/components/agent/AgentPackageList.vue'
 import { useAgentStore } from '@/stores/agent'
-import { useUiStore } from '@/stores/ui'
 
 const agentStore = useAgentStore()
-const uiStore = useUiStore()
 
 watch(
   () => agentStore.agentPackages.map((pkg) => pkg.package_id),
@@ -24,9 +22,6 @@ watch(
   { immediate: true },
 )
 
-onMounted(() => {
-  uiStore.openRightSidebar('status')
-})
 </script>
 
 <style scoped>

@@ -1,15 +1,18 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { REASONING_INTENSITY_MAX } from '@/utils/reasoning'
+import { backgroundTasksApi } from '@/api/backgroundTasks'
 
 export const DEFAULT_RUNTIME_REQUEST_TIMEOUT_SECONDS = 300
 export const DEFAULT_RUNTIME_MAX_RETRIES = 5
+export const DEFAULT_MAX_PARALLEL_SUB_AGENTS = 5
 
 const STORAGE_KEYS = {
   mainModelProfileId: 'fast-agent-factory.runtimeMainModelProfileId',
   reasoningIntensity: 'fastagentfactory.runtimeReasoningIntensity',
   requestTimeoutSeconds: 'fast-agent-factory.runtimeRequestTimeoutSeconds',
   maxRetries: 'fast-agent-factory.runtimeMaxRetries',
+  maxParallelSubAgents: 'fast-agent-factory.maxParallelSubAgents',
 } as const
 
 export const useRuntimePreferencesStore = defineStore('runtimePreferences', () => {
@@ -17,6 +20,10 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
   const reasoningIntensity = ref<number | null>(readStoredReasoningIntensity())
   const requestTimeoutSeconds = ref(readStoredRequestTimeoutSeconds())
   const maxRetries = ref(readStoredMaxRetries())
+  const maxParallelSubAgents = ref(readStoredMaxParallelSubAgents())
+  const maxParallelSubAgentsSaveFailed = ref(false)
+  let schedulerSettingsRevision: number | undefined
+  let settingsWriteQueue = Promise.resolve()
 
   function setMainModelProfileId(profileId: string): void {
     mainModelProfileId.value = String(profileId || '').trim()
@@ -46,15 +53,48 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     writeStoredValue(STORAGE_KEYS.maxRetries, String(normalized))
   }
 
+  function setMaxParallelSubAgents(value: number): void {
+    const normalized = Math.max(1, Math.round(value))
+    maxParallelSubAgents.value = normalized
+    maxParallelSubAgentsSaveFailed.value = false
+    settingsWriteQueue = settingsWriteQueue.then(async () => {
+      try {
+        const { settings } = await backgroundTasksApi.updateSettings(
+          normalized,
+          schedulerSettingsRevision,
+        )
+        schedulerSettingsRevision = settings.revision
+        maxParallelSubAgents.value = settings.max_parallel_sub_agents
+        writeStoredValue(STORAGE_KEYS.maxParallelSubAgents, String(settings.max_parallel_sub_agents))
+      } catch {
+        maxParallelSubAgentsSaveFailed.value = true
+        await refreshMaxParallelSubAgents().catch(() => undefined)
+      }
+    })
+  }
+
+  async function refreshMaxParallelSubAgents(): Promise<void> {
+    const { settings } = await backgroundTasksApi.settings()
+    schedulerSettingsRevision = settings.revision
+    maxParallelSubAgents.value = settings.max_parallel_sub_agents
+    writeStoredValue(STORAGE_KEYS.maxParallelSubAgents, String(settings.max_parallel_sub_agents))
+  }
+
+  void refreshMaxParallelSubAgents().catch(() => undefined)
+
   return {
     mainModelProfileId,
     reasoningIntensity,
     requestTimeoutSeconds,
     maxRetries,
+    maxParallelSubAgents,
+    maxParallelSubAgentsSaveFailed,
     setMainModelProfileId,
     setReasoningIntensity,
     setRequestTimeoutSeconds,
     setMaxRetries,
+    setMaxParallelSubAgents,
+    refreshMaxParallelSubAgents,
   }
 })
 
@@ -82,6 +122,13 @@ function readStoredMaxRetries(): number {
   if (!stored) return DEFAULT_RUNTIME_MAX_RETRIES
   const value = Number(stored)
   return Number.isInteger(value) && value >= 0 ? value : DEFAULT_RUNTIME_MAX_RETRIES
+}
+
+function readStoredMaxParallelSubAgents(): number {
+  const stored = readStoredText(STORAGE_KEYS.maxParallelSubAgents)
+  if (!stored) return DEFAULT_MAX_PARALLEL_SUB_AGENTS
+  const value = Number(stored)
+  return Number.isInteger(value) && value >= 1 ? value : DEFAULT_MAX_PARALLEL_SUB_AGENTS
 }
 
 function writeOrRemove(key: string, value: string): void {

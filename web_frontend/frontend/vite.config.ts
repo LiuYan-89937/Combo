@@ -3,21 +3,7 @@ import vue from '@vitejs/plugin-vue'
 import UnoCSS from 'unocss/vite'
 import { fileURLToPath, URL } from 'node:url'
 
-const backendProxy = {
-  '/health': {
-    target: 'http://127.0.0.1:8000',
-    changeOrigin: true,
-  },
-  '/events': {
-    target: 'http://127.0.0.1:8000',
-    changeOrigin: true,
-  },
-  '/api': {
-    target: 'http://127.0.0.1:8000',
-    changeOrigin: true,
-  },
-}
-
+// https://vitejs.dev/config/
 export default defineConfig({
   plugins: [
     vue(),
@@ -29,21 +15,28 @@ export default defineConfig({
     }
   },
   server: {
-    port: 3000,
-    strictPort: true,
-    host: '127.0.0.1',
-    proxy: backendProxy,
-  },
-  preview: {
-    port: 3000,
-    strictPort: true,
-    host: '127.0.0.1',
-    proxy: backendProxy,
+    port: 5173, // Tauri expects frontend on 5173 by default
+    strictPort: true, // Fail if port is already in use
+    host: '127.0.0.1', // Bind to localhost for security
+    proxy: {
+      '/events': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+      '/api': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+    }
   },
   build: {
     target: 'esnext',
     minify: 'terser',
     rollupOptions: {
+      input: {
+        app: fileURLToPath(new URL('./index.html', import.meta.url)),
+        showcase: fileURLToPath(new URL('./showcase.html', import.meta.url)),
+      },
       output: {
         manualChunks: {
           'vue-vendor': ['vue', 'vue-router', 'pinia'],

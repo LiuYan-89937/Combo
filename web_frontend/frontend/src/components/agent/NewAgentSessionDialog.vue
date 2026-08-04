@@ -11,6 +11,7 @@
         <strong>{{ t('sessions.newIndependentTask') }}</strong>
         <span>{{ t('sessions.newIndependentTaskDescription') }}</span>
       </button>
+
       <section class="new-session-option shared-workspace-option">
         <div>
           <strong>{{ t('sessions.newInWorkspace') }}</strong>
@@ -23,7 +24,11 @@
           :placeholder="t('sessions.selectWorkspace')"
         />
         <div class="shared-workspace-actions">
-          <n-button secondary @click="showDirectoryPicker = true">
+          <n-button
+            secondary
+            :loading="creatingLinkedWorkspace"
+            @click="chooseLinkedWorkspace"
+          >
             {{ t('sessions.selectLocalFolder') }}
           </n-button>
           <n-button
@@ -37,8 +42,9 @@
       </section>
     </div>
   </n-modal>
+
   <WorkspaceDirectoryPicker
-    v-model:show="showDirectoryPicker"
+    v-model:show="showServerDirectoryPicker"
     @select="registerLinkedWorkspace"
   />
 </template>
@@ -46,6 +52,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { NButton, NModal, NSelect, useMessage } from 'naive-ui'
+import { desktopDirectoryPickerAvailable, selectDesktopDirectory } from '@/api/desktopDialogs'
 import { workspaceApi, type WorkspaceProjectView } from '@/api/workspace'
 import WorkspaceDirectoryPicker from '@/components/workspace/WorkspaceDirectoryPicker.vue'
 import { useI18n } from '@/composables/useI18n'
@@ -63,7 +70,8 @@ const { t } = useI18n()
 const message = useMessage()
 const workspaces = ref<WorkspaceProjectView[]>([])
 const selectedWorkspaceId = ref<string | null>(null)
-const showDirectoryPicker = ref(false)
+const creatingLinkedWorkspace = ref(false)
+const showServerDirectoryPicker = ref(false)
 const workspaceOptions = computed(() => workspaces.value
   .filter(workspace => workspace.mode === 'project')
   .map(workspace => ({
@@ -71,11 +79,14 @@ const workspaceOptions = computed(() => workspaces.value
     value: workspace.workspace_id,
   })))
 
-watch(() => props.show, show => {
-  if (!show) return
-  selectedWorkspaceId.value = props.initialWorkspaceId || null
-  void refreshWorkspaces()
-})
+watch(
+  () => props.show,
+  show => {
+    if (!show) return
+    selectedWorkspaceId.value = props.initialWorkspaceId || null
+    void refreshWorkspaces()
+  },
+)
 
 async function refreshWorkspaces() {
   try {
@@ -90,7 +101,22 @@ function selectWorkspace(workspaceId: string | null) {
   emit('update:show', false)
 }
 
+async function chooseLinkedWorkspace() {
+  if (creatingLinkedWorkspace.value) return
+  if (!desktopDirectoryPickerAvailable()) {
+    showServerDirectoryPicker.value = true
+    return
+  }
+  try {
+    const sourcePath = await selectDesktopDirectory()
+    if (sourcePath) await registerLinkedWorkspace(sourcePath)
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : String(error))
+  }
+}
+
 async function registerLinkedWorkspace(sourcePath: string) {
+  creatingLinkedWorkspace.value = true
   try {
     const response = await workspaceApi.createProject({
       title: sourcePath.split(/[\\/]/).filter(Boolean).at(-1) || t('sessions.sharedWorkspace'),
@@ -108,6 +134,8 @@ async function registerLinkedWorkspace(sourcePath: string) {
     selectedWorkspaceId.value = response.workspace.workspace_id
   } catch (error) {
     message.error(error instanceof Error ? error.message : String(error))
+  } finally {
+    creatingLinkedWorkspace.value = false
   }
 }
 </script>
@@ -116,7 +144,12 @@ async function registerLinkedWorkspace(sourcePath: string) {
 :global(.new-agent-session-modal) {
   width: min(560px, calc(100vw - 32px));
 }
-.new-session-options { display: grid; gap: var(--app-space-md); }
+
+.new-session-options {
+  display: grid;
+  gap: var(--app-space-md);
+}
+
 .new-session-option {
   width: 100%;
   border: 1px solid var(--app-border);
@@ -128,11 +161,33 @@ async function registerLinkedWorkspace(sourcePath: string) {
   gap: var(--app-space-xs);
   text-align: left;
 }
-button.new-session-option { cursor: pointer; }
-button.new-session-option:hover { border-color: var(--app-text); }
-.new-session-option span { color: var(--app-text-muted); font-size: var(--app-font-sm); }
-.shared-workspace-option { gap: var(--app-space-md); }
-.shared-workspace-option > div:first-child { display: grid; gap: var(--app-space-xs); }
+
+button.new-session-option {
+  cursor: pointer;
+  transition:
+    border-color var(--app-transition-fast),
+    transform var(--app-transition-fast);
+}
+
+button.new-session-option:hover {
+  border-color: var(--app-text);
+  transform: translateY(-1px);
+}
+
+.new-session-option span {
+  color: var(--app-text-muted);
+  font-size: var(--app-font-sm);
+}
+
+.shared-workspace-option {
+  gap: var(--app-space-md);
+}
+
+.shared-workspace-option > div:first-child {
+  display: grid;
+  gap: var(--app-space-xs);
+}
+
 .shared-workspace-actions {
   display: flex;
   justify-content: flex-end;

@@ -1,18 +1,24 @@
 from __future__ import annotations
 
-from agent_factory.local_inference.capacity import (
-    ChatInferenceCapacity,
-    inspect_chat_inference_capacity,
-)
+from typing import Any
 
 
-def inspect_configured_inference_capacity() -> ChatInferenceCapacity:
-    """Return the shared chat inference capacity used by collaboration dispatch.
+DEFAULT_MAX_PARALLEL_SUB_AGENTS = 5
 
-    The local inference capacity probe reads the active chat model profile's
-    ``parallel_slots`` setting and enriches it with live llama-server occupancy
-    when the inference endpoint is reachable. Collaboration worker limits are
-    applied separately by the collaboration service.
-    """
 
-    return inspect_chat_inference_capacity()
+def normalize_max_parallel_sub_agents(
+    value: Any,
+    *,
+    fallback: int = DEFAULT_MAX_PARALLEL_SUB_AGENTS,
+) -> int:
+    if value is None or str(value).strip() == "":
+        return fallback
+    if isinstance(value, bool):
+        raise ValueError("max_parallel_sub_agents must be a positive integer")
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("max_parallel_sub_agents must be a positive integer") from exc
+    if normalized <= 0:
+        raise ValueError("max_parallel_sub_agents must be a positive integer")
+    return normalized
