@@ -238,7 +238,7 @@ import ResourceIcon from '@/components/common/ResourceIcon.vue'
 import { useI18n } from '@/composables/useI18n'
 import { useFileCapabilities } from '@/composables/useFileCapabilities'
 import { MAX_RUNTIME_ATTACHMENTS, extensionFromMimeType, pastedImageFiles, runtimeFileAttachmentFromFile } from '@/utils/attachments'
-import type { QueuedMessageView, RuntimeAttachmentInput } from '@/types/protocol'
+import type { ContextReferenceInput, QueuedMessageView, RuntimeAttachmentInput } from '@/types/protocol'
 import { useContextReferenceStore } from '@/stores/contextReferences'
 
 const { t } = useI18n()
@@ -482,6 +482,27 @@ function clearTrailingAtMention() {
   focus()
 }
 
+function restoreDraft(message: string, draftAttachments: RuntimeAttachmentInput[]) {
+  inputText.value = message
+  attachments.value = []
+  referenceStore.clear(normalizedReferenceScope.value)
+  draftAttachments.forEach(attachment => {
+    if (isContextReference(attachment)) {
+      referenceStore.add(attachment, normalizedReferenceScope.value)
+    } else {
+      attachments.value.push(attachment)
+    }
+  })
+  emit('input', inputText.value)
+  focus()
+}
+
+function isContextReference(attachment: RuntimeAttachmentInput): attachment is ContextReferenceInput {
+  return attachment.source_kind === 'message_reference'
+    || attachment.source_kind === 'workspace_file'
+    || attachment.source_kind === 'text_selection'
+}
+
 watch(
   normalizedReferenceScope,
   scope => referenceStore.activate(scope),
@@ -505,6 +526,7 @@ onMounted(() => {
 defineExpose({
   focus,
   clearTrailingAtMention,
+  restoreDraft,
 })
 </script>
 

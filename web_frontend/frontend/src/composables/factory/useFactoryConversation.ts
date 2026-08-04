@@ -111,7 +111,11 @@ export function useFactoryConversation() {
     runtimePreferences.setReasoningIntensity(value)
   }
 
-  function sendMessage(message: string, attachments: RuntimeAttachmentInput[]): boolean {
+  function sendMessage(
+    message: string,
+    attachments: RuntimeAttachmentInput[],
+    workspaceId?: string | null,
+  ): boolean {
     if (chatModelProfiles.value.length === 0) {
       uiStore.addNotification({
         type: 'warning',
@@ -126,6 +130,9 @@ export function useFactoryConversation() {
     const packageId = agentStore.activeChatPackageId
     if (packageId) {
       const agentSessionId = agentStore.selectedSessionId || undefined
+      const newSessionWorkspaceId = workspaceId === undefined
+        ? runtimeStore.activeWorkspaceId
+        : String(workspaceId || '').trim() || null
       const command = commands.sendAgentPackageMessage(
         packageId,
         message,
@@ -133,7 +140,7 @@ export function useFactoryConversation() {
         payloadAttachments,
         runtimeModelOptions(),
         undefined,
-        agentSessionId ? null : runtimeStore.activeWorkspaceId,
+        agentSessionId ? null : newSessionWorkspaceId,
       )
       runtimeStore.addUserMessage(message, command.request_id, {
         mode: 'agent_package',
