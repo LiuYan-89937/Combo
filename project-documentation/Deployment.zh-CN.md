@@ -22,6 +22,7 @@
 | 本机 | Chat SSH 转发 | `127.0.0.1:18003 -> remote:8003` |
 | 本机 | Embedding SSH 转发 | `127.0.0.1:18002 -> remote:8002` |
 | 本机 | Telemetry SSH 转发 | `127.0.0.1:18004 -> remote:8004` |
+| 本机 | Image SSH 转发 | `127.0.0.1:18005 -> remote:8005` |
 | 本机 | 官方 llama.cpp 源码 | `vendor/llama.cpp-official` |
 | 本机 | AMD llama.cpp 源码 | `vendor/llama.cpp-amd` |
 | 本机 | 共享算子追踪源码 | `vendor/llama.cpp-common` |
@@ -29,6 +30,7 @@
 | 远端 | llama-server ROCm | `127.0.0.1:8003` |
 | 远端 | Embedding 服务 | `127.0.0.1:8002` |
 | 远端 | 推理控制与遥测 | `127.0.0.1:8004` |
+| 远端 | stable-diffusion.cpp Image 服务 | `127.0.0.1:8005` |
 | 远端 | 最小推理 bundle | `/root/FastAgentFactory` |
 | 远端 | 两套 llama.cpp 源码 | `/root/fastagentfactory-llama-sources` |
 | 远端 | 两套构建与活动入口 | `/root/.fastagentfactory/llama` |
@@ -58,7 +60,7 @@ npm --version
 - Python 3.11+
 - Node.js 18+
 - SSH 模式下，私钥或 ssh-agent 可以登录 AMD 推理主机
-- 本机端口 `3000`、`8000`、`18002`、`18003`、`18004` 未被占用
+- 本机端口 `3000`、`8000`、`18002`、`18003`、`18004` 以及启用图片模型时的 `18005` 未被占用
 
 Windows 控制端直接在 PowerShell 中运行 `.\deploy.ps1 <命令>`，参数与
 `./deploy.sh <命令>` 一致，不要求 WSL 或 Git Bash。Web、Agent Runtime
@@ -408,7 +410,7 @@ Worker 租约以协作任务为唯一边界。同一个 AgentPackage 可以在�
 12. 幂等同步 Chat、Embedding、Image Generation 的节点 Profile 与 Web external Profile，并清理不属于当前部署清单的旧模型与推理配置。
 13. 设置 `main`、`task`、`compression` 和 `embedding` 默认 Profile。
 14. 激活 `LLAMA_DEFAULT_IMPLEMENTATION`，启动推理节点并等待 Chat、Embedding 与已启用的 Image Generation 都进入 `ready`。
-15. 从统一的 `.env` 派生运行时连接参数；SSH 目标建立隧道，本机目标直连节点，随后启动前后端；传入 `--no-web` 时跳过 Web 启动。
+15. 从统一的 `.env` 派生运行时连接参数；SSH 目标建立隧道，本机目标直连节点。随后按 `uv.lock` 和 `package-lock.json` 准备依赖并完成前端类型检查与生产构建，等待后端 `http://127.0.0.1:8000/health` 后，以 `--host 127.0.0.1 --port 3000 --strictPort` 启动前端并探测 `http://127.0.0.1:3000/`；传入 `--no-web` 时跳过 Web 启动。
 
 首次下载和编译时间取决于网络、磁盘和 Radeon GPU 主机 CPU。终端会直接显示 curl 与 ModelScope 下载进度。
 
@@ -470,13 +472,17 @@ FLUX.1-dev 受 Non-Commercial License 约束，该许可不等同于 Apache 或 
 
 ```bash
 curl --fail http://127.0.0.1:8000/health
+curl --fail http://127.0.0.1:3000/
 curl --fail http://127.0.0.1:18004/health
 curl --fail http://127.0.0.1:18004/runtime/rocm
 curl --fail http://127.0.0.1:18004/runtimes
 curl --fail http://127.0.0.1:18003/v1/models
+curl --fail http://127.0.0.1:18005/v1/models  # IMAGE_ENABLED=1 时
 ```
 
 Embedding 由模型配置页面和后端运行状态共同验收，不需要把远端端口暴露公网。
+
+终端应依次出现 `Backend is ready`、`Frontend is ready` 和 `Application ready`。前端进程必须显示 `http://127.0.0.1:3000/`；`4173` 是 Vite 的默认 Preview 端口，不属于部署器的有效就绪地址。
 
 ### 6.3 Web 验收
 
@@ -489,7 +495,7 @@ http://127.0.0.1:3000
 在“模型配置”确认：
 
 - GPU 型号、ROCm、PyTorch HIP 和显存数据来自远端节点；
-- Chat 与 Embedding 状态为 ready；
+- Chat、Embedding 与所有已启用的 Image Runtime 状态为 ready；
 - Chat 显示 256K Context、Q8_0 KV 和 Flash Attention；
 - mmproj 已关联，Profile 允许图片输入；
 - 显存预算显示预计占用、剩余显存和是否可加载。
@@ -694,6 +700,21 @@ SSH 已连接但远端转发目标未监听：
 ```
 
 AgentPackage、系统 Chat 和子 Agent 统一使用 Native Runtime，不依赖本机 Docker。
+
+### 11.7 前端显示 4173 或等待 180 秒后超时
+
+部署器固定探测 `http://127.0.0.1:3000/`，并通过显式 `--host 127.0.0.1 --port 3000 --strictPort` 参数启动 Vite Preview。若日志显示 `4173`，说明当前 checkout 仍是旧版 `deploy/web_runtime.py`，或绕过部署入口直接执行了 `npm run preview`。不要把 4173 写入 `.env`，应更新代码后重新执行 `./deploy.sh up`。
+
+前端依赖声明或 lockfile 更新后，先严格按已提交 lockfile 重建本机依赖：
+
+```bash
+cd web_frontend/frontend
+npm ci
+cd ../..
+./deploy.sh up
+```
+
+仓库将 TypeScript 固定在与当前 Vue 类型检查器兼容的 5.3 补丁版本线上。部署时不要脱离 lockfile 单独升级 TypeScript 的 major/minor 版本。
 
 ## 12. 部署与性能证据
 

@@ -19,8 +19,10 @@ from remote_deployment import CommandError, require_command, run
 
 
 WEB_SEARCH_MCP_REPOSITORY = "https://github.com/LiuYan-89937/BigOpenLLMSearch.git"
-BACKEND_HEALTH_URL = "http://127.0.0.1:8000/health"
-FRONTEND_HEALTH_URL = "http://127.0.0.1:3000/"
+BACKEND_PORT = 8000
+FRONTEND_PORT = 3000
+BACKEND_HEALTH_URL = f"http://127.0.0.1:{BACKEND_PORT}/health"
+FRONTEND_HEALTH_URL = f"http://127.0.0.1:{FRONTEND_PORT}/"
 
 
 @dataclass(slots=True)
@@ -125,8 +127,8 @@ class WebRuntimeSupervisor:
         print("FastAgentFactory Web")
         print("===================================")
         self._check_configuration()
-        require_available_port("Backend", 8000)
-        require_available_port("Frontend", 3000)
+        require_available_port("Backend", BACKEND_PORT)
+        require_available_port("Frontend", FRONTEND_PORT)
         try:
             self._start_inference_connection()
             self._sync_python_dependencies()
@@ -332,7 +334,7 @@ class WebRuntimeSupervisor:
             print("Built-in web search MCP is ready")
 
     def _start_backend(self) -> None:
-        print("Starting backend web runtime service on port 8000...")
+        print(f"Starting backend web runtime service on port {BACKEND_PORT}...")
         self.backend = ManagedProcess.start_logged(
             "backend",
             [str(self.python_bin), "web_frontend/backend/event_api_server.py"],
@@ -348,11 +350,21 @@ class WebRuntimeSupervisor:
         run([npm, "run", "build"], cwd=self.frontend_dir, environment=self.environment)
 
     def _start_frontend(self) -> None:
-        print("Starting frontend preview server on port 3000...")
+        print(f"Starting frontend preview server on port {FRONTEND_PORT}...")
         npm = require_command("npm")
         self.frontend = ManagedProcess.start_logged(
             "frontend",
-            [npm, "run", "preview"],
+            [
+                npm,
+                "run",
+                "preview",
+                "--",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(FRONTEND_PORT),
+                "--strictPort",
+            ],
             cwd=self.frontend_dir,
             environment=self.environment,
             log_path=self.logs_dir / "web-frontend.log",
@@ -383,8 +395,8 @@ class WebRuntimeSupervisor:
         print("")
         print("===================================")
         print("Application ready")
-        print("Frontend: http://localhost:3000")
-        print("Backend:  http://localhost:8000")
+        print(f"Frontend: http://localhost:{FRONTEND_PORT}")
+        print(f"Backend:  http://localhost:{BACKEND_PORT}")
         print("===================================")
         print(f"Backend log: {self.logs_dir / 'web-backend.log'}")
         print(f"Frontend log: {self.logs_dir / 'web-frontend.log'}")

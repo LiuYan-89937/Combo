@@ -18,6 +18,7 @@ Both modes use the same inference control API, model profiles, Official/AMD swit
 | Chat API | inference host `127.0.0.1:8003` |
 | Embedding API | inference host `127.0.0.1:8002` |
 | Inference control and telemetry | inference host `127.0.0.1:8004` |
+| Image generation API | inference host `127.0.0.1:8005` |
 | Official llama.cpp source | `vendor/llama.cpp-official` |
 | AMD llama.cpp source | `vendor/llama.cpp-amd` |
 | Shared dispatch tracing | `vendor/llama.cpp-common` |
@@ -315,14 +316,16 @@ The workflow is idempotent and performs these stages:
 10. Start inference control, Chat, Embedding, and configured Image services.
 11. Wait for real readiness, including model runtime metadata and MTP slot state when enabled.
 12. Generate local endpoint settings and the resource encryption key.
-13. Prepare Python, frontend, and Native Agent runtime dependencies.
-14. Start the backend and frontend unless `--no-web` was selected.
+13. Prepare Python, frontend, and Native Agent runtime dependencies from `uv.lock` and `package-lock.json`, then type-check and build the production frontend.
+14. Start the backend and wait for `http://127.0.0.1:8000/health`; start Vite Preview with explicit `--host 127.0.0.1 --port 3000 --strictPort` arguments and wait for `http://127.0.0.1:3000/`, unless `--no-web` was selected.
 
 Validated model files are reused on later runs. Partial downloads resume instead of restarting.
 
 By default, the FLUX image profile is enabled and active. Deployment waits for Chat, Embedding, and FLUX to report `ready`; FLUX uses eager loading and a 1024×1024 default generation size. Set `IMAGE_ENABLED=0` only when the image runtime should remain disabled.
 
 Open `http://localhost:3000` after readiness completes.
+
+The frontend port is not Vite's default preview port. `./deploy.sh up` owns the Web lifecycle and reports `Application ready` only after the backend and frontend probes both succeed. A log showing `http://127.0.0.1:4173/` indicates an outdated deployment controller or a direct preview invocation, not a valid FastAgentFactory startup.
 
 ## 6. Acceptance Checks
 
@@ -349,6 +352,7 @@ For SSH mode, local forwarded endpoints should respond:
 curl --fail http://127.0.0.1:18004/health
 curl --fail http://127.0.0.1:18003/health
 curl --fail http://127.0.0.1:18002/health
+curl --fail http://127.0.0.1:18005/v1/models  # when IMAGE_ENABLED=1
 ```
 
 For local mode, use the configured direct loopback ports.
@@ -356,6 +360,15 @@ For local mode, use the configured direct loopback ports.
 Readiness is not inferred only from an open port. The control node verifies the loaded model, implementation metadata, slot configuration, and required MTP state.
 
 ### 6.3 Web
+
+Verify both control-host endpoints before UI acceptance:
+
+```bash
+curl --fail http://127.0.0.1:8000/health
+curl --fail http://127.0.0.1:3000/
+```
+
+The terminal should print `Backend is ready`, `Frontend is ready`, and `Application ready` in that order. The preview process must report `http://127.0.0.1:3000/`; port `4173` is not accepted by the deployment readiness probe.
 
 Verify from the UI:
 
@@ -472,6 +485,21 @@ Inspect context size, slots, KV cache types, GPU layers, YaRN scaling, MTP, imag
 ### Native Agent Runtime Initialization Fails
 
 Check Python, uv, package dependency declarations, and session-workspace permissions, then rerun `./deploy.sh up`. The AgentPackage runtime does not require Docker.
+
+### Frontend Preview Starts on 4173 or Never Becomes Ready
+
+The deployment supervisor probes `http://127.0.0.1:3000/` and starts Vite with an explicit strict port. If the log reports `4173`, verify that the checkout contains the current `deploy/web_runtime.py` and that startup was performed through `./deploy.sh up`, not `npm run preview`.
+
+When frontend dependency declarations or the lockfile changed, rebuild the local installation from the committed lock before retrying:
+
+```bash
+cd web_frontend/frontend
+npm ci
+cd ../..
+./deploy.sh up
+```
+
+The committed toolchain keeps TypeScript on the Vue type-checker's compatible 5.3 patch line. Do not regenerate the lockfile with an unrelated TypeScript major/minor upgrade during deployment.
 
 ## 12. Static Checks
 

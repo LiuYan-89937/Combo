@@ -39,6 +39,8 @@ FastAgentFactory 的核心能力由多个可组合后端子系统构成。能力
 
 Model Pool 管理 chat、embedding 和 image-generation profile、artifact、默认角色、能力元数据与使用记录。模型 Contract 可按角色绑定 main、task、compression，也可为模型工具单独绑定图像模型。
 
+AMD 比赛部署中，控制端保存的是指向推理节点的 external profile。模型文件、ROCm Runtime、llama.cpp slot 与 Embedding/Image 服务都位于 AMD 节点；SSH 隧道只改变传输路径，不改变 ModelPoolStore 的 profile、默认角色和能力选择语义。前端通过 `/profiles` 与 `/defaults` 读取和更新这套配置，不另建在线模型目录。
+
 ### 运行时模型选择
 
 - AgentPackage 通过 Model Binding 声明模型角色、来源和能力要求；

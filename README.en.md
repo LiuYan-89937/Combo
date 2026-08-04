@@ -54,6 +54,7 @@ Control host
 │   18003 -> inference :8003  direct llama.cpp diagnostics  │
 │   18002 -> inference :8002  Embedding API                  │
 │   18004 -> inference :8004  Chat admission + control       │
+│   18005 -> inference :8005  Image generation API           │
 └──────────────────────────────┬─────────────────────────────┘
                                │
 AMD ROCm inference host        ▼
@@ -62,6 +63,7 @@ AMD ROCm inference host        ▼
 │   ├─ fair admission, priority, and queue cancellation      │
 │   ├─ llama-server ROCm :8003                               │
 │   ├─ SentenceTransformers + PyTorch HIP :8002              │
+│   ├─ stable-diffusion.cpp HIPBLAS :8005                    │
 │   └─ ROCm telemetry, model lifecycle, and benchmarks       │
 │                                                            │
 │ official + AMD llama.cpp builds / models / runtime state   │
@@ -166,13 +168,17 @@ Agent runtime, and SSH tunnel remain on the Windows machine, while only
 inference runs remotely. Linked workspaces use native paths such as
 `C:\Users\<username>\Documents`.
 
-The command validates the target, prepares the ROCm build environment, synchronizes the bundled native inference sources, builds Official and AMD llama.cpp implementations, downloads and validates configured models, creates model profiles, starts the inference services, prepares local Python/frontend/native runtime dependencies, and launches the Web application.
+The command validates the target, prepares the ROCm build environment, synchronizes the bundled native inference sources, builds Official and AMD llama.cpp implementations, downloads and validates configured models, creates model profiles, starts the inference services, prepares locked Python/frontend/native runtime dependencies, type-checks and builds the frontend, and launches the Web application. The preview server is explicitly bound to `127.0.0.1:3000`; application readiness is reported only after both backend and frontend probes succeed.
 
 Open:
 
 ```text
 http://localhost:3000
 ```
+
+The Web control host uses backend port `8000` and frontend port `3000`. A successful startup prints `Backend is ready`, `Frontend is ready`, and then `Application ready`. If Vite reports its default port `4173`, an old deployment script or a direct `npm run preview` command was used; update the checkout and rerun `./deploy.sh up` instead of configuring the application for 4173.
+
+In SSH mode, the Model Pool UI reads external profiles and role defaults stored on the control host, while Chat, Embedding, and Image inference runs on the AMD ROCm node through the SSH tunnels. The Web host does not load a second copy of the competition models.
 
 ### 3. Initialize Agents before first use
 
@@ -253,7 +259,7 @@ Full design details and measured boundaries are in [AMD Radeon GPU Inference Opt
   This Markdown viewer does not support embedded video.
 </video>
 
-If the embedded player is unavailable, [open or download the MP4 demo directly](FastAgentFactory-Demo.mp4) (approximately 34 MB).
+If the embedded player is unavailable, [open or download the MP4 demo directly](FastAgentFactory-Demo.mp4).
 
 The demonstration intentionally avoids rerunning the full ten-round profiling suite and includes:
 

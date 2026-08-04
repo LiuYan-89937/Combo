@@ -35,6 +35,8 @@ Both patterns use the same context, memory, knowledge, tool, artifact, checkpoin
 
 The model pool manages local and external profiles for chat, embedding, and image generation. Profiles describe modality, tool calling, reasoning, model description, native context, YaRN extension, output limit, concurrency, KV cache, Flash Attention, GPU layers, MTP, and VRAM policy.
 
+In the AMD competition deployment, the control host stores external profiles that point to the inference node. Model files, the ROCm runtime, llama.cpp slots, and Embedding/Image services remain on the AMD host. SSH tunnels change only transport; profile selection, role defaults, and capability checks still come from the control-host ModelPoolStore through `/profiles` and `/defaults`. The frontend does not maintain a separate online model catalog.
+
 ### Runtime Selection
 
 Model selection considers role, modality, tool-calling support, reasoning support, context requirements, and the profile description. Packages can bind models explicitly or use role defaults. Model-tool bindings remain separate from the main chat model.
