@@ -4,6 +4,7 @@
     preset="card"
     :title="t('workspace.selectServerDirectory')"
     class="workspace-directory-picker"
+    :mask-closable="false"
     @update:show="emit('update:show', $event)"
   >
     <div class="directory-picker-toolbar">
