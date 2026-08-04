@@ -169,7 +169,6 @@ def _script_run_target_schema() -> dict:
                     },
                     "cwd": {"type": "string"},
                     "mode": {"type": "string", "enum": ["foreground", "background"]},
-                    "wait_seconds": {"type": "integer", "minimum": 0, "maximum": 86400},
                     "max_output_chars": {"type": "integer", "minimum": 1, "maximum": 200000},
                 },
                 "required": ["command"],

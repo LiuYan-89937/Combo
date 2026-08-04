@@ -57,7 +57,8 @@ PROCESS_TOOL_SPECS: list[ToolSpec] = [
         description=(
             f"在 workspace 边界内通过当前平台的 {host_shell_display_name()} 启动命令，"
             "子进程默认已位于当前会话工作区根目录，命令应直接使用相对路径，无需先执行 cd。"
-            "前台执行会在工具卡片中持续显示 stdout/stderr；支持后台运行，wait 超时只返回状态，不自动终止进程。"
+            "foreground 会持续显示 stdout/stderr 并等待命令进入最终状态，一次调用即可获得完整结果；"
+            "仅对服务、监听器等明确需要脱离当前轮次的长期任务使用 background。"
         ),
         entrypoint="agent_factory.tooling.builtins.process.shell:run",
         input_schema={
@@ -74,14 +75,10 @@ PROCESS_TOOL_SPECS: list[ToolSpec] = [
                     "type": "string",
                     "enum": ["foreground", "background"],
                     "default": "foreground",
-                    "description": "foreground 会等待 wait_seconds；background 会立即返回进程状态。",
-                },
-                "wait_seconds": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 86400,
-                    "default": 30,
-                    "description": "foreground 模式最多等待多少秒返回；超时不杀进程。",
+                    "description": (
+                        "普通命令使用 foreground：持续等待到 completed、failed 或 stopped，不需要调用 shell_status。"
+                        "只有需要跨轮次保持运行的长期任务才使用 background；background 会立即返回 process_id。"
+                    ),
                 },
                 "max_output_chars": {
                     "type": "integer",
@@ -109,7 +106,10 @@ PROCESS_TOOL_SPECS: list[ToolSpec] = [
     ),
     ToolSpec(
         id="shell_status",
-        description="查看由 shell 工具启动的进程状态和已收集输出。",
+        description=(
+            "查看由 shell 以 background 模式启动的进程状态和已收集输出。"
+            "不要对 foreground 命令调用；foreground 会在原 shell 调用中持续输出并直接返回最终状态。"
+        ),
         entrypoint="agent_factory.tooling.builtins.process.shell_status:run",
         input_schema={
             "type": "object",

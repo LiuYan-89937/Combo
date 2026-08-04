@@ -33,6 +33,10 @@ _TOOL_OUTPUT_SESSION_ID: ContextVar[str | None] = ContextVar(
     "agentfactory_tool_output_session_id",
     default=None,
 )
+_RUNTIME_RUN_CONTROL: ContextVar[Any | None] = ContextVar(
+    "agentfactory_runtime_run_control",
+    default=None,
+)
 
 
 @contextmanager
@@ -84,6 +88,15 @@ def tool_output_session_context(session_id: str) -> Iterator[None]:
         _TOOL_OUTPUT_SESSION_ID.reset(token)
 
 
+@contextmanager
+def runtime_run_control_context(control: Any | None) -> Iterator[None]:
+    token = _RUNTIME_RUN_CONTROL.set(control)
+    try:
+        yield
+    finally:
+        _RUNTIME_RUN_CONTROL.reset(token)
+
+
 def current_tool_call() -> CurrentToolCall | None:
     return _CURRENT_TOOL_CALL.get()
 
@@ -104,3 +117,7 @@ def current_tool_approval_override() -> ToolApprovalOverride | None:
 
 def current_tool_output_session_id() -> str | None:
     return _TOOL_OUTPUT_SESSION_ID.get()
+
+
+def current_runtime_run_control() -> Any | None:
+    return _RUNTIME_RUN_CONTROL.get()

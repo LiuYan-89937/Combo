@@ -16,12 +16,13 @@ from agent_factory.tooling.workspace_paths import workspace_path_candidate
 
 
 _OUTPUT_BUFFER_LIMIT = 1_000_000
-_DEFAULT_WAIT_SECONDS = 30
 _DEFAULT_OUTPUT_CHARS = 12_000
 _OUTPUT_OBSERVATION_INTERVAL_SECONDS = 0.1
+_CANCELLATION_GRACE_SECONDS = 2
 
 
 ProcessOutputObserver = Callable[[dict[str, Any]], None]
+ProcessCancellationCheck = Callable[[], bool]
 LOGGER = logging.getLogger(__name__)
 
 
@@ -89,9 +90,9 @@ class ProcessManager:
         command: str,
         cwd: Path,
         mode: str,
-        wait_seconds: int,
         max_output_chars: int,
         on_output: ProcessOutputObserver | None = None,
+        cancellation_requested: ProcessCancellationCheck | None = None,
     ) -> dict[str, Any]:
         process_id = uuid.uuid4().hex
         shell_runtime = resolve_shell_runtime()
@@ -121,12 +122,12 @@ class ProcessManager:
         self._start_reader(managed, "stdout", process.stdout, output_changed=output_changed)
         self._start_reader(managed, "stderr", process.stderr, output_changed=output_changed)
         if mode == "foreground":
-            self._wait_without_killing(
+            self._wait_until_terminal(
                 managed,
-                wait_seconds=wait_seconds,
                 max_output_chars=max_output_chars,
                 output_changed=output_changed,
                 on_output=on_output,
+                cancellation_requested=cancellation_requested,
             )
         return self.snapshot(process_id=process_id, max_output_chars=max_output_chars)
 
@@ -155,14 +156,7 @@ class ProcessManager:
 
     def stop(self, *, process_id: str, grace_seconds: int, max_output_chars: int) -> dict[str, Any]:
         managed = self._get(process_id)
-        managed.stop_requested = True
-        if managed.process.poll() is None:
-            managed.shell_runtime.terminate_tree(managed.process)
-            try:
-                managed.process.wait(timeout=grace_seconds)
-            except subprocess.TimeoutExpired:
-                managed.shell_runtime.kill_tree(managed.process)
-                managed.process.wait()
+        self._terminate(managed, grace_seconds=grace_seconds)
         return self.snapshot(process_id=process_id, max_output_chars=max_output_chars)
 
     def close(self) -> None:
@@ -205,30 +199,23 @@ class ProcessManager:
         managed.reader_threads.append(thread)
         thread.start()
 
-    def _wait_without_killing(
+    def _wait_until_terminal(
         self,
         managed: ManagedProcess,
         *,
-        wait_seconds: int,
         max_output_chars: int,
         output_changed: threading.Event,
         on_output: ProcessOutputObserver | None,
+        cancellation_requested: ProcessCancellationCheck | None,
     ) -> None:
-        if wait_seconds <= 0:
-            return
-        deadline = time.monotonic() + wait_seconds
         while managed.process.poll() is None:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return
-            changed = output_changed.wait(
-                timeout=min(_OUTPUT_OBSERVATION_INTERVAL_SECONDS, remaining)
-            )
+            if cancellation_requested is not None and cancellation_requested():
+                self._terminate(managed, grace_seconds=_CANCELLATION_GRACE_SECONDS)
+                break
+            changed = output_changed.wait(timeout=_OUTPUT_OBSERVATION_INTERVAL_SECONDS)
             if changed:
                 try:
-                    managed.process.wait(
-                        timeout=min(_OUTPUT_OBSERVATION_INTERVAL_SECONDS, remaining)
-                    )
+                    managed.process.wait(timeout=_OUTPUT_OBSERVATION_INTERVAL_SECONDS)
                 except subprocess.TimeoutExpired:
                     pass
                 output_changed.clear()
@@ -238,6 +225,17 @@ class ProcessManager:
         if output_changed.is_set():
             output_changed.clear()
             self._notify_output(managed, max_output_chars=max_output_chars, observer=on_output)
+
+    def _terminate(self, managed: ManagedProcess, *, grace_seconds: int) -> None:
+        managed.stop_requested = True
+        if managed.process.poll() is not None:
+            return
+        managed.shell_runtime.terminate_tree(managed.process)
+        try:
+            managed.process.wait(timeout=grace_seconds)
+        except subprocess.TimeoutExpired:
+            managed.shell_runtime.kill_tree(managed.process)
+            managed.process.wait()
 
     def _notify_output(
         self,
@@ -351,7 +349,3 @@ def bounded_int(arguments: dict[str, Any], key: str, *, default: int, minimum: i
 
 def output_limit(arguments: dict[str, Any]) -> int:
     return bounded_int(arguments, "max_output_chars", default=_DEFAULT_OUTPUT_CHARS, minimum=1, maximum=200_000)
-
-
-def wait_seconds(arguments: dict[str, Any]) -> int:
-    return bounded_int(arguments, "wait_seconds", default=_DEFAULT_WAIT_SECONDS, minimum=0, maximum=86_400)
