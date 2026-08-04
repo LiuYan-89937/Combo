@@ -25,7 +25,6 @@ from agent_factory.runtime_workspace import RUNTIME_WORKSPACE_MOUNTS_SESSION_KEY
 from agent_factory.runtime_kernel.planning import is_plan_and_execute_pattern_id
 from agent_factory.runtime_kernel.prompt_fragments import runtime_prompt_fragments_from_state
 from agent_factory.runtime_kernel.tool_governance import tool_governance_prompt
-from agent_factory.tooling.builtins.filesystem.guidance import WRITE_STRATEGY_GUIDANCE
 
 
 DEFAULT_AGENT_SYSTEM_PROMPT = "You are the generated Agent runtime model. Answer the user directly and concisely."
@@ -227,15 +226,9 @@ def _executor_tool_policy(state: Any) -> str:
         "before retrying read with the exact file name/path. "
         "Call shell only when the available package/runtime tools cannot accomplish the current plan step; "
         "when doing so, include fallback_reason in the tool arguments explaining the gap. "
-        f"{WRITE_STRATEGY_GUIDANCE} "
-        "For a complete single-file replacement, call write with action=write_once, path, and content. "
-        "For staged writing, call action=start first, use the returned write_id for ordered action=append calls, "
-        "then call action=commit once; call action=abort if the staged write is abandoned. "
-        "Use edit for every multi-file change and for structured create, replace, move, copy, or delete operations. "
-        "edit is transactional: first call action=preview with the complete operations array, inspect the returned "
-        "affected_files diff, then call action=commit with the exact transaction_id returned by that preview. "
-        "Never invent or reuse a transaction_id, and never use shell as a fallback for file creation, movement, "
-        "copying, or deletion when edit is available. "
+        "Use write only when the complete content of one file is ready; provide path and the entire content in one call. "
+        "Use edit for a targeted change to one existing UTF-8 file: provide path, an exact old_text block, and new_text. "
+        "By default old_text must match exactly once; use replace_all only when every match should change. "
         f"{boundary} Filesystem-tool outputs should be written under the workspace root, for example "
         f"report.md or {workspace_root.rstrip('/')}/report.md."
     )
