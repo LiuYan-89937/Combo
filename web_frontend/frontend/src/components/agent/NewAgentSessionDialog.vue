@@ -4,7 +4,10 @@
     preset="card"
     :title="t('sessions.createTitle')"
     class="new-agent-session-modal"
-    @update:show="emit('update:show', $event)"
+    :closable="dialogClosable"
+    :mask-closable="false"
+    :close-on-esc="dialogClosable"
+    @update:show="handleDialogVisibility"
   >
     <div class="new-session-options">
       <button type="button" class="new-session-option" @click="selectWorkspace(null)">
@@ -26,7 +29,7 @@
         <div class="shared-workspace-actions">
           <n-button
             secondary
-            :loading="creatingLinkedWorkspace"
+            :loading="linkedWorkspaceBusy"
             @click="chooseLinkedWorkspace"
           >
             {{ t('sessions.selectLocalFolder') }}
@@ -41,6 +44,14 @@
         </div>
       </section>
     </div>
+
+    <template #footer>
+      <div class="new-session-footer">
+        <n-button :disabled="!dialogClosable" @click="closeDialog">
+          {{ t('common.cancel') }}
+        </n-button>
+      </div>
+    </template>
   </n-modal>
 
   <WorkspaceDirectoryPicker
@@ -70,8 +81,15 @@ const { t } = useI18n()
 const message = useMessage()
 const workspaces = ref<WorkspaceProjectView[]>([])
 const selectedWorkspaceId = ref<string | null>(null)
+const selectingLinkedWorkspace = ref(false)
 const creatingLinkedWorkspace = ref(false)
 const showServerDirectoryPicker = ref(false)
+const linkedWorkspaceBusy = computed(() => (
+  selectingLinkedWorkspace.value || creatingLinkedWorkspace.value
+))
+const dialogClosable = computed(() => (
+  !linkedWorkspaceBusy.value && !showServerDirectoryPicker.value
+))
 const workspaceOptions = computed(() => workspaces.value
   .filter(workspace => workspace.mode === 'project')
   .map(workspace => ({
@@ -102,17 +120,28 @@ function selectWorkspace(workspaceId: string | null) {
 }
 
 async function chooseLinkedWorkspace() {
-  if (creatingLinkedWorkspace.value) return
+  if (linkedWorkspaceBusy.value) return
   if (!desktopDirectoryPickerAvailable()) {
     showServerDirectoryPicker.value = true
     return
   }
+  selectingLinkedWorkspace.value = true
   try {
     const sourcePath = await selectDesktopDirectory()
     if (sourcePath) await registerLinkedWorkspace(sourcePath)
   } catch (error) {
     message.error(error instanceof Error ? error.message : String(error))
+  } finally {
+    selectingLinkedWorkspace.value = false
   }
+}
+
+function handleDialogVisibility(show: boolean) {
+  if (show || dialogClosable.value) emit('update:show', show)
+}
+
+function closeDialog() {
+  if (dialogClosable.value) emit('update:show', false)
 }
 
 async function registerLinkedWorkspace(sourcePath: string) {
@@ -192,5 +221,10 @@ button.new-session-option:hover {
   display: flex;
   justify-content: flex-end;
   gap: var(--app-space-sm);
+}
+
+.new-session-footer {
+  display: flex;
+  justify-content: flex-end;
 }
 </style>
