@@ -99,7 +99,18 @@
         </MessageInput>
       </div>
     </div>
-    <ConversationFloatingDock :session-id="backgroundTaskSessionId" />
+    <ConversationFloatingDock
+      :session-id="backgroundTaskSessionId"
+      @request-new-agent-session="requestNewAgentSession"
+    />
+    <NewAgentSessionDialog
+      v-if="pendingWorkspaceAction"
+      :show="true"
+      :package-id="pendingWorkspaceAction.packageId"
+      :initial-workspace-id="pendingWorkspaceAction.initialWorkspaceId"
+      @update:show="handleWorkspaceDialogVisibility"
+      @create="completeWorkspaceSelection"
+    />
     <TipPanel v-if="tipScopeId" :scope-type="tipScopeType" :scope-id="tipScopeId" />
   </div>
 </template>
@@ -122,6 +133,7 @@ import PublishConfirmationPanel from '@/components/chat/PublishConfirmationPanel
 import ResourceRequestPanel from '@/components/chat/ResourceRequestPanel.vue'
 import SchedulerRunStatusCard from '@/components/scheduler/SchedulerRunStatusCard.vue'
 import ConversationFloatingDock from '@/components/chat/ConversationFloatingDock.vue'
+import NewAgentSessionDialog from '@/components/agent/NewAgentSessionDialog.vue'
 import ContextProgressControl from '@/components/chat/ContextProgressControl.vue'
 import type { RuntimeAttachmentInput } from '@/types/protocol'
 import type { TranscriptItem } from '@/types/protocol'
@@ -134,6 +146,7 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import { isAgentSessionsLanding as routeIsAgentSessionsLanding } from '@/utils/agentSessionRoute'
 import { SYSTEM_CHAT_PACKAGE_ID } from '@/utils/resourceScope'
 import { agentPackageConversationScope } from '@/stores/runtime/scopes'
+import { useAgentSessionNavigation } from '@/composables/agent/useAgentSessionNavigation'
 
 const runtimeStore = useRuntimeStore()
 const agentStore = useAgentStore()
@@ -147,6 +160,19 @@ const scrollbarRef = ref()
 const inputRef = ref()
 const referenceStore = useContextReferenceStore()
 const resourceContext = useResourceContext()
+const { startNewAgentSession } = useAgentSessionNavigation()
+type PendingWorkspaceAction = {
+  kind: 'new_session'
+  packageId: string
+  initialWorkspaceId: string | null
+} | {
+  kind: 'first_message'
+  packageId: string
+  initialWorkspaceId: null
+  message: string
+  attachments: RuntimeAttachmentInput[]
+}
+const pendingWorkspaceAction = ref<PendingWorkspaceAction | null>(null)
 const messageWorkspaceContext = computed(() => resourceContext.workspaceContext.value)
 const referenceScope = computed(() => [
   'factory',
@@ -218,10 +244,65 @@ const activeSchedulerRunCards = computed(() => {
 })
 
 function handleSend(message: string, attachments: RuntimeAttachmentInput[]) {
-  if (!sendMessage(message, attachments)) return
+  const packageId = agentStore.activeChatPackageId
+  if (
+    packageId
+    && !agentStore.selectedSessionId
+    && !runtimeStore.activeWorkspaceId
+  ) {
+    pendingWorkspaceAction.value = {
+      kind: 'first_message',
+      packageId,
+      initialWorkspaceId: null,
+      message,
+      attachments,
+    }
+    return
+  }
+  sendAndFollow(message, attachments)
+}
+
+function requestNewAgentSession(packageId: string, initialWorkspaceId: string | null) {
+  pendingWorkspaceAction.value = {
+    kind: 'new_session',
+    packageId,
+    initialWorkspaceId,
+  }
+}
+
+function handleWorkspaceDialogVisibility(show: boolean) {
+  if (show) return
+  restorePendingDraft()
+  pendingWorkspaceAction.value = null
+}
+
+async function completeWorkspaceSelection(workspaceId: string | null) {
+  const action = pendingWorkspaceAction.value
+  if (!action) return
+  pendingWorkspaceAction.value = null
+  await startNewAgentSession(action.packageId, workspaceId)
+  if (action.kind === 'first_message' && !sendAndFollow(action.message, action.attachments, workspaceId)) {
+    inputRef.value?.restoreDraft(action.message, action.attachments)
+  }
+}
+
+function restorePendingDraft() {
+  const action = pendingWorkspaceAction.value
+  if (action?.kind === 'first_message') {
+    inputRef.value?.restoreDraft(action.message, action.attachments)
+  }
+}
+
+function sendAndFollow(
+  message: string,
+  attachments: RuntimeAttachmentInput[],
+  workspaceId?: string | null,
+): boolean {
+  if (!sendMessage(message, attachments, workspaceId)) return false
   nextTick(() => {
     scrollToBottom('smooth')
   })
+  return true
 }
 
 function handleCancel() {
