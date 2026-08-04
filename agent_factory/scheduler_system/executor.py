@@ -137,7 +137,7 @@ def scheduler_tool_approval_override(*, job: SchedulerJob, tool_id: str):
 
 def _optional_tool_args(payload: dict[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = {}
-    for key in ("cwd", "mode", "wait_seconds", "max_output_chars"):
+    for key in ("cwd", "mode", "max_output_chars"):
         if key in payload:
             result[key] = payload[key]
     return result

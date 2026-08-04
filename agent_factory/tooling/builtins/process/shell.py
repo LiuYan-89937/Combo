@@ -4,6 +4,7 @@ from typing import Any
 
 from agent_factory.tooling.builtins.process.manager import (
     PROCESS_MANAGER,
+    ProcessCancellationCheck,
     ProcessOutputObserver,
     is_read_only_process_path,
     output_limit,
@@ -11,11 +12,14 @@ from agent_factory.tooling.builtins.process.manager import (
     process_runtime_boundary,
     required_string,
     resolve_cwd,
-    wait_seconds,
 )
 from agent_factory.tooling.builtins.process.runtime import resolve_shell_runtime
 from agent_factory.tooling.envelope import tool_envelope
-from agent_factory.tooling.execution_context import current_tool_call, current_tool_event_sink
+from agent_factory.tooling.execution_context import (
+    current_runtime_run_control,
+    current_tool_call,
+    current_tool_event_sink,
+)
 from agent_factory.tooling.executor_fallback import executor_fallback_risk
 from agent_factory.tooling.risk import merge_risk_results
 from agent_factory.tooling.spec import ToolRiskResult
@@ -91,9 +95,9 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
             command=command,
             cwd=cwd,
             mode=mode,
-            wait_seconds=wait_seconds(arguments),
             max_output_chars=output_limit(arguments),
             on_output=output_observer,
+            cancellation_requested=_cancellation_check() if mode == "foreground" else None,
         )
     )
 
@@ -117,6 +121,17 @@ def _output_observer() -> ProcessOutputObserver | None:
         )
 
     return publish
+
+
+def _cancellation_check() -> ProcessCancellationCheck | None:
+    control = current_runtime_run_control()
+    if control is None:
+        return None
+
+    def requested() -> bool:
+        return bool(getattr(control, "drain_requested", False))
+
+    return requested
 
 
 def _evaluate_cwd(arguments: dict[str, Any], context: dict[str, Any]) -> ToolRiskResult:
