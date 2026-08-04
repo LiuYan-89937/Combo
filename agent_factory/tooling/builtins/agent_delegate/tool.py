@@ -10,8 +10,9 @@ from agent_factory.collaboration_system.parent_controller import (
 )
 from agent_factory.collaboration_system.result_delivery import DELIVERY_PROTOCOL
 from agent_factory.collaboration_system.task_client import task_id_for_request
+from agent_factory.contracts import BACKGROUND_TASK_NOTIFICATION_BATCH_KEY
 from agent_factory.factory_graph.frontend_bridge.agent_package_repository import AgentPackageRepository
-from agent_factory.tooling.envelope import tool_envelope
+from agent_factory.tooling.envelope import runtime_wait_evidence, tool_envelope
 from agent_factory.tooling.spec import ToolRiskResult
 
 
@@ -27,7 +28,18 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         output = _cancel(arguments, resources)
     else:
         raise ValueError(f"unsupported agent_delegate action: {action}")
-    return tool_envelope(output, summary=str(output.get("message") or ""))
+    return tool_envelope(
+        output,
+        evidence=(
+            runtime_wait_evidence(
+                status="waiting_for_workers",
+                reason="已启动异步子 Agent，等待完成通知。",
+            )
+            if action == "start"
+            else None
+        ),
+        summary=str(output.get("message") or ""),
+    )
 
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -77,6 +89,7 @@ def _start(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, An
             "acceptance_criteria": criteria,
         },
         visible_context={
+            BACKGROUND_TASK_NOTIFICATION_BATCH_KEY: request_id,
             "delivery_protocol": DELIVERY_PROTOCOL,
             "expected_artifacts": expected_artifacts,
             "parent_context": arguments.get("context")

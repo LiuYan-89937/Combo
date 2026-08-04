@@ -7,6 +7,7 @@ live in dedicated modules so frontend-facing concerns do not share one file.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import sys
 from pathlib import Path
@@ -19,7 +20,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from agent_factory.env import load_agentfactory_dotenv
 from agent_factory.benchmarking import BenchmarkService
-from agent_factory.contracts import NotFoundError
+from agent_factory.contracts import (
+    BACKGROUND_TASK_NOTIFICATION_BATCH_KEY,
+    NotFoundError,
+    TERMINAL_TASK_STATUSES,
+)
 from agent_factory.local_inference.runtime_manager import LocalInferenceRuntimeManager
 from agent_factory.runtime_kernel.persistence import close_shared_sqlite_checkpointers
 from agent_factory.create_agent.probe_jobs import probe_job_manager
@@ -225,18 +230,46 @@ async def _continue_parent_after_background_task(task_id: str) -> None:
         return
     if session.get("status") != "active":
         return
+    batch_id = str(task.visible_context.get(BACKGROUND_TASK_NOTIFICATION_BATCH_KEY) or "").strip()
+    if not batch_id:
+        return
+    tasks = [
+        candidate
+        for candidate in background_task_scheduler.list(session_id=task.session_id, limit=500)
+        if str(candidate.visible_context.get(BACKGROUND_TASK_NOTIFICATION_BATCH_KEY) or "").strip() == batch_id
+    ]
+    if any(candidate.status not in TERMINAL_TASK_STATUSES for candidate in tasks):
+        return
+    latest = max(
+        tasks,
+        key=lambda candidate: (candidate.completed_at or candidate.updated_at, candidate.task_id),
+        default=None,
+    )
+    if latest is None or latest.task_id != task.task_id:
+        return
     package_id = str(session.get("owner_package_id") or "").strip()
     session_id = str(session.get("owner_runtime_session_id") or "").strip()
     if not package_id or not session_id:
         return
-    details = [
-        f"后台任务状态更新：task_id={task.task_id}，type={task.type}，status={task.status}。",
+    batch = [
+        {
+            "task_id": candidate.task_id,
+            "type": candidate.type,
+            "status": candidate.status,
+            "assignee_package_id": candidate.assignee_package_id,
+            "task_text": candidate.task_text,
+            "result_summary": candidate.result_summary,
+            "result": candidate.result,
+            "artifact_refs": candidate.artifact_refs,
+            "error": candidate.error,
+        }
+        for candidate in tasks
     ]
-    if task.result_summary:
-        details.append(task.result_summary)
-    if task.artifact_refs:
-        details.append(f"已交付产物 {len(task.artifact_refs)} 项。")
-    details.append("请读取后台任务详情，整合结果并继续回应用户。")
+    details = [
+        f"当前批次的 {len(batch)} 个后台任务已全部结束。以下通知已包含完整交付结果，无需调用 background_tasks 查询：",
+        json.dumps(batch, ensure_ascii=False),
+        "请直接验收并整合结果；如果还需要启动下一批依赖任务，现在启动，否则向用户提交最终答复。",
+    ]
     await runtime_bridge.send_frontend_command(
         FactoryFrontendCommand(
             type="send_agent_package_message",
@@ -251,6 +284,7 @@ async def _continue_parent_after_background_task(task_id: str) -> None:
                     "visibility": "internal",
                     "task_id": task.task_id,
                     "task_type": task.type,
+                    "task_batch_id": batch_id,
                 },
             },
         )

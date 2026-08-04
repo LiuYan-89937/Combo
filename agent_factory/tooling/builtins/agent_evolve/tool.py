@@ -9,7 +9,8 @@ from agent_factory.collaboration_system.parent_controller import (
     runtime_user_config,
 )
 from agent_factory.factory_graph.frontend_bridge.agent_package_repository import AgentPackageRepository
-from agent_factory.tooling.envelope import tool_envelope
+from agent_factory.contracts import BACKGROUND_TASK_NOTIFICATION_BATCH_KEY
+from agent_factory.tooling.envelope import runtime_wait_evidence, tool_envelope
 from agent_factory.tooling.spec import ToolRiskResult
 
 
@@ -26,7 +27,18 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         output = _cancel(arguments, resources)
     else:
         raise ValueError(f"unsupported agent_evolve action: {action}")
-    return tool_envelope(output, summary=str(output.get("message") or ""))
+    return tool_envelope(
+        output,
+        evidence=(
+            runtime_wait_evidence(
+                status="waiting_for_workers",
+                reason="已启动异步 Agent 进化，等待状态更新。",
+            )
+            if action == "start"
+            else None
+        ),
+        summary=str(output.get("message") or ""),
+    )
 
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -55,10 +67,11 @@ def _start(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, An
         raise ValueError("built-in Agent packages cannot be evolved")
     goal = _required_text(arguments, "goal")
     constraints = _string_list(arguments.get("constraints"))
+    request_id = background_task_request_id(tool_id=TOOL_ID)
     task = background_task_client(resources).submit(
         parent.task_owner(),
         type="evolve",
-        request_id=background_task_request_id(tool_id=TOOL_ID),
+        request_id=request_id,
         task_text=_evolution_goal(goal, constraints),
         assignee_package_id=package_id,
         payload={
@@ -66,7 +79,11 @@ def _start(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, An
             "constraints": constraints,
             "user_config": runtime_user_config(resources),
         },
-        visible_context={"goal": goal, "constraints": constraints},
+        visible_context={
+            BACKGROUND_TASK_NOTIFICATION_BATCH_KEY: request_id,
+            "goal": goal,
+            "constraints": constraints,
+        },
     )
     return {
         "action": "start",
