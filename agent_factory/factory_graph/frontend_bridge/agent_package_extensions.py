@@ -1525,8 +1525,8 @@ def _skill_metadata_for_public_view(payload: dict[str, Any]) -> dict[str, Any]:
     try:
         skill = parse_skill_directory(
             path,
-            allow_directory_name_mismatch=source in {"skillhub", "agent_hub"},
-            allow_missing_frontmatter=source in {"skillhub", "agent_hub"},
+            allow_directory_name_mismatch=source in {"skillhub", "distribution"},
+            allow_missing_frontmatter=source in {"skillhub", "distribution"},
             fallback_name=str(payload.get("skill_id") or Path(path).name),
         )
     except Exception:

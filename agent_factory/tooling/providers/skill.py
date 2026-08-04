@@ -55,8 +55,8 @@ class SkillProvider:
             try:
                 skill = parse_skill_directory(
                     skill_root,
-                    allow_directory_name_mismatch=item.source in {"skillhub", "agent_hub"},
-                    allow_missing_frontmatter=item.source in {"skillhub", "agent_hub"},
+                    allow_directory_name_mismatch=item.source in {"skillhub", "distribution"},
+                    allow_missing_frontmatter=item.source in {"skillhub", "distribution"},
                     fallback_name=item.skill_id,
                 )
                 if skill.name != item.skill_id:

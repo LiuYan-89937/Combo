@@ -25,11 +25,6 @@
           <span><strong>{{ t('route.agents') }}</strong><small>{{ t('capabilityLibrary.publishedHint') }}</small></span>
           <n-icon class="entry-arrow"><ArrowForward /></n-icon>
         </button>
-        <button class="library-entry" type="button" @click="openRoute('AgentHub')">
-          <n-icon size="22"><CloudDownloadOutline /></n-icon>
-          <span><strong>{{ t('route.agentHub') }}</strong><small>{{ t('capabilityLibrary.agentHubHint') }}</small></span>
-          <n-icon class="entry-arrow"><ArrowForward /></n-icon>
-        </button>
       </div>
     </section>
 
@@ -69,7 +64,6 @@ import { NIcon, NModal } from 'naive-ui'
 import {
   ArrowForward,
   CheckmarkCircleOutline,
-  CloudDownloadOutline,
   CubeOutline,
   ExtensionPuzzleOutline,
   LayersOutline,
@@ -85,7 +79,7 @@ const emit = defineEmits<{ 'update:show': [value: boolean] }>()
 const router = useRouter()
 const { t } = useI18n()
 
-function openRoute(name: 'Agents' | 'AgentHub' | 'Extensions' | 'Knowledge' | 'Scheduler' | 'ModelPool' | 'Benchmarks') {
+function openRoute(name: 'Agents' | 'Extensions' | 'Knowledge' | 'Scheduler' | 'ModelPool' | 'Benchmarks') {
   emit('update:show', false)
   void router.push({ name })
 }

@@ -192,7 +192,7 @@ def import_distribution_extensions(root: Path) -> dict[str, list[str]]:
                 source,
                 enabled=skill.enabled,
                 required=skill.required,
-                source_kind="agent_hub",
+                source_kind="distribution",
                 expected_skill_id=skill.skill_id,
             )
             if imported.skill_id != skill.skill_id:
@@ -492,7 +492,7 @@ def _materialize_distribution_extensions(
         )
         skill_paths[skill.skill_id] = relative
         portable_skills.append(
-            skill.model_copy(update={"path": relative.as_posix(), "source": "agent_hub"})
+            skill.model_copy(update={"path": relative.as_posix(), "source": "distribution"})
         )
     path = extensions_root / EXTENSION_DISTRIBUTION_FILENAME
     path.parent.mkdir(parents=True, exist_ok=True)

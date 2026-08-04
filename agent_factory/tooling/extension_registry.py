@@ -229,7 +229,7 @@ def import_registered_skill_directory(
 ) -> EnabledSkillConfig:
     source_root = Path(source).expanduser().resolve()
     _assert_skill_tree_safe(source_root)
-    relaxed = source_kind in {"skillhub", "agent_hub"}
+    relaxed = source_kind in {"skillhub", "distribution"}
     package = parse_skill_directory(
         source_root,
         allow_directory_name_mismatch=relaxed,
