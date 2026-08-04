@@ -3,12 +3,13 @@ from __future__ import annotations
 import atexit
 from dataclasses import dataclass, field
 from pathlib import Path
+import logging
 import os
 import subprocess
 import threading
 import time
 import uuid
-from typing import Any, TextIO
+from typing import Any, Callable, TextIO
 
 from agent_factory.tooling.builtins.process.runtime import ShellRuntime, resolve_shell_runtime
 from agent_factory.tooling.workspace_paths import workspace_path_candidate
@@ -17,6 +18,11 @@ from agent_factory.tooling.workspace_paths import workspace_path_candidate
 _OUTPUT_BUFFER_LIMIT = 1_000_000
 _DEFAULT_WAIT_SECONDS = 30
 _DEFAULT_OUTPUT_CHARS = 12_000
+_OUTPUT_OBSERVATION_INTERVAL_SECONDS = 0.1
+
+
+ProcessOutputObserver = Callable[[dict[str, Any]], None]
+LOGGER = logging.getLogger(__name__)
 
 
 class OutputBuffer:
@@ -25,20 +31,23 @@ class OutputBuffer:
         self._chunks: list[str] = []
         self._size = 0
         self._truncated = False
+        self._lock = threading.RLock()
 
     def append(self, value: str) -> None:
         if not value:
             return
-        self._chunks.append(value)
-        self._size += len(value)
-        while self._size > self._limit and self._chunks:
-            removed = self._chunks.pop(0)
-            self._size -= len(removed)
-            self._truncated = True
+        with self._lock:
+            self._chunks.append(value)
+            self._size += len(value)
+            while self._size > self._limit and self._chunks:
+                removed = self._chunks.pop(0)
+                self._size -= len(removed)
+                self._truncated = True
 
     def snapshot(self, *, max_chars: int) -> tuple[str, bool]:
-        text = "".join(self._chunks)
-        truncated = self._truncated
+        with self._lock:
+            text = "".join(self._chunks)
+            truncated = self._truncated
         if len(text) > max_chars:
             text = text[-max_chars:]
             truncated = True
@@ -82,6 +91,7 @@ class ProcessManager:
         mode: str,
         wait_seconds: int,
         max_output_chars: int,
+        on_output: ProcessOutputObserver | None = None,
     ) -> dict[str, Any]:
         process_id = uuid.uuid4().hex
         shell_runtime = resolve_shell_runtime()
@@ -107,10 +117,17 @@ class ProcessManager:
         )
         with self._lock:
             self._processes[process_id] = managed
-        self._start_reader(managed, "stdout", process.stdout)
-        self._start_reader(managed, "stderr", process.stderr)
+        output_changed = threading.Event()
+        self._start_reader(managed, "stdout", process.stdout, output_changed=output_changed)
+        self._start_reader(managed, "stderr", process.stderr, output_changed=output_changed)
         if mode == "foreground":
-            self._wait_without_killing(managed, wait_seconds=wait_seconds)
+            self._wait_without_killing(
+                managed,
+                wait_seconds=wait_seconds,
+                max_output_chars=max_output_chars,
+                output_changed=output_changed,
+                on_output=on_output,
+            )
         return self.snapshot(process_id=process_id, max_output_chars=max_output_chars)
 
     def snapshot(self, *, process_id: str, max_output_chars: int) -> dict[str, Any]:
@@ -168,35 +185,83 @@ class ProcessManager:
             except KeyError as exc:
                 raise KeyError(f"unknown process_id: {process_id}") from exc
 
-    def _start_reader(self, managed: ManagedProcess, stream_name: str, stream: TextIO | None) -> None:
+    def _start_reader(
+        self,
+        managed: ManagedProcess,
+        stream_name: str,
+        stream: TextIO | None,
+        *,
+        output_changed: threading.Event,
+    ) -> None:
         if stream is None:
             return
         buffer = managed.stdout if stream_name == "stdout" else managed.stderr
         thread = threading.Thread(
             target=_read_stream,
-            args=(stream, buffer),
+            args=(stream, buffer, output_changed),
             name=f"tool-{managed.process_id}-{stream_name}",
             daemon=True,
         )
         managed.reader_threads.append(thread)
         thread.start()
 
-    def _wait_without_killing(self, managed: ManagedProcess, *, wait_seconds: int) -> None:
+    def _wait_without_killing(
+        self,
+        managed: ManagedProcess,
+        *,
+        wait_seconds: int,
+        max_output_chars: int,
+        output_changed: threading.Event,
+        on_output: ProcessOutputObserver | None,
+    ) -> None:
         if wait_seconds <= 0:
             return
-        try:
-            managed.process.wait(timeout=wait_seconds)
-        except subprocess.TimeoutExpired:
+        deadline = time.monotonic() + wait_seconds
+        while managed.process.poll() is None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            changed = output_changed.wait(
+                timeout=min(_OUTPUT_OBSERVATION_INTERVAL_SECONDS, remaining)
+            )
+            if changed:
+                try:
+                    managed.process.wait(
+                        timeout=min(_OUTPUT_OBSERVATION_INTERVAL_SECONDS, remaining)
+                    )
+                except subprocess.TimeoutExpired:
+                    pass
+                output_changed.clear()
+                self._notify_output(managed, max_output_chars=max_output_chars, observer=on_output)
+        for thread in managed.reader_threads:
+            thread.join(timeout=_OUTPUT_OBSERVATION_INTERVAL_SECONDS)
+        if output_changed.is_set():
+            output_changed.clear()
+            self._notify_output(managed, max_output_chars=max_output_chars, observer=on_output)
+
+    def _notify_output(
+        self,
+        managed: ManagedProcess,
+        *,
+        max_output_chars: int,
+        observer: ProcessOutputObserver | None,
+    ) -> None:
+        if observer is None:
             return
+        try:
+            observer(self.snapshot(process_id=managed.process_id, max_output_chars=max_output_chars))
+        except Exception:
+            LOGGER.warning("shell output observer failed for process %s", managed.process_id, exc_info=True)
 
 
-def _read_stream(stream: TextIO, buffer: OutputBuffer) -> None:
+def _read_stream(stream: TextIO, buffer: OutputBuffer, output_changed: threading.Event) -> None:
     try:
         while True:
             chunk = stream.readline()
             if chunk == "":
                 break
             buffer.append(chunk)
+            output_changed.set()
     finally:
         stream.close()
 

@@ -7,6 +7,7 @@ from typing import Any, Callable, Literal, Mapping
 from langgraph.types import interrupt
 from pydantic import BaseModel, ConfigDict, Field
 
+from agent_factory.exception_details import exception_leaf_messages, exception_summary
 from agent_factory.tooling.execution_context import (
     current_tool_approval_override,
     current_tool_call,
@@ -173,12 +174,13 @@ class ToolExecutionGateway:
         try:
             output = self.entrypoint(arguments=arguments, resources=tool_resources)
         except Exception as exc:
+            errors = exception_leaf_messages(exc)
             return self._observation(
                 "execution_failed",
-                f"Tool execution failed: {type(exc).__name__}: {exc}",
+                f"Tool execution failed: {exception_summary(exc)}",
                 tool_call_id=tool_call_id,
                 arguments=arguments,
-                errors=[f"{type(exc).__name__}: {exc}"],
+                errors=errors,
             )
         if not isinstance(output, dict):
             return self._observation(

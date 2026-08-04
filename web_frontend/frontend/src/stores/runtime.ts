@@ -490,6 +490,8 @@ export const useRuntimeStore = defineStore('runtime', {
         this._handleToolApprovalResolved(event)
       } else if (type === 'tool_call_started') {
         this._handleToolCallStarted(event)
+      } else if (type === 'tool_call_output_delta') {
+        this._handleToolCallStarted(event)
       } else if (type === 'tool_call_completed') {
         this._handleToolCallCompleted(event)
       } else if (type === 'tool_call_failed') {

@@ -83,6 +83,7 @@
     "tool_approval_requested",
     "tool_approval_resolved",
     "tool_call_started",
+    "tool_call_output_delta",
     "tool_call_completed",
     "tool_contract_invalid",
     "tool_call_failed",

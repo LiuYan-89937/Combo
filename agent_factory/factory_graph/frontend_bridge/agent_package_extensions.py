@@ -9,6 +9,7 @@ import threading
 from typing import Any, Callable
 from urllib.parse import urlparse
 
+from agent_factory.exception_details import exception_contains, exception_leaf_messages
 from agent_factory.runtime_contracts import LoadedAgentPackage
 from agent_factory.runtime_kernel.extensions.loader import (
     AgentInstanceExtensionConfigLoader,
@@ -1217,7 +1218,7 @@ def _test_mcp_server(
     try:
         discovered_tools = list(client.list_tools())
     except BaseException as exc:
-        if _exception_contains(exc, MCPRuntimeCancelled):
+        if exception_contains(exc, MCPRuntimeCancelled):
             failure = _mcp_test_failure(
                 exc,
                 stderr=client.stderr_logs(),
@@ -1298,7 +1299,7 @@ def _mcp_test_failure(
     stderr: list[str],
     sensitive_values: list[str],
 ) -> dict[str, Any]:
-    details = [_redact_mcp_test_text(message, sensitive_values) for message in _exception_leaf_messages(exc)]
+    details = [_redact_mcp_test_text(message, sensitive_values) for message in exception_leaf_messages(exc)]
     stderr_lines = [
         _redact_mcp_test_text(line.strip(), sensitive_values)
         for line in stderr
@@ -1314,26 +1315,6 @@ def _mcp_test_failure(
         "tool_count": 0,
         "tools": [],
     }
-
-
-def _exception_leaf_messages(exc: BaseException) -> list[str]:
-    if isinstance(exc, BaseExceptionGroup):
-        messages = [
-            message
-            for nested in exc.exceptions
-            for message in _exception_leaf_messages(nested)
-        ]
-        return list(dict.fromkeys(messages))
-    message = str(exc).strip()
-    return [f"{type(exc).__name__}: {message}" if message else type(exc).__name__]
-
-
-def _exception_contains(exc: BaseException, exception_type: type[BaseException]) -> bool:
-    if isinstance(exc, exception_type):
-        return True
-    if isinstance(exc, BaseExceptionGroup):
-        return any(_exception_contains(nested, exception_type) for nested in exc.exceptions)
-    return False
 
 
 def _redact_mcp_test_text(value: str, sensitive_values: list[str]) -> str:
