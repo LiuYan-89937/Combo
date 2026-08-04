@@ -53,8 +53,6 @@
           :key="pkg.package_id"
           hoverable
           class="package-card"
-          :class="{ 'package-card-selected': agentStore.selectedPackageId === pkg.package_id }"
-          @click="handleSelectPackage(pkg)"
         >
           <div class="package-header">
             <n-checkbox
@@ -72,10 +70,10 @@
               {{ getPackageInitial(pkg) }}
             </n-avatar>
             <div class="package-info">
-              <div class="package-name-row">
-                <n-text strong class="package-name">
-                  {{ pkg.agent_name || pkg.name || pkg.package_id }}
-                </n-text>
+              <n-text strong class="package-name">
+                {{ pkg.agent_name || pkg.name || pkg.package_id }}
+              </n-text>
+              <div v-if="pkg.is_builtin || pkg.runtime_pattern_id" class="package-tags">
                 <n-tag v-if="pkg.is_builtin" size="small" :bordered="false">
                   {{ t('agents.builtin') }}
                 </n-tag>
@@ -103,6 +101,9 @@
           </div>
 
           <div class="package-actions">
+            <n-button size="small" @click="handleViewDetails(pkg)">
+              {{ t('common.details') }}
+            </n-button>
             <n-button
               v-if="isPackageReady(pkg)"
               size="small"
@@ -155,6 +156,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import {
   NAvatar,
   NButton,
@@ -191,6 +193,7 @@ import {
 } from './agentPackagePresentation'
 
 const agentStore = useAgentStore()
+const router = useRouter()
 const uiStore = useUiStore()
 const commands = useCommand()
 const { openPackageAgentChat } = useAgentSessionNavigation()
@@ -247,8 +250,9 @@ function handleRefresh() {
   commands.listAgentPackageInstances()
 }
 
-function handleSelectPackage(pkg: AgentPackageView) {
+function handleViewDetails(pkg: AgentPackageView) {
   agentStore.selectPackage(pkg.package_id)
+  void router.push({ name: 'AgentDetail', params: { packageId: pkg.package_id } })
 }
 
 function handleRun(pkg: AgentPackageView) {
@@ -442,7 +446,6 @@ onMounted(() => {
 }
 
 .package-card {
-  cursor: pointer;
   transition: transform var(--app-transition-spring), box-shadow var(--app-transition-base);
   border-radius: var(--app-radius-lg);
   animation: app-fade-in-up 0.5s var(--app-transition-spring) both;
@@ -461,11 +464,6 @@ onMounted(() => {
 .package-card:hover {
   transform: translateY(-4px);
   box-shadow: var(--app-shadow-lg);
-}
-
-.package-card-selected {
-  border-color: var(--app-primary);
-  box-shadow: 0 0 0 1px var(--app-primary);
 }
 
 .package-card:active {
@@ -496,19 +494,19 @@ onMounted(() => {
   min-width: 0;
 }
 
-.package-name-row {
+.package-tags {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--app-space-xs);
-  min-width: 0;
 }
 
 .package-name {
   display: block;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   line-height: var(--app-leading-tight);
   color: var(--app-text-strong);
 }

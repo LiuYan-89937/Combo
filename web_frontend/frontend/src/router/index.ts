@@ -28,6 +28,11 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/PublishedView.vue'),
   },
   {
+    path: '/agents/:packageId',
+    name: 'AgentDetail',
+    component: () => import('@/views/AgentPackageDetailView.vue'),
+  },
+  {
     path: '/agent-group',
     name: 'AgentGroup',
     component: () => import('@/views/AgentGroupView.vue'),
