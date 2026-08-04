@@ -2,14 +2,50 @@
   <n-modal
     :show="show"
     preset="card"
-    :title="t('sessions.createTitle')"
+    :title="dialogTitle"
     class="new-agent-session-modal"
     :closable="dialogClosable"
     :mask-closable="false"
     :close-on-esc="dialogClosable"
     @update:show="handleDialogVisibility"
   >
-    <div class="new-session-options">
+    <div v-if="directoryStep" class="directory-picker">
+      <div class="directory-picker-toolbar">
+        <n-button
+          quaternary
+          :disabled="!parentPath || directoryLoading"
+          @click="parentPath && loadDirectory(parentPath)"
+        >
+          {{ t('workspace.parentDirectory') }}
+        </n-button>
+        <n-text class="directory-picker-path" :title="currentPath">
+          {{ currentPath || t('workspace.selectDirectoryRoot') }}
+        </n-text>
+      </div>
+
+      <n-spin :show="directoryLoading">
+        <n-list bordered clickable class="directory-picker-list">
+          <n-list-item
+            v-for="directory in visibleDirectories"
+            :key="directory.path"
+            @dblclick="loadDirectory(directory.path)"
+          >
+            <button
+              type="button"
+              class="directory-row"
+              :class="{ selected: selectedDirectoryPath === directory.path }"
+              @click="selectedDirectoryPath = directory.path"
+              @dblclick.stop="loadDirectory(directory.path)"
+            >
+              <n-icon><FolderOutline /></n-icon>
+              <span>{{ directory.name }}</span>
+            </button>
+          </n-list-item>
+        </n-list>
+      </n-spin>
+    </div>
+
+    <div v-else class="new-session-options">
       <button type="button" class="new-session-option" @click="selectWorkspace(null)">
         <strong>{{ t('sessions.newIndependentTask') }}</strong>
         <span>{{ t('sessions.newIndependentTaskDescription') }}</span>
@@ -46,26 +82,48 @@
     </div>
 
     <template #footer>
-      <div class="new-session-footer">
+      <div v-if="directoryStep" class="new-session-footer">
+        <n-button :disabled="linkedWorkspaceBusy" @click="leaveDirectoryStep">
+          {{ t('common.cancel') }}
+        </n-button>
+        <n-button
+          type="primary"
+          :loading="creatingLinkedWorkspace"
+          :disabled="directoryLoading || (!selectedDirectoryPath && !currentPath)"
+          @click="selectDirectory"
+        >
+          {{ t('workspace.selectThisDirectory') }}
+        </n-button>
+      </div>
+      <div v-else class="new-session-footer">
         <n-button :disabled="!dialogClosable" @click="closeDialog">
           {{ t('common.cancel') }}
         </n-button>
       </div>
     </template>
   </n-modal>
-
-  <WorkspaceDirectoryPicker
-    v-model:show="showServerDirectoryPicker"
-    @select="registerLinkedWorkspace"
-  />
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
-import { NButton, NModal, NSelect, useMessage } from 'naive-ui'
+import { computed, ref, watch } from 'vue'
+import {
+  NButton,
+  NIcon,
+  NList,
+  NListItem,
+  NModal,
+  NSelect,
+  NSpin,
+  NText,
+  useMessage,
+} from 'naive-ui'
+import { FolderOutline } from '@/components/icons'
 import { desktopDirectoryPickerAvailable, selectDesktopDirectory } from '@/api/desktopDialogs'
-import { workspaceApi, type WorkspaceProjectView } from '@/api/workspace'
-import WorkspaceDirectoryPicker from '@/components/workspace/WorkspaceDirectoryPicker.vue'
+import {
+  workspaceApi,
+  type WorkspaceDirectoryView,
+  type WorkspaceProjectView,
+} from '@/api/workspace'
 import { useI18n } from '@/composables/useI18n'
 
 const props = defineProps<{
@@ -83,12 +141,24 @@ const workspaces = ref<WorkspaceProjectView[]>([])
 const selectedWorkspaceId = ref<string | null>(null)
 const selectingLinkedWorkspace = ref(false)
 const creatingLinkedWorkspace = ref(false)
-const showServerDirectoryPicker = ref(false)
+const directoryStep = ref(false)
+const directoryLoading = ref(false)
+const directoryRoots = ref<WorkspaceDirectoryView[]>([])
+const directories = ref<WorkspaceDirectoryView[]>([])
+const currentPath = ref('')
+const parentPath = ref<string | null>(null)
+const selectedDirectoryPath = ref('')
 const linkedWorkspaceBusy = computed(() => (
   selectingLinkedWorkspace.value || creatingLinkedWorkspace.value
 ))
 const dialogClosable = computed(() => (
-  !linkedWorkspaceBusy.value && !showServerDirectoryPicker.value
+  !linkedWorkspaceBusy.value && !directoryLoading.value
+))
+const dialogTitle = computed(() => (
+  directoryStep.value ? t('workspace.selectServerDirectory') : t('sessions.createTitle')
+))
+const visibleDirectories = computed(() => (
+  currentPath.value ? directories.value : directoryRoots.value
 ))
 const workspaceOptions = computed(() => workspaces.value
   .filter(workspace => workspace.mode === 'project')
@@ -100,7 +170,10 @@ const workspaceOptions = computed(() => workspaces.value
 watch(
   () => props.show,
   show => {
-    if (!show) return
+    if (!show) {
+      directoryStep.value = false
+      return
+    }
     selectedWorkspaceId.value = props.initialWorkspaceId || null
     void refreshWorkspaces()
   },
@@ -110,7 +183,7 @@ async function refreshWorkspaces() {
   try {
     workspaces.value = (await workspaceApi.projects()).workspaces
   } catch (error) {
-    message.error(error instanceof Error ? error.message : String(error))
+    showError(error)
   }
 }
 
@@ -122,8 +195,8 @@ function selectWorkspace(workspaceId: string | null) {
 async function chooseLinkedWorkspace() {
   if (linkedWorkspaceBusy.value) return
   if (!desktopDirectoryPickerAvailable()) {
-    await nextTick()
-    showServerDirectoryPicker.value = true
+    directoryStep.value = true
+    await loadDirectoryRoots()
     return
   }
   selectingLinkedWorkspace.value = true
@@ -131,10 +204,51 @@ async function chooseLinkedWorkspace() {
     const sourcePath = await selectDesktopDirectory()
     if (sourcePath) await registerLinkedWorkspace(sourcePath)
   } catch (error) {
-    message.error(error instanceof Error ? error.message : String(error))
+    showError(error)
   } finally {
     selectingLinkedWorkspace.value = false
   }
+}
+
+async function loadDirectoryRoots() {
+  directoryLoading.value = true
+  selectedDirectoryPath.value = ''
+  currentPath.value = ''
+  parentPath.value = null
+  try {
+    directoryRoots.value = (await workspaceApi.directoryRoots()).roots
+    directories.value = []
+  } catch (error) {
+    showError(error)
+  } finally {
+    directoryLoading.value = false
+  }
+}
+
+async function loadDirectory(path: string) {
+  directoryLoading.value = true
+  selectedDirectoryPath.value = ''
+  try {
+    const listing = await workspaceApi.directories(path)
+    currentPath.value = listing.path
+    parentPath.value = listing.parent
+    directories.value = listing.directories
+  } catch (error) {
+    showError(error)
+  } finally {
+    directoryLoading.value = false
+  }
+}
+
+async function selectDirectory() {
+  const path = selectedDirectoryPath.value || currentPath.value
+  if (!path) return
+  await registerLinkedWorkspace(path)
+}
+
+function leaveDirectoryStep() {
+  if (linkedWorkspaceBusy.value) return
+  directoryStep.value = false
 }
 
 function handleDialogVisibility(show: boolean) {
@@ -162,17 +276,22 @@ async function registerLinkedWorkspace(sourcePath: string) {
       ),
     ]
     selectedWorkspaceId.value = response.workspace.workspace_id
+    directoryStep.value = false
   } catch (error) {
-    message.error(error instanceof Error ? error.message : String(error))
+    showError(error)
   } finally {
     creatingLinkedWorkspace.value = false
   }
+}
+
+function showError(error: unknown) {
+  message.error(error instanceof Error ? error.message : String(error))
 }
 </script>
 
 <style scoped>
 :global(.new-agent-session-modal) {
-  width: min(560px, calc(100vw - 32px));
+  width: min(620px, calc(100vw - 32px));
 }
 
 .new-session-options {
@@ -218,14 +337,47 @@ button.new-session-option:hover {
   gap: var(--app-space-xs);
 }
 
-.shared-workspace-actions {
+.shared-workspace-actions,
+.new-session-footer {
   display: flex;
   justify-content: flex-end;
   gap: var(--app-space-sm);
 }
 
-.new-session-footer {
+.directory-picker-toolbar {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  gap: var(--app-space-sm);
+  margin-bottom: var(--app-space-md);
+}
+
+.directory-picker-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.directory-picker-list {
+  height: min(420px, 55vh);
+  overflow: auto;
+}
+
+.directory-row {
+  width: 100%;
+  border: 0;
+  border-radius: var(--app-radius-sm);
+  background: transparent;
+  color: var(--app-text);
+  display: flex;
+  align-items: center;
+  gap: var(--app-space-sm);
+  padding: var(--app-space-xs);
+  text-align: left;
+  cursor: pointer;
+}
+
+.directory-row.selected {
+  background: var(--app-surface-hover);
 }
 </style>
