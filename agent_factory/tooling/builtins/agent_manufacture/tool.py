@@ -8,8 +8,7 @@ from agent_factory.collaboration_system.parent_controller import (
     parent_agent_context,
     runtime_user_config,
 )
-from agent_factory.contracts import BACKGROUND_TASK_NOTIFICATION_BATCH_KEY
-from agent_factory.tooling.envelope import runtime_wait_evidence, tool_envelope
+from agent_factory.tooling.envelope import tool_envelope
 from agent_factory.tooling.spec import ToolRiskResult
 
 
@@ -30,26 +29,16 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
             "user_config": runtime_user_config(resources),
         },
         delivery_standard={"requirements": request_payload["delivery_standards"]},
-        visible_context={
-            BACKGROUND_TASK_NOTIFICATION_BATCH_KEY: request_id,
-            "source_agent_search": request_payload["source_agent_search"],
-        },
+        visible_context={"source_agent_search": request_payload["source_agent_search"]},
     )
     output = {
         "status": task.status,
         "task_id": task.task_id,
         "create_agent_session_id": task.assignee_session_id,
         "message": "制造请求已进入统一后台任务队列，完成后会通知当前会话。",
-        "next_step": "等待后台任务完成；发布完成后再次调用 agent_search 获取新 package_id。",
+        "next_step": "向用户简要说明制造任务已启动，然后结束本轮并等待系统主动更新；不要查询后台任务进度。发布完成后再调用 agent_search 获取新 package_id。",
     }
-    return tool_envelope(
-        output,
-        evidence=runtime_wait_evidence(
-            status="waiting_for_workers",
-            reason="已启动异步 Agent 制造，等待完成通知。",
-        ),
-        summary=output["message"],
-    )
+    return tool_envelope(output, summary=output["message"])
 
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:

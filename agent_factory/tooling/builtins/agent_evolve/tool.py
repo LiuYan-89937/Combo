@@ -9,8 +9,7 @@ from agent_factory.collaboration_system.parent_controller import (
     runtime_user_config,
 )
 from agent_factory.factory_graph.frontend_bridge.agent_package_repository import AgentPackageRepository
-from agent_factory.contracts import BACKGROUND_TASK_NOTIFICATION_BATCH_KEY
-from agent_factory.tooling.envelope import runtime_wait_evidence, tool_envelope
+from agent_factory.tooling.envelope import tool_envelope
 from agent_factory.tooling.spec import ToolRiskResult
 
 
@@ -27,18 +26,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         output = _cancel(arguments, resources)
     else:
         raise ValueError(f"unsupported agent_evolve action: {action}")
-    return tool_envelope(
-        output,
-        evidence=(
-            runtime_wait_evidence(
-                status="waiting_for_workers",
-                reason="已启动异步 Agent 进化，等待状态更新。",
-            )
-            if action == "start"
-            else None
-        ),
-        summary=str(output.get("message") or ""),
-    )
+    return tool_envelope(output, summary=str(output.get("message") or ""))
 
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -80,7 +68,6 @@ def _start(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, An
             "user_config": runtime_user_config(resources),
         },
         visible_context={
-            BACKGROUND_TASK_NOTIFICATION_BATCH_KEY: request_id,
             "goal": goal,
             "constraints": constraints,
         },
@@ -91,6 +78,7 @@ def _start(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, An
         "task_id": task.task_id,
         "package_id": package_id,
         "message": f"{package_id} 的进化已进入统一后台任务队列。",
+        "next_step": "向用户简要说明进化任务已启动，然后结束本轮并等待系统主动更新；不要查询后台任务进度。",
     }
 
 
