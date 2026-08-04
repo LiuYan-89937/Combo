@@ -3,7 +3,7 @@
     <n-text depth="3" class="resource-target-label">{{ t('resource.configTarget') }}</n-text>
     <n-select
       :value="modelValue"
-      :options="options"
+      :options="selectOptions"
       class="resource-target-select"
       @update:value="(value) => emit('update:modelValue', value)"
     />
@@ -11,11 +11,13 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { NSelect, NText } from 'naive-ui'
+import type { SelectGroupOption } from 'naive-ui'
 import { useI18n } from '@/composables/useI18n'
 import type { ResourceTargetOptionGroup } from '@/types/resourceTarget'
 
-defineProps<{
+const props = defineProps<{
   modelValue: string
   options: ResourceTargetOptionGroup[]
 }>()
@@ -25,6 +27,12 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+const selectOptions = computed<SelectGroupOption[]>(() => props.options.map(group => ({
+  type: 'group',
+  label: group.label,
+  key: group.key,
+  children: group.children.map(option => ({ label: option.label, value: option.value })),
+})))
 </script>
 
 <style scoped>

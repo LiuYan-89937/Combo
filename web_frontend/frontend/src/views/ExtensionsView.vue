@@ -53,7 +53,7 @@
                   $event,
                   'mcp',
                   String(item.payload?.server_id || ''),
-                  item.name,
+                  extensionDisplayName(item),
                 )"
               >
                 <div class="card-topline">
@@ -62,9 +62,9 @@
                 </div>
                 <div class="card-body">
                   <div class="card-title-row">
-                    <strong>{{ item.name }}</strong>
+                    <strong>{{ extensionDisplayName(item) }}</strong>
                   </div>
-                  <p>{{ item.payload?.description || item.summary || t('common.noDescription') }}</p>
+                  <p>{{ extensionDescription(item) }}</p>
                   <code>{{ mcpCommandLine(item) }}</code>
                 </div>
                 <div class="card-actions">
@@ -138,7 +138,7 @@
                   $event,
                   'skill',
                   String(item.payload?.skill_id || ''),
-                  item.name,
+                  extensionDisplayName(item),
                 )"
               >
                 <div class="card-topline">
@@ -146,8 +146,8 @@
                   <div class="drag-grip">DRAG</div>
                 </div>
                 <div class="card-body">
-                  <div class="card-title-row"><strong>{{ item.name }}</strong></div>
-                  <p>{{ item.payload?.description || item.summary || t('common.noDescription') }}</p>
+                  <div class="card-title-row"><strong>{{ extensionDisplayName(item) }}</strong></div>
+                  <p>{{ extensionDescription(item) }}</p>
                   <code>{{ item.payload?.path || t('extensions.pathUnset') }}</code>
                 </div>
                 <n-dropdown :options="skillActions" @select="(key) => handleSkillAction(key, item)">
@@ -327,8 +327,17 @@ import McpConfigModal from '@/components/extensions/McpConfigModal.vue'
 import McpTestResultDetails from '@/components/extensions/McpTestResultDetails.vue'
 import SkillConfigModal from '@/components/extensions/SkillConfigModal.vue'
 import { useI18n } from '@/composables/useI18n'
+import type { ExtensionItemView } from '@/types/protocol'
 
 const { t } = useI18n()
+
+function extensionDisplayName(item: ExtensionItemView): string {
+  return String(item.name || item.payload?.display_name || item.payload?.server_id || item.payload?.skill_id || '').trim()
+}
+
+function extensionDescription(item: ExtensionItemView): string {
+  return String(item.payload?.description || '').trim() || t('common.noDescription')
+}
 const {
   assemblyBusyTargetId,
   assemblyTargets,

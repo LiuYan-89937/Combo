@@ -1,8 +1,11 @@
 <template>
   <n-drawer v-model:show="show" :width="400" placement="right">
-    <n-drawer-content :title="t('scheduler.history')">
-      <template #header-extra>
-        <n-button size="small" @click="refreshRuns">{{ t('common.refresh') }}</n-button>
+    <n-drawer-content>
+      <template #header>
+        <div class="drawer-header">
+          <span>{{ t('scheduler.history') }}</span>
+          <n-button size="small" @click="refreshRuns">{{ t('common.refresh') }}</n-button>
+        </div>
       </template>
 
       <n-list bordered>
@@ -111,6 +114,13 @@ function formatTime(timestamp: string): string {
 </script>
 
 <style scoped>
+.drawer-header {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+}
+
 .run-description {
   display: flex;
   flex-direction: column;

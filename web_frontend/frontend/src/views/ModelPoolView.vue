@@ -371,7 +371,7 @@
             :columns="usageColumns"
             :data="usageSummary?.groups || []"
             :loading="usageLoading"
-            :row-key="(row) => row.key"
+            :row-key="usageRowKey"
             size="small"
           />
         </div>
@@ -883,7 +883,9 @@ async function saveArtifact(): Promise<void> {
       revision: artifactForm.revision,
       checksum: artifactForm.checksum,
       native_context_tokens: artifactForm.kind === 'chat' ? artifactForm.native_context_tokens : null,
-      context_extension: artifactForm.kind === 'chat' && artifactForm.supports_yarn
+      context_extension: artifactForm.kind === 'chat'
+        && artifactForm.supports_yarn
+        && artifactForm.yarn_max_context_tokens !== null
         ? { method: 'yarn', max_context_tokens: artifactForm.yarn_max_context_tokens }
         : null,
       enabled: artifactForm.enabled,
@@ -1412,6 +1414,10 @@ function formatUsageTokens(value?: number | null): string {
   if (numeric >= 1_000_000) return `${Math.round(numeric / 100_000) / 10}M`
   if (numeric >= 1_000) return `${Math.round(numeric / 1_000)}K`
   return String(numeric)
+}
+
+function usageRowKey(row: ModelUsageGroup): string {
+  return row.key
 }
 
 function formatNumber(value?: number | null): string {

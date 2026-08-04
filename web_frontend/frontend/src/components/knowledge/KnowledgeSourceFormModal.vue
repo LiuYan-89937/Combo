@@ -188,6 +188,14 @@ interface FileSystemDirectoryEntryLike extends FileSystemEntryLike {
   }
 }
 
+interface KnowledgeSourceFormDraft {
+  kind: SourceKind
+  display_name: string
+  uri: string
+  content: string
+  mount_mode: 'index_only' | 'rag'
+}
+
 const props = defineProps<{
   show: boolean
   submitting?: boolean
@@ -217,12 +225,12 @@ const folderInputRef = ref<HTMLInputElement | null>(null)
 const selectedFiles = ref<KnowledgeUploadFile[]>([])
 const uploadValidationVisible = ref(false)
 const rejectedFileNames = ref<string[]>([])
-const formData = ref({
+const formData = ref<KnowledgeSourceFormDraft>({
   kind: DEFAULT_SOURCE_KIND,
   display_name: '',
   uri: '',
   content: '',
-  mount_mode: 'rag' as 'index_only' | 'rag',
+  mount_mode: 'rag',
 })
 const chunking = ref({
   splitter: 'recursive' as SplitterKind,

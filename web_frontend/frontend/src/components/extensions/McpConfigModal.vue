@@ -201,6 +201,22 @@ const emit = defineEmits<{
   'cancel-install': []
 }>()
 
+type McpRiskLevel = NonNullable<McpServerConfig['risk_level_default']>
+
+interface McpFormDraft {
+  display_name: string
+  description: string
+  transport: McpServerConfig['transport']
+  command: string
+  args: string
+  cwd: string
+  env: string
+  url: string
+  headers: string
+  timeout_seconds: number
+  risk_level_default: McpRiskLevel
+}
+
 const show = computed({ get: () => props.show, set: value => emit('update:show', value) })
 const { t } = useI18n()
 const formRef = ref<FormInst | null>(null)
@@ -215,7 +231,7 @@ const installResultType = computed(() => {
   if (props.installResult?.status === 'cancelled') return 'warning'
   return 'error'
 })
-const formData = ref(emptyForm())
+const formData = ref<McpFormDraft>(emptyForm())
 
 const transportOptions = computed(() => [
   { label: 'stdio', value: 'stdio' },
@@ -243,11 +259,11 @@ const rules = computed<FormRules>(() => ({
   }],
 }))
 
-function emptyForm() {
+function emptyForm(): McpFormDraft {
   return {
     display_name: '', description: '', transport: 'stdio' as McpServerConfig['transport'],
     command: '', args: '', cwd: '', env: '', url: '', headers: '', timeout_seconds: 60,
-    risk_level_default: 'medium' as const,
+    risk_level_default: 'medium',
   }
 }
 

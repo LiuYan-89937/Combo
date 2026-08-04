@@ -29,11 +29,11 @@ export function useKnowledgeManager() {
   async function refreshEmbeddingConfiguration(): Promise<void> {
     embeddingConfigurationLoading.value = true
     try {
-      const [bindingData, profileData] = await Promise.all([
-        modelPoolApi.infrastructureBindings(),
+      const [defaultData, profileData] = await Promise.all([
+        modelPoolApi.defaults(),
         modelPoolApi.profiles(),
       ])
-      const embeddingProfileId = String(bindingData.bindings.embedding || '').trim()
+      const embeddingProfileId = String(defaultData.defaults.embedding || '').trim()
       embeddingConfigurationMissing.value = !embeddingProfileId
         || !profileData.profiles.some((profile) => (
           profile.profile_id === embeddingProfileId

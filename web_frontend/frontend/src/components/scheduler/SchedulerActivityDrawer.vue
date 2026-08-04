@@ -1,8 +1,11 @@
 <template>
   <n-drawer v-model:show="show" :width="420" placement="right" @after-enter="markAllRead">
-    <n-drawer-content :title="t('scheduler.activityTitle')">
-      <template #header-extra>
+    <n-drawer-content>
+      <template #header>
+        <div class="drawer-header">
+          <span>{{ t('scheduler.activityTitle') }}</span>
         <n-button size="small" @click="openSchedulerPage">{{ t('scheduler.manageTasks') }}</n-button>
+        </div>
       </template>
 
       <div v-if="notices.length" class="notice-list">
@@ -54,6 +57,13 @@ function openSchedulerPage() {
   display: flex;
   flex-direction: column;
   gap: var(--app-space-sm);
+}
+
+.drawer-header {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .notice-list :deep(.scheduler-run-card) {

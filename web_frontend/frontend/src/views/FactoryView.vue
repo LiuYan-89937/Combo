@@ -166,7 +166,6 @@ const tipScopeType = computed(() => tipScope.value?.scopeType || 'factory-sessio
 const tipScopeId = computed(() => tipScope.value?.scopeId || '')
 
 const {
-  isAgentSessionLanding,
   inputPlaceholder,
   inputDisabled,
   modelConfigurationMissing,
