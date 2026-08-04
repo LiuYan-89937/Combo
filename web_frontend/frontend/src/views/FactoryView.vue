@@ -373,15 +373,11 @@ async function openRoutedAgentSession(version: number): Promise<boolean> {
   }
   activateAgentWorkspace()
   if (!sessionId && routeQueryText(route.query.new) === '1') {
-    if (
-      agentStore.activeChatPackageId === packageId
-      && agentStore.selectedSessionId === null
-      && runtimeStore.activeAgentSessionId === null
-      && runtimeStore.currentMode === 'agent_package'
-    ) return true
+    const workspaceId = routeQueryText(route.query.workspace_id)
+    if (emptyAgentRouteIsActive(packageId, workspaceId)) return true
     agentStore.enterAgentChat(packageId, null)
     runtimeStore.showEmptyAgentPackageSession(packageId)
-    runtimeStore.activeWorkspaceId = routeQueryText(route.query.workspace_id) || null
+    runtimeStore.activeWorkspaceId = workspaceId
     await commands.selectAgentPackage(packageId, 'run')
     return true
   }
@@ -441,6 +437,14 @@ function routeMatchesAgentSession(packageId: string, sessionId: string): boolean
   return route.name === 'Factory'
     && routeQueryText(route.query.package_id) === packageId
     && routeQueryText(route.query.session_id) === sessionId
+}
+
+function emptyAgentRouteIsActive(packageId: string, workspaceId: string | null): boolean {
+  return agentStore.activeChatPackageId === packageId
+    && agentStore.selectedSessionId === null
+    && runtimeStore.activeAgentSessionId === null
+    && runtimeStore.currentMode === 'agent_package'
+    && runtimeStore.activeWorkspaceId === workspaceId
 }
 
 function routeQueryText(value: unknown): string | null {
