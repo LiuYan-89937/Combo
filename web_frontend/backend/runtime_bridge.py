@@ -817,6 +817,7 @@ def _log_scheduled_coroutine_failure(future: Any) -> None:
 def _active_request_from_command(command: FactoryFrontendCommand, request_id: str) -> dict[str, Any]:
     now = datetime.now(UTC).isoformat()
     payload = dict(command.payload or {})
+    source = _command_request_source(command, request_id=request_id)
     if command.message:
         payload.setdefault("message", command.message)
     if command.session_id:
@@ -829,8 +830,8 @@ def _active_request_from_command(command: FactoryFrontendCommand, request_id: st
         "runId": None,
         "sessionId": command.session_id,
         "commandType": command.type,
-        "background": request_id.startswith("scheduler-"),
-        "source": "scheduler" if request_id.startswith("scheduler-") else "user",
+        "background": source == "scheduler",
+        "source": source,
         "startedAt": now,
         "completedAt": None,
         "payload": payload,
@@ -859,6 +860,7 @@ def _runtime_request_dispatch_event(
     payload.update(
         {
             "command_type": command.type,
+            "request_source": _command_request_source(command, request_id=request_id),
             "dispatch_state": dispatch_state,
             "queue_position": queue_position,
             "session_id": session_id or None,
@@ -873,6 +875,15 @@ def _runtime_request_dispatch_event(
         producer_type="factory_bridge",
         payload=payload,
     )
+
+
+def _command_request_source(command: FactoryFrontendCommand, *, request_id: str) -> str:
+    if request_id.startswith("scheduler-"):
+        return "scheduler"
+    metadata = command.payload.get("message_metadata")
+    if isinstance(metadata, dict) and str(metadata.get("visibility") or "").strip() == "internal":
+        return "internal"
+    return "user"
 
 
 def _command_session_id(command: FactoryFrontendCommand | None) -> str:

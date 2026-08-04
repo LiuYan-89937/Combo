@@ -18,6 +18,7 @@ from agent_factory.factory_graph.frontend_bridge.runtime_events import (
     RUN_TERMINAL_EVENT_TYPES,
     runtime_stream_status,
 )
+from agent_factory.runtime_kernel.session import COLLABORATION_WORKER_SESSION_KIND
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,7 +54,7 @@ class SubAgentTaskExecutor:
                 runtime_request=_dict(payload.get("runtime_request")),
                 attachments=payload.get("attachments"),
                 workdir_root=_path(payload.get("workdir_root")),
-                session_kind="background_task",
+                session_kind=COLLABORATION_WORKER_SESSION_KIND,
                 visible_in_agent_session_list=True,
             )
             resolved_session_id = str(run.session.get("session_id") or "").strip()

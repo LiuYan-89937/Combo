@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 import json
 from pathlib import Path
 import shutil
-from typing import Any
+from typing import Any, Literal, get_args
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -18,6 +18,17 @@ from agent_factory.runtime_protocol.turn_lifecycle import (
 )
 from agent_factory.trace_system import JSONLTraceStore
 from agent_factory.workspace_mounts import WorkspaceMountRecord
+
+
+AgentSessionKind = Literal[
+    "normal",
+    "collaboration_main",
+    "collaboration_worker",
+    "agent_group_member",
+    "scheduler",
+]
+COLLABORATION_WORKER_SESSION_KIND: AgentSessionKind = "collaboration_worker"
+_AGENT_SESSION_KINDS = frozenset(get_args(AgentSessionKind))
 
 
 class AgentSessionTurn(BaseModel):
@@ -323,8 +334,7 @@ def _optional_text(value: str | None) -> str | None:
 
 def _normalize_session_kind(value: str | None) -> str:
     kind = str(value or "").strip() or "normal"
-    allowed = {"normal", "collaboration_main", "collaboration_worker", "agent_group_member", "scheduler"}
-    if kind not in allowed:
+    if kind not in _AGENT_SESSION_KINDS:
         raise ValueError(f"unsupported agent session kind: {kind}")
     return kind
 
