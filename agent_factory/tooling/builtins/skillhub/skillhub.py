@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent_factory.tooling.envelope import tool_envelope
+from agent_factory.tooling.envelope import tool_envelope, tool_failure
 from agent_factory.tooling.skillhub.search_query import normalize_skillhub_search_query
 from agent_factory.tooling.spec import ToolRiskResult
 
@@ -10,11 +10,18 @@ from agent_factory.tooling.spec import ToolRiskResult
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     runtime = resources.get("skillhub")
     if runtime is None or not hasattr(runtime, "run"):
-        return tool_envelope({"status": "failed", "error": "SkillHUB runtime is not configured"})
+        return tool_failure(
+            "SkillHUB runtime is not configured",
+            output={"status": "failed"},
+        )
     try:
         result = runtime.run(_normalized_payload(arguments))
     except Exception as exc:
-        return tool_envelope({"status": "failed", "error": f"{type(exc).__name__}: {exc}"})
+        error = f"{type(exc).__name__}: {exc}"
+        return tool_failure(error, output={"status": "failed"})
+    if str(result.get("status") or "").strip() == "failed":
+        error = str(result.get("error") or result.get("message") or "SkillHUB action failed").strip()
+        return tool_failure(error, output=result)
     return tool_envelope(
         result,
         summary=str(result.get("message") or "SkillHUB action completed."),

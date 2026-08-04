@@ -3,16 +3,16 @@ from __future__ import annotations
 from typing import Any
 
 from agent_factory.scheduler_system.runtime import SchedulerRuntime
-from agent_factory.tooling.envelope import tool_envelope
+from agent_factory.tooling.envelope import tool_envelope, tool_failure
 
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     runtime = resources.get("scheduler_runtime")
     if not isinstance(runtime, SchedulerRuntime):
-        return tool_envelope({
-            "status": "failed",
-            "error": "scheduler runtime is not configured",
-        })
+        return tool_failure(
+            "scheduler runtime is not configured",
+            output={"status": "failed"},
+        )
     action = str(arguments.get("action") or "").strip()
     if action == "create":
         job = runtime.create_job(_job_payload(arguments, resources))
@@ -32,8 +32,13 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         return tool_envelope({"status": "completed", "deleted": runtime.delete_job(_job_id(arguments))})
     if action == "run_now":
         report = runtime.run_now(_job_id(arguments))
-        return tool_envelope({"status": report.status, "report": report.model_dump(mode="json")})
-    return tool_envelope({"status": "failed", "error": f"unsupported scheduler action: {action}"})
+        output = {"status": report.status, "report": report.model_dump(mode="json")}
+        if report.status == "failed":
+            error = report.error_summary or "scheduled job failed"
+            return tool_failure(error, output=output)
+        return tool_envelope(output)
+    error = f"unsupported scheduler action: {action}"
+    return tool_failure(error, output={"status": "failed"})
 
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:

@@ -10,7 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 from agent_factory.tooling.output_compressor import compress_tool_output
-from agent_factory.tooling.envelope import tool_envelope
+from agent_factory.tooling.envelope import tool_envelope, tool_failure
 from agent_factory.tooling.execution_context import current_tool_output_session_id
 from agent_factory.tooling.spec import ToolOutputCompressionActionConfig, ToolOutputCompressionConfig
 
@@ -263,7 +263,8 @@ def run_tool_output(arguments: dict[str, Any], resources: dict[str, Any]) -> dic
         try:
             output = store.describe(output_id)
         except (FileNotFoundError, ValueError):
-            return tool_envelope(_output_ref_not_found(action=action, output_id=output_id, store=store))
+            failure = _output_ref_not_found(action=action, output_id=output_id, store=store)
+            return tool_failure(failure["message"], output=failure, retryable=True)
         return tool_envelope({"action": action, "status": "completed", "output": output})
     if action == "read":
         try:
@@ -274,7 +275,8 @@ def run_tool_output(arguments: dict[str, Any], resources: dict[str, Any]) -> dic
                 limit=_optional_int(arguments.get("limit"), default=DEFAULT_TOOL_OUTPUT_MAX_MODEL_CHARS),
             )
         except (FileNotFoundError, ValueError):
-            return tool_envelope(_output_ref_not_found(action=action, output_id=output_id, store=store))
+            failure = _output_ref_not_found(action=action, output_id=output_id, store=store)
+            return tool_failure(failure["message"], output=failure, retryable=True)
         return tool_envelope({"action": action, "status": "completed", "output": output})
     raise ValueError(f"unsupported tool_output action: {action}")
 

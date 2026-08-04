@@ -194,7 +194,7 @@ class ToolExecutionGateway:
                 errors=["output is not a dict"],
             )
         try:
-            output, evidence, summary = unpack_tool_envelope(output)
+            envelope = unpack_tool_envelope(output)
         except Exception as exc:
             return self._observation(
                 "invalid_output",
@@ -202,10 +202,26 @@ class ToolExecutionGateway:
                 tool_call_id=tool_call_id,
                 arguments=arguments,
                 output=output,
-                execution_status="completed",
+                execution_status="failed",
                 contract_status="invalid",
                 errors=[f"{type(exc).__name__}: {exc}"],
             )
+        if envelope.execution_status == "failed":
+            return self._observation(
+                "execution_failed",
+                envelope.summary or f"Tool execution failed: {envelope.error}",
+                tool_call_id=tool_call_id,
+                arguments=arguments,
+                output=envelope.output,
+                evidence=envelope.evidence,
+                execution_status="failed",
+                contract_status="valid",
+                retryable=envelope.retryable,
+                errors=[envelope.error],
+            )
+        output = envelope.output
+        evidence = envelope.evidence
+        summary = envelope.summary
         output_errors = self.output_schema.errors_for(output)
         if output_errors:
             return self._observation(

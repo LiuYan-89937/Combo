@@ -9,6 +9,17 @@
         <small>{{ statusLabel }}</small>
       </span>
       <n-button
+        v-if="!terminal"
+        class="task-delete"
+        size="tiny"
+        quaternary
+        :loading="cancelling"
+        :disabled="view.status === 'cancelling'"
+        @click="cancelTask"
+      >
+        {{ t('common.cancel') }}
+      </n-button>
+      <n-button
         v-if="terminal"
         class="task-delete"
         size="tiny"
@@ -140,6 +151,7 @@ const emit = defineEmits<{ updated: [task: BackgroundTask]; deleted: [taskId: st
 const { t } = useI18n()
 const submitting = ref(false)
 const deleting = ref(false)
+const cancelling = ref(false)
 const answerText = ref('')
 const selectedOption = ref('')
 const actionError = ref('')
@@ -250,6 +262,21 @@ async function deleteTask() {
     actionError.value = error instanceof Error ? error.message : String(error)
   } finally {
     deleting.value = false
+  }
+}
+
+async function cancelTask() {
+  if (terminal.value || cancelling.value || task.value.status === 'cancelling') return
+  cancelling.value = true
+  actionError.value = ''
+  try {
+    task.value = (await backgroundTasksApi.cancel(task.value.task_id, 'user_cancelled')).task
+    emit('updated', task.value)
+    schedulePoll()
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    cancelling.value = false
   }
 }
 

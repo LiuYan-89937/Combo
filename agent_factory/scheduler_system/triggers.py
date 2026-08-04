@@ -11,14 +11,24 @@ from apscheduler.triggers.base import BaseTrigger
 from agent_factory.scheduler_system.schema import SchedulerScheduleType
 
 
-def build_trigger(*, schedule_type: SchedulerScheduleType, schedule_expr: str, timezone: str) -> BaseTrigger:
+def build_trigger(
+    *,
+    schedule_type: SchedulerScheduleType,
+    schedule_expr: str,
+    timezone: str,
+    anchor_at: str | None = None,
+) -> BaseTrigger:
     tz = ZoneInfo(timezone)
     expr = schedule_expr.strip()
     if schedule_type == "cron":
         return CronTrigger.from_crontab(expr, timezone=tz)
     if schedule_type == "interval":
         seconds = _interval_seconds(expr)
-        return IntervalTrigger(seconds=seconds, timezone=tz)
+        return IntervalTrigger(
+            seconds=seconds,
+            timezone=tz,
+            start_date=_date_value(anchor_at, tz) if anchor_at else None,
+        )
     if schedule_type == "date":
         return DateTrigger(run_date=_date_value(expr, tz), timezone=tz)
     raise ValueError(f"unsupported schedule_type: {schedule_type}")
