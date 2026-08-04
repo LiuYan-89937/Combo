@@ -14,6 +14,7 @@ def get_agent_manufacture_tool_specs() -> list[ToolSpec]:
                 "异步制造并发布新 Agent。仅当 agent_search 没有返回可复用候选，"
                 "且现有 Agent 不足以完成任务时使用。"
                 "本工具只登记制造请求并交给宿主制造服务执行，不会阻塞当前对话。"
+                "启动成功后先向用户简要总结制造目标，再结束当前回复；不要查询制造进度。"
                 "制造通过 full_static 后会自动发布 package，并主动把结果送回当前主 Agent 会话；"
                 "收到完成报告后必须再次调用 agent_search 确认可用 package_id。"
             ),

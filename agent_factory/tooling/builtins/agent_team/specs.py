@@ -13,7 +13,8 @@ def get_agent_team_tool_specs() -> list[ToolSpec]:
             description=(
                 "将一个目标拆给多个已发布 Agent 并行或按依赖顺序执行。"
                 "每个成员保留独立会话和工作区，并通过 deliver_result 把结果送回当前工作区。"
-                "先用 agent_search 确认每个 package_id；启动后不要轮询，成员状态变化会主动唤醒当前会话。"
+                "先用 agent_search 确认每个 package_id；启动成功后先向用户简要总结成员分工，再结束当前回复。"
+                "不要轮询，成员状态变化会主动唤醒当前会话。"
             ),
             entrypoint="agent_factory.tooling.builtins.agent_team.tool:run",
             input_schema=_input_schema(),

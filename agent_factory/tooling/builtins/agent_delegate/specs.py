@@ -15,7 +15,8 @@ def get_agent_delegate_tool_specs() -> list[ToolSpec]:
                 "先用 agent_search 获取真实 package_id，再用 action=start 启动。"
                 "子 Agent 保留独立会话和工作区，完成后必须通过 deliver_result 正式交付；"
                 "系统会把产物事务式传入当前工作区并自动唤醒你验收、整合和向用户汇报。"
-                "启动后当前运行会自动进入等待，不要查询任务进度；action=cancel 用于停止未完成任务。"
+                "启动成功后先向用户简要总结任务与分工，再结束当前回复并等待主动更新；"
+                "不要查询任务进度。action=cancel 用于停止未完成任务。"
             ),
             entrypoint="agent_factory.tooling.builtins.agent_delegate.tool:run",
             input_schema=_input_schema(),

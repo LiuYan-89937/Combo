@@ -23,7 +23,6 @@ BackgroundTaskStatus = Literal[
 ]
 
 BACKGROUND_TASK_TYPES: frozenset[str] = frozenset({"sub_agent", "manufacture", "evolve"})
-BACKGROUND_TASK_NOTIFICATION_BATCH_KEY = "notification_batch_id"
 BACKGROUND_TASK_STATUSES: frozenset[str] = frozenset(
     {
         "queued",
