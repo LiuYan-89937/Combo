@@ -5,7 +5,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import type { RouteRecordRaw } from 'vue-router'
 import {
-  detectBrowserLocale,
+  defaultLocale,
   localeStorageKey,
   normalizeLocale,
   routeTitleKey,
@@ -73,7 +73,7 @@ const router = createRouter({
 router.beforeEach((to, _from, next) => {
   if (typeof document !== 'undefined') {
     const storedLocale = typeof window === 'undefined' ? null : window.localStorage.getItem(localeStorageKey)
-    const locale = storedLocale ? normalizeLocale(storedLocale) : detectBrowserLocale()
+    const locale = storedLocale ? normalizeLocale(storedLocale) : defaultLocale
     document.title = `${translate(locale, routeTitleKey(to.name))} - FastAgentFactory`
   }
   next()

@@ -100,7 +100,7 @@ import {
   applyToolLifecycleEvent,
 } from './runtime/toolMutations'
 import {
-  detectBrowserLocale,
+  defaultLocale,
   localeStorageKey,
   normalizeLocale,
   translate,
@@ -1755,9 +1755,9 @@ export const useRuntimeStore = defineStore('runtime', {
 })
 
 function currentLocale() {
-  if (typeof window === 'undefined') return detectBrowserLocale()
+  if (typeof window === 'undefined') return defaultLocale
   const stored = window.localStorage.getItem(localeStorageKey)
-  return stored ? normalizeLocale(stored) : detectBrowserLocale()
+  return stored ? normalizeLocale(stored) : defaultLocale
 }
 
 function optionalPositiveInteger(value: unknown): number | null {

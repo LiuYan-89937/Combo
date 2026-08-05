@@ -9,7 +9,7 @@
 
 两种拓扑复用同一套模型 Profile、推理控制、Benchmark 和部署脚本。
 
-项目入口和功能说明见 [中文 README](../README.md)。
+项目入口和功能说明见 [中文 README](../README.zh-CN.md)。
 
 ## 1. 部署结果
 

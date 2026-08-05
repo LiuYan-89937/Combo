@@ -6,7 +6,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
 import {
-  detectBrowserLocale,
+  defaultLocale,
   localeStorageKey,
   normalizeLocale,
   type Locale,
@@ -21,9 +21,9 @@ const STORAGE_KEYS = {
 } as const
 
 function readStoredLocale(): Locale {
-  if (typeof window === 'undefined') return 'zh-CN'
+  if (typeof window === 'undefined') return defaultLocale
   const stored = window.localStorage.getItem(STORAGE_KEYS.locale)
-  return stored ? normalizeLocale(stored) : detectBrowserLocale()
+  return stored ? normalizeLocale(stored) : defaultLocale
 }
 
 function readStoredThemeMode(): ThemeMode {

@@ -1,204 +1,204 @@
-[简体中文](README.md) | [English](README.en.md)
+[English](README.md) | [简体中文](README.zh-CN.md)
 
 # FastAgentFactory
 
-> 基于多 Agent 平台的智能协作助手。
+> A collaborative AI assistant built on a multi-Agent platform.
 
-FastAgentFactory 将对话、任务拆分、Agent 调度、工具执行、知识检索、长期记忆、工作区和结果交付统一到一个可审计的协作平台中。主 Agent 可以直接完成任务，也可以按需调用、制造或进化专业 Agent，再对多个执行链的结果进行验收与统一交付。
+FastAgentFactory unifies conversation, task decomposition, Agent orchestration, tool execution, knowledge retrieval, long-term memory, workspaces, and deliverables in one auditable collaboration platform. The primary Agent may complete work directly, invoke existing specialists, manufacture new Agents, or evolve published Agents, then review and deliver the results of multiple execution chains through one conversation.
 
-平台支持 Linux/ROCm 本机部署，也支持 macOS、Windows 或 Linux 控制端通过 SSH 连接远程 AMD Radeon 推理节点。AgentPackage 由宿主监督的 Native Runtime 子进程执行，通过独立工作区、独立运行目录和共享只读依赖池实现逻辑隔离，不依赖 Docker。
+The platform supports local Linux/ROCm deployment and split-host deployment, where a macOS, Windows, or Linux control host connects to a remote AMD Radeon inference node over SSH. AgentPackages run as host-supervised native subprocesses. Independent workspaces, isolated runtime directories, and shared read-only dependency pools provide logical isolation without Docker.
 
-![FastAgentFactory 项目海报](supplementary-materials/poster/fastagentfactory-project-poster.png)
+![FastAgentFactory project poster](supplementary-materials/poster/fastagentfactory-project-poster.png)
 
-## 从这里开始
+## Start Here
 
-根据你的目标选择阅读路径：
+Choose a path according to what you want to do:
 
-| 我想…… | 建议先看 |
+| Goal | Recommended path |
 | --- | --- |
-| 快速了解产品 | [平台定位](#平台定位) → [核心能力](#核心能力) → [演示视频](#演示视频) |
-| 部署并运行 | [运行架构](#运行架构) → [环境要求](#环境要求) → [一键部署](#一键部署) |
-| 使用 Agent | [首次使用](#首次使用) → [功能指南](#功能指南) |
-| 查看 AMD 优化 | [AMD Radeon 推理优化](#amd-radeon-推理优化) → [Benchmark 与算子分析](#benchmark-与算子分析) |
-| 开发或验收 | [项目目录](#项目目录) → [开发与静态检查](#开发与静态检查) → [详细文档](#详细文档) |
+| Understand the product | [Platform Positioning](#platform-positioning) → [Core Capabilities](#core-capabilities) → [Demo Video](#demo-video) |
+| Deploy and run it | [Runtime Architecture](#runtime-architecture) → [Requirements](#requirements) → [One-command Deployment](#one-command-deployment) |
+| Use Agents | [First Run](#first-run) → [Feature Guide](#feature-guide) |
+| Review AMD optimizations | [AMD Radeon Inference Optimization](#amd-radeon-inference-optimization) → [Benchmarking and Operator Analysis](#benchmarking-and-operator-analysis) |
+| Develop or verify the project | [Repository Layout](#repository-layout) → [Development and Static Validation](#development-and-static-validation) → [Detailed Documentation](#detailed-documentation) |
 
-## 平台定位
+## Platform Positioning
 
-FastAgentFactory 不是把多个聊天窗口拼在一起，也不是要求每个任务都必须分发给子 Agent。它以主 Agent 为统一入口，根据任务复杂度和当前资源做动态决策：
+FastAgentFactory is neither a collection of disconnected chat windows nor a system that forces every request through a child Agent. The primary Agent is the unified entry point and dynamically chooses how to act according to task complexity and available capacity:
 
-1. 简单任务由主 Agent 直接执行。
-2. 已有专业 Agent 能处理时，主 Agent创建后台任务并委派。
-3. 需要多领域协同时，多个 Agent 可以异步运行，主 Agent继续接收用户消息并调整任务。
-4. 现有能力不足时，可以启动制造流程生成新的 AgentPackage。
-5. 已发布 Agent 表现不理想时，可以进入进化流程修改能力并重新验证。
+1. Complete straightforward work directly.
+2. Create a background task and delegate it when an existing specialist is suitable.
+3. Run multiple Agents asynchronously for cross-domain work while continuing to receive and interpret user messages.
+4. Start manufacturing when the required capability does not yet exist.
+5. Start evolution when a published Agent needs to be improved and revalidated.
 
-用户在一个会话中看到的是统一交互，而不是内部运行模式的割裂页面。任务链、参与 Agent、工具调用、审批、失败、暂停、外部等待和交付物都通过同一运行协议投影到前端。
+The user sees one continuous interaction rather than separate pages for internal runtime modes. Task chains, participating Agents, tool calls, approvals, failures, pauses, external waits, and deliverables are projected into the frontend through one runtime protocol.
 
-## 核心能力
+## Core Capabilities
 
-### 主 Agent 与异步多 Agent 协作
+### Primary Agent and Asynchronous Multi-Agent Collaboration
 
-- 主 Agent 可以直接调用工具，也可以创建并调度子 Agent 任务。
-- 多个 Agent 使用独立会话和运行状态，不共享未授权的上下文。
-- 后台任务具有排队、容量准入、租约、心跳、取消、恢复和结果交付状态。
-- 运行中发送的新消息进入队列，由主 Agent 在下一轮判断是补充、改向、停止还是继续。
-- 多 Agent 协作使用独立任务工作区；Agent 群聊可以让多个成员以独立会话共享同一个本机目录。
+- The primary Agent can use tools directly or create and orchestrate child-Agent tasks.
+- Every Agent has its own session and runtime state; unauthorized context is not shared.
+- Background tasks expose queueing, capacity admission, leases, heartbeats, cancellation, recovery, and delivery states.
+- Messages sent while work is running are queued. On the next turn, the primary Agent decides whether they supplement, redirect, stop, or continue current work.
+- Multi-Agent collaboration uses isolated task workspaces. Agent group chat can give independent Agent sessions access to the same locally linked directory.
 
-### Agent 制造与进化
+### Agent Manufacturing and Evolution
 
-- 使用自然语言描述 Agent 的用途、边界和交付标准。
-- 自动完成需求分析、Agent 身份、模型契约、工具、Skill、MCP、知识和运行 Pattern 配置。
-- 工具实现必须经过真实 Probe；依赖初始化、标准输出、失败阶段和最终结果可观测。
-- 完整静态校验通过后进入待发布状态，由用户在悬浮任务卡中确认发布。
-- 进化链路复用制造的 authoring、probe、validation 和 publish 状态机。
+- Describe the Agent's purpose, boundaries, and acceptance criteria in natural language.
+- Generate identity, model contracts, tools, Skills, MCP bindings, knowledge, and runtime patterns from the requirement.
+- Require a real Probe for tool implementations, with observable dependency initialization, standard output, failure stage, and final result.
+- Enter a pending-publication state only after complete static validation, then ask the user to confirm publication in the floating task card.
+- Reuse the same authoring, probe, validation, and publication state machine for evolution.
 
-### AgentPackage 运行体系
+### AgentPackage Runtime
 
-AgentPackage 是平台的可发布能力单元，描述：
+An AgentPackage is the platform's publishable capability unit. It describes:
 
-- Agent 身份与运行 Pattern。
-- 模型角色绑定和允许的覆盖项。
-- 工具、风险等级、审批策略、并发语义和输出压缩策略。
-- MCP、Skill 与知识库绑定关系。
-- Context、跨会话记忆和压缩策略。
-- Scheduler 默认时区、并发、超时、无人值守审批和失败暂停策略。
+- Agent identity and runtime pattern.
+- Model-role bindings and permitted overrides.
+- Tools, risk levels, approval policy, concurrency semantics, and output-compaction policy.
+- MCP, Skill, and knowledge-base bindings.
+- Context, cross-session memory, and compression policy.
+- Scheduler defaults for timezone, concurrency, timeout, unattended approval, and failure-based suspension.
 
-已发布包不保存用户模型凭据、Resource 密钥、聊天记录、附件和运行时 Checkpoint。下载外部 Agent 包后，需要在本地重新选择并绑定可用模型。
+Published packages do not contain user model credentials, Resource secrets, chat history, attachments, or runtime checkpoints. After downloading an external Agent package, the user must select and bind locally available models.
 
-### 工作区与文件交付
+### Workspaces and File Delivery
 
-- 新会话可以使用平台管理的独立工作区，也可以挂载本机已有目录。
-- 挂载模式不复制原目录；用户可以随时解除挂载。
-- 同一挂载工作区可以承载多个会话，每个 Agent仍保留独立会话状态。
-- 输入附件、知识材料、图片和生成文件可以在工作区浏览和打开。
-- 文件创建、修改、移动、复制和删除通过结构化工具或受控 Shell 执行，并保留工具记录。
+- A new session can use an isolated platform-managed workspace or link an existing local directory.
+- Linking does not copy the source directory and can be removed at any time.
+- Multiple sessions may use the same linked workspace while each Agent retains independent conversation state.
+- Attachments, knowledge materials, images, and generated files can be browsed and opened from the workspace.
+- File creation, editing, movement, copying, and deletion use structured tools or a controlled Shell, with tool records preserved.
 
-### 扩展、知识与记忆
+### Extensions, Knowledge, and Memory
 
-- MCP 和 Skill 在全局注册中心统一配置，再绑定到具体 Agent。
-- MCP 支持 stdio 与网络传输、环境变量、Header、超时和工具风险默认值。
-- Skill 可以包含 `SKILL.md`、脚本、模板和其他资源，而不是只有一段提示词。
-- 知识库支持文件摄取、切分、Embedding、检索、打开和引用来源。
-- 跨会话记忆区分工作区作用域和全局作用域，并按当前会话检索注入。
-- Context 压缩阈值默认跟随模型配置，也可以由 AgentPackage 覆盖。
+- MCP servers and Skills are configured once in a global registry, then bound to individual Agents.
+- MCP supports stdio and network transports, environment variables, headers, timeouts, and default tool-risk settings.
+- A Skill may contain `SKILL.md`, scripts, templates, and other resources rather than only a prompt fragment.
+- Knowledge bases support file ingestion, chunking, Embedding, retrieval, opening, and source citation.
+- Cross-session memory distinguishes workspace scope from global scope and is retrieved according to the current session.
+- Context compression follows the selected model profile by default and may be overridden by an AgentPackage.
 
-### 调度、审批与可观测性
+### Scheduling, Approval, and Observability
 
-- 定时任务支持时区、并发策略、超时、失败计数和自动暂停。
-- 工具审批、用户问答、资源请求与发布确认统一进入悬浮任务卡。
-- Auto 模式按照工具权限自动审批，并允许主 Agent自动与子 Agent交互。
-- Trace 保留模型流、工具调用、阶段、Token、缓存、任务状态和错误摘要。
-- 工具执行耗时动态更新；图片类工具结果可以在消息中直接展示。
+- Scheduled tasks support timezone, concurrency policy, timeout, failure counts, and automatic suspension.
+- Tool approval, user questions, resource requests, and publication confirmation share the same floating task-card surface.
+- Auto mode follows tool permissions for automatic approval and lets the primary Agent communicate with child Agents automatically.
+- Traces retain model streams, tool calls, stages, tokens, cache activity, task state, and error summaries.
+- Tool duration updates while the tool is running, and image-tool results can be rendered directly in messages.
 
-## 典型使用场景
+## Typical Use Cases
 
-### 办公交付
+### Office Deliverables
 
-用户提供主题、附件和风格要求，主 Agent 调用搜索、知识库与文件工具，必要时委派给文档或演示文稿 Agent，最终把可编辑文件写入当前工作区。
+The user provides a topic, attachments, and style requirements. The primary Agent uses search, knowledge, and file tools, delegates to a document or presentation Agent when useful, and writes editable deliverables to the current workspace.
 
-### 复杂研究
+### Complex Research
 
-主 Agent 将一个目标拆成多个证据任务，调用不同专业 Agent并行执行。每个任务返回来源、时间和产物，主 Agent完成语义验收、冲突处理和最终汇总。
+The primary Agent decomposes one goal into evidence tasks and runs different specialists in parallel. Each task returns sources, timestamps, and artifacts. The primary Agent performs semantic acceptance, resolves conflicts, and produces the final synthesis.
 
-### 周期事务
+### Recurring Work
 
-Agent 创建一次性或周期 Scheduler 任务，在无人值守策略允许的范围内生成简报、提醒或文件。需要批准的外部操作不会绕过权限策略。
+An Agent creates a one-time or recurring Scheduler task to produce briefs, reminders, or files within the unattended-approval boundary. External actions requiring approval cannot bypass their permission policy.
 
-### A 股多 Agent 演示
+### Built-in A-share Multi-Agent Demonstration
 
-仓库内置三个 A 股专业 Agent，用于展示真实数据工具、多 Agent 协作和交付：
+The repository includes three A-share specialist Agents that demonstrate real data tools, multi-Agent collaboration, and delivery:
 
-| Agent | 负责内容 | 典型交付 |
+| Agent | Responsibility | Typical deliverable |
 | --- | --- | --- |
-| A 股盘面雷达 | 市场宽度、成交额、板块和领涨个股 | 盘面简报、异常说明、Markdown 报告、经授权发送的邮件 |
-| A 股上市公司研究员 | 行情、财务、趋势和用户材料 | 带来源与数据时间的公司研究报告 |
-| A 股持仓风险管家 | 集中度、波动率、回撤、相关性和压力情景 | 组合风险报告与情景分析 |
+| A-share Market Radar | Market breadth, turnover, sectors, and leading stocks | Market brief, anomaly notes, Markdown report, and authorized email |
+| A-share Listed-company Researcher | Market data, financials, trends, and user materials | Company research report with sources and data timestamps |
+| A-share Portfolio Risk Guard | Concentration, volatility, drawdown, correlation, and stress scenarios | Portfolio risk report and scenario analysis |
 
-主 Agent 可以同时研究市场与多家公司，再对模拟持仓进行 `5%`、`10%` 下跌压力评估并统一交付。所有金融输出仅用于研究和系统能力演示，不构成投资建议。
+The primary Agent can research the market and several companies concurrently, then evaluate a simulated portfolio under `5%` and `10%` drawdowns and produce one delivery. All financial output is for research and system demonstration only and is not investment advice.
 
-## 运行架构
+## Runtime Architecture
 
 ```text
-控制端（macOS / Windows / Linux）
+Control host (macOS / Windows / Linux)
 ┌────────────────────────────────────────────────────────────┐
 │ Browser :3000                                              │
 │   │ HTTP + SSE                                             │
 │ FastAgentFactory Backend :8000                             │
-│   ├─ 主 Agent / 后台任务 / 多 Agent 调度                  │
+│   ├─ Primary Agent / background tasks / Agent orchestration│
 │   ├─ AgentPackage / RuntimeKernel / Tool Gateway           │
 │   ├─ Model Pool / Knowledge / Memory / Scheduler           │
 │   ├─ Workspace / Trace / Approval / Artifact               │
-│   └─ Native Agent Runtime / 独立会话工作区                 │
+│   └─ Native Agent Runtime / isolated session workspaces    │
 │                                                            │
-│ 本机回环或 SSH Tunnel                                      │
-│   18003 -> inference 8003  llama.cpp 直连诊断             │
-│   18002 -> inference 8002  Embedding API                   │
-│   18004 -> inference 8004  准入、控制与 Telemetry          │
-│   18005 -> inference 8005  Image Generation API            │
+│ Local loopback or SSH tunnels                              │
+│   18003 -> inference 8003  direct llama.cpp diagnostics   │
+│   18002 -> inference 8002  Embedding API                  │
+│   18004 -> inference 8004  admission, control, telemetry  │
+│   18005 -> inference 8005  Image Generation API           │
 └──────────────────────────────┬─────────────────────────────┘
-                               │ SSH Key only
-AMD ROCm 推理节点              ▼
+                               │ SSH key only
+AMD ROCm inference node        ▼
 ┌────────────────────────────────────────────────────────────┐
 │ FastAgentFactory Inference Control :8004                   │
-│   ├─ 跨会话公平调度 / 优先级 / 排队 / 取消                │
-│   ├─ llama-server ROCm :8003                               │
-│   ├─ SentenceTransformers + PyTorch HIP :8002              │
-│   ├─ stable-diffusion.cpp HIPBLAS :8005                    │
-│   └─ GPU / VRAM / Model Lifecycle / Benchmark Telemetry    │
+│   ├─ cross-session fairness / priority / queue / cancel   │
+│   ├─ llama-server ROCm :8003                              │
+│   ├─ SentenceTransformers + PyTorch HIP :8002             │
+│   ├─ stable-diffusion.cpp HIPBLAS :8005                   │
+│   └─ GPU / VRAM / model lifecycle / benchmark telemetry   │
 │                                                            │
 │ official + AMD llama.cpp source / build / active link      │
 │ GGUF + mmproj + bge-m3 + FLUX model files                  │
 └────────────────────────────────────────────────────────────┘
 ```
 
-平台支持两种拓扑：
+Two deployment topologies share the same behavior:
 
-- `DEPLOY_TARGET=local`：Web、Agent Runtime 和 AMD 推理节点位于同一台 Linux/ROCm 主机，服务通过回环地址直连。
-- `DEPLOY_TARGET=ssh`：Web 与 Agent Runtime 位于控制端，AMD 推理节点位于远程 Linux 主机，通过 SSH 隧道访问回环服务。
+- `DEPLOY_TARGET=local`: Web, Agent Runtime, and AMD inference run on the same Linux/ROCm host and communicate over loopback.
+- `DEPLOY_TARGET=ssh`: Web and Agent Runtime run on the control host, while the AMD inference node runs on remote Linux and exposes loopback services through SSH tunnels.
 
-两种拓扑复用相同的模型 Profile、Agent 运行链路、容量调度、Official/AMD 切换和 Benchmark，不维护功能降级的远程分支。
+Both topologies reuse the same model profiles, Agent runtime chain, capacity scheduler, Official/AMD switching, and benchmarks. There is no feature-reduced remote branch.
 
-## 默认模型
+## Default Models
 
-首次部署使用以下组合；需要覆盖时统一修改根目录 `.env` 或模型配置页面：
+The first deployment uses the following stack. Override it through the root `.env` or the model configuration page:
 
-| 用途 | 模型 | 下载方式 | 默认配置 |
+| Purpose | Model | Download source | Default configuration |
 | --- | --- | --- | --- |
-| Chat | `Qwen3.6-35B-A3B-APEX-I-Quality.gguf` | Hugging Face 国内镜像，断点续传并校验 SHA256 | 256K Context、Q8_0 KV、Flash Attention、3 Slots、公平准入调度、GPU Layers 99 |
-| Vision projector | 对应 `mmproj-...-APEX-F16.gguf` | Hugging Face 国内镜像 | 随 Chat Profile 加载 |
-| Embedding | `BAAI/bge-m3` | ModelScope | 1024 维、归一化、PyTorch HIP |
-| Image | `FLUX.1-dev Q4_0` + VAE + CLIP-L + T5XXL | ModelScope 国内直链 | stable-diffusion.cpp HIPBLAS、1024×1024、20 Steps、eager load |
+| Chat | `Qwen3.6-35B-A3B-APEX-I-Quality.gguf` | Hugging Face mirror with resume and SHA256 validation | 256K Context, Q8_0 KV, Flash Attention, 3 slots, fair admission, GPU Layers 99 |
+| Vision projector | Matching `mmproj-...-APEX-F16.gguf` | Hugging Face mirror | Loaded with the Chat profile |
+| Embedding | `BAAI/bge-m3` | ModelScope | 1024 dimensions, normalized, PyTorch HIP |
+| Image | `FLUX.1-dev Q4_0` + VAE + CLIP-L + T5XXL | ModelScope direct links | stable-diffusion.cpp HIPBLAS, 1024×1024, 20 steps, eager load |
 
-Chat GGUF 约 `23.5 GB`，视觉投影器约 `0.9 GB`，FLUX 相关文件约 `16.3 GB`。此外还需要 Embedding、原生构建和运行状态空间，部署前请确认推理节点磁盘容量。
+The Chat GGUF is approximately `23.5 GB`, the vision projector approximately `0.9 GB`, and the FLUX files approximately `16.3 GB`. Reserve additional space for Embedding, native builds, and runtime state.
 
-## 环境要求
+## Requirements
 
-### 控制端
+### Control Host
 
-- macOS、Linux 或 Windows 10/11。
-- Git。
-- OpenSSH：`ssh`、`scp`。
-- Python 3.11+。
-- [uv](https://docs.astral.sh/uv/)。
-- Node.js 18+ 与 npm。
+- macOS, Linux, or Windows 10/11.
+- Git.
+- OpenSSH: `ssh` and `scp`.
+- Python 3.11+.
+- [uv](https://docs.astral.sh/uv/).
+- Node.js 18+ and npm.
 
-SSH 远程部署在 macOS/Linux 上优先使用 `rsync` 增量同步。Windows 使用 OpenSSH、SCP 和压缩归档完成相同同步边界，不要求 WSL、Git Bash 或 Docker。只有 Linux 本机 ROCm 部署要求 `rsync`。
+Remote SSH deployment prefers incremental `rsync` on macOS/Linux. Windows uses OpenSSH, SCP, and compressed archives for the same synchronization boundary and does not require WSL, Git Bash, or Docker. Only local Linux ROCm deployment requires `rsync`.
 
-### AMD ROCm 推理节点
+### AMD ROCm Inference Node
 
-- Linux 与可用的 AMD Radeon GPU。
-- ROCm 用户态运行和编译组件。
-- `/dev/kfd` 访问权限。
-- 与当前 ROCm 版本兼容的 PyTorch HIP。
-- SSH 模式下支持 SSH Key 登录。
+- Linux and a working AMD Radeon GPU.
+- ROCm user-space runtime and compiler components.
+- Access to `/dev/kfd`.
+- PyTorch HIP compatible with the installed ROCm version.
+- SSH-key login in SSH mode.
 
-部署脚本只在缺失时准备 CMake、Ninja、curl、编译器等普通构建工具，不会升级或重装 GPU 驱动。
+The deployment scripts prepare ordinary build tools such as CMake, Ninja, curl, and a compiler only when missing. They do not upgrade or reinstall the GPU driver.
 
-> **服务器镜像提示**：在 RadeonCloud/AMD 云平台创建推理服务器时，建议选择 `ROCm vLLM-dev (Navi) (vllm-dev:rocm7.2.1_navi_ubuntu22.04_py3.10_pytorch_2.9_vllm_0.16.0)`。使用其他镜像前需要确认 ROCm、PyTorch HIP、`/dev/kfd` 与 Python ABI 兼容。
+> **Server image tip:** On RadeonCloud or AMD cloud infrastructure, select `ROCm vLLM-dev (Navi) (vllm-dev:rocm7.2.1_navi_ubuntu22.04_py3.10_pytorch_2.9_vllm_0.16.0)`. Before using another image, verify ROCm, PyTorch HIP, `/dev/kfd`, and Python ABI compatibility.
 
-## 一键部署
+## One-command Deployment
 
-### 1. 获取项目
+### 1. Get the Project
 
 ```bash
 git clone https://github.com/LiuYan-89937/FastAgentFactory.git
@@ -206,15 +206,15 @@ cd FastAgentFactory
 cp .env.example .env
 ```
 
-Windows PowerShell 使用：
+On Windows PowerShell:
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-### 2. 配置远程 AMD 推理节点
+### 2. Configure a Remote AMD Inference Node
 
-在 `.env` 中填写：
+Set these fields in `.env`:
 
 ```dotenv
 DEPLOY_TARGET=ssh
@@ -224,19 +224,19 @@ SSH_USER=root
 SSH_KEY=~/.ssh/<private-key>
 ```
 
-`SSH_KEY` 可以是私钥绝对路径或 `~/.ssh/...`。如果 ssh-agent 或 OpenSSH 能自动选择正确密钥，可以留空。
+`SSH_KEY` may be an absolute private-key path or a path under `~/.ssh`. Leave it empty when ssh-agent or OpenSSH can select the correct key automatically.
 
-先验证命令本身可以登录：
+Verify the command itself can log in:
 
 ```bash
 ssh root@<AMD-Inference-Host> -p <SSH-Port>
 ```
 
-从密钥生成、服务器 sshd 检查、公钥安装到连接验证的完整步骤见[部署指南的 SSH Key 章节](project-documentation/Deployment.zh-CN.md#41-从零配置-ssh-key)。
+For key generation, sshd checks, `authorized_keys` installation, and connection verification, see [Configure SSH Key Authentication from Scratch](project-documentation/Deployment.md#41-configure-ssh-key-authentication-from-scratch).
 
-### 3. 配置本机 AMD 推理节点
+### 3. Configure a Local AMD Inference Node
 
-AMD GPU 位于当前 Linux 主机时：
+When the AMD GPU is on the current Linux host:
 
 ```dotenv
 DEPLOY_TARGET=local
@@ -246,215 +246,215 @@ SSH_USER=
 SSH_KEY=
 ```
 
-将 `REMOTE_PROJECT_ROOT`、`REMOTE_STATE_ROOT`、`REMOTE_MODEL_ROOT`、`REMOTE_LLAMA_SOURCE_ROOT`、`REMOTE_LLAMA_RUNTIME_ROOT` 和 `REMOTE_STABLE_DIFFUSION_CPP_DIR` 设置为当前用户可写的本机绝对路径。字段名保留 `REMOTE_`，其统一含义是“推理节点路径”。
+Set `REMOTE_PROJECT_ROOT`, `REMOTE_STATE_ROOT`, `REMOTE_MODEL_ROOT`, `REMOTE_LLAMA_SOURCE_ROOT`, `REMOTE_LLAMA_RUNTIME_ROOT`, and `REMOTE_STABLE_DIFFUSION_CPP_DIR` to writable absolute local paths. The `REMOTE_` prefix consistently means “inference-node path” in both deployment modes.
 
-### 4. 启动
+### 4. Start
 
-macOS 或 Linux：
+On macOS or Linux:
 
 ```bash
 ./deploy.sh up
 ```
 
-Windows PowerShell：
+On Windows PowerShell:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
 .\deploy.ps1 up
 ```
 
-启动完成后访问：
+Open the application at:
 
 ```text
 http://localhost:3000
 ```
 
-正常日志会依次显示 `Backend is ready`、`Frontend is ready` 和 `Application ready`。Web 后端固定使用 `8000`，前端开发服务固定使用 `3000` 并支持 HMR。
+Successful startup prints `Backend is ready`, `Frontend is ready`, and `Application ready`. The backend uses port `8000`; the frontend development server uses port `3000` with HMR.
 
-### 部署脚本会做什么
+### What the Deployment Script Does
 
-首次 `up` 会按照同一幂等流程：
+The first `up` follows one idempotent workflow:
 
-1. 校验部署目标；SSH 模式验证 Key 登录，本机模式验证 Linux/ROCm 主机。
-2. 验证仓库内置的 Official 与 AMD 两套 llama.cpp 源码，不在线拉取 llama.cpp。
-3. 探查 GPU、显存、磁盘、`/dev/kfd`、ROCm 和 PyTorch HIP。
-4. 仅在缺失且配置允许时准备普通构建工具与 ROCm 用户态组件。
-5. 检查国内下载源的 HTTPS CA 信任链，并只在损坏时修复。
-6. 同步最小推理控制 bundle 与三套完整原生推理源码；本机同路径时直接复用。
-7. 独立构建 Official、AMD `llama-server` / `llama-bench` 和 HIPBLAS `sd-server`。
-8. 断点续传 Chat GGUF 与 mmproj，并校验 SHA256。
-9. 从 ModelScope 下载或复用 `BAAI/bge-m3`。
-10. 下载并校验 FLUX、VAE、CLIP-L 与 T5XXL。
-11. 幂等同步 Chat、Embedding、Image 的远端和控制端 Profile。
-12. 启动推理节点，并等待所有已启用模型进入 `ready`。
-13. SSH 模式建立回环隧道，本机模式直连回环端口。
-14. 按 `uv.lock` 与 `package-lock.json` 准备控制端依赖并启动前后端。
+1. Validate the target, including key-based SSH login or the local Linux/ROCm environment.
+2. Validate the bundled Official and AMD llama.cpp trees; do not fetch llama.cpp online.
+3. Inspect GPU, VRAM, disk, `/dev/kfd`, ROCm, and PyTorch HIP.
+4. Prepare ordinary build tools and ROCm user-space components only when missing and permitted.
+5. Check the HTTPS CA chain for domestic model mirrors and repair it only when broken.
+6. Synchronize the minimal inference-control bundle and three complete native inference source trees; reuse them directly when local paths coincide.
+7. Build Official and AMD `llama-server` / `llama-bench` plus the HIPBLAS `sd-server` independently.
+8. Resume Chat GGUF and mmproj downloads and validate SHA256.
+9. Download or reuse `BAAI/bge-m3` from ModelScope.
+10. Download and validate FLUX, VAE, CLIP-L, and T5XXL.
+11. Idempotently synchronize Chat, Embedding, and Image profiles on the inference and control hosts.
+12. Start the inference node and wait for every enabled model to become `ready`.
+13. Create loopback SSH tunnels in SSH mode or connect directly in local mode.
+14. Prepare control-host dependencies from `uv.lock` and `package-lock.json`, then start the backend and frontend.
 
-模型下载支持续传；已校验的大文件不会在重复执行时重新下载。
+Large model downloads are resumable. Files that already pass validation are not downloaded again.
 
-## 部署命令
+## Deployment Commands
 
-Windows PowerShell 使用 `.\deploy.ps1` 替代 `./deploy.sh`，参数保持一致。
+Use `.\deploy.ps1` instead of `./deploy.sh` on Windows PowerShell; arguments are the same.
 
-| 命令 | 作用 |
+| Command | Purpose |
 | --- | --- |
-| `./deploy.sh up` | 幂等部署推理节点并启动 Web；SSH 模式建立隧道 |
-| `./deploy.sh up --no-web` | 完成推理节点部署，不启动前后端 |
-| `./deploy.sh bootstrap` | 准备模型和推理服务，不启动 Web |
-| `./deploy.sh doctor` | 检查 GPU、ROCm、PyTorch HIP、磁盘和 llama.cpp |
-| `./deploy.sh status` | 查看节点、模型和软件版本状态 |
-| `./deploy.sh logs` | 查看推理节点最近 200 行日志 |
-| `./deploy.sh restart` | 重启推理节点并等待模型 Ready |
-| `./deploy.sh down` | 停止推理服务并释放显存 |
-| `./deploy.sh models` | 续传、校验模型并更新 Profile |
-| `./deploy.sh sync` | 同步最小推理 bundle 与原生推理源码 |
-| `./deploy.sh build-llama [official\|amd\|all]` | 增量构建指定实现 |
-| `./deploy.sh switch-llama <official\|amd>` | 在相同 Profile 下切换活动实现 |
-| `./deploy.sh list-llama-builds` | 查看源码 revision、摘要和二进制 SHA256 |
-| `./deploy.sh rollback-llama` | 恢复上一次活动实现 |
-| `./deploy.sh build-sd` | 同步并增量构建 stable-diffusion.cpp |
+| `./deploy.sh up` | Idempotently deploy inference and start Web; create tunnels in SSH mode |
+| `./deploy.sh up --no-web` | Deploy inference without starting frontend or backend |
+| `./deploy.sh bootstrap` | Prepare models and inference services without starting Web |
+| `./deploy.sh doctor` | Inspect GPU, ROCm, PyTorch HIP, disk, and llama.cpp |
+| `./deploy.sh status` | Show inference-node, model, and software-version status |
+| `./deploy.sh logs` | Show the most recent 200 lines of inference logs |
+| `./deploy.sh restart` | Restart inference and wait for model readiness |
+| `./deploy.sh down` | Stop inference and release VRAM |
+| `./deploy.sh models` | Resume and validate model downloads, then refresh profiles |
+| `./deploy.sh sync` | Synchronize the minimal inference bundle and native sources |
+| `./deploy.sh build-llama [official\|amd\|all]` | Incrementally build selected implementations |
+| `./deploy.sh switch-llama <official\|amd>` | Switch the active implementation under the same profile |
+| `./deploy.sh list-llama-builds` | Show source revisions, summaries, and binary SHA256 values |
+| `./deploy.sh rollback-llama` | Restore the previous active implementation |
+| `./deploy.sh build-sd` | Synchronize and incrementally build stable-diffusion.cpp |
 
-更换实例时修改 SSH Host 与 Port。持久盘变化时同步修改模型、状态、llama 源码、构建和 stable-diffusion.cpp 路径。
+When changing instances, update the SSH host and port. When persistent-disk locations change, update model, state, llama.cpp source/build, and stable-diffusion.cpp paths together.
 
-## 首次使用
+## First Run
 
-1. 打开“模型配置”，确认 Chat、Embedding 和已启用的 Image Profile 为 `ready`。
-2. 进入“已发布 Agent”，初始化需要使用的内置 Agent。
-3. 普通对话至少需要初始化 `Factory Chat`。
-4. 运行 A 股协作示例前初始化三个 A 股专业 Agent。
-5. 新建会话时选择独立工作区或挂载本机目录。
+1. Open **Model Configuration** and confirm that Chat, Embedding, and enabled Image profiles are `ready`.
+2. Open **Published Agents** and initialize the built-in Agents you plan to use.
+3. Initialize **Factory Chat** before regular conversation.
+4. Initialize all three A-share specialists before running their collaboration demonstration.
+5. When creating a session, choose an isolated workspace or link a local directory.
 
-初始化会准备 AgentPackage 环境、工具和依赖，所以第一次启动通常比后续会话更慢。如果 Factory Chat 尚未就绪就发送消息，系统会自动开始初始化，并在完成后进入正常流式输出。
+Initialization prepares the AgentPackage runtime, tools, and dependencies, so the first run is normally slower than subsequent sessions. If a message is sent before Factory Chat is ready, the platform begins initialization automatically and then transitions to normal streamed output.
 
-`deploy.sh up` 在前台运行。按 `Ctrl+C` 会停止前后端与 SSH 隧道，但远程推理节点保持运行；需要释放显存时执行 `./deploy.sh down`。
+`deploy.sh up` remains in the foreground. `Ctrl+C` stops the frontend, backend, and SSH tunnel but leaves the remote inference node running. Run `./deploy.sh down` to release its VRAM.
 
-## 功能指南
+## Feature Guide
 
-### 模型配置
+### Model Configuration
 
-模型配置页面可以：
+The model page can:
 
-- 查看 AMD GPU、ROCm、PyTorch HIP、显存与 GPU 利用率。
-- 查看 Chat、Embedding 和 Image 的加载阶段、日志与实际 Profile 参数。
-- 加载、卸载和重启模型。
-- 设置默认 `main`、`task`、`compression` 和 `embedding` Profile。
-- 配置 Context、最大输出、温度、压缩阈值、GPU Layers、KV Cache、并发和 Flash Attention。
-- 声明原生上下文、YaRN 支持和最大扩展上下文。
-- 根据 GGUF 元数据、上下文、并发和 KV Cache 估算显存。
-- 配置 FLUX 尺寸、Steps、CFG、Diffusion Flash Attention、CPU 文本编码器和驻留策略。
+- Show AMD GPU, ROCm, PyTorch HIP, VRAM, and GPU utilization.
+- Show load stages, logs, and effective profile parameters for Chat, Embedding, and Image.
+- Load, unload, and restart models.
+- Set default `main`, `task`, `compression`, and `embedding` profiles.
+- Configure Context, maximum output, temperature, compression threshold, GPU Layers, KV Cache, concurrency, and Flash Attention.
+- Declare native context, YaRN support, and maximum extended context.
+- Estimate VRAM from GGUF metadata, Context, concurrency, and KV Cache.
+- Configure FLUX dimensions, steps, CFG, Diffusion Flash Attention, CPU text encoders, and residency.
 
-保存已加载的 external Profile 后，控制端会将配置透传至推理节点并重启对应模型。超过原生 Context 时，只有声明支持 YaRN 且不超过扩展上限的配置才会进入 llama-server 命令行。
+Saving a loaded external profile forwards the new configuration to the inference node and restarts the corresponding runtime. A Context above the model's native limit reaches `llama-server` only when the profile declares YaRN support and stays below the configured extended limit.
 
-### 对话、工具与工作区
+### Conversation, Tools, and Workspaces
 
-进入对话后可以验证：
+Use a conversation to verify:
 
-1. 普通消息的流式输出。
-2. 文件、Shell、知识库和 MCP 的结构化 Tool Calling。
-3. 工具耗时、参数、输出和审批卡片。
-4. 工作区文件的实时刷新、预览与打开。
-5. Token、Context、压缩和 KV Prefix Cache 指标。
+1. Streamed output for ordinary messages.
+2. Structured Tool Calling for files, Shell, knowledge, and MCP.
+3. Live tool duration, arguments, output, and approval cards.
+4. Real-time workspace refresh, preview, and opening.
+5. Token, Context, compression, and KV Prefix Cache metrics.
 
-工具在工作区根目录执行，Shell 不需要每次手动 `cd`。运行期间可以继续发送消息，新消息进入队列，不会错误地切断其他会话。
+Tools execute from the workspace root, so Shell commands do not need to `cd` on every call. Messages sent during execution enter the session queue and do not incorrectly interrupt other sessions.
 
-### MCP 与 Skill
+### MCP and Skills
 
-Hackson 测试部署内置 Tavily Web Search MCP。`deploy.sh up` 会把它安装在项目 `.agentfactory/mcp/web_search` 下，构建后统一注册，并绑定到内置 Agent。
+The Hackson test deployment includes Tavily Web Search MCP. `deploy.sh up` installs it under `.agentfactory/mcp/web_search`, builds it, registers it globally, and binds it to built-in Agents.
 
-仓库内置的是共享测试密钥，只用于比赛演示，可能受到公共额度限制。AgentPackage 只保存 MCP 绑定关系，不会把测试 MCP 的私密配置写入发布包。
+The shared key is intended only for competition demonstration and may be constrained by shared quotas. AgentPackage artifacts preserve only MCP binding relationships and do not embed private test MCP configuration.
 
-用户可以在扩展页面统一注册 MCP 与 Skill，再将卡片拖动绑定到目标 Agent。Skill 支持完整文件夹，不限制为单个 `SKILL.md`。
+The Extensions page lets users register MCP servers and Skills once, then drag their cards onto target Agents. A Skill may contain a complete directory and is not limited to a single `SKILL.md`.
 
-### 知识库与 RAG
+### Knowledge Bases and RAG
 
-标准流程：
+The standard flow is:
 
-1. 在知识库入口创建知识源并上传文件。
-2. 等待文档解析、切分与 Embedding 完成。
-3. 将知识源绑定到目标 Agent。
-4. 提问需要内部资料或来源引用的问题。
-5. 在 Trace 中检查检索、打开、读取与引用来源。
+1. Create a knowledge source and upload files from the knowledge-base entry point.
+2. Wait for parsing, chunking, and Embedding.
+3. Bind the source to an Agent.
+4. Ask a question that needs internal material or source citations.
+5. Inspect retrieval, opening, reading, and cited sources in Trace.
 
-对话工具也可以添加知识，并通过高级参数覆盖切分等配置。查询无结果时 Agent 不应伪造资料内容。
+Conversation tools can also add knowledge and override chunking settings through advanced parameters. When retrieval returns no result, the Agent must not fabricate content from the source.
 
-### 本地图片生成
+### Local Image Generation
 
-FLUX.1-dev Q4_0 由远端 `sd-server` 提供 OpenAI-compatible Images API。生成结果进入当前工作区 `images/`，模型上下文只接收路径与元数据，不注入 base64。
+FLUX.1-dev Q4_0 is served by remote `sd-server` through an OpenAI-compatible Images API. Results are written to `images/` in the current workspace. Only paths and metadata enter model context; base64 payloads do not.
 
-Image Profile 默认启用并设为 Active。部署会等待 FLUX 真正进入 `ready` 才完成；可通过 `IMAGE_ENABLED=0` 禁用，或用 `IMAGE_EAGER_LOAD=0` 改为首次调用时加载。
+The Image profile is enabled and active by default. Deployment waits until FLUX is actually `ready`; set `IMAGE_ENABLED=0` to disable it or `IMAGE_EAGER_LOAD=0` to load it on first use.
 
-FLUX.1-dev 受 Non-Commercial License 约束，使用和演示前需要确认许可范围。
+FLUX.1-dev is governed by a Non-Commercial License. Review its permitted use before deployment or demonstration.
 
-### Agent 制造、发布与进化
+### Agent Manufacturing, Publication, and Evolution
 
-制造时应描述用途、输入边界、目标任务和交付标准。制造 Agent 会：
+A manufacturing request should state purpose, input boundaries, target tasks, and acceptance criteria. The manufacturing Agent will:
 
-1. 分析意图与任务。
-2. 选择 React 或 Plan-and-Execute Pattern。
-3. 生成 Agent 身份、模型契约和 Context。
-4. 装配 MCP、Skill、知识、Resource 与 Scheduler。
-5. 编写工具并进行真实 Probe。
-6. 完成静态校验。
-7. 在悬浮任务卡中等待用户确认发布。
+1. Analyze intent and tasks.
+2. Select React or Plan-and-Execute.
+3. Generate Agent identity, model contract, and Context.
+4. Assemble MCP, Skills, knowledge, Resources, and Scheduler settings.
+5. Implement tools and execute real Probes.
+6. Complete static validation.
+7. Wait for publication confirmation in the floating task card.
 
-发布后可以创建独立会话。需要继续修改时进入进化流程，复用相同校验和发布边界。
+After publication, the user can create an isolated session for the Agent. Evolution reuses the same validation and publication boundaries.
 
-## AMD Radeon 推理优化
+## AMD Radeon Inference Optimization
 
-仓库直接携带两套基于同一 revision 的 llama.cpp：
+The repository directly vendors two llama.cpp trees from the same revision:
 
 ```text
-vendor/llama.cpp-official/   固定 Official Baseline，不接受项目算子修改
-vendor/llama.cpp-amd/        AMD RDNA3 HIP Kernel 与融合实现
-vendor/llama.cpp-common/     两套实现共享的 Host Trace 协议
+vendor/llama.cpp-official/   pinned Official baseline; no project operator changes
+vendor/llama.cpp-amd/        AMD RDNA3 HIP kernels and fused implementations
+vendor/llama.cpp-common/     shared host-trace protocol
 ```
 
-### 最强算子级结果
+### Strongest Operator-level Result
 
-Q8_0 × Q8_1 Native Wave32 MMVQ 在同一 AMD 二进制内与 Official Q8 路径做独立消融：
+Q8_0 × Q8_1 Native Wave32 MMVQ was independently ablated against the Official Q8 path inside the same AMD binary:
 
-| Q8_0 普通 Decode 路径 | 调用次数 | Kernel 总耗时 | 相对 Official |
+| Q8_0 regular Decode path | Calls | Total kernel time | Relative to Official |
 | --- | ---: | ---: | ---: |
 | Official | 5,120 | 38.775 ms | — |
 | Native Wave32 | 5,120 | 20.507 ms | **-47.11%** |
 | Native Wave64 | 5,120 | 22.450 ms | -42.10% |
 
-`-47.11%` 是算子 Profiler 口径，只说明该 Kernel 家族的累计执行耗时，不等同于端到端服务吞吐提升。
+`-47.11%` is an operator-profiler measurement of cumulative time for this kernel family. It is not an end-to-end service-throughput claim.
 
-### 端到端结果
+### End-to-end Result
 
-在 Qwen3.6-35B-A3B Q6_K、gfx1100、单并发、256K Context、Q8_0 KV、Flash Attention 开启且 MTP 关闭的归档条件下：
+Archived conditions: Qwen3.6-35B-A3B Q6_K, gfx1100, one concurrent client, 256K Context, Q8_0 KV, Flash Attention enabled, MTP disabled.
 
-| 指标 | Official | AMD 整体实现 | 变化 |
+| Metric | Official | AMD implementation | Change |
 | --- | ---: | ---: | ---: |
-| Decode 平均吞吐 | 84.0867 tok/s | 88.8320 tok/s | **+5.64%** |
-| Decode 标准差 | 0.1943 tok/s | 0.1718 tok/s | — |
-| Prompt 平均耗时 | 482.680 ms | 478.321 ms | -0.90% |
-| 每次输出 Token | 256 | 256 | 相同 |
-| 输出哈希 | `6c7bf1…d473` | `6c7bf1…d473` | 相同 |
+| Mean Decode throughput | 84.0867 tok/s | 88.8320 tok/s | **+5.64%** |
+| Decode standard deviation | 0.1943 tok/s | 0.1718 tok/s | — |
+| Mean Prompt time | 482.680 ms | 478.321 ms | -0.90% |
+| Output tokens per run | 256 | 256 | same |
+| Output hash | `6c7bf1…d473` | `6c7bf1…d473` | same |
 
-Official 与 AMD 均开启 MTP 时，Decode 基本持平；AMD Prompt 吞吐提升 `16.70%`、模型计算 TTFT 降低 `14.31%`、双客户端 QPS 提升 `5.09%`、平均请求延迟降低 `4.89%`。MTP 同时改变两套实现的 Decode 调度，因此不把 MTP 自身收益归因于 AMD Kernel。
+With MTP enabled for both Official and AMD, Decode was effectively tied. AMD improved Prompt throughput by `16.70%`, reduced model-compute TTFT by `14.31%`, increased two-client QPS by `5.09%`, and reduced mean request latency by `4.89%`. Because MTP changes Decode scheduling in both implementations, MTP's own benefit is not attributed to AMD kernels.
 
-### 已实现的优化
+### Implemented Optimizations
 
-1. **Q8_1 激活量化复用**：在单次计算图中复用相同 F32 激活的 Q8_1 临时表示，Decode Q8_1 调用减少 `42.74%`。
-2. **Residual RMSNorm 融合**：把 Residual Add、RMSNorm 和权重缩放合并成一个 RDNA3 HIP Kernel，减少启动和显存往返。
-3. **Native Q6_K MMVQ**：使用一个 Wave32 计算一行，删除跨 Wave LDS 合并，并共享激活读取。
-4. **Q8 Wave32/Wave64 动态分派**：根据 K、输出行、LDS、Occupancy 和物理 Wave 宽度选择变体。
-5. **可验证命中**：通过 Kernel Catalog、Host Shape Trace、GGML 图与 `rocprofv3` 时间线证明分派命中，不根据名称猜测。
+1. **Q8_1 activation-quantization reuse:** reuse the same F32 activation's Q8_1 temporary representation within one computation graph, reducing Decode Q8_1 calls by `42.74%`.
+2. **Fused Residual RMSNorm:** combine Residual Add, RMSNorm, and scale in one RDNA3 HIP kernel to reduce launches and memory round trips.
+3. **Native Q6_K MMVQ:** use one Wave32 per output row, remove cross-Wave LDS reduction, and share activation reads.
+4. **Dynamic Q8 Wave32/Wave64 dispatch:** select variants using K, output rows, LDS, occupancy, and physical Wave width.
+5. **Verifiable hits:** prove dispatch with the Kernel Catalog, Host Shape Trace, GGML graph, and `rocprofv3` timeline instead of inferring from names.
 
-完整实现位置、逐轮数据、输出一致性和适用边界见 [AMD RDNA3 推理优化说明](project-documentation/performance/ROCmOptimizations.zh-CN.md)。以上数据只代表归档环境，不承诺在其他模型、Shape、ROCm 版本或 GPU 上获得相同收益。
+Implementation locations, per-round results, output consistency, and applicability boundaries are documented in [AMD Radeon GPU Inference Optimizations](project-documentation/performance/ROCmOptimizations.md). The archived measurements do not promise the same gains on other models, shapes, ROCm versions, or GPUs.
 
-### 修改与构建 AMD Kernel
+### Modify and Build AMD Kernels
 
-只在 AMD 目录修改算子：
+Make operator changes only in the AMD tree:
 
 ```bash
 cd vendor/llama.cpp-amd
-# 修改 ggml HIP 分派和 AMD Kernel
+# Modify ggml HIP dispatch and AMD kernels
 ```
 
-同步、构建并切换：
+Synchronize, build, and switch:
 
 ```bash
 cd ../..
@@ -463,39 +463,39 @@ cd ../..
 ./deploy.sh switch-llama amd
 ```
 
-Official 与 AMD 使用独立 CMake/Ninja 构建目录，同时生成 `llama-server` 和 `llama-bench`。新增 Kernel 需要更新 AMD Kernel Catalog 与构建清单，再通过算子分析证明真实命中。
+Official and AMD use independent CMake/Ninja build directories and both produce `llama-server` and `llama-bench`. New kernels must be registered in the AMD Kernel Catalog and build manifest, then verified through operator analysis.
 
-## Benchmark 与算子分析
+## Benchmarking and Operator Analysis
 
-性能页面记录：
+The performance page records:
 
-- TTFT、Prompt Tokens/s、Decode Tokens/s 与端到端延迟。
-- Peak VRAM、平均/峰值 GPU 利用率与功耗。
-- KV Prefix Cache 复用 Token、实际计算 Token 与加权复用率。
-- MTP 候选 Token、接受 Token 与接受率。
-- 并发 QPS、聚合输入/输出 TPS、错误率、TTFT P95 和请求延迟 P95。
+- TTFT, Prompt Tokens/s, Decode Tokens/s, and end-to-end latency.
+- Peak VRAM, mean/peak GPU utilization, and power.
+- KV Prefix Cache reused tokens, computed tokens, and weighted reuse ratio.
+- MTP candidate tokens, accepted tokens, and acceptance rate.
+- Concurrent QPS, aggregate input/output TPS, error rate, TTFT P95, and request-latency P95.
 
-每个实验组按轮交替运行 Official 与 AMD。两套实现使用同一模型文件和 Profile，控制节点互斥切换二进制，不会让两份 Chat 模型同时占用显存。Benchmark 自动记录 implementation、源码 revision、源码摘要和二进制 SHA256，不能手工填写实现身份。
+Every experiment group alternates Official and AMD rounds. Both implementations use the same model file and profile. The control node switches binaries mutually exclusively, so two Chat models never occupy VRAM at the same time. Benchmark identity—implementation, source revision, source summary, and binary SHA256—is recorded automatically and cannot be entered manually.
 
-### 普通性能测试
+### Normal Performance Tests
 
-普通测试保留服务实际使用的 HIP Graph，结果用于端到端吞吐和延迟结论。每轮必须使用相同 Prompt、输出上限、Context、并发与采样参数。
+Normal tests keep the HIP Graph used by the production service. Their results support end-to-end throughput and latency claims. Prompt, output limit, Context, concurrency, and sampling parameters must be identical in every paired round.
 
-### 算子分析
+### Operator Analysis
 
-算子分析与普通性能测试分开执行：
+Operator analysis is isolated from normal performance tests:
 
-1. 临时卸载 Chat 模型。
-2. 使用同一 Profile 参数运行 `llama-bench` Prefill 与 Decode。
-3. 通过 `GGML_CUDA_DISABLE_GRAPHS=1` 关闭分析子进程的 HIP Graph replay。
-4. 使用 `GGML_SCHED_DEBUG=2` 记录 GGML 图算子和后端。
-5. 使用 `rocprofv3` 汇总 Kernel 调用次数与耗时。
-6. 按 Host 分派记录与 GPU Kernel 时间线严格配对。
-7. 完成后自动恢复 Chat 模型。
+1. Temporarily unload the Chat model.
+2. Run `llama-bench` Prefill and Decode with the same profile parameters.
+3. Set `GGML_CUDA_DISABLE_GRAPHS=1` only for the analysis subprocess to disable HIP Graph replay.
+4. Use `GGML_SCHED_DEBUG=2` to record GGML graph operators and backends.
+5. Use `rocprofv3` to aggregate kernel calls and duration.
+6. Strictly pair host dispatch records with the GPU kernel timeline.
+7. Restore the Chat model automatically when analysis completes.
 
-只有 Host 记录数和 rocprof 事件数完全一致时才展示配对变体；数量不一致会告警，不进行推测。Profiler 耗时用于归因，真实吞吐以普通性能测试为准。
+A paired variant is displayed only when host-record and rocprof-event counts match exactly. A mismatch produces a warning rather than a guessed attribution. Profiler timing is used for attribution; real throughput comes from normal performance tests.
 
-## 演示视频
+## Demo Video
 
 <video
   controls
@@ -504,82 +504,82 @@ Official 与 AMD 使用独立 CMake/Ninja 构建目录，同时生成 `llama-ser
   width="100%"
 >
   <source src="FastAgentFactory-Demo.mp4" type="video/mp4">
-  当前 Markdown 阅读器不支持嵌入式视频。
+  This Markdown viewer does not support embedded video.
 </video>
 
-如果页面未显示播放器，请[直接播放或下载 MP4 演示视频](FastAgentFactory-Demo.mp4)。
+If the player is unavailable, [play or download the MP4 demo directly](FastAgentFactory-Demo.mp4).
 
-演示内容包括：
+The demonstration covers:
 
-1. 主 Agent 对话、工具调用和工作区交付。
-2. Agent 制造、异步后台任务与发布确认。
-3. 多 Agent 协作和专业 Agent 结果汇总。
-4. AMD Radeon 推理节点、模型运行时和容量状态。
-5. Official/AMD 配对性能测试与算子命中结果。
+1. Primary-Agent conversation, tool calls, and workspace delivery.
+2. Agent manufacturing, asynchronous background tasks, and publication confirmation.
+3. Multi-Agent collaboration and specialist-result synthesis.
+4. AMD Radeon inference-node, model-runtime, and capacity state.
+5. Paired Official/AMD testing and operator-hit evidence.
 
-视频中的短测用于展示操作流程，不替代性能文档中的重复实验结论。
+Short tests in the video demonstrate the workflow and do not replace the repeated experiments in the performance documentation.
 
-## 项目目录
-
-```text
-agent_factory/                  Agent、RuntimeKernel、工具、知识、记忆与调度核心
-web_frontend/backend/           FastAPI Web 后端
-web_frontend/frontend/          Vue 3 前端
-SystemPackage/                  内置 AgentPackage
-deploy/                         跨平台部署与推理控制
-vendor/llama.cpp-official/      Official Baseline 源码
-vendor/llama.cpp-amd/           AMD 优化源码
-vendor/llama.cpp-common/        共享 Trace 协议
-vendor/stable-diffusion.cpp/    图片推理源码与子模块
-project-documentation/          项目、架构、部署和性能文档
-supplementary-materials/        海报与补充材料
-```
-
-## 配置与数据目录
-
-### 控制端
+## Repository Layout
 
 ```text
-.env                         用户部署、SSH 与模型配置，不提交
-deploy/defaults.env          版本化内部默认值，不作为用户配置编辑
-.agentfactory/               模型池、扩展注册、知识、记忆与平台状态，不提交
-.agent_runtime/              会话工作区、Trace、Checkpoint 与工具输出，不提交
+agent_factory/                  Agent, RuntimeKernel, tools, knowledge, memory, scheduling
+web_frontend/backend/           FastAPI Web backend
+web_frontend/frontend/          Vue 3 frontend
+SystemPackage/                  built-in AgentPackages
+deploy/                         cross-platform deployment and inference control
+vendor/llama.cpp-official/      Official baseline source
+vendor/llama.cpp-amd/           AMD-optimized source
+vendor/llama.cpp-common/        shared trace protocol
+vendor/stable-diffusion.cpp/    image-inference source and submodules
+project-documentation/          product, architecture, deployment, performance documentation
+supplementary-materials/        poster and supplementary assets
 ```
 
-### 默认远程推理节点
+## Configuration and Data Directories
+
+### Control Host
 
 ```text
-/root/FastAgentFactory               最小推理 bundle
-/root/.fastagentfactory              venv、模型池 SQLite、PID 与日志
-/root/models                         GGUF、mmproj 与 ModelScope 模型
-/root/fastagentfactory-llama-sources Official、AMD 与共享源码
-/root/.fastagentfactory/llama        构建、清单和活动软链接
-/root/stable-diffusion.cpp           图片推理源码与构建产物
+.env                         user deployment, SSH, and model configuration; not committed
+deploy/defaults.env          versioned internal defaults; not a user-edited config file
+.agentfactory/               model pool, extension registry, knowledge, memory, platform state
+.agent_runtime/              session workspaces, traces, checkpoints, tool output
 ```
 
-`/root` 是否持久取决于实例类型。使用持久卷时，在 `.env` 覆盖模型、状态和构建目录；临时实例到期前需要备份 Benchmark、Profile、Trace 和算子改动。
+### Default Remote Inference Node
 
-## 安全边界
+```text
+/root/FastAgentFactory               minimal inference bundle
+/root/.fastagentfactory              venv, model-pool SQLite, PIDs, logs
+/root/models                         GGUF, mmproj, and ModelScope models
+/root/fastagentfactory-llama-sources Official, AMD, and shared source
+/root/.fastagentfactory/llama        builds, manifests, active symlink
+/root/stable-diffusion.cpp           image-inference source and build
+```
 
-- SSH 使用 Key 登录，不在配置文件中保存服务器密码。
-- `.env`、模型文件、Resource 密钥、会话和运行状态均排除 Git 提交。
-- 远端 `8002`、`8003`、`8004`、`8005` 默认只监听 `127.0.0.1`。
-- `AGENTFACTORY_RESOURCE_MASTER_KEY` 首次部署生成并写入本机 `.env`；丢失后旧加密资源无法恢复。
-- AgentPackage 使用宿主子进程、独立工作区和共享依赖池；这是逻辑隔离，不是内核级安全沙箱。
-- 部署脚本不会替用户安装或升级 GPU 驱动，`/dev/kfd` 必须由宿主环境提供。
-- AgentHub 上传前展示 Skill 内容和 MCP JSON 供用户检查；聊天记录、附件、运行时状态与 Resource 值不进入公开包。
+Whether `/root` persists depends on the instance type. When using persistent storage, override model, state, and build directories in `.env`. Back up benchmarks, profiles, traces, and operator changes before a temporary instance expires.
 
-## 排障
+## Security Boundaries
 
-### SSH 登录失败
+- SSH uses key authentication; server passwords are not stored in configuration.
+- `.env`, model files, Resource secrets, sessions, and runtime state are excluded from Git.
+- Remote ports `8002`, `8003`, `8004`, and `8005` bind to `127.0.0.1` by default.
+- `AGENTFACTORY_RESOURCE_MASTER_KEY` is generated on first deployment and written to local `.env`; encrypted resources cannot be recovered if it is lost.
+- AgentPackages use supervised host subprocesses, independent workspaces, and shared dependency pools. This is logical isolation, not a kernel security sandbox.
+- Deployment scripts do not install or upgrade the GPU driver; `/dev/kfd` must be provided by the host.
+- Before AgentHub upload, Skill content and MCP JSON are shown for user review. Chat history, attachments, runtime state, and Resource values are excluded from public packages.
+
+## Troubleshooting
+
+### SSH Login Failure
 
 ```bash
 ssh -vvv root@<host> -p <port>
 ```
 
-确认服务器 sshd 正在运行、允许 Key 登录、主机端口正确，并且服务端公钥与本机私钥匹配。
+Confirm that sshd is running, key login is enabled, host and port are correct, and the server public key matches the local private key.
 
-`channel ... open failed: connect failed: Connection refused` 表示 SSH 已连接，但远端推理服务尚未监听。执行：
+`channel ... open failed: connect failed: Connection refused` means SSH connected but the remote inference service is not listening. Run:
 
 ```bash
 ./deploy.sh status
@@ -589,52 +589,52 @@ ssh -vvv root@<host> -p <port>
 
 ### ReadTimeout
 
-先确认超时 URL：
+Identify the timed-out URL first:
 
-- `/models`：模型可能仍在首次解析或加载。
-- `/v1/chat/completions`：检查模型 Loading、Context、GPU 计算和 Slot 队列。
-- `18004`：检查 Telemetry 隧道与推理控制进程。
+- `/models`: a model may still be parsing or loading.
+- `/v1/chat/completions`: inspect model loading, Context, GPU execution, and the slot queue.
+- `18004`: inspect the Telemetry tunnel and inference-control process.
 
 ```bash
 ./deploy.sh status
 ./deploy.sh logs
 ```
 
-### 模型下载中断
+### Interrupted Model Download
 
 ```bash
 ./deploy.sh models
 ```
 
-GGUF 使用续传；完成后只有通过 SHA256 才会写入已验证标记。Embedding 与图片模型复用 ModelScope 缓存。
+GGUF downloads resume and receive a verified marker only after SHA256 succeeds. Embedding and image models reuse the ModelScope cache.
 
-### 模型无法加载或显存不足
+### Model Load Failure or Insufficient VRAM
 
 ```bash
 ./deploy.sh doctor
 ./deploy.sh logs
 ```
 
-在模型配置中降低 Context、并发、KV Cache 精度或 GPU Layers。保存已加载 Profile 会触发远端重启并应用新参数。
+Reduce Context, concurrency, KV Cache precision, or GPU Layers in Model Configuration. Saving a loaded profile restarts the remote model with the new parameters.
 
-### Agent Runtime 初始化失败
+### Agent Runtime Initialization Failure
 
-检查控制端 Python、uv、包依赖声明、工作区权限和依赖池日志，然后重新执行 `./deploy.sh up`。Native Runtime 不依赖 Docker。
+Check control-host Python, uv, package dependencies, workspace permissions, and dependency-pool logs, then rerun `./deploy.sh up`. Native Runtime does not depend on Docker.
 
-### 前端或后端未就绪
+### Frontend or Backend Not Ready
 
-检查项目目录下：
+Inspect:
 
 ```text
 .agentfactory/logs/web-backend.log
 .agentfactory/logs/web-frontend.log
 ```
 
-端口变化的客户端连接是浏览器临时源端口，后端监听端口仍固定为 `8000`。
+Changing client ports in access logs are temporary browser source ports; the backend listener remains fixed at `8000`.
 
-## 开发与静态检查
+## Development and Static Validation
 
-项目约定不通过提交脚本运行特化 Agent 业务示例，只做语法和静态检查：
+Project policy avoids specialized Agent business examples in committed validation scripts. Use syntax and static checks:
 
 ```bash
 python3 -m compileall -q agent_factory web_frontend/backend deploy
@@ -642,48 +642,48 @@ bash -n deploy.sh deploy/start_web.sh deploy/remote_runtime.sh
 git diff --check
 ```
 
-前端检查：
+Frontend validation:
 
 ```bash
 cd web_frontend/frontend
 npm run type-check
 ```
 
-算子修改使用独立构建和配对 Benchmark 验证，不用一次短测代替归档数据。
+Operator changes require independent builds and paired benchmarks. A single short run does not replace archived measurements.
 
-## 第三方组件与许可证
+## Third-party Components and Licenses
 
-项目自有源码采用 [Apache License 2.0](LICENSE)。该许可证不重新许可随仓库分发的第三方源码、运行时模型、外部数据或在线服务。
+Project-owned source is licensed under [Apache License 2.0](LICENSE). That license does not relicense vendored third-party source, runtime models, external data, or online services.
 
-### 随仓库分发的原生源码
+### Vendored Native Source
 
-| 组件 | 固定版本 | 许可证 | 位置 |
+| Component | Pinned revision | License | Location |
 | --- | --- | --- | --- |
 | llama.cpp Official | `f955e394bf94e01e5e36186d13c985727e5ef5b5` | MIT | `vendor/llama.cpp-official/` |
-| llama.cpp AMD 派生实现 | 同一 revision | 上游 MIT 条款继续适用 | `vendor/llama.cpp-amd/` |
+| llama.cpp AMD derivative | same revision | upstream MIT terms continue to apply | `vendor/llama.cpp-amd/` |
 | stable-diffusion.cpp | `833369da848e8e2f960fe1896a825e3a08ef9733` | MIT | `vendor/stable-diffusion.cpp/` |
-| libwebm | 随固定源码树 | BSD 3-Clause | stable-diffusion.cpp 子模块 |
-| libwebp | 随固定源码树 | BSD 3-Clause | stable-diffusion.cpp 子模块 |
+| libwebm | bundled pinned tree | BSD 3-Clause | stable-diffusion.cpp submodule |
+| libwebp | bundled pinned tree | BSD 3-Clause | stable-diffusion.cpp submodule |
 
-### 运行时模型
+### Runtime Models
 
-| 用途 | 模型 | 许可边界 |
+| Purpose | Model | License boundary |
 | --- | --- | --- |
-| Chat | SC117/Qwen3.6-35B-A3B APEX GGUF | 当前模型卡声明 Apache-2.0；需独立核验基础模型与派生谱系 |
+| Chat | SC117/Qwen3.6-35B-A3B APEX GGUF | Current model card states Apache-2.0; independently verify base-model and derivative lineage |
 | Embedding | BAAI/bge-m3 | MIT |
 | Image | FLUX.1-dev | Non-Commercial License |
-| FLUX GGUF | city96/FLUX.1-dev-gguf | 继续受 FLUX.1-dev 上游许可约束 |
+| FLUX GGUF | city96/FLUX.1-dev-gguf | Remains governed by the upstream FLUX.1-dev license |
 
-模型由部署脚本下载，不属于仓库源码。完整第三方说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+Models are downloaded by the deployment scripts and are not repository source. Full notices are recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-## 详细文档
+## Detailed Documentation
 
-| 文档 | 内容 |
+| Document | Contents |
 | --- | --- |
-| [项目说明](project-documentation/ProjectOverview.zh-CN.md) | 比赛定位、架构、模型、能力与优化总览 |
-| [应用场景](project-documentation/ApplicationScenarios.zh-CN.md) | 协作助手与金融研究示例 |
-| [Agent 架构](project-documentation/AgentArchitecture.zh-CN.md) | AgentPackage、RuntimeKernel、工具网关与隔离边界 |
-| [核心能力](project-documentation/CoreCapabilities.zh-CN.md) | 模型、工具、记忆、知识、调度和交付 |
-| [部署与验收](project-documentation/Deployment.zh-CN.md) | SSH、本机部署、模型准备、实例迁移、排障与验收 |
-| [AMD 推理优化](project-documentation/performance/ROCmOptimizations.zh-CN.md) | HIP Kernel、成对测试、算子证据与适用边界 |
-| [补充材料](SUPPLEMENTARY_MATERIALS.zh-CN.md) | 海报、演示与比赛材料索引 |
+| [Project Overview](project-documentation/ProjectOverview.md) | Competition positioning, architecture, models, capabilities, optimization overview |
+| [Application Scenarios](project-documentation/ApplicationScenarios.md) | Collaborative assistant and financial-research examples |
+| [Agent Architecture](project-documentation/AgentArchitecture.md) | AgentPackage, RuntimeKernel, Tool Gateway, isolation boundaries |
+| [Core Capabilities](project-documentation/CoreCapabilities.md) | Models, tools, memory, knowledge, scheduling, delivery |
+| [Deployment and Acceptance](project-documentation/Deployment.md) | SSH, local deployment, models, migration, troubleshooting, acceptance |
+| [AMD Inference Optimization](project-documentation/performance/ROCmOptimizations.md) | HIP kernels, paired testing, operator evidence, applicability |
+| [Supplementary Materials](SUPPLEMENTARY_MATERIALS.md) | Poster, demo, and competition-material index |

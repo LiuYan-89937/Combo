@@ -2,6 +2,7 @@ import { competitionEnUS, competitionZhCN } from './competitionMessages'
 
 export type Locale = 'zh-CN' | 'en-US'
 export const localeStorageKey = 'fast-agent-factory.locale'
+export const defaultLocale: Locale = 'en-US'
 
 const zhCN = {
   'app.name': 'FastAgentFactory',
@@ -2072,16 +2073,11 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
 }
 
 export function normalizeLocale(value: string | null | undefined): Locale {
-  if (!value) return 'zh-CN'
+  if (!value) return defaultLocale
   const normalized = value.toLowerCase()
   if (normalized.startsWith('en')) return 'en-US'
   if (normalized.startsWith('zh')) return 'zh-CN'
-  return 'zh-CN'
-}
-
-export function detectBrowserLocale(): Locale {
-  if (typeof navigator === 'undefined') return 'zh-CN'
-  return normalizeLocale(navigator.language)
+  return defaultLocale
 }
 
 export function translate(
@@ -2089,7 +2085,7 @@ export function translate(
   key: I18nKey,
   params?: Record<string, string | number>
 ): string {
-  const template = messages[locale][key] || messages['zh-CN'][key] || key
+  const template = messages[locale][key] || messages[defaultLocale][key] || key
   if (!params) return template
   return template.replace(/\{(\w+)\}/g, (match, name) => {
     const value = params[name]
