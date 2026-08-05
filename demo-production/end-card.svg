@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+  <rect width="1920" height="1080" fill="#ffffff"/>
+  <g fill="#111111" font-family="Inter, Arial, sans-serif" text-anchor="middle">
+    <text x="960" y="470" font-size="104" font-weight="700" letter-spacing="-3">One request. Multiple specialists.</text>
+    <text x="960" y="565" font-size="42" font-weight="400" fill="#555555">Real execution on AMD Radeon hardware.</text>
+    <text x="960" y="685" font-size="34" font-weight="600">FastAgentFactory</text>
+  </g>
+</svg>

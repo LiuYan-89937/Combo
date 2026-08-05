@@ -1,0 +1,24 @@
+Using the latest completed U.S. trading session, conduct a comprehensive market, fundamental, and portfolio risk analysis for this simulated portfolio:
+
+Apple (AAPL): 40%
+Microsoft (MSFT): 35%
+NVIDIA (NVDA): 25%
+
+Analyze approximately 250 trading days of historical data.
+
+Use available specialist agents where appropriate and execute independent research workstreams in parallel.
+
+Evaluate the portfolio under hypothetical S&P 500 declines of 5% and 10%.
+
+Deliver one consolidated Markdown report containing:
+
+- overall U.S. market conditions
+- company-level market and fundamental observations
+- portfolio concentration, volatility, drawdown, beta, and correlation
+- stress-test results
+- data providers and observation timestamps
+- missing-data or anomaly disclosures
+- methodology limitations
+- a clear financial-risk disclaimer
+
+Do not provide investment advice.

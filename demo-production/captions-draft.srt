@@ -1,0 +1,94 @@
+1
+00:00:00,000 --> 00:00:12,000
+FastAgentFactory is a local-first multi-agent platform
+powered by an AMD Radeon GPU through ROCm.
+
+2
+00:00:12,000 --> 00:00:24,000
+This demonstration follows one real task from the command line
+and graphical interface to a complete user-facing result.
+
+3
+00:00:24,000 --> 00:00:36,000
+The inference node is online, and the AMD implementation
+of llama.cpp is active.
+
+4
+00:00:36,000 --> 00:00:50,000
+The system reports a gfx1100 Radeon GPU, ROCm 7.2,
+three inference slots, and a loaded Qwen chat model.
+
+5
+00:00:50,000 --> 00:01:04,000
+Three U.S. equity specialists cover market conditions,
+company research, and portfolio risk.
+
+6
+00:01:04,000 --> 00:01:18,000
+Their tools combine Yahoo Finance prices, SEC disclosures,
+and transparent historical risk calculations.
+
+7
+00:01:18,000 --> 00:01:32,000
+I will submit one request covering Apple, Microsoft,
+and NVIDIA over approximately 250 trading days.
+
+8
+00:01:32,000 --> 00:01:46,000
+It also requests portfolio estimates under five-percent
+and ten-percent S&P 500 declines.
+
+9
+00:01:46,000 --> 00:02:00,000
+The primary agent identifies available specialists
+and decomposes the request into independent workstreams.
+
+10
+00:02:00,000 --> 00:02:14,000
+Independent tasks execute concurrently, while final synthesis
+waits for the required results.
+
+11
+00:02:14,000 --> 00:02:28,000
+Runtime capacity follows the live llama.cpp slots
+instead of a fixed worker limit.
+
+12
+00:02:28,000 --> 00:02:42,000
+Every tool result preserves its provider, observation time,
+warnings, and methodology boundaries.
+
+13
+00:02:42,000 --> 00:02:56,000
+During execution, Radeon telemetry remains visible
+as the local model processes each workstream.
+
+14
+00:02:56,000 --> 00:03:10,000
+AgentPackages use separate workspaces and runtime directories
+while sharing versioned, read-only dependency profiles.
+
+15
+00:03:10,000 --> 00:03:24,000
+The primary agent consolidates the evidence
+into one structured Markdown report.
+
+16
+00:03:24,000 --> 00:03:38,000
+The report includes concentration, volatility, drawdown,
+S&P 500 beta, correlation, and both stress scenarios.
+
+17
+00:03:38,000 --> 00:03:52,000
+It also identifies anomalies and separates historical
+measurements from scenario estimates.
+
+18
+00:03:52,000 --> 00:04:06,000
+The final delivery records sources, timestamps,
+methodology limitations, and a financial-risk disclaimer.
+
+19
+00:04:06,000 --> 00:04:20,000
+This is real multi-agent execution on AMD Radeon hardware,
+from one graphical request to a complete delivery.

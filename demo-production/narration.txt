@@ -1,0 +1,19 @@
+FastAgentFactory is a local-first multi-agent platform powered by an AMD Radeon GPU through ROCm. This demonstration follows one real task from the command line and graphical interface to a complete, user-facing result.
+
+The inference node is online and the AMD implementation of llama.cpp is active. The system reports a gfx1100 Radeon GPU, ROCm 7.2, three inference slots, and a loaded Qwen chat model. Embedding and image-generation services are also ready on the same inference node.
+
+The application includes three U.S. equity specialists. Market Radar retrieves major indexes, market leaders, decliners, and active securities. The Listed Company Researcher combines Yahoo Finance prices with SEC company disclosures. Portfolio Risk Guard calculates concentration, volatility, drawdown, beta, correlation, and market-shock scenarios.
+
+I will submit one high-level request covering Apple, Microsoft, and NVIDIA. It asks for approximately two hundred and fifty trading days of evidence, parallel specialist research, and portfolio estimates under five-percent and ten-percent S&P 500 declines.
+
+The primary agent first identifies the available specialists and decomposes the request into independent workstreams. Tasks that do not depend on one another can execute concurrently, while the final synthesis waits for their results. Runtime capacity is governed by the live llama.cpp slots instead of a fixed worker limit.
+
+The specialist agents now call their package tools. Market observations and adjusted price history come from Yahoo Finance. Company facts are read from SEC filings. Every result preserves its provider, observation time, warnings, and methodology boundaries instead of presenting unsupported values as facts.
+
+During execution, the Radeon telemetry remains visible. Model inference, embeddings, task coordination, tool execution, and workspace isolation all use the same local-first runtime. Independent AgentPackages use separate workspaces and runtime directories while sharing versioned, read-only dependency profiles.
+
+Once the specialists finish, the primary agent consolidates their evidence into a single Markdown report. The output begins with an executive market summary, followed by company-level observations and quantitative portfolio analysis.
+
+The risk section reports portfolio concentration, historical volatility, maximum drawdown, beta against the S&P 500, cross-holding correlation, and estimated changes under both requested market shocks. The report also identifies data anomalies and clearly separates historical measurements from scenario estimates.
+
+Finally, the delivery records its data sources and observation timestamps, explains methodological limitations, and includes a financial-risk disclaimer. This workflow demonstrates real execution on AMD Radeon hardware, multi-agent coordination, live data tools, and complete delivery from one graphical request.
