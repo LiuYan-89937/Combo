@@ -2,8 +2,8 @@
   "schema_version": "0.1",
   "agent": {
     "id": "portfolio_risk_guard",
-    "name": "A 股持仓风险管家",
-    "description": "读取用户提供的 A 股持仓，计算集中度、波动率、回撤、相关性和明确指定的压力情景。",
+    "name": "U.S. Equity Portfolio Risk Guard",
+    "description": "Analyzes user-provided U.S. equity holdings for concentration, volatility, drawdown, correlation, beta, and explicit stress scenarios.",
     "version": "0.1.1"
   },
   "runtime": {
@@ -13,9 +13,9 @@
     "agent_config": {
       "agent_id": "portfolio_risk_guard",
       "activation": {
-        "workflow_goal": "基于用户明确提供的 A 股持仓和风险要求完成可复核的组合风险分析。",
-        "start_when": "用户要求分析一组 A 股持仓、上传持仓文件或要求执行组合压力测试。",
-        "ask_when_missing": "缺少持仓代码及统一的权重或持股数量，或用户要求阈值判断但未给出阈值时先询问。"
+        "workflow_goal": "Produce an auditable risk analysis from explicitly provided U.S. equity holdings and risk requirements.",
+        "start_when": "The user asks to analyze U.S. equity holdings, uploads a portfolio file, or requests a portfolio stress test.",
+        "ask_when_missing": "Ask when tickers and a consistent weight-or-shares basis are missing, or when the user requests threshold-based judgments without thresholds."
       }
     }
   },
@@ -29,7 +29,7 @@
         "target": {"node_id": "planner", "impl": "cognitive.answer"},
         "payload": {
           "prompt_id": "planner_prompt",
-          "template": "你是 A 股持仓风险分析规划器。只使用 runtime_plan 制定步骤：确认持仓输入与计量方式、读取必要文件、计算组合指标、核对用户风险规则、执行用户明确指定的压力情景、形成风险报告。不得读取文件或调用分析工具。只处理六位代码 A 股；如果持仓没有统一提供 weight 或 shares，必须要求补充，不能自行猜测。",
+          "template": "You plan U.S. equity portfolio risk analysis. Use only runtime_plan to define steps for confirming holdings and measurement basis, reading required files, calculating metrics, checking user risk rules, running explicitly requested S&P 500 stress scenarios, and producing the report. Do not read files or call analysis tools. Cover U.S. equity tickers only. If holdings do not consistently provide weight or shares, require clarification and never guess.",
           "variables": []
         }
       },
@@ -58,7 +58,7 @@
         "target": {"node_id": "executor", "impl": "cognitive.answer"},
         "payload": {
           "prompt_id": "executor_prompt",
-          "template": "你是 A 股持仓风险分析执行器。严格执行 runtime_plan 当前步骤。进入第一个实质分析步骤时，先用 skill(action='load', name='a-share-portfolio-risk-analysis', current_system='portfolio_risk_guard', reason='执行 A 股持仓风险分析流程') 加载完整流程。协作任务提供共享材料路径或持仓文件时，先用 ls/glob 确认路径，再用 read 读取正文，然后把结构化 holdings 传给 analyze_a_share_portfolio；不要把文件路径冒充工具输入。工具只接受全部使用 weight 或全部使用 shares 的持仓。需要补充公开事件背景或交叉核验时使用系统提供的网页搜索 MCP，并与结构化行情数据分开标注。用户要求依据内部风险规范时必须先查询 knowledge，并引用命中来源；用户没有提供阈值时只报告原始指标，禁止擅自贴高风险或低风险标签。压力测试只使用用户明确给出的 stress_scenarios。使用文件工具读取、编辑和保存 Workspace 交付物，scheduler 仅用于用户明确要求的后续复查提醒，不得作为即时命令执行或文件读取工具。不接券商、不执行交易、不承诺收益。",
+          "template": "You execute U.S. equity portfolio risk analysis and must follow the current runtime_plan step. At the first substantive step, load skill(action='load', name='us-equity-portfolio-risk-analysis', current_system='portfolio_risk_guard', reason='Follow the U.S. equity portfolio risk workflow'). Confirm shared paths with ls/glob, read portfolio files with read, then pass structured holdings to analyze_us_equity_portfolio; never pass a file path as holdings. All positions must consistently use weight or shares. Use the available web-search MCP only for public context or cross-checking and distinguish it from structured market data. When internal risk policy is required, search knowledge and cite matches. Without user-provided thresholds, report raw metrics and do not invent risk labels. Run only explicitly supplied stress_scenarios. Use workspace file tools for deliverables and scheduler only for requested future reviews. Do not connect to brokers, trade, or promise returns.",
           "variables": []
         }
       },
@@ -67,7 +67,7 @@
         "binding_type": "tool_access",
         "target": {"node_id": "executor", "impl": "cognitive.answer"},
         "payload": {
-          "allowed_tool_ids": ["runtime_plan", "read", "write", "edit", "glob", "grep", "ls", "shell", "shell_status", "shell_stop", "skill", "knowledge", "scheduler", "skillhub", "analyze_a_share_portfolio"],
+          "allowed_tool_ids": ["runtime_plan", "read", "write", "edit", "glob", "grep", "ls", "shell", "shell_status", "shell_stop", "skill", "knowledge", "scheduler", "skillhub", "analyze_us_equity_portfolio"],
           "approval_policy": "allow_all"
         }
       },
@@ -90,7 +90,7 @@
         "target": {"node_id": "casual_react", "impl": "cognitive.answer"},
         "payload": {
           "prompt_id": "casual_react_prompt",
-          "template": "你是 A 股持仓风险管家。简短澄清可以直接回答；涉及具体组合指标必须调用 analyze_a_share_portfolio。没有用户阈值时不擅自划分风险等级，不处理港股、美股或交易执行。",
+          "template": "You are a U.S. equity portfolio risk guard. Answer brief clarifications directly, but call analyze_us_equity_portfolio for specific portfolio metrics. Do not assign risk categories without user thresholds, cover non-U.S. instruments, or execute trades.",
           "variables": []
         }
       },
@@ -98,7 +98,7 @@
         "binding_id": "casual_react_tool_access",
         "binding_type": "tool_access",
         "target": {"node_id": "casual_react", "impl": "cognitive.answer"},
-        "payload": {"allowed_tool_ids": ["read", "write", "edit", "glob", "grep", "ls", "shell", "shell_status", "shell_stop", "skill", "knowledge", "scheduler", "skillhub", "analyze_a_share_portfolio"], "approval_policy": "allow_all"}
+        "payload": {"allowed_tool_ids": ["read", "write", "edit", "glob", "grep", "ls", "shell", "shell_status", "shell_stop", "skill", "knowledge", "scheduler", "skillhub", "analyze_us_equity_portfolio"], "approval_policy": "allow_all"}
       },
       {
         "binding_id": "casual_react_model_operation",
@@ -119,7 +119,7 @@
         "target": {"node_id": "final_answer", "impl": "cognitive.answer"},
         "payload": {
           "prompt_id": "final_answer_prompt",
-          "template": "汇总已完成步骤，输出 A 股持仓风险报告：输入口径、数据时间与来源、持仓权重、集中度、组合收益与波动、最大回撤、个股风险指标、最高相关性组合、用户指定压力情景、资料规则引用、数据限制。只在用户提供明确阈值时按阈值判断，保留所有 warnings，不给确定性买卖指令。",
+          "template": "Synthesize completed steps into a U.S. equity portfolio risk report covering input basis, timestamps and sources, weights, concentration, portfolio return and volatility, maximum drawdown, S&P 500 beta, position metrics, highest-correlation pair, user-specified stress scenarios, cited policy material, and data limitations. Apply thresholds only when supplied by the user, preserve every warning, and never issue deterministic trade instructions.",
           "variables": []
         }
       },
@@ -127,7 +127,7 @@
         "binding_id": "final_answer_tool_access",
         "binding_type": "tool_access",
         "target": {"node_id": "final_answer", "impl": "cognitive.answer"},
-        "payload": {"allowed_tool_ids": ["read", "write", "edit", "glob", "grep", "ls", "shell", "shell_status", "shell_stop", "skill", "knowledge", "scheduler", "skillhub", "analyze_a_share_portfolio"], "approval_policy": "allow_all"}
+        "payload": {"allowed_tool_ids": ["read", "write", "edit", "glob", "grep", "ls", "shell", "shell_status", "shell_stop", "skill", "knowledge", "scheduler", "skillhub", "analyze_us_equity_portfolio"], "approval_policy": "allow_all"}
       },
       {
         "binding_id": "final_answer_model_operation",
@@ -147,10 +147,10 @@
   },
   "tools": [
     {
-      "id": "analyze_a_share_portfolio",
-      "description": "基于用户明确提供的 A 股持仓和腾讯证券前复权历史收盘价，计算持仓权重、集中度、组合收益、波动率、最大回撤、个股指标、相关性和用户指定压力情景。",
-      "schema_error_guidance": "holdings 必须包含 1 到 20 个不重复的六位 A 股代码，并且全部使用 weight 或全部使用 shares；history_days 为 60 到 500；stress_scenarios 可选。",
-      "entrypoint": "python:tools/analyze_a_share_portfolio/tool.py:run",
+      "id": "analyze_us_equity_portfolio",
+      "description": "Analyzes explicitly provided U.S. equity holdings using Yahoo Finance adjusted history and the S&P 500 benchmark. It calculates weights, concentration, return, volatility, drawdown, beta, correlation, and user-specified market stress scenarios.",
+      "schema_error_guidance": "holdings must contain 1 to 20 unique U.S. equity tickers and consistently use either weight or shares; history_days must be from 60 through 500; stress_scenarios is optional.",
+      "entrypoint": "python:tools/analyze_us_equity_portfolio/tool.py:run",
       "input_schema": {
         "type": "object",
         "properties": {
@@ -161,12 +161,12 @@
             "items": {
               "type": "object",
               "properties": {
-                "code": {"type": "string", "pattern": "^[0-9]{6}$"},
+                "ticker": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9.-]{0,9}$"},
                 "weight": {"type": "number", "exclusiveMinimum": 0},
                 "shares": {"type": "number", "exclusiveMinimum": 0},
                 "cost_price": {"type": "number", "exclusiveMinimum": 0}
               },
-              "required": ["code"],
+              "required": ["ticker"],
               "additionalProperties": false,
               "oneOf": [
                 {"required": ["weight"], "not": {"required": ["shares"]}},
@@ -179,7 +179,7 @@
             "type": "array",
             "maxItems": 5,
             "items": {"type": "number", "minimum": -50, "maximum": 50},
-            "description": "用户明确指定的全组合价格冲击百分比，例如 -10。"
+            "description": "User-specified S&P 500 shock percentages, for example -10."
           }
         },
         "required": ["holdings"],
@@ -192,6 +192,7 @@
           "observed_at": {"type": "string"},
           "source": {"type": "string"},
           "adjustment": {"type": "string"},
+          "benchmark": {"type": "string"},
           "weight_basis": {"type": "string", "enum": ["provided_weights", "latest_market_value"]},
           "portfolio": {"type": "object"},
           "holdings": {"type": "array", "items": {"type": "object"}},
@@ -200,7 +201,7 @@
           "warnings": {"type": "array", "items": {"type": "string"}},
           "message": {"type": "string"}
         },
-        "required": ["status", "observed_at", "source", "adjustment", "weight_basis", "portfolio", "holdings", "highest_correlation", "stress_results", "warnings", "message"],
+        "required": ["status", "observed_at", "source", "adjustment", "benchmark", "weight_basis", "portfolio", "holdings", "highest_correlation", "stress_results", "warnings", "message"],
         "additionalProperties": false
       },
       "resources": {},
@@ -217,6 +218,6 @@
   "harness": [],
   "metadata": {
     "provenance": {"source": "system_package", "package_id": "portfolio_risk_guard"},
-    "scope": "a_share_only"
+    "scope": "us_equity_only"
   }
 }

@@ -77,8 +77,8 @@ def _start(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, An
         "status": task.status,
         "task_id": task.task_id,
         "package_id": package_id,
-        "message": f"{package_id} 的进化已进入统一后台任务队列。",
-        "next_step": "向用户简要说明进化任务已启动，然后结束本轮并等待系统主动更新；不要查询后台任务进度。",
+        "message": f"Evolution of {package_id} entered the unified background-task queue.",
+        "next_step": "Briefly tell the user that evolution started, then end this turn and wait for active updates. Do not query background-task progress.",
     }
 
 
@@ -108,14 +108,14 @@ def _respond(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, 
         "action": "respond",
         "status": task.status,
         "task_id": task.task_id,
-        "message": "补充信息已提交到原进化任务。",
+        "message": "The additional information was submitted to the original evolution task.",
     }
 
 
 def _cancel(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     parent = parent_agent_context(resources, tool_id=TOOL_ID)
     task_id = _required_text(arguments, "task_id")
-    reason = str(arguments.get("reason") or "主 Agent 取消了进化任务。").strip()
+    reason = str(arguments.get("reason") or "The primary Agent cancelled the evolution task.").strip()
     task = background_task_client(resources).cancel_owned(
         parent.session_id,
         task_id,
@@ -125,14 +125,14 @@ def _cancel(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, A
         "action": "cancel",
         "status": task.status,
         "task_id": task.task_id,
-        "message": reason if task.status in {"cancelling", "cancelled"} else "任务已经结束。",
+        "message": reason if task.status in {"cancelling", "cancelled"} else "The task has already finished.",
     }
 
 
 def _evolution_goal(goal: str, constraints: list[str]) -> str:
     if not constraints:
         return goal
-    return goal + "\n\n约束：\n- " + "\n- ".join(constraints)
+    return goal + "\n\nConstraints:\n- " + "\n- ".join(constraints)
 
 
 def _required_text(values: dict[str, Any], key: str) -> str:

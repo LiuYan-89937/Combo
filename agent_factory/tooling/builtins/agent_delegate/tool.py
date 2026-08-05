@@ -90,15 +90,15 @@ def _start(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, An
         "task_id": task.task_id,
         "package_id": package_id,
         "child_session_id": task.assignee_session_id,
-        "message": f"任务已交给 {package_id} 异步执行；完成后会自动交付并通知当前会话。",
-        "next_step": "向用户简要说明已启动的任务和分工，然后结束本轮并等待系统主动更新；不要查询后台任务进度。",
+        "message": f"The task was delegated asynchronously to {package_id}; delivery will notify this session.",
+        "next_step": "Briefly tell the user what started and who owns it, then end this turn and wait for active updates. Do not query background-task progress.",
     }
 
 
 def _cancel(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     parent = parent_agent_context(resources, tool_id=TOOL_ID)
     task_id = _required_text(arguments, "task_id")
-    reason = str(arguments.get("reason") or "主 Agent 取消了委派任务。").strip()
+    reason = str(arguments.get("reason") or "The primary Agent cancelled the delegated task.").strip()
     task = background_task_client(resources).cancel_owned(
         parent.session_id,
         task_id,
@@ -108,7 +108,7 @@ def _cancel(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, A
         "action": "cancel",
         "status": task.status,
         "task_id": task.task_id,
-        "message": reason if task.status in {"cancelling", "cancelled"} else "任务已经结束。",
+        "message": reason if task.status in {"cancelling", "cancelled"} else "The task has already finished.",
     }
 
 

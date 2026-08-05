@@ -11,11 +11,11 @@ def get_agent_search_tool_specs() -> list[ToolSpec]:
         ToolSpec(
             id=AGENT_SEARCH_TOOL_ID,
             description=(
-                "按任务需求检索已经发布的可用子 Agent。"
-                "在多 Agent 协作中，创建子任务前必须先用本工具查找候选 Agent；"
-                "只能使用返回 candidates 中的 package_id 分配任务。"
-                "本工具只查询现有 Agent，不制造 Agent；当 status 为 no_suitable_agent，"
-                "可根据 manufacturing_recommendation 由主 Agent 另行委托制造 Agent。"
+                "Searches published child Agents by task requirements. Before creating a multi-Agent "
+                "subtask, use this tool to find candidates and assign only package_id values returned in "
+                "candidates. This tool searches existing Agents and does not manufacture one. When status "
+                "is no_suitable_agent, the primary Agent may separately request manufacturing based on "
+                "manufacturing_recommendation."
             ),
             entrypoint="agent_factory.tooling.builtins.agent_search.tool:run",
             input_schema={
@@ -24,7 +24,7 @@ def get_agent_search_tool_specs() -> list[ToolSpec]:
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "自然语言任务需求或子任务描述。不要拆成能力标签。",
+                        "description": "Natural-language task requirement or subtask description; do not reduce it to capability tags.",
                     },
                     "limit": {
                         "type": "integer",

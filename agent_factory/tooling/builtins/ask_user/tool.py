@@ -18,7 +18,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
             "type": "ask_user",
             "presentation": "assistant_dialogue",
             "resume_kind": "answer",
-            "title": str(arguments.get("title") or "子 Agent 需要你的回答").strip(),
+            "title": str(arguments.get("title") or "The child Agent needs your answer").strip(),
             "message": question,
             "options": options,
             "allow_free_text": bool(arguments.get("allow_free_text", True)),
@@ -27,7 +27,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     answer_payload = dict(answer) if isinstance(answer, dict) else {"answer": str(answer or "")}
     return tool_envelope(
         {"status": "answered", **answer_payload},
-        summary="用户已经回答，继续执行当前委派任务。",
+        summary="The user answered; continue the current delegated task.",
     )
 
 

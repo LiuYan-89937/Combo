@@ -35,8 +35,8 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         "status": task.status,
         "task_id": task.task_id,
         "create_agent_session_id": task.assignee_session_id,
-        "message": "制造请求已进入统一后台任务队列，完成后会通知当前会话。",
-        "next_step": "向用户简要说明制造任务已启动，然后结束本轮并等待系统主动更新；不要查询后台任务进度。发布完成后再调用 agent_search 获取新 package_id。",
+        "message": "The manufacturing request entered the unified background-task queue and will notify this session when complete.",
+        "next_step": "Briefly tell the user that manufacturing started, then end this turn and wait for active updates. Do not query progress. After publication, call agent_search for the new package_id.",
     }
     return tool_envelope(output, summary=output["message"])
 
@@ -68,17 +68,17 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
 
 def _manufacturing_prompt(payload: dict[str, Any]) -> str:
     lines = [
-        f"制造 Agent：{payload['agent_name']}",
-        f"用途：{payload['purpose']}",
-        f"现有 Agent 不足原因：{payload['reason_existing_agents_insufficient']}",
+        f"Manufacture Agent: {payload['agent_name']}",
+        f"Purpose: {payload['purpose']}",
+        f"Why existing Agents are insufficient: {payload['reason_existing_agents_insufficient']}",
     ]
     if payload["target_tasks"]:
-        lines.append("目标任务：\n- " + "\n- ".join(payload["target_tasks"]))
-    lines.append("交付标准：\n- " + "\n- ".join(payload["delivery_standards"]))
+        lines.append("Target tasks:\n- " + "\n- ".join(payload["target_tasks"]))
+    lines.append("Delivery standards:\n- " + "\n- ".join(payload["delivery_standards"]))
     if payload["constraints"]:
-        lines.append("约束：\n- " + "\n- ".join(payload["constraints"]))
+        lines.append("Constraints:\n- " + "\n- ".join(payload["constraints"]))
     if payload["preferred_pattern"]:
-        lines.append(f"偏好运行模式：{payload['preferred_pattern']}")
+        lines.append(f"Preferred runtime pattern: {payload['preferred_pattern']}")
     return "\n\n".join(lines)
 
 

@@ -1,7 +1,7 @@
 {
   "id": "send_market_brief_email",
-  "description": "通过用户配置的 SMTP 账户发送已经确认的 A 股市场简报。未传 recipients 时使用 Resource 中的默认收件人；调用前必须确认收件人、主题和正文。工具按低风险直接执行，不触发审批流程。",
-  "schema_error_guidance": "recipients 省略时使用默认收件人；显式传入时必须包含 1 到 10 个有效邮箱地址。subject 和 body 不能为空。",
+  "description": "Sends a confirmed U.S. equity market brief through the user's configured SMTP account. When recipients is omitted, it uses the Resource default. Confirm recipients, subject, and body before calling.",
+  "schema_error_guidance": "When supplied, recipients must contain 1 to 10 valid email addresses. subject and body must not be empty.",
   "entrypoint": "python:tools/send_market_brief_email/tool.py:run",
   "input_schema": {
     "type": "object",

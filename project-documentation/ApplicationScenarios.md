@@ -13,11 +13,11 @@ Typical work includes reviewing files, organizing information, creating content,
 
 ## 2. Financial Research Example
 
-Three built-in A-share agents demonstrate a realistic multi-agent workflow:
+Three built-in U.S. equity agents demonstrate a realistic multi-agent workflow:
 
-- **A-share Market Radar:** market breadth, turnover, sectors, and leading stocks.
-- **A-share Listed-company Researcher:** company prices, financials, trends, and user material.
-- **A-share Portfolio Risk Guard:** concentration, volatility, drawdown, correlation, and stress tests.
+- **U.S. Equity Market Radar:** major indexes, leading/declining equities, and most-active names.
+- **U.S. Listed Company Researcher:** Yahoo Finance prices, SEC company facts, trends, and user material.
+- **U.S. Equity Portfolio Risk Guard:** concentration, volatility, drawdown, S&P 500 beta, correlation, and stress tests.
 
 The main assistant can coordinate them to produce a time-stamped report, document abnormal or missing data, and send the result only under the configured email policy. Output is not investment advice.
 

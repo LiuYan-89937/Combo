@@ -496,7 +496,7 @@ class AgentEvolutionRuntime:
                     shutil.rmtree(context.backup_path, ignore_errors=True)
                 self._active_runs.pop(active_run_key, None)
                 normalizer.complete_visible_assistant_output_from_text(
-                    "本次进化被运行环境问题阻塞，不能通过修改 AgentPackage 解决。请先处理本地 runtime/model infrastructure blocker。",
+                    "Evolution is blocked by a runtime-environment issue that cannot be fixed in the AgentPackage. Resolve the local runtime/model infrastructure blocker first.",
                     node_id="agent_evolution",
                     reason="runtime_blocked",
                 )
@@ -626,7 +626,7 @@ class AgentEvolutionRuntime:
                                     "session_id": context.session_id,
                                     "run_id": context.request_id,
                                     "agent_id": "agent_evolution",
-                                    "agent_name": "进化 Agent",
+                                    "agent_name": "Evolution Agent",
                                     "package_id": package_id,
                                 },
                             )
@@ -699,10 +699,10 @@ class AgentEvolutionRuntime:
                 shutil.rmtree(context.backup_path, ignore_errors=True)
             restart = self._restart_evolved_package(package_id, request_id)
             if restart.get("status") == "ready":
-                final_answer = f"{final_answer}\n\n子 Agent 已自动重启并加载本次进化结果。"
+                final_answer = f"{final_answer}\n\nThe child Agent restarted automatically and loaded this evolution."
             elif restart.get("status") == "failed":
                 final_answer = (
-                    f"{final_answer}\n\n进化结果已保存，但子 Agent 自动重启失败："
+                    f"{final_answer}\n\nThe evolution was saved, but automatic child-Agent restart failed: "
                     f"{restart.get('error') or 'unknown error'}"
                 )
             self._active_runs.pop(active_run_key, None)
@@ -947,7 +947,7 @@ def _safe_evolution_summary(value: str) -> str:
     text = str(value or "").strip()
     if text and not looks_like_internal_observation_text(text):
         return text
-    return "AgentPackage 进化已完成并自动发布。"
+    return "AgentPackage evolution completed and was published automatically."
 
 
 def _safe_id(value: str, *, label: str) -> str:

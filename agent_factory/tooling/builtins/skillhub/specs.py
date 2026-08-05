@@ -13,7 +13,8 @@ def get_skillhub_tool_specs() -> list[ToolSpec]:
         ToolSpec(
             id="skillhub",
             description=(
-                "搜索 SkillHUB、检查全局 SkillHUB CLI 状态，或安装/移除当前 Agent 技能扩展目录中的 SkillHUB 技能。"
+                "Searches SkillHUB, checks global SkillHUB CLI status, or installs/removes a SkillHUB skill "
+                "for the current Agent extension directory."
             ),
             entrypoint="agent_factory.tooling.builtins.skillhub.skillhub:run",
             input_schema=_input_schema(),
@@ -41,11 +42,12 @@ def _input_schema() -> dict:
                 "maxLength": SKILLHUB_SEARCH_QUERY_MAX_CHARS,
                 "pattern": SKILLHUB_SEARCH_QUERY_PATTERN,
                 "description": (
-                    "仅用于 action=search。必须是 1 到 3 个短关键词或精确技能名，不能是长句、"
-                    "需求描述、或大量中英同义词堆叠。宽泛探索时拆成多次 search，每次只放少量高信号词；"
-                    "例如：frontend、design、frontend design、ppt、web、网页。"
+                    "Used only with action=search. Supply one to three short keywords or an exact skill name, "
+                    "not a sentence, requirement description, or synonym pile. Split broad exploration into "
+                    "multiple searches with a few high-signal terms, for example frontend, design, frontend "
+                    "design, ppt, or web."
                 ),
-                "examples": ["frontend", "design", "frontend design", "ppt", "web", "网页"],
+                "examples": ["frontend", "design", "frontend design", "ppt", "web"],
             },
             "skill": {
                 "type": "string",

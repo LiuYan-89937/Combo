@@ -11,10 +11,11 @@ def get_deliver_result_tool_specs() -> list[ToolSpec]:
         ToolSpec(
             id=DELIVER_RESULT_TOOL_ID,
             description=(
-                "正式向父 Agent 交付当前委派任务。仅在被父 Agent 委派的子运行中可用。"
-                "任务结束前调用一次，提交真实状态、简明总结和当前工作区内需要交付的文件或目录。"
-                "系统会验证来源、事务式传输产物并把结构化报告交给父 Agent；"
-                "普通文字回复不等于正式交付。"
+                "Formally delivers the current delegated task to its parent Agent and is available only in a "
+                "child run delegated by a parent. Call it once before finishing, with the true status, a concise "
+                "summary, and any workspace files or directories to transfer. The system validates provenance, "
+                "transfers artifacts transactionally, and sends a structured report to the parent. An ordinary "
+                "text response is not formal delivery."
             ),
             entrypoint="agent_factory.tooling.builtins.deliver_result.tool:run",
             input_schema=_input_schema(),

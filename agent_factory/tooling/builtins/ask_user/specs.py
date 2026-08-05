@@ -11,9 +11,11 @@ def get_ask_user_tool_specs() -> list[ToolSpec]:
         ToolSpec(
             id=ASK_USER_TOOL_ID,
             description=(
-                "暂停当前委派任务并向用户提出一个确实阻塞后续工作的具体问题。"
-                "仅在无法从现有任务信息、文件或工具结果中确定答案时调用；"
-                "可提供少量互斥选项，也可允许用户自由输入。用户回答后任务会从当前检查点继续。"
+                "Pauses the current delegated task and asks one concrete question that genuinely blocks "
+                "further work. Call it immediately in the same model response that decides user input is "
+                "required, and only when the answer cannot be determined from existing task information, "
+                "files, or tool results. Provide a small set of mutually exclusive options or allow free text. "
+                "The task resumes from the current checkpoint after the user answers."
             ),
             entrypoint="agent_factory.tooling.builtins.ask_user.tool:run",
             input_schema=_input_schema(),

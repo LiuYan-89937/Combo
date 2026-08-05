@@ -2,10 +2,10 @@
   "version": "enabled_skills.v0",
   "skills": [
     {
-      "skill_id": "a-share-company-research",
+      "skill_id": "us-listed-company-research",
       "enabled": true,
       "source": "local",
-      "path": "skills/a-share-company-research",
+      "path": "skills/us-listed-company-research",
       "required": true
     }
   ]

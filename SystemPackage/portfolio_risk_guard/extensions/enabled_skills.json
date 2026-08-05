@@ -2,10 +2,10 @@
   "version": "enabled_skills.v0",
   "skills": [
     {
-      "skill_id": "a-share-portfolio-risk-analysis",
+      "skill_id": "us-equity-portfolio-risk-analysis",
       "enabled": true,
       "source": "local",
-      "path": "skills/a-share-portfolio-risk-analysis",
+      "path": "skills/us-equity-portfolio-risk-analysis",
       "required": true
     }
   ]

@@ -22,7 +22,7 @@
     "builtin_allow_external_paths": false,
     "package_tools_enabled": true,
     "instance_extensions_enabled": true,
-    "instance_extension_root": "/runtime/extensions",
+    "instance_extension_root": ".agent_runtime/extensions",
     "approval_policy": {
       "mode": "allow_all",
       "tool_overrides": {}

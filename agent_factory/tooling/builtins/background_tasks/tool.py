@@ -22,17 +22,17 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
             "action": "list",
             "tasks": tasks,
             "count": len(tasks),
-            "message": f"已读取当前会话的 {len(tasks)} 个后台任务。",
+            "message": f"Read {len(tasks)} background tasks for the current session.",
         }
     elif action == "get":
         task = client.owned_task(parent.session_id, _required_text(arguments, "task_id"))
         output = {
             "action": "get",
             "task": task.model_dump(mode="json"),
-            "message": "后台任务详情已读取。",
+            "message": "Background-task details were read.",
         }
     elif action == "cancel":
-        reason = str(arguments.get("reason") or "主 Agent 取消了后台任务。").strip()
+        reason = str(arguments.get("reason") or "The primary Agent cancelled the background task.").strip()
         task = client.cancel_owned(
             parent.session_id,
             _required_text(arguments, "task_id"),

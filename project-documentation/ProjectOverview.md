@@ -24,7 +24,7 @@ A main agent selects published AgentPackages, decomposes a goal, delegates isola
 
 ### Financial Research Example
 
-Three built-in A-share agents demonstrate market monitoring, listed-company research, and portfolio risk analysis. They can work independently or be coordinated by the personal assistant. Their output is for research and demonstration only and is not investment advice.
+Three built-in U.S. equity agents demonstrate market monitoring, listed-company research, and portfolio risk analysis. They use Yahoo Finance market data and SEC company disclosures, can work independently or be coordinated by the personal assistant, and produce research-only demonstration output that is not investment advice.
 
 ### Manufacturable Specialist Assistant
 

@@ -146,7 +146,7 @@ class CreateAgentWorkflow:
             package_path = str(publish_report.get("package_path") or "").strip()
             return {
                 "flow_status": "package_complete",
-                "final_answer": f"AgentPackage 已发布：{package_id} ({package_path})",
+                "final_answer": f"AgentPackage published: {package_id} ({package_path})",
             }
         action = workspace.read_action()
         if action.action == "ask_user":
@@ -154,8 +154,8 @@ class CreateAgentWorkflow:
                 workspace,
                 action=action,
                 interrupt_type="create_agent_question",
-                title="补充制造信息",
-                default_message="请补充制造这个 AgentPackage 所需的信息。",
+                title="Additional manufacturing information",
+                default_message="Please provide the information required to manufacture this AgentPackage.",
             )
         assistant_turn = _assistant_turn_without_tools(state)
         if assistant_turn is not None:
@@ -180,8 +180,8 @@ class CreateAgentWorkflow:
                 workspace,
                 action=action,
                 interrupt_type="agent_evolution_question",
-                title="补充进化信息",
-                default_message="请补充进化这个已发布 AgentPackage 所需的信息。",
+                title="Additional evolution information",
+                default_message="Please provide the information required to evolve this published AgentPackage.",
             )
         assistant_turn = _assistant_turn_without_tools(state)
         if assistant_turn is not None:
@@ -280,7 +280,7 @@ def _emit_model_cache_metrics(
     graph_kind = str(state.get("graph_kind") or "manufacture")
     evolution_context = state.get("evolution_context") if isinstance(state.get("evolution_context"), dict) else {}
     agent_id = "agent_evolution" if graph_kind == "evolution" else "create_agent"
-    agent_name = "进化 Agent" if graph_kind == "evolution" else "制造 Agent"
+    agent_name = "Evolution Agent" if graph_kind == "evolution" else "Manufacturing Agent"
     payload = {
         "version": "create_agent_model_cache_metrics.v0",
         "node_id": "create_agent_supervisor",
@@ -438,7 +438,7 @@ def _evolution_final_answer(message: str) -> str:
     text = str(message or "").strip()
     if text and not looks_like_internal_observation_text(text):
         return text
-    return "AgentPackage 进化已通过 full_static validation，变更已完成并自动发布。"
+    return "AgentPackage evolution passed full_static validation, completed, and was published automatically."
 
 
 def _operation_prompt(messages: list[BaseMessage]) -> tuple[dict[str, Any], list[BaseMessage]]:
@@ -457,15 +457,15 @@ def _publish_ready_text(
     if pending:
         resource_ids = ", ".join(str(item.get("resource_id") or "") for item in pending if isinstance(item, dict))
         pending_text = (
-            f"\n- Runtime Resources: {resource_ids} 尚未配置，可发布后在包详情中填写。\n"
+            f"\n- Runtime Resources: {resource_ids} are not configured and can be completed in package details after publication.\n"
         )
     return (
-        "AgentPackage 已完成制造并通过最终静态校验。\n\n"
+        "AgentPackage manufacturing is complete and final static validation passed.\n\n"
         f"- Workspace: {workspace.root}\n"
         f"- Validation: {report.validation_scope} / {report.status}\n"
         f"- Summary: {report.summary}\n"
         f"{pending_text}\n"
-        "当前包已进入待发布状态。请在下方确认发布面板中决定发布或继续修改。"
+        "The package is ready for publication. Use the confirmation panel below to publish or continue editing."
     )
 
 

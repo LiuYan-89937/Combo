@@ -19,15 +19,15 @@ from agent_factory.tooling.builtins.filesystem.workspace_search import workspace
 def _missing_file_message(*, requested: str, resolved: str, parent: str) -> str:
     return (
         f"file not found: requested={requested!r}; resolved={resolved}. "
-        f"请先调用 ls 查看父目录或相近目录，例如 path={parent!r}，"
-        "确认真实文件名、大小写、后缀或路径层级后，再用准确路径重试 read。"
+        f"Call ls on the parent or nearby directory first, for example path={parent!r}, then confirm the "
+        "exact file name, case, extension, and hierarchy before retrying read with the accurate path."
     )
 
 
 def _directory_read_message(*, requested: str, resolved: str) -> str:
     return (
         f"path is a directory, not a file: requested={requested!r}; resolved={resolved}. "
-        f"请先调用 ls 查看该目录内容，例如 path={resolved!r}，选择具体文件后再调用 read。"
+        f"Call ls on this directory first, for example path={resolved!r}, then select a concrete file before calling read."
     )
 
 

@@ -11,9 +11,10 @@ def get_agent_list_tool_specs() -> list[ToolSpec]:
         ToolSpec(
             id=AGENT_LIST_TOOL_ID,
             description=(
-                "列出已经发布且可分配的 Agent，作为 agent_search 召回不足时的只读兜底。"
-                "本工具不做语义排序、不制造 Agent；返回的 package_id 可用于人工核对，"
-                "协作主 Agent 在创建任务前仍应优先使用 agent_search 的候选结果。"
+                "Lists published assignable Agents as a read-only fallback when agent_search recall is "
+                "insufficient. It does not perform semantic ranking or manufacture Agents. Returned "
+                "package_id values support manual review; a coordinating Agent should still prefer "
+                "agent_search candidates before creating work."
             ),
             entrypoint="agent_factory.tooling.builtins.agent_list.tool:run",
             input_schema={
@@ -24,7 +25,7 @@ def get_agent_list_tool_specs() -> list[ToolSpec]:
                         "type": "integer",
                         "minimum": 1,
                         "maximum": 100,
-                        "description": "最多返回多少个 Agent。",
+                        "description": "Maximum number of Agents to return.",
                     }
                 },
             },

@@ -103,8 +103,8 @@ def _start(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, An
             }
             for item in tasks
         ],
-        "message": f"{len(created)} 个子 Agent 任务已进入统一后台队列。",
-        "next_step": "向用户简要总结已启动的成员分工，然后结束本轮并等待成员主动更新；不要调用 background_tasks 查询进度。",
+        "message": f"{len(created)} child-Agent tasks entered the unified background queue.",
+        "next_step": "Briefly summarize the member assignments to the user, then end this turn and wait for active member updates. Do not call background_tasks to query progress.",
     }
 
 
@@ -113,7 +113,7 @@ def _cancel(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, A
     task_ids = _string_list(arguments.get("task_ids"))
     if not task_ids:
         raise ValueError("agent_team cancel requires task_ids")
-    reason = str(arguments.get("reason") or "主 Agent 取消了团队任务。").strip()
+    reason = str(arguments.get("reason") or "The primary Agent cancelled the team tasks.").strip()
     client = background_task_client(resources)
     tasks = [
         client.cancel_owned(parent.session_id, task_id, reason=reason)

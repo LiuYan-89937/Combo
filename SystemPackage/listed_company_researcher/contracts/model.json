@@ -6,7 +6,7 @@
     "bindings": {
       "main": {
         "source": "model_pool",
-        "reason": "使用当前启用的本地 AMD Radeon 推理配置完成中文研究规划、工具调用和报告综合。",
+        "reason": "Use the active local AMD Radeon inference profile for English-language company research planning, tool use, and report synthesis.",
         "required_capabilities": {
           "input_modalities": ["text"],
           "output_modalities": ["text"],

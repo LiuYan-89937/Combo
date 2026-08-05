@@ -9,14 +9,14 @@ def get_knowledge_tool_specs() -> list[ToolSpec]:
         ToolSpec(
             id="knowledge",
             description=(
-                "查询和管理当前 Agent 挂载的私有知识。"
-                "当问题涉及内部文档、项目事实、产品参数、业务规则、操作流程、代码规范、历史资料，"
-                "或用户明确要求根据知识库、文档、规范回答时，必须调用本工具，不得只凭模型记忆作答。"
-                "检索时先使用 search（默认 mode=auto），命中后按需使用 open/read 获取完整内容；"
-                "无结果时如实说明，不得伪造知识库内容或声称已经查询。"
-                "新增知识源必须先 prepare_source 预览，再 confirm_source 确认。"
-                "添加当前会话附件或工作区文件时，source.path 使用工作区相对路径或 /workdir 逻辑路径，"
-                "不要拼接宿主机安装目录。"
+                "Queries and manages private knowledge mounted on the current Agent. Call it when the question "
+                "depends on internal documents, project facts, product parameters, business rules, procedures, "
+                "coding standards, historical material, or when the user explicitly asks for an answer based on "
+                "a knowledge base, document, or policy. Do not answer solely from model memory. Search first "
+                "(mode=auto by default), then open/read matched content as needed. Report no-result honestly and "
+                "never fabricate knowledge content or claim a search that did not occur. To add a source, call "
+                "prepare_source before confirm_source. For session attachments or workspace files, use a relative "
+                "source.path or the logical /workdir path, never a host installation path."
             ),
             entrypoint="agent_factory.knowledge_system.tools:run",
             input_schema=_input_schema(),

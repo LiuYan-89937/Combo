@@ -4,11 +4,13 @@
   "agent": {
     "id": "factory_chat",
     "name": "Factory Chat",
-    "description": "Built-in general-purpose Agent Package for FastAgentFactory."
+    "description": "Built-in general-purpose Agent Package for FastAgentFactory.",
+    "version": "0.1.0"
   },
   "runtime": {
     "system_package": true,
-    "execution_backend": "host"
+    "execution_backend": "host",
+    "pattern_id": "react_agent"
   },
   "assembly_spec_path": "assembly_spec.json",
   "contracts": {

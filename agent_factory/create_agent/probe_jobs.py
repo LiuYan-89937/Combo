@@ -100,12 +100,12 @@ class ProbeJobManager:
                 status="cancelled",
                 stage="cancelled",
                 completed_at=_now(),
-                message="工具探测已取消。",
+                message="Tool probe cancelled.",
             )
         return store.update(
             job_id,
             status="cancellation_requested",
-            message="已请求取消工具探测。",
+            message="Tool-probe cancellation requested.",
         )
 
     def shutdown(self) -> None:
@@ -133,7 +133,7 @@ class ProbeJobManager:
             status="running",
             stage="preparing_snapshot",
             started_at=_now(),
-            message="正在准备工具探测快照。",
+            message="Preparing the tool-probe snapshot.",
         )
 
         def progress(stage: str, detail: dict[str, Any]) -> None:
@@ -147,7 +147,7 @@ class ProbeJobManager:
                     status="cancelled",
                     stage="cancelled",
                     completed_at=_now(),
-                    message="工具探测已取消。",
+                    message="Tool probe cancelled.",
                 )
                 return
             execution_lock = self._execution_lock(workspace, request)
@@ -155,7 +155,7 @@ class ProbeJobManager:
                 progress(
                     "waiting_for_tool_slot",
                     {
-                        "message": "正在等待同一工具的前序探测完成。",
+                        "message": "Waiting for an earlier probe of the same tool to finish.",
                         "tool_id": request.get("tool_id"),
                     },
                 )
@@ -168,7 +168,7 @@ class ProbeJobManager:
                 status="cancelled" if cancelled else "completed",
                 stage="cancelled" if cancelled else "completed",
                 completed_at=_now(),
-                message="工具探测已取消。" if cancelled else "工具探测已完成。",
+                message="Tool probe cancelled." if cancelled else "Tool probe completed.",
                 result=result,
             )
         except Exception as exc:
@@ -192,7 +192,7 @@ class ProbeJobManager:
             status="interrupted",
             stage="interrupted",
             completed_at=_now(),
-            message="后端进程已重启，未完成的工具探测已中断。",
+            message="The backend restarted and interrupted unfinished tool probes.",
         )
 
     def _future(self, job_id: str) -> Future[None] | None:
@@ -242,7 +242,7 @@ class ProbeJobStore:
             "snapshot_path": str(job_root / "snapshot"),
             "status": "queued",
             "stage": "queued",
-            "message": "工具探测已进入后台队列。",
+            "message": "The tool probe entered the background queue.",
             "request": request,
             "latest_progress": {},
             "stage_history": [],

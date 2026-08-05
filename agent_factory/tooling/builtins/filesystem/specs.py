@@ -30,29 +30,29 @@ _CHANGE_SUMMARY_SCHEMA = {
 _FILESYSTEM_RESOURCE = {"filesystem": "filesystem"}
 _FS_MODULE = "agent_factory.tooling.builtins.filesystem"
 _PATH_BOUNDARY_DESCRIPTION = (
-    "路径受当前工具 workspace root 限制；优先使用相对路径，或使用位于 workspace root 内的绝对路径。"
-    f"默认 sandbox workspace root 是 {DEFAULT_BUILTIN_WORKSPACE_ROOT}。"
-    "不要使用 /tmp、宿主机路径或其他任意绝对路径，除非 runtime 显式允许外部路径。"
+    "Paths are restricted to the current tool workspace root. Prefer relative paths or absolute paths "
+    f"inside that root. The default sandbox workspace root is {DEFAULT_BUILTIN_WORKSPACE_ROOT}. "
+    "Do not use /tmp, host paths, or arbitrary absolute paths unless the runtime explicitly allows external paths."
 )
 _READ_MISSING_GUIDANCE = (
-    "如果 read 提示文件不存在或路径不确定，不要直接断定文件不可用；"
-    "先调用 ls 查看父目录或相近目录，确认真实文件名、大小写、后缀或路径层级后再重试 read。"
+    "If read reports a missing or uncertain path, do not conclude that the file is unavailable. "
+    "Use ls on the parent or nearby directory to confirm the exact name, case, extension, and hierarchy before retrying."
 )
-_READ_PATH_DESCRIPTION = f"要读取的文件路径。{_PATH_BOUNDARY_DESCRIPTION}{_READ_MISSING_GUIDANCE}"
-_LS_PATH_DESCRIPTION = f"要列出的目录路径。{_PATH_BOUNDARY_DESCRIPTION}"
+_READ_PATH_DESCRIPTION = f"Path of the file to read. {_PATH_BOUNDARY_DESCRIPTION}{_READ_MISSING_GUIDANCE}"
+_LS_PATH_DESCRIPTION = f"Path of the directory to list. {_PATH_BOUNDARY_DESCRIPTION}"
 _WRITE_PATH_DESCRIPTION = (
-    f"要写入的文件路径。{_PATH_BOUNDARY_DESCRIPTION}"
-    "新生成的文件应直接写入工作区内，例如 report.md 或 "
+    f"Path of the file to write. {_PATH_BOUNDARY_DESCRIPTION}"
+    "Write new files directly inside the workspace, for example report.md or "
     f"{DEFAULT_BUILTIN_WORKSPACE_ROOT}/report.md。"
 )
-_BASE_PATH_DESCRIPTION = f"可选搜索根目录。{_PATH_BOUNDARY_DESCRIPTION}"
+_BASE_PATH_DESCRIPTION = f"Optional search root. {_PATH_BOUNDARY_DESCRIPTION}"
 
 
 FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
     ToolSpec(
         id="read",
         description=(
-            "读取 workspace 边界内的指定文本文件内容，按行号返回可控范围。"
+            "Reads a text file inside the workspace boundary and returns a controlled line range."
             f"{_READ_MISSING_GUIDANCE}"
         ),
         entrypoint="agent_factory.tooling.builtins.filesystem.read:run",
@@ -60,8 +60,8 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": _READ_PATH_DESCRIPTION},
-                "start_line": {"type": "integer", "minimum": 1, "default": 1, "description": "起始行号，从 1 开始。"},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 2000, "default": 200, "description": "最多读取多少行。"},
+                "start_line": {"type": "integer", "minimum": 1, "default": 1, "description": "One-based starting line."},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 2000, "default": 200, "description": "Maximum number of lines to read."},
             },
             "required": ["path"],
             "additionalProperties": False,
@@ -88,13 +88,13 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
     ToolSpec(
         id="write",
         description=(
-            "在 workspace 边界内创建或整体替换指定文本文件。"
-            "调用时必须把文件的完整正文放入 content；工具不会自动读取 assistant 消息中的正文。"
-            "已有单个 UTF-8 文件的局部修改应使用 edit。"
+            "Creates or fully replaces a text file inside the workspace boundary. The call must include "
+            "the complete file body in content; the tool does not read text from assistant messages. "
+            "Use edit for a local change to an existing UTF-8 file."
         ),
         schema_error_guidance=(
-            "write 调用必须同时提供 path 和 content。content 必须是目标文件的完整文本；"
-            "不要省略 content，也不要假设工具会读取此前回复中的正文。"
+            "A write call must provide both path and content. content must be the complete target file text; "
+            "do not omit it or assume the tool can read a previous response."
         ),
         entrypoint="agent_factory.tooling.builtins.filesystem.write:run",
         input_schema={
@@ -103,12 +103,12 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
                 "path": {"type": "string", "description": _WRITE_PATH_DESCRIPTION},
                 "content": {
                     "type": "string",
-                    "description": "要写入文件的完整文本内容。",
+                    "description": "Complete text content to write.",
                 },
                 "create_dirs": {
                     "type": "boolean",
                     "default": True,
-                    "description": "是否创建缺失的父目录。",
+                    "description": "Whether to create missing parent directories.",
                 },
             },
             "required": ["path", "content"],
@@ -134,22 +134,22 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
     ),
     ToolSpec(
         id="edit",
-        description="对 workspace 边界内的单个 UTF-8 文件执行精确文本替换。",
+        description="Performs an exact text replacement in one UTF-8 file inside the workspace boundary.",
         schema_error_guidance=(
-            "提供 path、old_text 和 new_text。old_text 默认必须只匹配一处；"
-            "需要替换全部匹配时显式设置 replace_all=true。"
+            "Provide path, old_text, and new_text. old_text must match exactly once by default; set "
+            "replace_all=true explicitly to replace every match."
         ),
         entrypoint="agent_factory.tooling.builtins.filesystem.edit:run",
         input_schema={
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": _WRITE_PATH_DESCRIPTION},
-                "old_text": {"type": "string", "description": "需要被替换的完整原文本。"},
-                "new_text": {"type": "string", "description": "替换后的文本，可为空字符串。"},
+                "old_text": {"type": "string", "description": "Complete original text to replace."},
+                "new_text": {"type": "string", "description": "Replacement text, which may be empty."},
                 "replace_all": {
                     "type": "boolean",
                     "default": False,
-                    "description": "是否替换全部匹配项。",
+                    "description": "Whether to replace all matches.",
                 },
             },
             "required": ["path", "old_text", "new_text"],
@@ -174,14 +174,14 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
     ),
     ToolSpec(
         id="glob",
-        description="在 workspace 边界内基于 glob 模式查找文件路径。",
+        description="Finds file paths by glob pattern inside the workspace boundary.",
         entrypoint="agent_factory.tooling.builtins.filesystem.glob:run",
         input_schema={
             "type": "object",
             "properties": {
-                "pattern": {"type": "string", "description": "glob 匹配模式。"},
+                "pattern": {"type": "string", "description": "Glob pattern."},
                 "base_path": {"type": "string", "default": ".", "description": _BASE_PATH_DESCRIPTION},
-                "max_results": {"type": "integer", "minimum": 1, "maximum": 5000, "default": 100, "description": "可选最大返回数量。"},
+                "max_results": {"type": "integer", "minimum": 1, "maximum": 5000, "default": 100, "description": "Optional maximum result count."},
             },
             "required": ["pattern"],
             "additionalProperties": False,
@@ -216,26 +216,26 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
     ),
     ToolSpec(
         id="grep",
-        description="在 workspace 边界内的文件内容中搜索文本或正则模式。",
+        description="Searches file contents for text or a regular expression inside the workspace boundary.",
         entrypoint="agent_factory.tooling.builtins.filesystem.grep:run",
         input_schema={
             "type": "object",
             "properties": {
-                "pattern": {"type": "string", "description": "搜索文本或正则。"},
+                "pattern": {"type": "string", "description": "Search text or regular expression."},
                 "base_path": {"type": "string", "default": ".", "description": _BASE_PATH_DESCRIPTION},
                 "include": {
                     "oneOf": [
                         {"type": "string"},
                         {"type": "array", "items": _STRING},
                     ],
-                    "description": "可选文件匹配模式或模式列表。",
+                    "description": "Optional file include pattern or pattern list.",
                 },
                 "exclude": {
                     "oneOf": [
                         {"type": "string"},
                         {"type": "array", "items": _STRING},
                     ],
-                    "description": "可选排除文件模式或模式列表。",
+                    "description": "Optional file exclusion pattern or pattern list.",
                 },
                 "case_sensitive": {"type": "boolean", "default": True},
                 "regex": {"type": "boolean", "default": True},
@@ -283,7 +283,7 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
     ),
     ToolSpec(
         id="ls",
-        description="列出 workspace 边界内的指定目录内容。",
+        description="Lists a directory inside the workspace boundary.",
         entrypoint="agent_factory.tooling.builtins.filesystem.ls:run",
         input_schema={
             "type": "object",

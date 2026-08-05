@@ -11,10 +11,11 @@ def get_agent_evolve_tool_specs() -> list[ToolSpec]:
         ToolSpec(
             id=AGENT_EVOLVE_TOOL_ID,
             description=(
-                "异步进化一个已发布 Agent。action=start 成功后先向用户简要总结进化目标，再结束当前回复；"
-                "不要轮询，进化完成、失败或需要补充信息时会主动回到当前会话。"
-                "action=respond 用于回答进化 Agent 的问题或处理工具批准，必须延续原 request_id；"
-                "background_tasks 仅用于异常诊断，action=cancel 取消并回滚未完成进化。"
+                "Asynchronously evolves a published Agent. After action=start succeeds, briefly summarize "
+                "the evolution goal to the user and end the response. Do not poll; completion, failure, or "
+                "requests for information actively return to this session. action=respond answers an evolution "
+                "question or tool approval and must continue the original request_id. Use background_tasks only "
+                "for exception diagnosis. action=cancel cancels and rolls back unfinished evolution."
             ),
             entrypoint="agent_factory.tooling.builtins.agent_evolve.tool:run",
             input_schema=_input_schema(),

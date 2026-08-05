@@ -2,10 +2,10 @@
   "version": "enabled_skills.v0",
   "skills": [
     {
-      "skill_id": "a-share-market-briefing",
+      "skill_id": "us-equity-market-briefing",
       "enabled": true,
       "source": "local",
-      "path": "skills/a-share-market-briefing",
+      "path": "skills/us-equity-market-briefing",
       "required": true
     }
   ]

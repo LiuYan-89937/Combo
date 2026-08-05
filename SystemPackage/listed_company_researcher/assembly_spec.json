@@ -2,8 +2,8 @@
   "schema_version": "0.1",
   "agent": {
     "id": "listed_company_researcher",
-    "name": "A 股上市公司研究员",
-    "description": "围绕单家 A 股上市公司执行行情、财务、趋势和用户挂载资料的证据化深度研究。",
+    "name": "U.S. Listed Company Researcher",
+    "description": "Performs evidence-based research on a U.S.-listed company using market data, SEC disclosures, trends, and user-provided materials.",
     "version": "0.1.1"
   },
   "runtime": {
@@ -13,9 +13,9 @@
     "agent_config": {
       "agent_id": "listed_company_researcher",
       "activation": {
-        "workflow_goal": "围绕用户指定的 A 股上市公司完成可追溯、区分事实与判断的研究报告。",
-        "start_when": "用户要求研究、比较或复盘一只明确的 A 股股票，且任务需要多个数据或文档步骤。",
-        "ask_when_missing": "缺少六位股票代码、研究目标或用户要求依据但尚未挂载的私有资料时先询问。"
+        "workflow_goal": "Produce a traceable research report on a user-specified U.S.-listed company while separating evidence from analysis.",
+        "start_when": "The user asks to research, compare, or review a named U.S. equity and the task requires multiple data or document steps.",
+        "ask_when_missing": "Ask when the ticker, research objective, or required private source material is missing."
       }
     }
   },
@@ -29,7 +29,7 @@
         "target": {"node_id": "planner", "impl": "cognitive.answer"},
         "payload": {
           "prompt_id": "planner_prompt",
-          "template": "你是 A 股上市公司研究任务规划器。只用 runtime_plan 建立精简、可验证的步骤，通常覆盖研究目标确认、公开行情与财务数据、用户挂载资料检索、交叉核验、风险与缺失信息、最终报告。不得调用研究工具，不得提前给结论。任务只允许涉及中国 A 股；缺少六位股票代码或必要资料时标记需要询问，不能猜测。",
+          "template": "You plan U.S. listed-company research. Use only runtime_plan to create concise, verifiable steps covering objective confirmation, public market and SEC data, mounted user materials, cross-checking, risks, missing evidence, and the final report. Do not call research tools or state conclusions. Cover U.S.-listed equities only. If the ticker or required evidence is missing, mark that the user must be asked; never guess.",
           "variables": []
         }
       },
@@ -58,7 +58,7 @@
         "target": {"node_id": "executor", "impl": "cognitive.answer"},
         "payload": {
           "prompt_id": "executor_prompt",
-          "template": "你是 A 股上市公司研究执行器。严格执行 runtime_plan 当前步骤。进入第一个实质研究步骤时，先用 skill(action='load', name='a-share-company-research', current_system='listed_company_researcher', reason='执行 A 股上市公司证据化研究流程') 加载完整流程。公开行情、历史走势和财务事实必须调用 research_a_share_company，并保留 observed_at、source、adjustment 和 warnings。需要补充公告、新闻、行业背景或交叉核验时使用系统提供的网页搜索 MCP，并区分结构化数据、公司披露和媒体信息。协作任务提供共享材料路径时，先用 ls/glob 确认路径，再用 read 读取正文；涉及用户挂载的财报、内部研究规范或项目资料时必须先调用 knowledge search，再 open/read 命中文档，没有结果要明确说明。使用文件工具读取、编辑和保存 Workspace 交付物。scheduler 仅用于用户明确要求的后续研究任务，不得作为即时命令执行或文件读取工具。不得伪造缺失数据，不得扩展到港股、美股或自动交易，不得把分析判断写成保证收益的建议。",
+          "template": "You execute U.S. listed-company research and must follow the current runtime_plan step. At the first substantive research step, load skill(action='load', name='us-listed-company-research', current_system='listed_company_researcher', reason='Follow the evidence-based U.S. listed-company research workflow'). Call research_us_company for public quotes, adjusted history, and SEC filing facts, preserving observed_at, source, adjustment, and warnings. Use the available web-search MCP for filings, news, industry context, or cross-checking, and distinguish structured data, company disclosures, and media evidence. Confirm shared paths with ls/glob and read them with read. For mounted reports, internal standards, or project material, search knowledge first and cite matched documents; state when no result exists. Use workspace file tools for deliverables. Use scheduler only for explicitly requested future research. Never fabricate missing data, execute trades, promise returns, or extend conclusions beyond supported U.S. equity evidence.",
           "variables": []
         }
       },
@@ -67,7 +67,7 @@
         "binding_type": "tool_access",
         "target": {"node_id": "executor", "impl": "cognitive.answer"},
         "payload": {
-          "allowed_tool_ids": ["runtime_plan", "read", "write", "edit", "glob", "grep", "ls", "shell", "shell_status", "shell_stop", "skill", "knowledge", "scheduler", "skillhub", "research_a_share_company"],
+          "allowed_tool_ids": ["runtime_plan", "read", "write", "edit", "glob", "grep", "ls", "shell", "shell_status", "shell_stop", "skill", "knowledge", "scheduler", "skillhub", "research_us_company"],
           "approval_policy": "allow_all"
         }
       },
@@ -90,7 +90,7 @@
         "target": {"node_id": "casual_react", "impl": "cognitive.answer"},
         "payload": {
           "prompt_id": "casual_react_prompt",
-          "template": "你是 A 股上市公司研究员。对无需完整研究流程的简短澄清直接回答；只要涉及当前股票数据就先调用 research_a_share_company。仅处理 A 股，区分事实和判断，不承诺收益。",
+          "template": "You are a U.S. listed-company researcher. Answer brief clarifications directly when no full workflow is needed. Call research_us_company before stating current stock data. Cover U.S.-listed equities only, distinguish facts from analysis, and never promise returns.",
           "variables": []
         }
       },
@@ -98,7 +98,7 @@
         "binding_id": "casual_react_tool_access",
         "binding_type": "tool_access",
         "target": {"node_id": "casual_react", "impl": "cognitive.answer"},
-        "payload": {"allowed_tool_ids": ["read", "write", "edit", "glob", "grep", "ls", "shell", "shell_status", "shell_stop", "skill", "knowledge", "scheduler", "skillhub", "research_a_share_company"], "approval_policy": "allow_all"}
+        "payload": {"allowed_tool_ids": ["read", "write", "edit", "glob", "grep", "ls", "shell", "shell_status", "shell_stop", "skill", "knowledge", "scheduler", "skillhub", "research_us_company"], "approval_policy": "allow_all"}
       },
       {
         "binding_id": "casual_react_model_operation",
@@ -119,7 +119,7 @@
         "target": {"node_id": "final_answer", "impl": "cognitive.answer"},
         "payload": {
           "prompt_id": "final_answer_prompt",
-          "template": "汇总已完成步骤，输出结构化 A 股公司研究报告：研究范围、数据时间与来源、行情与趋势事实、财务事实、用户资料证据、分析判断、风险与反面证据、缺失信息。引用用户资料时标明来源；工具 warnings 必须保留。不得生成未被工具或资料支持的数字，不得给出确定性买卖指令或收益承诺。",
+          "template": "Synthesize completed steps into a structured U.S. company research report covering scope, data timestamps and sources, market and trend facts, SEC filing facts, evidence from user materials, analysis, risks, counter-evidence, and missing information. Cite user materials, preserve all tool warnings, and never invent unsupported figures, issue deterministic trade instructions, or promise returns.",
           "variables": []
         }
       },
@@ -127,7 +127,7 @@
         "binding_id": "final_answer_tool_access",
         "binding_type": "tool_access",
         "target": {"node_id": "final_answer", "impl": "cognitive.answer"},
-        "payload": {"allowed_tool_ids": ["read", "write", "edit", "glob", "grep", "ls", "shell", "shell_status", "shell_stop", "skill", "knowledge", "scheduler", "skillhub", "research_a_share_company"], "approval_policy": "allow_all"}
+        "payload": {"allowed_tool_ids": ["read", "write", "edit", "glob", "grep", "ls", "shell", "shell_status", "shell_stop", "skill", "knowledge", "scheduler", "skillhub", "research_us_company"], "approval_policy": "allow_all"}
       },
       {
         "binding_id": "final_answer_model_operation",
@@ -147,14 +147,14 @@
   },
   "tools": [
     {
-      "id": "research_a_share_company",
-      "description": "通过腾讯证券获取指定六位代码 A 股公司的证券身份、当前行情和前复权历史走势，通过同花顺获取财务摘要，并计算透明的区间趋势指标。研究当前公司事实时必须调用。",
-      "schema_error_guidance": "code 必须是六位数字；history_days 必须在 30 到 1000 之间；sections 只能包含 basic、quote、history、financial。",
-      "entrypoint": "python:tools/research_a_share_company/tool.py:run",
+      "id": "research_us_company",
+      "description": "Researches a U.S.-listed company using Yahoo Finance quotes and adjusted history plus SEC company facts, then computes transparent period and trend metrics. Call it before stating current company market or filing facts.",
+      "schema_error_guidance": "ticker must be a valid U.S. equity symbol; history_days must be from 30 through 1000; sections may contain only basic, quote, history, and financial.",
+      "entrypoint": "python:tools/research_us_company/tool.py:run",
       "input_schema": {
         "type": "object",
         "properties": {
-          "code": {"type": "string", "pattern": "^[0-9]{6}$"},
+          "ticker": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9.-]{0,9}$"},
           "history_days": {"type": "integer", "minimum": 30, "maximum": 1000, "default": 250},
           "sections": {
             "type": "array",
@@ -164,14 +164,14 @@
             "default": ["basic", "quote", "history", "financial"]
           }
         },
-        "required": ["code"],
+        "required": ["ticker"],
         "additionalProperties": false
       },
       "output_schema": {
         "type": "object",
         "properties": {
           "status": {"type": "string", "enum": ["success", "partial", "error"]},
-          "code": {"type": "string"},
+          "ticker": {"type": "string"},
           "name": {"type": "string"},
           "observed_at": {"type": "string"},
           "source": {"type": "string"},
@@ -183,7 +183,7 @@
           "warnings": {"type": "array", "items": {"type": "string"}},
           "message": {"type": "string"}
         },
-        "required": ["status", "code", "name", "observed_at", "source", "adjustment", "warnings"],
+        "required": ["status", "ticker", "name", "observed_at", "source", "adjustment", "basic", "quote", "history_summary", "financial", "warnings", "message"],
         "additionalProperties": false
       },
       "resources": {},
@@ -200,6 +200,6 @@
   "harness": [],
   "metadata": {
     "provenance": {"source": "system_package", "package_id": "listed_company_researcher"},
-    "scope": "a_share_only"
+    "scope": "us_equity_only"
   }
 }

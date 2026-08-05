@@ -1,12 +1,12 @@
 {
-  "id": "research_a_share_company",
-  "description": "通过腾讯证券获取指定六位代码 A 股公司的证券身份、当前行情和前复权历史走势，通过同花顺获取财务摘要，并计算透明的区间趋势指标。研究当前公司事实时必须调用。",
-  "schema_error_guidance": "code 必须是六位数字；history_days 必须在 30 到 1000 之间；sections 只能包含 basic、quote、history、financial。",
-  "entrypoint": "python:tools/research_a_share_company/tool.py:run",
+  "id": "research_us_company",
+  "description": "Researches a U.S.-listed company using Yahoo Finance quotes and adjusted history plus SEC company facts, then computes transparent period and trend metrics. Call it before stating current company market or filing facts.",
+  "schema_error_guidance": "ticker must be a valid U.S. equity symbol; history_days must be from 30 through 1000; sections may contain only basic, quote, history, and financial.",
+  "entrypoint": "python:tools/research_us_company/tool.py:run",
   "input_schema": {
     "type": "object",
     "properties": {
-      "code": {"type": "string", "pattern": "^[0-9]{6}$"},
+      "ticker": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9.-]{0,9}$"},
       "history_days": {"type": "integer", "minimum": 30, "maximum": 1000, "default": 250},
       "sections": {
         "type": "array",
@@ -16,14 +16,14 @@
         "default": ["basic", "quote", "history", "financial"]
       }
     },
-    "required": ["code"],
+    "required": ["ticker"],
     "additionalProperties": false
   },
   "output_schema": {
     "type": "object",
     "properties": {
       "status": {"type": "string", "enum": ["success", "partial", "error"]},
-      "code": {"type": "string"},
+      "ticker": {"type": "string"},
       "name": {"type": "string"},
       "observed_at": {"type": "string"},
       "source": {"type": "string"},
@@ -35,7 +35,7 @@
       "warnings": {"type": "array", "items": {"type": "string"}},
       "message": {"type": "string"}
     },
-    "required": ["status", "code", "name", "observed_at", "source", "adjustment", "warnings"],
+    "required": ["status", "ticker", "name", "observed_at", "source", "adjustment", "basic", "quote", "history_summary", "financial", "warnings", "message"],
     "additionalProperties": false
   },
   "resources": {},

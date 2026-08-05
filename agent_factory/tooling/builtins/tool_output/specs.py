@@ -9,9 +9,9 @@ def get_tool_output_tool_specs() -> list[ToolSpec]:
         ToolSpec(
             id="tool_output",
             description=(
-                "查看保存在模型上下文之外的完整工具输出。"
-                "除非当前提示明确给出真实 output_id，否则先使用 action=list。"
-                "不要编造 output_id；describe/read 只接受 list 返回或 output_ref 中展示的 ID。"
+                "Reads complete tool output stored outside model context. Unless the current prompt provides a "
+                "real output_id, call action=list first. Never invent an output_id; describe/read accept only IDs "
+                "returned by list or shown in an output_ref."
             ),
             entrypoint="agent_factory.tooling.output_store:run_tool_output",
             input_schema=_input_schema(),

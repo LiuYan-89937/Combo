@@ -372,7 +372,7 @@ def _call(
     if cancel_event is not None and cancel_event.is_set():
         return _cancelled_probe_result(spec=spec, changed_files=[])
     _emit_probe_progress(
-        f"开始工具探测：目标工具 {tool_id}。",
+        f"Starting tool probe for {tool_id}.",
         {"tool_id": tool_id, "prompt": prompt},
     )
     before = package_fingerprint(workspace.root)
@@ -427,7 +427,7 @@ def _call(
     changed_files = _changed_files(before, after)
     transcript = _probe_transcript(direct_probe=direct_probe, record=record)
     _emit_probe_progress(
-        f"工具探测完成：{tool_id} -> {record.status}。",
+        f"Tool probe completed: {tool_id} -> {record.status}.",
         {
             "tool_id": tool_id,
             "status": record.status,
@@ -538,7 +538,7 @@ def _run_direct_probe(
     if not resolved_arguments and _schema_required_keys(spec.input_schema):
         errors.append("probe arguments are required by the target tool input_schema")
     _emit_probe_progress(
-        f"工具探测输入：{spec.id} args={_one_line(json.dumps(resolved_arguments, ensure_ascii=False, sort_keys=True), 220)}",
+        f"Tool-probe input: {spec.id} args={_one_line(json.dumps(resolved_arguments, ensure_ascii=False, sort_keys=True), 220)}",
         {"tool_id": spec.id, "arguments": resolved_arguments},
     )
     if errors:
@@ -590,7 +590,7 @@ def _run_direct_probe(
     status = str(observation_payload.get("status") or "").strip()
     message = str(observation_payload.get("message") or "").strip()
     _emit_probe_progress(
-        f"本地隔离工具 observation：{spec.id} {status or local_result.get('status') or '-'}" + (f" - {_one_line(message, 220)}" if message else ""),
+        f"Local isolated tool observation: {spec.id} {status or local_result.get('status') or '-'}" + (f" - {_one_line(message, 220)}" if message else ""),
         {
             "tool_id": spec.id,
             "status": status,
@@ -627,7 +627,7 @@ def _run_local_probe(
     try:
         _emit_probe_stage(
             "preparing_environment",
-            "正在准备工具依赖环境。",
+            "Preparing the tool dependency environment.",
             {"tool_id": spec.id},
         )
         EnvironmentResolver().ensure(
@@ -643,7 +643,7 @@ def _run_local_probe(
             raise ObservedProcessCancelled("probe cancelled after environment preparation")
         _emit_probe_stage(
             "loading_package",
-            "依赖环境已就绪，正在加载制造包。",
+            "The dependency environment is ready; loading the manufacturing package.",
             {"tool_id": spec.id},
         )
         package = AgentPackageLoader().load_path(workspace.package_manifest_path())
@@ -694,7 +694,7 @@ def _run_local_probe(
     )
     _emit_probe_stage(
         "starting_probe_runner",
-        f"本地隔离探测启动：{spec.id}",
+        f"Local isolated probe started: {spec.id}",
         {"tool_id": spec.id, "runtime": "local"},
     )
     try:
@@ -832,22 +832,22 @@ def _emit_probe_stage(stage: str, message: str, payload: dict[str, Any] | None =
 
 def _environment_progress_message(stage: str, detail: dict[str, Any]) -> str:
     if stage == "dependency_process_output":
-        return str(detail.get("message") or "依赖构建仍在进行。")
+        return str(detail.get("message") or "Dependency construction is still in progress.")
     return {
-        "checking_contract": "正在检查依赖合同。",
-        "checking_runtime": "正在检查本地运行环境。",
-        "resolving_dependencies": "正在解析共享依赖。",
-        "waiting_for_dependency_profile": "正在等待共享依赖配置。",
-        "checking_dependency_profile": "正在检查共享依赖缓存。",
-        "dependency_profile_cache_hit": "已命中共享依赖缓存。",
-        "creating_python_build_environment": "正在创建 Python 依赖构建环境。",
-        "building_python_wheels": "正在构建 Python wheel。",
-        "storing_python_wheels": "正在保存 Python wheel。",
-        "installing_npm_dependencies": "正在安装 npm 依赖。",
-        "dependency_profile_stored": "共享依赖配置已准备完成。",
-        "dependency_profile_ready": "依赖配置已就绪。",
-        "ready": "依赖环境已就绪。",
-    }.get(stage, f"依赖环境阶段：{stage}")
+        "checking_contract": "Checking the dependency contract.",
+        "checking_runtime": "Checking the local runtime environment.",
+        "resolving_dependencies": "Resolving shared dependencies.",
+        "waiting_for_dependency_profile": "Waiting for the shared dependency profile.",
+        "checking_dependency_profile": "Checking the shared dependency cache.",
+        "dependency_profile_cache_hit": "Shared dependency cache hit.",
+        "creating_python_build_environment": "Creating the Python dependency build environment.",
+        "building_python_wheels": "Building Python wheels.",
+        "storing_python_wheels": "Storing Python wheels.",
+        "installing_npm_dependencies": "Installing npm dependencies.",
+        "dependency_profile_stored": "The shared dependency profile is prepared.",
+        "dependency_profile_ready": "The dependency profile is ready.",
+        "ready": "The dependency environment is ready.",
+    }.get(stage, f"Dependency environment stage: {stage}")
 
 
 def _observe_probe_runner_output(*, tool_id: str, stream: str, line: str) -> None:
@@ -866,11 +866,11 @@ def _observe_probe_runner_output(*, tool_id: str, stream: str, line: str) -> Non
         _emit_probe_stage(
             stage,
             {
-                "discovering_tools": "正在发现制造包工具。",
-                "compiling_tool": "正在编译目标工具。",
-                "executing_tool": "正在执行目标工具。",
-                "tool_execution_finished": "目标工具执行结束。",
-            }.get(stage, f"工具探测阶段：{stage}"),
+                "discovering_tools": "Discovering manufacturing-package tools.",
+                "compiling_tool": "Compiling the target tool.",
+                "executing_tool": "Executing the target tool.",
+                "tool_execution_finished": "Target tool execution finished.",
+            }.get(stage, f"Tool-probe stage: {stage}"),
             {"tool_id": tool_id, **detail},
         )
         return
@@ -882,18 +882,18 @@ def _observe_probe_runner_output(*, tool_id: str, stream: str, line: str) -> Non
 
 
 def _probe_transcript(*, direct_probe: dict[str, Any], record: PackageToolProbeRecord) -> list[str]:
-    lines = [f"业务测试 prompt：{direct_probe.get('prompt') or record.prompt}"]
+    lines = [f"Business test prompt: {direct_probe.get('prompt') or record.prompt}"]
     lines.append(
-        "本地隔离运行时调用工具："
+        "Local isolated runtime tool call: "
         f"{record.tool_id} args={_one_line(json.dumps(record.arguments, ensure_ascii=False, sort_keys=True), 240)}"
     )
     dependency_report = direct_probe.get("dependency_report") if isinstance(direct_probe.get("dependency_report"), dict) else {}
     if dependency_report:
-        lines.append(f"依赖初始化：status={dependency_report.get('status') or '-'} phase={dependency_report.get('phase') or '-'}")
+        lines.append(f"Dependency initialization: status={dependency_report.get('status') or '-'} phase={dependency_report.get('phase') or '-'}")
     infrastructure_error = direct_probe.get("infrastructure_error") if isinstance(direct_probe.get("infrastructure_error"), dict) else {}
     if infrastructure_error:
         lines.append(
-            "本地隔离环境："
+            "Local isolated environment: "
             f"{infrastructure_error.get('why') or '-'} - {_one_line(str(infrastructure_error.get('message') or ''), 240)}"
         )
     observation = direct_probe.get("observation") if isinstance(direct_probe.get("observation"), dict) else {}
@@ -902,7 +902,7 @@ def _probe_transcript(*, direct_probe: dict[str, Any], record: PackageToolProbeR
         output = observation.get("output")
         output_text = _one_line(json.dumps(output, ensure_ascii=False, sort_keys=True), 320) if output else ""
         lines.append(
-            "工具返回："
+            "Tool result: "
             f"{record.tool_id} status={observation.get('status') or '-'}"
             + (f" message={_one_line(message, 180)}" if message else "")
             + (f" output={output_text}" if output_text else "")
@@ -910,7 +910,7 @@ def _probe_transcript(*, direct_probe: dict[str, Any], record: PackageToolProbeR
     evaluation = record.evaluation if isinstance(record.evaluation, dict) else {}
     if evaluation:
         lines.append(
-            "小模型摘要："
+            "Small-model summary: "
             f"{_one_line(str(evaluation.get('summary') or ''), 240)}"
         )
     return lines

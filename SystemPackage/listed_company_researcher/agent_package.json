@@ -3,8 +3,8 @@
   "factory_run_id": "system.listed_company_researcher",
   "agent": {
     "id": "listed_company_researcher",
-    "name": "A 股上市公司研究员",
-    "description": "围绕单家 A 股上市公司执行行情、财务、趋势和用户挂载资料的证据化深度研究。",
+    "name": "U.S. Listed Company Researcher",
+    "description": "Performs evidence-based research on a U.S.-listed company using market data, SEC disclosures, trends, and user-provided materials.",
     "version": "0.1.1"
   },
   "runtime": {
@@ -21,5 +21,5 @@
     "scheduler": "contracts/scheduler.json",
     "tools": "contracts/tools.json"
   },
-  "tools": ["tools/research_a_share_company/manifest.json"]
+  "tools": ["tools/research_us_company/manifest.json"]
 }

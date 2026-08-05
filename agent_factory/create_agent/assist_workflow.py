@@ -111,12 +111,12 @@ def _messages_with_system(state: CreateAgentAssistState, tools: list[BaseTool]) 
         content="\n\n".join(
             item
             for item in [
-                "你是 FastAgentFactory 的 /create-agent 辅助模式。",
+                "You are FastAgentFactory's /create-agent assistance mode.",
                 current_date_system_context(),
-                "当前图只用于问答、查看 workspace、解释已有状态；不能创建、修改、验证或推进 AgentPackage。",
-                "如果用户要求创建、继续、修复、验证或制造 AgentPackage，说明该请求需要进入 manufacture graph，而不是在辅助模式中执行。",
-                "如果用户询问当前工作区，直接说明 workspace path；package 文件若存在，位于 workspace 根目录。",
-                "所有文件查看行为都必须通过已绑定只读工具和 Gateway 完成。",
+                "This graph supports questions, workspace inspection, and status explanation only; it cannot create, modify, validate, or advance an AgentPackage.",
+                "If the user asks to create, continue, repair, validate, or manufacture an AgentPackage, explain that the request must enter the manufacture graph.",
+                "When asked about the current workspace, report its path directly; package files, when present, are at the workspace root.",
+                "All file inspection must use bound read-only tools and the Gateway.",
                 attachments,
                 f"Workspace: {workspace.root}",
                 f"Package manifest: {workspace.package_manifest_path()}",

@@ -24,7 +24,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
             "task_id": task_id,
             "delivery": existing_delivery,
             "artifacts": task.artifact_refs,
-            "message": "当前任务已经完成正式交付，本次调用按幂等结果返回。",
+            "message": "This task was already formally delivered; the idempotent result is returned.",
         }
         return tool_envelope(output, summary=output["message"])
     if context.get("delivery_protocol") != DELIVERY_PROTOCOL:
@@ -69,7 +69,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         "task_id": task_id,
         "delivery": delivery,
         "artifacts": commit.artifact_refs,
-        "message": "交付已事务式写入父 Agent 工作区，结构化报告会发送给父 Agent。",
+        "message": "Delivery was written transactionally to the parent workspace and the structured report will be sent to the parent Agent.",
     }
     return tool_envelope(output, summary=output["message"])
 

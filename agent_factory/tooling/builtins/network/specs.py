@@ -12,12 +12,12 @@ _NETWORK_RESOURCE = {"network": "network"}
 NETWORK_TOOL_SPECS: list[ToolSpec] = [
     ToolSpec(
         id="web_fetch",
-        description="从指定 URL 获取内容。",
+        description="Fetches content from a specified URL.",
         entrypoint="agent_factory.tooling.builtins.network.web_fetch:run",
         input_schema={
             "type": "object",
             "properties": {
-                "url": {"type": "string", "description": "要请求的 URL。"},
+                "url": {"type": "string", "description": "URL to request."},
                 "method": {"type": "string", "enum": ["GET", "HEAD"], "default": "GET"},
                 "headers": {"type": "object", "additionalProperties": {"type": "string"}},
                 "timeout_seconds": {"type": "integer", "minimum": 1},
@@ -44,12 +44,12 @@ NETWORK_TOOL_SPECS: list[ToolSpec] = [
     ),
     ToolSpec(
         id="web_search",
-        description="执行网络搜索，可指定域名过滤。",
+        description="Runs a web search with optional domain filtering.",
         entrypoint="agent_factory.tooling.builtins.network.web_search:run",
         input_schema={
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "搜索查询。"},
+                "query": {"type": "string", "description": "Search query."},
                 "domains": {"type": "array", "items": _STRING},
                 "max_results": {"type": "integer", "minimum": 1},
             },

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 import shutil
 import time
 from typing import Any
@@ -748,7 +749,7 @@ class CreateAgentRuntime:
                                     "session_id": session_id,
                                     "run_id": request_id,
                                     "agent_id": "create_agent",
-                                    "agent_name": "制造 Agent",
+                                    "agent_name": "Manufacturing Agent",
                                 },
                             )
                             normalizer.runtime_event(

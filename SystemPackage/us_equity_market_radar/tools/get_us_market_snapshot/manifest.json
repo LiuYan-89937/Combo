@@ -1,8 +1,8 @@
 {
-  "id": "get_a_share_market_snapshot",
-  "description": "通过腾讯证券获取当前 A 股全市场行情快照，计算涨跌家数、成交额和领涨个股。涉及当前盘面事实时必须先调用；返回数据时间、来源和提供方诊断。",
-  "schema_error_guidance": "top_n 必须是 1 到 20 的整数。",
-  "entrypoint": "python:tools/get_a_share_market_snapshot/tool.py:run",
+  "id": "get_us_market_snapshot",
+  "description": "Fetches current major U.S. index quotes and leading, declining, and most-active equities from Yahoo Finance. Call it before stating current U.S. market facts; it returns observation time, source, warnings, and provider diagnostics.",
+  "schema_error_guidance": "top_n must be an integer from 1 through 20.",
+  "entrypoint": "python:tools/get_us_market_snapshot/tool.py:run",
   "input_schema": {
     "type": "object",
     "properties": {
@@ -13,26 +13,28 @@
   "output_schema": {
     "type": "object",
     "properties": {
-      "status": {"type": "string", "enum": ["success", "error"]},
+      "status": {"type": "string", "enum": ["success", "partial", "error"]},
       "observed_at": {"type": "string"},
       "source": {"type": "string"},
-      "market": {"type": "object"},
+      "indexes": {"type": "array", "items": {"type": "object"}},
       "top_gainers": {"type": "array", "items": {"type": "object"}},
-      "top_turnover": {"type": "array", "items": {"type": "object"}},
+      "top_losers": {"type": "array", "items": {"type": "object"}},
+      "most_active": {"type": "array", "items": {"type": "object"}},
+      "warnings": {"type": "array", "items": {"type": "string"}},
       "provider_diagnostics": {
         "type": "object",
         "properties": {
           "provider": {"type": "string"},
           "hosts_used": {"type": "array", "items": {"type": "string"}},
           "retry_count": {"type": "integer", "minimum": 0},
-          "pages_fetched": {"type": "integer", "minimum": 0}
+          "requests_completed": {"type": "integer", "minimum": 0}
         },
-        "required": ["provider", "hosts_used", "retry_count", "pages_fetched"],
+        "required": ["provider", "hosts_used", "retry_count", "requests_completed"],
         "additionalProperties": false
       },
       "message": {"type": "string"}
     },
-    "required": ["status", "observed_at", "source", "provider_diagnostics"],
+    "required": ["status", "observed_at", "source", "indexes", "top_gainers", "top_losers", "most_active", "warnings", "provider_diagnostics", "message"],
     "additionalProperties": false
   },
   "resources": {},

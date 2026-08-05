@@ -104,15 +104,15 @@ The primary Agent decomposes one goal into evidence tasks and runs different spe
 
 An Agent creates a one-time or recurring Scheduler task to produce briefs, reminders, or files within the unattended-approval boundary. External actions requiring approval cannot bypass their permission policy.
 
-### Built-in A-share Multi-Agent Demonstration
+### Built-in U.S. Equity Multi-Agent Demonstration
 
-The repository includes three A-share specialist Agents that demonstrate real data tools, multi-Agent collaboration, and delivery:
+The repository includes three U.S. equity specialist Agents that demonstrate real data tools, multi-Agent collaboration, and delivery:
 
 | Agent | Responsibility | Typical deliverable |
 | --- | --- | --- |
-| A-share Market Radar | Market breadth, turnover, sectors, and leading stocks | Market brief, anomaly notes, Markdown report, and authorized email |
-| A-share Listed-company Researcher | Market data, financials, trends, and user materials | Company research report with sources and data timestamps |
-| A-share Portfolio Risk Guard | Concentration, volatility, drawdown, correlation, and stress scenarios | Portfolio risk report and scenario analysis |
+| U.S. Equity Market Radar | Major indexes, leading/declining equities, and most-active names | Market brief, anomaly notes, Markdown report, and authorized email |
+| U.S. Listed Company Researcher | Yahoo Finance market data, SEC company facts, trends, and user materials | Company research report with sources and data timestamps |
+| U.S. Equity Portfolio Risk Guard | Concentration, volatility, drawdown, S&P 500 beta, correlation, and stress scenarios | Portfolio risk report and scenario analysis |
 
 The primary Agent can research the market and several companies concurrently, then evaluate a simulated portfolio under `5%` and `10%` drawdowns and produce one delivery. All financial output is for research and system demonstration only and is not investment advice.
 
@@ -321,7 +321,7 @@ When changing instances, update the SSH host and port. When persistent-disk loca
 1. Open **Model Configuration** and confirm that Chat, Embedding, and enabled Image profiles are `ready`.
 2. Open **Published Agents** and initialize the built-in Agents you plan to use.
 3. Initialize **Factory Chat** before regular conversation.
-4. Initialize all three A-share specialists before running their collaboration demonstration.
+4. Initialize all three U.S. equity specialists before running their collaboration demonstration.
 5. When creating a session, choose an isolated workspace or link a local directory.
 
 Initialization prepares the AgentPackage runtime, tools, and dependencies, so the first run is normally slower than subsequent sessions. If a message is sent before Factory Chat is ready, the platform begins initialization automatically and then transitions to normal streamed output.

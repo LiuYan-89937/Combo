@@ -11,10 +11,12 @@ def get_agent_team_tool_specs() -> list[ToolSpec]:
         ToolSpec(
             id=AGENT_TEAM_TOOL_ID,
             description=(
-                "将一个目标拆给多个已发布 Agent 并行或按依赖顺序执行。"
-                "每个成员保留独立会话和工作区，并通过 deliver_result 把结果送回当前工作区。"
-                "先用 agent_search 确认每个 package_id；启动成功后先向用户简要总结成员分工，再结束当前回复。"
-                "不要轮询，成员状态变化会主动唤醒当前会话。"
+                "Splits one objective across multiple published Agents for parallel or dependency-ordered "
+                "execution. Each member keeps an independent session and workspace and returns results "
+                "through deliver_result. Confirm every package_id with agent_search first. After start, "
+                "briefly summarize member assignments to the user and end the response. Do not poll; member "
+                "status changes actively resume the current session. Use depends_on whenever a task consumes "
+                "another task's output, and leave it empty only for genuinely independent work."
             ),
             entrypoint="agent_factory.tooling.builtins.agent_team.tool:run",
             input_schema=_input_schema(),

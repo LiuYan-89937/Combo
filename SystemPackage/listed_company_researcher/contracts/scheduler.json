@@ -5,7 +5,7 @@
   "config": {
     "store_backend": "sqlite",
     "store_path": ".agent_runtime/scheduler/scheduler.sqlite",
-    "timezone": "Asia/Shanghai",
+    "timezone": "America/New_York",
     "default_concurrency_policy": "skip",
     "default_timeout_seconds": 900,
     "unattended_policy": "deny_if_approval_required",
