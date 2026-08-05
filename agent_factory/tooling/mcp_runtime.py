@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 import importlib
 import json
 import os
 from pathlib import Path
+from queue import Empty, Queue
 import threading
 from typing import Any, AsyncIterator, Callable
 
+from agent_factory.tooling.execution_context import register_runtime_tool_cancellation
 from agent_factory.tooling.providers.mcp import (
     MCPDiscoveredTool,
     MCPServerConfig,
@@ -24,6 +25,9 @@ class MCPRuntimeError(RuntimeError):
 
 class MCPRuntimeCancelled(MCPRuntimeError):
     pass
+
+
+MCP_CLEANUP_GRACE_SECONDS = 5.0
 
 
 @dataclass(slots=True)
@@ -93,22 +97,43 @@ class MCPRuntimeClient:
 
     def list_tools(self) -> list[MCPDiscoveredTool]:
         if self._tool_cache is None:
-            self._tool_cache = _run_async(self._list_tools())
+            operation = self.operation or MCPRuntimeOperation()
+            timeout_seconds = self._operation_timeout_seconds()
+            self._tool_cache = _run_async(
+                self._list_tools(operation=operation),
+                timeout_seconds=timeout_seconds,
+                operation=operation,
+                description=f"list tools for MCP server {self.server.server_id}",
+            )
         return list(self._tool_cache)
 
     def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        return _run_async(self._call_tool(tool_name, arguments))
+        operation = MCPRuntimeOperation()
+        unregister = register_runtime_tool_cancellation(operation.cancel)
+        try:
+            return _run_async(
+                self._call_tool(tool_name, arguments, operation=operation),
+                timeout_seconds=self.server.timeout_seconds,
+                operation=operation,
+                description=f"call MCP tool {self.server.server_id}/{tool_name}",
+            )
+        finally:
+            unregister()
 
     def stderr_logs(self) -> list[str]:
         return list(self._stderr_logs)
 
-    async def _list_tools(self) -> list[MCPDiscoveredTool]:
-        async with self._session() as session:
+    async def _list_tools(
+        self,
+        *,
+        operation: MCPRuntimeOperation | None = None,
+    ) -> list[MCPDiscoveredTool]:
+        async with self._session(operation=operation) as session:
             response = await _with_timeout(
                 session.list_tools(),
                 timeout_seconds=self._operation_timeout_seconds(),
                 operation=f"list tools for MCP server {self.server.server_id}",
-                runtime_operation=self.operation,
+                runtime_operation=operation,
             )
             tools = (
                 response.get("tools", response)
@@ -117,30 +142,46 @@ class MCPRuntimeClient:
             )
             return [_normalize_tool(tool) for tool in tools]
 
-    async def _call_tool(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        async with self._session() as session:
+    async def _call_tool(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        *,
+        operation: MCPRuntimeOperation,
+    ) -> dict[str, Any]:
+        async with self._session(operation=operation) as session:
             result = await _with_timeout(
                 session.call_tool(tool_name, arguments),
                 timeout_seconds=self.server.timeout_seconds,
                 operation=f"call MCP tool {self.server.server_id}/{tool_name}",
+                runtime_operation=operation,
             )
         return _normalize_call_result(result)
 
     @asynccontextmanager
-    async def _session(self) -> AsyncIterator[Any]:
+    async def _session(
+        self,
+        *,
+        operation: MCPRuntimeOperation | None = None,
+    ) -> AsyncIterator[Any]:
         sdk = _load_mcp_sdk()
         if self.server.transport == "stdio":
-            async with self._stdio_session(sdk) as session:
+            async with self._stdio_session(sdk, operation=operation) as session:
                 yield session
             return
         if self.server.transport in {"streamable_http", "sse"}:
-            async with self._remote_session(sdk) as session:
+            async with self._remote_session(sdk, operation=operation) as session:
                 yield session
             return
         raise MCPRuntimeError(f"unsupported MCP transport: {self.server.transport}")
 
     @asynccontextmanager
-    async def _stdio_session(self, sdk: dict[str, Any]) -> AsyncIterator[Any]:
+    async def _stdio_session(
+        self,
+        sdk: dict[str, Any],
+        *,
+        operation: MCPRuntimeOperation | None = None,
+    ) -> AsyncIterator[Any]:
         if not self.server.command:
             raise MCPRuntimeError(f"MCP stdio server requires command: {self.server.server_id}")
         env = {**os.environ, **self.server.env}
@@ -158,7 +199,7 @@ class MCPRuntimeClient:
             params_kwargs.pop("cwd", None)
             server_params = sdk["StdioServerParameters"](**params_kwargs)
         stderr_capture = _MCPStderrCapture(
-            on_line=(lambda line: self.operation.emit_stderr(self.server, line)) if self.operation else None
+            on_line=(lambda line: operation.emit_stderr(self.server, line)) if operation else None
         )
         try:
             stdio_context = sdk["stdio_client"](server_params, errlog=stderr_capture)
@@ -172,7 +213,7 @@ class MCPRuntimeClient:
                         session.initialize(),
                         timeout_seconds=self._operation_timeout_seconds(),
                         operation=f"initialize MCP server {self.server.server_id}",
-                        runtime_operation=self.operation,
+                        runtime_operation=operation,
                     )
                     yield session
         finally:
@@ -180,7 +221,12 @@ class MCPRuntimeClient:
             self._stderr_logs.extend(stderr_capture.lines())
 
     @asynccontextmanager
-    async def _remote_session(self, sdk: dict[str, Any]) -> AsyncIterator[Any]:
+    async def _remote_session(
+        self,
+        sdk: dict[str, Any],
+        *,
+        operation: MCPRuntimeOperation | None = None,
+    ) -> AsyncIterator[Any]:
         if not self.server.url:
             raise MCPRuntimeError(f"MCP {self.server.transport} server requires url: {self.server.server_id}")
         client_factory = sdk.get(self.server.transport)
@@ -199,7 +245,7 @@ class MCPRuntimeClient:
                     session.initialize(),
                     timeout_seconds=self._operation_timeout_seconds(),
                     operation=f"initialize MCP server {self.server.server_id}",
-                    runtime_operation=self.operation,
+                    runtime_operation=operation,
                 )
                 yield session
 
@@ -267,29 +313,73 @@ class _MCPStderrCapture:
     def close(self) -> None:
         if not self._writer.closed:
             self._writer.close()
-        self._thread.join()
+        self._thread.join(timeout=MCP_CLEANUP_GRACE_SECONDS)
 
     def _consume(self) -> None:
         try:
-            for raw_line in self._reader:
-                line = raw_line.strip()
-                if not line:
-                    continue
-                with self._lock:
-                    self._lines.append(line)
-                if self._on_line is not None:
-                    self._on_line(line)
+            try:
+                for raw_line in self._reader:
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    with self._lock:
+                        self._lines.append(line)
+                    if self._on_line is not None:
+                        self._on_line(line)
+            except (OSError, ValueError):
+                pass
         finally:
-            self._reader.close()
+            if not self._reader.closed:
+                self._reader.close()
 
 
-def _run_async(coro: Any) -> Any:
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        return executor.submit(lambda: asyncio.run(coro)).result()
+def _run_async(
+    coro: Any,
+    *,
+    timeout_seconds: float | None,
+    operation: MCPRuntimeOperation | None,
+    description: str,
+) -> Any:
+    outcome: Queue[tuple[str, Any]] = Queue(maxsize=1)
+
+    def run() -> None:
+        try:
+            outcome.put(("result", asyncio.run(coro)))
+        except BaseException as exc:
+            outcome.put(("error", exc))
+
+    worker = threading.Thread(target=run, name="mcp-runtime-call", daemon=True)
+    worker.start()
+    hard_deadline = None if timeout_seconds is None else timeout_seconds + MCP_CLEANUP_GRACE_SECONDS
+    waited = 0.0
+    poll_seconds = 0.05
+    while True:
+        if operation is not None and operation.cancelled:
+            try:
+                kind, value = outcome.get(timeout=MCP_CLEANUP_GRACE_SECONDS)
+            except Empty as exc:
+                raise MCPRuntimeCancelled(f"{description} did not stop within cleanup grace period") from exc
+            return _resolve_async_outcome(kind, value)
+        remaining = None if hard_deadline is None else hard_deadline - waited
+        if remaining is not None and remaining <= 0:
+            if operation is not None:
+                operation.cancel()
+            raise MCPRuntimeError(
+                f"{description} exceeded its {timeout_seconds:g}s timeout and cleanup did not finish"
+            )
+        interval = poll_seconds if remaining is None else min(poll_seconds, remaining)
+        try:
+            kind, value = outcome.get(timeout=interval)
+        except Empty:
+            waited += interval
+            continue
+        return _resolve_async_outcome(kind, value)
+
+
+def _resolve_async_outcome(kind: str, value: Any) -> Any:
+    if kind == "error":
+        raise value
+    return value
 
 
 async def _with_timeout(

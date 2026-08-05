@@ -5,6 +5,7 @@ import {
   upsertTurnTool,
 } from './conversationMutations'
 import { isBackgroundEvent } from './eventUtils'
+import { toolPayloadValue } from './toolPayload'
 
 type ToolMutationState = Pick<
   RuntimeViewState,
@@ -23,7 +24,15 @@ export function applyToolLifecycleEvent(
   status: ToolActivity['status'],
 ) {
   if (isBackgroundEvent(event, state.activeRequestId)) return
-  upsertToolActivityFromEvent(state, event, status)
+  const toolCallId = toolPayloadValue(event.payload || {}, ['tool_call_id', 'toolCallId'])
+  const existing = state.tools.find((tool) => toolCallId && tool.toolCallId === String(toolCallId))
+  const nextStatus = status === 'failed' && (
+    toolEventWasUserCancelled(event)
+    || existing?.status === 'cancelled'
+  )
+    ? 'cancelled'
+    : status
+  upsertToolActivityFromEvent(state, event, nextStatus)
 }
 
 export function applyToolApprovalRequested(state: ToolMutationState, event: FactoryFrontendEvent) {
@@ -78,6 +87,63 @@ export function applyToolApprovalResolved(state: ToolMutationState, event: Facto
       upsertTurnTool(state, tool)
       upsertToolMessagePart(state, tool)
     })
+}
+
+export function finalizeToolActivitiesForRequest(
+  state: ToolMutationState,
+  requestId: string | null,
+  timestamp: string,
+  terminalStatus: 'cancelled' | 'failed',
+  reason?: string,
+) {
+  if (!requestId) return
+  const terminalReason = String(reason || '').trim()
+  state.tools
+    .filter((tool) => tool.requestId === requestId && isToolActivityInFlight(tool))
+    .forEach((tool) => {
+      tool.status = terminalStatus
+      tool.eventType = 'tool_call_failed'
+      tool.timestamp = timestamp
+      tool.payload = {
+        ...(tool.payload || {}),
+        ...(terminalReason
+          ? {
+              error: tool.payload?.error || terminalReason,
+              result: tool.payload?.result || {
+                type: 'tool_observation',
+                status: terminalStatus,
+                tool_id: tool.toolName,
+                tool_call_id: tool.toolCallId,
+                message: terminalReason,
+                execution_status: 'failed',
+              },
+            }
+          : {}),
+      }
+      upsertTurnTool(state, tool)
+      upsertToolMessagePart(state, tool)
+    })
+}
+
+function isToolActivityInFlight(tool: ToolActivity): boolean {
+  return tool.status === 'proposed' || tool.status === 'started' || tool.status === 'approval'
+}
+
+function toolEventWasUserCancelled(event: FactoryFrontendEvent): boolean {
+  const payload = event.payload || {}
+  const result = payload.result && typeof payload.result === 'object' ? payload.result : null
+  const observation = payload.observation && typeof payload.observation === 'object' ? payload.observation : null
+  const statusValues = [
+    payload.status,
+    payload.execution_status,
+    result?.status,
+    result?.execution_status,
+    observation?.status,
+    observation?.execution_status,
+  ]
+  if (statusValues.some((value) => String(value || '').trim().toLowerCase() === 'cancelled')) return true
+  return [payload.error, result?.message, observation?.message]
+    .some((value) => /user_cancelled|user-cancelled/i.test(String(value || '')))
 }
 
 function resolveApprovalTool(tool: ToolActivity, event: FactoryFrontendEvent, approved: boolean) {

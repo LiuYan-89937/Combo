@@ -9,11 +9,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from agent_factory.exception_details import exception_leaf_messages, exception_summary
 from agent_factory.tooling.execution_context import (
+    RuntimeToolExecutionCancelled,
     current_tool_approval_override,
     current_tool_call,
     current_tool_event_sink,
     current_tool_runtime_resource_overrides,
     current_runtime_run_control,
+    execute_with_runtime_cancellation,
 )
 from agent_factory.tooling.output_store import (
     ToolOutputPolicy,
@@ -173,7 +175,18 @@ class ToolExecutionGateway:
             )
         self._emit_execution_started(arguments=arguments, risk=risk, tool_call_id=tool_call_id)
         try:
-            output = self.entrypoint(arguments=arguments, resources=tool_resources)
+            output = execute_with_runtime_cancellation(
+                lambda: self.entrypoint(arguments=arguments, resources=tool_resources)
+            )
+        except RuntimeToolExecutionCancelled as exc:
+            return self._observation(
+                "cancelled",
+                str(exc),
+                tool_call_id=tool_call_id,
+                arguments=arguments,
+                retryable=False,
+                errors=[str(exc)],
+            )
         except Exception as exc:
             errors = exception_leaf_messages(exc)
             return self._observation(

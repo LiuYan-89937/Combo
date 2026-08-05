@@ -4,7 +4,7 @@
     "mode": "allow_all",
     "low": "allow",
     "medium": "allow",
-    "high": "ask",
+    "high": "allow",
     "tool_overrides": {}
   }
 }

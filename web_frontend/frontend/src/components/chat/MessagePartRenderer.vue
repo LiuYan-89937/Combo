@@ -204,6 +204,7 @@ const toolKindLabel = computed(() => (
 ))
 const toolState = computed(() => {
   const status = props.part.status || ''
+  if (status === 'cancelled') return 'cancelled'
   if (status === 'failed') return 'failed'
   if (status === 'awaiting_approval') return 'approval'
   if (status === 'running' || status === 'streaming' || status === 'requested') return 'running'
@@ -212,6 +213,7 @@ const toolState = computed(() => {
 const isToolActive = computed(() => toolState.value === 'running' || toolState.value === 'approval')
 const toolStatusLabel = computed(() => {
   const status = props.part.status || ''
+  if (status === 'cancelled') return t('tool.status.cancelled')
   if (status === 'awaiting_approval') return t('tool.status.waitingApproval')
   if (status === 'requested') return t('tool.status.proposed')
   if (status === 'running' || status === 'streaming') return t('tool.status.started')

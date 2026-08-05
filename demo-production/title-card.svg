@@ -1,9 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
-  <rect width="1920" height="1080" fill="#0b0b0b"/>
-  <g fill="#ffffff" font-family="Inter, Arial, sans-serif" text-anchor="middle">
-    <text x="960" y="475" font-size="112" font-weight="700" letter-spacing="-3">FastAgentFactory</text>
-    <text x="960" y="565" font-size="38" font-weight="400" fill="#c8c8c8">Local-first Multi-Agent Runtime</text>
-    <line x1="710" y1="620" x2="1210" y2="620" stroke="#666666" stroke-width="2"/>
-    <text x="960" y="690" font-size="34" font-weight="500">AMD Radeon · ROCm · llama.cpp</text>
-  </g>
-</svg>

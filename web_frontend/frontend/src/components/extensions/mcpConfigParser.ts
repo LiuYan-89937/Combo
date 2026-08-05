@@ -7,28 +7,43 @@ export interface McpImportResult {
   errors: string[]
 }
 
-export function parseMcpConfigText(text: string): McpImportResult {
+export interface McpConfigParserMessages {
+  emptyConfig: string
+  jsonParseFailed: (reason: string) => string
+  noRecognizedServers: string
+  serverEntryName: (index: number) => string
+  invalidServer: (name: string, reason: string) => string
+  duplicateServerIds: (ids: string) => string
+  stdioCommandRequired: string
+  transportUrlRequired: (transport: string) => string
+  unsupportedTransport: (transport: string) => string
+}
+
+export function parseMcpConfigText(text: string, messages: McpConfigParserMessages): McpImportResult {
   const source = text.trim()
-  if (!source) return { servers: [], errors: ['请粘贴 MCP 配置。'] }
+  if (!source) return { servers: [], errors: [messages.emptyConfig] }
   let decoded: unknown
   try {
     decoded = JSON.parse(source)
   } catch (error) {
-    return { servers: [], errors: [`JSON 解析失败：${error instanceof Error ? error.message : String(error)}`] }
+    return { servers: [], errors: [messages.jsonParseFailed(error instanceof Error ? error.message : String(error))] }
   }
   const entries = mcpServerEntries(decoded)
-  if (entries.length === 0) return { servers: [], errors: ['没有找到可识别的 MCP Server 配置。'] }
+  if (entries.length === 0) return { servers: [], errors: [messages.noRecognizedServers] }
   const servers: McpServerConfig[] = []
   const errors: string[] = []
   entries.forEach(([name, value], index) => {
     try {
-      servers.push(normalizeMcpServer(value, name || `mcp_server_${index + 1}`))
+      servers.push(normalizeMcpServer(value, name || `mcp_server_${index + 1}`, messages))
     } catch (error) {
-      errors.push(`${name || `Server ${index + 1}`}：${error instanceof Error ? error.message : String(error)}`)
+      errors.push(messages.invalidServer(
+        name || messages.serverEntryName(index + 1),
+        error instanceof Error ? error.message : String(error),
+      ))
     }
   })
   const duplicateIds = duplicatedValues(servers.map(server => server.server_id || ''))
-  if (duplicateIds.length > 0) errors.push(`Server ID 重复：${duplicateIds.join('、')}`)
+  if (duplicateIds.length > 0) errors.push(messages.duplicateServerIds(duplicateIds.join(', ')))
   return { servers, errors }
 }
 
@@ -59,13 +74,17 @@ function mcpServerEntries(value: unknown): Array<[string, JsonObject]> {
   return objectEntries(value).filter(([, item]) => hasServerShape(item))
 }
 
-function normalizeMcpServer(raw: JsonObject, fallbackName: string): McpServerConfig {
+function normalizeMcpServer(
+  raw: JsonObject,
+  fallbackName: string,
+  messages: McpConfigParserMessages,
+): McpServerConfig {
   const displayName = String(raw.display_name || raw.name || fallbackName).trim()
   const url = String(raw.url || raw.endpoint || '').trim()
-  const transport = normalizeTransport(raw.transport || raw.type, Boolean(url))
+  const transport = normalizeTransport(raw.transport || raw.type, Boolean(url), messages)
   const command = normalizeCommand(raw.command)
-  if (transport === 'stdio' && !command) throw new Error('stdio transport 必须提供 command。')
-  if (transport !== 'stdio' && !url) throw new Error(`${transport} transport 必须提供 URL。`)
+  if (transport === 'stdio' && !command) throw new Error(messages.stdioCommandRequired)
+  if (transport !== 'stdio' && !url) throw new Error(messages.transportUrlRequired(transport))
   return {
     server_id: normalizeIdentifier(String(raw.server_id || fallbackName)),
     display_name: displayName || fallbackName,
@@ -88,12 +107,16 @@ function normalizeMcpServer(raw: JsonObject, fallbackName: string): McpServerCon
   }
 }
 
-function normalizeTransport(value: unknown, hasUrl: boolean): McpServerConfig['transport'] {
+function normalizeTransport(
+  value: unknown,
+  hasUrl: boolean,
+  messages: McpConfigParserMessages,
+): McpServerConfig['transport'] {
   const transport = String(value || '').trim().toLowerCase().replace(/-/g, '_')
   if (!transport) return hasUrl ? 'streamable_http' : 'stdio'
   if (transport === 'http' || transport === 'streamablehttp') return 'streamable_http'
   if (transport === 'streamable_http' || transport === 'sse' || transport === 'stdio') return transport
-  throw new Error(`不支持的 transport：${transport}`)
+  throw new Error(messages.unsupportedTransport(transport))
 }
 
 function normalizeCommand(value: unknown): string {

@@ -97,6 +97,7 @@ import {
 import {
   applyToolApprovalRequested,
   applyToolApprovalResolved,
+  finalizeToolActivitiesForRequest,
   applyToolLifecycleEvent,
 } from './runtime/toolMutations'
 import {
@@ -675,6 +676,15 @@ export const useRuntimeStore = defineStore('runtime', {
         return
       }
       this._completeActiveRequest(event, completedStatus)
+      if (completedStatus === 'stopped') {
+        finalizeToolActivitiesForRequest(
+          this,
+          event.request_id || this.activeRequestId || null,
+          event.timestamp,
+          'cancelled',
+          event.payload?.stop_reason || event.payload?.reason || undefined,
+        )
+      }
       this.runStatus = completedStatus
       const requestId = event.request_id || this.activeRequestId || null
       const turn = ensureConversationTurn(this, requestId, event.timestamp)
@@ -702,6 +712,13 @@ export const useRuntimeStore = defineStore('runtime', {
         return
       }
       this._completeActiveRequest(event, 'cancelled')
+      finalizeToolActivitiesForRequest(
+        this,
+        event.request_id || this.activeRequestId || null,
+        event.timestamp,
+        'cancelled',
+        event.payload?.stop_reason || event.payload?.reason || undefined,
+      )
       this.runStatus = 'cancelled'
       const requestId = event.request_id || this.activeRequestId || null
       this.pendingInterrupt = null
@@ -728,6 +745,13 @@ export const useRuntimeStore = defineStore('runtime', {
         return
       }
       this._completeActiveRequest(event, 'failed')
+      finalizeToolActivitiesForRequest(
+        this,
+        event.request_id || this.activeRequestId || null,
+        event.timestamp,
+        'failed',
+        event.payload?.message || event.payload?.error || event.message || undefined,
+      )
       this.runStatus = 'failed'
       const requestId = event.request_id || this.activeRequestId || null
       this.pendingInterrupt = null

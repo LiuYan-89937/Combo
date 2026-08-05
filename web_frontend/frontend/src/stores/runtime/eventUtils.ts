@@ -29,6 +29,13 @@ const REQUEST_TERMINAL_EVENT_TYPES = new Set([
   'error',
   'interrupt_requested',
   'tool_approval_requested',
+  // A stopped run can finish its in-flight tool cancellation immediately
+  // after the stop request. These events are terminal for the individual
+  // tool and must pass the request stop fence so the UI can close the card.
+  'tool_call_completed',
+  'tool_call_failed',
+  'tool_contract_invalid',
+  'tool_observation_available',
 ])
 
 export function isRequestScopedEvent(eventType: string): boolean {

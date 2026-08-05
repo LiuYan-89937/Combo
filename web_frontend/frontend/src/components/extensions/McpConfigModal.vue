@@ -177,6 +177,7 @@ import {
   mcpConfigArgsText,
   mcpConfigRecordText,
   parseMcpConfigText,
+  type McpConfigParserMessages,
 } from './mcpConfigParser'
 
 const props = withDefaults(defineProps<{
@@ -219,6 +220,17 @@ interface McpFormDraft {
 
 const show = computed({ get: () => props.show, set: value => emit('update:show', value) })
 const { t } = useI18n()
+const mcpParserMessages = computed<McpConfigParserMessages>(() => ({
+  emptyConfig: t('extensions.mcpImportEmpty'),
+  jsonParseFailed: reason => t('extensions.mcpJsonParseFailed', { reason }),
+  noRecognizedServers: t('extensions.mcpNoRecognizedServers'),
+  serverEntryName: index => t('extensions.mcpServerEntryName', { index }),
+  invalidServer: (name, reason) => t('extensions.mcpServerEntryInvalid', { name, reason }),
+  duplicateServerIds: ids => t('extensions.mcpDuplicateServerIds', { ids }),
+  stdioCommandRequired: t('extensions.mcpStdioCommandRequired'),
+  transportUrlRequired: transport => t('extensions.mcpTransportUrlRequired', { transport }),
+  unsupportedTransport: transport => t('extensions.mcpUnsupportedTransport', { transport }),
+}))
 const formRef = ref<FormInst | null>(null)
 const mode = ref<'import' | 'manual'>('import')
 const importText = ref('')
@@ -303,7 +315,7 @@ function loadEditConfig() {
 }
 
 function parseImport() {
-  const result = parseMcpConfigText(importText.value)
+  const result = parseMcpConfigText(importText.value, mcpParserMessages.value)
   importedServers.value = result.servers
   importErrors.value = result.errors
 }
@@ -332,7 +344,9 @@ function parseEditedServer(): McpServerConfig | null {
   try {
     decoded = JSON.parse(importText.value)
   } catch (error) {
-    importErrors.value = [`JSON 解析失败：${error instanceof Error ? error.message : String(error)}`]
+    importErrors.value = [mcpParserMessages.value.jsonParseFailed(
+      error instanceof Error ? error.message : String(error),
+    )]
     return null
   }
   if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) {

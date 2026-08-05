@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from contextvars import ContextVar
+from contextvars import ContextVar, copy_context
 from dataclasses import dataclass
+import threading
 from typing import Any, Callable, Iterator, Mapping
 
 
@@ -37,6 +38,10 @@ _RUNTIME_RUN_CONTROL: ContextVar[Any | None] = ContextVar(
     "agentfactory_runtime_run_control",
     default=None,
 )
+
+
+class RuntimeToolExecutionCancelled(RuntimeError):
+    pass
 
 
 @contextmanager
@@ -121,3 +126,62 @@ def current_tool_output_session_id() -> str | None:
 
 def current_runtime_run_control() -> Any | None:
     return _RUNTIME_RUN_CONTROL.get()
+
+
+def register_runtime_tool_cancellation(callback: Callable[[], None]) -> Callable[[], None]:
+    control = current_runtime_run_control()
+    register = getattr(control, "register_tool_cancellation", None)
+    if callable(register):
+        return register(callback)
+    if control is not None and bool(getattr(control, "drain_requested", False)):
+        callback()
+    return lambda: None
+
+
+def execute_with_runtime_cancellation(operation: Callable[[], Any]) -> Any:
+    """Run a synchronous tool operation behind the shared run cancellation boundary.
+
+    Python cannot safely terminate an arbitrary worker thread. On cancellation the
+    graph is released immediately and the worker is detached; cancellable tools such
+    as MCP and shell also register their own hook to terminate external I/O.
+    """
+
+    control = current_runtime_run_control()
+    if control is None:
+        return operation()
+    if bool(getattr(control, "drain_requested", False)):
+        raise RuntimeToolExecutionCancelled(_runtime_cancel_reason(control))
+
+    completed = threading.Event()
+    cancelled = threading.Event()
+    outcome: dict[str, Any] = {}
+    context = copy_context()
+
+    def run() -> None:
+        try:
+            outcome["value"] = context.run(operation)
+        except BaseException as exc:
+            outcome["error"] = exc
+        finally:
+            completed.set()
+
+    unregister = register_runtime_tool_cancellation(cancelled.set)
+    worker = threading.Thread(target=run, name="agentfactory-tool-call", daemon=True)
+    worker.start()
+    try:
+        while not completed.is_set():
+            if cancelled.wait(timeout=0.05) or bool(getattr(control, "drain_requested", False)):
+                raise RuntimeToolExecutionCancelled(_runtime_cancel_reason(control))
+        if cancelled.is_set() or bool(getattr(control, "drain_requested", False)):
+            raise RuntimeToolExecutionCancelled(_runtime_cancel_reason(control))
+        error = outcome.get("error")
+        if error is not None:
+            raise error
+        return outcome.get("value")
+    finally:
+        unregister()
+
+
+def _runtime_cancel_reason(control: Any) -> str:
+    reason = str(getattr(control, "drain_reason", None) or "user_cancelled")
+    return f"Tool execution cancelled: {reason}"
