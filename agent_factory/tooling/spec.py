@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 SNAKE_CASE_ID = re.compile(r"^[a-z][a-z0-9_]*$")
 
 ToolObservationStatus = Literal[
+    "cancelled",
     "denied",
     "revision_requested",
     "resource_required",

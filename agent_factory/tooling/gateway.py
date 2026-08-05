@@ -9,10 +9,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from agent_factory.exception_details import exception_leaf_messages, exception_summary
 from agent_factory.tooling.execution_context import (
+    RuntimeToolExecutionCancelled,
     current_tool_approval_override,
     current_tool_call,
     current_tool_event_sink,
     current_tool_runtime_resource_overrides,
+    current_runtime_run_control,
+    execute_with_runtime_cancellation,
 )
 from agent_factory.tooling.output_store import (
     ToolOutputPolicy,
@@ -172,7 +175,18 @@ class ToolExecutionGateway:
             )
         self._emit_execution_started(arguments=arguments, risk=risk, tool_call_id=tool_call_id)
         try:
-            output = self.entrypoint(arguments=arguments, resources=tool_resources)
+            output = execute_with_runtime_cancellation(
+                lambda: self.entrypoint(arguments=arguments, resources=tool_resources)
+            )
+        except RuntimeToolExecutionCancelled as exc:
+            return self._observation(
+                "cancelled",
+                str(exc),
+                tool_call_id=tool_call_id,
+                arguments=arguments,
+                retryable=False,
+                errors=[str(exc)],
+            )
         except Exception as exc:
             errors = exception_leaf_messages(exc)
             return self._observation(
@@ -249,7 +263,11 @@ class ToolExecutionGateway:
                 arguments=self._public_arguments(arguments),
                 store=self.output_store,
                 policy=self.output_policy,
-                compression_model=get_compression_model(),
+                compression_model=(
+                    None
+                    if _runtime_stop_requested()
+                    else get_compression_model()
+                ),
                 compression_config=self.spec.output_compression,
             )
         )
@@ -484,6 +502,11 @@ class ToolExecutionGateway:
     def _public_arguments(self, arguments: dict[str, Any]) -> dict[str, Any]:
         redacted = redact_json_pointer_paths(arguments, self.spec.sensitive_argument_paths)
         return redacted if isinstance(redacted, dict) else {}
+
+
+def _runtime_stop_requested() -> bool:
+    control = current_runtime_run_control()
+    return bool(control is not None and getattr(control, "drain_requested", False))
 
 
 def default_tool_max_revisions() -> int:

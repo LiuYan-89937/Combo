@@ -29,6 +29,10 @@ const REQUEST_TERMINAL_EVENT_TYPES = new Set([
   'error',
   'interrupt_requested',
   'tool_approval_requested',
+  'tool_call_completed',
+  'tool_call_failed',
+  'tool_contract_invalid',
+  'tool_observation_available',
 ])
 
 export function isRequestScopedEvent(eventType: string): boolean {

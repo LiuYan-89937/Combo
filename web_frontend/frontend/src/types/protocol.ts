@@ -53,6 +53,7 @@ export type ChatMessagePartStatus =
   | 'streaming'
   | 'completed'
   | 'failed'
+  | 'cancelled'
   | 'stopped'
   | 'requested'
   | 'awaiting_approval'
@@ -322,7 +323,7 @@ export interface ToolActivity {
   nodeId: string | null
   toolCallId: string | null
   toolName: string
-  status: 'proposed' | 'approval' | 'started' | 'completed' | 'failed' | 'observed'
+  status: 'proposed' | 'approval' | 'started' | 'completed' | 'failed' | 'cancelled' | 'observed'
   approvalState: 'pending' | 'approved' | 'denied' | 'rejected' | null
   payload: Record<string, any>
 }

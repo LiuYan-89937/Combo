@@ -152,6 +152,7 @@ const displayName = computed(() => (
   presentation.value.labelKey ? t(presentation.value.labelKey as any) : props.part.toolName
 ))
 const state = computed(() => {
+  if (props.part.status === 'cancelled') return 'cancelled'
   if (props.part.error || props.part.status === 'failed') return 'failed'
   if (props.part.status === 'awaiting_approval') return 'approval'
   if (['running', 'streaming', 'requested'].includes(String(props.part.status || ''))) return 'running'
@@ -159,6 +160,7 @@ const state = computed(() => {
 })
 const active = computed(() => state.value === 'running' || state.value === 'approval')
 const statusLabel = computed(() => {
+  if (state.value === 'cancelled') return t('tool.status.cancelled')
   if (state.value === 'failed') return t('tool.status.failed')
   if (state.value === 'approval') return t('tool.status.waitingApproval')
   if (state.value === 'running') return t('tool.status.started')

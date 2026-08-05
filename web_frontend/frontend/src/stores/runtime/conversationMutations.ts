@@ -111,7 +111,7 @@ export function upsertToolMessagePart(
   ]
   const status = activity.status === 'failed'
     ? 'failed'
-    : ['completed', 'observed'].includes(activity.status)
+    : ['completed', 'cancelled', 'observed'].includes(activity.status)
       ? 'completed'
       : 'streaming'
 

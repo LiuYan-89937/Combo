@@ -89,7 +89,7 @@ export function toolCallPart(tool: ToolActivity): ChatMessagePart {
 }
 
 export function toolResultPart(tool: ToolActivity): ChatMessagePart | null {
-  if (!['completed', 'failed', 'observed'].includes(tool.status)) return null
+  if (!['completed', 'failed', 'cancelled', 'observed'].includes(tool.status)) return null
   return {
     id: `${tool.activityKey}:result`,
     type: 'tool_result',
@@ -97,7 +97,7 @@ export function toolResultPart(tool: ToolActivity): ChatMessagePart | null {
     callId: tool.toolCallId,
     output: tool.payload?.output || tool.payload?.result || tool.payload?.observation || tool.payload?.content || null,
     error: tool.payload?.error || null,
-    status: tool.status === 'failed' ? 'failed' : 'completed',
+    status: tool.status === 'failed' ? 'failed' : tool.status === 'cancelled' ? 'cancelled' : 'completed',
     createdAt: tool.createdAt,
     startedAt: tool.startedAt,
     updatedAt: tool.timestamp,
@@ -197,5 +197,6 @@ function toolPartStatus(tool: ToolActivity): ChatMessagePartStatus {
   if (tool.status === 'approval') return 'awaiting_approval'
   if (tool.status === 'started' || tool.status === 'proposed') return 'running'
   if (tool.status === 'failed') return 'failed'
+  if (tool.status === 'cancelled') return 'cancelled'
   return 'completed'
 }

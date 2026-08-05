@@ -2,9 +2,9 @@
   <div class="extension-workbench">
     <header class="workbench-header">
       <div>
-        <div class="eyebrow">EXTENSION REGISTRY</div>
+        <div class="eyebrow">{{ t('extensions.registryEyebrow') }}</div>
         <h1>{{ t('extensions.title') }}</h1>
-        <p>统一注册扩展，然后拖动到右侧 Agent 选择器完成装配。</p>
+        <p>{{ t('extensions.subtitle') }}</p>
       </div>
       <n-button quaternary circle class="refresh-button" @click="refreshExtensionWorkbench">
         <template #icon><n-icon><Refresh /></n-icon></template>
@@ -29,8 +29,8 @@
           <n-tab-pane name="mcp" :tab="`MCP · ${extensionStore.mcpItems.length}`">
             <div class="registry-toolbar">
               <div>
-                <strong>全局 MCP 注册</strong>
-                <span>配置只保存一次，可装配给任意 Agent</span>
+                <strong>{{ t('extensions.globalMcpTitle') }}</strong>
+                <span>{{ t('extensions.globalMcpHint') }}</span>
               </div>
               <n-button class="primary-action" @click="openAddMcp">
                 <template #icon><n-icon><Add /></n-icon></template>
@@ -58,7 +58,7 @@
               >
                 <div class="card-topline">
                   <div class="card-icon">MCP</div>
-                  <div class="drag-grip">DRAG</div>
+                  <div class="drag-grip">{{ t('extensions.drag') }}</div>
                 </div>
                 <div class="card-body">
                   <div class="card-title-row">
@@ -68,7 +68,7 @@
                   <code>{{ mcpCommandLine(item) }}</code>
                 </div>
                 <div class="card-actions">
-                  <n-button size="tiny" quaternary @click="handleTestMcp(item)">测试</n-button>
+                  <n-button size="tiny" quaternary @click="handleTestMcp(item)">{{ t('extensions.test') }}</n-button>
                   <n-dropdown :options="mcpActions" @select="(key) => handleMcpAction(key, item)">
                     <n-button size="tiny" quaternary circle @click.stop>
                       <n-icon><EllipsisHorizontal /></n-icon>
@@ -114,8 +114,8 @@
 
             <div class="registry-toolbar">
               <div>
-                <strong>全局 Skill 注册</strong>
-                <span>Skill 内容集中管理，Agent 仅保存绑定</span>
+                <strong>{{ t('extensions.globalSkillTitle') }}</strong>
+                <span>{{ t('extensions.globalSkillHint') }}</span>
               </div>
               <n-button class="primary-action" @click="openAddSkill">
                 <template #icon><n-icon><Add /></n-icon></template>
@@ -143,7 +143,7 @@
               >
                 <div class="card-topline">
                   <div class="card-icon">SKILL</div>
-                  <div class="drag-grip">DRAG</div>
+                  <div class="drag-grip">{{ t('extensions.drag') }}</div>
                 </div>
                 <div class="card-body">
                   <div class="card-title-row"><strong>{{ item.name }}</strong></div>
@@ -165,10 +165,10 @@
       <section class="assembly-panel" :class="{ 'is-dragging': draggingExtension }">
         <div class="assembly-heading">
           <div>
-            <div class="eyebrow">AGENT ASSEMBLY</div>
-            <h2>选择 Agent</h2>
+            <div class="eyebrow">{{ t('extensions.assemblyEyebrow') }}</div>
+            <h2>{{ t('extensions.selectAgent') }}</h2>
           </div>
-          <span v-if="draggingExtension" class="drop-hint">拖到目标 Agent</span>
+          <span v-if="draggingExtension" class="drop-hint">{{ t('extensions.dragToAgent') }}</span>
         </div>
 
         <div class="picker-stage">
@@ -210,15 +210,15 @@
                 >
                   <span class="agent-index">{{ String(index + 1).padStart(2, '0') }}</span>
                   <span class="agent-name">{{ target.name }}</span>
-                  <span v-if="dragHoverTargetId === target.id" class="drop-action">释放添加</span>
-                  <span v-else-if="recentlyBoundTargetId === target.id" class="drop-action">已添加</span>
+                  <span v-if="dragHoverTargetId === target.id" class="drop-action">{{ t('extensions.releaseToAdd') }}</span>
+                  <span v-else-if="recentlyBoundTargetId === target.id" class="drop-action">{{ t('extensions.added') }}</span>
                   <span v-else class="agent-count">{{ targetExtensionCount(target.id) }}</span>
                 </button>
               </template>
               <div class="bound-popover">
                 <div class="bound-title">
                   <strong>{{ target.name }}</strong>
-                  <span>已装配扩展</span>
+                  <span>{{ t('extensions.boundExtensions') }}</span>
                 </div>
                 <div v-if="targetExtensions(target.id).length" class="bound-list">
                   <div v-for="item in targetExtensions(target.id)" :key="extensionKey(item)">
@@ -233,20 +233,20 @@
                         String(item.payload?.server_id || item.payload?.skill_id || ''),
                       )"
                     >
-                      移除
+                      {{ t('extensions.removeBinding') }}
                     </n-button>
                   </div>
                 </div>
-                <n-empty v-else size="small" description="尚未装配扩展" />
+                <n-empty v-else size="small" :description="t('extensions.noBoundExtensions')" />
               </div>
             </n-popover>
             <div class="picker-spacer" aria-hidden="true" />
           </div>
 
           <div class="selected-target-summary">
-            <span>当前目标</span>
+            <span>{{ t('extensions.currentTarget') }}</span>
             <strong>{{ selectedAssemblyTarget?.name || 'Agent' }}</strong>
-            <small>{{ targetExtensionCount(selectedAssemblyTarget?.id || '') }} 个扩展</small>
+            <small>{{ t('extensions.extensionCount', { count: targetExtensionCount(selectedAssemblyTarget?.id || '') }) }}</small>
             <div class="selected-extension-list">
               <span
                 v-for="item in targetExtensions(selectedAssemblyTarget?.id || '')"
@@ -255,14 +255,14 @@
                 {{ item.name }}
               </span>
               <span v-if="!targetExtensions(selectedAssemblyTarget?.id || '').length" class="empty-selection">
-                暂无扩展
+                {{ t('extensions.noExtensions') }}
               </span>
             </div>
           </div>
         </div>
 
         <footer class="assembly-footer">
-          拖拽后立即保存；进行中的任务保持不变，下一次运行使用最新装配。
+          {{ t('extensions.assemblySaveHint') }}
         </footer>
       </section>
     </main>
@@ -301,7 +301,7 @@
       >
         <span>{{ showcaseFlight.kind === 'mcp' ? 'MCP' : 'SKILL' }}</span>
         <strong>{{ showcaseFlight.name }}</strong>
-        <small>装配中</small>
+        <small>{{ t('extensions.bindingInProgress') }}</small>
       </div>
     </Teleport>
   </div>

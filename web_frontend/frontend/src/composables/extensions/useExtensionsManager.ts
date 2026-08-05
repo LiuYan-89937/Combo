@@ -65,14 +65,14 @@ export function useExtensionsManager() {
         packageId: '',
         resourceMode: 'create_agent',
         name: t('resource.manufacturing'),
-        glyph: '制',
+        glyph: t('extensions.manufacturingGlyph'),
       },
       {
         id: 'system:evolve_agent',
         packageId: '',
         resourceMode: 'evolve_agent',
         name: t('resource.evolution'),
-        glyph: '进',
+        glyph: t('extensions.evolutionGlyph'),
       },
     ]
     const packages = agentStore.agentPackages.map((pkg) => ({
@@ -109,9 +109,21 @@ export function useExtensionsManager() {
     Array.isArray(extensionStore.skillHubResult?.items) ? extensionStore.skillHubResult.items : []
   ))
   const skillHubCliAvailable = computed(() => extensionStore.skillHubResult?.cli_available === true)
-  const skillHubStatusMessage = computed(() => String(
-    extensionStore.skillHubResult?.message || t('extensions.skillHubStatusUnknown'),
-  ))
+  const skillHubStatusMessage = computed(() => {
+    const result = extensionStore.skillHubResult
+    if (!result) return t('extensions.skillHubStatusUnknown')
+    if (result.action === 'search') {
+      const count = Array.isArray(result.items) ? result.items.length : 0
+      return t('extensions.skillHubSearchCompleted', { count })
+    }
+    if (result.cli_available === true) {
+      const version = String(result.cli_version || '').trim()
+      return version
+        ? t('extensions.skillHubAvailableVersion', { version })
+        : t('extensions.skillHubAvailable')
+    }
+    return t('extensions.skillHubMissing')
+  })
   const permissionModeOptions = computed(() => [
     { label: t('permissions.mode.strict'), value: 'strict' },
     { label: t('permissions.mode.allowBelowHigh'), value: 'allow_below_high' },
@@ -496,7 +508,7 @@ export function useExtensionsManager() {
   function removalConfirmation(item: ExtensionItemView, base: string): string {
     const count = extensionUsageCount(item)
     if (!count) return base
-    return `${base}\n当前有 ${count} 个 Agent 正在使用，删除后会同时失效。`
+    return `${base}\n${t('extensions.usedByAgentsWarning', { count })}`
   }
 
   onMounted(() => {
