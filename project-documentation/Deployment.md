@@ -1,5 +1,3 @@
-[English](Deployment.md) | [简体中文](Deployment.zh-CN.md)
-
 # FastAgentFactory Deployment and Acceptance Guide
 
 This guide describes the reproducible deployment used for the submission. FastAgentFactory supports two equivalent topologies:

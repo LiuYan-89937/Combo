@@ -1,5 +1,3 @@
-[English](README.md) | [简体中文](README.zh-CN.md)
-
 # Project Documentation
 
 This directory contains the Track 2 project specification and its supporting documents. English is the default submission language; every first-party document provides a direct Simplified Chinese counterpart.

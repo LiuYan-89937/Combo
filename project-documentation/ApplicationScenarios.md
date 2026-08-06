@@ -1,5 +1,3 @@
-[English](ApplicationScenarios.md) | [简体中文](ApplicationScenarios.zh-CN.md)
-
 # Application Scenarios
 
 FastAgentFactory focuses on a fully local personal AI assistant that can maintain context, retrieve private knowledge, call real tools, coordinate specialist agents, and produce durable artifacts.

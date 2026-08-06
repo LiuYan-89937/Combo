@@ -1,5 +1,3 @@
-[English](CoreCapabilities.md) | [简体中文](CoreCapabilities.zh-CN.md)
-
 # Core Capabilities
 
 ## 1. Agent Lifecycle
@@ -17,8 +15,6 @@ Evolution starts from an existing published package, selected trace evidence, fa
 Published packages expose configuration, runtime state, resources, model/tool descriptions, context policy, memory write interval, sessions, workspaces, and artifacts. Package initialization is idempotent and single-flight, while conversation data remains session-isolated.
 
 The manufacturing workspace below exposes stage progress, resource declarations, tool validation, and publication state. The UI is an observability surface; it does not bypass runtime validation.
-
-![Agent manufacturing workspace](assets/screenshots/agent-authoring.png)
 
 ## 2. RuntimeKernel and Graph Orchestration
 
@@ -83,8 +79,6 @@ Knowledge sources can be attached at package or session scope. The runtime perfo
 
 The knowledge UI exposes source registration, background ingestion state, and document access. A source becomes retrievable only after ingestion completes and the relevant knowledge contract is active.
 
-![Knowledge management and ingestion entry point](assets/screenshots/capability-knowledge.png)
-
 ## 8. Resources and Secrets
 
 Resource descriptors declare structured value schemas, validation constraints, and consuming tools. Users configure each resource from package details. Values are encrypted at rest using the local master key and are not written back into AgentPackage source files. Configured values can be revealed in the authorized UI while password controls remain visually masked by default.
@@ -94,8 +88,6 @@ Resource descriptors declare structured value schemas, validation constraints, a
 Scheduled tasks use stable task identities and dedicated execution records. A rerun replaces the failed active attempt instead of accumulating duplicate live sessions, and retry guidance can include the prior failure reason. Scheduled activity is visible from every session through a dedicated view; an active related chat can receive status cards.
 
 The scheduled-task view selects an execution target from the active context and exposes task creation, status, and run-history entry points. Triggering, leases, and failure recovery remain owned by the Scheduler Runtime.
-
-![Scheduled-task creation and management](assets/screenshots/capability-scheduler.png)
 
 ## 10. Artifacts and Delivery
 
@@ -117,8 +109,6 @@ The collaboration system provides agent search, semantic task creation, worker s
 
 The collaboration view presents the main agent, task state, worker activity, recent reasoning summaries, and delivery entry points so parallel execution and semantic acceptance remain observable.
 
-![Multi-agent collaboration and task observability](assets/screenshots/collaboration.png)
-
 ## 13. Runtime Isolation and Extensions
 
 AgentPackage sessions run as supervised native subprocesses. Logical ownership separates package environments, sessions, workspaces, SQLite connections, tool outputs, and artifacts. Dependency environments are resolved by lock identity and reused safely without sharing writable runtime databases. This is an application-level isolation boundary rather than a kernel security sandbox.
@@ -126,8 +116,6 @@ AgentPackage sessions run as supervised native subprocesses. Logical ownership s
 Extensions remain declarative through package contracts and installed registries. The platform avoids package-specific branches in the core runtime.
 
 The extension-management view brings MCP servers, Skill extensions, and tool permissions into one surface. The active context supplies the default target while users can select another target explicitly; connection tests and enablement still pass through Gateway resource and permission boundaries.
-
-![MCP, Skill, and tool-permission extension management](assets/screenshots/capability-extensions.png)
 
 ## 14. Local and Remote Inference
 

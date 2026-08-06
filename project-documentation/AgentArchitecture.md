@@ -1,5 +1,3 @@
-[English](AgentArchitecture.md) | [简体中文](AgentArchitecture.zh-CN.md)
-
 # FastAgentFactory Agent Architecture
 
 ![FastAgentFactory Agent architecture](assets/diagrams/fastagentfactory-agent-architecture-native.png)

@@ -1,5 +1,3 @@
-[English](SUPPLEMENTARY_MATERIALS.md) | [简体中文](SUPPLEMENTARY_MATERIALS.zh-CN.md)
-
 # FastAgentFactory Supplementary Materials
 
 This submission uses a project poster as its supplementary material.

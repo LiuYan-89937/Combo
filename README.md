@@ -1,5 +1,3 @@
-[English](README.md) | [简体中文](README.zh-CN.md)
-
 # FastAgentFactory
 
 > A collaborative AI assistant built on a multi-Agent platform.

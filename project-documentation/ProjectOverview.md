@@ -1,5 +1,3 @@
-[English](ProjectOverview.md) | [简体中文](ProjectOverview.zh-CN.md)
-
 # FastAgentFactory Project Specification
 
 ## Project Positioning

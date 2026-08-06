@@ -1,5 +1,3 @@
-[English](ROCmOptimizations.md) | [简体中文](ROCmOptimizations.zh-CN.md)
-
 # AMD RDNA3 Inference Optimization
 
 ## Summary
@@ -152,12 +150,6 @@ The latest experiment group, completed on July 22, 2026, used the same long prom
 | Error rate | 0% | 0% | Equal |
 
 The accurate conclusion is: **with MTP enabled, AMD Decode is effectively tied with Official but retains a small `0.17%` gain; this is not a significant Decode improvement.** The clearer AMD gains are in Prompt/Prefill and two-client aggregate throughput. MTP changes per-token MMVQ execution into proposal generation plus multi-token target validation, and AMD's acceptance rate was 1.92 percentage points lower in this group. This dilutes the previously measured `5.64%` single-token Decode gain without MTP. The results are not contradictory: `5.64%` describes autoregressive Decode with MTP disabled, while `0.17%` describes the latest complete MTP-enabled service path.
-
-![Ten-round Official and AMD paired experiment history](../assets/screenshots/benchmark-experiment-history.png)
-
-![Prefill HIP kernel hotspots](../assets/screenshots/benchmark-prefill-hotspots.png)
-
-![AMD custom-kernel hits and Decode hotspots](../assets/screenshots/benchmark-decode-kernel-hits.png)
 
 The correctness check hashed the complete `reasoning_content + content` output. AMD MTP on/off and Official MTP on matched for this run, while Official without MTP diverged under greedy execution. The result is retained as a floating-point/batching-path boundary; it is not claimed that all four paths are bitwise identical.
 
