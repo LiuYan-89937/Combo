@@ -100,10 +100,13 @@ const compressionText = computed(() => {
     })
   }
   if (activity.status === 'completed') {
+    const originalCount = Number(payload.original_message_count || 0)
+    const compressedCount = Number(payload.compressed_message_count || 0)
+    const compactedCount = optionalNumber(payload.compacted_message_count)
     return t('status.contextCompressionCompleted', {
       before: formatCompactTokenCount(optionalNumber(payload.token_estimate_before)),
       after: formatCompactTokenCount(optionalNumber(payload.token_estimate_after)),
-      count: Number(payload.original_message_count || 0) - Number(payload.compressed_message_count || 0),
+      count: compactedCount ?? Math.max(0, originalCount - compressedCount + 1),
     })
   }
   if (activity.status === 'failed') {
@@ -136,11 +139,10 @@ function optionalNumber(value: unknown): number | null {
 .context-progress-trigger svg { position: absolute; inset: 2px; width: 34px; height: 34px; transform: rotate(-90deg); overflow: visible; }
 .context-progress-trigger circle { fill: none; stroke-width: 2.4; }
 .ring-track { stroke: var(--app-divider); }
-.ring-value { stroke: var(--app-text); stroke-linecap: round; transition: stroke-dasharray .48s cubic-bezier(.16, 1, .3, 1); }
+.ring-value { transform-box: fill-box; transform-origin: center; stroke: var(--app-text); stroke-linecap: round; transition: stroke-dasharray .48s cubic-bezier(.16, 1, .3, 1); }
 .ring-threshold { stroke: var(--app-warning); stroke-width: 4 !important; stroke-dasharray: 1.5 98.5; transform-origin: 18px 18px; }
 .ring-label { position: relative; z-index: 1; font-size: 9px; font-weight: 700; }
 .is-compressing .ring-value { stroke-dasharray: 18 82 !important; animation: context-ring-spin 1.1s linear infinite; }
-.is-compressing { animation: context-control-breathe 1.8s ease-in-out infinite; }
 .context-progress-bubble { width: 280px; padding: 5px 3px; }
 .bubble-heading, .bubble-meta { display: flex; justify-content: space-between; gap: 12px; }
 .bubble-heading { align-items: baseline; font-size: 12px; }
@@ -153,7 +155,6 @@ function optionalNumber(value: unknown): number | null {
 .compression-copy.failed { color: var(--app-error); }
 .compression-copy.completed { color: var(--app-success); }
 @keyframes context-ring-spin { to { transform: rotate(360deg); } }
-@keyframes context-control-breathe { 50% { opacity: .72; } }
 @keyframes context-dot-pulse { 50% { transform: scale(1.65); opacity: .45; } }
-@media (prefers-reduced-motion: reduce) { .context-progress-trigger, .ring-value, .is-compressing, .compression-copy i { animation: none; transition: none; } }
+@media (prefers-reduced-motion: reduce) { .context-progress-trigger, .ring-value, .compression-copy i { animation: none; transition: none; } }
 </style>

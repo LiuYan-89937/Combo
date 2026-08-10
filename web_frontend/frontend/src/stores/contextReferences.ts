@@ -51,5 +51,5 @@ function normalizedScope(scope: string): string {
 }
 
 function referenceSignature(reference: ContextReferenceInput): string {
-  return [reference.source_kind, reference.name, reference.content || ''].join('\u0000')
+  return [reference.source_kind, reference.name, reference.attachment_id || reference.content || ''].join('\u0000')
 }

@@ -178,17 +178,23 @@ async function handleDelete() {
   emit('deleted', props.file.path)
 }
 
-function addToReferences() {
-  const reference = workspaceFileContextReference(props.file)
-  if (!reference) {
-    message.warning(t('references.unsupportedFile'))
-    return
+async function addToReferences() {
+  try {
+    if (!rawFileUrl.value) throw new Error(t('references.unsupportedFile'))
+    const reference = await workspaceFileContextReference({
+      name: props.file.name,
+      path: props.file.path || props.file.name,
+      mimeType: props.file.mimeType,
+      rawUrl: rawFileUrl.value,
+    })
+    if (!referenceStore.add(reference)) {
+      message.warning(t('references.limitReached'))
+      return
+    }
+    message.success(t('references.added'))
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : String(error))
   }
-  if (!referenceStore.add(reference)) {
-    message.warning(t('references.limitReached'))
-    return
-  }
-  message.success(t('references.added'))
 }
 
 function base64Blob(content: string, mimeType: string): Blob {

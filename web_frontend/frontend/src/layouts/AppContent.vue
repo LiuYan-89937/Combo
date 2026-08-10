@@ -19,6 +19,7 @@
             </transition>
           </router-view>
         </main>
+        <BrowserPanel />
       </div>
     </div>
 
@@ -51,6 +52,7 @@ import SettingsDrawer from '@/components/common/SettingsDrawer.vue'
 import DebugDrawer from '@/components/common/DebugDrawer.vue'
 import SchedulerActivityDrawer from '@/components/scheduler/SchedulerActivityDrawer.vue'
 import EventStreamManager from '@/components/common/EventStreamManager.vue'
+import BrowserPanel from '@/components/browser/BrowserPanel.vue'
 
 withDefaults(defineProps<{
   runtimeServicesEnabled?: boolean

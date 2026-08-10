@@ -137,6 +137,7 @@ class ContextCompressionReport(BaseModel):
     node_id: str | None = None
     original_message_count: int = 0
     compressed_message_count: int = 0
+    compacted_message_count: int = 0
     token_estimate_before: int = 0
     token_estimate_after: int = 0
     token_count_method: str | None = None

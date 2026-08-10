@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendCommand
 from agent_factory.sqlite_runtime import sqlite_lifecycle_available
+from web_frontend.backend.attachment_upload_store import AttachmentUploadError, attachment_upload_store
 from web_frontend.backend.runtime_bridge import RuntimeBridge
 
 
@@ -73,7 +74,13 @@ def create_runtime_router(runtime_bridge: RuntimeBridge, logger: logging.Logger)
             command = FactoryFrontendCommand.model_validate(payload.get("command", payload))
         except ValidationError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        await runtime_bridge.send_frontend_command(command)
+        try:
+            runtime_command = command.model_copy(
+                update={"payload": attachment_upload_store().resolve_command_payload(command.payload)}
+            )
+        except AttachmentUploadError as exc:
+            raise HTTPException(status_code=410, detail=str(exc)) from exc
+        await runtime_bridge.send_frontend_command(runtime_command)
         logger.info("HTTP command sent: %s", command.type)
         return {"accepted": True, "command": command.model_dump(mode="json")}
 

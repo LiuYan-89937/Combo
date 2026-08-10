@@ -4,6 +4,7 @@ from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
+from agent_factory.models.anthropic_compat import LocalImageChatAnthropic
 from agent_factory.models.adapters.base import (
     reasoning_budget_tokens,
     reasoning_effort,
@@ -18,8 +19,6 @@ class AnthropicChatAdapter:
         self.profile = profile
 
     def create_chat_model(self, settings: Any) -> BaseChatModel:
-        from langchain_anthropic import ChatAnthropic
-
         kwargs: dict[str, Any] = {
             "model_name": settings.model,
             "api_key": settings.api_key,
@@ -41,7 +40,7 @@ class AnthropicChatAdapter:
         if effort:
             kwargs["effort"] = effort
 
-        return ChatAnthropic(**kwargs)
+        return LocalImageChatAnthropic(**kwargs)
 
 
 def _thinking_payload(settings: Any) -> dict[str, Any]:

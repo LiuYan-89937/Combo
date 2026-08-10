@@ -35,7 +35,9 @@ from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontend
 from agent_factory.paths import factory_artifact_path
 from agent_factory.tooling.skillhub import ensure_global_skillhub_cli
 from web_frontend.backend.routes.agent_packages import create_agent_package_router
+from web_frontend.backend.routes.attachments import create_attachment_router
 from web_frontend.backend.routes.background_tasks import create_background_task_router
+from web_frontend.backend.routes.browser_views import create_browser_view_router
 from web_frontend.backend.routes.agent_group import create_agent_group_router
 from web_frontend.backend.routes.agent_hub import create_agent_hub_router
 from web_frontend.backend.routes.create_agent import create_create_agent_router
@@ -94,8 +96,10 @@ app.add_middleware(
 )
 
 app.include_router(create_runtime_router(runtime_bridge, logger))
+app.include_router(create_attachment_router())
 app.include_router(create_agent_package_router(runtime_bridge, logger))
 app.include_router(create_background_task_router())
+app.include_router(create_browser_view_router(logger))
 app.include_router(
     create_agent_hub_router(runtime_factory=lambda: _agent_package_runtime(runtime_bridge))
 )

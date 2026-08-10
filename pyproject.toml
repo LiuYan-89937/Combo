@@ -20,8 +20,11 @@ dependencies = [
     "langgraph-checkpoint-sqlite>=3.1,<4",
     "langgraph-store-mongodb>=0.3,<1",
     "ebooklib>=0.19",
-    "markitdown[docx,outlook,pptx,xls,xlsx]>=0.1.6,<0.2",
+    "mammoth>=1.9,<2",
+    "markdownify>=1.2,<2",
     "odfpy>=1.4,<2",
+    "olefile>=0.47,<1",
+    "openpyxl>=3.1,<4",
     "apscheduler>=3.11,<4",
     "jsonschema>=4.23",
     "mcp>=1.0",
@@ -29,9 +32,11 @@ dependencies = [
     "pydantic>=2.8",
     "playwright>=1.54,<2",
     "pypdf>=4.0",
+    "python-pptx>=1.0,<2",
     "ruamel.yaml>=0.18",
     "langchain-anthropic>=1.1,<2",
     "striprtf>=0.0.29,<1",
+    "xlrd>=2.0,<3",
 ]
 
 [build-system]

@@ -195,9 +195,9 @@ def install_dependencies(python_dir: Path, project_root: Path):
         )
         browser_dir = python_dir / "playwright-browsers"
         browser_environment = {**os.environ, "PLAYWRIGHT_BROWSERS_PATH": str(browser_dir)}
-        print("安装 Chromium 浏览器运行时...")
+        print("安装 Chromium headless shell...")
         subprocess.run(
-            [str(python_exe), "-m", "playwright", "install", "chromium"],
+            [str(python_exe), "-m", "playwright", "install", "--only-shell", "chromium"],
             check=True,
             env=browser_environment,
         )

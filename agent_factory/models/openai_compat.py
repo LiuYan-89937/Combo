@@ -6,6 +6,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 from langchain_openai import ChatOpenAI
 
+from agent_factory.model_image_inputs import materialize_local_image_messages
 from agent_factory.models.reasoning import (
     coerce_reasoning_content,
     reasoning_content_from_blocks,
@@ -21,11 +22,15 @@ class ThinkingCompatibleChatOpenAI(ChatOpenAI):
     preserve_reasoning_content: bool = False
 
     def _get_request_payload(self, input_: Any, *, stop: list[str] | None = None, **kwargs: Any) -> dict:
-        payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+        source_messages = self._convert_input(input_).to_messages()
+        payload = super()._get_request_payload(
+            materialize_local_image_messages(source_messages),
+            stop=stop,
+            **kwargs,
+        )
         _normalize_tool_call_arguments_payload(payload.get("messages"))
         if not self.preserve_reasoning_content:
             return payload
-        source_messages = self._convert_input(input_).to_messages()
         payload_messages = payload.get("messages")
         if isinstance(payload_messages, list):
             _patch_reasoning_content_payload(payload_messages, source_messages)

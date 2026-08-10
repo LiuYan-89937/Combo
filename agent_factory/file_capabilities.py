@@ -35,7 +35,6 @@ OFFICE_EXTENSIONS = (
     | RICH_TEXT_EXTENSIONS
     | EBOOK_EXTENSIONS
 )
-MARKITDOWN_EXTENSIONS = DOCX_EXTENSIONS | {".pptx", ".xlsx", ".xls", ".msg"}
 LIBREOFFICE_EXTENSIONS = LEGACY_WORD_EXTENSIONS | LEGACY_PRESENTATION_EXTENSIONS
 SUPPORTED_FILE_EXTENSIONS = TEXT_EXTENSIONS | PDF_EXTENSIONS | OFFICE_EXTENSIONS | EMAIL_EXTENSIONS
 
@@ -99,9 +98,17 @@ def file_processing_capabilities() -> FileProcessingCapabilities:
     if _module_available("pypdf"):
         knowledge.update(PDF_EXTENSIONS)
         backends.append("pypdf")
-    if _module_available("markitdown"):
-        knowledge.update(MARKITDOWN_EXTENSIONS)
-        backends.append("markitdown")
+    office_backends = (
+        ("mammoth", DOCX_EXTENSIONS),
+        ("pptx", {".pptx"}),
+        ("openpyxl", {".xlsx"}),
+        ("xlrd", {".xls"}),
+        ("olefile", {".msg"}),
+    )
+    for module_name, extensions in office_backends:
+        if _module_available(module_name):
+            knowledge.update(extensions)
+            backends.append(module_name)
     if _module_available("striprtf.striprtf"):
         knowledge.update(RICH_TEXT_EXTENSIONS)
         backends.append("striprtf")

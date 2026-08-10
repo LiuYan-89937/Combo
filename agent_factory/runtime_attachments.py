@@ -14,6 +14,7 @@ from typing import Any
 from agent_factory.document_processing import parse_file, parse_url
 from agent_factory.file_capabilities import accepted_attachment_extensions
 from agent_factory.file_utils import file_sha256
+from agent_factory.model_image_inputs import local_image_content_block
 
 
 ATTACHMENT_INPUT_DIR = "input_files"
@@ -246,6 +247,8 @@ def _import_local_attachment_item(
     base_dir: Path | None = None,
     scope: str = "run",
     policy: AttachmentImportPolicy,
+    source_kind: str = "local_path",
+    mime_type: str | None = None,
 ) -> _ImportedLocalAttachment:
     prepared = _prepare_local_attachment_source(raw_path, base_dir=base_dir)
     _enforce_import_policy([prepared], policy=policy)
@@ -255,6 +258,8 @@ def _import_local_attachment_item(
         runtime_path_root=runtime_path_root,
         scope=scope,
         policy=policy,
+        source_kind=source_kind,
+        mime_type=mime_type,
     )
 
 
@@ -265,6 +270,8 @@ def _copy_prepared_local_attachment(
     runtime_path_root: str,
     scope: str,
     policy: AttachmentImportPolicy,
+    source_kind: str,
+    mime_type: str | None,
 ) -> _ImportedLocalAttachment:
     safe_name = _safe_filename(prepared.source.name)
     _validate_attachment_filename(safe_name)
@@ -284,15 +291,17 @@ def _copy_prepared_local_attachment(
         runtime_path_root=runtime_path_root,
         filename=target.name,
     )
-    mime_type, _ = mimetypes.guess_type(safe_name)
+    resolved_mime_type = mime_type
+    if not resolved_mime_type:
+        resolved_mime_type, _ = mimetypes.guess_type(safe_name)
     extracted = _extract_file_text(target, policy=policy)
     return _ImportedLocalAttachment(
         ref=RuntimeAttachmentRef(
             attachment_id=_attachment_id_for(runtime_path=runtime_path, digest=digest),
             display_name=target.name,
-            source_kind="local_path",
+            source_kind=source_kind,
             runtime_path=runtime_path,
-            mime_type=mime_type,
+            mime_type=resolved_mime_type,
             size_bytes=size_bytes,
             sha256=digest,
             scope=scope,
@@ -385,6 +394,8 @@ def _import_payload_attachment(
                     base_dir=base_dir,
                     scope=scope,
                     policy=policy,
+                    source_kind=declared_source_kind or "uploaded_file",
+                    mime_type=mime_type,
                 )
         if raw:
             data = _decode_base64_payload(raw)
@@ -563,12 +574,10 @@ def image_attachment_content_parts(attachments: Any) -> list[dict[str, Any]]:
         if not path:
             continue
         parts.append(
-            {
-                "type": "image_url",
-                "image_url": {
-                    "url": _image_data_url(path=Path(path), mime_type=mime_type or "image/png"),
-                },
-            }
+            local_image_content_block(
+                path=_validated_image_path(Path(path)),
+                mime_type=mime_type or "image/png",
+            )
         )
     return parts
 
@@ -680,14 +689,14 @@ def _is_image_mime_type(mime_type: str) -> bool:
     return mime_type.lower().startswith("image/")
 
 
-def _image_data_url(*, path: Path, mime_type: str) -> str:
+def _validated_image_path(path: Path) -> Path:
     if not path.is_file():
         raise AttachmentImportError(
             f"image attachment file does not exist: {path}",
             path=str(path),
             code="runtime_image_attachment_missing",
         )
-    return f"data:{mime_type};base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"
+    return path
 
 
 def time_named_attachment_scope(now: datetime | None = None) -> str:

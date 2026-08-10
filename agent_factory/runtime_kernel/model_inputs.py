@@ -316,19 +316,27 @@ def _with_model_compatible_tool_content(
     *,
     image_input_enabled: bool,
 ) -> list[BaseMessage]:
+    latest_ai_index = max(
+        (index for index, message in enumerate(messages) if isinstance(message, AIMessage)),
+        default=-1,
+    )
     compatible: list[BaseMessage] = []
-    for message in messages:
-        if image_input_enabled and isinstance(message, ToolMessage):
+    for index, message in enumerate(messages):
+        if (
+            image_input_enabled
+            and isinstance(message, ToolMessage)
+            and index > latest_ai_index
+        ):
             compatible.append(_with_tool_image_content(message))
             continue
         content = getattr(message, "content", None)
-        if not isinstance(message, ToolMessage) or not isinstance(content, list):
+        if not isinstance(content, list):
             compatible.append(message)
             continue
         retained = [
             block
             for block in content
-            if not isinstance(block, dict) or str(block.get("type") or "") != "image_url"
+            if not _is_image_content_block(block)
         ]
         normalized_content: str | list[Any]
         if len(retained) == 1 and isinstance(retained[0], dict) and retained[0].get("type") == "text":
@@ -337,6 +345,16 @@ def _with_model_compatible_tool_content(
             normalized_content = retained
         compatible.append(message.model_copy(update={"content": normalized_content}))
     return compatible
+
+
+def _is_image_content_block(block: Any) -> bool:
+    if not isinstance(block, dict):
+        return False
+    block_type = str(block.get("type") or "").strip()
+    if block_type in {"image", "image_url", "input_image"}:
+        return True
+    source = block.get("source")
+    return isinstance(source, dict) and str(source.get("media_type") or "").startswith("image/")
 
 
 def _with_tool_image_content(message: ToolMessage) -> ToolMessage:
@@ -449,7 +467,7 @@ def _message_image_parts(message: Any) -> list[dict[str, Any]]:
         return []
     parts: list[dict[str, Any]] = []
     for item in content:
-        if isinstance(item, dict) and str(item.get("type") or "") == "image_url":
+        if _is_image_content_block(item):
             parts.append(item)
     return parts
 

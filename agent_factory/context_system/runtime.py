@@ -22,6 +22,7 @@ from agent_factory.context_system.token_counter import (
     ModelContextLimits,
     TokenCountResult,
     count_messages_tokens,
+    context_window_payload,
     context_limits_with_overrides,
     model_context_limits as resolve_model_context_limits,
 )
@@ -111,6 +112,28 @@ class ContextSystemRuntime:
             node_id=node_id,
             payload=compression_report.model_dump(mode="json"),
         )
+        if compression_report.status == "completed":
+            working_state = _state_with_compressed_token_budget(
+                state=working_state,
+                compression_report=compression_report,
+            )
+            emit_context_event(
+                services=services,
+                state=working_state,
+                event_type="context_window_updated",
+                node_id=node_id,
+                payload=context_window_payload(
+                    node_id=node_id,
+                    token_count=compression_report.token_estimate_after,
+                    token_count_method=(
+                        compression_report.token_count_method or "compression_estimate"
+                    ),
+                    compression_threshold_tokens=active_limits.compression_trigger_tokens,
+                    context_window_tokens=active_limits.context_window_tokens,
+                    model_role="main",
+                    source="context_system.compression",
+                ),
+            )
         if compression_report.status == "failed":
             raise RuntimeError(compression_report.error or "context compression failed")
         messages_changed = compression_messages != working_messages
@@ -462,7 +485,8 @@ def _effective_context_token_count(
 ) -> TokenCountResult:
     budget = dict(getattr(getattr(state, "context", None), "token_budget", {}) or {})
     value = (
-        budget.get("last_provider_context_tokens_after_call")
+        budget.get("effective_context_tokens")
+        or budget.get("last_provider_context_tokens_after_call")
         or budget.get("last_provider_total_tokens")
         or budget.get("last_provider_input_tokens")
     )
@@ -473,9 +497,23 @@ def _effective_context_token_count(
         return measured_count
     return TokenCountResult(
         token_count=token_count,
-        method="previous_provider_usage_after_call",
+        method=str(budget.get("effective_context_source") or "previous_provider_usage_after_call"),
         model_role=str(budget.get("last_provider_model_role") or measured_count.model_role or "main"),
     )
+
+
+def _state_with_compressed_token_budget(
+    *,
+    state: Any,
+    compression_report: ContextCompressionReport,
+) -> Any:
+    updated = state.model_copy(deep=True)
+    updated.context.token_budget = {
+        **dict(getattr(updated.context, "token_budget", {}) or {}),
+        "effective_context_tokens": compression_report.token_estimate_after,
+        "effective_context_source": compression_report.token_count_method or "compression_estimate",
+    }
+    return updated
 
 
 def _factory_query_text(*, stage_id: str, values: dict[str, Any]) -> str:

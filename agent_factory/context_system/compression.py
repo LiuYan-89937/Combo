@@ -85,6 +85,7 @@ def maybe_compress_messages(
                     node_id=node_id,
                     original_message_count=len(messages),
                     compressed_message_count=len(messages),
+                    compacted_message_count=len(compressible),
                     token_estimate_before=token_before,
                     token_estimate_after=token_before,
                     token_count_method=count_before.method,
@@ -101,7 +102,10 @@ def maybe_compress_messages(
             },
             id=f"context-summary-{uuid4().hex}",
         )
-        compressed_messages = [*protected, summary_message, *recent]
+        compressed_messages = [
+            _without_inline_image_payload(message)
+            for message in [*protected, summary_message, *recent]
+        ]
         missing = incomplete_tool_call_ids(compressed_messages)
         if missing:
             raise RuntimeError("compressed messages contain incomplete tool call history: " + ", ".join(missing))
@@ -114,6 +118,7 @@ def maybe_compress_messages(
                 node_id=node_id,
                 original_message_count=len(messages),
                 compressed_message_count=len(compressed_messages),
+                compacted_message_count=len(compressible),
                 token_estimate_before=token_before,
                 token_estimate_after=token_after,
                 token_count_method=count_after.method,
@@ -204,6 +209,30 @@ def _is_tool_message(message: Any) -> bool:
     return isinstance(message, ToolMessage)
 
 
+def _without_inline_image_payload(message: Any) -> Any:
+    content = getattr(message, "content", None)
+    if not isinstance(content, list) or not hasattr(message, "model_copy"):
+        return message
+    retained = [block for block in content if not _is_image_content_block(block)]
+    if retained == content:
+        return message
+    normalized: str | list[Any]
+    if len(retained) == 1 and isinstance(retained[0], dict) and retained[0].get("type") == "text":
+        normalized = str(retained[0].get("text") or "")
+    else:
+        normalized = retained
+    return message.model_copy(update={"content": normalized})
+
+
+def _is_image_content_block(block: Any) -> bool:
+    if not isinstance(block, dict):
+        return False
+    if str(block.get("type") or "").strip() in {"image", "image_url", "input_image"}:
+        return True
+    source = block.get("source")
+    return isinstance(source, dict) and str(source.get("media_type") or "").startswith("image/")
+
+
 def _summarize_messages(messages: list[Any]) -> str:
     model = get_compression_model()
     if model is None:
@@ -273,4 +302,20 @@ def _message_text(message: Any) -> str:
     content = getattr(message, "content", message)
     if isinstance(content, str):
         return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+                continue
+            if not isinstance(block, dict):
+                continue
+            block_type = str(block.get("type") or "").strip()
+            if block_type in {"image", "image_url", "input_image"}:
+                parts.append("[image omitted from context summary]")
+                continue
+            value = block.get("text") or block.get("content")
+            if isinstance(value, str):
+                parts.append(value)
+        return "\n".join(parts)
     return str(content)

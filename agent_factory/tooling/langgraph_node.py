@@ -726,11 +726,11 @@ def _tool_observation_image(
     output = public_payload.get("output")
     if not isinstance(output, dict):
         return public_payload, None
-    image_base64 = output.pop("image_base64", None)
-    mime_type = output.get("mime_type")
-    image_path = output.get("path")
-    if not isinstance(image_base64, str) or not image_base64:
+    image_reference = output.pop("model_image", None)
+    if not isinstance(image_reference, dict):
         return public_payload, None
+    mime_type = image_reference.get("mime_type")
+    image_path = image_reference.get("path")
     if not isinstance(mime_type, str) or not mime_type.startswith("image/"):
         return public_payload, None
     if not isinstance(image_path, str) or not image_path:

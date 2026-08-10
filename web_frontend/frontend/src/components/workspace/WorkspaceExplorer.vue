@@ -146,7 +146,6 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
 import { workspaceEntryView } from '@/stores/runtime/viewMappers'
-import { workspaceFileView } from '@/stores/runtime/viewMappers'
 import { workspaceApi } from '@/api/workspace'
 import { selectLocalDirectory } from '@/api/desktopDialogs'
 import {
@@ -434,17 +433,20 @@ function confirmUnmount(entry: WorkspaceEntry) {
 }
 
 async function addFileReference(entry: WorkspaceEntry) {
-  const event = await workspaceApi.file(effectiveScope.value, entry.path, requestContext.value, 1_000_000)
-  const reference = workspaceFileContextReference(workspaceFileView(event.payload || {}))
-  if (!reference) {
-    message.warning(t('references.unsupportedFile'))
-    return
+  try {
+    const reference = await workspaceFileContextReference({
+      name: entry.name,
+      path: entry.path,
+      rawUrl: workspaceApi.rawUrl(effectiveScope.value, entry.path, requestContext.value),
+    })
+    if (!referenceStore.add(reference)) {
+      message.warning(t('references.limitReached'))
+      return
+    }
+    message.success(t('references.added'))
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : String(error))
   }
-  if (!referenceStore.add(reference)) {
-    message.warning(t('references.limitReached'))
-    return
-  }
-  message.success(t('references.added'))
 }
 
 async function deleteFile(entry: WorkspaceEntry) {

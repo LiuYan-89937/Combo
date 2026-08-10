@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import atexit
-import base64
 import ipaddress
 import json
 import logging
@@ -10,7 +9,7 @@ import os
 import socket
 import threading
 import time
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -75,6 +74,7 @@ class BrowserRuntimeConfig:
 @dataclass(slots=True)
 class BrowserSession:
     context: Any
+    view_id: str = field(default_factory=lambda: uuid4().hex)
     pages: dict[str, Any] = field(default_factory=dict)
     active_page_id: str | None = None
     last_used_at: float = field(default_factory=time.monotonic)
@@ -95,6 +95,8 @@ class BrowserRuntime:
         self._playwright: Any | None = None
         self._browser: Any | None = None
         self._sessions: dict[str, BrowserSession] = {}
+        self._view_streams: dict[tuple[str, str], dict[str, Any]] = {}
+        self._view_subscriptions: dict[str, tuple[str, str]] = {}
         self._start_lock: asyncio.Lock | None = None
         self._safe_hosts: dict[tuple[str, int], float] = {}
         self._closed = False
@@ -105,9 +107,10 @@ class BrowserRuntime:
         session_key: str,
         url: str,
         page_id: str | None,
+        new_page: bool,
         wait_until: str,
     ) -> dict[str, Any]:
-        return self._call(self._open(session_key, url, page_id, wait_until))
+        return self._call(self._open(session_key, url, page_id, new_page, wait_until))
 
     def snapshot(
         self,
@@ -223,6 +226,33 @@ class BrowserRuntime:
     def tabs(self, *, session_key: str) -> dict[str, Any]:
         return self._call(self._tabs(session_key))
 
+    def view_id(self, *, session_key: str) -> str:
+        return self._call(self._view_id(session_key))
+
+    def subscribe_view(
+        self,
+        *,
+        view_id: str,
+        page_id: str,
+        callback: Callable[[dict[str, Any]], None],
+    ) -> str:
+        return self._call(self._subscribe_view(view_id, page_id, callback))
+
+    def unsubscribe_view(self, subscription_id: str) -> None:
+        self._call(self._unsubscribe_view(subscription_id))
+
+    def dispatch_view_input(
+        self,
+        *,
+        view_id: str,
+        page_id: str,
+        event: dict[str, Any],
+    ) -> None:
+        self._call(self._dispatch_view_input(view_id, page_id, event))
+
+    def close_view_page(self, *, view_id: str, page_id: str) -> dict[str, Any]:
+        return self._call(self._close_view_page(view_id, page_id))
+
     def close(
         self,
         *,
@@ -251,7 +281,7 @@ class BrowserRuntime:
 
     def _call(
         self,
-        operation: Coroutine[Any, Any, dict[str, Any] | None],
+        operation: Coroutine[Any, Any, Any],
         *,
         timeout: int | None = None,
         allow_closed: bool = False,
@@ -320,6 +350,153 @@ class BrowserRuntime:
         self._sessions[session_key] = session
         return session
 
+    async def _view_id(self, session_key: str) -> str:
+        return (await self._session(session_key)).view_id
+
+    async def _subscribe_view(
+        self,
+        view_id: str,
+        page_id: str,
+        callback: Callable[[dict[str, Any]], None],
+    ) -> str:
+        session = self._session_for_view(view_id)
+        page = self._page(session, page_id)
+        key = (view_id, page_id)
+        stream = self._view_streams.get(key)
+        if stream is None:
+            cdp = await session.context.new_cdp_session(page)
+            stream = {"cdp": cdp, "subscribers": {}}
+            self._view_streams[key] = stream
+
+            async def publish_frame(payload: dict[str, Any]) -> None:
+                await cdp.send(
+                    "Page.screencastFrameAck",
+                    {"sessionId": payload.get("sessionId")},
+                )
+                frame = {
+                    "type": "frame",
+                    "data": payload.get("data"),
+                    "metadata": payload.get("metadata") or {},
+                    "page_id": page_id,
+                    "url": page.url,
+                    "title": await page.title(),
+                }
+                for subscriber in list(stream["subscribers"].values()):
+                    try:
+                        subscriber(frame)
+                    except Exception:
+                        LOGGER.debug("browser view subscriber rejected a frame", exc_info=True)
+
+            def on_frame(payload: dict[str, Any]) -> None:
+                asyncio.create_task(publish_frame(payload))
+
+            cdp.on("Page.screencastFrame", on_frame)
+            await cdp.send(
+                "Page.startScreencast",
+                {
+                    "format": "jpeg",
+                    "quality": 82,
+                    "maxWidth": self.config.viewport_width,
+                    "maxHeight": self.config.viewport_height,
+                    "everyNthFrame": 1,
+                },
+            )
+        subscription_id = uuid4().hex
+        stream["subscribers"][subscription_id] = callback
+        self._view_subscriptions[subscription_id] = key
+        session.last_used_at = time.monotonic()
+        return subscription_id
+
+    async def _unsubscribe_view(self, subscription_id: str) -> None:
+        key = self._view_subscriptions.pop(subscription_id, None)
+        if key is None:
+            return
+        stream = self._view_streams.get(key)
+        if stream is None:
+            return
+        stream["subscribers"].pop(subscription_id, None)
+        if stream["subscribers"]:
+            return
+        try:
+            await stream["cdp"].send("Page.stopScreencast")
+        except Exception:
+            LOGGER.debug("browser screencast stop failed", exc_info=True)
+        try:
+            await stream["cdp"].detach()
+        except Exception:
+            LOGGER.debug("browser CDP session detach failed", exc_info=True)
+        self._view_streams.pop(key, None)
+
+    async def _close_view_streams(self, *, view_id: str, page_id: str | None = None) -> None:
+        keys = [
+            key
+            for key in self._view_streams
+            if key[0] == view_id and (page_id is None or key[1] == page_id)
+        ]
+        subscription_ids = [
+            subscription_id
+            for subscription_id, key in self._view_subscriptions.items()
+            if key in keys
+        ]
+        for key in keys:
+            stream = self._view_streams.get(key)
+            if stream is None:
+                continue
+            event = {"type": "closed", "browser_view_id": key[0], "page_id": key[1]}
+            for subscriber in list(stream["subscribers"].values()):
+                try:
+                    subscriber(event)
+                except Exception:
+                    LOGGER.debug("browser view subscriber rejected close event", exc_info=True)
+        for subscription_id in subscription_ids:
+            await self._unsubscribe_view(subscription_id)
+
+    async def _dispatch_view_input(
+        self,
+        view_id: str,
+        page_id: str,
+        event: dict[str, Any],
+    ) -> None:
+        session = self._session_for_view(view_id)
+        page = self._page(session, page_id)
+        event_type = _text(event.get("type"))
+        if event_type == "mouse":
+            await page.mouse.move(float(event.get("x", 0)), float(event.get("y", 0)))
+            action = _text(event.get("action"))
+            button = _text(event.get("button")) or "left"
+            if action == "down":
+                await page.mouse.down(button=button)
+            elif action == "up":
+                await page.mouse.up(button=button)
+        elif event_type == "wheel":
+            await page.mouse.wheel(float(event.get("delta_x", 0)), float(event.get("delta_y", 0)))
+        elif event_type == "key":
+            await page.keyboard.press(_text(event.get("key")))
+        elif event_type == "text":
+            await page.keyboard.insert_text(str(event.get("text") or ""))
+        elif event_type == "navigate":
+            await page.goto(await self._safe_url(_text(event.get("url"))), wait_until="domcontentloaded")
+        elif event_type == "reload":
+            await page.reload(wait_until="domcontentloaded")
+        elif event_type == "back":
+            await page.go_back(wait_until="domcontentloaded")
+        elif event_type == "forward":
+            await page.go_forward(wait_until="domcontentloaded")
+        else:
+            raise ValueError(f"unsupported browser view input: {event_type or '<empty>'}")
+        session.active_page_id = page_id
+        session.last_used_at = time.monotonic()
+
+    async def _close_view_page(self, view_id: str, page_id: str) -> dict[str, Any]:
+        session = self._session_for_view(view_id)
+        return await self._close_page(session, page_id)
+
+    def _session_for_view(self, view_id: str) -> BrowserSession:
+        for session in self._sessions.values():
+            if session.view_id == view_id:
+                return session
+        raise KeyError("unknown browser view")
+
     async def _route_request(self, route: Any) -> None:
         url = str(route.request.url or "")
         if _non_network_url(url):
@@ -341,25 +518,38 @@ class BrowserRuntime:
         web_socket.connect_to_server()
 
     async def _open(
-        self, session_key: str, url: str, page_id: str | None, wait_until: str
+        self,
+        session_key: str,
+        url: str,
+        page_id: str | None,
+        new_page: bool,
+        wait_until: str,
     ) -> dict[str, Any]:
         safe_url = await self._safe_url(url)
         session = await self._session(session_key)
+        if page_id and new_page:
+            raise ValueError("page_id and new_page=true cannot be used together")
+        page_created = False
         if page_id:
             page = self._page(session, page_id)
             effective_page_id = page_id
+        elif session.active_page_id and not new_page:
+            effective_page_id = session.active_page_id
+            page = self._page(session, effective_page_id)
         else:
             if len(session.pages) >= self.config.max_pages_per_context:
                 raise RuntimeError("browser page capacity is exhausted for this session")
             page = await session.context.new_page()
             effective_page_id = uuid4().hex[:16]
             session.pages[effective_page_id] = page
+            page_created = True
         response = await page.goto(safe_url, wait_until=wait_until)
         session.active_page_id = effective_page_id
         session.last_used_at = time.monotonic()
         return {
             **await self._page_summary(page, effective_page_id),
             "status_code": response.status if response is not None else 0,
+            "_page_created": page_created,
         }
 
     async def _snapshot(
@@ -526,7 +716,10 @@ class BrowserRuntime:
             "path": str(output_path),
             "mime_type": "image/png",
             "size_bytes": len(data),
-            "image_base64": base64.b64encode(data).decode("ascii"),
+            "model_image": {
+                "path": str(output_path),
+                "mime_type": "image/png",
+            },
         }
 
     async def _download(
@@ -587,19 +780,48 @@ class BrowserRuntime:
     ) -> dict[str, Any]:
         session = self._sessions.get(session_key)
         if session is None:
-            return {"closed": False, "remaining_pages": 0}
+            return {
+                "closed": False,
+                "remaining_pages": 0,
+                "browser_view_id": None,
+                "closed_page_id": page_id,
+            }
         if close_context:
+            await self._close_view_streams(view_id=session.view_id)
             await session.context.close()
             self._sessions.pop(session_key, None)
-            return {"closed": True, "remaining_pages": 0}
+            return {
+                "closed": True,
+                "remaining_pages": 0,
+                "browser_view_id": session.view_id,
+                "closed_page_id": page_id,
+            }
         effective_page_id = page_id or session.active_page_id
         if not effective_page_id:
             raise ValueError("page_id is required because this browser context has no active page")
+        return await self._close_page(session, effective_page_id)
+
+    async def _close_page(
+        self,
+        session: BrowserSession,
+        page_id: str,
+    ) -> dict[str, Any]:
+        effective_page_id = page_id
         page = self._page(session, effective_page_id)
+        await self._close_view_streams(view_id=session.view_id, page_id=effective_page_id)
         await page.close()
         session.pages.pop(effective_page_id, None)
         session.active_page_id = next(reversed(session.pages), None) if session.pages else None
-        return {"closed": True, "remaining_pages": len(session.pages)}
+        result = {
+            "closed": True,
+            "remaining_pages": len(session.pages),
+            "browser_view_id": session.view_id,
+            "closed_page_id": effective_page_id,
+        }
+        if session.active_page_id is not None:
+            active_page = self._page(session, session.active_page_id)
+            result.update(await self._page_summary(active_page, session.active_page_id))
+        return result
 
     async def _active_page(
         self, session_key: str, page_id: str | None
@@ -683,9 +905,12 @@ class BrowserRuntime:
         stale = [key for key, session in self._sessions.items() if session.last_used_at < threshold]
         for key in stale:
             session = self._sessions.pop(key)
+            await self._close_view_streams(view_id=session.view_id)
             await session.context.close()
 
     async def _shutdown(self) -> None:
+        for subscription_id in list(self._view_subscriptions):
+            await self._unsubscribe_view(subscription_id)
         for session in list(self._sessions.values()):
             await session.context.close()
         self._sessions.clear()

@@ -348,7 +348,8 @@ async function handlePaste(e: ClipboardEvent) {
     showAttachmentLimitReached()
     return
   }
-  const pastedAttachments = await Promise.all(selectedFiles.map((file) => runtimeFileAttachmentFromFile(file)))
+  const pastedAttachments = await uploadFiles(selectedFiles)
+  if (!pastedAttachments) return
   appendAttachments(pastedAttachments)
   if (selectedFiles.length < files.length) {
     showAttachmentLimitPartial(selectedFiles.length)
@@ -413,7 +414,19 @@ async function appendFiles(files: File[]) {
   }
   const selected = accepted.slice(0, remainingAttachmentSlots.value)
   if (selected.length < accepted.length) showAttachmentLimitPartial(selected.length)
-  appendAttachments(await Promise.all(selected.map((file) => runtimeFileAttachmentFromFile(file))))
+  const uploaded = await uploadFiles(selected)
+  if (uploaded) appendAttachments(uploaded)
+}
+
+async function uploadFiles(files: File[]): Promise<RuntimeAttachmentInput[] | null> {
+  try {
+    return await Promise.all(files.map((file) => runtimeFileAttachmentFromFile(file)))
+  } catch (error) {
+    messageApi.error(t('attachments.uploadFailed', {
+      reason: error instanceof Error ? error.message : String(error),
+    }))
+    return null
+  }
 }
 
 function isAcceptedAttachmentFile(file: File): boolean {

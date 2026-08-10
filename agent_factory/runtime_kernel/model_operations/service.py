@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from agent_factory.context_system.events import emit_context_event
 from agent_factory.context_system.token_counter import (
+    context_token_count_after_call,
     context_window_payload,
     model_context_limits,
     provider_token_budget_payload,
@@ -906,7 +907,7 @@ def _emit_provider_usage_context_window(
 ) -> None:
     if services is None or node_id is None:
         return
-    token_count = token_count_from_usage_metadata(getattr(response, "usage_metadata", None))
+    token_count = context_token_count_after_call(getattr(response, "usage_metadata", None))
     if token_count is None:
         return
     limits = model_context_limits(services=services, state=state, model_role=model_role)

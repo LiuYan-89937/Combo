@@ -15,4 +15,20 @@ def message_text(message: Any) -> str:
     content = getattr(message, "content", message)
     if isinstance(content, str):
         return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+                continue
+            if not isinstance(block, dict):
+                continue
+            block_type = str(block.get("type") or "").strip()
+            if block_type in {"image", "image_url", "input_image"}:
+                parts.append("[image]")
+                continue
+            value = block.get("text") or block.get("content")
+            if isinstance(value, str):
+                parts.append(value)
+        return "\n".join(parts)
     return str(content)

@@ -28,11 +28,16 @@ done
 
 [[ -f "${CONFIG_PATH}" ]] || fail "Tauri configuration not found: ${CONFIG_PATH}"
 [[ -f "${FRONTEND_DIR}/package-lock.json" ]] || fail "Frontend lockfile is required."
-if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
-    [[ -f "${DEFAULT_UPDATER_KEY}" ]] || fail "Updater signing key not found: ${DEFAULT_UPDATER_KEY}"
+BUILD_UPDATER_ARTIFACTS=true
+if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" && -f "${DEFAULT_UPDATER_KEY}" ]]; then
     export TAURI_SIGNING_PRIVATE_KEY="${DEFAULT_UPDATER_KEY}"
 fi
-export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
+if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
+    BUILD_UPDATER_ARTIFACTS=false
+    echo "Updater signing key is unavailable; building the DMG without updater artifacts."
+else
+    export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
+fi
 
 if ! cargo tauri --version >/dev/null 2>&1; then
     echo "Installing Tauri CLI 2..."
@@ -79,7 +84,11 @@ fi
 echo "Building macOS application..."
 (
     cd "${TAURI_DIR}"
-    cargo tauri build --bundles app
+    if [[ "${BUILD_UPDATER_ARTIFACTS}" == true ]]; then
+        cargo tauri build --bundles app
+    else
+        cargo tauri build --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
+    fi
 )
 
 APP_PATH="${TAURI_DIR}/target/release/bundle/macos/${PRODUCT_NAME}.app"
@@ -88,16 +97,18 @@ APP_PATH="${TAURI_DIR}/target/release/bundle/macos/${PRODUCT_NAME}.app"
 echo "Verifying application signature..."
 codesign --verify --deep --strict "${APP_PATH}"
 
-GENERATED_UPDATER_PATH="${APP_PATH}.tar.gz"
-GENERATED_UPDATER_SIGNATURE_PATH="${GENERATED_UPDATER_PATH}.sig"
-[[ -f "${GENERATED_UPDATER_PATH}" ]] || fail "Updater bundle not found: ${GENERATED_UPDATER_PATH}"
-[[ -f "${GENERATED_UPDATER_SIGNATURE_PATH}" ]] || fail "Updater signature not found: ${GENERATED_UPDATER_SIGNATURE_PATH}"
+if [[ "${BUILD_UPDATER_ARTIFACTS}" == true ]]; then
+    GENERATED_UPDATER_PATH="${APP_PATH}.tar.gz"
+    GENERATED_UPDATER_SIGNATURE_PATH="${GENERATED_UPDATER_PATH}.sig"
+    [[ -f "${GENERATED_UPDATER_PATH}" ]] || fail "Updater bundle not found: ${GENERATED_UPDATER_PATH}"
+    [[ -f "${GENERATED_UPDATER_SIGNATURE_PATH}" ]] || fail "Updater signature not found: ${GENERATED_UPDATER_SIGNATURE_PATH}"
 
-UPDATER_DIR="$(dirname "${GENERATED_UPDATER_PATH}")"
-UPDATER_PATH="${UPDATER_DIR}/${PRODUCT_NAME}_${PRODUCT_VERSION}_${RELEASE_ARCH}.app.tar.gz"
-UPDATER_SIGNATURE_PATH="${UPDATER_PATH}.sig"
-mv -f "${GENERATED_UPDATER_PATH}" "${UPDATER_PATH}"
-mv -f "${GENERATED_UPDATER_SIGNATURE_PATH}" "${UPDATER_SIGNATURE_PATH}"
+    UPDATER_DIR="$(dirname "${GENERATED_UPDATER_PATH}")"
+    UPDATER_PATH="${UPDATER_DIR}/${PRODUCT_NAME}_${PRODUCT_VERSION}_${RELEASE_ARCH}.app.tar.gz"
+    UPDATER_SIGNATURE_PATH="${UPDATER_PATH}.sig"
+    mv -f "${GENERATED_UPDATER_PATH}" "${UPDATER_PATH}"
+    mv -f "${GENERATED_UPDATER_SIGNATURE_PATH}" "${UPDATER_SIGNATURE_PATH}"
+fi
 
 DMG_DIR="${TAURI_DIR}/target/release/bundle/dmg"
 DMG_PATH="${DMG_DIR}/${PRODUCT_NAME}_${PRODUCT_VERSION}_${DMG_ARCH}.dmg"
@@ -126,5 +137,7 @@ echo
 echo "Package created:"
 echo "  ${DMG_PATH}"
 shasum -a 256 "${DMG_PATH}"
-echo "  ${UPDATER_PATH}"
-echo "  ${UPDATER_SIGNATURE_PATH}"
+if [[ "${BUILD_UPDATER_ARTIFACTS}" == true ]]; then
+    echo "  ${UPDATER_PATH}"
+    echo "  ${UPDATER_SIGNATURE_PATH}"
+fi

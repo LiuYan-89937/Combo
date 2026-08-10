@@ -31,6 +31,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
             session_key=session_key,
             url=_required_text(arguments, "url"),
             page_id=page_id,
+            new_page=bool(arguments.get("new_page", False)),
             wait_until=str(arguments.get("wait_until") or "domcontentloaded"),
         )
     elif tool_id == "browser_snapshot":
@@ -134,6 +135,14 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         )
     else:
         raise RuntimeError(f"unsupported browser tool: {tool_id or '<unknown>'}")
+    if tool_id == "browser_close":
+        has_active_page = bool(output.get("page_id")) and int(output.get("remaining_pages") or 0) > 0
+        output["browser_view_action"] = "update" if has_active_page else "close"
+        output.setdefault("closed_page_id", page_id)
+    elif "page_id" in output or output.get("tabs") is not None:
+        page_created = bool(output.pop("_page_created", False))
+        output["browser_view_id"] = runtime.view_id(session_key=session_key)
+        output["browser_view_action"] = "open" if page_created else "update"
     return tool_envelope(output, summary=f"{tool_id} completed")
 
 

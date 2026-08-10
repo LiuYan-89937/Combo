@@ -1,4 +1,12 @@
-import type { ContextReferenceInput, TranscriptItem, WorkspaceFileView } from '@/types/protocol'
+import type { ContextReferenceInput, TranscriptItem } from '@/types/protocol'
+import { uploadRuntimeAttachment } from '@/api/attachments'
+
+interface WorkspaceFileReferenceSource {
+  name: string
+  path: string
+  mimeType?: string | null
+  rawUrl: string
+}
 
 export function messageContextReference(message: TranscriptItem): ContextReferenceInput {
   const speaker = String(message.metadata?.display_name || (message.role === 'user' ? 'User' : 'Assistant'))
@@ -15,26 +23,20 @@ export function messageContextReference(message: TranscriptItem): ContextReferen
   }
 }
 
-export function workspaceFileContextReference(file: WorkspaceFileView): ContextReferenceInput | null {
-  const path = String(file.path || file.name).trim()
-  const scope = String(file.scope || 'workdir')
-  if (file.kind === 'text') {
-    return {
-      kind: 'text',
-      name: path,
-      source_kind: 'workspace_file',
-      mime_type: file.mimeType || 'text/plain',
-      content: contextBlock('workspace_file', { scope, path }, file.content || ''),
-    }
+export async function workspaceFileContextReference(
+  source: WorkspaceFileReferenceSource,
+): Promise<ContextReferenceInput> {
+  const response = await fetch(source.rawUrl, { cache: 'no-store' })
+  if (!response.ok) {
+    throw new Error(`Workspace file download failed with HTTP ${response.status}`)
   }
-  if (!file.contentBase64) return null
+  const blob = await response.blob()
+  const mimeType = String(source.mimeType || blob.type || 'application/octet-stream')
+  const uploaded = await uploadRuntimeAttachment(new File([blob], source.name, { type: mimeType }))
   return {
-    kind: 'file',
-    name: file.name,
+    ...uploaded,
+    name: source.path,
     source_kind: 'workspace_file',
-    mime_type: file.mimeType || 'application/octet-stream',
-    encoding: 'base64',
-    content: file.contentBase64,
   }
 }
 

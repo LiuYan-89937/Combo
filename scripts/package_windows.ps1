@@ -212,7 +212,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "Python dependency installation failed with exit code $LASTEXITCODE."
 }
 $env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $PythonResourcesDir "playwright-browsers"
-& $PythonExecutable -m playwright install chromium
+& $PythonExecutable -m playwright install --only-shell chromium
 if ($LASTEXITCODE -ne 0) {
     throw "Playwright Chromium installation failed with exit code $LASTEXITCODE."
 }

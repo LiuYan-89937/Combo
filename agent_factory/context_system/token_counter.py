@@ -182,6 +182,15 @@ def token_count_from_usage_metadata(usage: Any) -> int | None:
     return normalize_usage_metadata(usage).input_tokens
 
 
+def context_token_count_after_call(usage: Any) -> int | None:
+    normalized = normalize_usage_metadata(usage)
+    if normalized.total_tokens is not None:
+        return normalized.total_tokens
+    if normalized.input_tokens is None:
+        return None
+    return int(normalized.input_tokens) + int(normalized.output_tokens or 0)
+
+
 def output_token_count_from_usage_metadata(usage: Any) -> int | None:
     return normalize_usage_metadata(usage).output_tokens
 
@@ -205,12 +214,16 @@ def provider_token_budget_payload(
         return {}
     output_tokens = usage.output_tokens
     total_tokens = usage.total_tokens
-    context_tokens_after_call = total_tokens or int(input_tokens) + int(output_tokens or 0)
+    context_tokens_after_call = context_token_count_after_call(usage_metadata)
+    if context_tokens_after_call is None:
+        context_tokens_after_call = int(input_tokens) + int(output_tokens or 0)
     return {
         "last_provider_input_tokens": int(input_tokens),
         "last_provider_output_tokens": output_tokens,
         "last_provider_total_tokens": total_tokens,
         "last_provider_context_tokens_after_call": context_tokens_after_call,
+        "effective_context_tokens": context_tokens_after_call,
+        "effective_context_source": "provider_usage",
         "last_provider_token_count_method": "provider_usage",
         "last_provider_node_id": node_id,
         "last_provider_model_role": model_role,

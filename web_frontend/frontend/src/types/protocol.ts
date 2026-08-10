@@ -18,10 +18,12 @@ export type RuntimeAttachmentKind = 'file' | 'text' | 'url'
 export interface RuntimeAttachmentInput {
   kind: RuntimeAttachmentKind
   name: string
+  attachment_id?: string
   content?: string
   encoding?: 'base64'
   source_kind?: string
   mime_type?: string
+  size_bytes?: number
 }
 
 export type ContextReferenceKind = 'message_reference' | 'workspace_file' | 'text_selection'

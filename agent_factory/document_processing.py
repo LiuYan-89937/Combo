@@ -20,7 +20,6 @@ from agent_factory.file_capabilities import (
     IMAGE_EXTENSIONS,
     LEGACY_PRESENTATION_EXTENSIONS,
     LEGACY_WORD_EXTENSIONS,
-    MARKITDOWN_EXTENSIONS,
     OFFICE_EXTENSIONS,
     OPEN_DOCUMENT_EXTENSIONS,
     PDF_EXTENSIONS,
@@ -30,6 +29,7 @@ from agent_factory.file_capabilities import (
     accepted_knowledge_extensions,
     file_processing_capabilities,
 )
+from agent_factory.office_document_parsers import parse_office_document
 
 
 document_processing_capabilities = file_processing_capabilities
@@ -65,7 +65,7 @@ def parse_file(path: Path, *, root: Path | None = None, metadata: dict[str, Any]
         _parse_with_rtf,
         _parse_with_epub,
         _parse_with_open_document,
-        _parse_with_markitdown,
+        _parse_with_office_parser,
         _parse_with_langchain,
         _parse_with_libreoffice,
         _parse_with_text_fallback,
@@ -188,30 +188,28 @@ def _parse_with_unstructured(
     )
 
 
-def _parse_with_markitdown(
+def _parse_with_office_parser(
     *,
     path: Path,
     suffix: str,
     root: Path,
     metadata: dict[str, Any],
 ) -> ParseResult:
-    if suffix not in MARKITDOWN_EXTENSIONS:
-        return ParseResult(documents=[], warnings=[])
     try:
-        markitdown_cls = importlib.import_module("markitdown").MarkItDown
-    except ModuleNotFoundError:
-        return ParseResult(documents=[], warnings=["markitdown_not_installed"])
-    try:
-        result = markitdown_cls().convert(str(path))
-        content = str(getattr(result, "text_content", "") or "").strip()
+        result = parse_office_document(path, suffix)
+        if result is None:
+            return ParseResult(documents=[], warnings=[])
+        content = result.content
+    except ModuleNotFoundError as exc:
+        return ParseResult(documents=[], warnings=[f"office_parser_dependency_missing: {exc.name}"])
     except Exception as exc:
-        return ParseResult(documents=[], warnings=[f"markitdown_failed: {type(exc).__name__}: {exc}"])
+        return ParseResult(documents=[], warnings=[f"office_parser_failed: {type(exc).__name__}: {exc}"])
     return _single_document_result(
         path=path,
         root=root,
         suffix=suffix,
         content=content,
-        loader="markitdown",
+        loader=result.loader,
         metadata=metadata,
     )
 
