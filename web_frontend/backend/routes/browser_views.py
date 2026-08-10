@@ -23,8 +23,14 @@ def create_browser_view_router(logger: logging.Logger) -> APIRouter:
                 view_id=view_id,
                 page_id=page_id,
             )
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except KeyError:
+            return {
+                "closed": False,
+                "already_closed": True,
+                "remaining_pages": 0,
+                "browser_view_id": view_id,
+                "closed_page_id": page_id,
+            }
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -51,6 +57,17 @@ def create_browser_view_router(logger: logging.Logger) -> APIRouter:
                 page_id=page_id,
                 callback=publish,
             )
+        except KeyError:
+            await websocket.send_json(
+                {
+                    "type": "closed",
+                    "browser_view_id": view_id,
+                    "page_id": page_id,
+                    "reason": "page_not_found",
+                }
+            )
+            await websocket.close(code=4404)
+            return
         except Exception as exc:
             await websocket.send_json({"type": "error", "message": f"{type(exc).__name__}: {exc}"})
             await websocket.close(code=4404)
