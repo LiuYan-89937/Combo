@@ -9,8 +9,22 @@ from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
+from agent_factory.context_system.events import emit_context_event
+from agent_factory.context_system.token_counter import (
+    context_window_payload,
+    model_context_limits,
+    provider_token_budget_payload,
+    token_count_from_usage_metadata,
+)
+from agent_factory.model_pool.runtime_override import (
+    resolve_runtime_main_chat_model_from_state,
+    resolve_runtime_reasoning_model,
+)
+from agent_factory.model_pool.schema import ModelBindingRuntimeOverrides
 from agent_factory.models.content import content_to_text, strip_internal_snapshot_blocks
 from agent_factory.models.message_layout import system_messages_first
+from agent_factory.models.reasoning import reasoning_content_from_message
+from agent_factory.models.usage import normalize_usage_metadata
 from agent_factory.runtime_kernel.adapters.model import (
     ModelRole,
     _bind_tools,
@@ -19,21 +33,8 @@ from agent_factory.runtime_kernel.adapters.model import (
 )
 from agent_factory.runtime_kernel.model_inputs import build_runtime_model_input
 from agent_factory.runtime_kernel.types import ModelInvocationResult
-from agent_factory.models.reasoning import reasoning_content_from_message
-from agent_factory.model_pool.runtime_override import (
-    resolve_runtime_main_chat_model_from_state,
-    resolve_runtime_reasoning_model,
-)
-from agent_factory.model_pool.schema import ModelBindingRuntimeOverrides
-from agent_factory.context_system.events import emit_context_event
-from agent_factory.context_system.token_counter import (
-    context_window_payload,
-    model_context_limits,
-    provider_token_budget_payload,
-    token_count_from_usage_metadata,
-)
-from agent_factory.models.usage import normalize_usage_metadata
 from agent_factory.tooling.description_context import contextualize_tool_descriptions
+from agent_factory.tooling.model_visibility import tools_visible_to_model
 
 _DEFAULT_STRUCTURED_METHOD = "json_mode"
 
@@ -94,14 +95,17 @@ class ModelOperationService:
     ) -> ModelInvocationResult:
         model, metadata = self._resolve_model(model_role, state=state)
         effective_model_role = str(metadata.get("model_role") or model_role or self.model_role)
-        tool_list = contextualize_tool_descriptions(tools or [])
+        image_input_enabled = bool(metadata.get("multimodal"))
+        tool_list = contextualize_tool_descriptions(
+            tools_visible_to_model(tools or [], image_input_enabled=image_input_enabled)
+        )
         envelope = build_runtime_model_input(
             state=state,
             prompt_binding=prompt_binding or {},
             messages=messages or [],
             tools=tool_list,
             node_id=node_id,
-            image_input_enabled=bool(metadata.get("multimodal")),
+            image_input_enabled=image_input_enabled,
         )
         trace_span_id = _start_trace_span(
             state=state,

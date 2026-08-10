@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+from agent_factory.tooling.builtins.agent_delegate.specs import get_agent_delegate_tool_specs
+from agent_factory.tooling.builtins.agent_evolve.specs import get_agent_evolve_tool_specs
 from agent_factory.tooling.builtins.agent_list.specs import get_agent_list_tool_specs
 from agent_factory.tooling.builtins.agent_manufacture.specs import get_agent_manufacture_tool_specs
 from agent_factory.tooling.builtins.agent_search.specs import get_agent_search_tool_specs
-from agent_factory.tooling.builtins.agent_delegate.specs import get_agent_delegate_tool_specs
-from agent_factory.tooling.builtins.agent_evolve.specs import get_agent_evolve_tool_specs
 from agent_factory.tooling.builtins.agent_team.specs import get_agent_team_tool_specs
-from agent_factory.tooling.builtins.background_tasks.specs import get_background_tasks_tool_specs
 from agent_factory.tooling.builtins.ask_user.specs import get_ask_user_tool_specs
+from agent_factory.tooling.builtins.background_tasks.specs import get_background_tasks_tool_specs
+from agent_factory.tooling.builtins.browser.specs import get_browser_tool_specs
 from agent_factory.tooling.builtins.deliver_result.specs import get_deliver_result_tool_specs
 from agent_factory.tooling.builtins.filesystem.specs import get_filesystem_tool_specs
 from agent_factory.tooling.builtins.knowledge.specs import get_knowledge_tool_specs
@@ -18,7 +19,6 @@ from agent_factory.tooling.builtins.scheduler.specs import get_scheduler_tool_sp
 from agent_factory.tooling.builtins.skillhub.specs import get_skillhub_tool_specs
 from agent_factory.tooling.builtins.tool_output.specs import get_tool_output_tool_specs
 from agent_factory.tooling.spec import ToolSpec
-
 
 IMPLEMENTED_BUILTIN_TOOL_IDS = {
     "read",
@@ -44,6 +44,20 @@ IMPLEMENTED_BUILTIN_TOOL_IDS = {
     "background_tasks",
     "ask_user",
     "deliver_result",
+    "browser_open",
+    "browser_snapshot",
+    "browser_click",
+    "browser_type",
+    "browser_select",
+    "browser_press",
+    "browser_scroll",
+    "browser_wait",
+    "browser_extract",
+    "browser_screenshot",
+    "browser_download",
+    "browser_upload",
+    "browser_tabs",
+    "browser_close",
 }
 
 ALWAYS_AVAILABLE_SYSTEM_TOOL_IDS = {"tool_output"}
@@ -62,6 +76,10 @@ READ_ONLY_SYSTEM_TOOL_IDS = {
     "agent_list",
     "agent_search",
     "background_tasks",
+    "browser_snapshot",
+    "browser_extract",
+    "browser_screenshot",
+    "browser_tabs",
 }
 
 
@@ -82,6 +100,7 @@ def get_builtin_tool_specs() -> list[ToolSpec]:
         *get_agent_evolve_tool_specs(),
         *get_agent_team_tool_specs(),
         *get_background_tasks_tool_specs(),
+        *get_browser_tool_specs(),
         *get_ask_user_tool_specs(),
         *get_deliver_result_tool_specs(),
     ]

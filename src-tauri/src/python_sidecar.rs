@@ -91,11 +91,15 @@ impl PythonSidecar {
         cmd.creation_flags(CREATE_NO_WINDOW);
 
         if !cfg!(debug_assertions) {
-            let mut python_paths = vec![resource_dir];
+            let mut python_paths = vec![resource_dir.clone()];
             if let Some(existing) = env::var_os("PYTHONPATH") {
                 python_paths.extend(env::split_paths(&existing));
             }
             cmd.env("PYTHONPATH", env::join_paths(python_paths)?);
+            cmd.env(
+                "PLAYWRIGHT_BROWSERS_PATH",
+                resource_dir.join("python").join("playwright-browsers"),
+            );
         }
 
         println!("Launching Python backend: {:?}", cmd);

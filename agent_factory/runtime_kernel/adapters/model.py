@@ -7,18 +7,18 @@ from typing import Any, Literal, Protocol
 from langchain_core.messages import BaseMessage
 from langchain_core.tools import BaseTool
 
-from agent_factory.models import ChatModelSettings
-from agent_factory.models.content import content_to_text, strip_internal_snapshot_blocks
-from agent_factory.models.reasoning import reasoning_content_from_message
 from agent_factory.model_pool.runtime_override import (
     resolve_runtime_main_chat_model_from_state,
     resolve_runtime_reasoning_model,
 )
 from agent_factory.model_pool.schema import ModelBindingRuntimeOverrides
+from agent_factory.models import ChatModelSettings
+from agent_factory.models.content import content_to_text, strip_internal_snapshot_blocks
+from agent_factory.models.reasoning import reasoning_content_from_message
 from agent_factory.runtime_kernel.model_inputs import build_runtime_model_input
 from agent_factory.runtime_kernel.types import ModelInvocationResult
 from agent_factory.tooling.description_context import contextualize_tool_descriptions
-
+from agent_factory.tooling.model_visibility import tools_visible_to_model
 
 ModelRole = Literal["main", "task", "compression"]
 
@@ -99,14 +99,17 @@ class LangChainModelServiceAdapter:
         model, settings = resolve_runtime_reasoning_model(model, settings, state)
         if model is None:
             raise RuntimeError(f"{self.model_role} model is not configured for AgentPackage runtime")
-        contextual_tools = contextualize_tool_descriptions(tools or [])
+        image_input_enabled = bool(settings.multimodal)
+        contextual_tools = contextualize_tool_descriptions(
+            tools_visible_to_model(tools or [], image_input_enabled=image_input_enabled)
+        )
         bound_model = _bind_tools(model, contextual_tools)
         envelope = build_runtime_model_input(
             state=state,
             prompt_binding=prompt_binding or {},
             messages=messages or [],
             tools=contextual_tools,
-            image_input_enabled=bool(settings.multimodal),
+            image_input_enabled=image_input_enabled,
         )
         response = bound_model.invoke(
             envelope.messages

@@ -211,6 +211,11 @@ if ($LASTEXITCODE -ne 0) {
 if ($LASTEXITCODE -ne 0) {
     throw "Python dependency installation failed with exit code $LASTEXITCODE."
 }
+$env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $PythonResourcesDir "playwright-browsers"
+& $PythonExecutable -m playwright install chromium
+if ($LASTEXITCODE -ne 0) {
+    throw "Playwright Chromium installation failed with exit code $LASTEXITCODE."
+}
 & $PythonExecutable (Join-Path $ProjectRoot "scripts\generate_icons.py")
 if ($LASTEXITCODE -ne 0) {
     throw "Application icon generation failed with exit code $LASTEXITCODE."

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
-from contextlib import nullcontext
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import nullcontext
+from copy import deepcopy
 from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
@@ -15,7 +16,11 @@ from langgraph.types import interrupt
 
 from agent_factory.runtime_kernel.observability.tool_events import emit_runtime_tool_activity
 from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
-from agent_factory.tooling.execution_context import current_tool_approval_override, tool_approval_override, tool_call_context
+from agent_factory.tooling.execution_context import (
+    current_tool_approval_override,
+    tool_approval_override,
+    tool_call_context,
+)
 from agent_factory.tooling.gateway import (
     DEFAULT_TOOL_APPROVAL_TRUST_STORE,
     TRUST_TOOL_ACTIONS,
@@ -23,7 +28,6 @@ from agent_factory.tooling.gateway import (
 )
 from agent_factory.tooling.redaction import redact_json_pointer_paths
 from agent_factory.tooling.runtime_resources import runtime_resource_overrides_from_state
-
 
 ToolEventCallback = Callable[[dict[str, Any]], None]
 
@@ -209,6 +213,7 @@ class AgentFactoryToolNode:
                 arguments=public_arguments,
             )
             event_type = _tool_event_type(normalized)
+            public_normalized = _public_tool_observation(normalized)
             self._emit(
                 {
                     "event_type": event_type,
@@ -216,12 +221,12 @@ class AgentFactoryToolNode:
                     "tool_call_id": tool_call_id,
                     "arguments": public_arguments,
                     "status": "completed" if event_type in {"tool_completed", "tool_contract_invalid"} else "failed",
-                    "result": normalized,
-                    "output": normalized.get("output"),
-                    "evidence": normalized.get("evidence") if isinstance(normalized.get("evidence"), dict) else {},
+                    "result": public_normalized,
+                    "output": public_normalized.get("output"),
+                    "evidence": public_normalized.get("evidence") if isinstance(public_normalized.get("evidence"), dict) else {},
                     "execution_status": str(normalized.get("execution_status") or ""),
                     "contract_status": str(normalized.get("contract_status") or ""),
-                    "observation": normalized,
+                    "observation": public_normalized,
                     "error": None if event_type in {"tool_completed", "tool_contract_invalid"} else normalized.get("message"),
                     "message": str(normalized.get("message") or ""),
                 }
@@ -665,6 +670,13 @@ def _parse_tool_message_content(content: Any) -> Any:
             return json.loads(content)
         except json.JSONDecodeError:
             return content
+    if isinstance(content, list):
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "text":
+                continue
+            text = block.get("text")
+            if isinstance(text, str):
+                return _parse_tool_message_content(text)
     return content
 
 
@@ -685,12 +697,45 @@ def _tool_event_type(payload: dict[str, Any]) -> str:
 
 
 def _tool_message(*, tool_id: str, tool_call_id: str, payload: dict[str, Any], status: str = "success") -> ToolMessage:
+    public_payload, image = _tool_observation_image(payload)
+    additional_kwargs: dict[str, Any] = {}
+    if image is not None:
+        image_path, mime_type = image
+        additional_kwargs["agent_factory_tool_image"] = {
+            "path": image_path,
+            "mime_type": mime_type,
+        }
     return ToolMessage(
-        content=json.dumps(payload, ensure_ascii=False, sort_keys=True),
+        content=json.dumps(public_payload, ensure_ascii=False, sort_keys=True),
         name=tool_id,
         tool_call_id=tool_call_id,
         status=status,  # type: ignore[arg-type]
+        additional_kwargs=additional_kwargs,
     )
+
+
+def _public_tool_observation(payload: dict[str, Any]) -> dict[str, Any]:
+    public_payload, _image = _tool_observation_image(payload)
+    return public_payload
+
+
+def _tool_observation_image(
+    payload: dict[str, Any],
+) -> tuple[dict[str, Any], tuple[str, str] | None]:
+    public_payload = deepcopy(payload)
+    output = public_payload.get("output")
+    if not isinstance(output, dict):
+        return public_payload, None
+    image_base64 = output.pop("image_base64", None)
+    mime_type = output.get("mime_type")
+    image_path = output.get("path")
+    if not isinstance(image_base64, str) or not image_base64:
+        return public_payload, None
+    if not isinstance(mime_type, str) or not mime_type.startswith("image/"):
+        return public_payload, None
+    if not isinstance(image_path, str) or not image_path:
+        return public_payload, None
+    return public_payload, (image_path, mime_type)
 
 
 def _observation_payload(

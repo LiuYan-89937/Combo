@@ -1,19 +1,20 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from hashlib import sha256
-import json
 from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
+from agent_factory.knowledge_system.guidance import KNOWLEDGE_GUIDANCE_CONTEXT_KEY
 from agent_factory.models.message_layout import system_messages_first
 from agent_factory.models.temporal_context import current_date_system_context
-from agent_factory.knowledge_system.guidance import KNOWLEDGE_GUIDANCE_CONTEXT_KEY
 from agent_factory.runtime_attachments import (
-    format_current_user_attachment_manifest,
+    AttachmentImportError,
     format_attachments_for_model,
+    format_current_user_attachment_manifest,
     image_attachment_content_parts,
     image_attachment_count,
 )
@@ -21,12 +22,11 @@ from agent_factory.runtime_defaults import (
     DEFAULT_BUILTIN_ALLOW_EXTERNAL_PATHS,
     DEFAULT_BUILTIN_WORKSPACE_ROOT,
 )
-from agent_factory.runtime_workspace import RUNTIME_WORKSPACE_MOUNTS_SESSION_KEY
 from agent_factory.runtime_kernel.planning import is_plan_and_execute_pattern_id
 from agent_factory.runtime_kernel.prompt_fragments import runtime_prompt_fragments_from_state
 from agent_factory.runtime_kernel.tool_governance import tool_governance_prompt
+from agent_factory.runtime_workspace import RUNTIME_WORKSPACE_MOUNTS_SESSION_KEY
 from agent_factory.tooling.builtins.filesystem.guidance import WRITE_STRATEGY_GUIDANCE
-
 
 DEFAULT_AGENT_SYSTEM_PROMPT = "You are the generated Agent runtime model. Answer the user directly and concisely."
 RUNTIME_REACT_PROTOCOL = (
@@ -286,6 +286,10 @@ def _history_messages(
     image_input_enabled: bool,
 ) -> list[Any]:
     normalized = [message for message in messages if isinstance(message, BaseMessage)]
+    normalized = _with_model_compatible_tool_content(
+        normalized,
+        image_input_enabled=image_input_enabled,
+    )
     if normalized and _uses_plan_and_execute_projection(state=state, node_id=node_id):
         return _with_current_user_attachments(
             state=state,
@@ -305,6 +309,58 @@ def _history_messages(
         messages=messages_from_input,
         image_input_enabled=image_input_enabled,
     )
+
+
+def _with_model_compatible_tool_content(
+    messages: list[BaseMessage],
+    *,
+    image_input_enabled: bool,
+) -> list[BaseMessage]:
+    compatible: list[BaseMessage] = []
+    for message in messages:
+        if image_input_enabled and isinstance(message, ToolMessage):
+            compatible.append(_with_tool_image_content(message))
+            continue
+        content = getattr(message, "content", None)
+        if not isinstance(message, ToolMessage) or not isinstance(content, list):
+            compatible.append(message)
+            continue
+        retained = [
+            block
+            for block in content
+            if not isinstance(block, dict) or str(block.get("type") or "") != "image_url"
+        ]
+        normalized_content: str | list[Any]
+        if len(retained) == 1 and isinstance(retained[0], dict) and retained[0].get("type") == "text":
+            normalized_content = str(retained[0].get("text") or "")
+        else:
+            normalized_content = retained
+        compatible.append(message.model_copy(update={"content": normalized_content}))
+    return compatible
+
+
+def _with_tool_image_content(message: ToolMessage) -> ToolMessage:
+    metadata = dict(getattr(message, "additional_kwargs", {}) or {}).get(
+        "agent_factory_tool_image"
+    )
+    if not isinstance(metadata, dict):
+        return message
+    path = str(metadata.get("path") or "").strip()
+    mime_type = str(metadata.get("mime_type") or "").strip()
+    if not path or not mime_type.startswith("image/"):
+        return message
+    try:
+        image_parts = image_attachment_content_parts([{"path": path, "mime_type": mime_type}])
+    except AttachmentImportError:
+        return message
+    if not image_parts:
+        return message
+    text = _message_text(message)
+    content: list[dict[str, Any]] = []
+    if text:
+        content.append({"type": "text", "text": text})
+    content.extend(image_parts)
+    return message.model_copy(update={"content": content})
 
 
 def _with_current_user_attachments(

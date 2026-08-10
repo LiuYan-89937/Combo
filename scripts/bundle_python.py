@@ -4,9 +4,9 @@
 用于生产环境的 Python 运行时
 """
 import os
-import sys
 import platform
 import shutil
+import sys
 import tarfile
 import zipfile
 from pathlib import Path
@@ -193,6 +193,14 @@ def install_dependencies(python_dir: Path, project_root: Path):
             [str(python_exe), "-m", "pip", "install", "-e", f"{project_root}[web]"],
             check=True
         )
+        browser_dir = python_dir / "playwright-browsers"
+        browser_environment = {**os.environ, "PLAYWRIGHT_BROWSERS_PATH": str(browser_dir)}
+        print("安装 Chromium 浏览器运行时...")
+        subprocess.run(
+            [str(python_exe), "-m", "playwright", "install", "chromium"],
+            check=True,
+            env=browser_environment,
+        )
         print("✓ 依赖安装完成")
     except subprocess.CalledProcessError as e:
         print(f"✗ 依赖安装失败: {e}")
@@ -225,6 +233,9 @@ def main():
     # 3. 安装项目依赖
     print("\n准备安装项目依赖...")
     install_dependencies(python_bundle_dir, project_root)
+
+    # 依赖与 Chromium 安装后可能新增符号链接，统一转换为可打包文件。
+    _convert_symlinks_to_files(python_bundle_dir)
 
     print("\n" + "=" * 60)
     print("✓ Python 打包完成")

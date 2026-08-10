@@ -27,6 +27,7 @@ dependencies = [
     "mcp>=1.0",
     "packaging>=24",
     "pydantic>=2.8",
+    "playwright>=1.54,<2",
     "pypdf>=4.0",
     "ruamel.yaml>=0.18",
     "langchain-anthropic>=1.1,<2",
