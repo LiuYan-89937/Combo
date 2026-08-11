@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True, slots=True)
 class DelegationRequest:
     strategy: ExecutionStrategy
+    agent_name: str
     system_prompt: str
     objective: str
     capability_names: tuple[str, ...]
@@ -180,6 +181,7 @@ class BoundDelegationRuntime:
             task_revision=1,
             parent_task_revision=parent.request.task_revision,
             strategy=request.strategy,
+            agent_name=request.agent_name,
             system_prompt=_child_system_prompt(request.system_prompt),
             objective=request.objective,
             acceptance_criteria=request.acceptance_criteria,
@@ -220,6 +222,7 @@ class BoundDelegationRuntime:
         )
         return {
             "status": "queued",
+            "agent_name": request.agent_name,
             "objective": request.objective,
             "strategy": request.strategy,
             "capabilities": list(request.capability_names),
@@ -238,6 +241,7 @@ class BoundDelegationRuntime:
         return {
             "tasks": [
                 {
+                    "agent_name": record.envelope.agent_name,
                     "objective": record.envelope.objective,
                     "strategy": record.envelope.strategy or record.child_runtime.request.strategy,
                     "status": record.status,
@@ -261,7 +265,10 @@ def _child_system_prompt(system_prompt: str) -> str:
         f"{system_prompt.strip()}\n\n"
         "You are a single-level temporary agent. Work non-blockingly in the shared workspace and do not "
         "delegate further. Only claim effects backed by native tool results. Use only the tools presented "
-        "to the current graph node; tool availability can differ between planning, execution, and finalization."
+        "to the current graph node; tool availability can differ between planning, execution, and finalization. "
+        "Before a tool call, put one concise user-facing sentence in the assistant content describing what you "
+        "are doing now. Keep it factual, action-oriented, and free of private reasoning; this sentence is used "
+        "as the live task activity summary."
     )
 
 

@@ -11,6 +11,7 @@ const REQUEST_SCOPED_PREFIXES = [
   'context_',
   'interrupt_',
   'runtime_request_',
+  'runtime_activity_',
   'runtime_paused',
   'runtime_resumed',
 ]
@@ -56,7 +57,8 @@ export function isBackgroundEvent(
 }
 
 export function isRestorableProcessStateEvent(eventType: string): boolean {
-  return ['stage_', 'node_', 'plan_', 'context_', 'memory_'].some((prefix) => eventType.startsWith(prefix))
+  return ['stage_', 'node_', 'plan_', 'context_', 'memory_', 'runtime_activity_']
+    .some((prefix) => eventType.startsWith(prefix))
 }
 
 export function interruptType(event: FactoryFrontendEvent | null): string {

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
+import json
 import os
 from pathlib import Path
 from collections.abc import Callable
@@ -13,7 +15,6 @@ from agent_factory.dynamic_runtime.capability_resolution_services import (
     ActiveCapabilityPolicyEvaluator,
     CapabilityResolutionConfig,
     PublishedCapabilityCompatibilityResolver,
-    PublishedCapabilitySearchIndex,
     ReceiptBackedCapabilityHealthResolver,
     ReceiptBackedDependencyEnvironmentResolver,
 )
@@ -24,6 +25,10 @@ from agent_factory.dynamic_runtime.database import DynamicRuntimeDatabase, Dynam
 from agent_factory.dynamic_runtime.capability_store import CapabilityStore
 from agent_factory.dynamic_runtime.approval_store import CapabilityApprovalGrantStore
 from agent_factory.dynamic_runtime.capability_resolver import MainTurnCapabilityResolver
+from agent_factory.dynamic_runtime.capability_search import (
+    CapabilityEmbeddingRuntime,
+    HybridCapabilitySearchIndex,
+)
 from agent_factory.dynamic_runtime.cancellation import (
     CancelRuntimeCommandHandler,
     RuntimeCancellationStore,
@@ -72,6 +77,7 @@ from agent_factory.dynamic_runtime.resume import ResumeInterruptCommandHandler
 from agent_factory.dynamic_runtime.steering import SteerRuntimeCommandHandler
 from agent_factory.dynamic_runtime.services import DynamicRuntimeServiceSet, DynamicRuntimeServicesFactory
 from agent_factory.model_pool.store import ModelPoolStore
+from agent_factory.models.embedding_model import resolve_embedding_model_profile
 from agent_factory.model_pool.usage import ModelUsageStore
 from agent_factory.runtime_protocol import ApplicationGeneration
 from agent_factory.runtime_protocol.versioning import RUNTIME_PROTOCOL_VERSION, RUNTIME_SCHEMA_VERSION
@@ -138,6 +144,7 @@ class DynamicRuntimeApplication:
         capability_resolver: MainTurnCapabilityResolver,
         runtime_service: DynamicRuntimeService,
         recovery_report: RuntimeRecoveryReport,
+        capability_search: HybridCapabilitySearchIndex,
     ) -> None:
         self.config = config
         self.database = database
@@ -148,6 +155,7 @@ class DynamicRuntimeApplication:
         self.capability_resolver = capability_resolver
         self.runtime_service = runtime_service
         self.recovery_report = recovery_report
+        self.capability_search = capability_search
         self.command_executions = CommandExecutionRegistry()
 
     @classmethod
@@ -155,7 +163,7 @@ class DynamicRuntimeApplication:
         cls,
         *,
         config: DynamicRuntimeApplicationConfig,
-        services_factory: DynamicRuntimeServicesFactory | Callable[[DynamicRuntimeStores], DynamicRuntimeServicesFactory],
+        services_factory: DynamicRuntimeServicesFactory | Callable[[DynamicRuntimeStores, HybridCapabilitySearchIndex], DynamicRuntimeServicesFactory],
         model_pool_store: ModelPoolStore,
         launch_context_resolver: RuntimeLaunchContextResolver | Callable[[DynamicRuntimeStores], RuntimeLaunchContextResolver],
         capability_bootstrap: Callable[[DynamicRuntimeStores, CapabilityAdapterRegistry], None],
@@ -170,16 +178,22 @@ class DynamicRuntimeApplication:
         generation = _starting_generation(config, stores.generations.next_generation_number())
         stores.generations.acquire(generation)
         try:
-            configured_services = services_factory(stores) if callable(services_factory) else services_factory
+            capability_search = HybridCapabilitySearchIndex(
+                database=database,
+                config=config.capability_resolution.search,
+                embedding_runtime=_embedding_runtime_resolver(model_pool_store),
+            )
+            configured_services = services_factory(stores, capability_search) if callable(services_factory) else services_factory
             service_set = configured_services.build()
             model_resolver = RuntimeModelResolver(model_pool_store)
             adapters = CapabilityAdapterRegistry.build(default_capability_adapters())
             adapters.require_complete()
             capability_bootstrap(stores, adapters)
+            capability_search.refresh(stores.capabilities.active_capabilities())
             resolution_config = config.capability_resolution
             capability_resolver = MainTurnCapabilityResolver(
                 store=stores.capabilities,
-                search_index=PublishedCapabilitySearchIndex(resolution_config.search),
+                search_index=capability_search,
                 policy_evaluator=ActiveCapabilityPolicyEvaluator(
                     allowed_trust_levels=resolution_config.allowed_trust_levels,
                 ),
@@ -221,6 +235,8 @@ class DynamicRuntimeApplication:
             )
             stores.generations.replace(active, expected_status="starting")
         except Exception:
+            if "capability_search" in locals():
+                capability_search.close()
             crashed_at = _utc_now_text()
             crashed = generation.model_copy(
                 update={
@@ -241,6 +257,7 @@ class DynamicRuntimeApplication:
             capability_resolver=capability_resolver,
             runtime_service=runtime_service,
             recovery_report=recovery_report,
+            capability_search=capability_search,
         )
 
     def renew_generation_lease(self) -> ApplicationGeneration:
@@ -302,9 +319,7 @@ class DynamicRuntimeApplication:
             "steer_runtime_request": SteerRuntimeCommandHandler(
                 commands=self.stores.commands,
                 runtime_instances=self.stores.runtime_instances,
-                cancellations=self.stores.cancellations,
                 run_controls=self.stores.run_controls,
-                executions=self.command_executions,
             ),
         }
         return self.command_dispatcher(handlers)
@@ -312,6 +327,7 @@ class DynamicRuntimeApplication:
     def close(self) -> None:
         current = self.generation
         if current.status in {"closed", "crashed"}:
+            self.capability_search.close()
             return
         now = _utc_now_text()
         if current.status == "active":
@@ -327,6 +343,7 @@ class DynamicRuntimeApplication:
         )
         self.stores.generations.replace(closed, expected_status=current.status)
         self.generation = closed
+        self.capability_search.close()
 
 
 def _stores(database: DynamicRuntimeDatabase) -> DynamicRuntimeStores:
@@ -356,6 +373,46 @@ def _stores(database: DynamicRuntimeDatabase) -> DynamicRuntimeStores:
         knowledge=GlobalKnowledgeStore(database),
         scheduler=WorkspaceSchedulerStore(database),
     )
+
+
+def _embedding_runtime_resolver(
+    store: ModelPoolStore,
+) -> Callable[[], CapabilityEmbeddingRuntime | None]:
+    def resolve() -> CapabilityEmbeddingRuntime | None:
+        profile_id = store.embedding_binding()
+        if not profile_id:
+            return None
+        resolved = resolve_embedding_model_profile(profile_id, store=store)
+        dimensions = resolved.settings.dims
+        if dimensions is None:
+            raise ValueError("embedding profile must declare dimensions")
+        fingerprint_payload = {
+            "profile_id": resolved.profile_id,
+            "provider": resolved.settings.provider,
+            "model": resolved.settings.model,
+            "base_url": resolved.settings.base_url,
+            "dimensions": dimensions,
+            "credential_digest": sha256(
+                str(resolved.settings.api_key or "").encode("utf-8")
+            ).hexdigest(),
+        }
+        fingerprint = sha256(
+            json.dumps(
+                fingerprint_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        return CapabilityEmbeddingRuntime(
+            profile_id=profile_id,
+            dimensions=dimensions,
+            fingerprint=fingerprint,
+            embed_documents=resolved.model.embed_documents,
+            embed_query=resolved.model.embed_query,
+        )
+
+    return resolve
 
 
 def _starting_generation(config: DynamicRuntimeApplicationConfig, generation: int) -> ApplicationGeneration:

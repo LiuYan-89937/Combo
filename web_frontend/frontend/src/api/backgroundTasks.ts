@@ -19,12 +19,12 @@ export interface BackgroundTask {
   status: BackgroundTaskStatus
   request_id: string
   child_runtime_instance_id: string
+  agent_name?: string | null
   task_text: string
+  activity_summary: string
+  activity_updated_at: string
   payload: Record<string, unknown>
   parent_task_id?: string | null
-  parent_package_id?: string | null
-  assignee_package_id?: string | null
-  assignee_session_id?: string | null
   delivery_standard: Record<string, unknown>
   visible_context: Record<string, unknown>
   depends_on: string[]

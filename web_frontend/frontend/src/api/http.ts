@@ -124,6 +124,20 @@ export async function requestJson<T>(url: string, init: RequestInit = {}): Promi
   return response.json() as Promise<T>
 }
 
+export async function requestFormJson<T>(url: string, formData: FormData): Promise<T> {
+  const response = await fetch(await backendUrl(url), {
+    method: 'POST',
+    headers: {
+      'X-AgentFactory-Principal': runtimePrincipalId(),
+      'X-AgentFactory-Client': runtimeClientInstanceId(),
+      'X-AgentFactory-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
+    },
+    body: formData,
+  })
+  if (!response.ok) throw await apiErrorFromResponse(response)
+  return response.json() as Promise<T>
+}
+
 export function withQuery(path: string, params: Record<string, string | number | undefined | null>): string {
   const search = new URLSearchParams()
   Object.entries(params).forEach(([key, value]) => {

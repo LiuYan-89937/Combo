@@ -1232,7 +1232,7 @@ def _active_pre_runtime_command(backend: Any, principal_id: str, command: dict[s
         row = connection.execute(
             """
             select receipt_json from command_inbox
-            where principal_id = ? and command_kind = 'send_message' and status = 'running'
+            where principal_id = ? and command_kind = 'send_message' and status in ('queued', 'running')
               and json_extract(receipt_json, '$.runtime_instance_id') is null
               and (? = '' or session_id = ?)
               and (? = '' or command_id = ?)
@@ -1614,6 +1614,7 @@ def _delegated_task_row_view(backend: Any, row: Any) -> dict[str, Any]:
         for event_row in event_rows
     ]
     latest = events[-1] if events else None
+    current_activity = _latest_runtime_activity(events)
     result = latest.payload.get("result") if latest and latest.event_type == "result" else None
     error = latest.payload.get("error") if latest and latest.event_type == "failed" else None
     artifacts = [
@@ -1628,12 +1629,12 @@ def _delegated_task_row_view(backend: Any, row: Any) -> dict[str, Any]:
         "status": _background_task_status(str(row["status"]), latest),
         "request_id": str(row["request_id"]),
         "child_runtime_instance_id": str(row["child_runtime_instance_id"]),
+        "agent_name": task.agent_name,
         "task_text": task.objective,
+        "activity_summary": current_activity.get("summary") or task.objective,
+        "activity_updated_at": current_activity.get("created_at") or str(row["updated_at"]),
         "payload": task.model_dump(mode="json"),
         "parent_task_id": None,
-        "parent_package_id": SYSTEM_CHAT_PACKAGE_ID,
-        "assignee_package_id": "temporary-agent",
-        "assignee_session_id": None,
         "delivery_standard": {"acceptance_criteria": list(task.acceptance_criteria)},
         "visible_context": {"context_facts": list(task.context_facts)},
         "depends_on": [],
@@ -1641,7 +1642,7 @@ def _delegated_task_row_view(backend: Any, row: Any) -> dict[str, Any]:
         "artifact_refs": artifacts,
         "result_summary": _task_result_summary(result),
         "result": {"value": result} if result is not None else None,
-        "error": error if isinstance(error, dict) else None,
+        "error": _delegated_error_view(error),
         "pending_interaction": _pending_task_interaction(latest),
         "created_at": str(row["created_at"]),
         "updated_at": str(row["updated_at"]),
@@ -1691,7 +1692,9 @@ def _delegated_task_event_views(
     for row in task_rows:
         raw = json.loads(str(row["payload_json"]))
         payload = raw.get("payload") if isinstance(raw.get("payload"), dict) else {}
-        timeline.append((str(row["created_at"]), str(row["event_id"]), _task_activity_payload(str(row["event_type"]), payload), str(row["event_type"])))
+        activity = _task_activity_payload(str(row["event_type"]), payload)
+        if activity is not None:
+            timeline.append((str(row["created_at"]), str(row["event_id"]), activity, str(row["event_type"])))
     for row in tool_rows:
         record = ToolCallRecord.model_validate_json(str(row["payload_json"]))
         timeline.append((record.updated_at, f"tool:{record.tool_call_id}:{record.status}", _tool_activity_payload(record), "tool"))
@@ -1700,7 +1703,7 @@ def _delegated_task_event_views(
         {
             "seq": index,
             "event_id": event_id,
-            "event_type": "background_task_progress_report",
+            "event_type": "background_task_activity",
             "created_at": created_at,
             "request_id": task["request_id"],
             "task_id": task_id,
@@ -1726,16 +1729,15 @@ def _runtime_activity_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {"phase_id": kind, "title_key": title_key, "summary_key": summary_key, "summary": str(payload.get("status") or kind), "status": payload.get("status") or "running", "details": payload}
 
 
-def _task_activity_payload(event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
-    if event_type == "progress":
-        activity_type = str(payload.get("activity_type") or "progress")
-        source_event_id = str(payload.get("source_event_id") or activity_type)
-        node_id = str(payload.get("node_id") or "").strip()
+def _task_activity_payload(event_type: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+    if event_type == "activity":
+        source_event_id = str(payload.get("source_event_id") or "runtime_activity_updated")
         return {
             "phase_id": f"activity:{source_event_id}",
-            "title": activity_type,
-            "summary": node_id or activity_type,
-            "status": "completed",
+            "category": "activity",
+            "title_key": "backgroundTask.activity.current",
+            "summary": str(payload.get("summary") or "").strip(),
+            "status": str(payload.get("status") or "active"),
             "details": payload,
         }
     title_key = {
@@ -1745,19 +1747,36 @@ def _task_activity_payload(event_type: str, payload: dict[str, Any]) -> dict[str
         "failed": "backgroundTask.activity.failed",
         "cancelled": "backgroundTask.activity.cancelled",
     }.get(event_type, "backgroundTask.activity.progress")
-    summary = _task_result_summary(payload.get("result")) or str(payload.get("summary") or event_type)
-    return {"phase_id": f"task:{event_type}", "title_key": title_key, "summary": summary, "status": "completed" if event_type == "result" else event_type, "details": payload}
+    error = _delegated_error_view(payload.get("error")) if event_type == "failed" else None
+    summary = (
+        str(error.get("message") or "")
+        if error is not None
+        else _task_result_summary(payload.get("result")) or str(payload.get("summary") or event_type)
+    )
+    return {"phase_id": f"task:{event_type}", "category": "lifecycle", "title_key": title_key, "summary": summary, "status": "completed" if event_type == "result" else event_type, "details": payload}
 
 
 def _tool_activity_payload(record: ToolCallRecord) -> dict[str, Any]:
     return {
         "phase_id": f"tool:{record.tool_call_id}",
+        "category": "tool",
         "title": record.model_alias,
         "summary_key": f"backgroundTask.toolStatus.{record.status}",
         "summary": record.status,
         "status": record.status,
         "details": record.model_dump(mode="json"),
     }
+
+
+def _latest_runtime_activity(events: list[Any]) -> dict[str, str]:
+    for event in reversed(events):
+        if event.event_type != "activity":
+            continue
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        summary = str(payload.get("summary") or "").strip()
+        if summary:
+            return {"summary": summary, "created_at": str(event.created_at)}
+    return {}
 
 
 def _pending_task_interaction(event: Any) -> dict[str, Any] | None:
@@ -1791,6 +1810,24 @@ def _task_result_summary(value: Any) -> str:
     if isinstance(value, dict) and value.get("summary") is not None:
         return str(value["summary"])[:240]
     return json.dumps(value, ensure_ascii=False)[:240]
+
+
+def _delegated_error_view(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    details = value.get("details") if isinstance(value.get("details"), dict) else {}
+    message = str(
+        details.get("message")
+        or value.get("message")
+        or value.get("user_message_key")
+        or value.get("code")
+        or ""
+    ).strip()
+    return {
+        "code": str(value.get("code") or "runtime_execution_failed"),
+        "message": message,
+        "details": details,
+    }
 
 
 def _background_task_status(value: str, latest_event: Any = None) -> str:

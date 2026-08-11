@@ -6,7 +6,9 @@ from dataclasses import dataclass
 
 from agent_factory.dynamic_runtime.application import DynamicRuntimeApplication
 from agent_factory.dynamic_runtime.dispatcher import CommandDispatcher
+from agent_factory.dynamic_runtime.launch_context import render_delegation_notifications
 from agent_factory.dynamic_runtime.outbox_publisher import OutboxPublisher
+from agent_factory.dynamic_runtime.run_control import RuntimeInputInjection
 
 
 FailureReporter = Callable[[str, BaseException], None]
@@ -157,13 +159,42 @@ class DynamicRuntimeSupervisor:
                 if claim is None:
                     await self._wait_for(self._temporary_wakeup)
                     continue
-                await asyncio.to_thread(self._application.runtime_service.execute_delegated, claim)
+                result = await asyncio.to_thread(self._application.runtime_service.execute_delegated, claim)
+                self._notify_active_main(result.runtime_instance)
                 self.notify_outbox()
             except BaseException as exc:
                 if isinstance(exc, asyncio.CancelledError):
                     raise
                 self._report_failure(component, exc)
                 await self._wait_for(self._temporary_wakeup)
+
+    def _notify_active_main(self, child_instance: object) -> None:
+        request = getattr(child_instance, "request", None)
+        session_id = str(getattr(request, "session_id", "") or "").strip()
+        principal_id = str(getattr(request, "principal_id", "") or "").strip()
+        if not session_id or not principal_id:
+            return
+        try:
+            active = self._application.stores.runtime_instances.active_main_for_session(
+                session_id=session_id,
+                principal_id=principal_id,
+            )
+        except LookupError:
+            return
+        events = self._application.stores.delegations.claim_completion_notifications(active)
+        if not events:
+            return
+        injection = RuntimeInputInjection(
+            injection_id="delegation-notification:" + ":".join(event.event_id for event in events),
+            role="system",
+            content=render_delegation_notifications(events),
+        )
+        accepted = self._application.stores.run_controls.submit_input(
+            runtime_instance_id=active.runtime_instance_id,
+            injection=injection,
+        )
+        if not accepted:
+            self._application.stores.delegations.release_completion_notifications(active, events)
 
     async def _generation_loop(self) -> None:
         while not self._stop.is_set():

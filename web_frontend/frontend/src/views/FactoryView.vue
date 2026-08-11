@@ -81,6 +81,7 @@
           @send="handleSend"
           @cancel="handleCancel"
           @steer="handleSteer"
+          @cancel-queued="handleCancelQueued"
         >
           <template #before-send><ContextProgressControl /></template>
         </MessageInput>
@@ -179,6 +180,7 @@ const {
   cancelRequest,
   sendMessage,
   steerQueuedRequest,
+  cancelQueuedRequest,
 } = useFactoryConversation()
 
 const {
@@ -267,6 +269,12 @@ function handleCancel() {
 
 function handleSteer(requestId: string) {
   steerQueuedRequest(requestId)
+}
+
+function handleCancelQueued(message: { requestId: string; content: string }) {
+  cancelQueuedRequest(message.requestId)
+  inputRef.value?.restoreDraft(message.content, [])
+  nextTick(() => inputRef.value?.focus())
 }
 
 function addMessageReference(message: TranscriptItem) {

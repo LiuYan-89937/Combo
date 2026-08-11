@@ -212,7 +212,7 @@ class ComposedRuntimeLaunchContextResolver(RuntimeLaunchContextResolver):
             delegation_notifications = ""
         else:
             base_prompt = self._prompt_provider.load()
-            delegation_notifications = _render_delegation_notifications(
+            delegation_notifications = render_delegation_notifications(
                 self._delegations.claim_completion_notifications(instance)
             )
         capability_instructions = (
@@ -285,13 +285,18 @@ def _render_system_prompt(
     return "\n\n".join(sections)
 
 
-def _render_delegation_notifications(events: tuple[Any, ...]) -> str:
+def render_delegation_notifications(events: tuple[Any, ...]) -> str:
     if not events:
         return ""
     entries = []
     for event in events:
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
+        details = error.get("details") if isinstance(error.get("details"), dict) else {}
+        reason = str(details.get("message") or error.get("message") or "").strip()
+        suffix = f" Reason: {reason}" if reason else ""
         entries.append(
-            f"- A delegated task finished with status {event.event_type}."
+            f"- Delegated task {event.task_id} finished with status {event.event_type}.{suffix}"
         )
     return (
         "Delegated task completion notifications received since the previous main runtime. "

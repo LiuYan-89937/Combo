@@ -28,6 +28,7 @@ import {
   applyContextActivityEvent,
   applyKnowledgeActivityEvent,
   applyMemoryActivityEvent,
+  applyRuntimeActivityEvent,
   applySchedulerActivityEvent,
   recordDebugEvent,
   recordTimelineEvent,
@@ -141,6 +142,7 @@ export const useRuntimeStore = defineStore('runtime', {
     conversationTurns: [],
     timeline: [],
     debugEvents: [],
+    runtimeActivity: { status: 'idle' },
     contextActivity: { status: 'idle' },
     contextWindow: null,
     memoryActivity: { status: 'idle' },
@@ -189,7 +191,7 @@ export const useRuntimeStore = defineStore('runtime', {
       return Object.values(state.activeRequests).filter((request) => (
         request.source === 'user'
         && request.status === 'running'
-        && ['queued', 'steering'].includes(String(request.payload?.dispatch_state || ''))
+        && request.payload?.dispatch_state === 'queued'
         && (!state.activeConversationScope || request.conversationScope === state.activeConversationScope)
       )).length
     },
@@ -199,7 +201,7 @@ export const useRuntimeStore = defineStore('runtime', {
         .filter((request) => (
           request.source === 'user'
           && request.status === 'running'
-          && ['queued', 'steering'].includes(String(request.payload?.dispatch_state || ''))
+          && request.payload?.dispatch_state === 'queued'
           && (!state.activeConversationScope || request.conversationScope === state.activeConversationScope)
         ))
         .sort((left, right) => {
@@ -212,7 +214,6 @@ export const useRuntimeStore = defineStore('runtime', {
             requestId: request.requestId,
             content: String(turn?.userMessage?.content || request.payload?.message || ''),
             position: Number(request.payload?.queue_position || 0),
-            steering: request.payload?.dispatch_state === 'steering',
           }
         })
     },
@@ -406,6 +407,11 @@ export const useRuntimeStore = defineStore('runtime', {
       // Plan
       else if (type === 'plan_updated') {
         this._handlePlanUpdated(event)
+      }
+
+      // User-facing runtime activity
+      else if (type === 'runtime_activity_updated') {
+        applyRuntimeActivityEvent(this, event)
       }
 
       // Message parts
@@ -605,6 +611,7 @@ export const useRuntimeStore = defineStore('runtime', {
       this.modelStreams = {}
       this.tools = []
       this.currentPlan = null
+      this.runtimeActivity = { status: 'idle' }
       const turn = ensureConversationTurn(this, event.request_id || null, event.timestamp)
       turn.status = 'running'
       turn.startedAt = event.timestamp
@@ -1010,8 +1017,8 @@ export const useRuntimeStore = defineStore('runtime', {
     },
 
     _handleRuntimeRequestSteering(event: FactoryFrontendEvent) {
-      this._registerActiveRequest(event, 'running')
-      this._setRequestDispatchState(event.request_id, 'steering', event.payload)
+      this._registerActiveRequest(event, 'completed')
+      this._setRequestDispatchState(event.request_id, 'promoted', event.payload)
     },
 
     _handleRuntimeRequestDispatched(event: FactoryFrontendEvent) {
@@ -1025,7 +1032,7 @@ export const useRuntimeStore = defineStore('runtime', {
 
     _setRequestDispatchState(
       requestId: string | null | undefined,
-      dispatchState: 'queued' | 'steering' | 'running' | 'stopping' | 'completed' | 'cancelled' | 'failed' | 'stopped',
+      dispatchState: 'queued' | 'promoted' | 'running' | 'stopping' | 'completed' | 'cancelled' | 'failed' | 'stopped',
       payload: Record<string, any> = {},
     ) {
       if (!requestId) return
@@ -1117,6 +1124,7 @@ export const useRuntimeStore = defineStore('runtime', {
       this.activeWorkspaceId = String(session.workspace_id || '') || null
       if (activate) this.currentMode = 'agent_package'
       this.currentPlan = snapshot.currentPlan
+      this.runtimeActivity = { status: 'idle' }
       this.contextActivity = { status: 'idle' }
       this.contextWindow = snapshot.contextWindow
       this.memoryActivity = { status: 'idle' }
@@ -1327,6 +1335,7 @@ export const useRuntimeStore = defineStore('runtime', {
       this.timeline = restored.timeline
       this.tools = restored.tools
       this.currentPlan = restored.currentPlan
+      this.runtimeActivity = restored.runtimeActivity
       this.contextActivity = restored.contextActivity
       this.contextWindow = restored.contextWindow
       this.memoryActivity = restored.memoryActivity
@@ -1474,6 +1483,7 @@ export const useRuntimeStore = defineStore('runtime', {
       this.modelStreams = {}
       this.tools = []
       this.currentPlan = null
+      this.runtimeActivity = { status: 'idle' }
       this.contextActivity = { status: 'idle' }
       this.contextWindow = null
       this.memoryActivity = { status: 'idle' }

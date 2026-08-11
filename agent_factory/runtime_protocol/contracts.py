@@ -628,6 +628,7 @@ class TaskEnvelope(FrozenProtocolModel):
     task_revision: int = Field(ge=1)
     parent_task_revision: int = Field(ge=1)
     strategy: ExecutionStrategy | None = None
+    agent_name: str | None = None
     system_prompt: str | None = None
     objective: str
     acceptance_criteria: tuple[str, ...] = ()
@@ -652,9 +653,9 @@ class TaskEnvelope(FrozenProtocolModel):
     def _required_envelope_text(cls, value: str, info: Any) -> str:
         return _required_text(value, info.field_name)
 
-    @field_validator("system_prompt")
+    @field_validator("agent_name", "system_prompt")
     @classmethod
-    def _optional_system_prompt(cls, value: str | None) -> str | None:
+    def _optional_envelope_text(cls, value: str | None) -> str | None:
         return _optional_text(value)
 
     @field_validator(

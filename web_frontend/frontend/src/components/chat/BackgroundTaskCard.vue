@@ -6,8 +6,9 @@
       </span>
       <span class="task-heading">
         <strong>{{ view.title }}</strong>
-        <small>{{ statusLabel }}</small>
+        <small>{{ view.objective }}</small>
       </span>
+      <span class="task-status-label">{{ statusLabel }}</span>
       <n-button
         v-if="!terminal"
         class="task-delete"
@@ -40,17 +41,13 @@
     </section>
 
     <section v-if="view.reports.length" class="task-section">
-      <h4>{{ t('backgroundTask.progressReports') }}</h4>
+      <h4>{{ t('backgroundTask.activity') }}</h4>
       <div class="progress-report-list">
         <div v-for="report in view.reports" :key="report.phaseId" class="progress-report-item">
           <span class="status-dot" :class="`dot-${normalizeStatus(report.status)}`" />
           <span>
             <strong>{{ report.title }}</strong>
             <small>{{ report.summary }}</small>
-            <details v-if="report.details" class="activity-details">
-              <summary>{{ t('common.details') }}</summary>
-              <pre>{{ formatDetails(report.details) }}</pre>
-            </details>
           </span>
           <time>{{ formatTime(report.occurredAt) }}</time>
         </div>
@@ -160,6 +157,8 @@ const statusLabel = computed(() => t(`backgroundTask.status.${view.value.status}
 const currentTitle = computed(() => localize(interaction.value?.title) || statusLabel.value)
 const currentDescription = computed(() => (
   interaction.value?.message
+  || (task.value.status === 'failed' ? task.value.error?.message : '')
+  || task.value.activity_summary
   || view.value.latestSummary
   || t(`backgroundTask.description.${task.value.status}` as any)
 ))
@@ -267,9 +266,9 @@ function stopPolling() {
 }
 
 function buildView(current: BackgroundTask, timeline: BackgroundTaskEvent[], fallbackTitle: string) {
-  const reportsByPhase = new Map<string, { phaseId: string; title: string; summary: string; status: string; occurredAt: string; details: Record<string, unknown> | null }>()
+  const reportsByPhase = new Map<string, { phaseId: string; title: string; summary: string; status: string; occurredAt: string }>()
   for (const event of timeline) {
-    if (event.event_type !== 'background_task_progress_report') continue
+    if (event.event_type !== 'background_task_activity') continue
     const phaseId = String(event.payload.phase_id || '').trim()
     const title = localize(event.payload.title_key) || String(event.payload.title || '').trim()
     const summary = localize(event.payload.summary_key) || String(event.payload.summary || '').trim()
@@ -280,20 +279,23 @@ function buildView(current: BackgroundTask, timeline: BackgroundTaskEvent[], fal
       summary,
       status: String(event.payload.status || 'completed'),
       occurredAt: String(event.payload.occurred_at || event.created_at),
-      details: event.payload.details && typeof event.payload.details === 'object'
-        ? event.payload.details as Record<string, unknown>
-        : null,
     })
   }
   const reports = Array.from(reportsByPhase.values())
   return {
-    title: current.task_text || fallbackTitle,
+    title: current.agent_name || fallbackTitle,
+    objective: current.task_text,
     status: current.status,
     reports,
     latestSummary: reports.at(-1)?.summary || '',
     artifacts: artifactViews(current),
     delivery: current.result_summary || '',
-    error: String(current.error?.message || ''),
+    error: String(
+      current.error?.message
+      || current.error?.details?.message
+      || current.error?.code
+      || '',
+    ),
   }
 }
 
@@ -322,10 +324,6 @@ function formatTime(value: unknown): string {
   return new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' }).format(parsed)
 }
 
-function formatDetails(value: Record<string, unknown>): string {
-  return JSON.stringify(value, null, 2)
-}
-
 </script>
 
 <style scoped>
@@ -333,9 +331,11 @@ function formatDetails(value: Record<string, unknown>): string {
 .task-header { display: flex; align-items: center; gap: 11px; }
 .task-mark { width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid var(--app-border); border-radius: 11px; }
 .task-heading { min-width: 0; flex: 1; display: grid; gap: 2px; }
+.task-status-label { flex: 0 0 auto; padding: 4px 8px; border: 1px solid var(--app-border); border-radius: 999px; color: var(--app-text-secondary); font-size: 10px; }
 .task-delete { flex: 0 0 auto; }
 .task-heading strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
-.task-heading small, .task-section small, .task-current small { color: var(--app-text-muted); font-size: 12px; line-height: 1.5; }
+.task-heading small { display: -webkit-box; overflow: hidden; color: var(--app-text-muted); font-size: 11px; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.task-section small, .task-current small { color: var(--app-text-muted); font-size: 12px; line-height: 1.5; }
 .task-current { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; padding: 12px; border: 1px solid var(--app-border); border-radius: 13px; }
 .task-current > span:last-child { display: grid; gap: 3px; }
 .status-dot { width: 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: var(--app-text-muted); }
@@ -348,9 +348,6 @@ function formatDetails(value: Record<string, unknown>): string {
 .progress-report-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 9px; align-items: start; }
 .progress-report-item > span:nth-child(2) { display: grid; gap: 2px; }
 .progress-report-item time { color: var(--app-text-muted); font-size: 10px; }
-.activity-details { margin-top: 5px; color: var(--app-text-muted); font-size: 11px; }
-.activity-details summary { cursor: pointer; }
-.activity-details pre { max-height: 220px; margin: 6px 0 0; padding: 8px; overflow: auto; border-radius: 8px; background: var(--app-code-background); color: var(--app-text); font-size: 10px; white-space: pre-wrap; word-break: break-word; }
 .task-interaction { display: grid; gap: 12px; }
 .task-interaction :deep(.tool-approval-panel), .task-interaction :deep(.resource-request-panel) { padding: 14px; box-shadow: none; }
 .interaction-copy { display: grid; gap: 5px; }

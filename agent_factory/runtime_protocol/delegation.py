@@ -11,7 +11,7 @@ from agent_factory.runtime_protocol.contracts import ApprovalMode, FrozenProtoco
 
 
 DelegatedTaskEventType = Literal[
-    "progress",
+    "activity",
     "question",
     "approval_required",
     "capability_request",

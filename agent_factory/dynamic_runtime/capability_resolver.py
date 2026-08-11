@@ -34,12 +34,15 @@ class CapabilitySearchMatch:
     capability_id: str
     score: float
     reason: str
+    evidence_id: str | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.capability_id, "capability search match capability_id")
         if not isfinite(self.score):
             raise ValueError("capability search match score must be finite")
         _require_text(self.reason, "capability search match reason")
+        if self.evidence_id is not None:
+            _require_text(self.evidence_id, "capability search match evidence_id")
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,6 +194,10 @@ class MainTurnCapabilityResolver:
         searchable = tuple(
             item for item in active
             if item.revision.capability_id not in excluded_capability_ids
+            and (
+                include_system_capabilities
+                or not _is_system_available_tool(item)
+            )
         )
         matches_by_requirement = tuple(
             (
@@ -356,6 +363,8 @@ class MainTurnCapabilityResolver:
         for requirement, matches in matches_by_requirement:
             accepted = False
             for match in matches:
+                if match.evidence_id is not None:
+                    evidence_ids.setdefault(match.capability_id, set()).add(match.evidence_id)
                 if select(
                     match.capability_id,
                     score=match.score,
@@ -476,6 +485,12 @@ def _system_available_capability_ids(
         if definition.system_available:
             capability_ids.append(item.revision.capability_id)
     return tuple(sorted(capability_ids))
+
+
+def _is_system_available_tool(item: ActiveCapability) -> bool:
+    if item.revision.kind != "tool":
+        return False
+    return ToolDefinition.model_validate(item.revision.content.definition).system_available
 
 
 def _reachable_selected_capabilities(

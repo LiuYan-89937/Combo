@@ -23,15 +23,15 @@ _TARGET = {
     "type": "object",
     "description": "A semantic or CSS locator. Provide exactly one of selector, role, text, label, placeholder, or test_id.",
     "properties": {
-        "selector": _STRING,
-        "role": _STRING,
-        "name": _STRING,
-        "text": _STRING,
-        "label": _STRING,
-        "placeholder": _STRING,
-        "test_id": _STRING,
-        "exact": {"type": "boolean", "default": False},
-        "nth": {"type": "integer", "minimum": 0},
+        "selector": {"type": "string", "description": "CSS selector. Prefer semantic locators when stable labels or roles are available."},
+        "role": {"type": "string", "description": "Accessibility role such as button, link, textbox, or option."},
+        "name": {"type": "string", "description": "Accessible name used together with role."},
+        "text": {"type": "string", "description": "Visible text used to locate an element."},
+        "label": {"type": "string", "description": "Associated form-control label."},
+        "placeholder": {"type": "string", "description": "Input placeholder text."},
+        "test_id": {"type": "string", "description": "Application-provided test identifier."},
+        "exact": {"type": "boolean", "default": False, "description": "Require an exact semantic text or name match."},
+        "nth": {"type": "integer", "minimum": 0, "description": "Zero-based match index when the locator resolves multiple elements."},
     },
     "additionalProperties": False,
 }
@@ -89,7 +89,7 @@ def get_browser_tool_specs() -> list[ToolSpec]:
             "browser_open",
             "Navigate an isolated browser page to an HTTP or HTTPS URL. By default this reuses the active page. Pass page_id to navigate a specific existing page, or set new_page=true only when another simultaneous page is intentionally required. Do not open a new page for retries, redirects, or continued work on the same site. Returns a page_id for subsequent browser tools.",
             {
-                "url": _STRING,
+                "url": {"type": "string", "description": "Absolute HTTP or HTTPS URL to open."},
                 "page_id": _OPEN_PAGE_ID,
                 "new_page": {
                     "type": "boolean",
@@ -100,6 +100,7 @@ def get_browser_tool_specs() -> list[ToolSpec]:
                     "type": "string",
                     "enum": ["commit", "domcontentloaded", "load", "networkidle"],
                     "default": "domcontentloaded",
+                    "description": "Navigation lifecycle milestone to await before returning.",
                 },
             },
             required=["url"],
@@ -118,8 +119,9 @@ def get_browser_tool_specs() -> list[ToolSpec]:
                     "minimum": 1000,
                     "maximum": 200000,
                     "default": 30000,
+                    "description": "Maximum page-text characters returned to the model.",
                 },
-                "include_links": {"type": "boolean", "default": True},
+                "include_links": {"type": "boolean", "default": True, "description": "Include discovered page links in the structured snapshot."},
             },
             output_properties={
                 **_PAGE_RESULT_PROPERTIES,
@@ -151,9 +153,9 @@ def get_browser_tool_specs() -> list[ToolSpec]:
             {
                 "page_id": _ACTIVE_PAGE_ID,
                 "target": deepcopy(_TARGET),
-                "text": _STRING,
-                "clear": {"type": "boolean", "default": True},
-                "submit": {"type": "boolean", "default": False},
+                "text": {"type": "string", "description": "Text to enter into the selected input."},
+                "clear": {"type": "boolean", "default": True, "description": "Clear the current input value before typing."},
+                "submit": {"type": "boolean", "default": False, "description": "Press Enter after typing to submit the input."},
             },
             required=["target", "text"],
             risk_level="medium",
@@ -165,7 +167,7 @@ def get_browser_tool_specs() -> list[ToolSpec]:
             {
                 "page_id": _ACTIVE_PAGE_ID,
                 "target": deepcopy(_TARGET),
-                "values": {"type": "array", "items": _STRING, "minItems": 1},
+                "values": {"type": "array", "items": _STRING, "minItems": 1, "description": "Option values to select."},
             },
             required=["target", "values"],
             risk_level="medium",
@@ -174,7 +176,7 @@ def get_browser_tool_specs() -> list[ToolSpec]:
         _spec(
             "browser_press",
             "Press a keyboard key or shortcut on an element or the active page.",
-            {"page_id": _ACTIVE_PAGE_ID, "target": deepcopy(_TARGET), "key": _STRING},
+            {"page_id": _ACTIVE_PAGE_ID, "target": deepcopy(_TARGET), "key": {"type": "string", "description": "Playwright key or shortcut such as Enter, Escape, or Control+A."}},
             required=["key"],
             risk_level="medium",
             effects=("network", "external_side_effect"),
@@ -185,8 +187,8 @@ def get_browser_tool_specs() -> list[ToolSpec]:
             {
                 "page_id": _ACTIVE_PAGE_ID,
                 "target": deepcopy(_TARGET),
-                "delta_x": {"type": "integer", "default": 0},
-                "delta_y": {"type": "integer", "default": 600},
+                "delta_x": {"type": "integer", "default": 0, "description": "Horizontal scroll distance in pixels."},
+                "delta_y": {"type": "integer", "default": 600, "description": "Vertical scroll distance in pixels."},
             },
         ),
         _spec(
@@ -200,11 +202,13 @@ def get_browser_tool_specs() -> list[ToolSpec]:
                     "minimum": 1,
                     "maximum": 60000,
                     "default": 5000,
+                    "description": "Bounded wait duration in milliseconds.",
                 },
                 "state": {
                     "type": "string",
                     "enum": ["attached", "detached", "visible", "hidden"],
                     "default": "visible",
+                    "description": "Requested element state when target is provided.",
                 },
             },
         ),
@@ -213,13 +217,14 @@ def get_browser_tool_specs() -> list[ToolSpec]:
             "Extract text, HTML, or links from the page or a CSS selector.",
             {
                 "page_id": _ACTIVE_PAGE_ID,
-                "selector": _STRING,
-                "format": {"type": "string", "enum": ["text", "html", "links"], "default": "text"},
+                "selector": {"type": "string", "description": "Optional CSS selector limiting extraction to one subtree."},
+                "format": {"type": "string", "enum": ["text", "html", "links"], "default": "text", "description": "Content representation to extract."},
                 "max_chars": {
                     "type": "integer",
                     "minimum": 1000,
                     "maximum": 500000,
                     "default": 50000,
+                    "description": "Maximum extracted characters returned to the model.",
                 },
             },
             output_properties={
@@ -236,8 +241,8 @@ def get_browser_tool_specs() -> list[ToolSpec]:
             {
                 "page_id": _ACTIVE_PAGE_ID,
                 "target": deepcopy(_TARGET),
-                "full_page": {"type": "boolean", "default": False},
-                "path": _STRING,
+                "full_page": {"type": "boolean", "default": False, "description": "Capture the entire scrollable page instead of the viewport or target."},
+                "path": {"type": "string", "description": "Optional workspace-relative PNG output path."},
             },
             output_properties={
                 **_PAGE_RESULT_PROPERTIES,
@@ -266,7 +271,7 @@ def get_browser_tool_specs() -> list[ToolSpec]:
         _spec(
             "browser_download",
             "Click a download target and save the resulting file inside the current workspace.",
-            {"page_id": _ACTIVE_PAGE_ID, "target": deepcopy(_TARGET), "path": _STRING},
+            {"page_id": _ACTIVE_PAGE_ID, "target": deepcopy(_TARGET), "path": {"type": "string", "description": "Optional workspace-relative destination path for the downloaded file."}},
             required=["target"],
             output_properties={
                 **_PAGE_RESULT_PROPERTIES,
@@ -289,7 +294,7 @@ def get_browser_tool_specs() -> list[ToolSpec]:
             {
                 "page_id": _ACTIVE_PAGE_ID,
                 "target": deepcopy(_TARGET),
-                "paths": {"type": "array", "items": _STRING, "minItems": 1},
+                "paths": {"type": "array", "items": _STRING, "minItems": 1, "description": "User-authorized workspace-relative files to upload."},
             },
             required=["target", "paths"],
             output_properties={
@@ -327,7 +332,7 @@ def get_browser_tool_specs() -> list[ToolSpec]:
         _spec(
             "browser_close",
             "Close one browser page, or close the entire isolated browser context for this Agent session.",
-            {"page_id": _ACTIVE_PAGE_ID, "close_context": {"type": "boolean", "default": False}},
+            {"page_id": _ACTIVE_PAGE_ID, "close_context": {"type": "boolean", "default": False, "description": "Close every page and release the isolated browser context instead of one page."}},
             output_properties={
                 "browser_view_id": {"type": ["string", "null"]},
                 "browser_view_action": {"type": "string", "enum": ["close", "update"]},

@@ -931,7 +931,10 @@ def _exception_error(instance: RuntimeInstance, exc: Exception) -> RuntimeErrorE
         request_id=instance.request.request_id,
         runtime_instance_id=instance.runtime_instance_id,
         operation=instance.request.policy_snapshot.model.operation,
-        details={"exception_type": name},
+        details={
+            "exception_type": name,
+            "message": str(exc).strip() or name,
+        },
     )
 
 

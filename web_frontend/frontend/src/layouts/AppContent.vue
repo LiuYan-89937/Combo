@@ -36,6 +36,7 @@
     <DebugDrawer v-model:show="uiStore.debugDrawerOpen" />
 
     <SchedulerActivityDrawer />
+    <EmbeddingSetupReminder />
 
     <!-- SSE 事件流初始化 -->
     <EventStreamManager v-if="runtimeServicesEnabled" />
@@ -51,6 +52,7 @@ import TaskNotificationManager from '@/components/common/TaskNotificationManager
 import SettingsDrawer from '@/components/common/SettingsDrawer.vue'
 import DebugDrawer from '@/components/common/DebugDrawer.vue'
 import SchedulerActivityDrawer from '@/components/scheduler/SchedulerActivityDrawer.vue'
+import EmbeddingSetupReminder from '@/components/common/EmbeddingSetupReminder.vue'
 import EventStreamManager from '@/components/common/EventStreamManager.vue'
 import BrowserPanel from '@/components/browser/BrowserPanel.vue'
 

@@ -33,7 +33,7 @@ def _input_schema() -> dict:
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "action": {"type": "string", "enum": ["list", "describe", "read"]},
+            "action": {"type": "string", "enum": ["list", "describe", "read"], "description": "list 列出输出，describe 查看结构，read 分段读取内容。"},
             "output_id": {
                 "type": "string",
                 "description": "A real output_id returned by action=list or shown in a compacted tool observation output_ref.",
@@ -42,12 +42,12 @@ def _input_schema() -> dict:
                 "type": "string",
                 "description": "Optional dot path into the stored output, for example stdout or items.0.",
             },
-            "offset": {"type": "integer", "minimum": 0, "default": 0},
-            "limit": {"type": "integer", "minimum": 1, "maximum": 200000, "default": 12000},
+            "offset": {"type": "integer", "minimum": 0, "default": 0, "description": "分段读取的起始字符偏移。"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 200000, "default": 12000, "description": "本次最多读取的字符数。"},
         },
         "oneOf": [
-            {"properties": {"action": {"const": "list"}}, "required": ["action"]},
-            {"properties": {"action": {"const": "describe"}}, "required": ["action", "output_id"]},
-            {"properties": {"action": {"const": "read"}}, "required": ["action", "output_id"]},
+            {"properties": {"action": {"const": "list", "description": "列出当前会话可读取的完整工具输出。"}}, "required": ["action"]},
+            {"properties": {"action": {"const": "describe", "description": "查看指定输出的结构与大小。"}}, "required": ["action", "output_id"]},
+            {"properties": {"action": {"const": "read", "description": "按路径和偏移分段读取指定输出。"}}, "required": ["action", "output_id"]},
         ],
     }

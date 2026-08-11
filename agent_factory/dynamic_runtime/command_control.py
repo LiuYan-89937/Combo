@@ -35,6 +35,13 @@ class CancelCommandRequestHandler:
             return CommandOutcome(status="rejected", rejection_code="command_owner_mismatch")
         if target.status in {"completed", "failed", "cancelled", "rejected"}:
             return CommandOutcome(status="completed")
+        if target.status == "queued":
+            self._commands.cancel_queued_message(
+                command_id=target.command_id,
+                principal_id=envelope.principal_id,
+                session_id=envelope.session_id,
+            )
+            return CommandOutcome(status="completed")
         if target.status != "running" or target.runtime_instance_id is not None:
             return CommandOutcome(
                 status="rejected",

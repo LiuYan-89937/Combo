@@ -18,6 +18,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     result = runtime.delegate(
         DelegationRequest(
             strategy=_strategy(arguments.get("strategy")),
+            agent_name=_required_text(arguments.get("agent_name"), "agent_name"),
             system_prompt=_required_text(arguments.get("system_prompt"), "system_prompt"),
             objective=_required_text(arguments.get("objective"), "objective"),
             capability_names=_text_tuple(arguments.get("capabilities")),

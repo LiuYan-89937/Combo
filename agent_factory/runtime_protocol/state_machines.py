@@ -34,7 +34,7 @@ CONVERSATION_TURN_TRANSITIONS: Mapping[
     ConversationTurnStatus,
     frozenset[ConversationTurnStatus],
 ] = {
-    "queued": frozenset({"running", "failed", "cancelled"}),
+    "queued": frozenset({"running", "completed", "failed", "cancelled"}),
     "running": frozenset({"waiting_approval", "waiting_external", "completed", "failed", "cancelled"}),
     "waiting_approval": frozenset({"running", "failed", "cancelled"}),
     "waiting_external": frozenset({"running", "failed", "cancelled"}),

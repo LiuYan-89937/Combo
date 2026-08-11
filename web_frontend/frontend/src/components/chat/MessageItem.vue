@@ -228,7 +228,6 @@ function stableColorIndex(value: string, size: number): number {
   padding: var(--app-space-lg) var(--app-space-md);
   border-radius: var(--app-radius-lg);
   transition: background-color var(--app-transition-base), transform var(--app-transition-spring), box-shadow var(--app-transition-base);
-  animation: app-fade-in-up 0.55s var(--app-transition-spring) both;
 }
 
 .message-item.role-assistant {
@@ -239,7 +238,6 @@ function stableColorIndex(value: string, size: number): number {
 
 .message-item.streaming {
   position: relative;
-  animation: none;
 }
 
 .message-item.streaming::before {
@@ -276,7 +274,6 @@ function stableColorIndex(value: string, size: number): number {
 .message-avatar {
   flex-shrink: 0;
   padding-top: 2px;
-  animation: app-pop-in 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .message-content {

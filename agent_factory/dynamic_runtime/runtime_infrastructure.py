@@ -15,6 +15,7 @@ from agent_factory.dynamic_runtime.capability_definitions import (
 )
 from agent_factory.dynamic_runtime.mcp_runtime import MCPRuntimePool
 from agent_factory.dynamic_runtime.capability_catalog_runtime import CapabilityCatalogRuntime
+from agent_factory.dynamic_runtime.control_plane_store import GlobalKnowledgeStore, WorkspaceSchedulerStore
 from agent_factory.dynamic_runtime.memory_store import ScopedMemoryStore
 from agent_factory.dynamic_runtime.delegation_store import DelegationStore
 from agent_factory.dynamic_runtime.delegation_runtime import DelegationRuntimeCoordinator
@@ -45,6 +46,7 @@ from agent_factory.tooling.output_store import ToolOutputStore
 from agent_factory.tooling.builtins.browser.runtime import BrowserRuntime
 from agent_factory.tooling.builtins.process.manager import ProcessManager, ProcessRuntimeResource
 from agent_factory.tooling.builtins.process.runtime import resolve_shell_runtime
+from agent_factory.tooling.skillhub.service import SkillHubService
 from agent_factory.tooling.builtins.filesystem.common import FilesystemRuntimeResource
 from agent_factory.tooling.builtins.filesystem.file_locks import WorkspaceFileLockManager
 from agent_factory.tooling.builtins.filesystem.staged_write import StagedWriteStore
@@ -395,6 +397,9 @@ def runtime_resource_factory(
     memory_store: ScopedMemoryStore,
     delegations: DelegationStore,
     delegation_runtime: DelegationRuntimeCoordinator,
+    knowledge_store: GlobalKnowledgeStore,
+    scheduler_store: WorkspaceSchedulerStore,
+    skillhub_runtime: SkillHubService,
     process_resources: RuntimeProcessResourcePool,
     filesystem_resources: RuntimeFilesystemResourcePool,
 ) -> RuntimeResourceFactory:
@@ -406,6 +411,9 @@ def runtime_resource_factory(
         "capability_catalog",
         "memory_store",
         "delegation_runtime",
+        "knowledge_runtime",
+        "scheduler_runtime",
+        "skillhub_runtime",
     }:
         raise ValueError(f"unsupported runtime resource: {resource_name}")
 
@@ -428,6 +436,15 @@ def runtime_resource_factory(
             return ProjectedRuntimeResource(value=runtime_execution_identity(instance))
         if resource_name == "delegation_runtime":
             return ProjectedRuntimeResource(value=delegation_runtime.for_parent(instance))
+        if resource_name in {"knowledge_runtime", "scheduler_runtime", "skillhub_runtime"}:
+            if instance.request.runtime_role != "main":
+                raise PermissionError(f"{resource_name} is available only to the main runtime")
+            control_plane_resources = {
+                "knowledge_runtime": knowledge_store,
+                "scheduler_runtime": scheduler_store,
+                "skillhub_runtime": skillhub_runtime,
+            }
+            return ProjectedRuntimeResource(value=control_plane_resources[resource_name])
         workspace = conversations.require_workspace(instance.request.workspace_id)
         if workspace.principal_id != instance.request.principal_id:
             raise PermissionError("runtime workspace belongs to another principal")

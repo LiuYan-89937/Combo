@@ -15,7 +15,8 @@ def get_delegation_tool_specs() -> list[ToolSpec]:
         ToolSpec(
             id="delegate",
             description=(
-                "Start one non-blocking temporary agent task. Describe the child's role and objective, "
+                "Start one non-blocking temporary agent task. Give the child a concise user-facing role name, "
+                "then describe its role and objective, "
                 "select its execution graph, and pass only public Tool, MCP, or Skill names returned by a "
                 "preceding capability search. Runtime policy "
                 "supplies the shared workspace scope, model, approvals, and internal identities. Once accepted, "
@@ -26,13 +27,22 @@ def get_delegation_tool_specs() -> list[ToolSpec]:
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
+                    "agent_name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 40,
+                        "description": (
+                            "A concise task-specific role name shown in the task capsule, such as Researcher "
+                            "or Presentation Designer. Never use a generic Temporary Agent label."
+                        ),
+                    },
                     "strategy": {
                         "type": "string",
                         "enum": ["react", "plan_and_execute"],
                         "description": "Execution graph selected by the main agent for this child task.",
                     },
-                    "system_prompt": {"type": "string", "minLength": 1},
-                    "objective": {"type": "string", "minLength": 1},
+                    "system_prompt": {"type": "string", "minLength": 1, "description": "该临时 Agent 的职责、边界和工作方式，不要重复用户全部上下文。"},
+                    "objective": {"type": "string", "minLength": 1, "description": "需要临时 Agent 独立完成的具体目标和预期交付物。"},
                     "capabilities": {
                         "type": "array",
                         "items": {
@@ -45,15 +55,17 @@ def get_delegation_tool_specs() -> list[ToolSpec]:
                         },
                         "minItems": 1,
                         "uniqueItems": True,
+                        "description": "从 capability 搜索结果中选择并交给临时 Agent 的公开能力名称。",
                     },
                     "acceptance_criteria": {
                         "type": "array",
                         "items": {"type": "string", "minLength": 1},
                         "uniqueItems": True,
                         "default": [],
+                        "description": "判断临时任务是否完成的可验证条件。",
                     },
                 },
-                "required": ["strategy", "system_prompt", "objective", "capabilities"],
+                "required": ["agent_name", "strategy", "system_prompt", "objective", "capabilities"],
             },
             output_schema={"type": "object"},
             resources={DELEGATION_RUNTIME_RESOURCE: DELEGATION_RUNTIME_RESOURCE},

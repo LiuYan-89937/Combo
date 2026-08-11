@@ -120,6 +120,14 @@ def current_runtime_run_control() -> Any | None:
     return _RUNTIME_RUN_CONTROL.get()
 
 
+def consume_runtime_inputs() -> tuple[Any, ...]:
+    control = current_runtime_run_control()
+    consume = getattr(control, "consume_inputs", None)
+    if not callable(consume):
+        return ()
+    return tuple(consume())
+
+
 def register_runtime_tool_cancellation(callback: Callable[[], None]) -> Callable[[], None]:
     control = current_runtime_run_control()
     register = getattr(control, "register_tool_cancellation", None)

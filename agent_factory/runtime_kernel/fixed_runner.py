@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from time import perf_counter
 from typing import Any
 
-from langchain_core.messages import RemoveMessage
+from langchain_core.messages import HumanMessage, RemoveMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.errors import GraphInterrupt
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
@@ -25,6 +25,7 @@ from agent_factory.runtime_kernel.state.runtime_graph import (
 )
 from agent_factory.runtime_kernel.state import RuntimeState, merge_state_patch
 from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
+from agent_factory.tooling.execution_context import consume_runtime_inputs
 
 
 NextNodeResolver = Callable[[str, str | None], tuple[str, str] | None]
@@ -92,16 +93,57 @@ def make_fixed_runner(
         active_state = state
         messages_patch: list[Any] = []
         try:
-            active_state, context_messages = _prepare_context(
-                state=active_state,
-                context=context,
-                services=services,
+            injected_messages = (
+                _consume_injected_messages()
+                if implementation.impl_id in {"cognitive.answer", "terminal.commit"}
+                else []
             )
-            if context_messages is not None:
-                messages_patch.extend([RemoveMessage(id=REMOVE_ALL_MESSAGES), *context_messages])
+            if injected_messages:
+                context.graph_messages.extend(injected_messages)
+            if implementation.impl_id == "terminal.commit" and injected_messages:
+                context_messages = None
+                raw_patch = {
+                    "execution": {
+                        "current_node": context.node_id,
+                        "route_decision": "runtime.steered",
+                    }
+                }
+            else:
+                active_state, context_messages = _prepare_context(
+                    state=active_state,
+                    context=context,
+                    services=services,
+                )
+                raw_patch = implementation.execute(active_state, context)
+            prepared_messages = (
+                context_messages
+                if context_messages is not None
+                else list(context.graph_messages)
+                if injected_messages
+                else None
+            )
+            if prepared_messages is not None:
+                messages_patch.extend([RemoveMessage(id=REMOVE_ALL_MESSAGES), *prepared_messages])
 
-            raw_patch = implementation.execute(active_state, context)
             node_messages, patch = split_graph_patch(raw_patch)
+            route_decision = str((patch.get("execution") or {}).get("route_decision") or "")
+            if implementation.impl_id == "cognitive.answer" and route_decision != "model.requests_tool":
+                late_messages = _consume_injected_messages()
+                if late_messages:
+                    node_messages = late_messages
+                    conversation_patch = dict(patch.get("conversation") or {})
+                    conversation_patch.update(
+                        {
+                            "assistant_draft": None,
+                            "reasoning_content": None,
+                            "final_answer": None,
+                            "clarification_question": None,
+                        }
+                    )
+                    patch["conversation"] = conversation_patch
+                    execution_patch = dict(patch.get("execution") or {})
+                    execution_patch["route_decision"] = "runtime.steered"
+                    patch["execution"] = execution_patch
             messages_patch.extend(node_messages)
             validate_patch_sections(
                 implementation.impl_id,
@@ -144,6 +186,27 @@ def make_fixed_runner(
             return runtime_graph_patch(failed)
 
     return runner
+
+
+def _consume_injected_messages() -> list[Any]:
+    messages: list[Any] = []
+    for injection in consume_runtime_inputs():
+        role = str(getattr(injection, "role", "") or "")
+        content = str(getattr(injection, "content", "") or "").strip()
+        injection_id = str(getattr(injection, "injection_id", "") or "").strip()
+        if not content or not injection_id:
+            continue
+        if role == "user":
+            messages.append(HumanMessage(id=injection_id, content=content))
+        elif role == "system":
+            messages.append(
+                SystemMessage(
+                    id=injection_id,
+                    content=content,
+                    additional_kwargs={"kind": "runtime_notification"},
+                )
+            )
+    return messages
 
 
 def _prepare_context(

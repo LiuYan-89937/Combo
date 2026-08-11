@@ -313,7 +313,7 @@ class DelegationStore:
                     task_revision=instance.request.task_revision,
                     parent_task_revision=int(task_row["parent_task_revision"]),
                     sequence=sequence,
-                    event_type="progress",
+                    event_type="activity",
                     principal_id=instance.request.principal_id,
                     parent_runtime_instance_id=str(task_row["parent_runtime_instance_id"]),
                     child_runtime_instance_id=instance.runtime_instance_id,
@@ -350,7 +350,7 @@ class DelegationStore:
                         aggregate_id=event.task_id,
                         aggregate_revision=event.task_revision,
                         event_id=event.event_id,
-                        event_kind="delegated_task_progress",
+                        event_kind="delegated_task_activity",
                         payload=event.model_dump(mode="json"),
                         created_at=event.created_at,
                         updated_at=event.created_at,
@@ -435,28 +435,49 @@ class DelegationStore:
                 """
                 select event_id, payload_json from delegated_task_notifications
                 where principal_id = ? and session_id = ?
-                  and (delivered_runtime_instance_id is null or delivered_runtime_instance_id = ?)
+                  and delivered_runtime_instance_id is null
                 order by created_at, event_id
                 """,
                 (
                     instance.request.principal_id,
                     instance.request.session_id,
-                    instance.runtime_instance_id,
                 ),
             ).fetchall()
+            claimed_rows = []
             for row in rows:
-                conn.execute(
+                changed = conn.execute(
                     """
                     update delegated_task_notifications
                     set delivered_runtime_instance_id = ?, delivered_at = ?
                     where event_id = ? and delivered_runtime_instance_id is null
                     """,
                     (instance.runtime_instance_id, now, str(row["event_id"])),
-                )
+                ).rowcount
+                if changed == 1:
+                    claimed_rows.append(row)
         return tuple(
             DelegatedTaskEvent.model_validate_json(str(row["payload_json"]))
-            for row in rows
+            for row in claimed_rows
         )
+
+    def release_completion_notifications(
+        self,
+        instance: RuntimeInstance,
+        events: tuple[DelegatedTaskEvent, ...],
+    ) -> None:
+        if not events:
+            return
+        event_ids = tuple(event.event_id for event in events)
+        placeholders = ", ".join("?" for _ in event_ids)
+        with self._database.transaction() as conn:
+            conn.execute(
+                f"""
+                update delegated_task_notifications
+                set delivered_runtime_instance_id = null, delivered_at = null
+                where event_id in ({placeholders}) and delivered_runtime_instance_id = ?
+                """,
+                (*event_ids, instance.runtime_instance_id),
+            )
 
     def claim_next(self, *, generation: int, lease_seconds: int) -> DelegatedTaskClaim | None:
         if generation < 1:
@@ -654,29 +675,25 @@ def _delegated_observation_activities(chunk: Any) -> tuple[dict[str, Any], ...]:
         return ()
     chunk_type = str(chunk.get("type") or "")
     payload = chunk.get("payload")
-    candidates: list[dict[str, Any]] = []
-    if chunk_type == "node_event" and isinstance(payload, dict):
-        candidates.append(payload)
-    elif chunk_type == "tool_activity" and isinstance(payload, dict):
-        raw_events = payload.get("events")
-        if isinstance(raw_events, list):
-            candidates.extend(item for item in raw_events if isinstance(item, dict))
-    activities = []
-    for candidate in candidates:
-        event_type = str(candidate.get("event_type") or "").strip()
-        if not event_type or event_type.endswith("_delta"):
-            continue
-        body = candidate.get("payload")
-        activities.append(
-            {
-                "activity_type": event_type,
-                "node_id": str(candidate.get("node_id") or "") or None,
-                "source_event_id": str(candidate.get("event_id") or "") or None,
-                "created_at": str(candidate.get("created_at") or "") or utc_now_text(),
-                "details": _json_record(body if isinstance(body, dict) else {}),
-            }
-        )
-    return tuple(activities)
+    if chunk_type != "node_event" or not isinstance(payload, dict):
+        return ()
+    if str(payload.get("event_type") or "") != "runtime_activity_updated":
+        return ()
+    body = payload.get("payload")
+    details = _json_record(body if isinstance(body, dict) else {})
+    summary = str(details.get("summary") or "").strip()
+    if not summary:
+        return ()
+    return (
+        {
+            "summary": summary,
+            "status": str(details.get("status") or "active"),
+            "source": str(details.get("source") or "runtime"),
+            "source_event_id": str(payload.get("event_id") or "") or None,
+            "created_at": str(payload.get("created_at") or "") or utc_now_text(),
+            "details": details,
+        },
+    )
 
 
 def _json_record(value: dict[str, Any]) -> dict[str, Any]:

@@ -232,6 +232,7 @@ export interface ConversationScopeState {
   timeline: TimelineItem[]
   tools: ToolActivity[]
   currentPlan: RuntimePlanView | null
+  runtimeActivity: RuntimeActivityView
   contextActivity: RuntimeActivityView
   contextWindow: ContextWindowView | null
   memoryActivity: RuntimeActivityView
@@ -284,7 +285,6 @@ export interface QueuedMessageView {
   requestId: string
   content: string
   position: number
-  steering: boolean
 }
 
 // ========== 节点和阶段 ==========
@@ -568,6 +568,7 @@ export interface RuntimeViewState {
   conversationTurns: ConversationTurn[]
   timeline: TimelineItem[]
   debugEvents: FactoryFrontendEvent[]
+  runtimeActivity: RuntimeActivityView
   contextActivity: RuntimeActivityView
   contextWindow: ContextWindowView | null
   memoryActivity: RuntimeActivityView

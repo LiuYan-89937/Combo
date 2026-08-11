@@ -27,7 +27,7 @@ export function useFactoryMessageProjection() {
     const items: FactoryTimelineItem[] = []
     const projectedAssistantRequests = new Set<string>()
     runtimeStore.transcript.forEach((message, index) => {
-      if (['queued', 'steering'].includes(String(message.metadata?.dispatch_state || ''))) return
+      if (message.metadata?.dispatch_state === 'queued') return
       if (conversationVisibleParts(message.parts).length === 0) return
       const requestId = String(message.metadata?.request_id || '').trim()
       const isPrimaryAssistant = Boolean(
@@ -65,7 +65,7 @@ export function useFactoryMessageProjection() {
     if (!activeTurn?.userMessage) return []
     if (!requestOwnsActivePresentation(activeTurn.requestId)) return []
     if (activeTurn.assistantMessages.some(messageHasDisplayParts)) return []
-    const displayStatus = activeRuntimeDisplayStatus(runtimeStore.nodes, runtimeStore.contextActivity, t)
+    const displayStatus = activeRuntimeDisplayStatus(runtimeStore.runtimeActivity, runtimeStore.contextActivity, t)
     const statusText = displayStatus.text
     return [
       {
@@ -140,7 +140,7 @@ export function useFactoryMessageProjection() {
 }
 
 function activeRuntimeDisplayStatus(
-  nodes: ReturnType<typeof useRuntimeStore>['nodes'],
+  runtimeActivity: ReturnType<typeof useRuntimeStore>['runtimeActivity'],
   contextActivity: ReturnType<typeof useRuntimeStore>['contextActivity'],
   t: ReturnType<typeof useI18n>['t'],
 ): { text: string; role: 'assistant' | 'system' } {
@@ -150,18 +150,9 @@ function activeRuntimeDisplayStatus(
   ) {
     return { text: t('context.context_compression_started'), role: 'system' }
   }
-  const activeNode = Object.values(nodes)
-    .filter(node => node.status === 'running' && node.payload?.visible_to_user !== false)
-    .sort((left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt))[0]
-  const statusKey = String(activeNode?.payload?.status_key || '')
-  if (statusKey === 'runtime_initialization') {
-    return { text: t('factory.status.runtimeInitialization'), role: 'system' }
-  }
-  if (statusKey === 'intent_analysis') {
-    return { text: t('factory.status.intentAnalysis'), role: 'assistant' }
-  }
-  if (statusKey === 'task_analysis') {
-    return { text: t('factory.status.taskAnalysis'), role: 'assistant' }
+  const activitySummary = String(runtimeActivity.payload?.summary || '').trim()
+  if (runtimeActivity.status === 'active' && activitySummary) {
+    return { text: activitySummary, role: 'assistant' }
   }
   return { text: t('roles.assistantThinking'), role: 'assistant' }
 }

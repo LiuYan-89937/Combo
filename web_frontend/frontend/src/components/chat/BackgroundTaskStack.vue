@@ -22,9 +22,13 @@
           <span v-else>✓</span>
         </span>
         <span class="task-stack-copy">
-          <strong>{{ capsuleTitle }}</strong>
-          <small v-if="visibleTasks.length > 1">{{ t('backgroundTask.stackCount', { count: visibleTasks.length }) }}</small>
+          <span class="task-stack-meta">
+            <strong>{{ primaryAgentName }}</strong>
+            <small>{{ elapsedLabel }}</small>
+          </span>
+          <span class="task-stack-summary-text">{{ currentActivitySummary }}</span>
         </span>
+        <span v-if="visibleTasks.length > 1" class="task-stack-count">+{{ visibleTasks.length - 1 }}</span>
         <span class="task-stack-chevron" aria-hidden="true">⌄</span>
       </button>
     </template>
@@ -72,9 +76,11 @@ const popoverRef = ref<{ syncPosition: () => void } | null>(null)
 const tasks = ref<BackgroundTask[]>([])
 const expanded = ref(false)
 let pollTimer: ReturnType<typeof setTimeout> | null = null
+let elapsedTimer: ReturnType<typeof setInterval> | null = null
 let requestVersion = 0
 let refreshInFlight = false
 let refreshQueued = false
+const currentTime = ref(Date.now())
 
 defineExpose({ syncPosition })
 
@@ -92,16 +98,37 @@ const requiresAction = computed(() => visibleTasks.value.some(task => (
   || task.pending_interaction?.kind === 'ask_user'
   || task.pending_interaction?.kind === 'resource_request'
 )))
-const capsuleTitle = computed(() => {
+const capsuleStatus = computed(() => {
   const task = primaryTask.value
-  if (!task) return t('backgroundTask.stackTitle')
-  const prefix = task.pending_interaction?.kind === 'tool_approval'
+  if (!task) return ''
+  return task.pending_interaction?.kind === 'tool_approval'
     ? t('backgroundTask.capsule.approval')
     : task.pending_interaction?.kind === 'ask_user' || task.pending_interaction?.kind === 'resource_request'
       ? t('backgroundTask.capsule.answer')
       : taskTypeLabel(task.status)
-  const target = task.assignee_package_id || task.task_text || t('backgroundTask.stackTitle')
-  return `${prefix} · ${target}`
+})
+const primaryAgentName = computed(() => String(
+  primaryTask.value?.agent_name || t('backgroundTask.memberFallback'),
+))
+const currentActivitySummary = computed(() => {
+  const task = primaryTask.value
+  if (!task) return t('backgroundTask.stackTitle')
+  if (task.pending_interaction?.kind === 'tool_approval') {
+    return task.pending_interaction.message || t('backgroundTask.pendingApproval')
+  }
+  if (task.pending_interaction?.kind === 'ask_user' || task.pending_interaction?.kind === 'resource_request') {
+    return task.pending_interaction.message || t('backgroundTask.pendingInput')
+  }
+  if (task.status === 'failed') return task.error?.message || t('backgroundTask.failedFallback')
+  if (task.status === 'succeeded' && task.result_summary) return task.result_summary
+  return task.activity_summary || task.task_text || capsuleStatus.value
+})
+const elapsedLabel = computed(() => {
+  const task = primaryTask.value
+  if (!task) return ''
+  const terminal = isTerminal(task.status)
+  const duration = formatDuration(task.started_at || task.created_at, terminal ? task.completed_at || task.updated_at : null)
+  return t(terminal ? 'backgroundTask.finishedIn' : 'backgroundTask.processedFor', { duration })
 })
 
 watch(requiresAction, (next, previous) => {
@@ -123,11 +150,13 @@ watch(
 onBeforeUnmount(() => {
   requestVersion += 1
   stopPolling()
+  stopElapsedClock()
   window.removeEventListener('fastagentfactory:background-task-updated', handleTaskEvent)
 })
 
 onMounted(() => {
   window.addEventListener('fastagentfactory:background-task-updated', handleTaskEvent)
+  elapsedTimer = window.setInterval(() => { currentTime.value = Date.now() }, 1000)
 })
 
 async function refreshTasks(version: number) {
@@ -171,6 +200,11 @@ function stopPolling() {
   refreshQueued = false
 }
 
+function stopElapsedClock() {
+  if (elapsedTimer) window.clearInterval(elapsedTimer)
+  elapsedTimer = null
+}
+
 function scheduleRefresh(version: number, delay: number) {
   if (pollTimer) clearTimeout(pollTimer)
   pollTimer = setTimeout(() => {
@@ -207,18 +241,43 @@ function taskTypeLabel(status: BackgroundTask['status']): string {
   if (status === 'cancelled' || status === 'cancelling') return t('backgroundTask.capsule.stopping')
   return t('backgroundTask.capsule.delegating')
 }
+
+function formatDuration(startValue: string, endValue: string | null): string {
+  const start = Date.parse(startValue)
+  const end = endValue ? Date.parse(endValue) : currentTime.value
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    return t('backgroundTask.duration.seconds', { count: 0 })
+  }
+  const totalSeconds = Math.max(0, Math.floor((end - start) / 1000))
+  if (totalSeconds < 60) return t('backgroundTask.duration.seconds', { count: totalSeconds })
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  if (minutes < 60) {
+    return seconds
+      ? t('backgroundTask.duration.minutesSeconds', { minutes, seconds })
+      : t('backgroundTask.duration.minutes', { count: minutes })
+  }
+  const hours = Math.floor(minutes / 60)
+  const remainingMinutes = minutes % 60
+  return remainingMinutes
+    ? t('backgroundTask.duration.hoursMinutes', { hours, minutes: remainingMinutes })
+    : t('backgroundTask.duration.hours', { count: hours })
+}
 </script>
 
 <style scoped>
-.task-stack-summary { min-height: 42px; max-width: min(320px, calc(100vw - 48px)); display: flex; align-items: center; gap: 9px; padding: 6px 12px 6px 7px; color: var(--app-text); background: var(--app-surface); border: 1px solid var(--app-border); border-radius: 999px; box-shadow: 0 10px 28px color-mix(in srgb, var(--app-text) 11%, transparent); cursor: pointer; transition: transform .2s cubic-bezier(.16, 1, .3, 1), border-color .2s ease, box-shadow .2s ease; }
+.task-stack-summary { width: min(360px, calc(100vw - 48px)); min-height: 72px; display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 9px; color: var(--app-text); background: var(--app-surface); border: 1px solid var(--app-border); border-radius: 18px; box-shadow: 0 10px 28px color-mix(in srgb, var(--app-text) 11%, transparent); cursor: pointer; transition: transform .2s cubic-bezier(.16, 1, .3, 1), border-color .2s ease, box-shadow .2s ease; }
 .task-stack-summary:hover { transform: translateY(-1px); border-color: var(--app-border-hover); box-shadow: 0 14px 34px color-mix(in srgb, var(--app-text) 14%, transparent); }
 .task-stack-summary.requires-action { border-color: var(--app-text); }
 .task-stack-mark { width: 29px; height: 29px; flex: 0 0 auto; display: grid; place-items: center; border: 1px solid var(--app-border); border-radius: 50%; font-size: 11px; }
 .task-stack-spinner { width: 13px; height: 13px; border: 2px solid var(--app-divider); border-top-color: var(--app-text); border-radius: 50%; animation: task-stack-spin .9s linear infinite; }
-.task-stack-copy { min-width: 0; display: grid; gap: 1px; text-align: left; }
-.task-stack-copy strong, .task-stack-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.task-stack-copy strong { font-size: 11px; font-weight: 600; }
-.task-stack-copy small { color: var(--app-text-muted); font-size: 9px; }
+.task-stack-copy { min-width: 0; flex: 1; display: grid; gap: 6px; text-align: left; }
+.task-stack-meta { min-width: 0; display: flex; align-items: baseline; gap: 7px; color: var(--app-text-muted); }
+.task-stack-meta strong, .task-stack-meta small, .task-stack-summary-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-stack-meta strong { color: var(--app-text); font-size: 12px; font-weight: 620; }
+.task-stack-meta small { font-size: 10px; }
+.task-stack-summary-text { padding-top: 6px; border-top: 1px solid var(--app-divider); color: var(--app-text-secondary); font-size: 11px; line-height: 1.35; }
+.task-stack-count { flex: 0 0 auto; display: grid; min-width: 25px; height: 25px; place-items: center; border: 1px solid var(--app-border); border-radius: 999px; color: var(--app-text-secondary); font-size: 10px; }
 .task-stack-chevron { color: var(--app-text-muted); font-size: 11px; }
 .task-stack-popover { width: min(480px, calc(100vw - 32px)); max-height: min(72vh, 680px); overflow: hidden; display: grid; grid-template-rows: auto minmax(0, 1fr); color: var(--app-text); background: var(--app-surface); border: 1px solid var(--app-border); border-radius: 18px; box-shadow: 0 28px 80px color-mix(in srgb, var(--app-text) 18%, transparent); animation: task-popover-in .24s cubic-bezier(.16, 1, .3, 1) both; }
 .stack-popover-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--app-divider); }

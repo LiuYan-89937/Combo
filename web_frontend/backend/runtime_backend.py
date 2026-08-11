@@ -25,6 +25,8 @@ from agent_factory.dynamic_runtime import (
     DatabaseSnapshotToolApprovalResolver,
     DynamicRuntimeApplication,
     DynamicRuntimeApplicationConfig,
+    DynamicRuntimeDatabase,
+    DynamicRuntimeMigrationRegistry,
     DynamicRuntimeServicesFactory,
     DynamicRuntimeSupervisor,
     DynamicRuntimeSupervisorConfig,
@@ -42,6 +44,7 @@ from agent_factory.dynamic_runtime import (
     SnapshotToolRegistryFactory,
     StructuredRouteAnalyzer,
     ToolProjectionMaterializer,
+    remove_sqlite_database_files,
 )
 from agent_factory.dynamic_runtime.capability_bootstrap import (
     CapabilityBootstrapConfig,
@@ -91,6 +94,7 @@ from agent_factory.tooling.builtins.source import (
     BuiltinToolSourceConfig,
 )
 from agent_factory.tooling.builtins.browser.runtime import BrowserRuntime, BrowserRuntimeConfig
+from agent_factory.tooling.skillhub.service import SkillHubService
 from agent_factory.dynamic_runtime.mcp_runtime import MCPRuntimePool
 from agent_factory.dynamic_runtime.mcp_source import MCPConfigCapabilitySource, MCPConfigSourceConfig
 from web_frontend.backend.frontend_event_bridge import FrontendEventBridge, RuntimeEventFanout
@@ -195,6 +199,9 @@ class RuntimeBackend:
             transaction_ttl_seconds=config.workspace_transaction_ttl_seconds,
         )
         self.mcp_runtime = MCPRuntimePool()
+        self.skillhub_runtime = SkillHubService(
+            skills_dir=config.skill_source_roots[0].path,
+        )
         self._mcp_registry_lock = RLock()
         try:
             self.application = self._open_application()
@@ -389,6 +396,18 @@ class RuntimeBackend:
             "mcp_registry_digest": _json_digest(registry),
         }
 
+    def refresh_capability_search_embeddings(self) -> None:
+        self.application.capability_search.refresh(
+            self.application.stores.capabilities.active_capabilities()
+        )
+
+    def _refresh_capability_search_if_ready(self) -> None:
+        application = getattr(self, "application", None)
+        if application is not None:
+            application.capability_search.refresh(
+                application.stores.capabilities.active_capabilities()
+            )
+
     def probe_mcp_server(self, capability_id: str) -> dict[str, object]:
         matches = tuple(
             item
@@ -409,6 +428,19 @@ class RuntimeBackend:
             "content_digest": revision.content_digest,
             "tool_count": len(tools),
             "tools": [str(tool.name) for tool in tools],
+        }
+
+    def skillhub_status(self) -> dict[str, Any]:
+        return self.skillhub_runtime.status()
+
+    def search_skillhub(self, query: str) -> dict[str, Any]:
+        return self.skillhub_runtime.search(query)
+
+    def install_skillhub_skill(self, skill: str) -> dict[str, object]:
+        result = self.skillhub_runtime.install(skill)
+        return {
+            "skillhub": result,
+            "capability_pool": self.capability_pool_snapshot(),
         }
 
     def add_mcp_server(
@@ -563,6 +595,40 @@ class RuntimeBackend:
                 raise
             if backup.exists():
                 shutil.rmtree(backup)
+        finally:
+            shutil.rmtree(staging_root, ignore_errors=True)
+        return self.capability_pool_snapshot()
+
+    def import_skill_folder(self, source_path: str) -> dict[str, object]:
+        source = Path(source_path).expanduser().resolve()
+        if not source.is_dir() or not (source / "SKILL.md").is_file():
+            raise ValueError("Skill folder must contain SKILL.md at its root")
+        source_root = self.config.skill_source_roots[0]
+        staging_root = Path(tempfile.mkdtemp(prefix=".skill-import-", dir=source_root.path))
+        staged = staging_root / source.name
+        try:
+            shutil.copytree(source, staged, symlinks=False)
+            validation_source = self._skill_capability_source((SkillSourceRoot(
+                root_id=source_root.root_id,
+                path=staging_root,
+                trust_level=source_root.trust_level,
+            ),))
+            drafts = validation_source.drafts()
+            if len(drafts) != 1:
+                raise ValueError("Skill folder must contain exactly one Skill")
+            skill_name = drafts[0].capability_id.removeprefix(f"skill://{source_root.root_id}/")
+            target = (source_root.path / skill_name).resolve()
+            if source_root.path not in target.parents:
+                raise ValueError("Skill identity resolves outside the configured Skill source")
+            if target.exists():
+                raise RuntimeError("skill_already_exists")
+            os.replace(staged, target)
+            try:
+                self._synchronize_skill_capabilities(self.application.stores, _capability_adapters())
+            except BaseException:
+                shutil.rmtree(target, ignore_errors=True)
+                self._synchronize_skill_capabilities(self.application.stores, _capability_adapters())
+                raise
         finally:
             shutil.rmtree(staging_root, ignore_errors=True)
         return self.capability_pool_snapshot()
@@ -789,6 +855,16 @@ class RuntimeBackend:
 
     def _open_application(self) -> DynamicRuntimeApplication:
         config = self.config
+        migration_registry = DynamicRuntimeMigrationRegistry()
+        migration = migration_registry.prepare(DynamicRuntimeDatabase(config.database_path))
+        if migration.initialization_required:
+            remove_sqlite_database_files(config.checkpoint_path)
+            remove_sqlite_database_files(config.graph_store_path)
+            if migration.reset_performed:
+                self.logger.info(
+                    "Reset incompatible dynamic runtime, checkpoint, and graph-store databases "
+                    "for schema epoch migration"
+                )
         delegation_runtime = DelegationRuntimeCoordinator()
         capability_blobs = CapabilityBlobStore(config.capability_blob_root)
         checkpointer = LangGraphCheckpointerFactory().build(
@@ -797,12 +873,13 @@ class RuntimeBackend:
         graph_store = LangGraphStoreFactory().build(
             LangGraphStoreConfig(backend="sqlite", path=config.graph_store_path)
         ).store
-        def services(stores: DynamicRuntimeStores) -> DynamicRuntimeServicesFactory:
+        def services(stores: DynamicRuntimeStores, capability_search) -> DynamicRuntimeServicesFactory:
             context_system = default_context_runtime(memory_store=stores.memories)
             capability_catalog = CapabilityCatalogRuntime(
                 store=stores.capabilities,
                 health_receipts=stores.capability_resolution_receipts,
                 allowed_trust_levels=("builtin", "local_user", "verified_external"),
+                search_index=capability_search,
             )
             approvals = DatabaseSnapshotToolApprovalResolver(stores.capability_approval_grants)
             outputs = SharedToolOutputResolver(config.tool_output_root)
@@ -817,6 +894,9 @@ class RuntimeBackend:
                         memory_store=stores.memories,
                         delegations=stores.delegations,
                         delegation_runtime=delegation_runtime,
+                        knowledge_store=stores.knowledge,
+                        scheduler_store=stores.scheduler,
+                        skillhub_runtime=self.skillhub_runtime,
                         process_resources=self.process_resources,
                         filesystem_resources=self.filesystem_resources,
                     )
@@ -883,10 +963,11 @@ class RuntimeBackend:
                     search=CapabilitySearchConfig(
                         maximum_results=24,
                         minimum_score=0.05,
-                        display_name_weight=0.35,
-                        description_weight=0.35,
-                        keyword_weight=0.3,
-                        exact_phrase_bonus=0.2,
+                        reciprocal_rank_constant=60,
+                        lexical_weight=0.55,
+                        vector_weight=0.45,
+                        exact_match_bonus=0.2,
+                        receipt_retention_limit=10_000,
                     ),
                     host_platform=_host_platform(),
                     host_python_abi=str(sys.implementation.cache_tag or "") or None,
@@ -898,12 +979,19 @@ class RuntimeBackend:
             launch_context_resolver=launch_context,
             capability_bootstrap=bootstrap_capabilities,
             observation_sink=self._publish_runtime_observation,
+            migration_registry=migration_registry,
         )
         delegation_runtime.bind(
             delegations=application.stores.delegations,
             model_resolver=application.model_resolver,
             capability_resolver=application.capability_resolver,
             generation=application.generation.generation,
+        )
+        self.skillhub_runtime.bind_publisher(
+            lambda: self._synchronize_skill_capabilities(
+                application.stores,
+                _capability_adapters(),
+            )
         )
         return application
 
@@ -929,6 +1017,7 @@ class RuntimeBackend:
             resolution_receipts=stores.capability_resolution_receipts,
             adapters=adapters,
         ).synchronize(BuiltinToolCapabilitySource(source_config).drafts())
+        self._refresh_capability_search_if_ready()
 
     def _skill_capability_source(
         self,
@@ -960,6 +1049,7 @@ class RuntimeBackend:
             self._skill_capability_source().drafts(),
             deactivate_removed_sources=True,
         )
+        self._refresh_capability_search_if_ready()
 
     def _synchronize_mcp_capabilities(self, stores, adapters) -> None:
         config = self.config
@@ -991,6 +1081,7 @@ class RuntimeBackend:
             drafts,
             deactivate_removed_sources=mcp_source.discovery_complete,
         )
+        self._refresh_capability_search_if_ready()
 
     def _report_failure(self, component: str, error: BaseException) -> None:
         self.logger.error(
@@ -1023,6 +1114,7 @@ def _capability_public_details(kind: str, raw_definition: dict[str, Any]) -> dic
             "output_max_model_chars": definition.runtime_policy.output_max_model_chars,
             "retain_raw_output": definition.runtime_policy.retain_raw_output,
             "read_only": definition.read_only,
+            "system_available": definition.system_available,
             "effects": list(definition.effects),
         }
     if kind == "mcp_server":

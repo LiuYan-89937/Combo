@@ -21,9 +21,10 @@ def get_capability_tool_specs() -> list[ToolSpec]:
                     "action": {
                         "type": "string",
                         "enum": ["search", "list_active"],
+                        "description": "search 按任务需求检索能力；list_active 列出当前全部可委派能力。",
                     },
-                    "query": {"type": "string"},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10},
+                    "query": {"type": "string", "description": "用自然语言描述需要完成的任务或所需能力。"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10, "description": "最多返回的能力数量。"},
                 },
                 "required": ["action"],
             },

@@ -16,6 +16,20 @@ type ActivityMutationState = Pick<
   | 'timeline'
 > & ResourceMutationState
 
+export function applyRuntimeActivityEvent(
+  state: Pick<RuntimeViewState, 'runtimeActivity'>,
+  event: FactoryFrontendEvent,
+) {
+  state.runtimeActivity = {
+    status: String(event.payload?.status || 'active'),
+    eventType: event.event_type,
+    payload: {
+      ...event.payload,
+      updated_at: event.timestamp,
+    },
+  }
+}
+
 export function applyContextActivityEvent(state: ActivityMutationState, event: FactoryFrontendEvent) {
   const type = event.event_type
   if (type === 'context_prepare_started') {

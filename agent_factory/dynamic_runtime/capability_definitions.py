@@ -27,6 +27,7 @@ RuntimeResourceName = Literal[
     "delegation_runtime",
     "knowledge_runtime",
     "scheduler_runtime",
+    "skillhub_runtime",
 ]
 
 

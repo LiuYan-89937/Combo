@@ -59,6 +59,7 @@ class OperationalToolCallNode:
             runtime_plan_calls,
             allowed_tool_ids=allowed_for_origin,
         )
+        _emit_plan_activity(context, state, working_state)
 
         registry = context.services.tool_registry
         if registry is None or not hasattr(registry, "model_tools"):
@@ -142,6 +143,36 @@ def _visible_tool_ids(
     else:
         visible_tool_ids = available_tool_ids(state)
     return visible_tool_ids
+
+
+def _emit_plan_activity(
+    context: NodeExecutionContext,
+    previous_state: RuntimeState,
+    current_state: RuntimeState,
+) -> None:
+    if current_state.plan.current_step_id == previous_state.plan.current_step_id and (
+        current_state.plan.model_dump(mode="json") == previous_state.plan.model_dump(mode="json")
+    ):
+        return
+    current_step = next(
+        (
+            step
+            for step in current_state.plan.steps
+            if step.step_id == current_state.plan.current_step_id
+        ),
+        None,
+    )
+    if current_step is None or not current_step.title.strip():
+        return
+    context.emit_event(
+        {
+            "event_type": "runtime_activity_updated",
+            "summary": current_step.title.strip(),
+            "status": "active",
+            "source": "plan",
+            "plan_step_id": current_step.step_id,
+        }
+    )
 
 
 def _plan_and_execute_delegated_tool_ids(

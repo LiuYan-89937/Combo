@@ -9,7 +9,14 @@ import sqlite3
 from agent_factory.sqlite_runtime import DEFAULT_SQLITE_BUSY_TIMEOUT_MS, connect_sqlite
 
 
-DYNAMIC_RUNTIME_DATABASE_SCHEMA = "dynamic_runtime_database.v16"
+DYNAMIC_RUNTIME_DATABASE_SCHEMA = "dynamic_runtime_database.v18"
+DYNAMIC_RUNTIME_SCHEMA_EPOCH = 2
+
+
+@dataclass(frozen=True, slots=True)
+class DynamicRuntimeMigrationResult:
+    reset_performed: bool
+    initialization_required: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,7 +38,46 @@ class DynamicRuntimeMigrationRegistry:
     def target_version(self) -> int:
         return self._steps[-1].version if self._steps else 0
 
-    def migrate(self, database: "DynamicRuntimeDatabase") -> None:
+    def prepare(self, database: "DynamicRuntimeDatabase") -> DynamicRuntimeMigrationResult:
+        if not database.path.exists() or database.path.stat().st_size == 0:
+            return DynamicRuntimeMigrationResult(
+                reset_performed=False,
+                initialization_required=True,
+            )
+        with database.connection(query_only=True) as conn:
+            epoch_table = conn.execute(
+                """
+                select 1 from sqlite_master
+                where type = 'table' and name = 'dynamic_runtime_schema_epoch'
+                """
+            ).fetchone()
+            if epoch_table is None:
+                current_epoch = None
+            else:
+                rows = conn.execute(
+                    "select epoch from dynamic_runtime_schema_epoch"
+                ).fetchall()
+                if len(rows) != 1:
+                    raise RuntimeError("dynamic runtime database has an invalid schema epoch ledger")
+                current_epoch = int(rows[0]["epoch"])
+        if current_epoch == DYNAMIC_RUNTIME_SCHEMA_EPOCH:
+            return DynamicRuntimeMigrationResult(
+                reset_performed=False,
+                initialization_required=False,
+            )
+        if current_epoch is not None and current_epoch > DYNAMIC_RUNTIME_SCHEMA_EPOCH:
+            raise RuntimeError(
+                "dynamic runtime database was created by a newer incompatible application "
+                f"(database epoch {current_epoch}, supported epoch {DYNAMIC_RUNTIME_SCHEMA_EPOCH})"
+            )
+        remove_sqlite_database_files(database.path)
+        return DynamicRuntimeMigrationResult(
+            reset_performed=True,
+            initialization_required=True,
+        )
+
+    def migrate(self, database: "DynamicRuntimeDatabase") -> DynamicRuntimeMigrationResult:
+        preparation = self.prepare(database)
         database.path.parent.mkdir(parents=True, exist_ok=True)
         with database.connection() as conn:
             conn.execute("begin immediate")
@@ -71,6 +117,7 @@ class DynamicRuntimeMigrationRegistry:
             except BaseException:
                 conn.rollback()
                 raise
+        return preparation
 
     def verify(self, database: "DynamicRuntimeDatabase") -> None:
         expected = _schema_allowlist()
@@ -799,7 +846,7 @@ def _default_migrations() -> tuple[MigrationStep, ...]:
                   task_id text not null,
                   task_revision integer not null,
                   sequence integer not null check (sequence >= 1),
-                  event_type text not null check (event_type in ('progress','question','approval_required','capability_request','artifact','result','failed','cancelled')),
+                  event_type text not null check (event_type in ('activity','question','approval_required','capability_request','artifact','result','failed','cancelled')),
                   principal_id text not null references principals(principal_id),
                   parent_runtime_instance_id text not null references runtime_instances(runtime_instance_id),
                   child_runtime_instance_id text not null references runtime_instances(runtime_instance_id),
@@ -923,12 +970,103 @@ def _default_migrations() -> tuple[MigrationStep, ...]:
                 "create index idx_delegated_task_notifications_delivery on delegated_task_notifications(principal_id, session_id, delivered_at, created_at)",
             ),
         ),
+        MigrationStep(
+            version=17,
+            name="schema_compatibility_epoch",
+            statements=(
+                f"""
+                create table dynamic_runtime_schema_epoch (
+                  epoch integer primary key check (epoch = {DYNAMIC_RUNTIME_SCHEMA_EPOCH}),
+                  initialized_at text not null
+                )
+                """,
+                f"""
+                insert into dynamic_runtime_schema_epoch(epoch, initialized_at)
+                values ({DYNAMIC_RUNTIME_SCHEMA_EPOCH}, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                """,
+            ),
+        ),
+        MigrationStep(
+            version=18,
+            name="hybrid_capability_search",
+            statements=(
+                """
+                create table capability_search_generations (
+                  generation_id text primary key,
+                  dataset_digest text not null,
+                  search_mode text not null check (search_mode in ('lexical', 'hybrid')),
+                  embedding_fingerprint text,
+                  embedding_profile_id text,
+                  embedding_dimensions integer check (embedding_dimensions is null or embedding_dimensions >= 1),
+                  status text not null check (status in ('building', 'active', 'retired', 'failed')),
+                  diagnostic text,
+                  created_at text not null,
+                  activated_at text,
+                  unique(dataset_digest, search_mode, embedding_fingerprint)
+                )
+                """,
+                "create index idx_capability_search_generation_status on capability_search_generations(status, created_at)",
+                """
+                create table capability_search_documents (
+                  generation_id text not null references capability_search_generations(generation_id) on delete cascade,
+                  capability_id text not null,
+                  index_revision_id text not null,
+                  kind text not null,
+                  display_name text not null,
+                  description text not null,
+                  keywords_json text not null,
+                  parameter_text text not null,
+                  searchable_text text not null,
+                  embedding_json text,
+                  primary key(generation_id, capability_id)
+                )
+                """,
+                "create index idx_capability_search_document_capability on capability_search_documents(capability_id, generation_id)",
+                """
+                create table capability_search_active_generation (
+                  singleton integer primary key check (singleton = 1),
+                  generation_id text not null references capability_search_generations(generation_id),
+                  changed_at text not null
+                )
+                """,
+                """
+                create table capability_search_receipts (
+                  receipt_id text primary key,
+                  generation_id text not null references capability_search_generations(generation_id),
+                  query_digest text not null,
+                  candidate_digest text not null,
+                  result_json text not null,
+                  created_at text not null
+                )
+                """,
+                "create index idx_capability_search_receipt_generation on capability_search_receipts(generation_id, created_at)",
+                """
+                create virtual table capability_search_fts using fts5(
+                  generation_id unindexed,
+                  capability_id unindexed,
+                  searchable_text,
+                  tokenize='unicode61 remove_diacritics 2'
+                )
+                """,
+            ),
+        ),
     )
+
+
+def remove_sqlite_database_files(path: str | Path) -> None:
+    database_path = Path(path).expanduser().resolve()
+    for candidate in (
+        database_path,
+        Path(f"{database_path}-wal"),
+        Path(f"{database_path}-shm"),
+    ):
+        candidate.unlink(missing_ok=True)
 
 
 def _schema_allowlist() -> set[tuple[str, str]]:
     return {
         ("table", "dynamic_runtime_schema_migrations"),
+        ("table", "dynamic_runtime_schema_epoch"),
         ("table", "principals"),
         ("table", "workspaces"),
         ("table", "conversations"),
@@ -1005,4 +1143,17 @@ def _schema_allowlist() -> set[tuple[str, str]]:
         ("index", "idx_scheduler_runs_job"),
         ("table", "workspace_mount_records"),
         ("index", "idx_workspace_mounts_owner"),
+        ("table", "capability_search_generations"),
+        ("index", "idx_capability_search_generation_status"),
+        ("table", "capability_search_documents"),
+        ("index", "idx_capability_search_document_capability"),
+        ("table", "capability_search_active_generation"),
+        ("table", "capability_search_receipts"),
+        ("index", "idx_capability_search_receipt_generation"),
+        ("table", "capability_search_fts"),
+        ("table", "capability_search_fts_data"),
+        ("table", "capability_search_fts_idx"),
+        ("table", "capability_search_fts_content"),
+        ("table", "capability_search_fts_docsize"),
+        ("table", "capability_search_fts_config"),
     }

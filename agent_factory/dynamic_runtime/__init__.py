@@ -1,4 +1,9 @@
-from agent_factory.dynamic_runtime.database import DynamicRuntimeDatabase, DynamicRuntimeMigrationRegistry
+from agent_factory.dynamic_runtime.database import (
+    DynamicRuntimeDatabase,
+    DynamicRuntimeMigrationRegistry,
+    DynamicRuntimeMigrationResult,
+    remove_sqlite_database_files,
+)
 from agent_factory.dynamic_runtime.cancellation import (
     CancelRuntimeCommandHandler,
     RuntimeCancellationResult,
@@ -64,7 +69,6 @@ from agent_factory.dynamic_runtime.capability_resolution_services import (
     CapabilityResolutionConfig,
     CapabilitySearchConfig,
     PublishedCapabilityCompatibilityResolver,
-    PublishedCapabilitySearchIndex,
     ReceiptBackedCapabilityHealthResolver,
     ReceiptBackedDependencyEnvironmentResolver,
 )
@@ -231,11 +235,13 @@ __all__ = [
     "DynamicRuntimeApplicationConfig",
     "DynamicRuntimeStores",
     "DynamicRuntimeMigrationRegistry",
+    "DynamicRuntimeMigrationResult",
     "DynamicRuntimeServiceSet",
     "DynamicRuntimeServicesFactory",
     "DynamicRuntimeService",
     "DynamicRuntimeSupervisor",
     "DynamicRuntimeSupervisorConfig",
+    "remove_sqlite_database_files",
     "ExecutionRouter",
     "ExplicitMCPToolCapabilityRuntimeAdapter",
     "ExplicitToolCapabilityRuntimeAdapter",
@@ -247,7 +253,6 @@ __all__ = [
     "OutboxPublisher",
     "PolicyRuntimeClock",
     "PublishedCapabilityCompatibilityResolver",
-    "PublishedCapabilitySearchIndex",
     "RuntimeEventStore",
     "RuntimeCancellationResult",
     "RuntimeCancellationStore",

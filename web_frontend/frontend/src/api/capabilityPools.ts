@@ -1,4 +1,4 @@
-import { requestJson } from './http'
+import { requestFormJson, requestJson } from './http'
 import type { McpServerConfig } from './resourceTypes'
 
 export type CapabilityKind = 'skill' | 'tool' | 'mcp_server' | 'mcp_tool'
@@ -60,8 +60,43 @@ export interface SkillEditorDocument {
   resources: SkillEditorResource[]
 }
 
+export interface SkillHubResult {
+  action: 'status' | 'search' | 'install'
+  status: string
+  message: string
+  cli_available: boolean
+  cli_version: string
+  items: Array<{
+    name: string
+    install_name: string
+    version: string
+    summary: string
+  }>
+}
+
+export interface SkillHubInstallResult {
+  skillhub: SkillHubResult
+  capability_pool: CapabilityPoolSnapshot
+}
+
 export const capabilityPoolsApi = {
   snapshot: () => requestJson<CapabilityPoolSnapshot>('/api/runtime/capabilities'),
+  skillHubStatus: () => requestJson<SkillHubResult>('/api/runtime/capabilities/skillhub/status'),
+  searchSkillHub: (query: string) => requestJson<SkillHubResult>('/api/runtime/capabilities/skillhub/search', {
+    method: 'POST',
+    body: JSON.stringify({ query }),
+  }),
+  installSkillHub: (skill: string) => requestJson<SkillHubInstallResult>('/api/runtime/capabilities/skillhub/install', {
+    method: 'POST',
+    body: JSON.stringify({ skill }),
+  }),
+  importSkillFolder: (rootName: string, files: Array<{ file: File; relativePath: string }>) => {
+    const formData = new FormData()
+    formData.append('root_name', rootName)
+    formData.append('relative_paths', JSON.stringify(files.map(item => item.relativePath)))
+    files.forEach(item => formData.append('files', item.file, item.file.name))
+    return requestFormJson<CapabilityPoolSnapshot>('/api/runtime/capabilities/skills/import', formData)
+  },
   probeMcp: (capabilityId: string) => requestJson<McpProbeResult>('/api/runtime/capabilities/mcp/probe', {
     method: 'POST',
     body: JSON.stringify({ capability_id: capabilityId }),

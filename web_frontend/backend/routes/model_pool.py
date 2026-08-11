@@ -4,7 +4,7 @@ import asyncio
 import hashlib
 import re
 from time import perf_counter
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import APIRouter, HTTPException
 from langchain_core.messages import HumanMessage
@@ -28,8 +28,17 @@ from agent_factory.model_pool.schema import (
 from agent_factory.model_pool.store import ModelPoolRevisionConflict, ModelPoolStoreError
 
 
-def create_model_pool_router(*, usage_store: ModelUsageStore) -> APIRouter:
+def create_model_pool_router(
+    *,
+    usage_store: ModelUsageStore,
+    on_embedding_configuration_changed: Callable[[], None] | None = None,
+) -> APIRouter:
     router = APIRouter(prefix="/api/model-pool")
+
+    def embedding_configuration_changed() -> None:
+        reset_embedding_model()
+        if on_embedding_configuration_changed is not None:
+            on_embedding_configuration_changed()
 
     @router.get("/providers")
     def list_providers():
@@ -45,7 +54,7 @@ def create_model_pool_router(*, usage_store: ModelUsageStore) -> APIRouter:
         store = ModelPoolStore()
         try:
             credential = store.create_credential(_credential_from_payload(payload, store=store))
-            reset_embedding_model()
+            embedding_configuration_changed()
         except Exception as exc:
             raise _http_error(exc) from exc
         return {"credential": credential.to_public().model_dump(mode="json")}
@@ -55,7 +64,7 @@ def create_model_pool_router(*, usage_store: ModelUsageStore) -> APIRouter:
         store = ModelPoolStore()
         try:
             credential = store.patch_credential(credential_id, payload)
-            reset_embedding_model()
+            embedding_configuration_changed()
         except Exception as exc:
             raise _http_error(exc) from exc
         return {"credential": credential.to_public().model_dump(mode="json")}
@@ -66,7 +75,7 @@ def create_model_pool_router(*, usage_store: ModelUsageStore) -> APIRouter:
         try:
             deleted = store.delete_credential(credential_id)
             if deleted:
-                reset_embedding_model()
+                embedding_configuration_changed()
             return {"deleted": deleted}
         except Exception as exc:
             raise _http_error(exc) from exc
@@ -106,7 +115,7 @@ def create_model_pool_router(*, usage_store: ModelUsageStore) -> APIRouter:
         }
         try:
             saved = ModelPoolStore().save_infrastructure_bindings(bindings)
-            reset_embedding_model()
+            embedding_configuration_changed()
         except Exception as exc:
             raise _http_error(exc) from exc
         return {"bindings": saved}
@@ -124,7 +133,7 @@ def create_model_pool_router(*, usage_store: ModelUsageStore) -> APIRouter:
         try:
             profile = store.create_profile(_profile_from_payload(payload, store=store))
             credential = store.get_credential(profile.credential_id)
-            reset_embedding_model()
+            embedding_configuration_changed()
         except Exception as exc:
             raise _http_error(exc) from exc
         return {"profile": profile.to_public(credential).model_dump(mode="json")}
@@ -135,7 +144,7 @@ def create_model_pool_router(*, usage_store: ModelUsageStore) -> APIRouter:
         try:
             profile = store.patch_profile(profile_id, payload)
             credential = store.get_credential(profile.credential_id)
-            reset_embedding_model()
+            embedding_configuration_changed()
         except Exception as exc:
             raise _http_error(exc) from exc
         return {"profile": profile.to_public(credential).model_dump(mode="json")}
@@ -145,7 +154,7 @@ def create_model_pool_router(*, usage_store: ModelUsageStore) -> APIRouter:
         try:
             deleted = ModelPoolStore().delete_profile(profile_id)
             if deleted:
-                reset_embedding_model()
+                embedding_configuration_changed()
             return {"deleted": deleted}
         except Exception as exc:
             raise _http_error(exc) from exc
@@ -171,7 +180,7 @@ def create_model_pool_router(*, usage_store: ModelUsageStore) -> APIRouter:
         store = ModelPoolStore()
         deleted = {profile_id: store.delete_profile(profile_id) for profile_id in ids}
         if any(deleted.values()):
-            reset_embedding_model()
+            embedding_configuration_changed()
         return {"deleted": deleted}
 
     @router.post("/select")

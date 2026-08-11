@@ -200,6 +200,10 @@ export function useFactoryConversation() {
     commands.steerRequest(requestId)
   }
 
+  function cancelQueuedRequest(requestId: string) {
+    commands.cancelRequest('user_cancelled', requestId)
+  }
+
   watch(isAgentChatActive, (active) => {
     if (!active && !selectedMainModelProfileId.value && chatModelProfiles.value.length > 0) {
       void resolveRuntimeMainModelProfileId(chatModelProfiles.value)
@@ -221,6 +225,7 @@ export function useFactoryConversation() {
     selectedMainModelProfileId,
     sendMessage,
     steerQueuedRequest,
+    cancelQueuedRequest,
     setSelectedMainModelProfileId,
     setReasoningIntensity,
     setApprovalMode,

@@ -705,7 +705,36 @@ class CommandInbox:
             )
         return queued
 
-    def promote_queued(
+    def queued_message_payload(
+        self,
+        *,
+        command_id: str,
+        principal_id: str,
+        session_id: str,
+    ) -> SendMessagePayload:
+        target_id = _required_text(command_id, "command_id")
+        owner = _required_text(principal_id, "principal_id")
+        session = _required_text(session_id, "session_id")
+        with self._database.connection(query_only=True) as conn:
+            row = conn.execute(
+                """
+                select receipt_json, envelope_json from command_inbox
+                where command_id = ? and principal_id = ? and session_id = ?
+                  and command_kind = 'send_message'
+                """,
+                (target_id, owner, session),
+            ).fetchone()
+            if row is None:
+                raise LookupError(f"queued message command not found: {target_id}")
+            receipt = CommandReceipt.model_validate_json(str(row["receipt_json"]))
+            if receipt.status != "queued":
+                raise ValueError(f"message command is not queued: {target_id}")
+            envelope = CommandEnvelope.model_validate_json(str(row["envelope_json"]))
+            if not isinstance(envelope.payload, SendMessagePayload):
+                raise TypeError("queued steering target is not a send-message command")
+        return envelope.payload
+
+    def complete_queued_as_steering(
         self,
         *,
         command_id: str,
@@ -729,36 +758,206 @@ class CommandInbox:
             receipt = CommandReceipt.model_validate_json(str(row["receipt_json"]))
             if receipt.status != "queued":
                 raise ValueError(f"message command is not queued: {target_id}")
-            next_sequence = int(
-                conn.execute("select min(queue_sequence) - 1 from command_inbox").fetchone()[0]
+            now = utc_now_text()
+            completed = receipt.model_copy(
+                update={
+                    "status": "completed",
+                    "receipt_revision": receipt.receipt_revision + 1,
+                    "updated_at": now,
+                    "terminal_at": now,
+                }
             )
             changed = conn.execute(
                 """
-                update command_inbox set queue_sequence = ?, updated_at = ?
-                where command_id = ? and status = 'queued'
+                update command_inbox
+                set status = 'completed', receipt_revision = ?, receipt_json = ?,
+                    updated_at = ?, terminal_at = ?
+                where command_id = ? and status = 'queued' and receipt_revision = ?
                 """,
-                (next_sequence, utc_now_text(), target_id),
+                (
+                    completed.receipt_revision,
+                    completed.model_dump_json(),
+                    now,
+                    now,
+                    target_id,
+                    receipt.receipt_revision,
+                ),
             ).rowcount
             if changed != 1:
-                raise RuntimeError("queued message promotion compare-and-set failed")
-            now = utc_now_text()
+                raise RuntimeError("queued steering command compare-and-set failed")
+            turn_row = conn.execute(
+                """
+                select payload_json from conversation_turns
+                where json_extract(payload_json, '$.source_command_id') = ?
+                """,
+                (target_id,),
+            ).fetchone()
+            if turn_row is None:
+                raise LookupError(f"conversation turn not found for command: {target_id}")
+            turn = ConversationTurn.model_validate_json(str(turn_row["payload_json"]))
+            require_transition(turn.status, "completed", CONVERSATION_TURN_TRANSITIONS, machine="conversation turn")
+            completed_turn = turn.model_copy(
+                update={"status": "completed", "updated_at": now, "terminal_at": now}
+            )
+            turn_changed = conn.execute(
+                """
+                update conversation_turns
+                set status = 'completed', payload_json = ?, updated_at = ?, terminal_at = ?
+                where turn_id = ? and status = 'queued'
+                """,
+                (completed_turn.model_dump_json(), now, now, turn.turn_id),
+            ).rowcount
+            if turn_changed != 1:
+                raise RuntimeError("queued steering turn compare-and-set failed")
             insert_outbox(
                 conn,
                 OutboxRecord(
                     aggregate_kind="command",
                     aggregate_id=target_id,
-                    aggregate_revision=receipt.receipt_revision,
+                    aggregate_revision=completed.receipt_revision,
                     event_id=f"command:{target_id}:steering:{uuid4().hex}",
                     event_kind="command_steering",
                     payload={
-                        **receipt.model_dump(mode="json"),
-                        "dispatch_state": "steering",
+                        **completed.model_dump(mode="json"),
+                        "command_kind": "send_message",
+                        "dispatch_state": "promoted",
                     },
                     created_at=now,
                     updated_at=now,
                 ),
             )
-        return receipt
+            insert_outbox(
+                conn,
+                OutboxRecord(
+                    aggregate_kind="conversation",
+                    aggregate_id=session,
+                    aggregate_revision=turn.task_revision,
+                    event_id=f"conversation:{session}:turn:{turn.turn_id}:steered",
+                    event_kind="conversation_turn_completed",
+                    payload={
+                        "session_id": session,
+                        "turn_id": turn.turn_id,
+                        "command_id": target_id,
+                        "status": "completed",
+                        "disposition": "steered",
+                    },
+                    created_at=now,
+                    updated_at=now,
+                ),
+            )
+            advance_conversation_revision(conn, session, updated_at=now)
+        return completed
+
+    def cancel_queued_message(
+        self,
+        *,
+        command_id: str,
+        principal_id: str,
+        session_id: str,
+    ) -> CommandReceipt:
+        target_id = _required_text(command_id, "command_id")
+        owner = _required_text(principal_id, "principal_id")
+        session = _required_text(session_id, "session_id")
+        with self._database.transaction() as conn:
+            row = conn.execute(
+                """
+                select receipt_json from command_inbox
+                where command_id = ? and principal_id = ? and session_id = ?
+                  and command_kind = 'send_message'
+                """,
+                (target_id, owner, session),
+            ).fetchone()
+            if row is None:
+                raise LookupError(f"queued message command not found: {target_id}")
+            receipt = CommandReceipt.model_validate_json(str(row["receipt_json"]))
+            if receipt.status == "cancelled":
+                return receipt
+            if receipt.status != "queued":
+                raise ValueError(f"message command is not queued: {target_id}")
+            now = utc_now_text()
+            cancelled = receipt.model_copy(
+                update={
+                    "status": "cancelled",
+                    "receipt_revision": receipt.receipt_revision + 1,
+                    "updated_at": now,
+                    "terminal_at": now,
+                }
+            )
+            changed = conn.execute(
+                """
+                update command_inbox
+                set status = 'cancelled', receipt_revision = ?, receipt_json = ?,
+                    updated_at = ?, terminal_at = ?
+                where command_id = ? and status = 'queued' and receipt_revision = ?
+                """,
+                (
+                    cancelled.receipt_revision,
+                    cancelled.model_dump_json(),
+                    now,
+                    now,
+                    target_id,
+                    receipt.receipt_revision,
+                ),
+            ).rowcount
+            if changed != 1:
+                raise RuntimeError("queued message cancellation compare-and-set failed")
+            turn_row = conn.execute(
+                """
+                select payload_json from conversation_turns
+                where json_extract(payload_json, '$.source_command_id') = ?
+                """,
+                (target_id,),
+            ).fetchone()
+            if turn_row is None:
+                raise LookupError(f"conversation turn not found for command: {target_id}")
+            turn = ConversationTurn.model_validate_json(str(turn_row["payload_json"]))
+            require_transition(turn.status, "cancelled", CONVERSATION_TURN_TRANSITIONS, machine="conversation turn")
+            cancelled_turn = turn.model_copy(
+                update={"status": "cancelled", "updated_at": now, "terminal_at": now}
+            )
+            turn_changed = conn.execute(
+                """
+                update conversation_turns
+                set status = 'cancelled', payload_json = ?, updated_at = ?, terminal_at = ?
+                where turn_id = ? and status = 'queued'
+                """,
+                (cancelled_turn.model_dump_json(), now, now, turn.turn_id),
+            ).rowcount
+            if turn_changed != 1:
+                raise RuntimeError("queued conversation turn cancellation compare-and-set failed")
+            insert_outbox(
+                conn,
+                OutboxRecord(
+                    aggregate_kind="command",
+                    aggregate_id=target_id,
+                    aggregate_revision=cancelled.receipt_revision,
+                    event_id=f"command:{target_id}:{cancelled.receipt_revision}",
+                    event_kind="command_cancelled",
+                    payload={**cancelled.model_dump(mode="json"), "command_kind": "send_message"},
+                    created_at=now,
+                    updated_at=now,
+                ),
+            )
+            insert_outbox(
+                conn,
+                OutboxRecord(
+                    aggregate_kind="conversation",
+                    aggregate_id=session,
+                    aggregate_revision=turn.task_revision,
+                    event_id=f"conversation:{session}:turn:{turn.turn_id}:cancelled",
+                    event_kind="conversation_turn_cancelled",
+                    payload={
+                        "session_id": session,
+                        "turn_id": turn.turn_id,
+                        "command_id": target_id,
+                        "status": "cancelled",
+                    },
+                    created_at=now,
+                    updated_at=now,
+                ),
+            )
+            advance_conversation_revision(conn, session, updated_at=now)
+        return cancelled
 
     def get_receipt(self, command_id: str) -> CommandReceipt:
         with self._database.connection(query_only=True) as conn:
@@ -768,30 +967,6 @@ class CommandInbox:
             ).fetchone()
         if row is None:
             raise LookupError(f"command receipt not found: {command_id}")
-        return CommandReceipt.model_validate_json(str(row["receipt_json"]))
-
-    def running_unattached_for_session(
-        self,
-        *,
-        principal_id: str,
-        session_id: str,
-    ) -> CommandReceipt:
-        with self._database.connection(query_only=True) as conn:
-            row = conn.execute(
-                """
-                select receipt_json from command_inbox
-                where principal_id = ? and session_id = ?
-                  and command_kind = 'send_message' and status = 'running'
-                  and json_extract(receipt_json, '$.runtime_instance_id') is null
-                order by updated_at desc limit 1
-                """,
-                (
-                    _required_text(principal_id, "principal_id"),
-                    _required_text(session_id, "session_id"),
-                ),
-            ).fetchone()
-        if row is None:
-            raise LookupError(f"active pre-runtime command not found for session: {session_id}")
         return CommandReceipt.model_validate_json(str(row["receipt_json"]))
 
     def claim_next(

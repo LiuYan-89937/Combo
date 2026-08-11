@@ -4,11 +4,12 @@ import asyncio
 from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
+import tempfile
 from typing import Any, Literal, Protocol
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -38,6 +39,18 @@ class CapabilityPoolManager(Protocol):
         ...
 
     def probe_mcp_server(self, capability_id: str) -> dict[str, object]:
+        ...
+
+    def skillhub_status(self) -> dict[str, Any]:
+        ...
+
+    def search_skillhub(self, query: str) -> dict[str, Any]:
+        ...
+
+    def install_skillhub_skill(self, skill: str) -> dict[str, object]:
+        ...
+
+    def import_skill_folder(self, source_path: str) -> dict[str, object]:
         ...
 
     def add_mcp_server(
@@ -79,12 +92,18 @@ class DynamicRuntimeApiConfig:
     keepalive_seconds: float
     replay_limit: int
     managed_workspace_root: Path
+    maximum_skill_file_bytes: int
+    maximum_skill_bytes: int
 
     def __post_init__(self) -> None:
         if self.keepalive_seconds <= 0:
             raise ValueError("keepalive_seconds must be positive")
         if self.replay_limit < 1:
             raise ValueError("replay_limit must be positive")
+        if self.maximum_skill_file_bytes < 1:
+            raise ValueError("maximum_skill_file_bytes must be positive")
+        if self.maximum_skill_bytes < self.maximum_skill_file_bytes:
+            raise ValueError("maximum_skill_bytes must be at least maximum_skill_file_bytes")
         root = Path(self.managed_workspace_root).expanduser().resolve()
         object.__setattr__(self, "managed_workspace_root", root)
 
@@ -337,6 +356,32 @@ class SkillContentWriteRequest(BaseModel):
             raise ValueError("Skill content fields must not be empty")
         return text
 
+
+class SkillHubSearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    query: str
+
+    @field_validator("query")
+    @classmethod
+    def _query_is_present(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("SkillHub query must not be empty")
+        return text
+
+
+class SkillHubInstallRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    skill: str
+
+    @field_validator("skill")
+    @classmethod
+    def _skill_is_present(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("SkillHub skill must not be empty")
+        return text
+
 def create_dynamic_runtime_router(
     *,
     application: DynamicRuntimeApplication,
@@ -352,6 +397,73 @@ def create_dynamic_runtime_router(
     async def capabilities(request: Request) -> dict[str, object]:
         principal_resolver.resolve(request)
         return await asyncio.to_thread(capability_pools.capability_pool_snapshot)
+
+    @router.get("/capabilities/skillhub/status")
+    async def skillhub_status(request: Request) -> dict[str, Any]:
+        principal_resolver.resolve(request)
+        return await asyncio.to_thread(capability_pools.skillhub_status)
+
+    @router.post("/capabilities/skillhub/search")
+    async def search_skillhub(
+        request: Request,
+        payload: SkillHubSearchRequest,
+    ) -> dict[str, Any]:
+        principal_resolver.resolve(request)
+        try:
+            return await asyncio.to_thread(capability_pools.search_skillhub, payload.query)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.post("/capabilities/skillhub/install")
+    async def install_skillhub_skill(
+        request: Request,
+        payload: SkillHubInstallRequest,
+    ) -> dict[str, object]:
+        principal_resolver.resolve(request)
+        try:
+            return await asyncio.to_thread(
+                capability_pools.install_skillhub_skill,
+                payload.skill,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.post("/capabilities/skills/import", status_code=201)
+    async def import_skill_folder(
+        request: Request,
+        root_name: str = Form(...),
+        relative_paths: str = Form(...),
+        files: list[UploadFile] = File(...),
+    ) -> dict[str, object]:
+        principal_resolver.resolve(request)
+        try:
+            paths = _skill_upload_paths(relative_paths, expected_count=len(files))
+            normalized_root = _portable_skill_root_name(root_name)
+            with tempfile.TemporaryDirectory(prefix="agentfactory-skill-upload-") as temporary:
+                source = Path(temporary) / normalized_root
+                source.mkdir()
+                total_bytes = 0
+                for upload, relative_path in zip(files, paths, strict=True):
+                    destination = source / relative_path
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    total_bytes += await _write_bounded_upload(
+                        upload,
+                        destination,
+                        maximum_file_bytes=config.maximum_skill_file_bytes,
+                    )
+                    if total_bytes > config.maximum_skill_bytes:
+                        raise ValueError("Skill content exceeds configured byte limit")
+                return await asyncio.to_thread(capability_pools.import_skill_folder, str(source))
+        except RuntimeError as exc:
+            if str(exc) == "skill_already_exists":
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            raise HTTPException(status_code=502, detail="skill_synchronization_failed") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @router.post("/capabilities/mcp/probe")
     async def probe_mcp_server(
@@ -739,6 +851,51 @@ def create_dynamic_runtime_router(
         )
 
     return router
+
+
+def _skill_upload_paths(raw: str, *, expected_count: int) -> tuple[Path, ...]:
+    try:
+        values = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Skill relative_paths must be valid JSON") from exc
+    if not isinstance(values, list) or len(values) != expected_count:
+        raise ValueError("Skill relative_paths must correspond to uploaded files")
+    paths: list[Path] = []
+    portable: set[str] = set()
+    for value in values:
+        text = str(value or "").replace("\\", "/").strip("/")
+        path = Path(text)
+        if not text or path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+            raise ValueError(f"Skill upload path is invalid: {value}")
+        key = path.as_posix().casefold()
+        if key in portable:
+            raise ValueError(f"Skill upload contains a cross-platform path collision: {value}")
+        portable.add(key)
+        paths.append(path)
+    return tuple(paths)
+
+
+def _portable_skill_root_name(value: str) -> str:
+    name = str(value or "").strip()
+    if not name or name in {".", ".."} or Path(name).name != name or "/" in name or "\\" in name:
+        raise ValueError("Skill folder name is invalid")
+    return name
+
+
+async def _write_bounded_upload(
+    upload: UploadFile,
+    destination: Path,
+    *,
+    maximum_file_bytes: int,
+) -> int:
+    written = 0
+    with destination.open("xb") as stream:
+        while chunk := await upload.read(1024 * 1024):
+            written += len(chunk)
+            if written > maximum_file_bytes:
+                raise ValueError(f"Skill file exceeds configured byte limit: {destination.name}")
+            stream.write(chunk)
+    return written
 
 
 def _environment_references(

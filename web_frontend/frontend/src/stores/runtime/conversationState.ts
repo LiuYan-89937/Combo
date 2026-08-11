@@ -7,6 +7,7 @@ type ConversationScopeSource = Pick<
   | 'timeline'
   | 'tools'
   | 'currentPlan'
+  | 'runtimeActivity'
   | 'contextActivity'
   | 'contextWindow'
   | 'memoryActivity'
@@ -37,6 +38,10 @@ export function buildConversationScopeState(source: ConversationScopeSource): Co
     currentPlan: source.currentPlan
       ? { ...source.currentPlan, steps: source.currentPlan.steps.map((step) => ({ ...step })) }
       : null,
+    runtimeActivity: {
+      ...source.runtimeActivity,
+      payload: { ...(source.runtimeActivity.payload || {}) },
+    },
     contextActivity: {
       ...source.contextActivity,
       payload: { ...(source.contextActivity.payload || {}) },
@@ -84,6 +89,9 @@ export function normalizeConversationScopeState(saved: ConversationScopeState): 
     currentPlan: saved.currentPlan
       ? { ...saved.currentPlan, steps: saved.currentPlan.steps.map((step) => ({ ...step })) }
       : null,
+    runtimeActivity: saved.runtimeActivity
+      ? { ...saved.runtimeActivity, payload: { ...(saved.runtimeActivity.payload || {}) } }
+      : { status: 'idle' },
     contextActivity: saved.contextActivity
       ? { ...saved.contextActivity, payload: { ...(saved.contextActivity.payload || {}) } }
       : { status: 'idle' },

@@ -5,7 +5,9 @@ from hashlib import sha256
 import json
 
 from agent_factory.dynamic_runtime.capability_resolution_store import CapabilityResolutionReceiptStore
+from agent_factory.dynamic_runtime.capability_resolver import CapabilitySearchIndex
 from agent_factory.dynamic_runtime.capability_store import ActiveCapability, CapabilityStore
+from agent_factory.dynamic_runtime.capability_definitions import ToolDefinition
 from agent_factory.runtime_protocol import CapabilityTrustLevel
 
 
@@ -18,37 +20,35 @@ class CapabilityCatalogRuntime:
         store: CapabilityStore,
         health_receipts: CapabilityResolutionReceiptStore,
         allowed_trust_levels: tuple[CapabilityTrustLevel, ...],
+        search_index: CapabilitySearchIndex,
     ) -> None:
         if not allowed_trust_levels:
             raise ValueError("capability catalog requires allowed trust levels")
         self._store = store
         self._health_receipts = health_receipts
         self._allowed_trust_levels = frozenset(allowed_trust_levels)
+        self._search_index = search_index
 
     def list_active(self) -> list[dict[str, object]]:
         return [self._summary(item) for item in self._eligible()]
 
     def search(self, query: str, *, limit: int) -> list[dict[str, object]]:
-        terms = tuple(part for part in _normalize(query).split() if part)
-        if not terms:
+        normalized = str(query or "").strip()
+        if not normalized:
             raise ValueError("capability search query must not be empty")
         if limit < 1:
             raise ValueError("capability search limit must be positive")
-        matches: list[tuple[float, ActiveCapability]] = []
-        for item in self._eligible():
-            document = item.index_revision.document
-            fields = (
-                _normalize(document.display_name),
-                _normalize(document.description),
-                *(_normalize(keyword) for keyword in document.keywords),
-            )
-            matched = sum(1 for term in terms if any(term in field for field in fields))
-            if matched:
-                matches.append((matched / len(terms), item))
-        matches.sort(key=lambda entry: (-entry[0], entry[1].revision.capability_id))
+        eligible = self._eligible()
+        by_id = {item.revision.capability_id: item for item in eligible}
+        matches = self._search_index.search(requirements=(normalized,), candidates=eligible)
         return [
-            {**self._summary(item), "score": score}
-            for score, item in matches[:limit]
+            {
+                **self._summary(by_id[match.capability_id]),
+                "score": match.score,
+                "search_evidence_id": match.evidence_id,
+            }
+            for match in matches[:limit]
+            if match.capability_id in by_id
         ]
 
     def inspect(self, capability_id: str) -> dict[str, object]:
@@ -126,6 +126,7 @@ class CapabilityCatalogRuntime:
             item
             for item in self._store.active_capabilities()
             if item.revision.trust_level in self._allowed_trust_levels
+            and _delegatable(item)
         )
 
     def _by_id(self) -> dict[str, ActiveCapability]:
@@ -143,6 +144,13 @@ class CapabilityCatalogRuntime:
 
 def _normalize(value: str) -> str:
     return " ".join(str(value or "").casefold().split())
+
+
+def _delegatable(item: ActiveCapability) -> bool:
+    if item.revision.kind != "tool":
+        return True
+    definition = ToolDefinition.model_validate(item.revision.content.definition)
+    return not definition.system_available
 
 
 def _required_text(value: str, field_name: str) -> str:

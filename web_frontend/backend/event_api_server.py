@@ -120,10 +120,15 @@ def create_app(config: RuntimeBackendConfig | None = None) -> FastAPI:
                 keepalive_seconds=15.0,
                 replay_limit=256,
                 managed_workspace_root=backend.config.workspace_root,
+                maximum_skill_file_bytes=backend.config.maximum_skill_file_bytes,
+                maximum_skill_bytes=backend.config.maximum_skill_bytes,
             ),
         )
     )
-    application.include_router(create_model_pool_router(usage_store=backend.application.stores.model_usage))
+    application.include_router(create_model_pool_router(
+        usage_store=backend.application.stores.model_usage,
+        on_embedding_configuration_changed=backend.refresh_capability_search_embeddings,
+    ))
     application.include_router(create_frontend_interaction_router(backend))
     application.include_router(create_attachment_router())
     application.include_router(create_file_router())

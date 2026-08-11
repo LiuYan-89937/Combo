@@ -18,23 +18,30 @@
       >
         <div class="queued-message-copy">
           <span class="queued-message-status">
-            {{ queuedMessage.steering
-              ? t('chat.messageSteering')
-              : t('chat.messageQueuedAt', { position: queuedMessage.position }) }}
+            {{ t('chat.messageQueuedAt', { position: queuedMessage.position }) }}
           </span>
           <span class="queued-message-content">
             {{ queuedMessage.content || t('chat.attachmentMessage') }}
           </span>
         </div>
-        <n-button
-          size="small"
-          text
-          class="queued-message-action"
-          :disabled="queuedMessage.steering"
-          @click="emit('steer', queuedMessage.requestId)"
-        >
-          {{ queuedMessage.steering ? t('chat.steering') : t('chat.steer') }}
-        </n-button>
+        <div class="queued-message-actions">
+          <n-button
+            size="small"
+            text
+            class="queued-message-action"
+            @click="emit('cancelQueued', queuedMessage)"
+          >
+            {{ t('common.cancel') }}
+          </n-button>
+          <n-button
+            size="small"
+            text
+            class="queued-message-action"
+            @click="emit('steer', queuedMessage.requestId)"
+          >
+            {{ t('chat.steer') }}
+          </n-button>
+        </div>
       </div>
     </div>
 
@@ -346,6 +353,7 @@ const emit = defineEmits<{
   send: [message: string, attachments: RuntimeAttachmentInput[]]
   cancel: []
   steer: [requestId: string]
+  cancelQueued: [message: QueuedMessageView]
   input: [value: string]
   'update:selectedModelProfileId': [value: string]
   'update:reasoningIntensity': [value: number | null]
@@ -751,6 +759,13 @@ defineExpose({
   flex: 0 0 auto;
   color: var(--app-text);
   font-weight: 650;
+}
+
+.queued-message-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--app-space-xs);
 }
 
 @keyframes queued-message-bubble-in {

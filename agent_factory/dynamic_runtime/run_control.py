@@ -2,7 +2,21 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Literal
 from uuid import uuid4
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeInputInjection:
+    injection_id: str
+    role: Literal["user", "system"]
+    content: str
+
+    def __post_init__(self) -> None:
+        _required_text(self.injection_id, "injection_id")
+        _required_text(self.content, "content")
+
 
 class RuntimeRunControl:
     """Cooperative graph cancellation with active tool-I/O hooks."""
@@ -12,6 +26,7 @@ class RuntimeRunControl:
         "_drain_reason",
         "_tool_cancel_callbacks",
         "_tool_cancel_lock",
+        "_input_injections",
     )
 
     def __init__(self) -> None:
@@ -19,6 +34,7 @@ class RuntimeRunControl:
         self._drain_reason: str | None = None
         self._tool_cancel_lock = threading.RLock()
         self._tool_cancel_callbacks: dict[str, Callable[[], None]] = {}
+        self._input_injections: dict[str, RuntimeInputInjection] = {}
 
     def request_drain(self, reason: str = "shutdown") -> None:
         drain_reason = _required_text(reason, "reason")
@@ -60,6 +76,23 @@ class RuntimeRunControl:
 
         return unregister
 
+    def submit_input(self, injection: RuntimeInputInjection) -> bool:
+        with self._tool_cancel_lock:
+            if self._drain_event.is_set():
+                return False
+            self._input_injections[injection.injection_id] = injection
+            return True
+
+    def revoke_input(self, injection_id: str) -> None:
+        with self._tool_cancel_lock:
+            self._input_injections.pop(_required_text(injection_id, "injection_id"), None)
+
+    def consume_inputs(self) -> tuple[RuntimeInputInjection, ...]:
+        with self._tool_cancel_lock:
+            inputs = tuple(self._input_injections.values())
+            self._input_injections.clear()
+        return inputs
+
 
 class RuntimeRunControlRegistry:
     """Own exactly one cooperative control per active RuntimeInstance."""
@@ -91,6 +124,24 @@ class RuntimeRunControlRegistry:
         for control in controls:
             control.request_drain(drain_reason)
         return len(controls)
+
+    def submit_input(
+        self,
+        *,
+        runtime_instance_id: str,
+        injection: RuntimeInputInjection,
+    ) -> bool:
+        instance_id = _required_text(runtime_instance_id, "runtime_instance_id")
+        with self._lock:
+            control = self._controls.get(instance_id)
+        return control.submit_input(injection) if control is not None else False
+
+    def revoke_input(self, *, runtime_instance_id: str, injection_id: str) -> None:
+        instance_id = _required_text(runtime_instance_id, "runtime_instance_id")
+        with self._lock:
+            control = self._controls.get(instance_id)
+        if control is not None:
+            control.revoke_input(injection_id)
 
     def release(self, runtime_instance_id: str, control: RuntimeRunControl) -> None:
         instance_id = _required_text(runtime_instance_id, "runtime_instance_id")

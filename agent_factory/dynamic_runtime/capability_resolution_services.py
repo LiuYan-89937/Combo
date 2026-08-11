@@ -7,8 +7,6 @@ import json
 from math import isfinite
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import InvalidVersion, Version
-import re
-import unicodedata
 
 from agent_factory.dynamic_runtime.capability_adapters import CapabilityRuntimeProjection
 from agent_factory.dynamic_runtime.capability_definitions import (
@@ -24,8 +22,6 @@ from agent_factory.dynamic_runtime.capability_resolver import (
     CapabilityHealthResolver,
     CapabilityPolicyEvaluator,
     CapabilityResolutionDecision,
-    CapabilitySearchIndex,
-    CapabilitySearchMatch,
     DependencyEnvironmentResolver,
 )
 from agent_factory.dynamic_runtime.capability_store import ActiveCapability
@@ -43,27 +39,26 @@ from agent_factory.runtime_protocol import (
 class CapabilitySearchConfig:
     maximum_results: int
     minimum_score: float
-    display_name_weight: float
-    description_weight: float
-    keyword_weight: float
-    exact_phrase_bonus: float
+    reciprocal_rank_constant: int
+    lexical_weight: float
+    vector_weight: float
+    exact_match_bonus: float
+    receipt_retention_limit: int
 
     def __post_init__(self) -> None:
         if self.maximum_results < 1:
             raise ValueError("capability search maximum_results must be positive")
-        numeric = (
-            self.minimum_score,
-            self.display_name_weight,
-            self.description_weight,
-            self.keyword_weight,
-            self.exact_phrase_bonus,
-        )
+        if self.reciprocal_rank_constant < 1:
+            raise ValueError("capability search reciprocal_rank_constant must be positive")
+        if self.receipt_retention_limit < 1:
+            raise ValueError("capability search receipt_retention_limit must be positive")
+        numeric = (self.minimum_score, self.lexical_weight, self.vector_weight, self.exact_match_bonus)
         if any(not isfinite(value) or value < 0 for value in numeric):
             raise ValueError("capability search scores and weights must be finite and non-negative")
         if self.minimum_score > 1:
             raise ValueError("capability search minimum_score cannot exceed 1")
-        if sum(numeric[1:]) <= 0:
-            raise ValueError("capability search requires at least one positive weight")
+        if self.lexical_weight <= 0 or self.vector_weight <= 0:
+            raise ValueError("capability search lexical and vector weights must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,41 +79,6 @@ class CapabilityResolutionConfig:
             raise ValueError("capability resolution allowed_trust_levels must be unique")
         object.__setattr__(self, "host_python_abi", abi)
         object.__setattr__(self, "allowed_trust_levels", trust_levels)
-
-
-class PublishedCapabilitySearchIndex(CapabilitySearchIndex):
-    """Search only immutable documents attached to active index revisions."""
-
-    def __init__(self, config: CapabilitySearchConfig) -> None:
-        self._config = config
-
-    def search(
-        self,
-        *,
-        requirements: tuple[str, ...],
-        candidates: tuple[ActiveCapability, ...],
-    ) -> tuple[CapabilitySearchMatch, ...]:
-        queries = tuple(_normalize_text(value) for value in requirements if str(value or "").strip())
-        if not queries:
-            return ()
-        matches: list[CapabilitySearchMatch] = []
-        for candidate in candidates:
-            document = candidate.index_revision.document
-            score, fields = _document_score(document, queries, self._config)
-            if score < self._config.minimum_score:
-                continue
-            matches.append(
-                CapabilitySearchMatch(
-                    capability_id=candidate.revision.capability_id,
-                    score=score,
-                    reason=(
-                        "matched immutable capability index document fields: "
-                        + ", ".join(fields)
-                    ),
-                )
-            )
-        matches.sort(key=lambda item: (-item.score, item.capability_id))
-        return tuple(matches[: self._config.maximum_results])
 
 
 class ActiveCapabilityPolicyEvaluator(CapabilityPolicyEvaluator):
@@ -366,58 +326,6 @@ class ReceiptBackedDependencyEnvironmentResolver(DependencyEnvironmentResolver):
         ) != refs:
             raise RuntimeError("dependency environment receipt references differ from selected revisions")
         return receipt.environment
-
-
-def _document_score(document: object, queries: tuple[str, ...], config: CapabilitySearchConfig) -> tuple[float, tuple[str, ...]]:
-    display_name = _normalize_text(getattr(document, "display_name"))
-    description = _normalize_text(getattr(document, "description"))
-    keywords = tuple(_normalize_text(value) for value in getattr(document, "keywords"))
-    weighted_fields = (
-        ("display_name", display_name, config.display_name_weight),
-        ("description", description, config.description_weight),
-        ("keywords", " ".join(keywords), config.keyword_weight),
-    )
-    maximum = sum(weight for _, _, weight in weighted_fields) + config.exact_phrase_bonus
-    query_scores: list[float] = []
-    matched_fields: set[str] = set()
-    for query in queries:
-        tokens = _tokens(query)
-        score = 0.0
-        for field_name, value, weight in weighted_fields:
-            coverage = _token_coverage(tokens, value)
-            if coverage > 0:
-                matched_fields.add(field_name)
-            score += weight * coverage
-        if any(query in value for _, value, _ in weighted_fields):
-            score += config.exact_phrase_bonus
-        query_scores.append(score / maximum)
-    return sum(query_scores) / len(query_scores), tuple(sorted(matched_fields))
-
-
-def _token_coverage(tokens: tuple[str, ...], value: str) -> float:
-    if not tokens:
-        return 0.0
-    return sum(1 for token in tokens if token in value) / len(tokens)
-
-
-def _tokens(value: str) -> tuple[str, ...]:
-    tokens: list[str] = []
-    for segment in re.findall(r"[a-z0-9]+|[\u3400-\u4dbf\u4e00-\u9fff]+", value):
-        if re.fullmatch(r"[\u3400-\u4dbf\u4e00-\u9fff]+", segment):
-            tokens.extend(
-                segment[index : index + 2]
-                for index in range(max(1, len(segment) - 1))
-            )
-        else:
-            tokens.append(segment)
-    unique_tokens = tuple(dict.fromkeys(tokens))
-    return unique_tokens or (value,)
-
-
-def _normalize_text(value: object) -> str:
-    normalized = unicodedata.normalize("NFKC", str(value or "")).casefold()
-    normalized = re.sub(r"[_./:\\-]+", " ", normalized)
-    return " ".join(normalized.split())
 
 
 def _version_satisfies(resolved_version: str, constraint: str) -> tuple[bool, str]:

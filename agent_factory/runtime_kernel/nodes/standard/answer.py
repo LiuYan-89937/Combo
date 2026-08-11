@@ -61,6 +61,7 @@ class CognitiveAnswerNode:
         tool_calls = _message_tool_calls(ai_message) or list(result.tool_calls or [])
         reasoning_content = _reasoning_content_from_metadata(result.metadata)
         if tool_calls:
+            _emit_activity_summary(context, result.assistant_draft)
             return {
                 "messages": [
                     _ai_message_with_origin(
@@ -186,6 +187,27 @@ def _reasoning_content_from_metadata(metadata: dict[str, Any] | None) -> str | N
     if isinstance(value, str):
         return value.strip() or None
     return None
+
+
+def _emit_activity_summary(context: NodeExecutionContext, value: str | None) -> None:
+    summary = _activity_summary(value)
+    if not summary:
+        return
+    context.emit_event(
+        {
+            "event_type": "runtime_activity_updated",
+            "summary": summary,
+            "status": "active",
+            "source": "model",
+        }
+    )
+
+
+def _activity_summary(value: str | None) -> str:
+    text = " ".join(str(value or "").split()).strip()
+    if not text:
+        return ""
+    return text[:240].rstrip()
 
 
 def _ai_message_with_origin(
