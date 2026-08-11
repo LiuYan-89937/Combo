@@ -19,6 +19,7 @@ from agent_factory.tooling.builtins.filesystem.common import (
     resolve_path,
     write_focus_facts,
     require_filesystem_runtime,
+    require_file_locks,
 )
 from agent_factory.tooling.builtins.filesystem.text_changes import atomic_write_file
 
@@ -199,19 +200,20 @@ def commit_staged_write(arguments: dict[str, Any], resources: dict[str, Any]) ->
     staged = store.take(write_id)
     created_directories: list[Path] = []
     try:
-        _validate_workspace(staged, resources)
-        current = _snapshot(staged.target)
-        if current != staged.snapshot:
-            raise RuntimeError("target changed after staged write started; start a new staged write")
-        if not staged.target.parent.exists():
-            if not staged.create_dirs:
-                raise FileNotFoundError(str(staged.target.parent))
-            created_directories = _ensure_parent_directories(
-                staged.target.parent,
-                stop=staged.workspace_root,
-            )
-        after_hash, after_bytes, after_lines = _stream_file_metadata(staged.staging_file)
-        atomic_write_file(staged.target, staged.staging_file)
+        with require_file_locks(resources).acquire((staged.target,)):
+            _validate_workspace(staged, resources)
+            current = _snapshot(staged.target)
+            if current != staged.snapshot:
+                raise RuntimeError("target changed after staged write started; start a new staged write")
+            if not staged.target.parent.exists():
+                if not staged.create_dirs:
+                    raise FileNotFoundError(str(staged.target.parent))
+                created_directories = _ensure_parent_directories(
+                    staged.target.parent,
+                    stop=staged.workspace_root,
+                )
+            after_hash, after_bytes, after_lines = _stream_file_metadata(staged.staging_file)
+            atomic_write_file(staged.target, staged.staging_file)
         return {
             "action": "commit",
             "status": "committed",

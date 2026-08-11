@@ -401,12 +401,23 @@ def _token_coverage(tokens: tuple[str, ...], value: str) -> float:
 
 
 def _tokens(value: str) -> tuple[str, ...]:
-    tokens = tuple(dict.fromkeys(re.findall(r"[\w]+", value, flags=re.UNICODE)))
-    return tokens or (value,)
+    tokens: list[str] = []
+    for segment in re.findall(r"[a-z0-9]+|[\u3400-\u4dbf\u4e00-\u9fff]+", value):
+        if re.fullmatch(r"[\u3400-\u4dbf\u4e00-\u9fff]+", segment):
+            tokens.extend(
+                segment[index : index + 2]
+                for index in range(max(1, len(segment) - 1))
+            )
+        else:
+            tokens.append(segment)
+    unique_tokens = tuple(dict.fromkeys(tokens))
+    return unique_tokens or (value,)
 
 
 def _normalize_text(value: object) -> str:
-    return " ".join(unicodedata.normalize("NFKC", str(value or "")).casefold().split())
+    normalized = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    normalized = re.sub(r"[_./:\\-]+", " ", normalized)
+    return " ".join(normalized.split())
 
 
 def _version_satisfies(resolved_version: str, constraint: str) -> tuple[bool, str]:

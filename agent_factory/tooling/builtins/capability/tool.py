@@ -24,19 +24,6 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
                 limit=int(arguments.get("limit", 10)),
             ),
         }
-    elif action == "inspect":
-        output = {
-            "action": action,
-            "capability": catalog.inspect(str(arguments.get("capability_id") or "")),
-        }
-    elif action == "prepare":
-        values = arguments.get("capability_ids")
-        if not isinstance(values, list):
-            raise ValueError("capability_ids must be an array")
-        output = {
-            "action": action,
-            "preparation": catalog.prepare(tuple(str(value) for value in values)),
-        }
     else:
-        raise ValueError("capability action must be search, inspect, prepare, or list_active")
+        raise ValueError("capability action must be search or list_active")
     return tool_envelope(output, summary=f"capability {action} completed")

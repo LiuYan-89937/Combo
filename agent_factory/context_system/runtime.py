@@ -87,6 +87,21 @@ class ContextSystemRuntime:
             state=working_state,
             measured_count=measured_count,
         )
+        emit_context_event(
+            services=services,
+            state=working_state,
+            event_type="context_window_updated",
+            node_id=node_id,
+            payload=context_window_payload(
+                node_id=node_id,
+                token_count=effective_count.token_count,
+                token_count_method=effective_count.method,
+                compression_threshold_tokens=active_limits.compression_trigger_tokens,
+                context_window_tokens=active_limits.context_window_tokens,
+                model_role="main",
+                source="context_system.pre_model",
+            ),
+        )
         compression_messages, compression_report = maybe_compress_messages(
             messages=working_messages,
             policy=compression_policy,

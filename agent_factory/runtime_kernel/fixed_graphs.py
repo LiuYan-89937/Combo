@@ -42,6 +42,7 @@ class FixedTopology:
     nodes: tuple[FixedNode, ...]
     edges: tuple[FixedEdge, ...]
     success_nodes: frozenset[str]
+    visible_model_nodes: frozenset[str]
 
     def next_node(self, source: str, decision: str | None) -> tuple[str, str] | None:
         fallback: str | None = None
@@ -109,6 +110,12 @@ def build_fixed_runtime_graph(
         services=services,
         node_runners=node_runners,
     )
+
+
+def fixed_graph_model_output_visible(strategy: str, node_id: str | None) -> bool:
+    if strategy not in {"react", "plan_and_execute"}:
+        return False
+    return str(node_id or "") in _topology(strategy).visible_model_nodes
 
 
 def _entry_router(topology: FixedTopology):
@@ -186,6 +193,7 @@ def _react_topology() -> FixedTopology:
             FixedEdge("commit", "finalize", "always"),
         ),
         success_nodes=frozenset({"finalize"}),
+        visible_model_nodes=frozenset({"answer"}),
     )
 
 
@@ -219,4 +227,5 @@ def _plan_and_execute_topology() -> FixedTopology:
             FixedEdge("commit", "finalize", "always"),
         ),
         success_nodes=frozenset({"finalize"}),
+        visible_model_nodes=frozenset({"final_answer"}),
     )

@@ -12,9 +12,7 @@ from agent_factory.dynamic_runtime.event_persistence import (
 from agent_factory.dynamic_runtime.persistence_helpers import (
     advance_conversation_revision,
     insert_runtime_instance,
-    insert_message,
     insert_outbox,
-    insert_turn,
     upsert_capability_snapshot,
 )
 from agent_factory.dynamic_runtime.repositories import utc_now_text
@@ -41,7 +39,7 @@ class RuntimeStartStore:
     def __init__(self, database: DynamicRuntimeDatabase) -> None:
         self._database = database
 
-    def create(
+    def attach(
         self,
         *,
         envelope: CommandEnvelope,
@@ -68,14 +66,17 @@ class RuntimeStartStore:
                 principal_id=envelope.principal_id,
                 workspace_id=runtime_instance.request.workspace_id,
             )
-            _require_next_task_revision(conn, turn)
             current_receipt = _load_receipt(conn, envelope.command_id)
             if current_receipt != claimed_receipt:
                 raise RuntimeError("command receipt changed before runtime creation")
 
             upsert_capability_snapshot(conn, capability_snapshot)
-            insert_turn(conn, turn)
-            insert_message(conn, user_message)
+            _attach_prepared_turn(
+                conn,
+                envelope=envelope,
+                turn=turn,
+                user_message=user_message,
+            )
             insert_runtime_instance(conn, runtime_instance)
 
             attached_receipt = claimed_receipt.model_copy(
@@ -103,7 +104,10 @@ class RuntimeStartStore:
                     aggregate_revision=attached_receipt.receipt_revision,
                     event_id=f"command:{attached_receipt.command_id}:{attached_receipt.receipt_revision}",
                     event_kind="command_attached_runtime",
-                    payload=attached_receipt.model_dump(mode="json"),
+                    payload={
+                        **attached_receipt.model_dump(mode="json"),
+                        "command_kind": envelope.payload.kind,
+                    },
                     created_at=now,
                     updated_at=now,
                 ),
@@ -155,6 +159,8 @@ def _validate_start_objects(
         raise ValueError("new conversation turn must be queued and owned by the runtime instance")
     if turn.user_message_id != user_message.message_id or turn.task_revision != request.task_revision:
         raise ValueError("conversation turn does not match user message or task revision")
+    if turn.source_command_id != envelope.command_id:
+        raise ValueError("conversation turn does not match source command")
     if user_message.role != "user" or user_message.status != "committed":
         raise ValueError("runtime start requires one committed user message")
     if user_message.session_id != envelope.session_id or user_message.turn_id != turn.turn_id:
@@ -194,19 +200,52 @@ def _require_conversation_owner(
         raise RuntimeError("command principal or workspace does not own the conversation")
 
 
-def _require_next_task_revision(
+def _attach_prepared_turn(
     conn: sqlite3.Connection,
+    *,
+    envelope: CommandEnvelope,
     turn: ConversationTurn,
+    user_message: ConversationMessage,
 ) -> None:
-    row = conn.execute(
+    turn_row = conn.execute(
         """
-        select coalesce(max(task_revision), 0) + 1 as next_revision
-        from conversation_turns where session_id = ?
+        select payload_json from conversation_turns where turn_id = ?
         """,
-        (turn.session_id,),
+        (turn.turn_id,),
     ).fetchone()
-    if int(row["next_revision"]) != turn.task_revision:
-        raise RuntimeError("conversation task revision changed before runtime creation")
+    message_row = conn.execute(
+        "select payload_json from conversation_messages where message_id = ?",
+        (user_message.message_id,),
+    ).fetchone()
+    if turn_row is None or message_row is None:
+        raise RuntimeError("runtime start requires a durably prepared conversation turn")
+    prepared_turn = ConversationTurn.model_validate_json(str(turn_row["payload_json"]))
+    prepared_message = ConversationMessage.model_validate_json(str(message_row["payload_json"]))
+    expected_turn = turn.model_copy(
+        update={
+            "active_runtime_instance_id": None,
+            "updated_at": prepared_turn.updated_at,
+        }
+    )
+    if prepared_turn != expected_turn or prepared_message != user_message:
+        raise RuntimeError("prepared conversation turn changed before runtime attachment")
+    if prepared_turn.source_command_id != envelope.command_id:
+        raise RuntimeError("prepared conversation turn belongs to a different command")
+    changed = conn.execute(
+        """
+        update conversation_turns
+        set active_runtime_instance_id = ?, payload_json = ?, updated_at = ?
+        where turn_id = ? and status = 'queued' and active_runtime_instance_id is null
+        """,
+        (
+            turn.active_runtime_instance_id,
+            turn.model_dump_json(),
+            turn.updated_at,
+            turn.turn_id,
+        ),
+    ).rowcount
+    if changed != 1:
+        raise RuntimeError("conversation turn runtime attachment compare-and-set failed")
 
 
 def _load_receipt(conn: sqlite3.Connection, command_id: str) -> CommandReceipt:

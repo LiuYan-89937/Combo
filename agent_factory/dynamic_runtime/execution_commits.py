@@ -12,6 +12,7 @@ from agent_factory.dynamic_runtime.event_persistence import (
 from agent_factory.dynamic_runtime.persistence_helpers import (
     advance_conversation_revision,
     insert_message,
+    insert_outbox,
 )
 from agent_factory.dynamic_runtime.repositories import utc_now_text
 from agent_factory.model_pool.usage import insert_runtime_model_usage
@@ -23,6 +24,7 @@ from agent_factory.runtime_protocol import (
     RuntimeInstance,
     RuntimeModelUsage,
     ToolCallRecord,
+    OutboxRecord,
 )
 from agent_factory.runtime_protocol.events import RuntimeEventPayload
 from agent_factory.runtime_protocol.state_machines import (
@@ -346,10 +348,15 @@ def _commit_delegated_task(
         if hasattr(event_payload, "model_dump")
         else dict(event_payload)
     )
+    payload["session_id"] = request.session_id
     event = DelegatedTaskEvent(
         event_id=f"delegated_task_event:{request.task_id}:{request.task_revision}:{sequence}",
         task_id=request.task_id,
         task_revision=request.task_revision,
+        parent_task_revision=_load_instance(
+            conn,
+            request.parent_runtime_instance_id or "",
+        ).request.task_revision,
         sequence=sequence,
         event_type=event_type,
         principal_id=request.principal_id,
@@ -381,6 +388,37 @@ def _commit_delegated_task(
             event.created_at,
         ),
     )
+    insert_outbox(
+        conn,
+        OutboxRecord(
+            aggregate_kind="delegated_task",
+            aggregate_id=event.task_id,
+            aggregate_revision=event.task_revision,
+            event_id=event.event_id,
+            event_kind=f"delegated_task_{event.event_type}",
+            payload=event.model_dump(mode="json"),
+            created_at=now,
+            updated_at=now,
+        ),
+    )
+    if event.event_type in {"result", "failed", "cancelled"}:
+        conn.execute(
+            """
+            insert into delegated_task_notifications(
+              event_id, task_id, task_revision, principal_id, session_id,
+              payload_json, delivered_runtime_instance_id, created_at, delivered_at
+            ) values (?, ?, ?, ?, ?, ?, null, ?, null)
+            """,
+            (
+                event.event_id,
+                event.task_id,
+                event.task_revision,
+                event.principal_id,
+                request.session_id,
+                event.model_dump_json(),
+                event.created_at,
+            ),
+        )
 
 
 def _load_instance(conn: Any, runtime_instance_id: str) -> RuntimeInstance:

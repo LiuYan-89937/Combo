@@ -145,6 +145,54 @@ class ScopedMemoryStore:
                 raise RuntimeError("memory revision changed before deletion")
         return deleted
 
+    def delete_as_owner(
+        self,
+        *,
+        memory_id: str,
+        principal_id: str,
+    ) -> MemoryRevision:
+        """Delete a memory through the authenticated user-management surface."""
+        with self._database.transaction() as conn:
+            row = conn.execute(
+                """
+                select head.*, revision.payload_json
+                from memory_heads as head
+                join memory_revisions as revision
+                  on revision.memory_id = head.memory_id and revision.revision = head.revision
+                where head.memory_id = ?
+                """,
+                (_required_text(memory_id, "memory_id"),),
+            ).fetchone()
+            if row is None or str(row["principal_id"]) != principal_id:
+                raise LookupError(f"memory not found: {memory_id}")
+            if str(row["status"]) != "active":
+                raise ValueError("memory is already deleted")
+            current = MemoryRevision.model_validate_json(str(row["payload_json"]))
+            deleted = current.model_copy(
+                update={
+                    "revision": current.revision + 1,
+                    "status": "deleted",
+                    "created_at": _now_text(),
+                }
+            )
+            self._insert_revision(conn, deleted)
+            changed = conn.execute(
+                """
+                update memory_heads
+                set revision = ?, status = 'deleted', updated_at = ?
+                where memory_id = ? and revision = ? and status = 'active'
+                """,
+                (
+                    deleted.revision,
+                    deleted.created_at,
+                    deleted.memory_id,
+                    current.revision,
+                ),
+            ).rowcount
+            if changed != 1:
+                raise RuntimeError("memory revision changed before deletion")
+        return deleted
+
     def list_active(
         self,
         *,
@@ -272,6 +320,11 @@ class ScopedMemoryStore:
 
 def _terms(value: str) -> list[str]:
     return [item for item in re.findall(r"[\w\-]{2,}", str(value or "").casefold()) if item]
+
+
+def _now_text() -> str:
+    from datetime import UTC, datetime
+    return datetime.now(UTC).isoformat()
 
 
 def _required_text(value: str, field_name: str) -> str:

@@ -60,6 +60,7 @@ class DelegationGrant(FrozenProtocolModel):
     child_runtime_instance_id: str
     task_id: str
     task_revision: int = Field(ge=1)
+    parent_task_revision: int = Field(ge=1)
     parent_capability_snapshot_id: str
     child_capability_snapshot_id: str
     workspace_id: str

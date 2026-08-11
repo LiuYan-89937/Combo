@@ -6,6 +6,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from agent_factory.dynamic_runtime.main_turn import RouteAnalyzer
 from agent_factory.dynamic_runtime.model_service import ResolvedRuntimePolicy
+from agent_factory.runtime_kernel.model_operations import prepare_structured_output_invocation
 from agent_factory.runtime_protocol import (
     CommandEnvelope,
     RouteDecision,
@@ -32,7 +33,6 @@ class StructuredRouteAnalyzer(RouteAnalyzer):
         payload: SendMessagePayload,
         policy: ResolvedRuntimePolicy,
     ) -> RouteDecision:
-        structured = policy.chat_model.model.with_structured_output(RouteDecision)
         attachment_lines = [
             f"- {item.attachment_id}@{item.revision} digest={item.content_digest}"
             for item in payload.attachments
@@ -40,11 +40,18 @@ class StructuredRouteAnalyzer(RouteAnalyzer):
         user_content = payload.content
         if attachment_lines:
             user_content += "\n\nAttachment references:\n" + "\n".join(attachment_lines)
-        result = await structured.ainvoke(
-            [
+        invocation = prepare_structured_output_invocation(
+            model=policy.chat_model.model,
+            output_model=RouteDecision,
+            messages=[
                 SystemMessage(content=self._system_prompt),
                 HumanMessage(content=user_content),
             ],
+            model_metadata=policy.chat_model.settings.metadata(),
+            config_tags=["execution-routing"],
+        )
+        result = await invocation.model.ainvoke(
+            list(invocation.messages),
             config={
                 "metadata": {
                     "operation": "execution_routing",

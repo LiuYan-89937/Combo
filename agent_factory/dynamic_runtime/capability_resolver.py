@@ -161,9 +161,10 @@ class MainTurnCapabilityResolver:
         policy: ResolvedRuntimePolicy,
         workspace_id: str,
     ) -> CapabilitySnapshot:
+        del route
         return self.resolve_requirements(
             principal_id=envelope.principal_id,
-            requirements=route.capability_requirements,
+            requirements=(),
             policy=policy,
             workspace_id=workspace_id,
         )
@@ -175,6 +176,8 @@ class MainTurnCapabilityResolver:
         requirements: tuple[str, ...],
         policy: ResolvedRuntimePolicy,
         workspace_id: str,
+        include_system_capabilities: bool = True,
+        excluded_capability_ids: frozenset[str] = frozenset(),
     ) -> CapabilitySnapshot:
         principal_id = _require_text(principal_id, "runtime principal_id")
         resolved_workspace_id = _require_text(workspace_id, "workspace_id")
@@ -185,11 +188,31 @@ class MainTurnCapabilityResolver:
         active_by_id = {item.revision.capability_id: item for item in active}
         if len(active_by_id) != len(active):
             raise CapabilityResolutionError("active capability store returned duplicate capability IDs")
-        matches = self._search_index.search(
-            requirements=requirements,
-            candidates=active,
+        searchable = tuple(
+            item for item in active
+            if item.revision.capability_id not in excluded_capability_ids
         )
-        matches_by_id = _unique_search_matches(matches)
+        matches_by_requirement = tuple(
+            (
+                requirement,
+                _ordered_requirement_matches(
+                    requirement=requirement,
+                    candidates=searchable,
+                    search_index=self._search_index,
+                ),
+            )
+            for requirement in requirements
+        )
+        unmatched_requirements = tuple(
+            requirement
+            for requirement, matches in matches_by_requirement
+            if not matches
+        )
+        if unmatched_requirements:
+            raise CapabilityResolutionError(
+                "no active capability matched required capability descriptions: "
+                + ", ".join(unmatched_requirements)
+            )
 
         selected: dict[str, ActiveCapability] = {}
         rejected: dict[str, CapabilitySelection] = {}
@@ -213,6 +236,14 @@ class MainTurnCapabilityResolver:
                 raise CapabilityResolutionError(
                     f"capability index returned a capability outside the active store snapshot: {capability_id}"
                 )
+            if capability_id in excluded_capability_ids:
+                rejected[capability_id] = _rejected_selection(
+                    active_capability.revision,
+                    "capability is excluded from this runtime role",
+                    score,
+                    evidence_ids={active_capability.index_revision.index_revision_id},
+                )
+                return False
             if capability_id in visiting:
                 cycle_start = visiting.index(capability_id)
                 cycle = " -> ".join([*visiting[cycle_start:], capability_id])
@@ -312,17 +343,34 @@ class MainTurnCapabilityResolver:
             reasons[capability_id] = reason
             return True
 
-        for capability_id in _system_available_capability_ids(active):
-            if select(
-                capability_id,
-                score=None,
-                reason="declared as a stable system capability by the active revision",
-            ):
-                accepted_roots.add(capability_id)
+        if include_system_capabilities:
+            for capability_id in _system_available_capability_ids(active):
+                if select(
+                    capability_id,
+                    score=None,
+                    reason="declared as a stable system capability by the active revision",
+                ):
+                    accepted_roots.add(capability_id)
 
-        for match in sorted(matches_by_id.values(), key=lambda item: (-item.score, item.capability_id)):
-            if select(match.capability_id, score=match.score, reason=match.reason):
-                accepted_roots.add(match.capability_id)
+        unavailable_requirements: list[str] = []
+        for requirement, matches in matches_by_requirement:
+            accepted = False
+            for match in matches:
+                if select(
+                    match.capability_id,
+                    score=match.score,
+                    reason=f"{match.reason}; required by {requirement}",
+                ):
+                    accepted_roots.add(match.capability_id)
+                    accepted = True
+                    break
+            if not accepted:
+                unavailable_requirements.append(requirement)
+        if unavailable_requirements:
+            raise CapabilityResolutionError(
+                "required capability descriptions matched no usable active capability: "
+                + ", ".join(unavailable_requirements)
+            )
 
         reachable = _reachable_selected_capabilities(accepted_roots, selected)
         selected = {
@@ -387,6 +435,36 @@ class MainTurnCapabilityResolver:
         )
 
 
+def _ordered_requirement_matches(
+    *,
+    requirement: str,
+    candidates: tuple[ActiveCapability, ...],
+    search_index: CapabilitySearchIndex,
+) -> tuple[CapabilitySearchMatch, ...]:
+    normalized = _normalized_public_name(requirement)
+    exact = tuple(
+        CapabilitySearchMatch(
+            capability_id=item.revision.capability_id,
+            score=1.0,
+            reason="matched exact public capability name",
+        )
+        for item in candidates
+        if _normalized_public_name(item.revision.content.display_name) == normalized
+    )
+    if exact:
+        return tuple(sorted(exact, key=lambda item: item.capability_id))
+    return tuple(
+        sorted(
+            search_index.search(requirements=(requirement,), candidates=candidates),
+            key=lambda item: (-item.score, item.capability_id),
+        )
+    )
+
+
+def _normalized_public_name(value: str) -> str:
+    return " ".join(str(value or "").casefold().split())
+
+
 def _system_available_capability_ids(
     active: tuple[ActiveCapability, ...],
 ) -> tuple[str, ...]:
@@ -398,20 +476,6 @@ def _system_available_capability_ids(
         if definition.system_available:
             capability_ids.append(item.revision.capability_id)
     return tuple(sorted(capability_ids))
-
-
-def _unique_search_matches(
-    matches: tuple[CapabilitySearchMatch, ...],
-) -> dict[str, CapabilitySearchMatch]:
-    unique: dict[str, CapabilitySearchMatch] = {}
-    for match in matches:
-        previous = unique.get(match.capability_id)
-        if previous is not None and previous != match:
-            raise CapabilityResolutionError(
-                f"capability search index returned conflicting matches: {match.capability_id}"
-            )
-        unique[match.capability_id] = match
-    return unique
 
 
 def _reachable_selected_capabilities(

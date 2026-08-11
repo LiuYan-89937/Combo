@@ -17,6 +17,7 @@ from agent_factory.tooling.builtins.filesystem.common import (
     filesystem_boundary,
     resolve_path,
     require_filesystem_runtime,
+    require_file_locks,
 )
 from agent_factory.tooling.builtins.filesystem.text_changes import text_change_summary
 DEFAULT_TRANSACTION_TTL_SECONDS = 600
@@ -203,9 +204,11 @@ def commit_transaction(transaction_id: str, resources: dict[str, Any]) -> dict[s
         if plan.workspace_root != root:
             raise ValueError("transaction belongs to a different workspace")
         try:
-            _validate_commit_targets(plan, resources=resources)
-            _validate_snapshots(plan)
-            _apply_transaction(plan)
+            targets = tuple(plan.workspace_root / relative for relative in plan.snapshots)
+            with require_file_locks(resources).acquire(targets):
+                _validate_commit_targets(plan, resources=resources)
+                _validate_snapshots(plan)
+                _apply_transaction(plan)
         finally:
             store.remove(transaction_id)
     return _plan_payload(plan, status="committed")

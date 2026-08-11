@@ -9,8 +9,9 @@ def get_capability_tool_specs() -> list[ToolSpec]:
         ToolSpec(
             id="capability",
             description=(
-                "Search and inspect the active capability catalog, freeze a dependency-closed "
-                "preparation receipt, or list active capabilities."
+                "Search or list the active Tool, MCP, and Skill catalog before delegation. Returns only "
+                "public capability names, kinds, and descriptions. Pass the selected names to delegate; "
+                "delegate performs validation, dependency closure, and snapshot assembly internally."
             ),
             entrypoint="agent_factory.tooling.builtins.capability.tool:run",
             input_schema={
@@ -19,17 +20,10 @@ def get_capability_tool_specs() -> list[ToolSpec]:
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["search", "inspect", "prepare", "list_active"],
+                        "enum": ["search", "list_active"],
                     },
                     "query": {"type": "string"},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10},
-                    "capability_id": {"type": "string"},
-                    "capability_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "minItems": 1,
-                        "uniqueItems": True,
-                    },
                 },
                 "required": ["action"],
             },

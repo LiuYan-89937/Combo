@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from dataclasses import dataclass
 from typing import Any, Literal
+from uuid import uuid4
 
 from agent_factory.dynamic_runtime.database import DynamicRuntimeDatabase
 from agent_factory.dynamic_runtime.persistence_helpers import (
@@ -15,6 +16,7 @@ from agent_factory.dynamic_runtime.persistence_helpers import (
 )
 from agent_factory.runtime_protocol import (
     CapabilitySnapshot,
+    AttachmentPart,
     CommandEnvelope,
     CommandReceipt,
     ConversationMessage,
@@ -22,10 +24,13 @@ from agent_factory.runtime_protocol import (
     OutboxRecord,
     RuntimeInstance,
     RuntimeEvent,
+    SendMessagePayload,
+    TextPart,
     ToolCallRecord,
 )
 from agent_factory.runtime_protocol.state_machines import (
     COMMAND_TRANSITIONS,
+    CONVERSATION_TURN_TRANSITIONS,
     RUNTIME_INSTANCE_TRANSITIONS,
     TOOL_CALL_TRANSITIONS,
     require_transition,
@@ -34,6 +39,13 @@ from agent_factory.runtime_protocol.state_machines import (
 
 def utc_now_text() -> str:
     return datetime.now(UTC).isoformat()
+
+
+CONTROL_COMMAND_KINDS = (
+    "cancel_command_request",
+    "cancel_runtime_request",
+    "steer_runtime_request",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +78,10 @@ class WorkspaceIdentity:
     mount_record_id: str | None
     revision: int
     status: str
+    title: str | None
+    mode: Literal["isolated", "project"]
+    created_at: str
+    updated_at: str
 
 
 class ConversationStore:
@@ -86,22 +102,31 @@ class ConversationStore:
         workspace_id: str,
         principal_id: str,
         managed_path: str,
+        title: str = "工作区",
+        mode: Literal["isolated", "project"] = "project",
     ) -> None:
         now = utc_now_text()
+        owner = _required_text(principal_id, "principal_id")
         with self._database.transaction() as conn:
+            conn.execute(
+                "insert or ignore into principals(principal_id, created_at) values (?, ?)",
+                (owner, now),
+            )
             conn.execute(
                 """
                 insert into workspaces(
                   workspace_id, principal_id, kind, managed_path, mount_record_id,
-                  revision, status, created_at, updated_at
-                ) values (?, ?, 'managed', ?, null, 1, 'active', ?, ?)
+                  revision, status, created_at, updated_at, title, mode
+                ) values (?, ?, 'managed', ?, null, 1, 'active', ?, ?, ?, ?)
                 """,
                 (
                     _required_text(workspace_id, "workspace_id"),
-                    _required_text(principal_id, "principal_id"),
+                    owner,
                     _required_text(managed_path, "managed_path"),
                     now,
                     now,
+                    _required_text(title, "title"),
+                    mode,
                 ),
             )
 
@@ -178,6 +203,77 @@ class ConversationStore:
                 ),
             )
 
+    def create_linked_workspace(
+        self,
+        *,
+        workspace_id: str,
+        principal_id: str,
+        source_path: str,
+        title: str,
+        mode: Literal["isolated", "project"] = "project",
+    ) -> None:
+        now = utc_now_text()
+        mount_record_id = f"mount_{workspace_id}"
+        owner = _required_text(principal_id, "principal_id")
+        with self._database.transaction() as conn:
+            conn.execute(
+                "insert or ignore into principals(principal_id, created_at) values (?, ?)",
+                (owner, now),
+            )
+            conn.execute(
+                "insert into workspace_mount_records values (?, ?, ?, ?, 'active', 1, ?, ?)",
+                (mount_record_id, owner, _required_text(source_path, "source_path"), _required_text(title, "title"), now, now),
+            )
+            conn.execute(
+                """
+                insert into workspaces(
+                  workspace_id, principal_id, kind, managed_path, mount_record_id,
+                  revision, status, created_at, updated_at, title, mode
+                ) values (?, ?, 'mounted', null, ?, 1, 'active', ?, ?, ?, ?)
+                """,
+                (workspace_id, owner, mount_record_id, now, now, title, mode),
+            )
+
+    def update_workspace(
+        self,
+        *,
+        workspace_id: str,
+        principal_id: str,
+        title: str | None = None,
+        mode: Literal["isolated", "project"] | None = None,
+        archived: bool | None = None,
+    ) -> WorkspaceIdentity:
+        current = self.require_workspace(workspace_id)
+        owner = _required_text(principal_id, "principal_id")
+        if current.principal_id != owner or current.status == "deleted":
+            raise LookupError(f"workspace not found: {workspace_id}")
+        next_title = current.title if title is None else _required_text(title, "title")
+        next_mode = current.mode if mode is None else mode
+        next_status = current.status if archived is None else "detached" if archived else "active"
+        now = utc_now_text()
+        with self._database.transaction() as conn:
+            changed = conn.execute(
+                """
+                update workspaces
+                set title = ?, mode = ?, status = ?, revision = revision + 1, updated_at = ?
+                where workspace_id = ? and principal_id = ? and revision = ?
+                """,
+                (next_title, next_mode, next_status, now, current.workspace_id, owner, current.revision),
+            ).rowcount
+            if changed != 1:
+                raise RuntimeError("workspace compare-and-set failed")
+        return self.require_workspace(workspace_id)
+
+    def require_mount_path(self, mount_record_id: str, principal_id: str) -> str:
+        with self._database.connection(query_only=True) as conn:
+            row = conn.execute(
+                "select source_path from workspace_mount_records where mount_record_id = ? and principal_id = ? and status = 'active'",
+                (_required_text(mount_record_id, "mount_record_id"), _required_text(principal_id, "principal_id")),
+            ).fetchone()
+        if row is None:
+            raise LookupError(f"workspace mount not found: {mount_record_id}")
+        return str(row["source_path"])
+
     def create_conversation(
         self,
         *,
@@ -252,13 +348,52 @@ class ConversationStore:
             for row in rows
         ]
 
+    def archive_for_principal(self, *, session_id: str, principal_id: str) -> ConversationIdentity:
+        identity = self.require_identity(session_id)
+        owner = _required_text(principal_id, "principal_id")
+        if identity.principal_id != owner or identity.status != "active":
+            raise LookupError(f"active conversation not found: {session_id}")
+        now = utc_now_text()
+        with self._database.transaction() as conn:
+            cursor = conn.execute(
+                """
+                update conversations
+                set status = 'archived', revision = revision + 1, updated_at = ?
+                where session_id = ? and principal_id = ? and status = 'active'
+                """,
+                (now, session_id, owner),
+            )
+            if cursor.rowcount != 1:
+                raise LookupError(f"active conversation not found: {session_id}")
+        return self.require_identity(session_id)
+
+    def archive_all_for_principal(self, principal_id: str) -> tuple[str, ...]:
+        owner = _required_text(principal_id, "principal_id")
+        active_ids = tuple(
+            item.session_id
+            for item in self.list_for_principal(owner)
+            if item.status == "active"
+        )
+        if not active_ids:
+            return ()
+        with self._database.transaction() as conn:
+            conn.execute(
+                """
+                update conversations
+                set status = 'archived', revision = revision + 1, updated_at = ?
+                where principal_id = ? and status = 'active'
+                """,
+                (utc_now_text(), owner),
+            )
+        return active_ids
+
     def require_workspace(self, workspace_id: str) -> WorkspaceIdentity:
         value = _required_text(workspace_id, "workspace_id")
         with self._database.connection(query_only=True) as conn:
             row = conn.execute(
                 """
                 select workspace_id, principal_id, kind, managed_path, mount_record_id,
-                       revision, status
+                       revision, status, title, mode, created_at, updated_at
                 from workspaces where workspace_id = ?
                 """,
                 (value,),
@@ -273,7 +408,36 @@ class ConversationStore:
             mount_record_id=str(row["mount_record_id"]) if row["mount_record_id"] is not None else None,
             revision=int(row["revision"]),
             status=str(row["status"]),
+            title=str(row["title"]) if row["title"] is not None else None,
+            mode=str(row["mode"]),
+            created_at=str(row["created_at"]),
+            updated_at=str(row["updated_at"]),
         )
+
+    def list_workspaces_for_principal(self, principal_id: str) -> list[WorkspaceIdentity]:
+        owner = _required_text(principal_id, "principal_id")
+        with self._database.connection(query_only=True) as conn:
+            rows = conn.execute(
+                """
+                select workspace_id, principal_id, kind, managed_path, mount_record_id,
+                       revision, status, title, mode, created_at, updated_at
+                from workspaces where principal_id = ? order by updated_at desc, workspace_id
+                """,
+                (owner,),
+            ).fetchall()
+        return [WorkspaceIdentity(
+            workspace_id=str(row["workspace_id"]),
+            principal_id=str(row["principal_id"]),
+            kind=str(row["kind"]),
+            managed_path=str(row["managed_path"]) if row["managed_path"] is not None else None,
+            mount_record_id=str(row["mount_record_id"]) if row["mount_record_id"] is not None else None,
+            revision=int(row["revision"]),
+            status=str(row["status"]),
+            title=str(row["title"]) if row["title"] is not None else None,
+            mode=str(row["mode"]),
+            created_at=str(row["created_at"]),
+            updated_at=str(row["updated_at"]),
+        ) for row in rows]
 
     def next_task_revision(self, session_id: str) -> int:
         value = _required_text(session_id, "session_id")
@@ -312,6 +476,111 @@ class ConversationStore:
             insert_outbox(conn, outbox)
             advance_conversation_revision(conn, message.session_id, updated_at=utc_now_text())
 
+    def require_turn_for_message(self, *, session_id: str, message_id: str) -> ConversationTurn:
+        with self._database.connection(query_only=True) as conn:
+            row = conn.execute(
+                """
+                select payload_json from conversation_turns
+                where session_id = ? and user_message_id = ?
+                """,
+                (
+                    _required_text(session_id, "session_id"),
+                    _required_text(message_id, "message_id"),
+                ),
+            ).fetchone()
+        if row is None:
+            raise LookupError(f"conversation turn not found for message: {message_id}")
+        return ConversationTurn.model_validate_json(str(row["payload_json"]))
+
+    def require_message(self, *, session_id: str, message_id: str) -> ConversationMessage:
+        with self._database.connection(query_only=True) as conn:
+            row = conn.execute(
+                """
+                select payload_json from conversation_messages
+                where session_id = ? and message_id = ?
+                """,
+                (
+                    _required_text(session_id, "session_id"),
+                    _required_text(message_id, "message_id"),
+                ),
+            ).fetchone()
+        if row is None:
+            raise LookupError(f"conversation message not found: {message_id}")
+        return ConversationMessage.model_validate_json(str(row["payload_json"]))
+
+    def fail_pre_runtime_turn(self, *, source_command_id: str) -> ConversationTurn:
+        return self._terminalize_pre_runtime_turn(
+            source_command_id=source_command_id,
+            status="failed",
+        )
+
+    def cancel_pre_runtime_turn(self, *, source_command_id: str) -> ConversationTurn:
+        return self._terminalize_pre_runtime_turn(
+            source_command_id=source_command_id,
+            status="cancelled",
+        )
+
+    def _terminalize_pre_runtime_turn(
+        self,
+        *,
+        source_command_id: str,
+        status: Literal["failed", "cancelled"],
+    ) -> ConversationTurn:
+        command_id = _required_text(source_command_id, "source_command_id")
+        now = utc_now_text()
+        with self._database.transaction() as conn:
+            row = conn.execute(
+                """
+                select payload_json from conversation_turns
+                where json_extract(payload_json, '$.source_command_id') = ?
+                """,
+                (command_id,),
+            ).fetchone()
+            if row is None:
+                raise LookupError(f"conversation turn not found for command: {command_id}")
+            current = ConversationTurn.model_validate_json(str(row["payload_json"]))
+            if current.status == status:
+                return current
+            require_transition(
+                current.status,
+                status,
+                CONVERSATION_TURN_TRANSITIONS,
+                machine="conversation turn",
+            )
+            terminal = current.model_copy(
+                update={"status": status, "updated_at": now, "terminal_at": now}
+            )
+            changed = conn.execute(
+                """
+                update conversation_turns
+                set status = ?, payload_json = ?, updated_at = ?, terminal_at = ?
+                where turn_id = ? and status = ?
+                """,
+                (status, terminal.model_dump_json(), now, now, current.turn_id, current.status),
+            ).rowcount
+            if changed != 1:
+                raise RuntimeError("conversation turn compare-and-set failed")
+            insert_outbox(
+                conn,
+                OutboxRecord(
+                    aggregate_kind="conversation",
+                    aggregate_id=current.session_id,
+                    aggregate_revision=current.task_revision,
+                    event_id=f"conversation:{current.session_id}:turn:{current.turn_id}:{status}",
+                    event_kind=f"conversation_turn_{status}",
+                    payload={
+                        "session_id": current.session_id,
+                        "turn_id": current.turn_id,
+                        "command_id": command_id,
+                        "status": status,
+                    },
+                    created_at=now,
+                    updated_at=now,
+                ),
+            )
+            advance_conversation_revision(conn, current.session_id, updated_at=now)
+        return terminal
+
     def messages(self, session_id: str) -> list[ConversationMessage]:
         with self._database.connection(query_only=True) as conn:
             rows = conn.execute(
@@ -320,6 +589,27 @@ class ConversationStore:
                 where session_id = ? order by created_at, rowid
                 """,
                 (_required_text(session_id, "session_id"),),
+            ).fetchall()
+        return [ConversationMessage.model_validate_json(str(row["payload_json"])) for row in rows]
+
+    def messages_through_task_revision(
+        self,
+        *,
+        session_id: str,
+        task_revision: int,
+    ) -> list[ConversationMessage]:
+        if task_revision < 1:
+            raise ValueError("task_revision must be positive")
+        with self._database.connection(query_only=True) as conn:
+            rows = conn.execute(
+                """
+                select message.payload_json
+                from conversation_messages as message
+                join conversation_turns as turn on turn.turn_id = message.turn_id
+                where message.session_id = ? and turn.task_revision <= ?
+                order by turn.task_revision, message.created_at, message.rowid
+                """,
+                (_required_text(session_id, "session_id"), task_revision),
             ).fetchall()
         return [ConversationMessage.model_validate_json(str(row["payload_json"])) for row in rows]
 
@@ -381,6 +671,20 @@ class CommandInbox:
                     envelope.payload.kind,
                 ),
             )
+            if isinstance(envelope.payload, SendMessagePayload):
+                _insert_send_message_intake(conn, envelope)
+            queue_position = int(
+                conn.execute(
+                    """
+                    select count(*) from command_inbox
+                    where session_id = ? and command_id <> ?
+                      and command_kind = 'send_message'
+                      and status in ('queued', 'running')
+                      and queue_sequence < ?
+                    """,
+                    (envelope.session_id, envelope.command_id, sequence),
+                ).fetchone()[0]
+            )
             insert_outbox(
                 conn,
                 OutboxRecord(
@@ -389,12 +693,72 @@ class CommandInbox:
                     aggregate_revision=queued.receipt_revision,
                     event_id=f"command:{queued.command_id}:{queued.receipt_revision}",
                     event_kind="command_queued",
-                    payload=queued.model_dump(mode="json"),
+                    payload={
+                        **queued.model_dump(mode="json"),
+                        "command_kind": envelope.payload.kind,
+                        "dispatch_state": "queued" if queue_position else "dispatching",
+                        "queue_position": queue_position,
+                    },
                     created_at=queued.updated_at,
                     updated_at=queued.updated_at,
                 ),
             )
         return queued
+
+    def promote_queued(
+        self,
+        *,
+        command_id: str,
+        principal_id: str,
+        session_id: str,
+    ) -> CommandReceipt:
+        target_id = _required_text(command_id, "command_id")
+        owner = _required_text(principal_id, "principal_id")
+        session = _required_text(session_id, "session_id")
+        with self._database.transaction() as conn:
+            row = conn.execute(
+                """
+                select receipt_json from command_inbox
+                where command_id = ? and principal_id = ? and session_id = ?
+                  and command_kind = 'send_message'
+                """,
+                (target_id, owner, session),
+            ).fetchone()
+            if row is None:
+                raise LookupError(f"queued message command not found: {target_id}")
+            receipt = CommandReceipt.model_validate_json(str(row["receipt_json"]))
+            if receipt.status != "queued":
+                raise ValueError(f"message command is not queued: {target_id}")
+            next_sequence = int(
+                conn.execute("select min(queue_sequence) - 1 from command_inbox").fetchone()[0]
+            )
+            changed = conn.execute(
+                """
+                update command_inbox set queue_sequence = ?, updated_at = ?
+                where command_id = ? and status = 'queued'
+                """,
+                (next_sequence, utc_now_text(), target_id),
+            ).rowcount
+            if changed != 1:
+                raise RuntimeError("queued message promotion compare-and-set failed")
+            now = utc_now_text()
+            insert_outbox(
+                conn,
+                OutboxRecord(
+                    aggregate_kind="command",
+                    aggregate_id=target_id,
+                    aggregate_revision=receipt.receipt_revision,
+                    event_id=f"command:{target_id}:steering:{uuid4().hex}",
+                    event_kind="command_steering",
+                    payload={
+                        **receipt.model_dump(mode="json"),
+                        "dispatch_state": "steering",
+                    },
+                    created_at=now,
+                    updated_at=now,
+                ),
+            )
+        return receipt
 
     def get_receipt(self, command_id: str) -> CommandReceipt:
         with self._database.connection(query_only=True) as conn:
@@ -404,6 +768,30 @@ class CommandInbox:
             ).fetchone()
         if row is None:
             raise LookupError(f"command receipt not found: {command_id}")
+        return CommandReceipt.model_validate_json(str(row["receipt_json"]))
+
+    def running_unattached_for_session(
+        self,
+        *,
+        principal_id: str,
+        session_id: str,
+    ) -> CommandReceipt:
+        with self._database.connection(query_only=True) as conn:
+            row = conn.execute(
+                """
+                select receipt_json from command_inbox
+                where principal_id = ? and session_id = ?
+                  and command_kind = 'send_message' and status = 'running'
+                  and json_extract(receipt_json, '$.runtime_instance_id') is null
+                order by updated_at desc limit 1
+                """,
+                (
+                    _required_text(principal_id, "principal_id"),
+                    _required_text(session_id, "session_id"),
+                ),
+            ).fetchone()
+        if row is None:
+            raise LookupError(f"active pre-runtime command not found for session: {session_id}")
         return CommandReceipt.model_validate_json(str(row["receipt_json"]))
 
     def claim_next(
@@ -425,10 +813,11 @@ class CommandInbox:
             ).fetchone()
             if owner is None:
                 raise RuntimeError("command dispatcher generation is not active or its lease expired")
+            control_placeholders = ", ".join("?" for _ in CONTROL_COMMAND_KINDS)
             lane_filter = (
-                "queued.command_kind = 'cancel_runtime_request'"
+                f"queued.command_kind in ({control_placeholders})"
                 if lane == "control"
-                else "queued.command_kind <> 'cancel_runtime_request'"
+                else f"queued.command_kind not in ({control_placeholders})"
             )
             row = conn.execute(
                 f"""
@@ -436,7 +825,7 @@ class CommandInbox:
                 where queued.status = 'queued'
                   and {lane_filter}
                   and (
-                    queued.command_kind = 'cancel_runtime_request'
+                    queued.command_kind in ({control_placeholders})
                     or not exists (
                       select 1 from command_inbox active
                       where active.session_id = queued.session_id and active.status = 'running'
@@ -445,7 +834,8 @@ class CommandInbox:
                 order by
                   queued.queue_sequence
                 limit 1
-                """
+                """,
+                (*CONTROL_COMMAND_KINDS, *CONTROL_COMMAND_KINDS),
             ).fetchone()
             if row is None:
                 return None
@@ -544,6 +934,26 @@ class RuntimeInstanceStore:
             ).fetchone()
         if row is None:
             raise LookupError(f"runtime instance not found: {runtime_instance_id}")
+        return RuntimeInstance.model_validate_json(str(row["payload_json"]))
+
+    def active_main_for_session(self, *, session_id: str, principal_id: str) -> RuntimeInstance:
+        with self._database.connection(query_only=True) as conn:
+            row = conn.execute(
+                """
+                select payload_json from runtime_instances
+                where session_id = ?
+                  and json_extract(payload_json, '$.request.principal_id') = ?
+                  and json_extract(payload_json, '$.request.runtime_role') = 'main'
+                  and status in ('queued', 'running', 'waiting_approval', 'waiting_external', 'cancelling')
+                order by updated_at desc, rowid desc limit 1
+                """,
+                (
+                    _required_text(session_id, "session_id"),
+                    _required_text(principal_id, "principal_id"),
+                ),
+            ).fetchone()
+        if row is None:
+            raise LookupError(f"active runtime not found for session: {session_id}")
         return RuntimeInstance.model_validate_json(str(row["payload_json"]))
 
     def capability_snapshot(self, snapshot_id: str) -> CapabilitySnapshot:
@@ -866,6 +1276,84 @@ class RuntimeEventStore:
                 (session, session_sequence, limit),
             ).fetchall()
         return [RuntimeEvent.model_validate_json(str(row["payload_json"])) for row in rows]
+
+
+def _insert_send_message_intake(conn: Any, envelope: CommandEnvelope) -> None:
+    payload = envelope.payload
+    if not isinstance(payload, SendMessagePayload):
+        raise TypeError("send-message intake requires SendMessagePayload")
+    conversation = conn.execute(
+        """
+        select principal_id, status from conversations where session_id = ?
+        """,
+        (envelope.session_id,),
+    ).fetchone()
+    if conversation is None or str(conversation["status"]) != "active":
+        raise LookupError(f"active conversation not found: {envelope.session_id}")
+    if str(conversation["principal_id"]) != envelope.principal_id:
+        raise PermissionError("command principal does not own the conversation")
+    existing_message = conn.execute(
+        "select 1 from conversation_messages where message_id = ?",
+        (payload.message_id,),
+    ).fetchone()
+    if existing_message is not None:
+        raise ValueError(f"message_id is already committed: {payload.message_id}")
+
+    task_revision = int(
+        conn.execute(
+            """
+            select coalesce(max(task_revision), 0) + 1
+            from conversation_turns where session_id = ?
+            """,
+            (envelope.session_id,),
+        ).fetchone()[0]
+    )
+    now = utc_now_text()
+    turn = ConversationTurn(
+        turn_id=uuid4().hex,
+        session_id=envelope.session_id,
+        user_message_id=payload.message_id,
+        task_revision=task_revision,
+        status="queued",
+        source_command_id=envelope.command_id,
+        created_at=now,
+        updated_at=now,
+    )
+    message = ConversationMessage(
+        message_id=payload.message_id,
+        session_id=envelope.session_id,
+        turn_id=turn.turn_id,
+        role="user",
+        status="committed",
+        parts=(
+            TextPart(text=payload.content),
+            *(AttachmentPart(attachment=attachment) for attachment in payload.attachments),
+        ),
+        created_at=envelope.submitted_at,
+        committed_at=now,
+    )
+    insert_turn(conn, turn)
+    insert_message(conn, message)
+    insert_outbox(
+        conn,
+        OutboxRecord(
+            aggregate_kind="conversation",
+            aggregate_id=envelope.session_id,
+            aggregate_revision=task_revision,
+            event_id=f"conversation:{envelope.session_id}:turn:{turn.turn_id}:committed",
+            event_kind="conversation_user_message_committed",
+            payload={
+                "session_id": envelope.session_id,
+                "turn_id": turn.turn_id,
+                "message_id": message.message_id,
+                "command_id": envelope.command_id,
+                "task_revision": task_revision,
+            },
+            created_at=now,
+            updated_at=now,
+        ),
+    )
+    advance_conversation_revision(conn, envelope.session_id, updated_at=now)
 
 
 def _required_text(value: Any, field_name: str) -> str:

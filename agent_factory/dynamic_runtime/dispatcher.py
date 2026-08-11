@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Awaitable, Literal, Mapping, Protocol
 
@@ -48,12 +49,48 @@ class CommandHandler(Protocol):
         ...
 
 
+class CommandExecutionRegistry:
+    """Own cancellable in-flight command handlers before runtime attachment."""
+
+    def __init__(self) -> None:
+        self._tasks: dict[str, asyncio.Task[CommandOutcome]] = {}
+        self._cancellation_reasons: dict[str, str] = {}
+
+    def register(self, command_id: str, task: asyncio.Task[CommandOutcome]) -> None:
+        if command_id in self._tasks:
+            raise RuntimeError(f"command execution is already registered: {command_id}")
+        self._tasks[command_id] = task
+
+    def cancel(self, command_id: str, *, reason: str) -> bool:
+        task = self._tasks.get(command_id)
+        if task is None or task.done():
+            return False
+        self._cancellation_reasons[command_id] = str(reason or "user_cancelled")
+        task.cancel()
+        return True
+
+    def cancellation_reason(self, command_id: str) -> str | None:
+        return self._cancellation_reasons.get(command_id)
+
+    def release(self, command_id: str, task: asyncio.Task[CommandOutcome]) -> None:
+        if self._tasks.get(command_id) is task:
+            self._tasks.pop(command_id, None)
+        self._cancellation_reasons.pop(command_id, None)
+
+
 class CommandDispatcher:
     """Claim durable commands and finalize each receipt exactly once."""
 
-    def __init__(self, *, inbox: CommandInbox, handlers: Mapping[str, CommandHandler]) -> None:
+    def __init__(
+        self,
+        *,
+        inbox: CommandInbox,
+        handlers: Mapping[str, CommandHandler],
+        executions: CommandExecutionRegistry,
+    ) -> None:
         self._inbox = inbox
         self._handlers = dict(handlers)
+        self._executions = executions
 
     async def dispatch_one(
         self,
@@ -72,8 +109,17 @@ class CommandDispatcher:
                 rejection_code="unsupported_command_kind",
             )
         else:
+            execution = asyncio.create_task(
+                handler.handle(envelope, receipt, generation=generation),
+                name=f"dynamic-runtime-command-{envelope.command_id}",
+            )
+            self._executions.register(envelope.command_id, execution)
             try:
-                outcome = await handler.handle(envelope, receipt, generation=generation)
+                outcome = await execution
+            except asyncio.CancelledError:
+                if self._executions.cancellation_reason(envelope.command_id) is None:
+                    raise
+                outcome = CommandOutcome(status="cancelled")
             except Exception as exc:
                 current_receipt = self._inbox.get_receipt(receipt.command_id)
                 if current_receipt.runtime_instance_id is not None:
@@ -84,6 +130,8 @@ class CommandDispatcher:
                     status="rejected",
                     rejection_code="command_handler_failed_before_runtime",
                 )
+            finally:
+                self._executions.release(envelope.command_id, execution)
         current_receipt = self._inbox.get_receipt(receipt.command_id)
         self._finalize(current_receipt, outcome)
         return True

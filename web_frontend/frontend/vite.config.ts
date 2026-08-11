@@ -33,7 +33,10 @@ export default defineConfig({
     target: 'esnext',
     minify: 'terser',
     rollupOptions: {
-      input: fileURLToPath(new URL('./index.html', import.meta.url)),
+      input: {
+        app: fileURLToPath(new URL('./index.html', import.meta.url)),
+        showcase: fileURLToPath(new URL('./showcase.html', import.meta.url)),
+      },
       output: {
         manualChunks: {
           'vue-vendor': ['vue', 'vue-router', 'pinia'],

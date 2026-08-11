@@ -19,6 +19,7 @@ from agent_factory.runtime_protocol import (
 )
 from agent_factory.dynamic_runtime.capability_blob_store import CapabilityBlobStore
 from agent_factory.dynamic_runtime.capability_definitions import SkillDefinition
+from agent_factory.dynamic_runtime.delegation_store import DelegationStore
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,12 +169,14 @@ class ComposedRuntimeLaunchContextResolver(RuntimeLaunchContextResolver):
         workspaces: WorkspaceLaunchResolver,
         attachments: AttachmentLaunchResolver,
         capability_instructions: CapabilityInstructionRenderer,
+        delegations: DelegationStore,
     ) -> None:
         self._prompt_provider = prompt_provider
         self._clock = clock
         self._workspaces = workspaces
         self._attachments = attachments
         self._capability_instructions = capability_instructions
+        self._delegations = delegations
 
     def resolve(
         self,
@@ -202,10 +205,26 @@ class ComposedRuntimeLaunchContextResolver(RuntimeLaunchContextResolver):
             )
             for reference in attachment_refs
         )
+        if request.runtime_role == "temporary":
+            base_prompt = self._delegations.for_runtime(instance.runtime_instance_id).envelope.system_prompt
+            if base_prompt is None:
+                raise RuntimeError("temporary runtime task has no delegated system prompt")
+            delegation_notifications = ""
+        else:
+            base_prompt = self._prompt_provider.load()
+            delegation_notifications = _render_delegation_notifications(
+                self._delegations.claim_completion_notifications(instance)
+            )
+        capability_instructions = (
+            self._capability_instructions.render(capability_snapshot)
+            if request.runtime_role == "temporary"
+            else ""
+        )
         system_prompt = _render_system_prompt(
-            base=self._prompt_provider.load(),
+            base=base_prompt,
             clock=clock,
-            capability_instructions=self._capability_instructions.render(capability_snapshot),
+            capability_instructions=capability_instructions,
+            delegation_notifications=delegation_notifications,
         )
         return RuntimeLaunchContext(
             system_prompt=system_prompt,
@@ -246,6 +265,7 @@ def _render_system_prompt(
     base: str,
     clock: ClockSnapshot,
     capability_instructions: str,
+    delegation_notifications: str,
 ) -> str:
     sections = [
         base.strip(),
@@ -259,7 +279,27 @@ def _render_system_prompt(
     instructions = str(capability_instructions or "").strip()
     if instructions:
         sections.append(instructions)
+    notifications = str(delegation_notifications or "").strip()
+    if notifications:
+        sections.append(notifications)
     return "\n\n".join(sections)
+
+
+def _render_delegation_notifications(events: tuple[Any, ...]) -> str:
+    if not events:
+        return ""
+    entries = []
+    for event in events:
+        entries.append(
+            f"- A delegated task finished with status {event.event_type}."
+        )
+    return (
+        "Delegated task completion notifications received since the previous main runtime. "
+        "Treat these as authoritative child results, inspect details with delegation_status without supplying "
+        "an internal identifier when needed, "
+        "and continue or report the parent task accordingly:\n"
+        + "\n".join(entries)
+    )
 
 
 def _parse_utc_instant(value: str) -> datetime:

@@ -17,6 +17,7 @@ from agent_factory.dynamic_runtime.mcp_runtime import MCPRuntimePool
 from agent_factory.dynamic_runtime.capability_catalog_runtime import CapabilityCatalogRuntime
 from agent_factory.dynamic_runtime.memory_store import ScopedMemoryStore
 from agent_factory.dynamic_runtime.delegation_store import DelegationStore
+from agent_factory.dynamic_runtime.delegation_runtime import DelegationRuntimeCoordinator
 from agent_factory.dynamic_runtime.runtime_identity import runtime_execution_identity
 from agent_factory.dynamic_runtime.repositories import ConversationStore
 from agent_factory.dynamic_runtime.snapshot_tool_execution import (
@@ -45,6 +46,7 @@ from agent_factory.tooling.builtins.browser.runtime import BrowserRuntime
 from agent_factory.tooling.builtins.process.manager import ProcessManager, ProcessRuntimeResource
 from agent_factory.tooling.builtins.process.runtime import resolve_shell_runtime
 from agent_factory.tooling.builtins.filesystem.common import FilesystemRuntimeResource
+from agent_factory.tooling.builtins.filesystem.file_locks import WorkspaceFileLockManager
 from agent_factory.tooling.builtins.filesystem.staged_write import StagedWriteStore
 from agent_factory.tooling.builtins.filesystem.workspace_transaction import WorkspaceTransactionStore
 
@@ -149,10 +151,18 @@ class RuntimeFilesystemResourcePool:
             raise ValueError("filesystem runtime TTLs must be at least 60 seconds")
         self._staged_write_ttl_seconds = staged_write_ttl_seconds
         self._transaction_ttl_seconds = transaction_ttl_seconds
+        self._file_locks = WorkspaceFileLockManager()
         self._entries: dict[str, _FilesystemPoolEntry] = {}
         self._lock = RLock()
 
-    def acquire(self, instance: RuntimeInstance, *, root: Path) -> ProjectedRuntimeResource:
+    def acquire(
+        self,
+        instance: RuntimeInstance,
+        *,
+        root: Path,
+        allowed_write_paths: tuple[Path, ...] = (),
+        write_scope_enforced: bool = False,
+    ) -> ProjectedRuntimeResource:
         key = _runtime_attempt_key(instance)
         resolved_root = root.expanduser().resolve()
         with self._lock:
@@ -167,6 +177,7 @@ class RuntimeFilesystemResourcePool:
                         transaction_store=WorkspaceTransactionStore(
                             ttl_seconds=self._transaction_ttl_seconds
                         ),
+                        file_locks=self._file_locks,
                         allowed_write_paths=allowed_write_paths,
                         write_scope_enforced=write_scope_enforced,
                     ),
@@ -383,6 +394,7 @@ def runtime_resource_factory(
     capability_catalog: CapabilityCatalogRuntime,
     memory_store: ScopedMemoryStore,
     delegations: DelegationStore,
+    delegation_runtime: DelegationRuntimeCoordinator,
     process_resources: RuntimeProcessResourcePool,
     filesystem_resources: RuntimeFilesystemResourcePool,
 ) -> RuntimeResourceFactory:
@@ -393,6 +405,7 @@ def runtime_resource_factory(
         "browser_runtime",
         "capability_catalog",
         "memory_store",
+        "delegation_runtime",
     }:
         raise ValueError(f"unsupported runtime resource: {resource_name}")
 
@@ -413,6 +426,8 @@ def runtime_resource_factory(
             return ProjectedRuntimeResource(value=memory_store)
         if resource_name == "runtime_identity":
             return ProjectedRuntimeResource(value=runtime_execution_identity(instance))
+        if resource_name == "delegation_runtime":
+            return ProjectedRuntimeResource(value=delegation_runtime.for_parent(instance))
         workspace = conversations.require_workspace(instance.request.workspace_id)
         if workspace.principal_id != instance.request.principal_id:
             raise PermissionError("runtime workspace belongs to another principal")

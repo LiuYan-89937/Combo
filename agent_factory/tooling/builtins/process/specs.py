@@ -168,4 +168,7 @@ PROCESS_TOOL_SPECS: list[ToolSpec] = [
 
 
 def get_process_tool_specs() -> list[ToolSpec]:
-    return [tool.model_copy(deep=True) for tool in PROCESS_TOOL_SPECS]
+    return [
+        tool.model_copy(update={"system_available": True}, deep=True)
+        for tool in PROCESS_TOOL_SPECS
+    ]

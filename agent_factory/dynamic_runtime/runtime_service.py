@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from contextvars import copy_context
 from collections.abc import Callable
 import json
+import logging
 import threading
 from typing import Any, Literal, Protocol
 
@@ -55,6 +56,8 @@ from agent_factory.tooling.execution_context import (
 
 
 RuntimeExecutionStatus = Literal["waiting_approval", "waiting_external", "completed", "failed", "cancelled"]
+RuntimeObservationSink = Callable[[RuntimeInstance, Any], None]
+logger = logging.getLogger(__name__)
 
 
 class RuntimeLaunchContext(BaseModel):
@@ -111,6 +114,7 @@ class DynamicRuntimeService:
         model_resolver: RuntimeModelResolver,
         launch_context_resolver: RuntimeLaunchContextResolver,
         delegations: DelegationStore,
+        observation_sink: RuntimeObservationSink | None = None,
     ) -> None:
         self._service_set = service_set
         self._runtime_instances = runtime_instances
@@ -120,6 +124,7 @@ class DynamicRuntimeService:
         self._model_resolver = model_resolver
         self._launch_context_resolver = launch_context_resolver
         self._delegations = delegations
+        self._observation_sink = observation_sink
 
     def execute(self, runtime_instance_id: str) -> RuntimeExecutionResult:
         return self._run(
@@ -143,6 +148,16 @@ class DynamicRuntimeService:
             resume_payload=resume_payload,
             delegation_claim_id=None,
         )
+
+    def pending_interrupts(self, runtime_instance_id: str) -> tuple[dict[str, Any], ...]:
+        instance = self._runtime_instances.get(runtime_instance_id)
+        if instance.status not in {"waiting_approval", "waiting_external"}:
+            raise RuntimeError("runtime instance is not waiting for an interrupt response")
+        graph = self._service_set.graph_for(instance.request.strategy)
+        checkpoint = graph.graph_app.get_state(
+            {"configurable": {"thread_id": instance.runtime_instance_id}}
+        )
+        return tuple(_interrupt_payloads(raw={}, checkpoint=checkpoint))
 
     def _run(
         self,
@@ -212,7 +227,6 @@ class DynamicRuntimeService:
             config = {
                 "configurable": {
                     "thread_id": claimed_instance.runtime_instance_id,
-                    "checkpoint_ns": f"dynamic_runtime:{claimed_instance.request.strategy}",
                 }
             }
             if resume_payload is None:
@@ -228,7 +242,7 @@ class DynamicRuntimeService:
                     "runtime": runtime_checkpoint_payload(state, mode="json"),
                 }
             else:
-                graph_input = Command(resume=resume_payload)
+                graph_input = Command(resume=_graph_resume_values(resume_payload))
             fallback_raw = (
                 graph_input
                 if isinstance(graph_input, dict)
@@ -247,6 +261,11 @@ class DynamicRuntimeService:
                     session_id=claimed_instance.request.session_id,
                     fallback_raw=fallback_raw,
                     on_complete=release_runtime_leases,
+                    on_observation=(
+                        (lambda chunk: self._observation_sink(claimed_instance, chunk))
+                        if self._observation_sink is not None
+                        else None
+                    ),
                 )
             checkpoint = graph.graph_app.get_state(config)
             authoritative = getattr(checkpoint, "values", None) or raw
@@ -280,6 +299,23 @@ class DynamicRuntimeService:
                 or status in {"waiting_approval", "waiting_external"}
                 else projected_for_records
             )
+            projected_tool_calls = _tool_call_records(
+                projected_for_records,
+                instance=claimed_instance,
+                waiting_status=status,
+            )
+            delivery_error = _delegated_delivery_error(
+                instance=claimed_instance,
+                status=status,
+                graph_messages=projection_messages,
+                tool_calls=projected_tool_calls,
+            )
+            if delivery_error is not None:
+                status = "failed"
+                state.execution.finished = True
+                state.execution.finish_status = "failed"
+                state.execution.last_error = delivery_error
+                state.execution.last_error_location = "delegation.delivery"
             error = _terminal_error(claimed_instance, status=status, state=state)
             try:
                 committed_instance = self._execution_commits.commit(
@@ -287,17 +323,16 @@ class DynamicRuntimeService:
                     status=status,
                     event_payload=_event_payload(
                         claimed_instance,
+                        state=state,
                         status=status,
                         interrupts=interrupts,
                         error=error,
                         graph_messages=projection_messages,
+                        conversation_messages=projected_messages,
+                        tool_calls=projected_tool_calls,
                     ),
                     messages=projected_messages,
-                    tool_calls=_tool_call_records(
-                        projected_for_records,
-                        instance=claimed_instance,
-                        waiting_status=status,
-                    ),
+                    tool_calls=projected_tool_calls,
                     model_usage=_model_usage_records(claimed_instance, state.observability.events),
                     error=error,
                 )
@@ -330,10 +365,17 @@ class DynamicRuntimeService:
                     status=status,
                     event_payload=_event_payload(
                         latest,
+                        state=state,
                         status=status,
                         interrupts=[],
                         error=error,
                         graph_messages=projection_messages,
+                        conversation_messages=projected_messages,
+                        tool_calls=_tool_call_records(
+                            projected_for_records,
+                            instance=claimed_instance,
+                            waiting_status=status,
+                        ),
                     ),
                     messages=projected_messages,
                     tool_calls=_tool_call_records(
@@ -354,6 +396,12 @@ class DynamicRuntimeService:
                 interrupt_payloads=tuple(interrupts),
             )
         except Exception as exc:
+            logger.exception(
+                "Dynamic runtime execution failed: runtime_instance_id=%s request_id=%s turn_id=%s",
+                claimed_instance.runtime_instance_id,
+                claimed_instance.request.request_id,
+                claimed_instance.request.turn_id,
+            )
             error = _exception_error(claimed_instance, exc)
             try:
                 self._execution_commits.fail_claimed(claimed_instance, error)
@@ -370,7 +418,10 @@ class DynamicRuntimeService:
         instance: RuntimeInstance,
     ) -> tuple[list[ConversationMessage], ConversationMessage]:
         if instance.request.runtime_role == "main":
-            messages = self._conversations.messages(instance.request.session_id)
+            messages = self._conversations.messages_through_task_revision(
+                session_id=instance.request.session_id,
+                task_revision=instance.request.task_revision,
+            )
             return messages, _current_user_message(instance, messages)
         record = self._delegations.for_runtime(instance.runtime_instance_id)
         if record.child_runtime.request != instance.request:
@@ -514,11 +565,39 @@ def _interrupt_payloads(*, raw: Any, checkpoint: Any) -> list[dict[str, Any]]:
     for item in values:
         value = getattr(item, "value", item)
         payload = dict(value) if isinstance(value, dict) else {"value": value}
+        interrupt_id = str(getattr(item, "id", "") or "").strip()
+        if interrupt_id:
+            payload["interrupt_id"] = interrupt_id
         marker = repr(sorted(payload.items(), key=lambda pair: str(pair[0])))
         if marker not in seen:
             seen.add(marker)
             payloads.append(payload)
     return payloads
+
+
+def _graph_resume_values(payload: dict[str, Any]) -> dict[str, Any]:
+    interrupt_id = str(payload.get("interrupt_id") or "").strip()
+    decision = str(payload.get("decision") or "").strip()
+    response = str(payload.get("response") or "").strip()
+    if not interrupt_id:
+        raise ValueError("runtime resume payload requires an interrupt identity")
+    if decision == "approve":
+        value: Any = {"action": "approve"}
+    elif decision == "deny":
+        value = {"action": "deny"}
+    elif decision == "trust_tool":
+        value = {"action": "trust_tool"}
+    elif decision == "revise":
+        if not response:
+            raise ValueError("runtime revision requires guidance")
+        value = {"action": "revise", "revision_guidance": response}
+    elif decision == "answer":
+        if not response:
+            raise ValueError("runtime answer requires a response")
+        value = response
+    else:
+        raise ValueError(f"unsupported runtime interrupt decision: {decision!r}")
+    return {interrupt_id: value}
 
 
 def _execution_status(
@@ -548,6 +627,32 @@ def _execution_status(
         state.execution.last_error = state.execution.last_error or "Runtime graph stopped before a terminal node."
         state.execution.last_error_location = state.execution.last_error_location or "runtime.finalize"
     return "failed"
+
+
+def _delegated_delivery_error(
+    *,
+    instance: RuntimeInstance,
+    status: RuntimeExecutionStatus,
+    graph_messages: list[BaseMessage],
+    tool_calls: tuple[ToolCallRecord, ...],
+) -> str | None:
+    if instance.request.runtime_role != "temporary" or status != "completed":
+        return None
+    final_content = _final_graph_message_content(graph_messages)
+    rendered = json.dumps(final_content, ensure_ascii=False) if not isinstance(final_content, str) else final_content
+    if "DSML" in rendered and "tool_calls" in rendered:
+        return "Temporary agent returned serialized tool markup instead of a native tool call."
+    required_tools = tuple(instance.request.route_decision.capability_requirements)
+    if required_tools and not tool_calls:
+        return "Temporary agent completed without executing any of its required tools."
+    unresolved = tuple(
+        record.model_alias
+        for record in tool_calls
+        if record.status in {"proposed", "waiting_approval", "running"}
+    )
+    if unresolved:
+        return "Temporary agent has unresolved tool calls: " + ", ".join(unresolved)
+    return None
 
 
 def _close_terminal_tool_calls(
@@ -683,26 +788,87 @@ def _model_usage_records(
 def _event_payload(
     instance: RuntimeInstance,
     *,
+    state: RuntimeState,
     status: RuntimeExecutionStatus,
     interrupts: list[dict[str, Any]],
     error: RuntimeErrorEnvelope | None,
     graph_messages: list[BaseMessage],
+    conversation_messages: list[ConversationMessage],
+    tool_calls: tuple[ToolCallRecord, ...],
 ) -> dict[str, Any]:
     if status in {"waiting_approval", "waiting_external"}:
+        source = (
+            {
+                "task_id": instance.request.task_id,
+                "parent_runtime_instance_id": instance.request.parent_runtime_instance_id,
+                "runtime_role": instance.request.runtime_role,
+            }
+            if instance.request.runtime_role == "temporary"
+            else {"runtime_role": instance.request.runtime_role}
+        )
         return {
             "kind": f"runtime_{status}",
             "status": status,
-            "details": {"interrupts": _json_safe(interrupts)},
+            "details": {
+                "interrupts": _json_safe(interrupts),
+                "source": source,
+            },
         }
     if status == "completed":
+        assistant_message = next(
+            (message for message in reversed(conversation_messages) if message.role == "assistant"),
+            None,
+        )
+        final_content = _final_graph_message_content(graph_messages)
+        result = (
+            {
+                "summary": final_content,
+                "verified": True,
+                "tool_evidence": [
+                    {
+                        "tool": record.model_alias,
+                        "status": record.status,
+                        "result": record.result,
+                    }
+                    for record in tool_calls
+                ],
+            }
+            if instance.request.runtime_role == "temporary"
+            else final_content
+        )
         return {
             "kind": "runtime_completed",
             "status": "completed",
-            "result": _final_graph_message_content(graph_messages),
+            "result": result,
+            "message": (
+                {
+                    "message_id": assistant_message.message_id,
+                    "parts": [part.model_dump(mode="json") for part in assistant_message.parts],
+                    "created_at": assistant_message.created_at,
+                }
+                if assistant_message is not None
+                else None
+            ),
+            "context_window": _latest_context_window(state),
         }
     if error is None:
         raise RuntimeError(f"terminal runtime status requires an error envelope: {status}")
     return {"kind": status, "error": error.model_dump(mode="json")}
+
+
+def _latest_context_window(state: RuntimeState) -> dict[str, Any] | None:
+    for raw_event in reversed(state.observability.events):
+        if not isinstance(raw_event, dict) or raw_event.get("event_type") != "context_window_updated":
+            continue
+        payload = raw_event.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        return {
+            key: _json_safe(value)
+            for key, value in payload.items()
+            if key != "event_type"
+        }
+    return None
 
 
 def _final_graph_message_content(messages: list[BaseMessage]) -> Any:
@@ -732,6 +898,7 @@ def _terminal_error(
         operation=instance.request.policy_snapshot.model.operation,
         details={
             "error_location": str(state.execution.last_error_location or "runtime.finalize"),
+            "message": str(state.execution.last_error or "runtime execution failed"),
         },
     )
 
@@ -781,6 +948,7 @@ def _run_graph_with_control(
     session_id: str,
     fallback_raw: dict[str, Any],
     on_complete: Callable[[], None],
+    on_observation: Callable[[Any], None] | None,
 ) -> tuple[dict[str, Any], bool]:
     if control.drain_requested:
         on_complete()
@@ -795,14 +963,16 @@ def _run_graph_with_control(
                 tool_output_session_context(session_id),
                 runtime_run_control_context(control),
             ):
-                for chunk in graph_app.stream(
+                for mode, chunk in graph_app.stream(
                     graph_input,
                     config=config,
-                    stream_mode="values",
+                    stream_mode=["values", "custom"],
                     durability="sync",
                 ):
-                    if isinstance(chunk, dict):
+                    if mode == "values" and isinstance(chunk, dict):
                         outcome["raw"] = chunk
+                    elif mode == "custom" and on_observation is not None:
+                        on_observation(chunk)
         except BaseException as exc:
             outcome["error"] = exc
         finally:

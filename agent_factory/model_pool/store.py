@@ -682,7 +682,10 @@ class ModelPoolStore:
               credential_id, revision, payload_json, created_at
             )
             select credential_id,
-                   cast(json_extract(payload_json, '$.revision') as integer),
+                   coalesce(
+                     cast(json_extract(payload_json, '$.revision') as integer),
+                     1
+                   ),
                    payload_json,
                    updated_at
             from model_credentials
@@ -694,7 +697,10 @@ class ModelPoolStore:
               profile_id, revision, credential_id, payload_json, created_at
             )
             select profile_id,
-                   cast(json_extract(payload_json, '$.revision') as integer),
+                   coalesce(
+                     cast(json_extract(payload_json, '$.revision') as integer),
+                     1
+                   ),
                    credential_id,
                    payload_json,
                    updated_at

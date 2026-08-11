@@ -3,6 +3,8 @@ from agent_factory.runtime_kernel.model_operations.service import (
     ModelOperationService,
     RuntimeModelHandle,
     RuntimeModelHandleRegistry,
+    StructuredOutputInvocation,
+    prepare_structured_output_invocation,
 )
 
 __all__ = [
@@ -10,4 +12,6 @@ __all__ = [
     "ModelOperationService",
     "RuntimeModelHandle",
     "RuntimeModelHandleRegistry",
+    "StructuredOutputInvocation",
+    "prepare_structured_output_invocation",
 ]

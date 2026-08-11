@@ -39,22 +39,22 @@ impl PythonSidecar {
             Self::find_bundled_python(app)?
         };
 
-        let project_root = if cfg!(debug_assertions) {
+        let (project_root, data_root) = if cfg!(debug_assertions) {
             // In dev mode, get from CARGO_MANIFEST_DIR at build time
             // The manifest is in src-tauri/, so parent is project root
             let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .parent()
                 .ok_or("Cannot determine project root")?
                 .to_path_buf();
-            root
+            (root.clone(), root)
         } else {
-            // Production state belongs to the per-user application data
-            // directory. Bundled resources remain immutable application assets.
-            let root = app.path().app_local_data_dir()?;
-            std::fs::create_dir_all(root.join(".agentfactory"))?;
-            root
+            // Application resources are immutable. Runtime state belongs to the
+            // per-user application data directory and survives app upgrades.
+            let data_root = app.path().app_local_data_dir()?;
+            std::fs::create_dir_all(data_root.join(".agentfactory"))?;
+            (resource_dir.clone(), data_root)
         };
-        let log_path = project_root
+        let log_path = data_root
             .join(".agentfactory")
             .join("logs")
             .join("backend.log");
@@ -72,6 +72,7 @@ impl PythonSidecar {
             .current_dir(&project_root)
             .env("AGENTFACTORY_PORT", &port_str)
             .env("AGENTFACTORY_PROJECT_ROOT", &project_root)
+            .env("AGENTFACTORY_DATA_ROOT", &data_root)
             .env("AGENTFACTORY_PARENT_STDIN_WATCHDOG", "1")
             .env("PYTHONUTF8", "1")
             .env("PYTHONUNBUFFERED", "1")

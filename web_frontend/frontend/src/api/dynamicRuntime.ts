@@ -1,7 +1,8 @@
 import { backendUrl } from './backendUrl'
+import { runtimeClientInstanceId, runtimePrincipalId } from './runtimeIdentity'
 
-export const RUNTIME_PROTOCOL_VERSION = 'dynamic_runtime.v10'
-export const RUNTIME_SCHEMA_VERSION = 'dynamic_runtime_schema.v10'
+export const RUNTIME_PROTOCOL_VERSION = 'dynamic_runtime.v11'
+export const RUNTIME_SCHEMA_VERSION = 'dynamic_runtime_schema.v11'
 
 export type ExecutionPreference = 'auto' | 'react' | 'plan_and_execute'
 export type ApprovalMode = 'ask' | 'auto' | 'always_approval'
@@ -48,10 +49,16 @@ export interface ConversationMessage {
 
 export interface RuntimeEvent {
   event_id: string
+  stream_id: string
+  sequence: number
+  session_sequence: number
   runtime_instance_id: string
   request_id: string
   session_id: string
   turn_id: string
+  workspace_id: string
+  task_revision: number
+  attempt_id: string | null
   payload: { kind: string; [key: string]: unknown }
   created_at: string
 }
@@ -62,7 +69,7 @@ export interface RuntimePolicy {
   revision: number
   execution_preference: ExecutionPreference
   approval_mode: ApprovalMode
-  model_profile_id: string
+  model_profile_id: string | null
   reasoning_intensity: number | null
   request_timeout_seconds: number
   max_model_attempts: number
@@ -72,12 +79,16 @@ export interface RuntimePolicy {
   timezone: string
 }
 
-const PRINCIPAL_STORAGE_KEY = 'agentfactory.principal_id'
-const CLIENT_STORAGE_KEY = 'agentfactory.client_instance_id'
+interface CommandReceipt {
+  command_id: string
+  request_id: string | null
+  runtime_instance_id: string | null
+  status: string
+}
 
 export async function connectRuntime(): Promise<RuntimeConnection> {
-  const principalId = stableId(PRINCIPAL_STORAGE_KEY)
-  const clientInstanceId = stableId(CLIENT_STORAGE_KEY)
+  const principalId = runtimePrincipalId()
+  const clientInstanceId = runtimeClientInstanceId()
   const health = await rawRequest<{ status: string; protocol: RuntimeDescriptor; generation: number }>('/health')
   if (
     health.protocol.protocol_version !== RUNTIME_PROTOCOL_VERSION
@@ -107,30 +118,28 @@ export const dynamicRuntimeApi = {
       connection,
       `/api/runtime/conversations/${encodeURIComponent(sessionId)}`,
     ),
-  policy: (connection: RuntimeConnection) =>
-    request<RuntimePolicy>(connection, '/api/runtime/policy'),
+  policy: (connection: RuntimeConnection) => request<RuntimePolicy>(connection, '/api/runtime/policy'),
   savePolicy: (connection: RuntimeConnection, payload: Record<string, unknown>) =>
     request<RuntimePolicy>(connection, '/api/runtime/policy', {
       method: 'PUT', body: JSON.stringify(payload),
     }),
-  submitMessage: (connection: RuntimeConnection, sessionId: string, content: string) => {
-    const commandId = crypto.randomUUID().replaceAll('-', '')
-    return request<Record<string, unknown>>(connection, '/api/runtime/commands', {
-      method: 'POST',
-      body: JSON.stringify({
-        protocol_version: connection.descriptor.protocol_version,
-        command_id: commandId,
-        client_instance_id: connection.clientInstanceId,
-        principal_id: connection.principalId,
-        session_id: sessionId,
-        payload: {
-          kind: 'send_message',
-          message_id: crypto.randomUUID().replaceAll('-', ''),
-          content,
-        },
-      }),
-    })
-  },
+  submitMessage: (connection: RuntimeConnection, sessionId: string, content: string) =>
+    submitCommand(connection, sessionId, {
+      kind: 'send_message',
+      message_id: randomId(),
+      content,
+    }),
+  cancelRuntime: (
+    connection: RuntimeConnection,
+    sessionId: string,
+    runtimeInstanceId: string,
+    requestId: string,
+  ) => submitCommand(connection, sessionId, {
+    kind: 'cancel_runtime_request',
+    runtime_instance_id: runtimeInstanceId,
+    request_id: requestId,
+    reason: 'user_cancelled',
+  }),
   streamEvents: (
     connection: RuntimeConnection,
     sessionId: string,
@@ -138,6 +147,24 @@ export const dynamicRuntimeApi = {
     onEvent: (event: RuntimeEvent) => void,
     signal: AbortSignal,
   ) => streamEvents(connection, sessionId, afterEventId, onEvent, signal),
+}
+
+function submitCommand(
+  connection: RuntimeConnection,
+  sessionId: string,
+  payload: Record<string, unknown>,
+): Promise<CommandReceipt> {
+  return request<CommandReceipt>(connection, '/api/runtime/commands', {
+    method: 'POST',
+    body: JSON.stringify({
+      protocol_version: connection.descriptor.protocol_version,
+      command_id: randomId(),
+      client_instance_id: connection.clientInstanceId,
+      principal_id: connection.principalId,
+      session_id: sessionId,
+      payload,
+    }),
+  })
 }
 
 async function request<T>(connection: RuntimeConnection, path: string, init: RequestInit = {}): Promise<T> {
@@ -212,10 +239,6 @@ function parseRuntimeEvent(frame: string): RuntimeEvent | null {
   return data ? JSON.parse(data) as RuntimeEvent : null
 }
 
-function stableId(key: string): string {
-  const current = window.localStorage.getItem(key)?.trim()
-  if (current) return current
-  const value = crypto.randomUUID().replaceAll('-', '')
-  window.localStorage.setItem(key, value)
-  return value
+function randomId(): string {
+  return crypto.randomUUID().replace(/-/g, '')
 }

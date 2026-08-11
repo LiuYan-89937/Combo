@@ -72,7 +72,7 @@ class FileSystemSkillCapabilitySource:
             if not source_root.path.is_dir():
                 raise FileNotFoundError(f"configured skill source root is unavailable: {source_root.path}")
             for directory in sorted(source_root.path.iterdir(), key=lambda item: item.name):
-                if not directory.is_dir() or directory.is_symlink():
+                if directory.name.startswith(".") or not directory.is_dir() or directory.is_symlink():
                     continue
                 manifest = directory / "SKILL.md"
                 if not manifest.is_file() or manifest.is_symlink():

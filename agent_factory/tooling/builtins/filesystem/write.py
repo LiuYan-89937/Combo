@@ -9,6 +9,7 @@ from agent_factory.tooling.builtins.filesystem.common import (
     filesystem_boundary,
     filesystem_mounts,
     path_risk_result,
+    require_file_locks,
     required_string,
     resolve_path,
     write_focus_facts,
@@ -83,24 +84,25 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         allowed_roots=filesystem_allowed_roots(resources),
     )
     assert_not_protected_write_path(target, root=root, resources=resources)
-    existed = target.exists()
-    before_hash = None
-    before_content = ""
-    if existed:
-        if not target.is_file():
-            raise IsADirectoryError(str(target))
-        before_bytes = target.read_bytes()
-        before_hash = sha256(before_bytes).hexdigest()
-        try:
-            before_content = before_bytes.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise ValueError(f"existing file is not valid utf-8 text: {target}") from exc
-    if not target.parent.exists():
-        if not create_dirs:
-            raise FileNotFoundError(str(target.parent))
-        target.parent.mkdir(parents=True, exist_ok=True)
-    content_bytes = content.encode("utf-8")
-    atomic_write_bytes(target, content_bytes)
+    with require_file_locks(resources).acquire((target,)):
+        existed = target.exists()
+        before_hash = None
+        before_content = ""
+        if existed:
+            if not target.is_file():
+                raise IsADirectoryError(str(target))
+            before_bytes = target.read_bytes()
+            before_hash = sha256(before_bytes).hexdigest()
+            try:
+                before_content = before_bytes.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise ValueError(f"existing file is not valid utf-8 text: {target}") from exc
+        if not target.parent.exists():
+            if not create_dirs:
+                raise FileNotFoundError(str(target.parent))
+            target.parent.mkdir(parents=True, exist_ok=True)
+        content_bytes = content.encode("utf-8")
+        atomic_write_bytes(target, content_bytes)
     output = {
         "path": workspace_relative_path(
             target,

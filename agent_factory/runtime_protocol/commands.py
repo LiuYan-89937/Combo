@@ -69,12 +69,27 @@ class CancelRuntimeRequestPayload(FrozenProtocolModel):
         return text
 
 
+class CancelCommandRequestPayload(FrozenProtocolModel):
+    kind: Literal["cancel_command_request"] = "cancel_command_request"
+    target_command_id: str
+    reason: str
+
+    @field_validator("target_command_id", "reason")
+    @classmethod
+    def _required_cancel_command_text(cls, value: str, info: object) -> str:
+        text = str(value or "").strip()
+        if not text:
+            field_name = getattr(info, "field_name", "value")
+            raise ValueError(f"{field_name} must not be empty")
+        return text
+
+
 class ResumeInterruptPayload(FrozenProtocolModel):
     kind: Literal["resume_interrupt"] = "resume_interrupt"
     runtime_instance_id: str
     request_id: str
     interrupt_id: str
-    decision: Literal["approve", "deny", "answer"]
+    decision: Literal["approve", "deny", "trust_tool", "revise", "answer"]
     response: str | None = None
 
     @field_validator("runtime_instance_id", "request_id", "interrupt_id")
@@ -93,20 +108,35 @@ class ResumeInterruptPayload(FrozenProtocolModel):
         return text or None
 
     @model_validator(mode="after")
-    def _answer_requires_response(self) -> "ResumeInterruptPayload":
-        if self.decision == "answer" and self.response is None:
-            raise ValueError("answer interrupt decision requires response")
-        if self.decision != "answer" and self.response is not None:
-            raise ValueError("approve and deny decisions cannot carry response")
+    def _response_matches_decision(self) -> "ResumeInterruptPayload":
+        if self.decision in {"answer", "revise"} and self.response is None:
+            raise ValueError(f"{self.decision} interrupt decision requires response")
+        if self.decision not in {"answer", "revise"} and self.response is not None:
+            raise ValueError(f"{self.decision} interrupt decision cannot carry response")
         return self
+
+
+class SteerRuntimeRequestPayload(FrozenProtocolModel):
+    kind: Literal["steer_runtime_request"] = "steer_runtime_request"
+    queued_command_id: str
+
+    @field_validator("queued_command_id")
+    @classmethod
+    def _required_queued_command_id(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("queued_command_id must not be empty")
+        return text
 
 
 CommandPayload = Annotated[
     Union[
         SendMessagePayload,
         SetExecutionPreferencePayload,
+        CancelCommandRequestPayload,
         CancelRuntimeRequestPayload,
         ResumeInterruptPayload,
+        SteerRuntimeRequestPayload,
     ],
     Field(discriminator="kind"),
 ]

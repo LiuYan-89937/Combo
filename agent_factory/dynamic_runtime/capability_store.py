@@ -440,6 +440,24 @@ class CapabilityStore:
             ).fetchone()
         return CapabilityRevision.model_validate_json(str(row["payload_json"])) if row else None
 
+    def revision_by_content_digest(
+        self,
+        capability_id: str,
+        content_digest: str,
+    ) -> CapabilityRevision | None:
+        with self._database.connection(query_only=True) as conn:
+            row = conn.execute(
+                """
+                select payload_json from capability_revisions
+                where capability_id = ? and content_digest = ?
+                """,
+                (
+                    _required_text(capability_id, "capability_id"),
+                    _required_text(content_digest, "content_digest"),
+                ),
+            ).fetchone()
+        return CapabilityRevision.model_validate_json(str(row["payload_json"])) if row else None
+
     def add_index_revision(self, index: CapabilityIndexRevision) -> CapabilityIndexRevision:
         with self._database.transaction() as conn:
             source = self._revision_row(conn, index.source_capability_id, index.source_revision)
@@ -485,6 +503,27 @@ class CapabilityStore:
                 ),
             )
         return index
+
+    def index_revision_for_source(
+        self,
+        capability_id: str,
+        source_revision: int,
+        source_digest: str,
+    ) -> CapabilityIndexRevision | None:
+        with self._database.connection(query_only=True) as conn:
+            row = conn.execute(
+                """
+                select payload_json from capability_index_revisions
+                where capability_id = ? and source_revision = ? and source_digest = ?
+                order by created_at desc limit 1
+                """,
+                (
+                    _required_text(capability_id, "capability_id"),
+                    source_revision,
+                    _required_text(source_digest, "source_digest"),
+                ),
+            ).fetchone()
+        return CapabilityIndexRevision.model_validate_json(str(row["payload_json"])) if row else None
 
     def set_activation(
         self,

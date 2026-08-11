@@ -34,7 +34,7 @@ CONVERSATION_TURN_TRANSITIONS: Mapping[
     ConversationTurnStatus,
     frozenset[ConversationTurnStatus],
 ] = {
-    "queued": frozenset({"running", "cancelled"}),
+    "queued": frozenset({"running", "failed", "cancelled"}),
     "running": frozenset({"waiting_approval", "waiting_external", "completed", "failed", "cancelled"}),
     "waiting_approval": frozenset({"running", "failed", "cancelled"}),
     "waiting_external": frozenset({"running", "failed", "cancelled"}),
@@ -46,7 +46,7 @@ CONVERSATION_TURN_TRANSITIONS: Mapping[
 COMMAND_TRANSITIONS: Mapping[CommandStatus, frozenset[CommandStatus]] = {
     "received": frozenset({"queued", "rejected", "cancelled"}),
     "queued": frozenset({"running", "cancelled", "rejected"}),
-    "running": frozenset({"completed", "failed", "cancelled"}),
+    "running": frozenset({"completed", "failed", "cancelled", "rejected"}),
     "completed": frozenset(),
     "failed": frozenset(),
     "cancelled": frozenset(),

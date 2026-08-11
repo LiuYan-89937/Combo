@@ -4,13 +4,13 @@ import asyncio
 from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Literal, Protocol
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from agent_factory.dynamic_runtime import (
     DynamicRuntimeApplication,
@@ -30,6 +30,47 @@ from agent_factory.runtime_protocol import (
 
 class RequestPrincipalResolver(Protocol):
     def resolve(self, request: Request) -> str:
+        ...
+
+
+class CapabilityPoolManager(Protocol):
+    def capability_pool_snapshot(self) -> dict[str, object]:
+        ...
+
+    def probe_mcp_server(self, capability_id: str) -> dict[str, object]:
+        ...
+
+    def add_mcp_server(
+        self,
+        server: dict[str, Any],
+        *,
+        expected_registry_digest: str,
+    ) -> dict[str, object]:
+        ...
+
+    def replace_tool_configuration(
+        self,
+        *,
+        capability_id: str,
+        expected_content_digest: str,
+        display_name: str,
+        description: str,
+        runtime_policy: dict[str, Any],
+    ) -> dict[str, object]:
+        ...
+
+    def skill_editor_document(self, capability_id: str) -> dict[str, object]:
+        ...
+
+    def replace_skill_content(
+        self,
+        *,
+        capability_id: str,
+        expected_content_digest: str,
+        metadata: dict[str, Any],
+        instructions: str,
+        resources: dict[str, str],
+    ) -> dict[str, object]:
         ...
 
 
@@ -112,15 +153,345 @@ class RuntimePolicyWriteRequest(BaseModel):
         return text
 
 
+class MCPServerProbeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    capability_id: str
+
+    @field_validator("capability_id")
+    @classmethod
+    def _capability_id_is_present(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("capability_id must not be empty")
+        return text
+
+
+class MCPBindingReference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source: Literal["process_environment", "literal"]
+    name: str | None = None
+    value: str | None = None
+
+    @model_validator(mode="after")
+    def _reference_matches_source(self) -> "MCPBindingReference":
+        if self.source == "process_environment" and (not self.name or self.value is not None):
+            raise ValueError("process environment binding requires name and forbids value")
+        if self.source == "literal" and (self.value is None or self.name is not None):
+            raise ValueError("literal binding requires value and forbids name")
+        return self
+
+
+class MCPServerCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_registry_digest: str
+    server_id: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
+    display_name: str
+    description: str
+    transport: Literal["stdio", "streamable_http", "sse"]
+    command: str | None = None
+    arguments: tuple[str, ...] = ()
+    working_directory: str | None = None
+    endpoint: str | None = None
+    environment_bindings: dict[str, str | MCPBindingReference] = Field(default_factory=dict)
+    header_bindings: dict[str, str | MCPBindingReference] = Field(default_factory=dict)
+    connect_timeout_seconds: float = Field(default=30.0, gt=0)
+    request_timeout_seconds: float = Field(default=120.0, gt=0)
+    max_parallel_requests: int = Field(default=1, ge=1)
+    risk_level_default: Literal["low", "medium", "high"] = "medium"
+    concurrent_default: bool = True
+
+    @field_validator("expected_registry_digest")
+    @classmethod
+    def _registry_digest_is_sha256(cls, value: str) -> str:
+        text = str(value or "").strip().lower()
+        if len(text) != 64 or any(character not in "0123456789abcdef" for character in text):
+            raise ValueError("expected_registry_digest must be lowercase SHA-256")
+        return text
+
+    @field_validator("display_name", "description")
+    @classmethod
+    def _server_text_is_present(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("MCP server name and description must not be empty")
+        return text
+
+    @field_validator("command", "working_directory", "endpoint")
+    @classmethod
+    def _optional_server_text(cls, value: str | None) -> str | None:
+        text = str(value or "").strip()
+        return text or None
+
+    @field_validator("environment_bindings", "header_bindings")
+    @classmethod
+    def _binding_names_are_present(cls, value: dict[str, str | MCPBindingReference]) -> dict[str, str | MCPBindingReference]:
+        normalized = {
+            str(target).strip(): source if isinstance(source, MCPBindingReference) else str(source).strip()
+            for target, source in value.items()
+        }
+        if any(not target or not source for target, source in normalized.items()):
+            raise ValueError("MCP binding names must not be empty")
+        return normalized
+
+    @model_validator(mode="after")
+    def _transport_fields_match(self) -> "MCPServerCreateRequest":
+        if self.transport == "stdio":
+            if self.command is None or self.endpoint is not None:
+                raise ValueError("stdio MCP requires command and forbids endpoint")
+        elif self.endpoint is None or self.command is not None or self.arguments:
+            raise ValueError("HTTP MCP requires endpoint and forbids command arguments")
+        return self
+
+    def registry_document(self) -> dict[str, Any]:
+        return {
+            "server_id": self.server_id,
+            "transport": self.transport,
+            "command": self.command,
+            "args": list(self.arguments),
+            "cwd": self.working_directory,
+            "env": _environment_references(self.environment_bindings),
+            "url": self.endpoint,
+            "headers": _environment_references(self.header_bindings),
+            "source": {
+                "kind": "local_user",
+                "name": self.display_name,
+                "description": self.description,
+            },
+            "enabled": True,
+            "required": True,
+            "tool_id_prefix": None,
+            "risk_level_default": self.risk_level_default,
+            "concurrent_default": self.concurrent_default,
+            "timeout_seconds": self.request_timeout_seconds,
+            "connect_timeout_seconds": self.connect_timeout_seconds,
+            "max_parallel_requests": self.max_parallel_requests,
+            "tool_input_property_enums": {},
+            "tool_loop_policies": {},
+            "tool_description_contexts": {},
+        }
+
+
+class SkillReplaceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    capability_id: str
+    source_path: str
+    expected_content_digest: str
+
+    @field_validator("capability_id", "source_path", "expected_content_digest")
+    @classmethod
+    def _skill_replace_text_is_present(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("Skill replacement fields must not be empty")
+        return text
+
+
+class ToolRuntimePolicyWriteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    approval: Literal["inherit", "allow", "ask", "deny"]
+    risk_level: Literal["low", "medium", "high"]
+    allow_parallel_calls: bool
+    max_parallel_calls: int = Field(ge=1, le=128)
+    timeout_seconds: float = Field(gt=0, le=3600)
+    output_projection: Literal["compress", "passthrough"]
+    output_max_model_chars: int = Field(ge=1000, le=1_000_000)
+    retain_raw_output: bool
+
+    @model_validator(mode="after")
+    def _parallel_limit_matches_switch(self) -> "ToolRuntimePolicyWriteRequest":
+        if not self.allow_parallel_calls and self.max_parallel_calls != 1:
+            raise ValueError("disabled parallel calls require max_parallel_calls=1")
+        return self
+
+
+class ToolConfigurationWriteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_content_digest: str
+    display_name: str
+    description: str
+    runtime_policy: ToolRuntimePolicyWriteRequest
+
+    @field_validator("expected_content_digest", "display_name", "description")
+    @classmethod
+    def _required_tool_configuration_text(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("tool configuration fields must not be empty")
+        return text
+
+
+class SkillContentWriteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_content_digest: str
+    metadata: dict[str, Any]
+    instructions: str
+    resources: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("expected_content_digest", "instructions")
+    @classmethod
+    def _required_skill_content_text(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("Skill content fields must not be empty")
+        return text
+
 def create_dynamic_runtime_router(
     *,
     application: DynamicRuntimeApplication,
     supervisor: DynamicRuntimeSupervisor,
     broadcaster: RuntimeEventBroadcaster,
     principal_resolver: RequestPrincipalResolver,
+    capability_pools: CapabilityPoolManager,
     config: DynamicRuntimeApiConfig,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/runtime")
+
+    @router.get("/capabilities")
+    async def capabilities(request: Request) -> dict[str, object]:
+        principal_resolver.resolve(request)
+        return await asyncio.to_thread(capability_pools.capability_pool_snapshot)
+
+    @router.post("/capabilities/mcp/probe")
+    async def probe_mcp_server(
+        request: Request,
+        payload: MCPServerProbeRequest,
+    ) -> dict[str, object]:
+        principal_resolver.resolve(request)
+        try:
+            return await asyncio.to_thread(
+                capability_pools.probe_mcp_server,
+                payload.capability_id,
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="mcp_probe_failed") from exc
+
+    @router.post("/capabilities/mcp", status_code=201)
+    async def add_mcp_server(
+        request: Request,
+        payload: MCPServerCreateRequest,
+    ) -> dict[str, object]:
+        principal_resolver.resolve(request)
+        try:
+            return await asyncio.to_thread(
+                capability_pools.add_mcp_server,
+                payload.registry_document(),
+                expected_registry_digest=payload.expected_registry_digest,
+            )
+        except RuntimeError as exc:
+            if str(exc) == "mcp_registry_revision_conflict":
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            raise HTTPException(status_code=502, detail="mcp_discovery_failed") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.put("/capabilities/mcp/{server_id}")
+    async def update_mcp_server(
+        server_id: str,
+        request: Request,
+        payload: MCPServerCreateRequest,
+    ) -> dict[str, object]:
+        principal_resolver.resolve(request)
+        try:
+            return await asyncio.to_thread(
+                capability_pools.replace_mcp_server,
+                server_id,
+                payload.registry_document(),
+                expected_registry_digest=payload.expected_registry_digest,
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            if str(exc) == "mcp_registry_revision_conflict":
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            raise HTTPException(status_code=502, detail="mcp_discovery_failed") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.put("/capabilities/skills")
+    async def update_skill(
+        request: Request,
+        payload: SkillReplaceRequest,
+    ) -> dict[str, object]:
+        principal_resolver.resolve(request)
+        try:
+            return await asyncio.to_thread(
+                capability_pools.replace_skill,
+                capability_id=payload.capability_id,
+                source_path=payload.source_path,
+                expected_content_digest=payload.expected_content_digest,
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            if str(exc) == "skill_revision_conflict":
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            raise HTTPException(status_code=502, detail="skill_synchronization_failed") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.put("/capabilities/tools/{capability_id:path}")
+    async def update_tool_configuration(
+        capability_id: str,
+        request: Request,
+        payload: ToolConfigurationWriteRequest,
+    ) -> dict[str, object]:
+        principal_resolver.resolve(request)
+        try:
+            return await asyncio.to_thread(
+                capability_pools.replace_tool_configuration,
+                capability_id=capability_id,
+                expected_content_digest=payload.expected_content_digest,
+                display_name=payload.display_name,
+                description=payload.description,
+                runtime_policy=payload.runtime_policy.model_dump(mode="json"),
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            if str(exc) == "tool_revision_conflict":
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            raise HTTPException(status_code=502, detail="tool_synchronization_failed") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.get("/capabilities/skills/{capability_id:path}/editor")
+    async def get_skill_editor(capability_id: str, request: Request) -> dict[str, object]:
+        principal_resolver.resolve(request)
+        try:
+            return await asyncio.to_thread(capability_pools.skill_editor_document, capability_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.put("/capabilities/skills/{capability_id:path}/editor")
+    async def update_skill_content(
+        capability_id: str,
+        request: Request,
+        payload: SkillContentWriteRequest,
+    ) -> dict[str, object]:
+        principal_resolver.resolve(request)
+        try:
+            return await asyncio.to_thread(
+                capability_pools.replace_skill_content,
+                capability_id=capability_id,
+                expected_content_digest=payload.expected_content_digest,
+                metadata=payload.metadata,
+                instructions=payload.instructions,
+                resources=payload.resources,
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            if str(exc) == "skill_revision_conflict":
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            raise HTTPException(status_code=502, detail="skill_synchronization_failed") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @router.get("/conversations")
     async def list_conversations(request: Request) -> dict[str, object]:
@@ -368,6 +739,19 @@ def create_dynamic_runtime_router(
         )
 
     return router
+
+
+def _environment_references(
+    bindings: dict[str, str | MCPBindingReference],
+) -> dict[str, dict[str, str]]:
+    return {
+        target: (
+            source.model_dump(exclude_none=True)
+            if isinstance(source, MCPBindingReference)
+            else {"source": "process_environment", "name": source}
+        )
+        for target, source in bindings.items()
+    }
 
 
 def _server_descriptor(application: DynamicRuntimeApplication) -> RuntimeProtocolDescriptor:

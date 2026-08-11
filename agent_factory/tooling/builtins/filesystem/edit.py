@@ -8,6 +8,7 @@ from agent_factory.tooling.builtins.filesystem.common import (
     filesystem_allowed_roots,
     filesystem_boundary,
     path_risk_result,
+    require_file_locks,
     required_string,
     resolve_path,
     write_focus_facts,
@@ -41,25 +42,26 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         allowed_roots=filesystem_allowed_roots(resources),
     )
     assert_not_protected_write_path(target, root=root, resources=resources)
-    if not target.exists():
-        raise FileNotFoundError(str(target))
-    if not target.is_file():
-        raise IsADirectoryError(str(target))
-    raw = target.read_bytes()
-    try:
-        content = raw.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise ValueError(f"file is not valid utf-8 text: {target}") from exc
-    count = content.count(old_text)
-    if count == 0:
-        raise ValueError("old_text was not found")
-    if not replace_all and count != 1:
-        raise ValueError(
-            f"old_text matched {count} times; set replace_all=true or provide a more specific old_text"
-        )
-    updated = content.replace(old_text, new_text) if replace_all else content.replace(old_text, new_text, 1)
-    updated_bytes = updated.encode("utf-8")
-    atomic_write_bytes(target, updated_bytes)
+    with require_file_locks(resources).acquire((target,)):
+        if not target.exists():
+            raise FileNotFoundError(str(target))
+        if not target.is_file():
+            raise IsADirectoryError(str(target))
+        raw = target.read_bytes()
+        try:
+            content = raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"file is not valid utf-8 text: {target}") from exc
+        count = content.count(old_text)
+        if count == 0:
+            raise ValueError("old_text was not found")
+        if not replace_all and count != 1:
+            raise ValueError(
+                f"old_text matched {count} times; set replace_all=true or provide a more specific old_text"
+            )
+        updated = content.replace(old_text, new_text) if replace_all else content.replace(old_text, new_text, 1)
+        updated_bytes = updated.encode("utf-8")
+        atomic_write_bytes(target, updated_bytes)
     output = {
         "path": str(target),
         "replacements": count if replace_all else 1,

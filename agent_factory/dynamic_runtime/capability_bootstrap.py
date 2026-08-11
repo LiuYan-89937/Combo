@@ -50,10 +50,16 @@ class CapabilityBootstrapPublisher:
         self._resolution_receipts = resolution_receipts
         self._adapters = adapters
 
-    def synchronize(self, drafts: tuple[CapabilityDraft, ...]) -> tuple[CapabilityRevision, ...]:
+    def synchronize(
+        self,
+        drafts: tuple[CapabilityDraft, ...],
+        *,
+        deactivate_removed_sources: bool = True,
+    ) -> tuple[CapabilityRevision, ...]:
         self._validate_source_set(drafts)
         published = tuple(self._synchronize_draft(draft) for draft in drafts)
-        self._deactivate_removed_sources(frozenset(draft.capability_id for draft in drafts))
+        if deactivate_removed_sources:
+            self._deactivate_removed_sources(frozenset(draft.capability_id for draft in drafts))
         return published
 
     def _synchronize_draft(self, desired: CapabilityDraft) -> CapabilityRevision:
@@ -69,6 +75,21 @@ class CapabilityBootstrapPublisher:
         ):
             self._ensure_health(active.revision, evidence_digest=active.revision.validation_receipt_id)
             return active.revision
+
+        reusable = self._store.revision_by_content_digest(
+            draft.capability_id,
+            draft.content_digest,
+        )
+        if reusable is not None:
+            if (
+                reusable.source_uri != draft.source_uri
+                or reusable.resolved_version != draft.resolved_version
+                or reusable.trust_level != draft.trust_level
+            ):
+                raise CapabilityConflictError(
+                    "published capability content digest belongs to different immutable source metadata"
+                )
+            return self._reactivate_revision(reusable, current_activation)
 
         validation = self._adapters.validate(draft)
         self._store.record_validation(validation)
@@ -137,6 +158,48 @@ class CapabilityBootstrapPublisher:
                 None if current_activation is None else current_activation.activation_revision
             ),
         )
+        return revision
+
+    def _reactivate_revision(
+        self,
+        revision: CapabilityRevision,
+        current_activation: CapabilityActivation | None,
+    ) -> CapabilityRevision:
+        index = self._store.index_revision_for_source(
+            revision.capability_id,
+            revision.revision,
+            revision.content_digest,
+        )
+        if index is None:
+            index = CapabilityIndexRevision(
+                schema_version="capability_search_document.v1",
+                source_capability_id=revision.capability_id,
+                source_revision=revision.revision,
+                source_digest=revision.content_digest,
+                document=CapabilitySearchDocument(
+                    display_name=revision.content.display_name,
+                    description=revision.content.description,
+                    keywords=revision.content.keywords,
+                ),
+            )
+            self._store.add_index_revision(index)
+        activation_revision = 1 if current_activation is None else current_activation.activation_revision + 1
+        self._store.set_activation(
+            CapabilityActivation(
+                capability_id=revision.capability_id,
+                kind=revision.kind,
+                activation_revision=activation_revision,
+                status="active",
+                revision=revision.revision,
+                content_digest=revision.content_digest,
+                index_revision_id=index.index_revision_id,
+                changed_by_principal_id=self._config.publisher_principal_id,
+            ),
+            expected_activation_revision=(
+                None if current_activation is None else current_activation.activation_revision
+            ),
+        )
+        self._ensure_health(revision, evidence_digest=revision.validation_receipt_id)
         return revision
 
     def _upsert_draft(self, desired: CapabilityDraft) -> CapabilityDraft:

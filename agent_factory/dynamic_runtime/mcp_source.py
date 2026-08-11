@@ -49,8 +49,14 @@ class MCPConfigCapabilitySource:
         self._runtime = runtime
         self._environment_resolver = environment_resolver
         self._report_unavailable = report_unavailable
+        self._discovery_complete = True
+
+    @property
+    def discovery_complete(self) -> bool:
+        return self._discovery_complete
 
     def drafts(self) -> tuple[CapabilityDraft, ...]:
+        self._discovery_complete = True
         document = json.loads(self._config.path.read_text(encoding="utf-8"))
         if document.get("version") != "mcp_servers.v0" or not isinstance(document.get("servers"), list):
             raise ValueError("MCP server registry must use mcp_servers.v0")
@@ -58,15 +64,20 @@ class MCPConfigCapabilitySource:
         for raw in document["servers"]:
             if not isinstance(raw, dict) or not raw.get("enabled", True):
                 continue
+            newly_registered_digest: str | None = None
             try:
                 server_draft, binding = self._server_draft(raw)
-                self._runtime.register(server_draft.content_digest, binding)
+                if self._runtime.register(server_draft.content_digest, binding):
+                    newly_registered_digest = server_draft.content_digest
                 tools = self._runtime.discover_tools(server_draft.content_digest)
             except Exception as exc:
+                if newly_registered_digest is not None:
+                    self._runtime.unregister(newly_registered_digest)
                 server_id = str(raw.get("server_id") or "").strip() or "<invalid>"
                 self._report_unavailable(server_id, exc)
                 if raw.get("required", False):
                     raise
+                self._discovery_complete = False
                 continue
             drafts.append(server_draft)
             drafts.extend(self._tool_drafts(raw, server_draft, tools))
@@ -81,13 +92,14 @@ class MCPConfigCapabilitySource:
         endpoint = _optional_text(raw.get("url"))
         cwd = _optional_path(raw.get("cwd"))
         timeout = float(raw.get("timeout_seconds", 120.0))
+        connect_timeout = float(raw.get("connect_timeout_seconds", min(timeout, 30.0)))
         definition = MCPServerDefinition(
             transport=transport,
             executable=command,
             arguments=tuple(str(item) for item in raw.get("args") or ()),
             endpoint=endpoint,
             working_directory_alias=server_id if cwd is not None else None,
-            connect_timeout_seconds=min(timeout, 30.0),
+            connect_timeout_seconds=connect_timeout,
             request_timeout_seconds=timeout,
             max_parallel_requests=int(raw.get("max_parallel_requests", 1)),
         )
@@ -148,6 +160,15 @@ class MCPConfigCapabilitySource:
             prefix = f"mcp_{prefix}"
         risk = str(raw.get("risk_level_default") or "medium")
         concurrent = bool(raw.get("concurrent_default", True))
+        runtime_policies = raw.get("tool_runtime_policies") or {}
+        if not isinstance(runtime_policies, dict):
+            raise ValueError(f"MCP tool_runtime_policies must be an object: {server_id}")
+        description_contexts = raw.get("tool_description_contexts") or {}
+        if not isinstance(description_contexts, dict):
+            raise ValueError(f"MCP tool_description_contexts must be an object: {server_id}")
+        display_names = raw.get("tool_display_names") or {}
+        if not isinstance(display_names, dict):
+            raise ValueError(f"MCP tool_display_names must be an object: {server_id}")
         result: list[CapabilityDraft] = []
         aliases: set[str] = set()
         upstream_names: set[str] = set()
@@ -160,18 +181,31 @@ class MCPConfigCapabilitySource:
             aliases.add(alias)
             input_schema = dict(tool.inputSchema or {"type": "object"})
             output_schema = dict(tool.outputSchema or {"type": "object", "additionalProperties": True})
+            policy_override = runtime_policies.get(upstream_name) or {}
+            if not isinstance(policy_override, dict):
+                raise ValueError(f"MCP tool runtime policy must be an object: {server_id}/{upstream_name}")
+            base_policy = ToolRuntimePolicy(
+                risk_level=risk,
+                allow_parallel_calls=concurrent,
+                max_parallel_calls=(server.content.definition["max_parallel_requests"] if concurrent else 1),
+            )
+            runtime_policy = ToolRuntimePolicy.model_validate({
+                **base_policy.model_dump(mode="json"),
+                **policy_override,
+            })
+            description = str(
+                description_contexts.get(upstream_name)
+                or tool.description
+                or f"MCP tool {upstream_name}"
+            ).strip()
             definition = MCPToolDefinition(
                 server_capability_id=server.capability_id,
                 upstream_tool_name=upstream_name,
                 model_alias=alias,
-                model_description=str(tool.description or f"MCP tool {upstream_name}"),
+                model_description=description,
                 input_schema=_schema_evidence(input_schema),
                 output_schema=_schema_evidence(output_schema),
-                runtime_policy=ToolRuntimePolicy(
-                    risk_level=risk,
-                    allow_parallel_calls=concurrent,
-                    max_parallel_calls=server.content.definition["max_parallel_requests"],
-                ),
+                runtime_policy=runtime_policy,
                 effects=("network",),
             )
             result.append(
@@ -187,7 +221,7 @@ class MCPConfigCapabilitySource:
                     ),
                     trust_level=server.trust_level,
                     content=CapabilityContent(
-                        display_name=alias,
+                        display_name=str(display_names.get(upstream_name) or alias).strip(),
                         description=definition.model_description,
                         keywords=("mcp", server_id, upstream_name),
                         definition_schema="mcp_tool_definition.v2",

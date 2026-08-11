@@ -28,7 +28,13 @@ from agent_factory.dynamic_runtime.cancellation import (
     CancelRuntimeCommandHandler,
     RuntimeCancellationStore,
 )
-from agent_factory.dynamic_runtime.dispatcher import CommandDispatcher, CommandHandler
+from agent_factory.dynamic_runtime.command_control import CancelCommandRequestHandler
+from agent_factory.dynamic_runtime.control_plane_store import GlobalKnowledgeStore, WorkspaceSchedulerStore
+from agent_factory.dynamic_runtime.dispatcher import (
+    CommandDispatcher,
+    CommandExecutionRegistry,
+    CommandHandler,
+)
 from agent_factory.dynamic_runtime.execution_commits import RuntimeExecutionCommitStore
 from agent_factory.dynamic_runtime.delegation_store import DelegationStore
 from agent_factory.dynamic_runtime.lifecycle_repositories import (
@@ -55,10 +61,15 @@ from agent_factory.dynamic_runtime.repositories import (
     ToolCallStore,
 )
 from agent_factory.dynamic_runtime.recovery import RuntimeRecoveryReport, RuntimeRecoveryService
-from agent_factory.dynamic_runtime.runtime_service import DynamicRuntimeService, RuntimeLaunchContextResolver
+from agent_factory.dynamic_runtime.runtime_service import (
+    DynamicRuntimeService,
+    RuntimeLaunchContextResolver,
+    RuntimeObservationSink,
+)
 from agent_factory.dynamic_runtime.run_control import RuntimeRunControlRegistry
 from agent_factory.dynamic_runtime.runtime_start import RuntimeStartStore
 from agent_factory.dynamic_runtime.resume import ResumeInterruptCommandHandler
+from agent_factory.dynamic_runtime.steering import SteerRuntimeCommandHandler
 from agent_factory.dynamic_runtime.services import DynamicRuntimeServiceSet, DynamicRuntimeServicesFactory
 from agent_factory.model_pool.store import ModelPoolStore
 from agent_factory.model_pool.usage import ModelUsageStore
@@ -108,6 +119,8 @@ class DynamicRuntimeStores:
     revocations: RevocationStore
     deliveries: DeliveryCommitStore
     delete_plans: DeletePlanStore
+    knowledge: GlobalKnowledgeStore
+    scheduler: WorkspaceSchedulerStore
 
 
 class DynamicRuntimeApplication:
@@ -135,6 +148,7 @@ class DynamicRuntimeApplication:
         self.capability_resolver = capability_resolver
         self.runtime_service = runtime_service
         self.recovery_report = recovery_report
+        self.command_executions = CommandExecutionRegistry()
 
     @classmethod
     def open(
@@ -145,6 +159,7 @@ class DynamicRuntimeApplication:
         model_pool_store: ModelPoolStore,
         launch_context_resolver: RuntimeLaunchContextResolver | Callable[[DynamicRuntimeStores], RuntimeLaunchContextResolver],
         capability_bootstrap: Callable[[DynamicRuntimeStores, CapabilityAdapterRegistry], None],
+        observation_sink: RuntimeObservationSink | None = None,
         migration_registry: DynamicRuntimeMigrationRegistry | None = None,
     ) -> "DynamicRuntimeApplication":
         database = DynamicRuntimeDatabase(config.database_path)
@@ -193,6 +208,7 @@ class DynamicRuntimeApplication:
                     else launch_context_resolver
                 ),
                 delegations=stores.delegations,
+                observation_sink=observation_sink,
             )
             recovery_report = RuntimeRecoveryService(database).reconcile(
                 current_generation=generation.generation,
@@ -246,7 +262,11 @@ class DynamicRuntimeApplication:
         return renewed
 
     def command_dispatcher(self, handlers: Mapping[str, CommandHandler]) -> CommandDispatcher:
-        return CommandDispatcher(inbox=self.stores.commands, handlers=handlers)
+        return CommandDispatcher(
+            inbox=self.stores.commands,
+            handlers=handlers,
+            executions=self.command_executions,
+        )
 
     def main_command_dispatcher(
         self,
@@ -254,6 +274,10 @@ class DynamicRuntimeApplication:
         execution_router: ExecutionRouter,
     ) -> CommandDispatcher:
         handlers: dict[str, CommandHandler] = {
+            "cancel_command_request": CancelCommandRequestHandler(
+                commands=self.stores.commands,
+                executions=self.command_executions,
+            ),
             "send_message": MainTurnCommandHandler(
                 conversations=self.stores.conversations,
                 runtime_instances=self.stores.runtime_instances,
@@ -274,6 +298,13 @@ class DynamicRuntimeApplication:
             "resume_interrupt": ResumeInterruptCommandHandler(
                 runtime_instances=self.stores.runtime_instances,
                 runtime_service=self.runtime_service,
+            ),
+            "steer_runtime_request": SteerRuntimeCommandHandler(
+                commands=self.stores.commands,
+                runtime_instances=self.stores.runtime_instances,
+                cancellations=self.stores.cancellations,
+                run_controls=self.stores.run_controls,
+                executions=self.command_executions,
             ),
         }
         return self.command_dispatcher(handlers)
@@ -322,6 +353,8 @@ def _stores(database: DynamicRuntimeDatabase) -> DynamicRuntimeStores:
         revocations=RevocationStore(database),
         deliveries=DeliveryCommitStore(database),
         delete_plans=DeletePlanStore(database),
+        knowledge=GlobalKnowledgeStore(database),
+        scheduler=WorkspaceSchedulerStore(database),
     )
 
 

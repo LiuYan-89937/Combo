@@ -58,14 +58,22 @@ class MCPRuntimePool:
         self._closed = False
         self._thread.start()
 
-    def register(self, server_content_digest: str, binding: MCPServerRuntimeBinding) -> None:
+    def register(self, server_content_digest: str, binding: MCPServerRuntimeBinding) -> bool:
         with self._lock:
             if self._closed:
                 raise RuntimeError("MCP runtime pool is closed")
             existing = self._bindings.get(server_content_digest)
             if existing is not None and existing != binding:
                 raise RuntimeError("MCP server revision was registered with conflicting runtime settings")
+            if existing is not None:
+                return False
             self._bindings[server_content_digest] = binding
+            return True
+
+    def unregister(self, server_content_digest: str) -> None:
+        with self._lock:
+            self._bindings.pop(server_content_digest, None)
+            self._semaphores.pop(server_content_digest, None)
 
     def discover_tools(self, server_content_digest: str) -> tuple[Any, ...]:
         binding = self._binding(server_content_digest)

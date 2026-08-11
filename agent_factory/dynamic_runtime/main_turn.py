@@ -12,16 +12,12 @@ from agent_factory.dynamic_runtime.repositories import ConversationStore, Runtim
 from agent_factory.dynamic_runtime.runtime_service import DynamicRuntimeService
 from agent_factory.dynamic_runtime.runtime_start import RuntimeStartStore
 from agent_factory.runtime_protocol import (
-    AttachmentPart,
     CommandEnvelope,
     CommandReceipt,
-    ConversationMessage,
-    ConversationTurn,
     RouteDecision,
     RuntimeInstance,
     RuntimeRequest,
     SendMessagePayload,
-    TextPart,
 )
 
 
@@ -107,35 +103,73 @@ class MainTurnCommandHandler:
         if conversation.principal_id != envelope.principal_id:
             raise PermissionError("command principal does not own the conversation")
 
-        policy = self._runtime_policies.require_for_principal(envelope.principal_id)
-        resolved_policy = self._model_resolver.resolve_policy(
-            policy,
-            operation="main_turn",
-            execution_preference=payload.execution_preference,
-            approval_mode=payload.approval_mode,
+        turn = self._conversations.require_turn_for_message(
+            session_id=envelope.session_id,
+            message_id=payload.message_id,
         )
-        route = await self._execution_router.route(
-            envelope=envelope,
-            payload=payload,
-            policy=resolved_policy,
+        user_message = self._conversations.require_message(
+            session_id=envelope.session_id,
+            message_id=payload.message_id,
         )
-        capability_snapshot = await self._capability_resolver.resolve(
-            envelope=envelope,
-            route=route,
-            policy=resolved_policy,
-            workspace_id=conversation.workspace_id,
-        )
+        if turn.source_command_id != envelope.command_id:
+            raise RuntimeError("prepared conversation turn belongs to a different command")
+        if turn.status != "queued" or turn.active_runtime_instance_id is not None:
+            raise RuntimeError("prepared conversation turn is not available for runtime attachment")
+
+        try:
+            policy = self._runtime_policies.require_for_principal(envelope.principal_id)
+            resolved_policy = self._model_resolver.resolve_policy(
+                policy,
+                operation="main_turn",
+                execution_preference=payload.execution_preference,
+                approval_mode=payload.approval_mode,
+            )
+        except Exception:
+            self._conversations.fail_pre_runtime_turn(source_command_id=envelope.command_id)
+            return CommandOutcome(
+                status="rejected",
+                rejection_code="runtime_policy_resolution_failed",
+            )
+        try:
+            route = await self._execution_router.route(
+                envelope=envelope,
+                payload=payload,
+                policy=resolved_policy,
+            )
+        except asyncio.CancelledError:
+            self._conversations.cancel_pre_runtime_turn(source_command_id=envelope.command_id)
+            raise
+        except Exception:
+            self._conversations.fail_pre_runtime_turn(source_command_id=envelope.command_id)
+            return CommandOutcome(
+                status="rejected",
+                rejection_code="execution_route_failed",
+            )
+        try:
+            capability_snapshot = await self._capability_resolver.resolve(
+                envelope=envelope,
+                route=route,
+                policy=resolved_policy,
+                workspace_id=conversation.workspace_id,
+            )
+        except asyncio.CancelledError:
+            self._conversations.cancel_pre_runtime_turn(source_command_id=envelope.command_id)
+            raise
+        except Exception:
+            self._conversations.fail_pre_runtime_turn(source_command_id=envelope.command_id)
+            return CommandOutcome(
+                status="rejected",
+                rejection_code="capability_resolution_failed",
+            )
 
         now = utc_now_text()
-        turn_id = uuid4().hex
         runtime_instance_id = uuid4().hex
         request_id = uuid4().hex
-        task_revision = self._conversations.next_task_revision(envelope.session_id)
         request = RuntimeRequest(
             request_id=request_id,
             principal_id=envelope.principal_id,
             session_id=envelope.session_id,
-            turn_id=turn_id,
+            turn_id=turn.turn_id,
             workspace_id=conversation.workspace_id,
             runtime_role="main",
             strategy=route.strategy,
@@ -143,7 +177,7 @@ class MainTurnCommandHandler:
             policy_snapshot=resolved_policy.snapshot,
             capability_snapshot_id=capability_snapshot.snapshot_id,
             approval_mode=resolved_policy.snapshot.approval_mode,
-            task_revision=task_revision,
+            task_revision=turn.task_revision,
             created_at=now,
         )
         instance = RuntimeInstance(
@@ -157,34 +191,17 @@ class MainTurnCommandHandler:
             created_at=now,
             updated_at=now,
         )
-        turn = ConversationTurn(
-            turn_id=turn_id,
-            session_id=envelope.session_id,
-            user_message_id=payload.message_id,
-            task_revision=task_revision,
-            status="queued",
-            active_runtime_instance_id=runtime_instance_id,
-            created_at=now,
-            updated_at=now,
+        attached_turn = turn.model_copy(
+            update={
+                "active_runtime_instance_id": runtime_instance_id,
+                "updated_at": now,
+            }
         )
-        message = ConversationMessage(
-            message_id=payload.message_id,
-            session_id=envelope.session_id,
-            turn_id=turn_id,
-            role="user",
-            status="committed",
-            parts=(
-                TextPart(text=payload.content),
-                *(AttachmentPart(attachment=attachment) for attachment in payload.attachments),
-            ),
-            created_at=envelope.submitted_at,
-            committed_at=now,
-        )
-        self._runtime_starts.create(
+        self._runtime_starts.attach(
             envelope=envelope,
             claimed_receipt=receipt,
-            turn=turn,
-            user_message=message,
+            turn=attached_turn,
+            user_message=user_message,
             capability_snapshot=capability_snapshot,
             runtime_instance=instance,
         )

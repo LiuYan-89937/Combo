@@ -177,6 +177,7 @@ class ConversationTurn(ProtocolModel):
     task_revision: int = Field(ge=1)
     status: ConversationTurnStatus = "queued"
     active_runtime_instance_id: str | None = None
+    source_command_id: str | None = None
     created_at: str = Field(default_factory=utc_now_text)
     updated_at: str = Field(default_factory=utc_now_text)
     terminal_at: str | None = None
@@ -190,7 +191,7 @@ class ConversationTurn(ProtocolModel):
             raise ValueError(f"{field_name} must not be empty")
         return text
 
-    @field_validator("active_runtime_instance_id", "terminal_at")
+    @field_validator("active_runtime_instance_id", "source_command_id", "terminal_at")
     @classmethod
     def _optional_turn_text(cls, value: str | None) -> str | None:
         text = str(value or "").strip()

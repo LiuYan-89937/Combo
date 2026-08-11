@@ -22,6 +22,8 @@ class OutboxRecord(ProtocolModel):
         "delivery",
         "scheduler_run",
         "capability",
+        "runtime_policy",
+        "delegated_task",
     ]
     aggregate_id: str
     aggregate_revision: int = Field(ge=1)

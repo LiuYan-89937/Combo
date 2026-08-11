@@ -79,6 +79,10 @@ class RuntimeRecoveryService:
                     raise RuntimeError(
                         "cannot recover a runtime whose application generation is still live"
                     )
+                if not _conversation_is_active(conn, instance.request.session_id):
+                    _cancel_runtime_for_inactive_conversation(conn, instance=instance, now=now)
+                    counts["cancelled_incomplete_runtimes"] += 1
+                    continue
                 if instance.status in {"waiting_approval", "waiting_external"}:
                     _adopt_waiting_runtime(
                         conn,
@@ -192,6 +196,49 @@ def _adopt_waiting_runtime(
     advance_conversation_revision(conn, instance.request.session_id, updated_at=now)
 
 
+def _conversation_is_active(conn, session_id: str) -> bool:
+    row = conn.execute(
+        "select status from conversations where session_id = ?",
+        (session_id,),
+    ).fetchone()
+    return row is not None and str(row["status"]) == "active"
+
+
+def _cancel_runtime_for_inactive_conversation(
+    conn,
+    *,
+    instance: RuntimeInstance,
+    now: str,
+) -> None:
+    error = RuntimeErrorEnvelope(
+        code="conversation_inactive",
+        category="cancelled",
+        terminal_status="cancelled",
+        retryable=False,
+        user_message_key="runtime.cancelled.conversation_inactive",
+        request_id=instance.request.request_id,
+        runtime_instance_id=instance.runtime_instance_id,
+        operation=instance.request.policy_snapshot.model.operation,
+        details={"conversation_status": "inactive"},
+    )
+    cancelled = _cancel_runtime_record(
+        conn,
+        instance=instance,
+        error=error,
+        reason="conversation_inactive",
+        reserve_event_sequence=False,
+        now=now,
+    )
+    _cancel_turn(conn, instance=cancelled, now=now)
+    _cancel_tool_calls(
+        conn,
+        instance=cancelled,
+        error_code="conversation_inactive",
+        persist_results=False,
+        now=now,
+    )
+
+
 def _cancel_incomplete_runtime(conn, *, instance: RuntimeInstance, now: str) -> None:
     error = RuntimeErrorEnvelope(
         code="application_generation_replaced",
@@ -204,15 +251,52 @@ def _cancel_incomplete_runtime(conn, *, instance: RuntimeInstance, now: str) -> 
         operation=instance.request.policy_snapshot.model.operation,
         details={"replaced_generation": instance.generation},
     )
+    cancelled = _cancel_runtime_record(
+        conn,
+        instance=instance,
+        error=error,
+        reason="application_generation_replaced",
+        reserve_event_sequence=True,
+        now=now,
+    )
+    _cancel_turn(conn, instance=cancelled, now=now)
+    _cancel_tool_calls(
+        conn,
+        instance=cancelled,
+        error_code="application_generation_replaced",
+        persist_results=True,
+        now=now,
+    )
+    event = runtime_event_for_instance(
+        cancelled,
+        payload={"kind": "cancelled", "error": error.model_dump(mode="json")},
+        sequence=cancelled.last_event_sequence,
+        session_sequence=next_session_event_sequence(conn, instance.request.session_id),
+        created_at=now,
+    )
+    insert_runtime_event_and_outbox(conn, event)
+    advance_conversation_revision(conn, instance.request.session_id, updated_at=now)
+
+
+def _cancel_runtime_record(
+    conn,
+    *,
+    instance: RuntimeInstance,
+    error: RuntimeErrorEnvelope,
+    reason: str,
+    reserve_event_sequence: bool,
+    now: str,
+) -> RuntimeInstance:
+    last_event_sequence = instance.last_event_sequence + (1 if reserve_event_sequence else 0)
     cancelled = instance.model_copy(
         update={
             "status": "cancelled",
-            "last_event_sequence": instance.last_event_sequence + 1,
+            "last_event_sequence": last_event_sequence,
             "updated_at": now,
             "terminal_at": now,
             "error": error,
             "cancel_requested_at": now,
-            "cancel_reason": "application_generation_replaced",
+            "cancel_reason": reason,
         }
     )
     changed = conn.execute(
@@ -234,18 +318,8 @@ def _cancel_incomplete_runtime(conn, *, instance: RuntimeInstance, now: str) -> 
         ),
     ).rowcount
     if changed != 1:
-        raise RuntimeError("incomplete runtime recovery compare-and-set failed")
-    _cancel_turn(conn, instance=cancelled, now=now)
-    _cancel_tool_calls(conn, instance=cancelled, now=now)
-    event = runtime_event_for_instance(
-        cancelled,
-        payload={"kind": "cancelled", "error": error.model_dump(mode="json")},
-        sequence=cancelled.last_event_sequence,
-        session_sequence=next_session_event_sequence(conn, instance.request.session_id),
-        created_at=now,
-    )
-    insert_runtime_event_and_outbox(conn, event)
-    advance_conversation_revision(conn, instance.request.session_id, updated_at=now)
+        raise RuntimeError("runtime recovery cancellation compare-and-set failed")
+    return cancelled
 
 
 def _cancel_turn(conn, *, instance: RuntimeInstance, now: str) -> None:
@@ -273,7 +347,14 @@ def _cancel_turn(conn, *, instance: RuntimeInstance, now: str) -> None:
         raise RuntimeError("conversation turn recovery compare-and-set failed")
 
 
-def _cancel_tool_calls(conn, *, instance: RuntimeInstance, now: str) -> None:
+def _cancel_tool_calls(
+    conn,
+    *,
+    instance: RuntimeInstance,
+    error_code: str,
+    persist_results: bool,
+    now: str,
+) -> None:
     rows = conn.execute(
         """
         select payload_json from tool_calls
@@ -287,7 +368,7 @@ def _cancel_tool_calls(conn, *, instance: RuntimeInstance, now: str) -> None:
         cancelled = current.model_copy(
             update={
                 "status": "cancelled",
-                "error_code": "application_generation_replaced",
+                "error_code": error_code,
                 "updated_at": now,
             }
         )
@@ -300,6 +381,8 @@ def _cancel_tool_calls(conn, *, instance: RuntimeInstance, now: str) -> None:
         ).rowcount
         if changed != 1:
             raise RuntimeError("tool call recovery compare-and-set failed")
+        if not persist_results:
+            continue
         insert_message(
             conn,
             ConversationMessage(
@@ -312,7 +395,7 @@ def _cancel_tool_calls(conn, *, instance: RuntimeInstance, now: str) -> None:
                     ToolResultPart(
                         tool_call_id=current.tool_call_id,
                         status="cancelled",
-                        error_code="application_generation_replaced",
+                        error_code=error_code,
                     ),
                 ),
                 source_runtime_instance_id=instance.runtime_instance_id,
@@ -325,6 +408,30 @@ def _cancel_tool_calls(conn, *, instance: RuntimeInstance, now: str) -> None:
 
 
 def _reject_unattached_command(conn, *, receipt: CommandReceipt, now: str) -> None:
+    row = conn.execute(
+        """
+        select payload_json from conversation_turns
+        where json_extract(payload_json, '$.source_command_id') = ?
+        """,
+        (receipt.command_id,),
+    ).fetchone()
+    if row is not None:
+        turn = ConversationTurn.model_validate_json(str(row["payload_json"]))
+        if turn.status == "queued":
+            failed_turn = turn.model_copy(
+                update={"status": "failed", "updated_at": now, "terminal_at": now}
+            )
+            changed = conn.execute(
+                """
+                update conversation_turns
+                set status = 'failed', payload_json = ?, updated_at = ?, terminal_at = ?
+                where turn_id = ? and status = 'queued'
+                """,
+                (failed_turn.model_dump_json(), now, now, turn.turn_id),
+            ).rowcount
+            if changed != 1:
+                raise RuntimeError("pre-runtime turn recovery compare-and-set failed")
+            advance_conversation_revision(conn, turn.session_id, updated_at=now)
     terminal = receipt.model_copy(
         update={
             "status": "rejected",

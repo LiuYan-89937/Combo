@@ -65,12 +65,14 @@ from agent_factory.runtime_protocol.delegation import DelegatedTaskEvent, Delega
 from agent_factory.runtime_protocol.navigation import DeepLinkResolution, DeepLinkResolver
 from agent_factory.runtime_protocol.state_machines import InvalidStateTransition, require_transition
 from agent_factory.runtime_protocol.commands import (
+    CancelCommandRequestPayload,
     CancelRuntimeRequestPayload,
     CommandEnvelope,
     CommandReceipt,
     ResumeInterruptPayload,
     SendMessagePayload,
     SetExecutionPreferencePayload,
+    SteerRuntimeRequestPayload,
 )
 from agent_factory.runtime_protocol.lifecycle import (
     ApplicationGeneration,
@@ -165,11 +167,13 @@ __all__ = [
     "RuntimeErrorCategory",
     "RuntimeErrorEnvelope",
     "CancelRuntimeRequestPayload",
+    "CancelCommandRequestPayload",
     "CommandEnvelope",
     "CommandReceipt",
     "ResumeInterruptPayload",
     "SendMessagePayload",
     "SetExecutionPreferencePayload",
+    "SteerRuntimeRequestPayload",
     "ApplicationGeneration",
     "CutoverManifest",
     "CutoverStoreRecord",

@@ -26,6 +26,8 @@ def runtime_event_for_instance(
             "turn_id": instance.request.turn_id,
             "workspace_id": instance.request.workspace_id,
             "task_revision": instance.request.task_revision,
+            "runtime_role": instance.request.runtime_role,
+            "task_id": instance.request.task_id,
             "attempt_id": instance.attempt_id,
             "payload": payload,
             "created_at": created_at,

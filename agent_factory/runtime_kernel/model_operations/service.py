@@ -43,6 +43,44 @@ class RuntimeModelHandle:
     settings: Any
 
 
+@dataclass(frozen=True, slots=True)
+class StructuredOutputInvocation:
+    model: Any
+    messages: tuple[Any, ...]
+    method: str
+
+
+def prepare_structured_output_invocation(
+    *,
+    model: Any,
+    output_model: type[BaseModel],
+    messages: list[Any],
+    model_metadata: dict[str, Any],
+    requested_method: str | None = None,
+    config_tags: list[str] | None = None,
+) -> StructuredOutputInvocation:
+    method = _effective_structured_method(
+        requested=requested_method,
+        model_metadata=model_metadata,
+    )
+    request_messages = _structured_request_messages(
+        messages=list(messages),
+        output_model=output_model,
+        output_json_schema=_schema_payload(output_model),
+        structured_method=method,
+    )
+    return StructuredOutputInvocation(
+        model=_structured_model(
+            model=model,
+            output_model=output_model,
+            method=method,
+            config_tags=_structured_config_tags(config_tags),
+        ),
+        messages=tuple(system_messages_first(request_messages)),
+        method=method,
+    )
+
+
 class RuntimeModelHandleRegistry:
     def __init__(self) -> None:
         self._lock = RLock()
@@ -222,23 +260,21 @@ class ModelInvocationOperations:
             request_messages = envelope.messages
         attempts = max(1, int(max_attempts))
         last_error: Exception | None = None
-        effective_structured_method = _effective_structured_method(
-            requested=structured_method,
+        invocation = prepare_structured_output_invocation(
+            model=model,
+            output_model=output_model,
+            messages=request_messages,
             model_metadata=metadata,
+            requested_method=structured_method,
+            config_tags=config_tags,
         )
+        effective_structured_method = invocation.method
         operation_context = {
             **metadata,
             "structured_output_method": effective_structured_method,
             **(operation_metadata or {}),
         }
-        schema_payload = _schema_payload(output_model)
-        request_messages = _structured_request_messages(
-            messages=request_messages,
-            output_model=output_model,
-            output_json_schema=schema_payload,
-            structured_method=effective_structured_method,
-        )
-        request_messages = system_messages_first(request_messages)
+        request_messages = list(invocation.messages)
         input_diagnostics = _structured_input_diagnostics(
             envelope=envelope,
             request_messages=request_messages,
@@ -251,13 +287,7 @@ class ModelInvocationOperations:
                 {"operation": "structured_json", "attempt": attempt, "max_attempts": attempts, **operation_context},
             )
             try:
-                structured_model = _structured_model(
-                    model=model,
-                    output_model=output_model,
-                    method=effective_structured_method,
-                    config_tags=_structured_config_tags(config_tags),
-                )
-                result = structured_model.invoke(request_messages)
+                result = invocation.model.invoke(request_messages)
                 if isinstance(result, output_model):
                     parsed = result
                 else:

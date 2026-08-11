@@ -347,4 +347,7 @@ def get_browser_tool_specs() -> list[ToolSpec]:
             ],
         ),
     ]
-    return [spec.model_copy(deep=True) for spec in specs]
+    return [
+        spec.model_copy(update={"system_available": True}, deep=True)
+        for spec in specs
+    ]

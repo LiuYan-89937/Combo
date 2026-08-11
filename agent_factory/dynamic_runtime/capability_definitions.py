@@ -24,6 +24,7 @@ RuntimeResourceName = Literal[
     "browser_runtime",
     "capability_catalog",
     "memory_store",
+    "delegation_runtime",
     "knowledge_runtime",
     "scheduler_runtime",
 ]
@@ -222,7 +223,7 @@ class ToolDefinition(FrozenProtocolModel):
     def _description_is_present(cls, value: str) -> str:
         return _required_text(value, "tool model_description")
 
-    @field_validator("effects", "runtime_resources", "required_input_modalities", "output_modalities", "platforms")
+    @field_validator("effects", "required_input_modalities", "output_modalities", "platforms")
     @classmethod
     def _tuple_values_are_unique(cls, values: tuple[str, ...], info: object) -> tuple[str, ...]:
         if not values:
@@ -231,6 +232,13 @@ class ToolDefinition(FrozenProtocolModel):
             raise ValueError(f"{getattr(info, 'field_name', 'values')} must be unique")
         if "any" in values and len(values) > 1:
             raise ValueError("platform 'any' cannot be combined with concrete platforms")
+        return values
+
+    @field_validator("runtime_resources")
+    @classmethod
+    def _runtime_resources_are_unique(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        if len(values) != len(set(values)):
+            raise ValueError("runtime_resources must be unique")
         return values
 
     @field_validator("sensitive_argument_paths")

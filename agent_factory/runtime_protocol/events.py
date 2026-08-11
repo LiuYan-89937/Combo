@@ -10,10 +10,12 @@ from agent_factory.runtime_protocol.contracts import (
     FrozenProtocolModel,
     RouteDecision,
     RuntimeInstanceStatus,
+    RuntimeRole,
     TaskRevisionAction,
     utc_now_text,
 )
 from agent_factory.runtime_protocol.errors import RuntimeErrorEnvelope
+from agent_factory.runtime_protocol.conversation import ConversationPart
 from agent_factory.runtime_protocol.tool_calls import ToolCallStatus
 
 
@@ -24,9 +26,38 @@ class RuntimeLifecyclePayload(FrozenProtocolModel):
         "runtime_started",
         "runtime_recovered",
         "runtime_cancelling",
-        "runtime_completed",
     ]
     status: RuntimeInstanceStatus
+
+
+class AssistantMessageSnapshot(FrozenProtocolModel):
+    message_id: str
+    parts: tuple[ConversationPart, ...]
+    created_at: str
+
+    @field_validator("message_id", "created_at")
+    @classmethod
+    def _required_message_text(cls, value: str, info: object) -> str:
+        text = str(value or "").strip()
+        if not text:
+            field_name = getattr(info, "field_name", "value")
+            raise ValueError(f"{field_name} must not be empty")
+        return text
+
+    @field_validator("parts")
+    @classmethod
+    def _message_has_parts(cls, value: tuple[ConversationPart, ...]) -> tuple[ConversationPart, ...]:
+        if not value:
+            raise ValueError("assistant message snapshot requires at least one part")
+        return value
+
+
+class RuntimeCompletedPayload(FrozenProtocolModel):
+    kind: Literal["runtime_completed"] = "runtime_completed"
+    status: Literal["completed"] = "completed"
+    result: JsonValue | None = None
+    message: AssistantMessageSnapshot | None = None
+    context_window: dict[str, JsonValue] | None = None
 
 
 class RuntimeWaitingPayload(FrozenProtocolModel):
@@ -262,6 +293,7 @@ class TerminalErrorPayload(FrozenProtocolModel):
 RuntimeEventPayload = Annotated[
     Union[
         RuntimeLifecyclePayload,
+        RuntimeCompletedPayload,
         RuntimeWaitingPayload,
         RouteDecidedPayload,
         CapabilityResolutionStartedPayload,
@@ -293,6 +325,8 @@ class RuntimeEvent(FrozenProtocolModel):
     turn_id: str
     workspace_id: str
     task_revision: int = Field(ge=1)
+    runtime_role: RuntimeRole | None = None
+    task_id: str | None = None
     attempt_id: str | None = None
     payload: RuntimeEventPayload
     created_at: str = Field(default_factory=utc_now_text)
@@ -314,7 +348,7 @@ class RuntimeEvent(FrozenProtocolModel):
             raise ValueError(f"{field_name} must not be empty")
         return text
 
-    @field_validator("attempt_id")
+    @field_validator("attempt_id", "task_id")
     @classmethod
     def _optional_event_text(cls, value: str | None) -> str | None:
         text = str(value or "").strip()

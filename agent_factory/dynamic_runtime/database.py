@@ -9,7 +9,7 @@ import sqlite3
 from agent_factory.sqlite_runtime import DEFAULT_SQLITE_BUSY_TIMEOUT_MS, connect_sqlite
 
 
-DYNAMIC_RUNTIME_DATABASE_SCHEMA = "dynamic_runtime_database.v11"
+DYNAMIC_RUNTIME_DATABASE_SCHEMA = "dynamic_runtime_database.v16"
 
 
 @dataclass(frozen=True, slots=True)
@@ -813,6 +813,116 @@ def _default_migrations() -> tuple[MigrationStep, ...]:
                 "create index idx_delegated_task_events_parent on delegated_task_events(parent_runtime_instance_id, created_at)",
             ),
         ),
+        MigrationStep(
+            version=12,
+            name="global_knowledge_and_workspace_scheduler",
+            statements=(
+                """
+                create table knowledge_sources (
+                  source_id text primary key,
+                  revision integer not null check (revision >= 1),
+                  status text not null check (status in ('ready','indexing','failed','deleted')),
+                  payload_json text not null,
+                  created_at text not null,
+                  updated_at text not null
+                )
+                """,
+                "create index idx_knowledge_sources_status on knowledge_sources(status, updated_at)",
+                """
+                create table knowledge_documents (
+                  document_id text primary key,
+                  source_id text not null references knowledge_sources(source_id),
+                  revision integer not null check (revision >= 1),
+                  status text not null check (status in ('ready','deleted')),
+                  title text not null,
+                  mime_type text not null,
+                  content text not null,
+                  content_digest text not null,
+                  created_at text not null,
+                  updated_at text not null
+                )
+                """,
+                "create index idx_knowledge_documents_source on knowledge_documents(source_id, status, updated_at)",
+                """
+                create table scheduler_jobs (
+                  job_id text primary key,
+                  workspace_id text not null references workspaces(workspace_id),
+                  revision integer not null check (revision >= 1),
+                  status text not null check (status in ('enabled','paused','deleted')),
+                  payload_json text not null,
+                  created_at text not null,
+                  updated_at text not null
+                )
+                """,
+                "create index idx_scheduler_jobs_workspace on scheduler_jobs(workspace_id, status, updated_at)",
+                """
+                create table scheduler_runs (
+                  run_id text primary key,
+                  job_id text not null references scheduler_jobs(job_id),
+                  status text not null check (status in ('queued','running','completed','failed','cancelled')),
+                  runtime_instance_id text references runtime_instances(runtime_instance_id),
+                  payload_json text not null,
+                  created_at text not null,
+                  updated_at text not null,
+                  terminal_at text
+                )
+                """,
+                "create index idx_scheduler_runs_job on scheduler_runs(job_id, created_at)",
+            ),
+        ),
+        MigrationStep(
+            version=13,
+            name="workspace_display_identity",
+            statements=(
+                "alter table workspaces add column title text",
+            ),
+        ),
+        MigrationStep(
+            version=14,
+            name="workspace_mount_records",
+            statements=(
+                """
+                create table workspace_mount_records (
+                  mount_record_id text primary key,
+                  principal_id text not null references principals(principal_id),
+                  source_path text not null,
+                  title text not null,
+                  status text not null check (status in ('active','detached','deleted')),
+                  revision integer not null check (revision >= 1),
+                  created_at text not null,
+                  updated_at text not null
+                )
+                """,
+                "create index idx_workspace_mounts_owner on workspace_mount_records(principal_id, status, updated_at)",
+            ),
+        ),
+        MigrationStep(
+            version=15,
+            name="workspace_project_mode",
+            statements=(
+                "alter table workspaces add column mode text not null default 'project' check (mode in ('isolated', 'project'))",
+            ),
+        ),
+        MigrationStep(
+            version=16,
+            name="delegated_task_completion_mailbox",
+            statements=(
+                """
+                create table delegated_task_notifications (
+                  event_id text primary key,
+                  task_id text not null,
+                  task_revision integer not null,
+                  principal_id text not null references principals(principal_id),
+                  session_id text not null references conversations(session_id),
+                  payload_json text not null,
+                  delivered_runtime_instance_id text references runtime_instances(runtime_instance_id),
+                  created_at text not null,
+                  delivered_at text
+                )
+                """,
+                "create index idx_delegated_task_notifications_delivery on delegated_task_notifications(principal_id, session_id, delivered_at, created_at)",
+            ),
+        ),
     )
 
 
@@ -883,4 +993,16 @@ def _schema_allowlist() -> set[tuple[str, str]]:
         ("index", "idx_delegated_tasks_claim"),
         ("table", "delegated_task_events"),
         ("index", "idx_delegated_task_events_parent"),
+        ("table", "delegated_task_notifications"),
+        ("index", "idx_delegated_task_notifications_delivery"),
+        ("table", "knowledge_sources"),
+        ("index", "idx_knowledge_sources_status"),
+        ("table", "knowledge_documents"),
+        ("index", "idx_knowledge_documents_source"),
+        ("table", "scheduler_jobs"),
+        ("index", "idx_scheduler_jobs_workspace"),
+        ("table", "scheduler_runs"),
+        ("index", "idx_scheduler_runs_job"),
+        ("table", "workspace_mount_records"),
+        ("index", "idx_workspace_mounts_owner"),
     }

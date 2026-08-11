@@ -1,0 +1,156 @@
+import { requestJson } from './http'
+import type { McpServerConfig } from './resourceTypes'
+
+export type CapabilityKind = 'skill' | 'tool' | 'mcp_server' | 'mcp_tool'
+
+export interface CapabilityPoolItem {
+  capability_id: string
+  kind: CapabilityKind
+  namespace: string
+  display_name: string
+  description: string
+  keywords: string[]
+  revision: number
+  resolved_version: string
+  content_digest: string
+  source_uri: string
+  trust_level: string
+  health: string | null
+  definition_schema: string
+  details: Record<string, unknown>
+}
+
+export interface CapabilityPoolSnapshot {
+  counts: Record<CapabilityKind, number>
+  capabilities: CapabilityPoolItem[]
+  mcp_registry_digest: string
+}
+
+export interface McpProbeResult {
+  capability_id: string
+  content_digest: string
+  tool_count: number
+  tools: string[]
+}
+
+export interface ToolRuntimePolicyInput {
+  approval: 'inherit' | 'allow' | 'ask' | 'deny'
+  risk_level: 'low' | 'medium' | 'high'
+  allow_parallel_calls: boolean
+  max_parallel_calls: number
+  timeout_seconds: number
+  output_projection: 'compress' | 'passthrough'
+  output_max_model_chars: number
+  retain_raw_output: boolean
+}
+
+export interface SkillEditorResource {
+  path: string
+  size_bytes: number
+  editable: boolean
+  content: string | null
+}
+
+export interface SkillEditorDocument {
+  capability_id: string
+  content_digest: string
+  source_path: string
+  metadata: Record<string, unknown>
+  instructions: string
+  resources: SkillEditorResource[]
+}
+
+export const capabilityPoolsApi = {
+  snapshot: () => requestJson<CapabilityPoolSnapshot>('/api/runtime/capabilities'),
+  probeMcp: (capabilityId: string) => requestJson<McpProbeResult>('/api/runtime/capabilities/mcp/probe', {
+    method: 'POST',
+    body: JSON.stringify({ capability_id: capabilityId }),
+  }),
+  addMcp: (server: McpServerConfig, expectedRegistryDigest: string) =>
+    requestJson<CapabilityPoolSnapshot>('/api/runtime/capabilities/mcp', {
+      method: 'POST',
+      body: JSON.stringify(mcpWritePayload(server, expectedRegistryDigest)),
+    }),
+  updateMcp: (serverId: string, server: McpServerConfig, expectedRegistryDigest: string) =>
+    requestJson<CapabilityPoolSnapshot>(`/api/runtime/capabilities/mcp/${encodeURIComponent(serverId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(mcpWritePayload({ ...server, server_id: serverId }, expectedRegistryDigest)),
+    }),
+  updateSkill: (capabilityId: string, sourcePath: string, expectedContentDigest: string) =>
+    requestJson<CapabilityPoolSnapshot>('/api/runtime/capabilities/skills', {
+      method: 'PUT',
+      body: JSON.stringify({
+        capability_id: capabilityId,
+        source_path: sourcePath,
+        expected_content_digest: expectedContentDigest,
+      }),
+    }),
+  updateTool: (
+    item: Pick<CapabilityPoolItem, 'capability_id' | 'content_digest'>,
+    input: { display_name: string; description: string; runtime_policy: ToolRuntimePolicyInput },
+  ) => requestJson<CapabilityPoolSnapshot>(
+    `/api/runtime/capabilities/tools/${encodeURIComponent(item.capability_id)}`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ expected_content_digest: item.content_digest, ...input }),
+    },
+  ),
+  skillEditor: (capabilityId: string) => requestJson<SkillEditorDocument>(
+    `/api/runtime/capabilities/skills/${encodeURIComponent(capabilityId)}/editor`,
+  ),
+  updateSkillContent: (
+    document: SkillEditorDocument,
+    input: { metadata: Record<string, unknown>; instructions: string; resources: Record<string, string> },
+  ) => requestJson<CapabilityPoolSnapshot>(
+    `/api/runtime/capabilities/skills/${encodeURIComponent(document.capability_id)}/editor`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ expected_content_digest: document.content_digest, ...input }),
+    },
+  ),
+}
+
+function mcpWritePayload(server: McpServerConfig, expectedRegistryDigest: string) {
+  return {
+    expected_registry_digest: expectedRegistryDigest,
+    server_id: server.server_id || generatedServerId(),
+    display_name: server.display_name,
+    description: server.description || server.display_name,
+    transport: server.transport,
+    command: server.transport === 'stdio' ? server.command : null,
+    arguments: server.transport === 'stdio' ? argumentList(server.args) : [],
+    working_directory: server.transport === 'stdio' ? server.cwd || null : null,
+    endpoint: server.transport === 'stdio' ? null : server.url,
+    environment_bindings: bindingRecord(server.env),
+    header_bindings: bindingRecord(server.headers),
+    request_timeout_seconds: server.timeout_seconds,
+    connect_timeout_seconds: server.connect_timeout_seconds ?? 30,
+    max_parallel_requests: server.max_parallel_requests ?? 1,
+    risk_level_default: server.risk_level_default || 'medium',
+    concurrent_default: server.concurrent_default ?? true,
+  }
+}
+
+function generatedServerId(): string {
+  const randomPart = globalThis.crypto?.randomUUID?.().replace(/-/g, '').slice(0, 12)
+    || Math.random().toString(36).slice(2, 14)
+  return `mcp_${randomPart}`
+}
+
+function argumentList(value: McpServerConfig['args']): string[] {
+  if (Array.isArray(value)) return value.map(String).filter(Boolean)
+  return String(value || '').trim().split(/\s+/).filter(Boolean)
+}
+
+function bindingRecord(value: string | Record<string, unknown> | undefined): Record<string, unknown> {
+  if (!value) return {}
+  if (typeof value === 'object') return value
+  return Object.fromEntries(
+    value.split(/\r?\n/).map(line => line.trim()).filter(Boolean).map((line) => {
+      const separator = line.indexOf('=')
+      return separator < 0
+        ? [line, line]
+        : [line.slice(0, separator).trim(), line.slice(separator + 1).trim()]
+    }).filter(([key, source]) => Boolean(key && source)),
+  )
+}

@@ -8,6 +8,7 @@ from typing import Any
 
 from agent_factory.tooling.spec import ToolRiskResult
 from agent_factory.tooling.workspace_paths import workspace_path_candidate
+from agent_factory.tooling.builtins.filesystem.file_locks import WorkspaceFileLockManager
 
 
 SENSITIVE_FILE_NAMES = {".env", ".env.local", ".env.production", "id_rsa", "id_ed25519"}
@@ -19,6 +20,7 @@ class FilesystemRuntimeResource:
     root: Path
     staged_write_store: Any
     transaction_store: Any
+    file_locks: WorkspaceFileLockManager
     allow_external: bool = False
     allowed_roots: tuple[Path, ...] = ()
     mounts: Mapping[str, Path] = field(default_factory=dict)
@@ -68,6 +70,10 @@ def require_filesystem_runtime(resources: dict[str, Any]) -> FilesystemRuntimeRe
     if not isinstance(runtime, FilesystemRuntimeResource):
         raise RuntimeError("owned filesystem runtime resource is not configured")
     return runtime
+
+
+def require_file_locks(resources: dict[str, Any]) -> WorkspaceFileLockManager:
+    return require_filesystem_runtime(resources).file_locks
 
 
 def _filesystem_context(resources: dict[str, Any]) -> FilesystemRuntimeResource | dict[str, Any]:

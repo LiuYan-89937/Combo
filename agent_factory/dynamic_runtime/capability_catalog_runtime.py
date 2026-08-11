@@ -135,12 +135,9 @@ class CapabilityCatalogRuntime:
     def _summary(item: ActiveCapability) -> dict[str, object]:
         revision = item.revision
         return {
-            "capability_id": revision.capability_id,
+            "name": revision.content.display_name,
             "kind": revision.kind,
-            "display_name": revision.content.display_name,
             "description": revision.content.description,
-            "revision": revision.revision,
-            "content_digest": revision.content_digest,
         }
 
 

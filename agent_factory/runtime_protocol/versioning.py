@@ -5,7 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-RUNTIME_PROTOCOL_VERSION = "dynamic_runtime.v11"
+RUNTIME_PROTOCOL_VERSION = "dynamic_runtime.v12"
 RUNTIME_SCHEMA_VERSION = "dynamic_runtime_schema.v11"
 
 
