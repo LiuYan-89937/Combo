@@ -1,7 +1,7 @@
 [project]
 name = "fastagenthub"
 version = "0.1.0"
-description = "FastAgentFactory AgentPackage registry service"
+description = "FastAgentFactory website authentication and application release service"
 requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.115,<1",

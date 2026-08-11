@@ -11,6 +11,7 @@ from typing import Any, Iterable
 from uuid import uuid4
 
 from agent_hub.config import Settings
+from agent_hub.audit import record_audit
 from agent_hub.database import Database, utc_now
 from agent_hub.github_releases import (
     GitHubReleaseClient,
@@ -18,10 +19,15 @@ from agent_hub.github_releases import (
     StagedGitHubAsset,
 )
 from agent_hub.oss_store import ObjectStore
-from agent_hub.registry import RegistryError, _audit
 
 
 LOGGER = logging.getLogger("agent_hub.app_releases")
+
+
+class AppReleaseError(RuntimeError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
 
 SEMVER_PATTERN = re.compile(
     r"^(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\."
@@ -104,7 +110,7 @@ class AppReleaseRegistry:
                         now,
                     ),
                 )
-                _audit(
+                record_audit(
                     connection,
                     actor_user_id=str(admin["user_id"]),
                     action="app_release.created",
@@ -113,7 +119,7 @@ class AppReleaseRegistry:
                     detail={"version": normalized_version},
                 )
         except sqlite3.IntegrityError as exc:
-            raise RegistryError(
+            raise AppReleaseError(
                 "app_release_version_conflict",
                 "this application version already exists",
             ) from exc
@@ -129,7 +135,7 @@ class AppReleaseRegistry:
     ) -> dict[str, Any]:
         release = self._release_row(release_id)
         if release["status"] in {"queued", "publishing", "withdrawn"}:
-            raise RegistryError(
+            raise AppReleaseError(
                 "app_release_state_invalid",
                 f"application release cannot be edited from status {release['status']}",
             )
@@ -147,7 +153,7 @@ class AppReleaseRegistry:
                 """,
                 (normalized_title, notes, now, release_id),
             )
-            _audit(
+            record_audit(
                 connection,
                 actor_user_id=str(admin["user_id"]),
                 action="app_release.updated",
@@ -189,7 +195,7 @@ class AppReleaseRegistry:
     ) -> dict[str, Any]:
         release = self._release_row(release_id)
         if release["status"] not in {"draft", "failed"}:
-            raise RegistryError(
+            raise AppReleaseError(
                 "app_release_state_invalid",
                 f"assets cannot be changed from status {release['status']}",
             )
@@ -211,7 +217,7 @@ class AppReleaseRegistry:
             required=signature_required,
         )
         if expected_size <= 0 or expected_size > self.settings.max_app_asset_bytes:
-            raise RegistryError(
+            raise AppReleaseError(
                 "app_asset_size_invalid",
                 f"asset size must be between 1 and "
                 f"{self.settings.max_app_asset_bytes} bytes",
@@ -254,7 +260,7 @@ class AppReleaseRegistry:
                 )
             ):
                 connection.rollback()
-                raise RegistryError(
+                raise AppReleaseError(
                     "app_asset_filename_conflict",
                     "asset filenames must be unique within an application release",
                 )
@@ -288,7 +294,7 @@ class AppReleaseRegistry:
                     now,
                 ),
             )
-            _audit(
+            record_audit(
                 connection,
                 actor_user_id=str(admin["user_id"]),
                 action="app_release.asset_created",
@@ -327,14 +333,14 @@ class AppReleaseRegistry:
     ) -> dict[str, Any]:
         asset = self._asset_row(release_id, asset_id)
         if asset["status"] != "awaiting_upload":
-            raise RegistryError(
+            raise AppReleaseError(
                 "app_asset_state_invalid",
                 f"asset cannot be completed from status {asset['status']}",
             )
         try:
             actual_size = self.object_store.object_size(str(asset["object_key"]))
         except FileNotFoundError as exc:
-            raise RegistryError(
+            raise AppReleaseError(
                 "app_asset_object_missing",
                 "uploaded application asset was not found",
             ) from exc
@@ -357,7 +363,7 @@ class AppReleaseRegistry:
                         asset_id,
                     ),
                 )
-            raise RegistryError(
+            raise AppReleaseError(
                 "app_asset_size_mismatch",
                 f"expected {expected_size} bytes, received {actual_size}",
             )
@@ -374,8 +380,8 @@ class AppReleaseRegistry:
             )
             if result.rowcount != 1:
                 connection.rollback()
-                raise RegistryError("app_asset_state_changed", "asset state changed")
-            _audit(
+                raise AppReleaseError("app_asset_state_changed", "asset state changed")
+            record_audit(
                 connection,
                 actor_user_id=str(admin["user_id"]),
                 action="app_release.asset_uploaded",
@@ -395,7 +401,7 @@ class AppReleaseRegistry:
     ) -> None:
         release = self._release_row(release_id)
         if release["status"] not in {"draft", "failed"}:
-            raise RegistryError(
+            raise AppReleaseError(
                 "app_release_state_invalid",
                 f"assets cannot be changed from status {release['status']}",
             )
@@ -406,7 +412,7 @@ class AppReleaseRegistry:
                 "delete from app_release_assets where asset_id = ?",
                 (asset_id,),
             )
-            _audit(
+            record_audit(
                 connection,
                 actor_user_id=str(admin["user_id"]),
                 action="app_release.asset_deleted",
@@ -428,7 +434,7 @@ class AppReleaseRegistry:
     ) -> None:
         release = self._release_row(release_id)
         if release["status"] not in {"draft", "failed"}:
-            raise RegistryError(
+            raise AppReleaseError(
                 "app_release_state_invalid",
                 f"application release cannot be deleted from status {release['status']}",
             )
@@ -445,7 +451,7 @@ class AppReleaseRegistry:
             ).fetchone()
             if active_job is not None:
                 connection.rollback()
-                raise RegistryError(
+                raise AppReleaseError(
                     "app_release_job_conflict",
                     "an application release job is still active",
                 )
@@ -453,7 +459,7 @@ class AppReleaseRegistry:
                 "delete from app_releases where app_release_id = ?",
                 (release_id,),
             )
-            _audit(
+            record_audit(
                 connection,
                 actor_user_id=str(admin["user_id"]),
                 action="app_release.deleted",
@@ -478,25 +484,25 @@ class AppReleaseRegistry:
         admin: dict[str, Any],
     ) -> dict[str, Any]:
         if not self.settings.github_release_configured:
-            raise RegistryError(
+            raise AppReleaseError(
                 "github_release_not_configured",
                 "GitHub application release publishing is not configured",
             )
         release = self._release_row(release_id)
         if release["status"] not in {"draft", "failed"}:
-            raise RegistryError(
+            raise AppReleaseError(
                 "app_release_state_invalid",
                 f"application release cannot be published from status {release['status']}",
             )
         assets = self._asset_rows(release_id)
         if not assets:
-            raise RegistryError(
+            raise AppReleaseError(
                 "app_release_assets_required",
                 "at least one uploaded application asset is required",
             )
         invalid = [row for row in assets if row["status"] != "uploaded"]
         if invalid:
-            raise RegistryError(
+            raise AppReleaseError(
                 "app_release_assets_incomplete",
                 "all application assets must finish uploading before publishing",
             )
@@ -515,7 +521,7 @@ class AppReleaseRegistry:
             ).fetchone()
             if active_job is not None:
                 connection.rollback()
-                raise RegistryError(
+                raise AppReleaseError(
                     "app_release_job_conflict",
                     "an application release job is already active",
                 )
@@ -535,7 +541,7 @@ class AppReleaseRegistry:
                 """,
                 (str(admin["user_id"]), now, release_id),
             )
-            _audit(
+            record_audit(
                 connection,
                 actor_user_id=str(admin["user_id"]),
                 action="app_release.publish_queued",
@@ -587,7 +593,7 @@ class AppReleaseRegistry:
     def process_claimed_job(self, job_id: str) -> dict[str, Any]:
         job = self._job_row(job_id)
         if job["status"] != "running":
-            raise RegistryError(
+            raise AppReleaseError(
                 "app_release_job_missing",
                 "claimed application release job was not found",
             )
@@ -697,7 +703,7 @@ class AppReleaseRegistry:
                 """
             ).fetchall()
         if not rows:
-            raise RegistryError(
+            raise AppReleaseError(
                 "app_release_not_found",
                 "no published application release was found",
             )
@@ -718,7 +724,7 @@ class AppReleaseRegistry:
     ) -> dict[str, Any]:
         row = self._release_row(release_id)
         if not include_private and row["status"] != "published":
-            raise RegistryError(
+            raise AppReleaseError(
                 "app_release_not_found",
                 "published application release was not found",
             )
@@ -731,7 +737,7 @@ class AppReleaseRegistry:
                 (asset_id,),
             ).fetchone()
         if row is None:
-            raise RegistryError("app_asset_not_found", "application asset was not found")
+            raise AppReleaseError("app_asset_not_found", "application asset was not found")
         return _asset_view(row, include_private=True)
 
     def installer_download_url(self, asset_id: str) -> str:
@@ -757,7 +763,7 @@ class AppReleaseRegistry:
                 (now, asset_id),
             ).fetchone()
         if asset is None:
-            raise RegistryError(
+            raise AppReleaseError(
                 "app_asset_not_found",
                 "published application installer was not found",
             )
@@ -766,7 +772,7 @@ class AppReleaseRegistry:
     def public_config(self) -> dict[str, Any]:
         try:
             latest = self.latest_release()
-        except RegistryError:
+        except AppReleaseError:
             latest = None
         downloads = []
         if latest is not None:
@@ -798,7 +804,6 @@ class AppReleaseRegistry:
                 ).fetchone()[0]
             )
         return {
-            "maxPackageBytes": self.settings.max_package_bytes,
             "githubRepoUrl": self.settings.github_repository_url,
             "downloads": downloads,
             "totalDownloadCount": (
@@ -819,13 +824,13 @@ class AppReleaseRegistry:
         )
         normalized_architecture = str(architecture or "").strip().casefold()
         if platform is None:
-            raise RegistryError(
+            raise AppReleaseError(
                 "app_update_target_invalid",
                 "updates are available for darwin and windows targets",
             )
         allowed_architectures = PLATFORM_ASSETS[platform]["architectures"]
         if normalized_architecture not in allowed_architectures:
-            raise RegistryError(
+            raise AppReleaseError(
                 "app_update_architecture_invalid",
                 f"unsupported update architecture for {target}",
             )
@@ -872,7 +877,7 @@ class AppReleaseRegistry:
         release = self._release_row(release_id)
         assets = self._asset_rows(release_id)
         if not assets:
-            raise RegistryError(
+            raise AppReleaseError(
                 "app_release_assets_required",
                 "application release has no assets",
             )
@@ -997,7 +1002,7 @@ class AppReleaseRegistry:
                     """,
                     (now, job["job_id"]),
                 )
-                _audit(
+                record_audit(
                     connection,
                     actor_user_id=str(job["created_by"]),
                     action="app_release.published",
@@ -1028,7 +1033,7 @@ class AppReleaseRegistry:
         release = self._release_row(str(job["app_release_id"]))
         github_release_id = int(release["github_release_id"] or 0)
         if github_release_id <= 0:
-            raise RegistryError(
+            raise AppReleaseError(
                 "github_release_missing",
                 "published application release has no GitHub release id",
             )
@@ -1169,7 +1174,7 @@ class AppReleaseRegistry:
                 (release_id,),
             ).fetchone()
         if row is None:
-            raise RegistryError(
+            raise AppReleaseError(
                 "app_release_not_found",
                 "application release was not found",
             )
@@ -1185,7 +1190,7 @@ class AppReleaseRegistry:
                 (release_id, asset_id),
             ).fetchone()
         if row is None:
-            raise RegistryError("app_asset_not_found", "application asset was not found")
+            raise AppReleaseError("app_asset_not_found", "application asset was not found")
         return row
 
     def _asset_rows(self, release_id: str) -> list[sqlite3.Row]:
@@ -1239,7 +1244,7 @@ class AppReleaseRegistry:
                 (job_id,),
             ).fetchone()
         if row is None:
-            raise RegistryError(
+            raise AppReleaseError(
                 "app_release_job_not_found",
                 "application release job was not found",
             )
@@ -1394,24 +1399,24 @@ class AppReleaseRegistry:
         normalized_filename = str(filename or "").strip()
         specification = PLATFORM_ASSETS.get(normalized_platform)
         if specification is None:
-            raise RegistryError(
+            raise AppReleaseError(
                 "app_asset_platform_invalid",
                 "platform must be macos or windows",
             )
         if normalized_architecture not in specification["architectures"]:
-            raise RegistryError(
+            raise AppReleaseError(
                 "app_asset_architecture_invalid",
                 f"unsupported architecture for {normalized_platform}",
             )
         asset_specification = specification["assets"].get(normalized_kind)
         if asset_specification is None:
-            raise RegistryError(
+            raise AppReleaseError(
                 "app_asset_kind_invalid",
                 f"{normalized_kind or 'unknown'} assets are not supported for "
                 f"{normalized_platform}",
             )
         if not FILENAME_PATTERN.fullmatch(normalized_filename):
-            raise RegistryError(
+            raise AppReleaseError(
                 "app_asset_filename_invalid",
                 "asset filename must be a safe basename",
             )
@@ -1419,7 +1424,7 @@ class AppReleaseRegistry:
         extensions = tuple(asset_specification["extensions"])
         if not lowered_filename.endswith(extensions):
             allowed = ", ".join(extensions)
-            raise RegistryError(
+            raise AppReleaseError(
                 "app_asset_filename_invalid",
                 f"{normalized_platform} asset must use one of: {allowed}",
             )
@@ -1537,7 +1542,7 @@ def _semver(value: str) -> SemVer:
         normalized = normalized[1:]
     match = SEMVER_PATTERN.fullmatch(normalized)
     if match is None:
-        raise RegistryError(
+        raise AppReleaseError(
             "app_release_version_invalid",
             "version must be valid semantic version text",
         )
@@ -1559,12 +1564,12 @@ def _semver(value: str) -> SemVer:
 def _updater_signature(value: str, *, required: bool) -> str:
     normalized = str(value or "").strip()
     if required and not normalized:
-        raise RegistryError(
+        raise AppReleaseError(
             "app_asset_signature_required",
             "the Tauri updater signature is required for this asset",
         )
     if len(normalized) > 20_000 or "\x00" in normalized:
-        raise RegistryError(
+        raise AppReleaseError(
             "app_asset_signature_invalid",
             "the Tauri updater signature is invalid",
         )
@@ -1574,7 +1579,7 @@ def _updater_signature(value: str, *, required: bool) -> str:
 def _validate_release_asset_set(assets: list[sqlite3.Row]) -> None:
     installers = [asset for asset in assets if asset["asset_kind"] == "installer"]
     if not installers:
-        raise RegistryError(
+        raise AppReleaseError(
             "app_release_installer_required",
             "at least one application installer is required",
         )
@@ -1591,14 +1596,14 @@ def _validate_release_asset_set(assets: list[sqlite3.Row]) -> None:
         architecture = str(installer["architecture"])
         if platform == "windows":
             if not installer["updater_signature"]:
-                raise RegistryError(
+                raise AppReleaseError(
                     "app_release_update_signature_required",
                     f"Windows {architecture} installer requires its Tauri signature",
                 )
             continue
         updater = identities.get((platform, architecture, "updater"))
         if updater is None or not updater["updater_signature"]:
-            raise RegistryError(
+            raise AppReleaseError(
                 "app_release_updater_required",
                 f"macOS {architecture} installer requires a signed updater archive",
             )
@@ -1611,7 +1616,7 @@ def _validate_release_asset_set(assets: list[sqlite3.Row]) -> None:
             "installer",
         )
         if identity not in identities:
-            raise RegistryError(
+            raise AppReleaseError(
                 "app_release_installer_required",
                 f"{asset['platform']} {asset['architecture']} updater has no installer",
             )
@@ -1620,9 +1625,9 @@ def _validate_release_asset_set(assets: list[sqlite3.Row]) -> None:
 def _required_text(value: str, field: str, *, maximum: int) -> str:
     normalized = str(value or "").strip()
     if not normalized:
-        raise RegistryError(f"{field}_required", f"{field} must not be empty")
+        raise AppReleaseError(f"{field}_required", f"{field} must not be empty")
     if len(normalized) > maximum:
-        raise RegistryError(
+        raise AppReleaseError(
             f"{field}_too_long",
             f"{field} must contain at most {maximum} characters",
         )
@@ -1630,7 +1635,7 @@ def _required_text(value: str, field: str, *, maximum: int) -> str:
 
 
 def _error_code(error: Exception) -> str:
-    if isinstance(error, RegistryError):
+    if isinstance(error, AppReleaseError):
         return error.code
     if isinstance(error, GitHubReleaseError):
         return "github_release_error"

@@ -1,7 +1,7 @@
 import type { WorkspaceRequestContext } from '@/api/resourceTypes'
 import { SYSTEM_CHAT_PACKAGE_ID } from '@/utils/resourceScope'
 
-export type ResourceTargetKind = 'chat' | 'create_agent' | 'evolve_agent' | 'package'
+export type ResourceTargetKind = 'chat' | 'package'
 
 export interface ResourceTarget {
   kind: ResourceTargetKind
@@ -23,13 +23,6 @@ export interface ResourceTargetOptionGroup {
 }
 
 export function resourceTargetFromContext(context: WorkspaceRequestContext): ResourceTarget | null {
-  if (context.resourceMode === 'create_agent') return { kind: 'create_agent' }
-  if (context.resourceMode === 'evolve_agent') {
-    return {
-      kind: 'evolve_agent',
-      packageId: normalizedValue(context.packageId),
-    }
-  }
   if (context.resourceMode === 'package' || !context.resourceMode) {
     const packageId = normalizedValue(context.packageId)
     return packageId && packageId !== SYSTEM_CHAT_PACKAGE_ID
@@ -46,7 +39,7 @@ export function resourceTargetKey(target: ResourceTarget): string {
 }
 
 export function parseResourceTargetKey(value: string): ResourceTarget | null {
-  if (value === 'chat' || value === 'create_agent' || value === 'evolve_agent') {
+  if (value === 'chat') {
     return { kind: value }
   }
   if (!value.startsWith('package:')) return null

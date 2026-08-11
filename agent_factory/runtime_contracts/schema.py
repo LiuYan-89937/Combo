@@ -8,7 +8,7 @@ from pydantic.json_schema import SkipJsonSchema
 
 from agent_factory.context_system import ContextContractConfig
 from agent_factory.model_pool.schema import ModelBindingRole, ModelProfileBinding, ModelToolBinding
-from agent_factory.scheduler_system.schema import SchedulerContractConfig, SchedulerSeedContractConfig
+from agent_factory.scheduler_system.schema import SchedulerContractConfig
 from agent_factory.trace_system.schema import TraceContractConfig
 from agent_factory.tooling.approval_policy import ToolApprovalPolicyConfig
 from agent_factory.tooling.builtins.aliases import canonical_builtin_tool_ids
@@ -30,10 +30,7 @@ REQUIRED_AGENT_PACKAGE_CONTRACTS = frozenset(
         "tools",
     }
 )
-OPTIONAL_AGENT_PACKAGE_CONTRACTS = frozenset({"scheduler_seed"})
-SUPPORTED_AGENT_PACKAGE_CONTRACTS = (
-    REQUIRED_AGENT_PACKAGE_CONTRACTS | OPTIONAL_AGENT_PACKAGE_CONTRACTS
-)
+SUPPORTED_AGENT_PACKAGE_CONTRACTS = REQUIRED_AGENT_PACKAGE_CONTRACTS
 
 
 class AgentIdentitySpec(BaseModel):
@@ -365,15 +362,6 @@ class SchedulerContract(BaseModel):
     version: Literal["scheduler_contract.v0"] = "scheduler_contract.v0"
     enabled: bool = True
     config: SchedulerContractConfig = Field(default_factory=SchedulerContractConfig)
-
-
-class SchedulerSeedContract(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    type: Literal["scheduler_seed"] = "scheduler_seed"
-    version: Literal["scheduler_seed_contract.v0"] = "scheduler_seed_contract.v0"
-    enabled: bool = True
-    config: SchedulerSeedContractConfig = Field(default_factory=SchedulerSeedContractConfig)
 
 
 def _validate_package_relative_path(value: str, *, field_name: str) -> str:

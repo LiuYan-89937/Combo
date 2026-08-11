@@ -9,7 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-BackgroundTaskType = Literal["sub_agent", "manufacture", "evolve"]
+BackgroundTaskType = Literal["sub_agent"]
 BackgroundTaskStatus = Literal[
     "queued",
     "claimed",
@@ -22,7 +22,7 @@ BackgroundTaskStatus = Literal[
     "cancelled",
 ]
 
-BACKGROUND_TASK_TYPES: frozenset[str] = frozenset({"sub_agent", "manufacture", "evolve"})
+BACKGROUND_TASK_TYPES: frozenset[str] = frozenset({"sub_agent"})
 BACKGROUND_TASK_STATUSES: frozenset[str] = frozenset(
     {
         "queued",

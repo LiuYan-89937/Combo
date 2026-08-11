@@ -20,7 +20,7 @@ export type TaskNotificationStatus = 'completed' | 'failed' | 'cancelled' | 'ski
 export type TaskNotificationTarget =
   | {
       kind: 'conversation'
-      mode: 'create_agent' | 'evolve_agent' | 'agent_package'
+      mode: 'agent_package'
       sessionId: string | null
       packageId: string | null
       conversationScope?: string | null
@@ -185,9 +185,7 @@ async function isCurrentTargetVisible(target: TaskNotificationTarget): Promise<b
   if (target.conversationScope) {
     return runtimeStore.activeConversationScope === target.conversationScope
   }
-  return target.mode === 'agent_package'
-    ? runtimeStore.activeAgentSessionId === target.sessionId
-    : runtimeStore.activeFactorySessionId === target.sessionId
+  return runtimeStore.activeAgentSessionId === target.sessionId
 }
 
 async function openNotificationTarget(target: TaskNotificationTarget): Promise<void> {

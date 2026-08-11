@@ -20,7 +20,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from agent_factory.env import load_agentfactory_dotenv
 from agent_factory.contracts import NotFoundError
 from agent_factory.runtime_kernel.persistence import close_shared_sqlite_checkpointers
-from agent_factory.create_agent.probe_jobs import probe_job_manager
 from agent_factory.collaboration_system.task_client import background_task_store_path
 from agent_factory.collaboration_system.persistence import migrate_legacy_background_tasks
 from agent_factory.collaboration_system.task_executors import RuntimeBundle
@@ -34,13 +33,10 @@ from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import Ag
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendCommand
 from agent_factory.paths import factory_artifact_path
 from agent_factory.tooling.skillhub import ensure_global_skillhub_cli
-from web_frontend.backend.routes.agent_packages import create_agent_package_router
 from web_frontend.backend.routes.attachments import create_attachment_router
 from web_frontend.backend.routes.background_tasks import create_background_task_router
 from web_frontend.backend.routes.browser_views import create_browser_view_router
 from web_frontend.backend.routes.agent_group import create_agent_group_router
-from web_frontend.backend.routes.agent_hub import create_agent_hub_router
-from web_frontend.backend.routes.create_agent import create_create_agent_router
 from web_frontend.backend.routes.extensions import create_extensions_router
 from web_frontend.backend.routes.files import create_file_router
 from web_frontend.backend.routes.knowledge import create_knowledge_router
@@ -48,7 +44,6 @@ from web_frontend.backend.routes.memory import create_memory_router
 from web_frontend.backend.routes.model_pool import create_model_pool_router
 from web_frontend.backend.routes.runtime import create_runtime_router
 from web_frontend.backend.routes.scheduler import create_scheduler_router
-from web_frontend.backend.routes.tips import create_tip_router
 from web_frontend.backend.routes.storage import create_storage_router
 from web_frontend.backend.routes.workspace import create_workspace_router
 from web_frontend.backend.runtime_bridge import RuntimeBridge
@@ -97,14 +92,9 @@ app.add_middleware(
 
 app.include_router(create_runtime_router(runtime_bridge, logger))
 app.include_router(create_attachment_router())
-app.include_router(create_agent_package_router(runtime_bridge, logger))
 app.include_router(create_background_task_router())
 app.include_router(create_browser_view_router(logger))
-app.include_router(
-    create_agent_hub_router(runtime_factory=lambda: _agent_package_runtime(runtime_bridge))
-)
 app.include_router(create_agent_group_router(runtime_bridge, agent_group_service))
-app.include_router(create_create_agent_router())
 app.include_router(create_workspace_router(runtime_bridge))
 app.include_router(create_file_router())
 app.include_router(create_knowledge_router(runtime_bridge))
@@ -112,7 +102,6 @@ app.include_router(create_memory_router(runtime_bridge))
 app.include_router(create_extensions_router(runtime_bridge))
 app.include_router(create_scheduler_router(runtime_bridge))
 app.include_router(create_model_pool_router())
-app.include_router(create_tip_router())
 app.include_router(create_storage_router(runtime_bridge))
 
 
@@ -146,14 +135,10 @@ async def startup_event():
     if (
         adapter is None
         or adapter.agent_package_runtime is None
-        or adapter.create_agent_runtime is None
-        or adapter.evolution_runtime is None
     ):
         raise RuntimeError("runtime adapter did not initialize background-task runtimes")
     runtimes = RuntimeBundle(
         agent_package_runtime=adapter.agent_package_runtime,
-        create_agent_runtime=adapter.create_agent_runtime,
-        evolution_runtime=adapter.evolution_runtime,
     )
     task_store_path = background_task_store_path(factory_artifact_path("background_tasks"))
     migration = migrate_legacy_background_tasks(
@@ -194,7 +179,6 @@ async def shutdown_event():
         unregister_background_task_service(background_task_scheduler)
         background_task_scheduler = None
     agent_group_service.shutdown()
-    probe_job_manager.shutdown()
     runtime_bridge.remove_event_observer(_observe_agent_group_runtime_event)
     await runtime_bridge.stop()
     close_shared_sqlite_checkpointers()

@@ -695,6 +695,7 @@ async function saveCredential(): Promise<void> {
     }
     if (credentialForm.api_key.trim()) payload.api_key = credentialForm.api_key.trim()
     if (credentialEditing.value) {
+      payload.expected_revision = credentialEditing.value.revision
       await modelPoolApi.patchCredential(credentialEditing.value.credential_id, payload)
     } else {
       await modelPoolApi.saveCredential(payload)
@@ -812,6 +813,7 @@ async function saveProfile(): Promise<void> {
       notes: profileForm.notes,
     }
     if (profileEditing.value) {
+      Object.assign(payload, { expected_revision: profileEditing.value.revision })
       await modelPoolApi.patchProfile(profileEditing.value.profile_id, payload)
     } else {
       await modelPoolApi.saveProfile(payload)
@@ -827,7 +829,7 @@ async function saveProfile(): Promise<void> {
 
 async function setCredentialEnabled(item: ModelPoolCredential, enabled: boolean): Promise<void> {
   try {
-    await modelPoolApi.patchCredential(item.credential_id, { enabled })
+    await modelPoolApi.patchCredential(item.credential_id, { enabled, expected_revision: item.revision })
     await refresh()
   } catch (error) {
     message.error(error instanceof Error ? error.message : t('common.requestFailed'))
@@ -836,7 +838,7 @@ async function setCredentialEnabled(item: ModelPoolCredential, enabled: boolean)
 
 async function setProfileEnabled(item: ModelPoolProfile, enabled: boolean): Promise<void> {
   try {
-    await modelPoolApi.patchProfile(item.profile_id, { enabled })
+    await modelPoolApi.patchProfile(item.profile_id, { enabled, expected_revision: item.revision })
     await refresh()
   } catch (error) {
     message.error(error instanceof Error ? error.message : t('common.requestFailed'))

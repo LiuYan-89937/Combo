@@ -22,7 +22,7 @@ export function withPendingInterruptContext(
     .filter(Boolean)
   const firstRequest = requests[0] && typeof requests[0] === 'object' ? requests[0] : {}
   const mode = pending.mode || state.currentMode || undefined
-  const runtimeSessionId = mode === 'agent_package' || mode === 'evolve_agent'
+  const runtimeSessionId = mode === 'agent_package'
     ? pending.session_id || undefined
     : undefined
 

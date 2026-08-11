@@ -39,8 +39,7 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
     event.event_type === 'session_switched' ||
     event.event_type === 'session_empty' ||
     event.event_type === 'session_deleted' ||
-    event.event_type === 'sessions_listed' ||
-    (event.event_type === 'agent_package_selected' && event.payload?.purpose === 'evolution' && event.payload?.session)
+    event.event_type === 'sessions_listed'
   ) {
     const sessionStore = useSessionStore()
     sessionStore.setSessions(runtimeStore.sessions as any)
@@ -50,15 +49,6 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
     ))
     if (activeFactorySession || event.event_type === 'session_deleted' || event.event_type === 'session_empty') {
       sessionStore.setCurrentSession(activeFactorySession ? activeFactorySessionId : null)
-    }
-    const sessionPayload = event.payload?.session
-    const evolutionPackageId = sessionPayload && typeof sessionPayload === 'object'
-      ? String(sessionPayload.evolve_agent_package_id || '').trim()
-      : ''
-    if (runtimeStore.currentMode === 'evolve_agent' && evolutionPackageId) {
-      const agentStore = useAgentStore()
-      agentStore.leaveAgentChat()
-      agentStore.selectPackage(evolutionPackageId)
     }
     if (event.event_type === 'session_deleted') {
       useAgentStore().removeRecentSessionsForPackage(SYSTEM_CHAT_PACKAGE_ID)
@@ -232,41 +222,18 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
 }
 
 function resourceEventMatchesCurrentContext(event: FactoryFrontendEvent): boolean {
-  const eventMode = resourceEventMode(event)
-  const currentMode = currentResourceMode()
-  if (eventMode || currentMode) {
-    return eventMode === currentMode && resourceEventPackageId(event) === currentResourcePackageId()
-  }
   return resourceEventPackageId(event) === currentResourcePackageId()
 }
 
-function currentResourceMode(): string | null {
-  const runtimeStore = useRuntimeStore()
-  if (runtimeStore.currentMode === 'create_agent') return 'create_agent'
-  if (runtimeStore.currentMode === 'evolve_agent') return 'evolve_agent'
-  return null
-}
-
 function currentResourcePackageId(): string | null {
-  const runtimeStore = useRuntimeStore()
   const agentStore = useAgentStore()
-  if (runtimeStore.currentMode === 'create_agent') return normalizeResourcePackageId('create_agent')
-  if (runtimeStore.currentMode === 'evolve_agent') return normalizeResourcePackageId('evolve_agent')
   if (agentStore.activeChatPackageId) {
     return normalizeResourcePackageId(agentStore.activeChatPackageId)
   }
   return normalizeResourcePackageId(SYSTEM_CHAT_PACKAGE_ID)
 }
 
-function resourceEventMode(event: FactoryFrontendEvent): string | null {
-  const payload = event.payload || {}
-  const nested = payload.payload && typeof payload.payload === 'object' ? payload.payload : {}
-  return normalizeResourceMode(payload.resource_mode || nested.resource_mode || null)
-}
-
 function resourceEventPackageId(event: FactoryFrontendEvent): string | null {
-  const mode = resourceEventMode(event)
-  if (mode) return normalizeResourcePackageId(mode)
   const payload = event.payload || {}
   const nested = payload.payload && typeof payload.payload === 'object' ? payload.payload : {}
   const execution = nested.execution && typeof nested.execution === 'object' ? nested.execution : {}
@@ -278,11 +245,6 @@ function resourceEventPackageId(event: FactoryFrontendEvent): string | null {
       nested.owner_id ||
       null
   )
-}
-
-function normalizeResourceMode(value: unknown): string | null {
-  const mode = String(value || '').trim()
-  return mode === 'create_agent' || mode === 'evolve_agent' ? mode : null
 }
 
 function sessionWithPackage(session: any, packageId: unknown): any {

@@ -14,7 +14,6 @@
             :message="message"
             :streaming="message.status === 'streaming'"
             quoteable
-            :tip-context="tipContextFor(message)"
             :workspace-context="messageWorkspaceContext"
             @quote="quoteMessage"
           />
@@ -99,7 +98,6 @@
         />
       </footer>
     </section>
-    <TipPanel v-if="tipScopeId" scope-type="agent-group" :scope-id="tipScopeId" />
   </div>
 </template>
 
@@ -113,8 +111,6 @@ import ToolApprovalPanel from '@/components/chat/ToolApprovalPanel.vue'
 import type { FactoryFrontendEvent, RuntimeAttachmentInput, TranscriptItem } from '@/types/protocol'
 import { useContextReferenceStore } from '@/stores/contextReferences'
 import { messageContextReference } from '@/utils/contextReferences'
-import TipPanel from '@/components/chat/TipPanel.vue'
-import type { TipMessageContext } from '@/stores/tips'
 
 const store = useAgentGroupStore()
 const inputRef = ref()
@@ -129,7 +125,6 @@ const messageWorkspaceContext = computed(() => ({
   resourceMode: 'agent_group' as const,
   groupId: store.activeGroup?.group_id || null,
 }))
-const tipScopeId = computed(() => store.activeGroup?.group_id || '')
 
 const activeRunKey = computed(() => store.activeRuns.map(run => `${run.group_run_id}:${run.status}`).join('|'))
 const retryableRuns = computed(() => store.runs.filter(run => ['failed', 'cancelled'].includes(run.status)))
@@ -195,15 +190,6 @@ function quoteMessage(message: TranscriptItem) {
   quotedMessage.value = message
   referenceStore.add(messageContextReference(message), referenceScope.value)
   nextTick(() => inputRef.value?.focus())
-}
-
-function tipContextFor(message: TranscriptItem): Omit<TipMessageContext, 'sourceMessageId' | 'sourceRole' | 'sourceContent'> | null {
-  if (!tipScopeId.value || message.role !== 'assistant') return null
-  return {
-    scopeType: 'agent-group',
-    scopeId: tipScopeId.value,
-    agentPackageId: String(message.metadata?.package_id || ''),
-  }
 }
 
 function messageSpeaker(message: TranscriptItem): string {

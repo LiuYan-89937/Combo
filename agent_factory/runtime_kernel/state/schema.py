@@ -13,11 +13,11 @@ class RunState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     run_id: str = Field(default_factory=lambda: uuid4().hex)
-    agent_id: str = "unknown-agent"
-    session_id: str = "default"
-    workspace_id: str | None = None
-    pattern_id: str = "unknown-pattern"
-    pattern_version: int = 1
+    runtime_instance_id: str
+    session_id: str
+    workspace_id: str
+    strategy: Literal["react", "plan_and_execute"]
+    graph_version: int = 1
     runtime_kernel_version: str = RUNTIME_KERNEL_VERSION
     started_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -44,7 +44,6 @@ class ContextState(BaseModel):
     hidden_context: dict[str, Any] = Field(default_factory=dict)
     compression_applied: bool = False
     token_budget: dict[str, Any] = Field(default_factory=dict)
-    assembly_log: list[str] = Field(default_factory=list)
 
 
 class ToolLoopMetrics(BaseModel):
@@ -70,6 +69,8 @@ class ToolLoopGovernanceState(BaseModel):
 class ToolState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    capability_snapshot_id: str | None = None
+    capability_snapshot_digest: str | None = None
     available_tools: list[str] = Field(default_factory=list)
     pending_tool_call: dict[str, Any] | None = None
     pending_tool_calls: list[dict[str, Any]] = Field(default_factory=list)
@@ -159,9 +160,11 @@ class ExecutionState(BaseModel):
 class RuntimeConfigState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    user_config: dict[str, Any] = Field(default_factory=dict)
-    agent_config: dict[str, Any] = Field(default_factory=dict)
-    session_config: dict[str, Any] = Field(default_factory=dict)
+    system_prompt: str = ""
+    attachments: list[dict[str, Any]] = Field(default_factory=list)
+    workspace_root_alias: str = "/workdir"
+    allow_external_paths: bool = False
+    workspace_mounts: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ObservabilityState(BaseModel):
@@ -179,7 +182,6 @@ class RuntimeState(BaseModel):
     schema_version: str = RUNTIME_STATE_SCHEMA_VERSION
     run: RunState = Field(default_factory=RunState)
     runtime_config: RuntimeConfigState = Field(default_factory=RuntimeConfigState)
-    package_state: dict[str, Any] = Field(default_factory=dict)
     conversation: ConversationState = Field(default_factory=ConversationState)
     context: ContextState = Field(default_factory=ContextState)
     tools: ToolState = Field(default_factory=ToolState)

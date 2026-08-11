@@ -52,7 +52,6 @@ class CognitiveIntentGateNode:
             operation_metadata={"node_id": context.node_id, "operation": "intent_gate"},
             services=context.services,
             node_id=context.node_id,
-            model_role="task",
         )
         payload = decision.model_dump(mode="json")
         route = "intent.start_workflow" if decision.decision == "start_workflow" else "intent.casual"

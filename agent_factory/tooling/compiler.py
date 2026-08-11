@@ -3,23 +3,31 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from threading import RLock
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel
 
+from agent_factory.models import get_compression_model
 from agent_factory.tooling.entrypoint import ToolEntrypointLoader
 from agent_factory.tooling.entrypoints import EntrypointAdapterRegistry, MCPToolClient
 from agent_factory.tooling.execution_context import current_tool_call
 from agent_factory.tooling.approval_policy import ToolApprovalPolicyConfig, default_tool_approval_policy
 from agent_factory.tooling.envelope import is_tool_envelope, tool_envelope
 from agent_factory.tooling.gateway import (
+    DEFAULT_TOOL_APPROVAL_TRUST_STORE,
     ToolApprovalHandler,
+    ToolApprovalTrustResolver,
     ToolExecutionGateway,
     default_tool_max_revisions,
 )
 from agent_factory.resource_system import RESOURCE_RESOLVER_KEY
-from agent_factory.tooling.output_store import TOOL_OUTPUT_STORE_RESOURCE, ToolOutputStore, default_tool_output_policy
+from agent_factory.tooling.output_store import (
+    TOOL_OUTPUT_STORE_RESOURCE,
+    ToolOutputPolicy,
+    ToolOutputStore,
+    default_tool_output_policy,
+)
 from agent_factory.tooling.package_tool_spec import is_package_tool_entrypoint
 from agent_factory.tooling.risk import ToolRiskEvaluator
 from agent_factory.tooling.schema_compiler import compile_json_schema
@@ -43,6 +51,9 @@ class ToolCompiler:
         allowed_python_roots: list[str | Path] | None = None,
         adapter_registry: EntrypointAdapterRegistry | None = None,
         mcp_clients: Mapping[str, MCPToolClient] | None = None,
+        output_policy: ToolOutputPolicy | None = None,
+        compression_model_resolver: Callable[[], Any] | None = get_compression_model,
+        approval_trust_store: ToolApprovalTrustResolver | None = DEFAULT_TOOL_APPROVAL_TRUST_STORE,
     ) -> None:
         self.package_root = Path(package_root).resolve() if package_root else None
         self.loader = entrypoint_loader or ToolEntrypointLoader(
@@ -56,12 +67,12 @@ class ToolCompiler:
         self.approval_policy = approval_policy or default_tool_approval_policy()
         self.max_revisions = max_revisions or default_tool_max_revisions()
         self.output_store = _output_store_from_resources(self.resources)
-        self.output_policy = default_tool_output_policy()
+        self.output_policy = output_policy or default_tool_output_policy()
+        self.compression_model_resolver = compression_model_resolver
+        self.approval_trust_store = approval_trust_store
 
     def compile(self, spec: ToolSpec) -> BaseTool:
         try:
-            input_schema = compile_json_schema(schema=spec.input_schema, model_name=f"{spec.id}_args")
-            output_schema = compile_json_schema(schema=spec.output_schema, model_name=f"{spec.id}_output")
             entrypoint = (
                 _lazy_package_entrypoint(spec, self.loader)
                 if _is_package_tool_spec(spec)
@@ -70,6 +81,29 @@ class ToolCompiler:
             entrypoint = _entrypoint_for_spec(spec, entrypoint)
             hard_risk_evaluator = self._load_hard_risk_evaluator(spec)
             llm_risk_prompt = self._load_llm_risk_prompt(spec)
+        except Exception as exc:
+            raise ToolCompileError(f"cannot compile tool {spec.id}: {exc}") from exc
+        return self.compile_resolved(
+            spec,
+            entrypoint=entrypoint,
+            hard_risk_evaluator=hard_risk_evaluator,
+            llm_risk_prompt=llm_risk_prompt,
+        )
+
+    def compile_resolved(
+        self,
+        spec: ToolSpec,
+        *,
+        entrypoint: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]],
+        hard_risk_evaluator: ToolRiskEvaluator | None = None,
+        llm_risk_prompt: str | None = None,
+    ) -> BaseTool:
+        """Compile an already materialized entrypoint without consulting a registry or filesystem."""
+        if not callable(entrypoint):
+            raise ToolCompileError(f"cannot compile tool {spec.id}: resolved entrypoint is not callable")
+        try:
+            input_schema = compile_json_schema(schema=spec.input_schema, model_name=f"{spec.id}_args")
+            output_schema = compile_json_schema(schema=spec.output_schema, model_name=f"{spec.id}_output")
         except Exception as exc:
             raise ToolCompileError(f"cannot compile tool {spec.id}: {exc}") from exc
         gateway = ToolExecutionGateway(
@@ -86,6 +120,8 @@ class ToolCompiler:
             max_revisions=self.max_revisions,
             output_store=self.output_store,
             output_policy=self.output_policy,
+            approval_trust_store=self.approval_trust_store,
+            compression_model_resolver=self.compression_model_resolver,
         )
 
         def invoke_tool(**kwargs: Any) -> dict[str, Any]:
@@ -111,6 +147,11 @@ class ToolCompiler:
                     "concurrent": spec.concurrent,
                     "risk_level": spec.risk_level,
                     "approval_request": gateway.approval_request,
+                    "trust_tool": (
+                        self.approval_trust_store.trust_tool
+                        if self.approval_trust_store is not None
+                        else None
+                    ),
                     "loop_policy": spec.loop_policy.model_dump(mode="json", exclude_none=True),
                     "sensitive_argument_paths": list(spec.sensitive_argument_paths),
                     "base_description": spec.description,

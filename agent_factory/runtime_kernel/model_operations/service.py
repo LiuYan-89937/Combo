@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass
+from threading import RLock
 from typing import Any
 from uuid import uuid4
 
@@ -32,37 +34,65 @@ from agent_factory.runtime_kernel.adapters.model import (
     _configured_model_for_role,
     _tool_calls_from_response,
 )
-from agent_factory.runtime_kernel.model_inputs import build_runtime_model_input
+from agent_factory.runtime_kernel.model_inputs import (
+    build_runtime_model_input,
+    legacy_system_prompt_from_binding,
+)
 from agent_factory.runtime_kernel.types import ModelInvocationResult
+from agent_factory.runtime_protocol import ModelSelectionSnapshot
 from agent_factory.tooling.description_context import contextualize_tool_descriptions
 from agent_factory.tooling.model_visibility import tools_visible_to_model
 
 _DEFAULT_STRUCTURED_METHOD = "json_mode"
 
 
-class ModelOperationService:
-    """Kernel-level model operations used by generated Agent runtimes.
+@dataclass(frozen=True, slots=True)
+class RuntimeModelHandle:
+    runtime_instance_id: str
+    snapshot: ModelSelectionSnapshot
+    model: Any
+    settings: Any
+
+
+class RuntimeModelHandleRegistry:
+    def __init__(self) -> None:
+        self._lock = RLock()
+        self._handles: dict[str, RuntimeModelHandle] = {}
+
+    def register(self, handle: RuntimeModelHandle) -> None:
+        runtime_instance_id = str(handle.runtime_instance_id or "").strip()
+        if not runtime_instance_id:
+            raise ValueError("runtime model handle requires runtime_instance_id")
+        with self._lock:
+            existing = self._handles.get(runtime_instance_id)
+            if existing is not None and existing != handle:
+                raise RuntimeError("runtime instance already has a different model handle")
+            self._handles[runtime_instance_id] = handle
+
+    def require(self, runtime_instance_id: str) -> RuntimeModelHandle:
+        key = str(runtime_instance_id or "").strip()
+        if not key:
+            raise RuntimeError("runtime model resolution requires runtime_instance_id")
+        with self._lock:
+            handle = self._handles.get(key)
+        if handle is None:
+            raise RuntimeError(f"runtime model handle is not registered: {key}")
+        return handle
+
+    def release(self, runtime_instance_id: str) -> RuntimeModelHandle | None:
+        key = str(runtime_instance_id or "").strip()
+        if not key:
+            raise ValueError("runtime_instance_id must not be empty")
+        with self._lock:
+            return self._handles.pop(key, None)
+
+
+class ModelInvocationOperations:
+    """Kernel-level model invocation shapes shared by runtime services.
 
     The service is intentionally limited to model invocation shapes. It does
     not decide graph routes, plan tools, approve tools, or execute tools.
     """
-
-    def __init__(
-        self,
-        *,
-        role: ModelRole = "main",
-        model: Any | None = None,
-        settings: Any | None = None,
-        models_by_role: Mapping[str, tuple[Any, Any]] | None = None,
-        require_runtime_profile: bool = False,
-        runtime_profile_overrides: ModelBindingRuntimeOverrides | None = None,
-    ) -> None:
-        self.model_role = role
-        self._model = model
-        self._settings = settings
-        self._models_by_role = dict(models_by_role or {})
-        self._require_runtime_profile = require_runtime_profile
-        self._runtime_profile_overrides = runtime_profile_overrides or ModelBindingRuntimeOverrides()
 
     def text(
         self,
@@ -102,7 +132,7 @@ class ModelOperationService:
         )
         envelope = build_runtime_model_input(
             state=state,
-            prompt_binding=prompt_binding or {},
+            system_prompt=self._system_prompt(state=state, prompt_binding=prompt_binding),
             messages=messages or [],
             tools=tool_list,
             node_id=node_id,
@@ -229,7 +259,7 @@ class ModelOperationService:
         else:
             envelope = build_runtime_model_input(
                 state=state,
-                prompt_binding=prompt_binding or {},
+                system_prompt=self._system_prompt(state=state, prompt_binding=prompt_binding),
                 messages=messages or [],
                 tools=[],
                 node_id=node_id,
@@ -375,6 +405,30 @@ class ModelOperationService:
         )
         raise RuntimeError(f"structured model operation failed after {attempts} attempts: {last_error}")
 
+class LegacyRoleModelOperationService(ModelInvocationOperations):
+    """Legacy role-based resolver retained only until Package Runtime deletion."""
+
+    def __init__(
+        self,
+        *,
+        role: ModelRole = "main",
+        model: Any | None = None,
+        settings: Any | None = None,
+        models_by_role: Mapping[str, tuple[Any, Any]] | None = None,
+        require_runtime_profile: bool = False,
+        runtime_profile_overrides: ModelBindingRuntimeOverrides | None = None,
+    ) -> None:
+        self.model_role = role
+        self._model = model
+        self._settings = settings
+        self._models_by_role = dict(models_by_role or {})
+        self._require_runtime_profile = require_runtime_profile
+        self._runtime_profile_overrides = runtime_profile_overrides or ModelBindingRuntimeOverrides()
+
+    @staticmethod
+    def _system_prompt(*, state: Any, prompt_binding: dict[str, Any] | None) -> str:
+        return legacy_system_prompt_from_binding(prompt_binding)
+
     def _resolve_model(self, role: ModelRole | None = None, *, state: Any | None = None) -> tuple[Any, dict[str, Any]]:
         requested_role = role or self.model_role
         if state is not None and (requested_role == "main" or self._require_runtime_profile):
@@ -518,6 +572,66 @@ class ModelOperationService:
     ) -> dict[str, int | None]:
         requested_role = role if role in {"main", "task", "compression"} else self.model_role
         _model, metadata = self._resolve_model(requested_role, state=state)  # type: ignore[arg-type]
+        return {
+            "max_input_tokens": metadata.get("max_input_tokens"),
+            "compression_trigger_tokens": metadata.get("compression_trigger_tokens"),
+        }
+
+
+class ModelOperationService(ModelInvocationOperations):
+    """Resolve exactly one model handle frozen for the current runtime instance."""
+
+    model_role = "runtime"
+    authoritative_runtime_model = True
+
+    def __init__(self, registry: RuntimeModelHandleRegistry) -> None:
+        self._registry = registry
+
+    @staticmethod
+    def _system_prompt(*, state: Any, prompt_binding: dict[str, Any] | None) -> str:
+        if prompt_binding:
+            raise RuntimeError("fixed runtime model operations do not accept prompt bindings")
+        runtime_config = getattr(state, "runtime_config", None)
+        system_prompt = str(getattr(runtime_config, "system_prompt", "") or "").strip()
+        if not system_prompt:
+            raise RuntimeError("fixed runtime model operations require runtime_config.system_prompt")
+        return system_prompt
+
+    def _resolve_model(
+        self,
+        role: ModelRole | None = None,
+        *,
+        state: Any | None = None,
+    ) -> tuple[Any, dict[str, Any]]:
+        if role is not None:
+            raise RuntimeError("fixed runtime model operations do not accept role selection")
+        runtime_instance_id = str(
+            getattr(getattr(state, "run", None), "runtime_instance_id", "") or ""
+        ).strip()
+        handle = self._registry.require(runtime_instance_id)
+        settings_metadata = handle.settings.metadata() if hasattr(handle.settings, "metadata") else {}
+        return handle.model, {
+            **settings_metadata,
+            "model_operation": handle.snapshot.operation,
+            "model_role": handle.snapshot.operation,
+            "model_profile_id": handle.snapshot.profile_id,
+            "model_profile_revision": handle.snapshot.profile_revision,
+            "credential_resource_id": handle.snapshot.credential_resource_id,
+            "credential_revision": handle.snapshot.credential_revision,
+            "provider": handle.snapshot.provider,
+            "model": handle.snapshot.model_name,
+            "model_source": "runtime_policy_snapshot",
+        }
+
+    def context_limits_for_role(
+        self,
+        role: str | None = None,
+        *,
+        state: Any | None = None,
+    ) -> dict[str, int | None]:
+        if role not in {None, "runtime", "main_turn", "temporary_turn"}:
+            raise RuntimeError("fixed runtime context limits do not accept legacy model roles")
+        _model, metadata = self._resolve_model(state=state)
         return {
             "max_input_tokens": metadata.get("max_input_tokens"),
             "compression_trigger_tokens": metadata.get("compression_trigger_tokens"),

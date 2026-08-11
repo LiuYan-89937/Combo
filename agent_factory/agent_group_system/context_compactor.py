@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from agent_factory.agent_group_system.store import AgentGroupStore
 from agent_factory.context_system.schema import CompressionPolicy
 from agent_factory.context_system.token_counter import count_text_tokens
-from agent_factory.runtime_kernel.model_operations.service import ModelOperationService
+from agent_factory.runtime_kernel.model_operations.service import LegacyRoleModelOperationService
 
 
 class GroupContextCheckpoint(BaseModel):
@@ -32,7 +32,7 @@ class GroupContextCompactor:
         compression_policy: CompressionPolicy | None = None,
     ) -> None:
         self.store = store
-        self.model_service = model_service or ModelOperationService()
+        self.model_service = model_service or LegacyRoleModelOperationService()
         self.logger = logger or logging.getLogger(__name__)
         self.compression_policy = compression_policy or CompressionPolicy()
 

@@ -14,10 +14,6 @@ export interface SessionView {
   current_mode: string | null
   session_kind?: string | null
   visible_in_factory_session_list?: boolean | null
-  create_agent_session_id?: string | null
-  evolve_agent_package_id?: string | null
-  create_agent_turn_count: number
-  evolve_agent_turn_count?: number
   mode_titles?: Record<string, string | null>
   mode_turn_counts?: Record<string, number>
   created_at: string

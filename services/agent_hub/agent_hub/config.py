@@ -33,14 +33,9 @@ class Settings:
     oss_internal_endpoint: str
     oss_prefix: str
     upload_url_ttl_seconds: int
-    download_url_ttl_seconds: int
-    max_package_bytes: int
-    max_archive_files: int
-    max_uncompressed_bytes: int
-    max_compression_ratio: int
     max_app_asset_bytes: int
     installer_download_baseline: int
-    validation_poll_seconds: float
+    worker_poll_seconds: float
     backup_prefix: str
 
     @property
@@ -100,23 +95,14 @@ def get_settings() -> Settings:
         oss_internal_endpoint=_endpoint_env("AGENTHUB_OSS_INTERNAL_ENDPOINT"),
         oss_prefix=_path_prefix_env("AGENTHUB_OSS_PREFIX", "agenthub"),
         upload_url_ttl_seconds=_positive_int_env("AGENTHUB_UPLOAD_URL_TTL_SECONDS", 900),
-        download_url_ttl_seconds=_positive_int_env("AGENTHUB_DOWNLOAD_URL_TTL_SECONDS", 300),
-        max_package_bytes=_positive_int_env(
-            "AGENTHUB_MAX_PACKAGE_BYTES", 200 * 1024 * 1024
-        ),
-        max_archive_files=_positive_int_env("AGENTHUB_MAX_ARCHIVE_FILES", 5_000),
-        max_uncompressed_bytes=_positive_int_env(
-            "AGENTHUB_MAX_UNCOMPRESSED_BYTES", 500 * 1024 * 1024
-        ),
-        max_compression_ratio=_positive_int_env("AGENTHUB_MAX_COMPRESSION_RATIO", 100),
         max_app_asset_bytes=_positive_int_env(
             "AGENTHUB_MAX_APP_ASSET_BYTES", 1024 * 1024 * 1024
         ),
         installer_download_baseline=_non_negative_int_env(
             "AGENTHUB_INSTALLER_DOWNLOAD_BASELINE", 0
         ),
-        validation_poll_seconds=_positive_float_env(
-            "AGENTHUB_VALIDATION_POLL_SECONDS", 2.0
+        worker_poll_seconds=_positive_float_env(
+            "AGENTHUB_WORKER_POLL_SECONDS", 2.0
         ),
         backup_prefix=_path_prefix_env("AGENTHUB_BACKUP_PREFIX", "agenthub/backups"),
     )

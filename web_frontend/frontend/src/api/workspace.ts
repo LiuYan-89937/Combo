@@ -131,8 +131,6 @@ function workspaceQuery(context: WorkspaceContextInput): Record<string, string |
     package_id: normalized.packageId,
     package_session_id: normalized.packageSessionId,
     workspace_id: normalized.workspaceId,
-    factory_session_id: normalized.factorySessionId,
-    create_agent_session_id: normalized.createAgentSessionId,
     group_id: normalized.groupId,
   }
 }

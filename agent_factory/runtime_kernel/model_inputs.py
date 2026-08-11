@@ -22,13 +22,10 @@ from agent_factory.runtime_defaults import (
     DEFAULT_BUILTIN_ALLOW_EXTERNAL_PATHS,
     DEFAULT_BUILTIN_WORKSPACE_ROOT,
 )
-from agent_factory.runtime_kernel.planning import is_plan_and_execute_pattern_id
-from agent_factory.runtime_kernel.prompt_fragments import runtime_prompt_fragments_from_state
 from agent_factory.runtime_kernel.tool_governance import tool_governance_prompt
-from agent_factory.runtime_workspace import RUNTIME_WORKSPACE_MOUNTS_SESSION_KEY
 from agent_factory.tooling.builtins.filesystem.guidance import WRITE_STRATEGY_GUIDANCE
 
-DEFAULT_AGENT_SYSTEM_PROMPT = "You are the generated Agent runtime model. Answer the user directly and concisely."
+LEGACY_AGENT_SYSTEM_PROMPT = "You are the generated Agent runtime model. Answer the user directly and concisely."
 RUNTIME_REACT_PROTOCOL = (
     "Runtime ReAct protocol: use the conversation history as the source of truth. "
     "When tools are available and useful, call them with the model's native tool_call mechanism only. "
@@ -36,7 +33,7 @@ RUNTIME_REACT_PROTOCOL = (
     "When inspecting workspace files, if read reports a missing file or the path is uncertain, call ls on "
     "the parent or nearby directory before retrying read with the exact file name/path."
 )
-EXECUTOR_TOOL_POLICY = "Executor tool policy: execute the current plan step with package/domain tools first."
+EXECUTOR_TOOL_POLICY = "Executor tool policy: execute the current plan step using only the frozen tools available to this runtime."
 FINAL_ANSWER_TOOL_POLICY = (
     "Final-answer delivery policy: produce the final user-facing answer from completed plan evidence. "
     "When the deliverable still needs an artifact to be generated or inspected, use available delivery tools "
@@ -94,13 +91,13 @@ class ModelInputEnvelope:
 def build_runtime_model_input(
     *,
     state: Any,
-    prompt_binding: dict[str, Any],
+    system_prompt: str,
     messages: list[Any],
     tools: list[BaseTool],
     node_id: str | None = None,
     image_input_enabled: bool = False,
 ) -> ModelInputEnvelope:
-    stable_system = _stable_system_prompt(prompt_binding=prompt_binding, state=state, node_id=node_id)
+    stable_system = _stable_system_prompt(system_prompt=system_prompt, state=state, node_id=node_id)
     visual_attachment_count = image_attachment_count(_runtime_attachments(state))
     history_messages = _history_messages(
         state=state,
@@ -108,6 +105,14 @@ def build_runtime_model_input(
         node_id=node_id,
         image_input_enabled=image_input_enabled,
     )
+
+
+def legacy_system_prompt_from_binding(prompt_binding: dict[str, Any] | None) -> str:
+    """Translate the retired prompt-binding shape at the legacy boundary only."""
+
+    if not isinstance(prompt_binding, dict):
+        return LEGACY_AGENT_SYSTEM_PROMPT
+    return str(prompt_binding.get("template") or "").strip() or LEGACY_AGENT_SYSTEM_PROMPT
     dynamic_evidence = _dynamic_evidence_text(
         state=state,
         node_id=node_id,
@@ -167,42 +172,20 @@ def _knowledge_guidance_text(state: Any) -> str:
     return str(model_context.get(KNOWLEDGE_GUIDANCE_CONTEXT_KEY) or "").strip()
 
 
-def _stable_system_prompt(*, prompt_binding: dict[str, Any], state: Any, node_id: str | None = None) -> str:
-    template = str(prompt_binding.get("template") or "").strip() or DEFAULT_AGENT_SYSTEM_PROMPT
+def _stable_system_prompt(*, system_prompt: str, state: Any, node_id: str | None = None) -> str:
+    template = str(system_prompt or "").strip()
+    if not template:
+        raise ValueError("runtime model input requires an explicit system_prompt")
     parts = [template]
     if node_id == PLAN_EXECUTE_EXECUTOR_NODE_ID:
         parts.append(_executor_tool_policy(state))
     if node_id == PLAN_EXECUTE_FINAL_ANSWER_NODE_ID:
         parts.append(FINAL_ANSWER_TOOL_POLICY)
     parts.append(RUNTIME_REACT_PROTOCOL)
-    parts.extend(runtime_prompt_fragments_from_state(state))
-    delegation_guidance = _delegation_system_guidance(state)
-    if delegation_guidance:
-        parts.append(delegation_guidance)
     mount_guidance = _workspace_mount_guidance(state)
     if mount_guidance:
         parts.append(mount_guidance)
     return "\n\n".join(parts)
-
-
-def _delegation_system_guidance(state: Any) -> str:
-    user_config = getattr(getattr(state, "runtime_config", None), "user_config", {}) or {}
-    if not isinstance(user_config, dict):
-        return ""
-    context = user_config.get("delegation_context")
-    if not isinstance(context, dict):
-        return ""
-    parent_session_id = str(context.get("parent_session_id") or "").strip()
-    task_id = str(context.get("task_id") or "").strip()
-    if not parent_session_id or not task_id:
-        return ""
-    return (
-        "You are executing a delegated child-Agent task. Work only within the assigned task boundary. "
-        "If essential user input is missing, call ask_user and continue from the resumed answer. "
-        "Before ending, call deliver_result exactly once with the truthful completion state, a concise report, "
-        "and every file or directory that must be transferred to the parent Agent. A normal final response is not "
-        f"a formal delivery. Background-task identity: parent_session_id={parent_session_id}, task_id={task_id}."
-    )
 
 
 def _executor_tool_policy(state: Any) -> str:
@@ -225,8 +208,7 @@ def _executor_tool_policy(state: Any) -> str:
         "glob, ls, and read may be used to inspect workspace files. "
         "If read reports a missing file or the path is uncertain, inspect the parent or nearby directory with ls "
         "before retrying read with the exact file name/path. "
-        "Call shell only when the available package/runtime tools cannot accomplish the current plan step; "
-        "when doing so, include fallback_reason in the tool arguments explaining the gap. "
+        "Call shell only when no dedicated available tool can accomplish the current plan step and the active policy permits it. "
         f"{WRITE_STRATEGY_GUIDANCE} "
         "For a complete single-file replacement, call write with action=write_once, path, and content. "
         "For staged writing, call action=start first, use the returned write_id for ordered action=append calls, "
@@ -242,25 +224,19 @@ def _executor_tool_policy(state: Any) -> str:
 
 
 def _builtin_workspace_root(state: Any) -> str:
-    session_config = getattr(getattr(state, "runtime_config", None), "session_config", {}) or {}
-    if not isinstance(session_config, dict):
-        return DEFAULT_BUILTIN_WORKSPACE_ROOT
-    value = str(session_config.get("builtin_workspace_root") or DEFAULT_BUILTIN_WORKSPACE_ROOT).strip()
+    runtime_config = getattr(state, "runtime_config", None)
+    value = str(getattr(runtime_config, "workspace_root_alias", "") or DEFAULT_BUILTIN_WORKSPACE_ROOT).strip()
     return value or DEFAULT_BUILTIN_WORKSPACE_ROOT
 
 
 def _builtin_allow_external_paths(state: Any) -> bool:
-    session_config = getattr(getattr(state, "runtime_config", None), "session_config", {}) or {}
-    if not isinstance(session_config, dict):
-        return DEFAULT_BUILTIN_ALLOW_EXTERNAL_PATHS
-    return bool(session_config.get("builtin_allow_external_paths", DEFAULT_BUILTIN_ALLOW_EXTERNAL_PATHS))
+    runtime_config = getattr(state, "runtime_config", None)
+    return bool(getattr(runtime_config, "allow_external_paths", DEFAULT_BUILTIN_ALLOW_EXTERNAL_PATHS))
 
 
 def _workspace_mount_guidance(state: Any) -> str:
-    session_config = getattr(getattr(state, "runtime_config", None), "session_config", {}) or {}
-    if not isinstance(session_config, dict):
-        return ""
-    mounts = session_config.get(RUNTIME_WORKSPACE_MOUNTS_SESSION_KEY)
+    runtime_config = getattr(state, "runtime_config", None)
+    mounts = getattr(runtime_config, "workspace_mounts", None)
     if not isinstance(mounts, list):
         return ""
     paths = [
@@ -473,7 +449,7 @@ def _message_image_parts(message: Any) -> list[dict[str, Any]]:
 
 
 def _uses_plan_and_execute_projection(*, state: Any, node_id: str | None) -> bool:
-    if not is_plan_and_execute_pattern_id(getattr(getattr(state, "run", None), "pattern_id", None)):
+    if getattr(getattr(state, "run", None), "strategy", None) != "plan_and_execute":
         return False
     return node_id in PLAN_EXECUTE_PROJECTED_HISTORY_NODES
 
@@ -622,10 +598,8 @@ def _dynamic_evidence_text(
 
 
 def _runtime_attachments(state: Any) -> Any:
-    user_config = getattr(getattr(state, "runtime_config", None), "user_config", {}) or {}
-    if not isinstance(user_config, dict):
-        return None
-    return user_config.get("attachments")
+    runtime_config = getattr(state, "runtime_config", None)
+    return getattr(runtime_config, "attachments", None)
 
 
 def _runtime_attachments_text(state: Any, *, include_extracted_text_for_images: bool) -> str:

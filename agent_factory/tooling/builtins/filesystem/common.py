@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from agent_factory.create_agent.stage_context import stage_context_from_resources
 from agent_factory.tooling.spec import ToolRiskResult
 from agent_factory.tooling.workspace_paths import workspace_path_candidate
 
@@ -316,19 +315,6 @@ def _path_matches_focus_files(path: Path, *, root: Path, focus_files: list[Any])
 
 
 def _focus_write_facts(path: Path, *, root: Path, resources: dict[str, Any]) -> dict[str, Any]:
-    stage_context = stage_context_from_resources(resources)
-    if stage_context is not None:
-        relative_path = _relative_path_text(path, root=root)
-        active = stage_context.active_stage()
-        focus_files = stage_context.active_focus_files()
-        target_focus_id = _target_focus_for_path(relative_path, stage_context.file_focuses())
-        return {
-            "relative_path": relative_path,
-            "active_focus_id": active.system_id if active else "",
-            "active_focus_files": focus_files,
-            "target_focus_id": target_focus_id,
-            "outside_focus": bool(focus_files and not _path_matches_focus_files(path, root=root, focus_files=focus_files)),
-        }
     return {"relative_path": _relative_path_text(path, root=root)}
 
 
@@ -353,18 +339,3 @@ def _workspace_path_guidance(root: Path) -> str:
         f"filesystem root {root}; do not use /tmp, host paths, or arbitrary absolute paths "
         "unless external paths are explicitly enabled."
     )
-
-
-def _target_focus_for_path(relative_path: str, focuses: dict[Any, Any]) -> str:
-    for raw_focus_path, raw_focus_id in focuses.items():
-        focus_path = str(raw_focus_path or "").strip()
-        focus_id = str(raw_focus_id or "").strip()
-        if not focus_path or not focus_id:
-            continue
-        if focus_path.endswith("/"):
-            if relative_path.startswith(focus_path):
-                return focus_id
-            continue
-        if relative_path == focus_path:
-            return focus_id
-    return ""

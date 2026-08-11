@@ -80,7 +80,6 @@ def inject_runtime_cross_session_memory(
             **updated.context.model_context,
             "cross_session_memory": pack.model_dump(mode="json"),
         }
-        updated.context.assembly_log.append("system_cross_session_memory_inject")
         return (
             updated,
             MemoryInjectionReport(

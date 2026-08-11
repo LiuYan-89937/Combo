@@ -29,7 +29,6 @@ class KnowledgeGuidanceSystemWrapper:
         else:
             model_context.pop(KNOWLEDGE_GUIDANCE_CONTEXT_KEY, None)
         updated.context.model_context = model_context
-        updated.context.assembly_log.append(f"system_knowledge_guidance:{context.node_id}")
         return updated, {"context": updated.context.model_dump(mode="json")}
 
 

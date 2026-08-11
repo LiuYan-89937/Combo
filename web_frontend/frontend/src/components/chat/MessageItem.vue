@@ -3,7 +3,6 @@
     class="message-item"
     :class="[`role-${message.role}`, { streaming }]"
     :data-reference-label="`${roleLabel} · ${formatTime(message.timestamp)}`"
-    :data-tip-source-key="registeredSourceKey || undefined"
   >
     <div class="message-avatar">
       <n-avatar :size="36" :style="avatarStyle">
@@ -38,7 +37,7 @@
         </n-button>
       </div>
 
-      <div ref="messageBodyRef" class="message-body">
+      <div class="message-body">
         <div
           v-if="thinking"
           class="thinking-content"
@@ -77,23 +76,11 @@
       </div>
     </div>
 
-    <button
-      v-for="marker in tipMarkers"
-      :key="marker.tipId"
-      class="tip-marker"
-      :class="{ 'tip-marker-answering': marker.answering }"
-      :style="{ left: `${marker.x}px`, top: `${marker.y}px` }"
-      type="button"
-      title="Tiping"
-      @click="openTip(marker.tipId, $event)"
-    >
-      <TipingIcon :size="20" scroll-motion />
-    </button>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed } from 'vue'
 import type { CSSProperties } from 'vue'
 import { NAvatar, NButton, NIcon, NTag, NText } from 'naive-ui'
 import { ReturnUpBackOutline } from '@/components/icons'
@@ -102,11 +89,6 @@ import MessagePartRenderer from './MessagePartRenderer.vue'
 import type { TranscriptItem } from '@/types/protocol'
 import { conversationVisibleParts } from '@/utils/toolPresentation'
 import type { WorkspaceRequestContext } from '@/api/resourceTypes'
-import { useTipStore, type TipMessageContext } from '@/stores/tips'
-import TipingIcon from './TipingIcon.vue'
-import { useTipMarkerLayout } from '@/composables/chat/useTipMarkerLayout'
-
-type TipContextConfig = Omit<TipMessageContext, 'sourceMessageId' | 'sourceRole' | 'sourceContent'>
 
 const props = withDefaults(
   defineProps<{
@@ -114,14 +96,12 @@ const props = withDefaults(
     streaming?: boolean
     thinking?: boolean
     quoteable?: boolean
-    tipContext?: TipContextConfig | null
     workspaceContext?: WorkspaceRequestContext | null
   }>(),
   {
     streaming: false,
     thinking: false,
     quoteable: false,
-    tipContext: null,
     workspaceContext: null,
   }
 )
@@ -131,44 +111,6 @@ defineEmits<{
 }>()
 
 const { locale, t } = useI18n()
-const tipStore = useTipStore()
-const registeredSourceKey = ref('')
-const messageBodyRef = ref<HTMLElement | null>(null)
-const messageTips = computed(() => registeredSourceKey.value ? tipStore.tipsForSource(registeredSourceKey.value) : [])
-const { tipMarkers } = useTipMarkerLayout(messageBodyRef, messageTips)
-
-watch(
-  () => props.tipContext,
-  (context) => {
-    if (registeredSourceKey.value) tipStore.unregisterSource(registeredSourceKey.value)
-    registeredSourceKey.value = context
-      ? tipStore.registerSource({
-          ...context,
-          sourceMessageId: props.message.id,
-          sourceRole: props.message.role,
-          sourceContent: props.message.content,
-        })
-      : ''
-  },
-  { immediate: true, deep: true },
-)
-
-onBeforeUnmount(() => {
-  if (registeredSourceKey.value) tipStore.unregisterSource(registeredSourceKey.value)
-})
-
-function openTip(tipId: string, event: MouseEvent) {
-  const tip = messageTips.value.find(item => item.tip_id === tipId)
-  if (!tip) return
-  const marker = event.currentTarget as HTMLElement
-  const bounds = marker.getBoundingClientRect()
-  tipStore.selectTip(tip.scope_type, tip.scope_id, tip.tip_id, {
-    x: bounds.left + bounds.width / 2,
-    y: bounds.top + bounds.height / 2,
-  })
-}
-
-
 const roleLabel = computed(() => {
   const displayName = String(props.message.metadata?.display_name || '').trim()
   if (displayName) return displayName
@@ -289,65 +231,6 @@ function stableColorIndex(value: string, size: number): number {
   animation: app-fade-in-up 0.55s var(--app-transition-spring) both;
 }
 
-.tip-marker {
-  position: absolute;
-  transform: translate(-50%, -100%);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--app-radius-sm);
-  background: transparent;
-  color: var(--app-text);
-  box-shadow: none;
-  cursor: pointer;
-  font: inherit;
-  z-index: 2;
-  isolation: isolate;
-  transition: border-color var(--app-transition-base), background-color var(--app-transition-base), transform var(--app-transition-spring);
-  animation: tip-marker-arrive .76s var(--app-transition-spring) both;
-}
-
-.tip-marker::after {
-  content: '';
-  position: absolute;
-  inset: 1px;
-  z-index: -1;
-  border: 1px solid color-mix(in srgb, var(--app-text) 72%, transparent);
-  border-radius: 50%;
-  animation: tip-marker-ripple 1.25s ease-out .12s 2 both;
-}
-
-.tip-marker:hover {
-  background: transparent;
-  transform: translate(-50%, -100%) scale(1.06);
-}
-
-.tip-marker-answering {
-  animation: tip-marker-arrive .76s var(--app-transition-spring) both,
-             tip-marker-breathe 1.55s ease-in-out .76s infinite;
-}
-
-@keyframes tip-marker-arrive {
-  0% { opacity: 0; transform: translate(-50%, -82%) scale(.2) rotate(-16deg); }
-  46% { opacity: 1; transform: translate(-50%, -108%) scale(1.24) rotate(7deg); }
-  72% { transform: translate(-50%, -96%) scale(.9) rotate(-3deg); }
-  100% { opacity: 1; transform: translate(-50%, -100%) scale(1) rotate(0); }
-}
-
-@keyframes tip-marker-ripple {
-  0% { opacity: .72; transform: scale(.42); }
-  72%, 100% { opacity: 0; transform: scale(1.8); }
-}
-
-@keyframes tip-marker-breathe {
-  0%, 100% { opacity: .68; transform: translate(-50%, -100%) scale(.96); }
-  50% { opacity: 1; transform: translate(-50%, -100%) scale(1.04); }
-}
-
 .message-item.role-assistant {
   background: var(--app-surface-elevated);
   border: none;
@@ -417,22 +300,6 @@ function stableColorIndex(value: string, size: number): number {
   position: relative;
   font-size: var(--app-font-lg);
   line-height: var(--app-leading-relaxed);
-}
-
-.message-body :deep(.tip-layout-anchor) {
-  display: inline-block;
-  width: 0;
-  height: calc(1lh + var(--app-space-xl));
-  vertical-align: baseline;
-  pointer-events: none;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .tip-marker,
-  .tip-marker::after,
-  .tip-marker-answering {
-    animation: none;
-  }
 }
 
 .streaming-ink-dots {

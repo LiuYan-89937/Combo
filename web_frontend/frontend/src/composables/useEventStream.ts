@@ -12,9 +12,7 @@ import { useAgentGroupStore } from '@/stores/agentGroup'
 import { useUiStore } from '@/stores/ui'
 import type { FactoryFrontendEvent } from '@/types/protocol'
 import { agentPackagesApi } from '@/api/agentPackages'
-import { postCommand } from '@/api/http'
 import { backendUrl } from '@/api/backendUrl'
-import { switchSessionCommand } from '@/api/commands'
 import {
   captureTaskNotificationEventContext,
   publishTaskNotificationsForEvent,
@@ -49,12 +47,6 @@ async function restoreActiveConversation(runtimeStore: ReturnType<typeof useRunt
     const restored = await agentPackagesApi.session(packageId, runtimeStore.activeAgentSessionId)
     applyRuntimeEvent(restored)
     return
-  }
-  if (
-    runtimeStore.activeFactorySessionId
-    && ['create_agent', 'evolve_agent'].includes(String(runtimeStore.currentMode || ''))
-  ) {
-    await postCommand(switchSessionCommand(runtimeStore.activeFactorySessionId, runtimeStore.currentMode))
   }
 }
 

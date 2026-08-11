@@ -154,7 +154,7 @@ class TaskExecutionContext:
 
 
 class BackgroundTaskService:
-    """Application-scoped scheduler shared by sub-agent, manufacture and evolve."""
+    """Application-scoped scheduler for temporary-Agent tasks."""
 
     def __init__(
         self,

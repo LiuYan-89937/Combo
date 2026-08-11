@@ -9,8 +9,6 @@ from typing import Any, Callable, Iterator
 from agent_factory.collaboration_system.task_service import TaskExecutionContext, TaskExecutor
 from agent_factory.collaboration_system.progress_summary import progress_summary_session
 from agent_factory.contracts import BackgroundTask, BackgroundTaskResult
-from agent_factory.create_agent.runtime import CreateAgentRuntime
-from agent_factory.evolution.runtime import AgentEvolutionRuntime
 from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import AgentPackageRuntimeManager
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendEvent
 from agent_factory.factory_graph.frontend_bridge.runtime_events import (
@@ -24,14 +22,10 @@ from agent_factory.runtime_kernel.session import COLLABORATION_WORKER_SESSION_KI
 @dataclass(frozen=True, slots=True)
 class RuntimeBundle:
     agent_package_runtime: AgentPackageRuntimeManager
-    create_agent_runtime: CreateAgentRuntime
-    evolution_runtime: AgentEvolutionRuntime
 
     def task_executors(self) -> dict[str, TaskExecutor]:
         return {
             "sub_agent": SubAgentTaskExecutor(self.agent_package_runtime),
-            "manufacture": ManufactureTaskExecutor(self.create_agent_runtime),
-            "evolve": EvolutionTaskExecutor(self.evolution_runtime),
         }
 
 
@@ -83,71 +77,6 @@ class SubAgentTaskExecutor:
                 request_id=request_id,
                 package_id=package_id,
                 session_id=task.assignee_session_id,
-            ),
-        )
-
-
-class ManufactureTaskExecutor:
-    def __init__(self, runtime: CreateAgentRuntime) -> None:
-        self.runtime = runtime
-
-    def run(self, task: BackgroundTask, context: TaskExecutionContext) -> BackgroundTaskResult:
-        payload = dict(task.payload)
-        session_id = task.assignee_session_id or f"manufacture_{task.task_id}"
-        if task.assignee_session_id is None:
-            context.update_task(assignee_session_id=session_id)
-        return _consume_runtime(
-            task,
-            context,
-            start=lambda request_id: self.runtime.stream(
-                user_input=task.task_text,
-                session_id=session_id,
-                request_id=request_id,
-                attachments=payload.get("attachments"),
-                user_config=_dict(payload.get("user_config")),
-            ),
-            resume=lambda request_id, resume_payload: self.runtime.resume_stream(
-                session_id=session_id,
-                resume_payload=resume_payload,
-                request_id=request_id,
-            ),
-            cancel=lambda request_id, reason: self.runtime.cancel_active_requests(
-                reason=reason,
-                request_id=request_id,
-            ),
-        )
-
-
-class EvolutionTaskExecutor:
-    def __init__(self, runtime: AgentEvolutionRuntime) -> None:
-        self.runtime = runtime
-
-    def run(self, task: BackgroundTask, context: TaskExecutionContext) -> BackgroundTaskResult:
-        package_id = _required(task.assignee_package_id, "assignee_package_id")
-        payload = dict(task.payload)
-        session_id = task.assignee_session_id or f"evolve_{task.task_id}"
-        if task.assignee_session_id is None:
-            context.update_task(assignee_session_id=session_id)
-        return _consume_runtime(
-            task,
-            context,
-            start=lambda request_id: self.runtime.stream(
-                package_id=package_id,
-                user_input=task.task_text,
-                request_id=request_id,
-                session_id=session_id,
-                attachments=payload.get("attachments"),
-                user_config=_dict(payload.get("user_config")),
-            ),
-            resume=lambda request_id, resume_payload: self.runtime.resume_stream(
-                package_id=package_id,
-                session_id=session_id,
-                resume_payload=resume_payload,
-                request_id=request_id,
-            ),
-            cancel=lambda request_id, reason: self.runtime.cancel_active_requests(
-                reason=reason,
-                request_id=request_id,
             ),
         )
 

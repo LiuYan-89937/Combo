@@ -1,0 +1,313 @@
+from __future__ import annotations
+
+from collections.abc import Callable
+from datetime import datetime, timezone
+from time import perf_counter
+import traceback
+from typing import Any
+
+from langchain_core.messages import RemoveMessage
+from langchain_core.runnables import RunnableConfig
+from langgraph.errors import GraphInterrupt
+from langgraph.graph.message import REMOVE_ALL_MESSAGES
+from langgraph.runtime import Runtime
+
+from agent_factory.runtime_kernel.services import RuntimeServices
+from agent_factory.runtime_kernel.nodes.base import NodeExecutionContext, NodeImplementation
+from agent_factory.runtime_kernel.observability.node_events import emit_runtime_node_event
+from agent_factory.runtime_kernel.observability.schema import RuntimeObservationEvent
+from agent_factory.runtime_kernel.observability.tool_events import emit_runtime_tool_activity
+from agent_factory.runtime_kernel.observability.runtime_events import apply_node_metrics, emit_state_event
+from agent_factory.runtime_kernel.state.runtime_graph import (
+    runtime_graph_patch,
+    runtime_state_from_graph,
+    split_graph_patch,
+    validate_patch_sections,
+)
+from agent_factory.runtime_kernel.state import RuntimeState, merge_state_patch
+from agent_factory.runtime_kernel.trace_policy import classify_node_failure
+from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
+
+
+NextNodeResolver = Callable[[str, str | None], tuple[str, str] | None]
+
+
+def make_fixed_runner(
+    *,
+    node_id: str,
+    implementation: NodeImplementation,
+    services: RuntimeServices,
+    success_nodes: frozenset[str],
+    next_node: NextNodeResolver,
+) -> Callable[..., dict[str, Any]]:
+    """Build one node runner for the two immutable runtime graphs.
+
+    Fixed runners deliberately have no Pattern binding, Package state manager,
+    render manifest, bookmark, hook, retry wrapper, or arbitrary node wrapper.
+    """
+
+    def runner(
+        raw_state: dict[str, Any],
+        config: RunnableConfig = None,
+        runtime: Runtime = None,
+    ) -> dict[str, Any]:
+        state = runtime_state_from_graph(raw_state)
+        if state.execution.finished:
+            return runtime_graph_patch(state)
+        if _timed_out(state) and not _must_close_tool_protocol(implementation, raw_state):
+            _finish(state, status="failed", error="Execution timed out before node execution.")
+            return runtime_graph_patch(state)
+
+        started = perf_counter()
+        trace_recorder = getattr(services, "trace_recorder", None)
+        trace_span_id = None
+        if trace_recorder is not None:
+            trace_span_id = trace_recorder.start_span(
+                trace_id=state.observability.trace_id,
+                run_id=state.run.run_id,
+                span_kind="node_execution",
+                name=node_id,
+                node_id=node_id,
+                payload={"impl": implementation.impl_id, "node_id": node_id},
+            )
+        emit_state_event(
+            services,
+            state,
+            "node_entered",
+            node_id=node_id,
+            payload={"impl": implementation.impl_id},
+        )
+        emitted_events: list[dict[str, Any]] = []
+
+        def emit_event(payload: dict[str, Any]) -> None:
+            event = RuntimeObservationEvent(
+                trace_id=state.observability.trace_id,
+                run_id=state.run.run_id,
+                event_type=payload.get("event_type", "node_event"),
+                node_id=node_id,
+                payload=payload,
+            )
+            services.observability_manager.emit(event)
+            emit_runtime_node_event(event)
+            if event.persistence == "durable":
+                emitted_events.append(event.model_dump(mode="json"))
+            if trace_recorder is not None:
+                trace_recorder.record_event(
+                    trace_id=state.observability.trace_id,
+                    run_id=state.run.run_id,
+                    event_type=event.event_type,
+                    node_id=node_id,
+                    message=event.message,
+                    payload=event.payload,
+                )
+            emit_runtime_tool_activity(payload, node_id=node_id)
+
+        context = NodeExecutionContext(
+            node_id=node_id,
+            impl=implementation.impl_id,
+            services=services,
+            emit_event=emit_event,
+            graph_messages=list(raw_state.get("messages") or []),
+            graph_config=config,
+            graph_runtime=runtime,
+        )
+        active_state = state
+        messages_patch: list[Any] = []
+        try:
+            active_state, context_messages = _prepare_context(
+                state=active_state,
+                context=context,
+                services=services,
+            )
+            if context_messages is not None:
+                messages_patch.extend([RemoveMessage(id=REMOVE_ALL_MESSAGES), *context_messages])
+
+            raw_patch = implementation.execute(active_state, context)
+            node_messages, patch = split_graph_patch(raw_patch)
+            messages_patch.extend(node_messages)
+            validate_patch_sections(
+                implementation.impl_id,
+                patch,
+                set(implementation.writable_sections),
+            )
+            updated = merge_state_patch(active_state, patch)
+            if emitted_events:
+                updated.observability.events = [*updated.observability.events, *emitted_events]
+            updated.execution.turn_count += 1
+            apply_node_metrics(updated, perf_counter() - started)
+            _resolve_after_node(
+                state=updated,
+                node_id=node_id,
+                success_nodes=success_nodes,
+                next_node=next_node,
+            )
+            duration_ms = int((perf_counter() - started) * 1000)
+            emit_state_event(
+                services,
+                updated,
+                "node_completed",
+                node_id=node_id,
+                payload={"impl": implementation.impl_id, "duration_ms": duration_ms},
+            )
+            if trace_recorder is not None and trace_span_id is not None:
+                trace_recorder.finish_span(
+                    trace_id=updated.observability.trace_id,
+                    run_id=updated.run.run_id,
+                    span_id=trace_span_id,
+                    span_kind="node_execution",
+                    name=node_id,
+                    status="completed",
+                    node_id=node_id,
+                    payload={"node_id": node_id, "duration_ms": duration_ms},
+                )
+            return runtime_graph_patch(updated, messages=messages_patch)
+        except GraphInterrupt:
+            raise
+        except Exception as exc:
+            failed = active_state
+            failed.execution.retry_count += 1
+            _finish(failed, status="failed", error=str(exc), location=node_id)
+            failure = classify_node_failure(node_impl=implementation.impl_id, error=exc)
+            if trace_recorder is not None and failure.domain == "runtime_kernel":
+                trace_recorder.suppress_trace(
+                    trace_id=failed.observability.trace_id,
+                    run_id=failed.run.run_id,
+                    reason=failure.reason,
+                    payload={
+                        "node_id": node_id,
+                        "node_impl": implementation.impl_id,
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                        "traceback": "".join(
+                            traceback.TracebackException.from_exception(
+                                exc,
+                                capture_locals=False,
+                            ).format()
+                        ),
+                    },
+                )
+            emit_state_event(
+                services,
+                failed,
+                "node_failed",
+                node_id=node_id,
+                payload={"impl": implementation.impl_id, "error": str(exc)},
+            )
+            if trace_recorder is not None and trace_span_id is not None:
+                trace_recorder.finish_span(
+                    trace_id=failed.observability.trace_id,
+                    run_id=failed.run.run_id,
+                    span_id=trace_span_id,
+                    span_kind="node_execution",
+                    name=node_id,
+                    status="failed",
+                    node_id=node_id,
+                    payload={"node_id": node_id, "error": str(exc)},
+                )
+            return runtime_graph_patch(failed)
+
+    return runner
+
+
+def _prepare_context(
+    *,
+    state: RuntimeState,
+    context: NodeExecutionContext,
+    services: RuntimeServices,
+) -> tuple[RuntimeState, list[Any] | None]:
+    if not context.impl.startswith("cognitive."):
+        return state, None
+    context_system = services.context_system
+    result = context_system.prepare_before_model_call(
+        state=state,
+        node_id=context.node_id,
+        impl=context.impl,
+        messages=list(context.graph_messages),
+        services=services,
+        resources=services.runtime_resources,
+        enable_dynamic_evidence=(
+            state.run.strategy != "plan_and_execute"
+            or context.node_id in {"executor", "final_answer"}
+        ),
+    )
+    context.graph_messages = list(result.messages)
+    return result.state, list(result.messages) if result.messages_changed else None
+
+
+def _resolve_after_node(
+    *,
+    state: RuntimeState,
+    node_id: str,
+    success_nodes: frozenset[str],
+    next_node: NextNodeResolver,
+) -> None:
+    if _timed_out(state) and state.execution.route_decision != "model.requests_tool":
+        _finish(state, status="failed", error="Execution timed out.")
+        return
+    if state.policy.interrupted or state.execution.interrupted:
+        state.execution.interrupted = True
+        state.execution.finished = True
+        state.execution.finish_status = "interrupted"
+        state.execution.current_node = node_id
+        state.execution.interrupt_payload = {
+            "node_id": node_id,
+            "interrupt_type": state.policy.interrupt_type,
+            "approval_required": state.policy.approval_required,
+            "reason": state.policy.block_reason or state.policy.refusal_reason,
+        }
+        return
+    if state.policy.blocked:
+        state.execution.finish_status = state.execution.finish_status or "blocked"
+    if node_id in success_nodes:
+        state.execution.current_node = node_id
+        state.execution.finished = True
+        state.execution.finish_status = state.execution.finish_status or "completed"
+        return
+    if state.execution.finished:
+        state.execution.current_node = node_id
+        state.execution.finish_status = state.execution.finish_status or (
+            "blocked" if state.policy.blocked else "completed"
+        )
+        return
+    resolved = next_node(node_id, state.execution.route_decision)
+    if resolved is None:
+        _finish(state, status="failed", error=f"No next node resolved from {node_id}.")
+        state.execution.current_node = node_id
+        return
+    condition, target = resolved
+    state.execution.route_decision = condition
+    state.execution.current_node = target
+
+
+def _finish(
+    state: RuntimeState,
+    *,
+    status: str,
+    error: str | None = None,
+    location: str | None = None,
+) -> None:
+    state.execution.finished = True
+    state.execution.finish_status = status
+    state.execution.route_decision = "execution.finished"
+    if error:
+        state.execution.last_error = error
+    if location:
+        state.execution.last_error_location = location
+
+
+def _timed_out(state: RuntimeState) -> bool:
+    if state.execution.timeout_seconds <= 0:
+        return False
+    try:
+        started_at = datetime.fromisoformat(state.run.started_at)
+    except ValueError:
+        return False
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - started_at).total_seconds() > state.execution.timeout_seconds
+
+
+def _must_close_tool_protocol(implementation: NodeImplementation, raw_state: dict[str, Any]) -> bool:
+    return implementation.impl_id == "operational.tool_call" and bool(
+        incomplete_tool_call_ids(raw_state.get("messages") or [])
+    )

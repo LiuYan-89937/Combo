@@ -5,7 +5,7 @@
 
 // ========== 基础类型 ==========
 
-export type FactoryMode = 'create_agent' | 'evolve_agent' | 'agent_package' | 'agent_group'
+export type FactoryMode = 'agent_package' | 'agent_group'
 
 export type RunStatus = 'idle' | 'running' | 'stopping' | 'waiting_for_workers' | 'interrupted' | 'completed' | 'stopped' | 'cancelled' | 'failed'
 
@@ -240,7 +240,6 @@ export interface ConversationScopeState {
   activeRequestId?: string | null
   runStatus?: RunStatus
   pendingInterrupt?: FactoryFrontendEvent | null
-  createAgentPublishReady?: Record<string, any> | null
   currentRunId?: string | null
   nodes?: Record<string, NodeViewState>
   stages?: Record<string, StageStatus>
@@ -248,7 +247,7 @@ export interface ConversationScopeState {
 
 export interface AgentPackageSelectionIntent {
   packageId: string | null
-  purpose: 'run' | 'evolution' | null
+  purpose: 'run' | null
 }
 
 // ========== 模型流 ==========
@@ -551,7 +550,6 @@ export interface RuntimeViewState {
   activeRequests: Record<string, ActiveRequestView>
   runStatus: RunStatus
   pendingInterrupt: FactoryFrontendEvent | null
-  createAgentPublishReady: Record<string, any> | null
   currentMode: FactoryMode | null
   activeFactorySessionId: string | null
   activeAgentSessionId: string | null

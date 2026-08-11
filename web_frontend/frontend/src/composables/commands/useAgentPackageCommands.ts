@@ -18,9 +18,9 @@ export function useAgentPackageCommands() {
     transport.applyEventRequest(agentPackagesApi.list())
   }
 
-  const selectAgentPackage = (packageId: string, purpose?: 'run' | 'evolution') => {
-    runtimeStore.expectAgentPackageSelection(packageId, purpose || 'run')
-    return transport.applyEventRequest(agentPackagesApi.select(packageId, purpose))
+  const selectAgentPackage = (packageId: string) => {
+    runtimeStore.expectAgentPackageSelection(packageId, 'run')
+    return transport.applyEventRequest(agentPackagesApi.select(packageId))
   }
 
   const deleteAgentPackage = (packageId: string) => {
@@ -125,23 +125,6 @@ export function useAgentPackageCommands() {
     return command
   }
 
-  const runAgentEvolution = (
-    packageId: string,
-    message: string,
-    attachments?: RuntimeAttachmentInput[],
-    runtimeOptions?: commands.RuntimeMainModelOptions,
-  ) => {
-    const command = commands.runAgentEvolutionCommand(
-      packageId,
-      message,
-      attachments,
-      runtimeOptions,
-      runtimeStore.activeFactorySessionId,
-    )
-    transport.sendRuntimeCommand(command)
-    return command
-  }
-
   return {
     listAgentPackages,
     selectAgentPackage,
@@ -156,6 +139,5 @@ export function useAgentPackageCommands() {
     deleteAgentPackageSession,
     runAgentPackage,
     sendAgentPackageMessage,
-    runAgentEvolution,
   }
 }

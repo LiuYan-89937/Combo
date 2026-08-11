@@ -15,10 +15,7 @@ const REQUEST_SCOPED_PREFIXES = [
   'runtime_resumed',
 ]
 
-const USER_INPUT_INTERRUPT_TYPES = new Set([
-  'create_agent_question',
-  'agent_evolution_question',
-])
+const USER_INPUT_INTERRUPT_TYPES = new Set(['ask_user'])
 
 const DEDICATED_INTERRUPT_PANEL_TYPES = new Set<string>()
 

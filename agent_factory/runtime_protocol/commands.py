@@ -1,0 +1,186 @@
+from __future__ import annotations
+
+from typing import Annotated, Literal, Union
+
+from pydantic import Field, field_validator, model_validator
+
+from agent_factory.runtime_protocol.contracts import (
+    ApprovalMode,
+    AttachmentRevisionRef,
+    ExecutionPreference,
+    FrozenProtocolModel,
+    ProtocolModel,
+    utc_now_text,
+)
+from agent_factory.runtime_protocol.errors import RuntimeErrorEnvelope
+from agent_factory.runtime_protocol.versioning import RUNTIME_PROTOCOL_VERSION
+
+
+CommandStatus = Literal[
+    "received",
+    "queued",
+    "running",
+    "completed",
+    "failed",
+    "cancelled",
+    "rejected",
+]
+TerminalCommandStatus = Literal["completed", "failed", "cancelled", "rejected"]
+
+
+class SendMessagePayload(FrozenProtocolModel):
+    kind: Literal["send_message"] = "send_message"
+    message_id: str
+    content: str
+    attachments: tuple[AttachmentRevisionRef, ...] = ()
+    execution_preference: ExecutionPreference | None = None
+    approval_mode: ApprovalMode | None = None
+
+    @field_validator("message_id", "content")
+    @classmethod
+    def _required_message_text(cls, value: str, info: object) -> str:
+        text = str(value or "").strip()
+        if not text:
+            field_name = getattr(info, "field_name", "value")
+            raise ValueError(f"{field_name} must not be empty")
+        return text
+
+
+class SetExecutionPreferencePayload(FrozenProtocolModel):
+    kind: Literal["set_execution_preference"] = "set_execution_preference"
+    execution_preference: ExecutionPreference
+    approval_mode: ApprovalMode
+    expected_policy_revision: int = Field(ge=1)
+
+
+class CancelRuntimeRequestPayload(FrozenProtocolModel):
+    kind: Literal["cancel_runtime_request"] = "cancel_runtime_request"
+    runtime_instance_id: str
+    request_id: str
+    reason: str
+
+    @field_validator("runtime_instance_id", "request_id", "reason")
+    @classmethod
+    def _required_cancel_text(cls, value: str, info: object) -> str:
+        text = str(value or "").strip()
+        if not text:
+            field_name = getattr(info, "field_name", "value")
+            raise ValueError(f"{field_name} must not be empty")
+        return text
+
+
+class ResumeInterruptPayload(FrozenProtocolModel):
+    kind: Literal["resume_interrupt"] = "resume_interrupt"
+    runtime_instance_id: str
+    request_id: str
+    interrupt_id: str
+    decision: Literal["approve", "deny", "answer"]
+    response: str | None = None
+
+    @field_validator("runtime_instance_id", "request_id", "interrupt_id")
+    @classmethod
+    def _required_interrupt_text(cls, value: str, info: object) -> str:
+        text = str(value or "").strip()
+        if not text:
+            field_name = getattr(info, "field_name", "value")
+            raise ValueError(f"{field_name} must not be empty")
+        return text
+
+    @field_validator("response")
+    @classmethod
+    def _optional_response(cls, value: str | None) -> str | None:
+        text = str(value or "").strip()
+        return text or None
+
+    @model_validator(mode="after")
+    def _answer_requires_response(self) -> "ResumeInterruptPayload":
+        if self.decision == "answer" and self.response is None:
+            raise ValueError("answer interrupt decision requires response")
+        if self.decision != "answer" and self.response is not None:
+            raise ValueError("approve and deny decisions cannot carry response")
+        return self
+
+
+CommandPayload = Annotated[
+    Union[
+        SendMessagePayload,
+        SetExecutionPreferencePayload,
+        CancelRuntimeRequestPayload,
+        ResumeInterruptPayload,
+    ],
+    Field(discriminator="kind"),
+]
+
+
+class CommandEnvelope(FrozenProtocolModel):
+    protocol_version: str = RUNTIME_PROTOCOL_VERSION
+    command_id: str
+    client_instance_id: str
+    principal_id: str
+    session_id: str
+    payload: CommandPayload
+    submitted_at: str = Field(default_factory=utc_now_text)
+
+    @field_validator(
+        "protocol_version",
+        "command_id",
+        "client_instance_id",
+        "principal_id",
+        "session_id",
+    )
+    @classmethod
+    def _required_envelope_text(cls, value: str, info: object) -> str:
+        text = str(value or "").strip()
+        if not text:
+            field_name = getattr(info, "field_name", "value")
+            raise ValueError(f"{field_name} must not be empty")
+        return text
+
+
+class CommandReceipt(ProtocolModel):
+    command_id: str
+    client_instance_id: str
+    principal_id: str
+    session_id: str
+    status: CommandStatus
+    receipt_revision: int = Field(default=1, ge=1)
+    request_id: str | None = None
+    runtime_instance_id: str | None = None
+    error: RuntimeErrorEnvelope | None = None
+    rejection_code: str | None = None
+    received_at: str = Field(default_factory=utc_now_text)
+    updated_at: str = Field(default_factory=utc_now_text)
+    terminal_at: str | None = None
+
+    @field_validator("command_id", "client_instance_id", "principal_id", "session_id")
+    @classmethod
+    def _required_receipt_text(cls, value: str, info: object) -> str:
+        text = str(value or "").strip()
+        if not text:
+            field_name = getattr(info, "field_name", "value")
+            raise ValueError(f"{field_name} must not be empty")
+        return text
+
+    @field_validator("request_id", "runtime_instance_id", "terminal_at", "rejection_code")
+    @classmethod
+    def _optional_receipt_text(cls, value: str | None) -> str | None:
+        text = str(value or "").strip()
+        return text or None
+
+    @model_validator(mode="after")
+    def _terminal_state_is_consistent(self) -> "CommandReceipt":
+        terminal = self.status in {"completed", "failed", "cancelled", "rejected"}
+        if terminal != bool(self.terminal_at):
+            raise ValueError("terminal command status and terminal_at must be set together")
+        if self.status == "failed" and self.error is None:
+            raise ValueError("failed command receipt requires error")
+        if self.status == "rejected" and self.rejection_code is None:
+            raise ValueError("rejected command receipt requires rejection_code")
+        if self.status != "rejected" and self.rejection_code is not None:
+            raise ValueError("only rejected command receipt can carry rejection_code")
+        if self.error is not None:
+            if self.error.request_id != self.request_id:
+                raise ValueError("command error request identity does not match receipt")
+            if self.error.runtime_instance_id != self.runtime_instance_id:
+                raise ValueError("command error runtime identity does not match receipt")
+        return self

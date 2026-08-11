@@ -25,7 +25,7 @@ from agent_factory.model_pool.schema import (
     DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS,
     ModelProfileBinding,
 )
-from agent_factory.model_pool.store import ModelPoolStoreError
+from agent_factory.model_pool.store import ModelPoolRevisionConflict, ModelPoolStoreError
 
 
 def create_model_pool_router() -> APIRouter:
@@ -41,10 +41,10 @@ def create_model_pool_router() -> APIRouter:
         return {"credentials": [item.to_public().model_dump(mode="json") for item in store.list_credentials()]}
 
     @router.post("/credentials")
-    def upsert_credential(payload: dict[str, Any]):
+    def create_credential(payload: dict[str, Any]):
         store = ModelPoolStore()
         try:
-            credential = store.upsert_credential(_credential_from_payload(payload, store=store))
+            credential = store.create_credential(_credential_from_payload(payload, store=store))
             reset_embedding_model()
         except Exception as exc:
             raise _http_error(exc) from exc
@@ -119,10 +119,10 @@ def create_model_pool_router() -> APIRouter:
         return ModelUsageStore().summary(group_by=value, days=days)
 
     @router.post("/profiles")
-    def upsert_profile(payload: dict[str, Any]):
+    def create_profile(payload: dict[str, Any]):
         store = ModelPoolStore()
         try:
-            profile = store.upsert_profile(_profile_from_payload(payload, store=store))
+            profile = store.create_profile(_profile_from_payload(payload, store=store))
             credential = store.get_credential(profile.credential_id)
             reset_embedding_model()
         except Exception as exc:
@@ -213,7 +213,12 @@ def _profile_from_payload(payload: dict[str, Any], *, store: ModelPoolStore) -> 
 
 
 def _http_error(exc: Exception) -> HTTPException:
-    status = 404 if isinstance(exc, ModelPoolStoreError) and str(exc).startswith("unknown ") else 400
+    if isinstance(exc, ModelPoolRevisionConflict):
+        status = 409
+    elif isinstance(exc, ModelPoolStoreError) and str(exc).startswith("unknown "):
+        status = 404
+    else:
+        status = 400
     return HTTPException(status_code=status, detail=f"{type(exc).__name__}: {exc}")
 
 

@@ -29,7 +29,6 @@
                 :message="item.message"
                 :streaming="isMessageStreaming(item.message.streamId)"
                 quoteable
-                :tip-context="tipContextFor(item.message)"
                 :workspace-context="messageWorkspaceContext"
                 @quote="addMessageReference"
               />
@@ -58,17 +57,6 @@
       <ToolApprovalPanel
         v-if="hasApprovalRequests"
         class="approval-section"
-      />
-      <PublishConfirmationPanel
-        v-if="runtimeStore.isPublishConfirmationPending"
-        class="approval-section"
-      />
-      <ResourceRequestPanel
-        v-if="resourceRequests.length && resourceWorkspaceId"
-        :workspace-id="resourceWorkspaceId"
-        :requests="resourceRequests"
-        @configured="handleResourceConfigured"
-        @skip="handleResourceSkipped"
       />
 
       <!-- 输入区 -->
@@ -111,7 +99,6 @@
       @update:show="handleWorkspaceDialogVisibility"
       @create="completeWorkspaceSelection"
     />
-    <TipPanel v-if="tipScopeId" :scope-type="tipScopeType" :scope-id="tipScopeId" />
   </div>
 </template>
 
@@ -129,8 +116,6 @@ import { useCommand } from '@/composables/useCommand'
 import MessageItem from '@/components/chat/MessageItem.vue'
 import MessageInput from '@/components/chat/MessageInput.vue'
 import ToolApprovalPanel from '@/components/chat/ToolApprovalPanel.vue'
-import PublishConfirmationPanel from '@/components/chat/PublishConfirmationPanel.vue'
-import ResourceRequestPanel from '@/components/chat/ResourceRequestPanel.vue'
 import SchedulerRunStatusCard from '@/components/scheduler/SchedulerRunStatusCard.vue'
 import ConversationFloatingDock from '@/components/chat/ConversationFloatingDock.vue'
 import NewAgentSessionDialog from '@/components/agent/NewAgentSessionDialog.vue'
@@ -139,8 +124,6 @@ import type { RuntimeAttachmentInput } from '@/types/protocol'
 import type { TranscriptItem } from '@/types/protocol'
 import { useContextReferenceStore } from '@/stores/contextReferences'
 import { messageContextReference } from '@/utils/contextReferences'
-import TipPanel from '@/components/chat/TipPanel.vue'
-import type { TipMessageContext } from '@/stores/tips'
 import { useResourceContext } from '@/composables/useResourceContext'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { isAgentSessionsLanding as routeIsAgentSessionsLanding } from '@/utils/agentSessionRoute'
@@ -179,20 +162,8 @@ const referenceScope = computed(() => [
   runtimeStore.currentMode,
   runtimeStore.activeFactorySessionId || runtimeStore.activeAgentSessionId || 'new',
 ].join(':'))
-const tipScope = computed(() => {
-  if (runtimeStore.activeAgentSessionId) {
-    return { scopeType: 'agent-session', scopeId: runtimeStore.activeAgentSessionId }
-  }
-  if (runtimeStore.activeFactorySessionId) {
-    return { scopeType: 'factory-session', scopeId: runtimeStore.activeFactorySessionId }
-  }
-  return null
-})
-const tipScopeType = computed(() => tipScope.value?.scopeType || 'factory-session')
-const tipScopeId = computed(() => tipScope.value?.scopeId || '')
 
 const {
-  isAgentSessionLanding,
   inputPlaceholder,
   inputDisabled,
   modelConfigurationMissing,
@@ -215,24 +186,6 @@ const {
   thinkingMessages,
   timelineItems,
 } = useFactoryMessageProjection()
-
-const resourceRequests = computed(() => {
-  const values = runtimeStore.pendingInterrupt?.payload?.resource_requests
-  return Array.isArray(values) ? values.filter((item): item is {
-    resource_id: string
-    description?: string
-    secret?: boolean
-    required?: boolean
-    value_schema?: Record<string, unknown>
-    secret_fields?: string[]
-  } => Boolean(item && typeof item.resource_id === 'string')) : []
-})
-
-const resourceWorkspaceId = computed(() => String(
-  runtimeStore.pendingInterrupt?.payload?.workspace_id
-    || resourceContext.workspaceContext.value.createAgentSessionId
-    || '',
-).trim())
 
 const backgroundTaskSessionId = computed(() => (
   runtimeStore.activeAgentSessionId || runtimeStore.activeFactorySessionId || null
@@ -317,27 +270,6 @@ function handleSteer(requestId: string) {
 function addMessageReference(message: TranscriptItem) {
   referenceStore.add(messageContextReference(message), referenceScope.value)
   nextTick(() => inputRef.value?.focus())
-}
-
-function tipContextFor(message: TranscriptItem): Omit<TipMessageContext, 'sourceMessageId' | 'sourceRole' | 'sourceContent'> | null {
-  if (!tipScopeId.value || message.role !== 'assistant') return null
-  const modelProfileId = String(message.metadata?.model_profile_id || '').trim() || null
-  const messageReasoningIntensity = message.metadata?.reasoning_intensity
-  return {
-    scopeType: tipScopeType.value,
-    scopeId: tipScopeId.value,
-    agentPackageId: String(message.metadata?.package_id || agentStore.activeChatPackageId || 'factory_chat'),
-    modelProfileId,
-    reasoningIntensity: typeof messageReasoningIntensity === 'number' ? messageReasoningIntensity : null,
-  }
-}
-
-function handleResourceConfigured(resourceIds: string[]) {
-  handleSend(`运行时资源 ${resourceIds.join(', ')} 已安全配置。`, [])
-}
-
-function handleResourceSkipped() {
-  handleSend('该运行时资源暂不配置，请继续完成可实现部分；发布后可在包详情中填写。', [])
 }
 
 function scrollToBottom(behavior: ScrollBehavior = 'auto') {
@@ -459,7 +391,7 @@ async function openRoutedAgentSession(version: number): Promise<boolean> {
     if (emptyAgentRouteIsActive(packageId, workspaceId)) return true
     agentStore.enterAgentChat(packageId, null)
     runtimeStore.showEmptyAgentPackageSession(packageId, workspaceId)
-    await commands.selectAgentPackage(packageId, 'run')
+    await commands.selectAgentPackage(packageId)
     return true
   }
   if (!sessionId) {
@@ -490,7 +422,7 @@ async function openRoutedAgentSession(version: number): Promise<boolean> {
   }
   agentStore.enterAgentChat(packageId, sessionId)
   runtimeStore.expectAgentPackageSession(packageId, sessionId)
-  await commands.selectAgentPackage(packageId, 'run')
+  await commands.selectAgentPackage(packageId)
   if (version !== routeActivationVersion || !routeMatchesAgentSession(packageId, sessionId)) return true
   await commands.loadAgentPackageSession(
     packageId,

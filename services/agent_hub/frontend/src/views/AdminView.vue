@@ -1,8 +1,7 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted } from 'vue'
 import { storeToRefs } from 'pinia'
 import AppReleaseManager from '@/components/admin/AppReleaseManager.vue'
-import AgentReviewManager from '@/components/admin/AgentReviewManager.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseIcon from '@/components/base/BaseIcon.vue'
 import StateBlock from '@/components/base/StateBlock.vue'
@@ -11,11 +10,10 @@ import { useSeo } from '@/composables/useSeo'
 
 const auth = useAuthStore()
 const { user, resolved, loading, isAuthenticated, isAdmin } = storeToRefs(auth)
-const tab = ref<'app' | 'agents'>('app')
 
 useSeo(() => ({
   title: '管理控制台',
-  description: 'FastAgentFactory 应用发布与 AgentHub 审核控制台。',
+  description: 'FastAgentFactory 应用发布与更新日志管理控制台。',
   path: '/admin',
   noindex: true,
 }))
@@ -30,7 +28,7 @@ onMounted(() => auth.ensure())
         <div>
           <span class="eyebrow">Administration</span>
           <h1>管理控制台</h1>
-          <p>管理桌面应用版本、更新日志与 AgentHub 审核。</p>
+          <p>管理桌面应用版本、安装包与更新日志。</p>
         </div>
         <span v-if="user" class="admin__identity">
           <img v-if="user.avatar_url" :src="user.avatar_url" alt="" width="32" height="32" />
@@ -56,24 +54,7 @@ onMounted(() => auth.ensure())
         body="当前 GitHub 账号不在管理员白名单中。"
       />
       <template v-else>
-        <nav class="tabs" aria-label="管理功能">
-          <button
-            type="button"
-            :class="{ 'tabs__active': tab === 'app' }"
-            @click="tab = 'app'"
-          >
-            应用发布
-          </button>
-          <button
-            type="button"
-            :class="{ 'tabs__active': tab === 'agents' }"
-            @click="tab = 'agents'"
-          >
-            Agent 包审核
-          </button>
-        </nav>
-        <AppReleaseManager v-if="tab === 'app'" />
-        <AgentReviewManager v-else />
+        <AppReleaseManager />
       </template>
     </main>
   </div>

@@ -31,7 +31,6 @@ ALWAYS_LONG_RUNNING_COMMANDS = {
     "initialize_agent_package",
     "send_agent_package_message",
     "run_agent_package",
-    "run_agent_evolution",
     "run_agent_group_member",
 }
 
@@ -45,7 +44,6 @@ COMMAND_MODE_HINTS = {
     "initialize_agent_package": "agent_package",
     "send_agent_package_message": "agent_package",
     "run_agent_package": "agent_package",
-    "run_agent_evolution": "evolve_agent",
     "run_agent_group_member": "agent_group",
 }
 

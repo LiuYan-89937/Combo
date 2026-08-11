@@ -16,9 +16,6 @@ export function useResourceContext() {
 
   const packageId = computed(() => {
     if (agentStore.activeChatPackageId) return agentStore.activeChatPackageId
-    if (runtimeStore.currentMode === 'evolve_agent' && agentStore.selectedPackageId) {
-      return agentStore.selectedPackageId
-    }
     return null
   })
 
@@ -27,29 +24,9 @@ export function useResourceContext() {
     return agentStore.agentPackages.find((pkg) => pkg.package_id === packageId.value) || null
   })
 
-  const activeFactorySession = computed(() => (
-    runtimeStore.sessions.find((session: any) => session.session_id === runtimeStore.activeFactorySessionId) || null
-  ))
-  const createAgentSessionId = computed(() => (
-    String(activeFactorySession.value?.create_agent_session_id || '').trim() || null
-  ))
   const workspaceContext = computed<WorkspaceRequestContext>(() => {
     if (route.name === 'AgentGroup' && agentGroupStore.activeGroup?.group_id) {
       return { resourceMode: 'agent_group', groupId: agentGroupStore.activeGroup.group_id }
-    }
-    if (runtimeStore.currentMode === 'create_agent') {
-      return {
-        resourceMode: 'create_agent',
-        factorySessionId: runtimeStore.activeFactorySessionId,
-        createAgentSessionId: createAgentSessionId.value,
-      }
-    }
-    if (runtimeStore.currentMode === 'evolve_agent') {
-      return {
-        resourceMode: 'evolve_agent',
-        packageId: agentStore.selectedPackageId,
-        factorySessionId: runtimeStore.activeFactorySessionId,
-      }
     }
     if (agentStore.activeChatPackageId) {
       return {
@@ -70,8 +47,6 @@ export function useResourceContext() {
     workspaceContext.value.packageId || '',
     workspaceContext.value.packageSessionId || '',
     workspaceContext.value.workspaceId || '',
-    workspaceContext.value.factorySessionId || '',
-    workspaceContext.value.createAgentSessionId || '',
     workspaceContext.value.groupId || '',
   ].join(':'))
   const workspaceDefaultScope = computed<WorkspaceScope>(() => 'workdir')
@@ -86,11 +61,9 @@ export function useResourceContext() {
   ))
   const label = computed(() => {
     if (workspaceContext.value.resourceMode === 'agent_group') return agentGroupStore.activeGroup?.title || 'Agent Group'
-    if (runtimeStore.currentMode === 'create_agent') return t('resource.manufacturing')
     if (!packageId.value) return t('resource.chat')
     const pkg = packageInfo.value
-    const prefix = runtimeStore.currentMode === 'evolve_agent' ? t('resource.evolution') : t('resource.subAgent')
-    return `${prefix} · ${pkg?.agent_name || pkg?.name || t('common.unnamedAgent')}`
+    return `${t('resource.subAgent')} · ${pkg?.agent_name || pkg?.name || t('common.unnamedAgent')}`
   })
 
   return {

@@ -74,7 +74,7 @@ class ContextSystemRuntime:
         active_limits = self.model_context_limits(
             services=services,
             state=state,
-            model_role="main",
+            model_role=_runtime_model_operation(services),
         )
         compression_policy = policy.compression.model_copy(
             update={"trigger_token_threshold": active_limits.compression_trigger_tokens}
@@ -431,6 +431,11 @@ def default_context_runtime(config: ContextContractConfig | None = None) -> Cont
     return ContextSystemRuntime(config=config or ContextContractConfig())
 
 
+def _runtime_model_operation(services: Any) -> str:
+    service = getattr(services, "model_operation_service", None)
+    return "main_turn" if bool(getattr(service, "authoritative_runtime_model", False)) else "main"
+
+
 def _reusable_turn_evidence_frame(*, state: Any, node_id: str) -> LLMContextFrame | None:
     model_context = getattr(getattr(state, "context", None), "model_context", {}) or {}
     evidence = model_context.get("runtime_turn_evidence") if isinstance(model_context, dict) else None
@@ -474,7 +479,6 @@ def _state_with_turn_evidence(*, state: Any, node_id: str, frame: LLMContextFram
         node_id: frame_payload,
         "runtime_turn_evidence": evidence,
     }
-    updated.context.assembly_log.append(f"system_context_prepare:{node_id}")
     return updated
 
 

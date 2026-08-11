@@ -52,10 +52,6 @@ export function useShowcaseDirector(options: ShowcaseDirectorOptions) {
       cycle += 1
       await conversationScene()
       await transition()
-      await manufacturingScene()
-      await transition()
-      await evolutionScene()
-      await transition()
       await collaborationScene()
       await transition()
       await knowledgeScene()
@@ -108,87 +104,6 @@ export function useShowcaseDirector(options: ShowcaseDirectorOptions) {
       }),
       textPart('初版已经放进工作区：周四、周五以会议为主，周末安排上野、浅草和台场，并预留了雨天替代方案。'),
     ], { display_name: '闲聊' }))
-    await wait(READING_PAUSE_MS)
-  }
-
-  async function manufacturingScene(): Promise<void> {
-    await showcaseRouter.replace({
-      name: 'Factory',
-      query: { package_id: CHAT_PACKAGE_ID, new: '1' },
-    })
-    await waitForView('.message-input-container')
-    agentStore.enterAgentChat(CHAT_PACKAGE_ID, null)
-    runtimeStore.showEmptyAgentPackageSession(CHAT_PACKAGE_ID)
-    resetConversation()
-    uiStore.setConversationDockPanel('workspace')
-    await wait(900)
-
-    const input = await waitForElement<HTMLTextAreaElement>('.message-input-container textarea')
-    if (!input) return
-    await typeText(input, '制造一个能持续调研信息并交付 PDF 的旅行规划 Agent')
-    appendMessage(message('user', [
-      textPart('制造一个能持续调研信息并交付 PDF 的旅行规划 Agent'),
-    ]))
-    input.value = ''
-    await wait(1100)
-
-    appendMessage(message('assistant', [
-      textPart('我会把需求转成可运行的 Agent 包：先定义交付标准，再配置工具、上下文与运行模式。'),
-      toolPart('create_agent_authoring', 'running', {
-        action: 'configure_package',
-        agent_name: '旅行规划师',
-      }, null),
-    ], { display_name: '制造 Agent' }))
-    await wait(1900)
-    completeLastTool({
-      status: 'committed',
-      operations_count: 6,
-      affected_files: [
-        changedFile('package.json', 'created', 38),
-        changedFile('context.json', 'created', 24),
-        changedFile('tools/travel_plan.py', 'created', 112),
-      ],
-      duration_ms: 1240,
-    })
-    appendMessage(message('assistant', [
-      textPart('基础包已经生成并通过结构检查。旅行规划师现在具备明确的输入、执行步骤与 PDF 交付标准。'),
-    ], { display_name: '制造 Agent' }))
-    await wait(READING_PAUSE_MS)
-  }
-
-  async function evolutionScene(): Promise<void> {
-    agentStore.selectPackage(SHOWCASE_PACKAGE_ID)
-    await showcaseRouter.replace({
-      name: 'Factory',
-      query: { package_id: CHAT_PACKAGE_ID, new: '1' },
-    })
-    await waitForView('.message-input-container')
-    agentStore.enterAgentChat(CHAT_PACKAGE_ID, null)
-    runtimeStore.showEmptyAgentPackageSession(CHAT_PACKAGE_ID)
-    resetConversation()
-    await wait(1000)
-
-    appendMessage(message('user', [
-      textPart('让它能根据同行人的年龄、预算和天气自动给出替代路线。'),
-    ]))
-    await wait(1100)
-    appendMessage(message('assistant', [
-      textPart('正在分析现有旅行规划师的边界。我会保留原有交付格式，并增强约束建模与备选方案生成。'),
-      toolPart('evolve_agent_authoring', 'running', {
-        package_id: SHOWCASE_PACKAGE_ID,
-        focus: ['同行人约束', '预算控制', '天气备选'],
-      }, null),
-    ], { display_name: '进化 Agent' }))
-    await wait(1900)
-    completeLastTool({
-      status: 'committed',
-      version: '2.0',
-      improved_capabilities: ['家庭成员适配', '预算分级', '天气降级路线'],
-      duration_ms: 1680,
-    })
-    appendMessage(message('assistant', [
-      textPart('进化完成。新版会在每天的计划中同时给出主路线、预算区间和雨天替代方案。'),
-    ], { display_name: '进化 Agent' }))
     await wait(READING_PAUSE_MS)
   }
 
@@ -379,7 +294,6 @@ export function useShowcaseDirector(options: ShowcaseDirectorOptions) {
     runtimeStore.activeRequests = {}
     runtimeStore.runStatus = 'idle'
     runtimeStore.pendingInterrupt = null
-    runtimeStore.createAgentPublishReady = null
   }
 
   function appendMessage(item: TranscriptItem): void {
@@ -522,13 +436,6 @@ export function useShowcaseDirector(options: ShowcaseDirectorOptions) {
     }
   }
 
-  function changedFile(path: string, changeType: string, addedLines: number) {
-    return {
-      path,
-      change_type: changeType,
-      change_summary: { added_lines: addedLines, removed_lines: 0 },
-    }
-  }
 }
 
 function knowledgeSource(

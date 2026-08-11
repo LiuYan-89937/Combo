@@ -24,7 +24,6 @@ const menuOpen = ref(false)
 
 const links = computed(() => [
   { to: '/', label: t('nav.product'), exact: true },
-  { to: '/hub', label: t('nav.hub') },
   { to: '/changelog', label: t('nav.changelog') },
   { to: '/guide', label: t('nav.guide') },
 ])
@@ -72,10 +71,9 @@ function signIn() {
       <div class="header__actions">
         <LangToggle />
         <ThemeToggle />
-        <RouterLink to="/publish" class="header__publish">{{ t('nav.publish') }}</RouterLink>
         <RouterLink v-if="isAdmin" to="/admin" class="header__publish">{{ t('nav.admin') }}</RouterLink>
         <template v-if="isAuthenticated && user">
-          <RouterLink to="/publish" class="header__user" :title="user.display_name || user.github_login">
+          <RouterLink to="/admin" class="header__user" :title="user.display_name || user.github_login">
             <img
               v-if="user.avatar_url"
               :src="user.avatar_url"
@@ -116,7 +114,6 @@ function signIn() {
           >
             {{ link.label }}
           </RouterLink>
-          <RouterLink to="/publish" class="sheet__link">{{ t('nav.publish') }}</RouterLink>
           <RouterLink v-if="isAdmin" to="/admin" class="sheet__link">{{ t('nav.admin') }}</RouterLink>
           <a class="sheet__link" :href="config.githubRepoUrl" target="_blank" rel="noopener noreferrer">
             {{ t('nav.github') }}

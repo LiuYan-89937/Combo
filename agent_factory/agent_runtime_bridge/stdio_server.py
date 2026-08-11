@@ -8,8 +8,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from langgraph.errors import GraphDrained
-from langgraph.runtime import RunControl
+from agent_factory.dynamic_runtime.run_control import RuntimeRunControl
 
 from agent_factory.assembly.compiler import AgentAssemblyCompiler
 from agent_factory.environment_system.runtime import RuntimeDependencyError, activate_runtime_dependencies
@@ -40,10 +39,9 @@ from agent_factory.scheduler_system.execution_config import (
     scheduler_run_timeout_seconds,
     scheduler_run_user_config,
 )
-from agent_factory.scheduler_system.seeds import apply_scheduler_seed_contract
 from agent_factory.knowledge_system.events import KNOWLEDGE_EVENT_TYPES
 from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
-from agent_factory.package_runtime.run_control import RuntimeRunControlRegistry
+from agent_factory.dynamic_runtime.run_control import RuntimeRunControlRegistry
 from agent_factory.package_runtime.drained_checkpoint import (
     finalize_drained_runtime_checkpoint,
     repair_incomplete_message_checkpoint,
@@ -191,14 +189,14 @@ class BridgeRuntimeState:
         reason: str = "user_cancelled",
         request_id: str | None = None,
     ) -> int:
-        return self.run_controls.request_drain(reason=reason, request_id=request_id)
+        return self.run_controls.request_drain(reason=reason, runtime_instance_id=request_id)
 
-    def _register_run_control(self, request_id: str, command_type: str) -> RunControl | None:
+    def _register_run_control(self, request_id: str, command_type: str) -> RuntimeRunControl | None:
         if command_type not in {"run_message", "resume_interrupt"} or not request_id:
             return None
         return self.run_controls.register(request_id)
 
-    def _forget_run_control(self, request_id: str, control: RunControl | None) -> None:
+    def _forget_run_control(self, request_id: str, control: RuntimeRunControl | None) -> None:
         if control is None or not request_id:
             return
         self.run_controls.release(request_id, control)
@@ -302,7 +300,6 @@ class BridgeRuntimeState:
             self.compiled_runtime = CompiledRuntime(package=package, compiled=compiled, facade=facade)
             _configure_scheduler_runtime(package=package, compiled=compiled, facade=facade)
             _configure_knowledge_runtime(compiled=compiled)
-            _apply_scheduler_seeds(package=package, compiled=compiled)
             self.background_workers.add_many(runtime_build.background_workers)
             for lifecycle_event in self.background_workers.start_all():
                 if lifecycle_event.status == "failed":
@@ -395,19 +392,6 @@ def _configure_knowledge_runtime(*, compiled: Any) -> None:
     if knowledge_runtime is None:
         return
     knowledge_runtime.event_sink = _knowledge_event_sink
-
-
-def _apply_scheduler_seeds(*, package: LoadedAgentPackage, compiled: Any) -> None:
-    scheduler_runtime = getattr(compiled.compiled_app.services, "scheduler_runtime", None)
-    if scheduler_runtime is None:
-        return
-    contract = package.contracts.get("scheduler_seed") if isinstance(package.contracts, dict) else None
-    package_id = package.manifest.factory_run_id or package.package_root.name
-    apply_scheduler_seed_contract(
-        runtime=scheduler_runtime,
-        contract_payload=contract if isinstance(contract, dict) else None,
-        package_id=package_id,
-    )
 
 
 def _emit_worker_lifecycle_failure(*, package: LoadedAgentPackage, lifecycle_event: WorkerLifecycleEvent) -> None:
@@ -616,7 +600,7 @@ def _run_message(
     payload: dict[str, Any],
     runtime: CompiledRuntime,
     *,
-    run_control: RunControl | None = None,
+    run_control: RuntimeRunControl | None = None,
 ) -> int:
     message = str(payload.get("message") or "").strip()
     if not message and not has_attachment_payload(payload.get("attachments")):
@@ -659,7 +643,6 @@ def _run_message(
         status="running",
     )
     final_state = None
-    graph_drained = False
     stream_iter = facade.instance.controller.stream(
         compiled.compiled_app,
         run_context.state,
@@ -672,13 +655,11 @@ def _run_message(
                 return 0
             if stream_mode == "runtime_final":
                 final_state = chunk
-    except GraphDrained:
-        graph_drained = True
     finally:
         close = getattr(stream_iter, "close", None)
         if callable(close):
             close()
-    if graph_drained or bool(run_control and run_control.drain_requested):
+    if bool(run_control and run_control.drain_requested):
         return _emit_stopped_runtime(
             normalizer,
             run_context,
@@ -749,7 +730,7 @@ def _resume_interrupt(
     payload: dict[str, Any],
     runtime: CompiledRuntime,
     *,
-    run_control: RunControl | None = None,
+    run_control: RuntimeRunControl | None = None,
 ) -> int:
     session_id = str(payload.get("session_id") or "").strip()
     resume_payload = payload.get("resume_payload")
@@ -773,7 +754,6 @@ def _resume_interrupt(
     run_context.state.execution.timeout_seconds = 0
     run_context.state.execution.max_retries = request_policy.max_retries
     final_state = None
-    graph_drained = False
     stream_iter = facade.instance.controller.stream_resume(
         compiled.compiled_app,
         run_context.state,
@@ -787,13 +767,11 @@ def _resume_interrupt(
                 return 0
             if stream_mode == "runtime_final":
                 final_state = chunk
-    except GraphDrained:
-        graph_drained = True
     finally:
         close = getattr(stream_iter, "close", None)
         if callable(close):
             close()
-    if graph_drained or bool(run_control and run_control.drain_requested):
+    if bool(run_control and run_control.drain_requested):
         return _emit_stopped_runtime(
             normalizer,
             run_context,

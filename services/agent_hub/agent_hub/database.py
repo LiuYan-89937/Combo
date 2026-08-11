@@ -9,7 +9,7 @@ from typing import Iterator
 from agent_hub.config import Settings
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 SQLITE_BUSY_TIMEOUT_MS = 10_000
 
 
@@ -72,60 +72,6 @@ class Database:
 
                 create index if not exists idx_sessions_user
                 on sessions(user_id, expires_at);
-
-                create table if not exists uploads (
-                  upload_id text primary key,
-                  user_id text not null references users(user_id),
-                  filename text not null,
-                  object_key text not null unique,
-                  expected_size integer not null,
-                  actual_size integer,
-                  status text not null,
-                  error_code text,
-                  error_message text,
-                  claimed_at text,
-                  validation_json text,
-                  created_at text not null,
-                  updated_at text not null
-                );
-
-                create index if not exists idx_uploads_status
-                on uploads(status, created_at);
-
-                create table if not exists packages (
-                  package_row_id text primary key,
-                  publisher_user_id text not null references users(user_id),
-                  publisher_login text not null collate nocase,
-                  package_id text not null,
-                  name text not null,
-                  description text not null,
-                  created_at text not null,
-                  updated_at text not null,
-                  unique(publisher_login, package_id)
-                );
-
-                create table if not exists releases (
-                  release_id text primary key,
-                  package_row_id text not null references packages(package_row_id),
-                  upload_id text not null unique references uploads(upload_id),
-                  version text not null,
-                  sha256 text not null,
-                  object_key text not null unique,
-                  size_bytes integer not null,
-                  status text not null,
-                  validation_json text not null,
-                  changelog text not null default '',
-                  download_count integer not null default 0,
-                  reviewed_by text references users(user_id),
-                  review_message text,
-                  created_at text not null,
-                  published_at text,
-                  updated_at text not null,
-                  unique(package_row_id, version)
-                );
-
-                create index if not exists idx_releases_public
-                on releases(status, published_at);
 
                 create table if not exists app_releases (
                   app_release_id text primary key,

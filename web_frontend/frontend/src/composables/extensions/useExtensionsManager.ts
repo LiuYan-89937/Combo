@@ -6,6 +6,7 @@ import { useManagedResourceContext } from '@/composables/useManagedResourceConte
 import { useExtensionStore } from '@/stores/extension'
 import { useAgentStore } from '@/stores/agent'
 import { extensionsApi } from '@/api/extensions'
+import { SYSTEM_CHAT_PACKAGE_ID } from '@/utils/resourceScope'
 import type {
   McpServerConfig,
   SkillConfig,
@@ -42,7 +43,7 @@ export function useExtensionsManager() {
   const mcpInstallStopping = ref(false)
   const mcpTestRequestId = ref<string | null>(null)
   const mcpTestStopping = ref(false)
-  const selectedAssemblyTargetId = ref('system:create_agent')
+  const selectedAssemblyTargetId = ref('system:chat')
   const bindingsByTarget = ref<Record<string, { mcp_server_ids: string[]; skill_ids: string[] }>>({})
   const draggingExtension = ref<{ kind: 'mcp' | 'skill'; identifier: string } | null>(null)
   const assemblyBusyTargetId = ref<string | null>(null)
@@ -61,18 +62,11 @@ export function useExtensionsManager() {
   const assemblyTargets = computed(() => {
     const systemTargets = [
       {
-        id: 'system:create_agent',
-        packageId: '',
-        resourceMode: 'create_agent',
-        name: t('resource.manufacturing'),
-        glyph: t('extensions.manufacturingGlyph'),
-      },
-      {
-        id: 'system:evolve_agent',
-        packageId: '',
-        resourceMode: 'evolve_agent',
-        name: t('resource.evolution'),
-        glyph: t('extensions.evolutionGlyph'),
+        id: 'system:chat',
+        packageId: SYSTEM_CHAT_PACKAGE_ID,
+        resourceMode: 'package',
+        name: t('resource.chat'),
+        glyph: t('resource.chat').slice(0, 1).toUpperCase(),
       },
     ]
     const packages = agentStore.agentPackages.map((pkg) => ({

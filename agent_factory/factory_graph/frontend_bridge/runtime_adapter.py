@@ -7,8 +7,6 @@ from typing import Any
 
 from agent_factory.env import load_agentfactory_dotenv
 from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import AgentPackageRuntimeManager
-from agent_factory.create_agent.runtime import CreateAgentRuntime
-from agent_factory.evolution import AgentEvolutionRuntime
 from agent_factory.factory_graph.frontend_bridge.protocol import FactoryFrontendCommand, FactoryMode, event
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_agent_packages import RuntimeAgentPackageCommandMixin
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_resources import RuntimeResourceCommandMixin
@@ -18,10 +16,7 @@ from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import (
     Emit,
     FactoryBridgeOptions,
     PendingAgentPackageRun,
-    PendingCreateAgentRun,
-    PendingEvolutionRun,
 )
-from agent_factory.factory_graph.session import FactorySessionManager
 from agent_factory.memory_system.factory import shutdown_factory_memory_worker
 from agent_factory.runtime_kernel.background_workers import RuntimeBackgroundWorkerManager
 from agent_factory.scheduler_system import SchedulerRuntime
@@ -35,11 +30,6 @@ class RuntimeCommandContext:
 
 _NAVIGATION_COMMAND_TYPES = frozenset(
     {
-        "start_session",
-        "switch_session",
-        "new_session",
-        "delete_session",
-        "set_mode",
         "select_agent_package",
     }
 )
@@ -52,7 +42,6 @@ class FactoryRuntimeAdapter(
     RuntimeSchedulerCommandMixin,
 ):
     emit: Emit
-    session_manager: FactorySessionManager | None = None
     checkpointer: Any = None
     checkpointer_handle: Any = None
     options: FactoryBridgeOptions = field(default_factory=FactoryBridgeOptions)
@@ -66,32 +55,14 @@ class FactoryRuntimeAdapter(
     pending_agent_package_runs: dict[tuple[str, str], PendingAgentPackageRun] = field(default_factory=dict)
     pending_agent_package_runs_lock: RLock = field(default_factory=RLock)
     pending_agent_group_runs: dict[str, PendingAgentPackageRun] = field(default_factory=dict)
-    pending_create_agent_run: PendingCreateAgentRun | None = None
-    pending_evolution_run: PendingEvolutionRun | None = None
     agent_package_runtime: AgentPackageRuntimeManager | None = None
-    create_agent_runtime: CreateAgentRuntime | None = None
-    evolution_runtime: AgentEvolutionRuntime | None = None
-    evolution_package_id: str | None = None
     scheduler_runtime: SchedulerRuntime | None = None
     background_workers: RuntimeBackgroundWorkerManager | None = None
 
     def __post_init__(self) -> None:
         load_agentfactory_dotenv()
-        if self.session_manager is None:
-            self.session_manager = FactorySessionManager.from_env()
         if self.agent_package_runtime is None:
             self.agent_package_runtime = AgentPackageRuntimeManager()
-        if self.create_agent_runtime is None:
-            self.create_agent_runtime = CreateAgentRuntime()
-        if self.evolution_runtime is None:
-            self.evolution_runtime = AgentEvolutionRuntime(
-                package_restart_handler=(
-                    lambda package_id, request_id: self.agent_package_runtime.restart_package_instance(
-                        package_id,
-                        request_id=request_id,
-                    )
-                )
-            )
         self.agent_package_runtime.set_emit(self.emit)
 
     @property
@@ -184,13 +155,6 @@ def _record_session_id(record: Any | None) -> str:
 
 
 _COMMAND_HANDLERS: dict[str, str] = {
-    "start_session": "start_session",
-    "list_sessions": "list_sessions",
-    "switch_session": "switch_session",
-    "new_session": "new_session",
-    "delete_session": "delete_session",
-    "set_mode": "set_mode",
-    "send_message": "send_message",
     "workspace_manage": "workspace_manage",
     "knowledge_manage": "knowledge_manage",
     "extensions_manage": "extensions_manage",
@@ -207,7 +171,6 @@ _COMMAND_HANDLERS: dict[str, str] = {
     "send_agent_package_message": "send_agent_package_message",
     "run_agent_package": "run_agent_package",
     "run_agent_group_member": "run_agent_group_member",
-    "run_agent_evolution": "run_agent_evolution",
     "resume_interrupt": "resume_interrupt",
     "cancel_runtime_request": "cancel_runtime_request",
 }

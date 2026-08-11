@@ -9,7 +9,6 @@ const FOREGROUND_RUN_COMMANDS = new Set<FactoryFrontendCommand['type']>([
   'resume_interrupt',
   'run_agent_package',
   'send_agent_package_message',
-  'run_agent_evolution',
 ])
 
 let cancellationBarrier: Promise<void> = Promise.resolve()

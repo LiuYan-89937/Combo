@@ -22,8 +22,8 @@ describe('i18n store', () => {
   it('resolves nested keys and interpolates variables', () => {
     const store = useI18nStore()
     store.setLocale('en')
-    expect(store.t('nav.hub')).toBe('AgentHub')
-    expect(store.t('hub.resultCount', { total: 12 })).toBe('12 results')
+    expect(store.t('nav.changelog')).toBe('Changelog')
+    expect(store.t('home.totalDownloads', { count: 12 })).toBe('12 installer downloads')
   })
 
   it('falls back to the raw path for an unknown key', () => {

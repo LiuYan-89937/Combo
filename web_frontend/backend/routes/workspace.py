@@ -14,7 +14,6 @@ from agent_factory.factory_graph.frontend_bridge.agent_package_runtime import Ag
 from agent_factory.agent_group_system.store import AgentGroupStore
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import SYSTEM_CHAT_PACKAGE_ID
 from agent_factory.factory_graph.frontend_bridge.workspace_resources import FrontendWorkspaceService
-from agent_factory.factory_graph.session import FactorySessionManager
 from agent_factory.native_directory_picker import (
     NativeDirectoryPicker,
     NativeDirectoryPickerUnavailableError,
@@ -229,7 +228,6 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         factory_session_id: str | None = None,
         package_session_id: str | None = None,
         workspace_id: str | None = None,
-        create_agent_session_id: str | None = None,
         group_id: str | None = None,
     ):
         event = await resource_command(
@@ -243,7 +241,6 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
                     factory_session_id=factory_session_id,
                     package_session_id=package_session_id,
                     workspace_id=workspace_id,
-                    create_agent_session_id=create_agent_session_id,
                     group_id=group_id,
                 ),
             },
@@ -260,7 +257,6 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         factory_session_id: str | None = None,
         package_session_id: str | None = None,
         workspace_id: str | None = None,
-        create_agent_session_id: str | None = None,
         group_id: str | None = None,
     ):
         event = await resource_command(
@@ -276,7 +272,6 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
                     factory_session_id=factory_session_id,
                     package_session_id=package_session_id,
                     workspace_id=workspace_id,
-                    create_agent_session_id=create_agent_session_id,
                     group_id=group_id,
                 ),
             },
@@ -294,7 +289,6 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         factory_session_id: str | None = None,
         package_session_id: str | None = None,
         workspace_id: str | None = None,
-        create_agent_session_id: str | None = None,
         group_id: str | None = None,
     ):
         event = await resource_command(
@@ -311,7 +305,6 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
                     factory_session_id=factory_session_id,
                     package_session_id=package_session_id,
                     workspace_id=workspace_id,
-                    create_agent_session_id=create_agent_session_id,
                     group_id=group_id,
                 ),
             },
@@ -328,12 +321,10 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         factory_session_id: str | None = None,
         package_session_id: str | None = None,
         workspace_id: str | None = None,
-        create_agent_session_id: str | None = None,
         group_id: str | None = None,
     ):
         service = FrontendWorkspaceService(
             agent_package_runtime=AgentPackageRuntimeManager(),
-            session_manager=FactorySessionManager.from_env(),
         )
         try:
             target = service.resolve_file(
@@ -343,7 +334,6 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
                     factory_session_id=factory_session_id,
                     package_session_id=package_session_id,
                     workspace_id=workspace_id,
-                    create_agent_session_id=create_agent_session_id,
                     group_id=group_id,
                 ),
                 scope=scope,
@@ -372,12 +362,10 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         factory_session_id: str | None = None,
         package_session_id: str | None = None,
         workspace_id: str | None = None,
-        create_agent_session_id: str | None = None,
         group_id: str | None = None,
     ):
         service = FrontendWorkspaceService(
             agent_package_runtime=AgentPackageRuntimeManager(),
-            session_manager=FactorySessionManager.from_env(),
         )
         try:
             target = service.resolve_entry(
@@ -387,7 +375,6 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
                     factory_session_id=factory_session_id,
                     package_session_id=package_session_id,
                     workspace_id=workspace_id,
-                    create_agent_session_id=create_agent_session_id,
                     group_id=group_id,
                 ),
                 scope=scope,
@@ -411,12 +398,10 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
         factory_session_id: str | None = None,
         package_session_id: str | None = None,
         workspace_id: str | None = None,
-        create_agent_session_id: str | None = None,
         group_id: str | None = None,
     ):
         service = FrontendWorkspaceService(
             agent_package_runtime=AgentPackageRuntimeManager(),
-            session_manager=FactorySessionManager.from_env(),
         )
         try:
             return service.delete_file(
@@ -426,7 +411,6 @@ def create_workspace_router(runtime_bridge: RuntimeBridge) -> APIRouter:
                     factory_session_id=factory_session_id,
                     package_session_id=package_session_id,
                     workspace_id=workspace_id,
-                    create_agent_session_id=create_agent_session_id,
                     group_id=group_id,
                 ),
                 scope=scope,
@@ -447,7 +431,6 @@ def workspace_context_payload(
     factory_session_id: str | None,
     package_session_id: str | None,
     workspace_id: str | None,
-    create_agent_session_id: str | None,
     group_id: str | None,
 ) -> dict[str, str]:
     return {
@@ -456,7 +439,6 @@ def workspace_context_payload(
         **({"factory_session_id": factory_session_id} if factory_session_id else {}),
         **({"package_session_id": package_session_id} if package_session_id else {}),
         **({"workspace_id": workspace_id} if workspace_id else {}),
-        **({"create_agent_session_id": create_agent_session_id} if create_agent_session_id else {}),
         **({"group_id": group_id} if group_id else {}),
     }
 

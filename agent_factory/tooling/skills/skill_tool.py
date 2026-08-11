@@ -56,7 +56,7 @@ def _input_schema() -> dict[str, Any]:
                 "description": (
                     "Skill Gateway action. Use describe before read_resource for the same current_system. "
                     "list/search/describe expose metadata only. "
-                    "load returns SKILL.md for one tracked manufacturing focus. list_loaded returns loaded state. "
+                    "load returns SKILL.md for one tracked runtime focus. list_loaded returns loaded state. "
                     "read_resource reads one referenced skill resource or script source listed by describe/load. "
                     "read_repair_resources reads validator-recommended resources as a compact bundle."
                 ),
@@ -90,7 +90,7 @@ def _input_schema() -> dict[str, Any]:
             },
             "current_system": {
                 "type": "string",
-                "description": "Required for describe/load/list_loaded/read_resource. Use the manufacturing focus or system id whose skill state should be tracked; it is advisory state, not a stage gate.",
+                "description": "Required for describe/load/list_loaded/read_resource. Use the runtime focus or system id whose skill state should be tracked; it is advisory state, not a stage gate.",
             },
             "reason": {
                 "type": "string",
@@ -151,7 +151,7 @@ def _tool_description() -> str:
             "When validator provides recommended_skill/recommended_resources, prefer action=read_repair_resources "
             "with those exact paths instead of guessing individual resource paths. "
             "Use action=list/search/describe to inspect metadata before loading content. "
-            "Use action=load with current_system and reason only when the current manufacturing context needs that SKILL.md body. "
+            "Use action=load with current_system and reason only when the current runtime context needs that SKILL.md body. "
             "Use action=list_loaded to inspect loaded state. "
             "Use action=read_resource with current_system only for resources or scripts explicitly listed by describe/load. "
             "read_resource defaults to a compact outline. Use mode=fragment for schema pointers. "

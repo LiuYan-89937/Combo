@@ -34,9 +34,6 @@ export function useManagedResourceContext(capability: ResourceTargetCapability) 
     const target = resourceTargetFromContext(inferred.workspaceContext.value)
     if (capability === 'system_and_package') return target || { kind: 'chat' }
     if (target?.kind === 'package' || target?.kind === 'chat') return target
-    if (target?.kind === 'evolve_agent' && target.packageId) {
-      return { kind: 'package', packageId: target.packageId }
-    }
     return { kind: 'chat' }
   })
 
@@ -75,8 +72,6 @@ export function useManagedResourceContext(capability: ResourceTargetCapability) 
     workspaceContext.value.resourceMode || '',
     workspaceContext.value.packageId || '',
     workspaceContext.value.packageSessionId || '',
-    workspaceContext.value.factorySessionId || '',
-    workspaceContext.value.createAgentSessionId || '',
     workspaceContext.value.groupId || '',
   ].join(':'))
 
@@ -95,9 +90,7 @@ export function useManagedResourceContext(capability: ResourceTargetCapability) 
         value: FOLLOW_CONTEXT_VALUE,
       }],
     }]
-    const systemTargets: ResourceTarget[] = capability === 'system_and_package'
-      ? [{ kind: 'chat' }, { kind: 'create_agent' }, { kind: 'evolve_agent' }]
-      : [{ kind: 'chat' }]
+    const systemTargets: ResourceTarget[] = [{ kind: 'chat' }]
     groups.push({
       type: 'group',
       label: t('resource.systemAgents'),
@@ -123,8 +116,6 @@ export function useManagedResourceContext(capability: ResourceTargetCapability) 
 
   function targetLabel(target: ResourceTarget): string {
     if (target.kind === 'chat') return t('resource.chat')
-    if (target.kind === 'create_agent') return t('resource.manufacturing')
-    if (target.kind === 'evolve_agent') return t('resource.evolution')
     const pkg = agentStore.agentPackages.find((item) => item.package_id === target.packageId)
     return pkg?.agent_name || pkg?.name || target.packageId || t('common.unnamedAgent')
   }
@@ -157,21 +148,12 @@ function workspaceContextForTarget(target: ResourceTarget): WorkspaceRequestCont
   if (target.kind === 'package') {
     return { resourceMode: 'package', packageId: target.packageId }
   }
-  if (target.kind === 'create_agent' || target.kind === 'evolve_agent') {
-    return { resourceMode: target.kind }
-  }
   return { resourceMode: 'package', packageId: SYSTEM_CHAT_PACKAGE_ID }
 }
 
 function contextIdentityKey(context: WorkspaceRequestContext): string {
   if (context.resourceMode === 'package' || !context.resourceMode) {
     return `package:${context.packageId || SYSTEM_CHAT_PACKAGE_ID}`
-  }
-  if (context.resourceMode === 'create_agent') {
-    return `create_agent:${context.factorySessionId || ''}:${context.createAgentSessionId || ''}`
-  }
-  if (context.resourceMode === 'evolve_agent') {
-    return `evolve_agent:${context.packageId || ''}:${context.factorySessionId || ''}`
   }
   return `agent_group:${context.groupId || ''}`
 }

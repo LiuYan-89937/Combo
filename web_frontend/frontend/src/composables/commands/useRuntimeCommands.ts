@@ -19,9 +19,6 @@ export function useRuntimeCommands() {
   }
 
   const switchSession = (sessionId: string, mode?: FactoryMode | null) => {
-    if (mode === 'create_agent' || mode === 'evolve_agent') {
-      runtimeStore.expectFactorySession(sessionId, mode)
-    }
     transport.sendRuntimeCommand(commands.switchSessionCommand(sessionId, mode))
   }
 

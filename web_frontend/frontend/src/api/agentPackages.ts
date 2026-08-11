@@ -66,7 +66,7 @@ export interface AgentPackageResourcesResponse {
 
 export const agentPackagesApi = {
   list: () => requestEvent('/api/agent-packages'),
-  select: (packageId: string, purpose?: 'run' | 'evolution') =>
+  select: (packageId: string, purpose: 'run' = 'run') =>
     requestEvent('/api/agent-packages/select', {
       method: 'POST',
       body: JSON.stringify({ package_id: packageId, purpose }),

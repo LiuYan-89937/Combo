@@ -60,9 +60,13 @@ def model_context_limits(
         try:
             limits = resolver(role, state=state)
         except (LookupError, RuntimeError, ValueError):
+            if bool(getattr(service, "authoritative_runtime_model", False)):
+                raise
             limits = None
         if isinstance(limits, dict):
             return _normalized_model_context_limits(limits)
+        if bool(getattr(service, "authoritative_runtime_model", False)):
+            raise RuntimeError("authoritative runtime model service returned no context limits")
     try:
         from agent_factory.model_pool.resolver import resolve_available_chat_model
 

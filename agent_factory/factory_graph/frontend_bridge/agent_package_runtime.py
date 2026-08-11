@@ -14,7 +14,6 @@ from uuid import uuid4
 
 from agent_factory.knowledge_system import KnowledgeIngestionWorker, KnowledgeRuntime, build_knowledge_runtime
 from agent_factory.knowledge_system.schema import KnowledgeRuntimeConfig
-from agent_factory.agent_registry import refresh_agent_registry_index
 from agent_factory.runtime_contracts import ContextContract, LoadedAgentPackage
 from agent_factory.model_pool.resolver import (
     resolve_available_chat_model,
@@ -572,50 +571,7 @@ class AgentPackageRuntimeManager:
         result = self.repository.delete_user_package(package_id)
         self._environment_preparation_errors.pop(package_id, None)
         result["deleted_resource_count"] = self.resource_store.delete_package(package_id)
-        result["agent_registry_refresh"] = _refresh_agent_registry_index(package_id)
         return result
-
-    def package_distribution_preview(self, package_id: str) -> dict[str, object]:
-        return self.repository.distribution_preview(package_id)
-
-    def export_package_archive(
-        self,
-        package_id: str,
-        *,
-        extension_overrides: dict[str, object] | None = None,
-    ) -> Path:
-        return self.repository.export_user_package_archive(
-            package_id,
-            extension_overrides=extension_overrides,
-        )
-
-    def install_package_archive(
-        self,
-        archive_path: str | Path,
-        *,
-        expected_sha256: str,
-        expected_package_id: str,
-        replace: bool,
-        model_bindings: dict[str, str],
-        model_tool_bindings: dict[str, str],
-    ) -> dict[str, Any]:
-        existing_manifest = self.repository.manifest_path(expected_package_id)
-        if existing_manifest.is_file():
-            self.shutdown_package_instance(expected_package_id)
-            self._close_knowledge_runtime(expected_package_id)
-        package = self.repository.install_user_package_archive(
-            archive_path,
-            expected_sha256=expected_sha256,
-            expected_package_id=expected_package_id,
-            replace=replace,
-            prepare_package=lambda package_root: AgentPackageConfigurationEditor().rebind_models(
-                package_root,
-                bindings=dict(model_bindings),
-                tool_bindings=dict(model_tool_bindings),
-            ),
-        )
-        self._environment_preparation_errors.pop(expected_package_id, None)
-        return self._package_summary(package.manifest_path)
 
     def list_sessions(self, package_id: str, *, include_internal: bool = False) -> list[dict[str, Any]]:
         package = self.load_package(package_id)
@@ -862,11 +818,6 @@ class AgentPackageRuntimeManager:
         package = self.load_package(package_id)
         return self.extensions.summary(package_id, package)
 
-    def system_extension_config_summary(self, resource_mode: str) -> dict[str, Any]:
-        if resource_mode not in {"create_agent", "evolve_agent"}:
-            raise ValueError(f"unsupported system extension resource mode: {resource_mode}")
-        return self.extensions.system_summary(resource_mode)
-
     def extensions_manage(
         self,
         package_id: str,
@@ -880,26 +831,6 @@ class AgentPackageRuntimeManager:
         result = self.extensions.manage(
             package_id,
             package,
-            action,
-            payload,
-            request_id=request_id,
-            progress=progress,
-        )
-        return result.payload
-
-    def system_extensions_manage(
-        self,
-        resource_mode: str,
-        action: str,
-        payload: dict[str, Any],
-        *,
-        request_id: str | None = None,
-        progress: Callable[[str, str], None] | None = None,
-    ) -> dict[str, Any]:
-        if resource_mode not in {"create_agent", "evolve_agent"}:
-            raise ValueError(f"unsupported system extension resource mode: {resource_mode}")
-        result = self.extensions.system_manage(
-            resource_mode,
             action,
             payload,
             request_id=request_id,
@@ -2199,13 +2130,6 @@ def _hydrate_session_runtime_view(session: dict[str, Any]) -> dict[str, Any]:
     if latest_plan:
         hydrated["current_plan"] = latest_plan
     return hydrated
-
-
-def _refresh_agent_registry_index(package_id: str) -> dict[str, Any]:
-    try:
-        return refresh_agent_registry_index(package_id)
-    except Exception as exc:
-        return {"status": "failed", "message": f"{type(exc).__name__}: {exc}"}
 
 
 def _session_trace_records(session: dict[str, Any]) -> list[dict[str, Any]]:

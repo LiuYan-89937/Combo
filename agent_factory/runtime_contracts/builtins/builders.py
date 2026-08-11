@@ -33,14 +33,13 @@ from agent_factory.runtime_contracts.schema import (
     NodeProviderContract,
     ResourcesContract,
     SchedulerContract,
-    SchedulerSeedContract,
     ToolsContract,
     TraceContract,
 )
 from agent_factory.runtime_kernel.adapters import InMemoryToolRegistry, LangChainModelServiceAdapter
 from agent_factory.runtime_kernel.extensions.manager import AgentInstanceExtensionManager
 from agent_factory.runtime_kernel.prompt_fragments import RUNTIME_PROMPT_FRAGMENTS_SESSION_KEY
-from agent_factory.runtime_kernel.model_operations import ModelOperationService
+from agent_factory.runtime_kernel.model_operations import LegacyRoleModelOperationService
 from agent_factory.runtime_kernel.node_providers import NodeProviderRegistry
 from agent_factory.runtime_kernel.persistence import (
     LangGraphCheckpointerConfig,
@@ -413,7 +412,7 @@ class ModelContractBuilder:
                     require_runtime_profile=runtime_main_profile_required,
                     runtime_profile_overrides=main_binding.overrides,
                 ),
-                "model_operation_service": ModelOperationService(
+                "model_operation_service": LegacyRoleModelOperationService(
                     role="main",
                     models_by_role=models_by_role,
                     require_runtime_profile=runtime_main_profile_required,
@@ -524,15 +523,6 @@ class SchedulerContractBuilder:
             },
             background_workers=[worker],
         )
-
-
-class SchedulerSeedContractBuilder:
-    contract_type = "scheduler_seed"
-    contract_version = "scheduler_seed_contract.v0"
-
-    def build(self, contract: SchedulerSeedContract, context: RuntimeBuildContext) -> RuntimeContribution:
-        del contract, context
-        return RuntimeContribution()
 
 
 class DependenciesContractBuilder:

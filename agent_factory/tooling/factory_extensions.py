@@ -31,7 +31,7 @@ from agent_factory.tooling.providers import (
 
 
 FACTORY_EXTENSION_ROOT_ENV = "AGENTFACTORY_FACTORY_EXTENSION_ROOT"
-SystemAgentExtensionOwner = Literal["factory_chat", "create_agent", "evolve_agent"]
+SystemAgentExtensionOwner = Literal["factory_chat"]
 
 
 class FactoryExtensionLoadReport(BaseModel):
@@ -191,8 +191,6 @@ def default_factory_extension_root() -> Path:
 def default_system_agent_extension_root(owner: SystemAgentExtensionOwner) -> Path:
     env_name = {
         "factory_chat": "AGENTFACTORY_FACTORY_CHAT_EXTENSION_ROOT",
-        "create_agent": "AGENTFACTORY_CREATE_AGENT_EXTENSION_ROOT",
-        "evolve_agent": "AGENTFACTORY_EVOLVE_AGENT_EXTENSION_ROOT",
     }[owner]
     configured = os.getenv(env_name)
     if configured:

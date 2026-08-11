@@ -78,7 +78,7 @@ class RuntimeEvidenceAdapter(Protocol):
 
 
 class WorkflowEvidenceAdapter:
-    """Evidence selector for manufacture and evolution workflow boundaries."""
+    """Evidence selector for temporary-Agent workflow boundaries."""
 
     def __init__(self, task_type: str, policy: ProgressSummaryPolicy) -> None:
         self.task_type = task_type

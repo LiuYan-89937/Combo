@@ -17,7 +17,6 @@ type ConversationScopeSource = Pick<
   | 'activeRequestId'
   | 'runStatus'
   | 'pendingInterrupt'
-  | 'createAgentPublishReady'
   | 'currentRunId'
   | 'nodes'
   | 'stages'
@@ -60,7 +59,6 @@ export function buildConversationScopeState(source: ConversationScopeSource): Co
     pendingInterrupt: source.pendingInterrupt
       ? { ...source.pendingInterrupt, payload: { ...(source.pendingInterrupt.payload || {}) } }
       : null,
-    createAgentPublishReady: source.createAgentPublishReady ? { ...source.createAgentPublishReady } : null,
     currentRunId: source.currentRunId,
     nodes: Object.fromEntries(
       Object.entries(source.nodes).map(([key, node]) => [key, { ...node, payload: { ...(node.payload || {}) } }]),
@@ -111,7 +109,6 @@ export function normalizeConversationScopeState(saved: ConversationScopeState): 
     pendingInterrupt: saved.pendingInterrupt
       ? { ...saved.pendingInterrupt, payload: { ...(saved.pendingInterrupt.payload || {}) } }
       : null,
-    createAgentPublishReady: saved.createAgentPublishReady ? { ...saved.createAgentPublishReady } : null,
     currentRunId: saved.currentRunId ?? null,
     nodes: Object.fromEntries(
       Object.entries(saved.nodes || {}).map(([key, node]) => [key, { ...node, payload: { ...(node.payload || {}) } }]),

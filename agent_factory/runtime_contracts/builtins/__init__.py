@@ -8,7 +8,6 @@ from agent_factory.runtime_contracts.builtins.builders import (
     NodeProviderContractBuilder,
     ResourcesContractBuilder,
     SchedulerContractBuilder,
-    SchedulerSeedContractBuilder,
     ToolsContractBuilder,
     TraceContractBuilder,
 )
@@ -18,7 +17,6 @@ from agent_factory.runtime_contracts.builtins.defaults import (
     default_model_contract,
     default_resources_contract,
     default_scheduler_contract,
-    default_scheduler_seed_contract,
     default_tools_contract,
 )
 from agent_factory.runtime_contracts.registry import RuntimeContractRegistry
@@ -30,7 +28,6 @@ from agent_factory.runtime_contracts.schema import (
     NodeProviderContract,
     ResourcesContract,
     SchedulerContract,
-    SchedulerSeedContract,
     ToolsContract,
     TraceContract,
 )
@@ -95,12 +92,6 @@ def default_runtime_contract_registry(
         builder=SchedulerContractBuilder(),
     )
     registry.register(
-        contract_type="scheduler_seed",
-        version="scheduler_seed_contract.v0",
-        model=SchedulerSeedContract,
-        builder=SchedulerSeedContractBuilder(),
-    )
-    registry.register(
         contract_type="dependencies",
         version="dependencies_contract.v1",
         model=DependenciesContract,
@@ -116,6 +107,5 @@ __all__ = [
     "default_resources_contract",
     "default_runtime_contract_registry",
     "default_scheduler_contract",
-    "default_scheduler_seed_contract",
     "default_tools_contract",
 ]

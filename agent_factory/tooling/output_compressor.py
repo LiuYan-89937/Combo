@@ -130,10 +130,10 @@ def _invoke_structured_compression(
     max_chars: int,
     config: ToolOutputCompressionActionConfig,
 ) -> dict[str, Any]:
-    schema = config.schema or DEFAULT_COMPRESSION_SCHEMA
+    schema = config.output_schema or DEFAULT_COMPRESSION_SCHEMA
     output_model = (
         compile_json_schema(schema=schema, model_name=f"{tool_id}_compressed_output").pydantic_model
-        if config.schema
+        if config.output_schema
         else DefaultToolOutputCompression
     )
     args_summary = json.dumps(arguments, ensure_ascii=False, default=str)[:200]

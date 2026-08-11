@@ -14,7 +14,6 @@ useSeo(() => ({ title: t('notFound.title'), path: '/404', noindex: true }))
     <p class="not-found__body">{{ t('notFound.body') }}</p>
     <div class="not-found__actions">
       <BaseButton to="/" icon-end="arrow-right">{{ t('notFound.goHome') }}</BaseButton>
-      <BaseButton to="/hub" variant="secondary">{{ t('nav.hub') }}</BaseButton>
     </div>
   </div>
 </template>

@@ -30,24 +30,3 @@ class PendingAgentPackageRun:
     group_id: str | None = None
     group_run_id: str | None = None
     workdir_root: Any | None = None
-
-
-@dataclass(slots=True)
-class PendingCreateAgentRun:
-    session_id: str
-    factory_session_id: str | None = None
-    request_id: str | None = None
-    interrupt_id: str | None = None
-    interrupt_event_id: str | None = None
-    interrupt_payload: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(slots=True)
-class PendingEvolutionRun:
-    package_id: str
-    session_id: str
-    request_id: str | None = None
-    trace_id: str | None = None
-    interrupt_id: str | None = None
-    interrupt_event_id: str | None = None
-    interrupt_payload: dict[str, Any] = field(default_factory=dict)

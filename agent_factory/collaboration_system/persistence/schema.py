@@ -120,7 +120,7 @@ def _apply_schema(conn: sqlite3.Connection) -> None:
         create table if not exists background_tasks (
           task_id text primary key,
           session_id text not null references background_task_sessions(session_id) on delete cascade,
-          type text not null check(type in ('sub_agent','manufacture','evolve')),
+          type text not null check(type = 'sub_agent'),
           status text not null check(status in (
             'queued','claimed','running','waiting_approval','waiting_external',
             'cancelling','succeeded','failed','cancelled'

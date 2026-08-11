@@ -17,17 +17,14 @@ export function conversationScopeForMode(
   mode: string | null,
   payload: Record<string, any> = {},
 ): string | null {
-  if (mode === 'create_agent') return factoryConversationScope('create_agent', factorySessionIdFromPayload(payload))
-  if (mode === 'evolve_agent') {
-    const session = payload?.session && typeof payload.session === 'object' ? payload.session : {}
-    const packageId =
-      payload?.package_id ||
-      payload?.evolve_agent_package_id ||
-      payload?.package?.package_id ||
-      session.evolve_agent_package_id
-    return `factory:evolve_agent:${packageId || 'unselected'}:${factorySessionIdFromPayload(payload) || 'new'}`
-  }
-  return null
+  if (mode !== 'agent_package') return null
+  const session = payload?.session && typeof payload.session === 'object' ? payload.session : {}
+  const packageId = cleanText(payload.package_id || payload?.package?.package_id || session.package_id)
+  if (!packageId) return null
+  return agentPackageConversationScope(
+    packageId,
+    cleanText(payload.session_id || payload.agent_session_id || session.session_id),
+  )
 }
 
 export function isMoreSpecificConversationScope(
@@ -96,7 +93,6 @@ export function scopeFromRequestPayload(
 export function scopeFromMessageMetadata(
   metadata: Record<string, any>,
   currentMode: FactoryMode | null,
-  activeFactorySessionId: string | null = null,
 ): string | null {
   const mode = String(metadata.mode || currentMode || '')
   if (mode === 'agent_package') {
@@ -105,21 +101,7 @@ export function scopeFromMessageMetadata(
       metadata.agent_session_id ? String(metadata.agent_session_id) : null,
     )
   }
-  return conversationScopeForMode(mode, {
-    ...metadata,
-    session_id: metadata.session_id || metadata.factory_session_id || activeFactorySessionId,
-  })
-}
-
-function factoryConversationScope(mode: string, sessionId: string | null): string {
-  return `factory:${mode}:${sessionId || 'new'}`
-}
-
-function factorySessionIdFromPayload(payload: Record<string, any>): string | null {
-  const session = payload?.session && typeof payload.session === 'object' ? payload.session : {}
-  const value = payload?.session_id || payload?.factory_session_id || payload?.frontend_session_id || session.session_id
-  const text = String(value || '').trim()
-  return text || null
+  return null
 }
 
 function cleanText(value: unknown): string | null {

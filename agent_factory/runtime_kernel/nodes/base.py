@@ -5,9 +5,8 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from agent_factory.runtime_kernel.bindings.services import RuntimeServices
+from agent_factory.runtime_kernel.services import RuntimeServices
 from agent_factory.runtime_kernel.state import RuntimeState
-from agent_factory.runtime_render import NodeRenderSpec
 
 
 class NodeExecutionContext(BaseModel):
@@ -15,12 +14,8 @@ class NodeExecutionContext(BaseModel):
 
     node_id: str
     impl: str
-    bindings: list[dict[str, Any]] = Field(default_factory=list)
-    all_bindings: list[dict[str, Any]] = Field(default_factory=list)
-    hook_bindings: list[dict[str, Any]] = Field(default_factory=list)
     services: RuntimeServices
     emit_event: Callable[[dict[str, Any]], None]
-    render_spec: NodeRenderSpec | None = None
     graph_messages: list[Any] = Field(default_factory=list)
     graph_config: Any | None = None
     graph_runtime: Any | None = None

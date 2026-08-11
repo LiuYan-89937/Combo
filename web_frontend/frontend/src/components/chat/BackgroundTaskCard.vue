@@ -60,19 +60,6 @@
         @resolve="resolveApproval"
       />
 
-      <template v-else-if="interaction.kind === 'resource_request' && interaction.workspace_id">
-        <div class="interaction-copy">
-          <strong>{{ interaction.title }}</strong>
-          <p>{{ interaction.message }}</p>
-        </div>
-        <ResourceRequestPanel
-          :workspace-id="interaction.workspace_id"
-          :requests="resourceRequests"
-          @configured="continueAfterResources"
-          @skip="answerText = ''"
-        />
-      </template>
-
       <template v-else-if="interaction.kind === 'ask_user'">
         <div class="interaction-copy">
           <strong>{{ interaction.title }}</strong>
@@ -135,7 +122,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NButton, NIcon, NInput } from 'naive-ui'
-import { Bot, Upgrade } from '@vicons/carbon'
+import { Bot } from '@vicons/carbon'
 import { useI18n } from '@/composables/useI18n'
 import {
   backgroundTasksApi,
@@ -144,7 +131,6 @@ import {
   type InteractionAction,
 } from '@/api/backgroundTasks'
 import ToolApprovalPanel from './ToolApprovalPanel.vue'
-import ResourceRequestPanel from './ResourceRequestPanel.vue'
 
 const props = defineProps<{ task: BackgroundTask; fallbackTitle?: string }>()
 const emit = defineEmits<{ updated: [task: BackgroundTask]; deleted: [taskId: string] }>()
@@ -160,7 +146,7 @@ const events = ref<BackgroundTaskEvent[]>([])
 let pollTimer: ReturnType<typeof setTimeout> | null = null
 
 const interaction = computed(() => task.value.pending_interaction || null)
-const kindIcon = computed(() => task.value.type === 'evolve' ? Upgrade : Bot)
+const kindIcon = computed(() => Bot)
 const view = computed(() => buildView(task.value, events.value, props.fallbackTitle || t('backgroundTask.title')))
 const terminal = computed(() => ['succeeded', 'failed', 'cancelled'].includes(view.value.status))
 const statusLabel = computed(() => t(`backgroundTask.status.${view.value.status}` as any))
@@ -172,14 +158,6 @@ const currentDescription = computed(() => (
 ))
 const allowFreeText = computed(() => interaction.value?.payload.allow_free_text !== false)
 const canSubmitAnswer = computed(() => Boolean(answerText.value.trim() || selectedOption.value))
-const resourceRequests = computed(() => interaction.value?.resource_requests.map(request => ({
-  resource_id: String(request.resource_id || ''),
-  description: request.description == null ? undefined : String(request.description),
-  secret: Boolean(request.secret),
-  required: Boolean(request.required),
-  value_schema: isRecord(request.value_schema) ? request.value_schema : undefined,
-  secret_fields: Array.isArray(request.secret_fields) ? request.secret_fields.map(String) : undefined,
-})).filter(request => request.resource_id) || [])
 
 onMounted(loadEvents)
 onBeforeUnmount(stopPolling)
@@ -222,10 +200,6 @@ async function submitAnswer() {
 function selectOption(value: string) {
   selectedOption.value = value
   answerText.value = ''
-}
-
-async function continueAfterResources(resourceIds: string[]) {
-  await resolveInteraction('continue', { configured_resource_ids: resourceIds })
 }
 
 async function resolveInteraction(action: InteractionAction, payload: Record<string, unknown>) {
@@ -337,9 +311,6 @@ function formatTime(value: unknown): string {
   return new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' }).format(parsed)
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
-}
 </script>
 
 <style scoped>

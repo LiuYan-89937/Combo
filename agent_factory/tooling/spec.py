@@ -25,7 +25,7 @@ ToolContractStatus = Literal["valid", "invalid"]
 ToolRiskLevel = Literal["low", "medium", "high"]
 ToolRiskAction = Literal["inherit", "allow", "ask", "deny", "uncertain"]
 ToolLLMRiskMode = Literal["disabled", "on_uncertain", "always"]
-ToolPermissionScope = Literal["system", "package", "extension", "model"]
+ToolPermissionScope = Literal["system", "package", "extension", "model", "capability"]
 ToolOutputCompressionMode = Literal["structured_json", "deterministic"]
 ToolOutputProjectionMode = Literal["compress", "passthrough"]
 
@@ -89,13 +89,17 @@ class ToolRiskResult(BaseModel):
 
 
 class ToolOutputCompressionActionConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True, serialize_by_alias=True)
 
     mode: ToolOutputCompressionMode = "structured_json"
     prompt: str = ""
-    schema: dict[str, Any] = Field(default_factory=dict)
+    output_schema: dict[str, Any] = Field(
+        default_factory=dict,
+        validation_alias="schema",
+        serialization_alias="schema",
+    )
 
-    @field_validator("schema")
+    @field_validator("output_schema")
     @classmethod
     def validate_schema_object(cls, value: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(value, dict):

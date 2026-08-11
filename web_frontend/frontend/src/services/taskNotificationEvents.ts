@@ -2,7 +2,7 @@ import { useAgentGroupStore } from '@/stores/agentGroup'
 import { isSchedulerRequest } from '@/stores/runtime/eventUtils'
 import { scopeFromEventPayload } from '@/stores/runtime/scopes'
 import { schedulerRunNoticeView } from '@/stores/runtime/viewMappers'
-import type { FactoryFrontendEvent, FactoryMode } from '@/types/protocol'
+import type { FactoryFrontendEvent } from '@/types/protocol'
 import {
   publishTaskNotification,
   type TaskNotificationStatus,
@@ -47,11 +47,9 @@ function conversationNotification(event: FactoryFrontendEvent): TaskTerminalNoti
   const finishStatus = text(event.payload?.finish_status || event.payload?.status)
   if (finishStatus === 'waiting_for_workers') return null
 
-  const mode = normalizedMode(event.mode)
-  const sessionId = conversationSessionId(event, mode)
-  const packageId = mode === 'agent_package'
-    ? text(event.payload?.package_id || event.payload?.agent_session?.package_id)
-    : null
+  const mode = 'agent_package' as const
+  const sessionId = conversationSessionId(event)
+  const packageId = text(event.payload?.package_id || event.payload?.agent_session?.package_id)
   return {
     key: `conversation:${event.request_id || event.event_id}:${status}`,
     category: 'conversation',
@@ -118,27 +116,9 @@ function notificationStatus(value: string): TaskNotificationStatus | null {
   return null
 }
 
-function normalizedMode(
-  mode: FactoryMode | null,
-): 'create_agent' | 'evolve_agent' | 'agent_package' {
-  if (mode === 'create_agent' || mode === 'evolve_agent' || mode === 'agent_package') return mode
-  return 'agent_package'
-}
-
-function conversationSessionId(
-  event: FactoryFrontendEvent,
-  mode: 'create_agent' | 'evolve_agent' | 'agent_package',
-): string | null {
-  if (mode === 'agent_package') {
-    return text(
-      event.payload?.agent_session?.session_id
-      || event.payload?.session_id
-      || event.session_id,
-    )
-  }
+function conversationSessionId(event: FactoryFrontendEvent): string | null {
   return text(
-    event.payload?.factory_session_id
-    || event.payload?.session?.session_id
+    event.payload?.agent_session?.session_id
     || event.payload?.session_id
     || event.session_id,
   )

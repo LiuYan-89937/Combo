@@ -1,24 +1,19 @@
 <script setup lang="ts">
 /*
- * Marketing home: hero, capability pipeline, architecture boundary, featured
- * agents (real API) and a download section driven by public config. Every
+ * Marketing home: hero, dynamic capability pipeline, architecture boundary,
+ * and a download section driven by public config. Every
  * claim maps to a real product capability; download buttons disable when the
  * config has no URL rather than faking a link.
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseIcon, { type IconName } from '@/components/base/BaseIcon.vue'
-import PackageCard from '@/components/hub/PackageCard.vue'
 import ProductShowcase from '@/components/home/ProductShowcase.vue'
-import StateBlock from '@/components/base/StateBlock.vue'
-import SkeletonBlock from '@/components/base/SkeletonBlock.vue'
 import { useI18n } from '@/i18n'
 import { useConfigStore } from '@/stores/config'
 import { useSeo, ORIGIN } from '@/composables/useSeo'
 import { formatCount } from '@/composables/useFormat'
-import { listPackages } from '@/api/packages'
-import type { AgentRelease } from '@/api/types'
 
 const { t } = useI18n()
 const { config } = storeToRefs(useConfigStore())
@@ -29,24 +24,9 @@ const pipelineKeys: Array<{ key: string; icon: IconName }> = [
   { key: 'assemble', icon: 'boxes' },
   { key: 'run', icon: 'play' },
   { key: 'collaborate', icon: 'users' },
-  { key: 'distribute', icon: 'upload' },
 ]
 
 const factoryNodes = ['MODEL', 'TOOLS', 'MCP', 'SKILLS']
-
-const featured = ref<AgentRelease[]>([])
-const featuredState = ref<'loading' | 'ready' | 'empty' | 'error'>('loading')
-
-async function loadFeatured() {
-  featuredState.value = 'loading'
-  try {
-    const res = await listPackages({ limit: 6 })
-    featured.value = res.items
-    featuredState.value = res.items.length ? 'ready' : 'empty'
-  } catch {
-    featuredState.value = 'error'
-  }
-}
 
 const hasDownload = computed(() => config.value.downloads.some((d) => d.url))
 
@@ -66,7 +46,6 @@ useSeo(() => ({
   },
 }))
 
-onMounted(loadFeatured)
 </script>
 
 <template>
@@ -83,9 +62,6 @@ onMounted(loadFeatured)
           <p class="hero__subtitle">{{ t('home.subtitle') }}</p>
           <div class="hero__actions">
             <BaseButton to="/#download" size="lg" icon="download">{{ t('home.ctaDownload') }}</BaseButton>
-            <BaseButton to="/hub" size="lg" variant="secondary" icon-end="arrow-right">
-              {{ t('home.ctaHub') }}
-            </BaseButton>
             <BaseButton
               :href="config.githubRepoUrl"
               external
@@ -171,66 +147,13 @@ onMounted(loadFeatured)
           </div>
           <div class="arch__link">
             <span class="arch__dashes" />
-            <span class="arch__link-label">metadata · auth · packages</span>
+            <span class="arch__link-label">updates · downloads · changelog</span>
           </div>
           <div class="arch__node">
             <BaseIcon name="boxes" :size="20" />
-            <span>AgentHub</span>
-            <small>Distribution only</small>
+            <span>Release service</span>
+            <small>Updates and downloads</small>
           </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- FEATURED -->
-    <section class="section">
-      <div class="container">
-        <header class="block-head block-head--row">
-          <div>
-            <span class="eyebrow">AgentHub</span>
-            <h2 class="block-head__title">{{ t('home.featuredTitle') }}</h2>
-            <p class="block-head__sub">{{ t('home.featuredSubtitle') }}</p>
-          </div>
-          <BaseButton to="/hub" variant="secondary" icon-end="arrow-right" class="block-head__cta">
-            {{ t('home.featuredViewAll') }}
-          </BaseButton>
-        </header>
-
-        <div v-if="featuredState === 'loading'" class="grid">
-          <div v-for="n in 3" :key="n" class="skeleton-card">
-            <SkeletonBlock width="52px" height="52px" radius="var(--radius-md)" />
-            <SkeletonBlock height="18px" width="60%" />
-            <SkeletonBlock height="14px" />
-            <SkeletonBlock height="14px" width="80%" />
-          </div>
-          <span class="visually-hidden" role="status">{{ t('common.loading') }}</span>
-        </div>
-
-        <div v-else-if="featuredState === 'ready'" class="grid">
-          <PackageCard v-for="item in featured" :key="item.release_id" :release="item" />
-        </div>
-
-        <StateBlock
-          v-else-if="featuredState === 'error'"
-          kind="error"
-          :title="t('common.error')"
-          :body="t('common.serverError')"
-          retryable
-          @retry="loadFeatured"
-        />
-
-        <StateBlock
-          v-else
-          kind="empty"
-          icon="boxes"
-          :title="t('home.featuredEmptyTitle')"
-          :body="t('home.featuredEmptyBody')"
-        >
-        </StateBlock>
-        <div v-if="featuredState === 'empty'" class="home__empty-cta">
-          <BaseButton to="/guide" variant="secondary" icon-end="arrow-right">
-            {{ t('home.featuredEmptyCta') }}
-          </BaseButton>
         </div>
       </div>
     </section>

@@ -6,6 +6,9 @@
 environment.lock.json
 .venv/
 docs/*
+!docs/DYNAMIC_AGENT_RUNTIME_REFACTOR.md
+!docs/refactor/
+!docs/refactor/**
 AGENT_GROUP_*.md
 开发规范以及架构初版.md
 examples/customer_service_agent/memory/

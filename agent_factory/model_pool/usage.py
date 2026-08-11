@@ -461,10 +461,6 @@ def _agent_id(*, event_payload: dict[str, Any], payload: dict[str, Any], package
         return package_id
     if mode == "chat":
         return "factory_chat"
-    if mode == "create_agent":
-        return "create_agent"
-    if mode in {"agent_evolution", "evolve_agent"}:
-        return "agent_evolution"
     return _text(event_payload.get("graph_id")) or mode or "unknown_agent"
 
 
@@ -475,10 +471,6 @@ def _agent_label(*, event_payload: dict[str, Any], payload: dict[str, Any], agen
             return text
     if mode == "chat":
         return "闲聊"
-    if mode == "create_agent":
-        return "制造 Agent"
-    if mode in {"agent_evolution", "evolve_agent"}:
-        return "进化 Agent"
     return agent_id or _text(event_payload.get("graph_id")) or "未知 Agent"
 
 

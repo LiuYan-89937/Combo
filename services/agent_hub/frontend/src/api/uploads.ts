@@ -1,30 +1,4 @@
-import { request } from './client'
-import type { CreateUploadResponse, HubUpload, UploadRequest } from './types'
-
-/** Step 1: register an upload and receive a signed OSS PUT request. */
-export function createUpload(filename: string, sizeBytes: number): Promise<CreateUploadResponse> {
-  return request<CreateUploadResponse>('/uploads', {
-    method: 'POST',
-    body: { filename, size_bytes: sizeBytes },
-  })
-}
-
-/** Step 4: mark the OSS object uploaded so validation can be queued. */
-export function completeUpload(uploadId: string): Promise<HubUpload> {
-  return request<HubUpload>(`/uploads/${encodeURIComponent(uploadId)}/complete`, {
-    method: 'POST',
-  })
-}
-
-/** Poll a single upload's current status. */
-export function fetchUpload(uploadId: string, signal?: AbortSignal): Promise<HubUpload> {
-  return request<HubUpload>(`/uploads/${encodeURIComponent(uploadId)}`, { signal })
-}
-
-/** List the current user's submissions. */
-export function listUploads(limit = 50, signal?: AbortSignal): Promise<HubUpload[]> {
-  return request<HubUpload[]>('/uploads', { query: { limit }, signal })
-}
+import type { UploadRequest } from './types'
 
 export interface DirectUploadProgress {
   loaded: number

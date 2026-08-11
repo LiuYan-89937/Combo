@@ -77,7 +77,6 @@ import {
 } from './runtime/scopes'
 import {
   agentPackageSessionSnapshotView,
-  factorySessionSnapshotView,
 } from './runtime/sessionSnapshots'
 import {
   sessionDeletionFromPayload,
@@ -108,7 +107,6 @@ import {
 } from '@/i18n'
 import {
   isStandaloneAgentSession,
-  isStandaloneFactorySession,
 } from '@/utils/sessionPresentation'
 
 // 事件去重集合
@@ -126,7 +124,6 @@ export const useRuntimeStore = defineStore('runtime', {
     activeRequests: {},
     runStatus: 'idle',
     pendingInterrupt: null,
-    createAgentPublishReady: null,
     currentMode: null,
     activeFactorySessionId: null,
     activeAgentSessionId: null,
@@ -175,18 +172,8 @@ export const useRuntimeStore = defineStore('runtime', {
       return state.runStatus === 'interrupted' && !isUserInputInterrupt(state.pendingInterrupt)
     },
 
-    // 制造 Agent 的业务中断需要用户继续输入，而不是审批按钮。
     isAwaitingUserInputInterrupt: (state): boolean => {
       return state.runStatus === 'interrupted' && isUserInputInterrupt(state.pendingInterrupt)
-    },
-
-    isPublishConfirmationPending: (state): boolean => {
-      return Boolean(state.createAgentPublishReady)
-    },
-
-    publishConfirmationPayload: (state): Record<string, any> | null => {
-      if (state.createAgentPublishReady) return state.createAgentPublishReady
-      return null
     },
 
     // 当前是否有活跃的运行
@@ -319,51 +306,6 @@ export const useRuntimeStore = defineStore('runtime', {
         this._handleRuntimeOptionsChanged(event)
         this._restoreActiveRequestsFromRuntimeSnapshot(event)
         console.info('Runtime ready')
-      } else if (type === 'session_started') {
-        const continuedPendingRequest = this._promoteFactoryScopeFromSessionEvent(event)
-        this._upsertFactorySession(payload?.session)
-        if (continuedPendingRequest) {
-          this.activeFactorySessionId = payload?.session_id || payload?.session?.session_id || event.session_id || null
-          this.currentMode = event.mode || this.currentMode
-          this._saveActiveConversationScope()
-        } else {
-          this._restoreSessionSnapshot(payload)
-        }
-      } else if (type === 'session_switched') {
-        this._upsertFactorySession(payload?.session)
-        this._restoreSessionSnapshot(payload)
-      } else if (type === 'session_empty') {
-        if (event.mode !== 'create_agent' && event.mode !== 'evolve_agent') return
-        const mode = event.mode
-        const packageId = mode === 'evolve_agent'
-          ? String(payload?.package_id || '').trim() || null
-          : null
-        this.sessions = (payload?.sessions || []).filter(isStandaloneFactorySession)
-        const scope = conversationScopeForMode(mode, { package_id: packageId })
-        if (scope && this._shouldActivateConversationScope(scope)) {
-          this.showEmptyFactoryConversation(mode, packageId)
-        }
-      } else if (type === 'sessions_listed') {
-        this.sessions = (payload?.sessions || []).filter(isStandaloneFactorySession)
-      } else if (type === 'session_deleted') {
-        const deletion = sessionDeletionFromPayload(payload)
-        const deletedSessionIds = new Set(deletion.sessionIds)
-        const deletedCurrentSession = sessionDeletionIncludes(deletion, this.activeFactorySessionId)
-          || (deletion.deletedActive && this.currentMode !== 'agent_package')
-        this.sessions = payload?.sessions
-          ? payload.sessions.filter(isStandaloneFactorySession)
-          : this.sessions.filter((session: any) => !deletedSessionIds.has(session.session_id))
-        if (
-          deletedCurrentSession
-          && (this.currentMode === 'create_agent' || this.currentMode === 'evolve_agent')
-        ) {
-          const emptyConversationMode = this.currentMode
-          const evolutionPackageId = emptyConversationMode === 'evolve_agent'
-            ? this.selectedAgentPackage?.package_id || null
-            : null
-          this.showEmptyFactoryConversation(emptyConversationMode, evolutionPackageId)
-        }
-        this._deleteConversationScopesForSessions(deletion.sessionIds)
       } else if (type === 'mode_changed') {
         this._handleModeChanged(event)
       }
@@ -387,10 +329,6 @@ export const useRuntimeStore = defineStore('runtime', {
         this.agentSessions = payload?.sessions
           ? payload.sessions.filter(isStandaloneAgentSession)
           : this.agentSessions
-        if (payload?.purpose === 'evolution' && payload?.package?.package_id) {
-          this._upsertFactorySession(payload?.session)
-          this._restoreSessionSnapshot(payload)
-        }
       } else if (type === 'agent_package_deleted') {
         const deletedPackageId = payload?.package_id
         this.agentPackages = payload?.packages || this.agentPackages.filter((pkg) => pkg.package_id !== deletedPackageId)
@@ -645,9 +583,6 @@ export const useRuntimeStore = defineStore('runtime', {
       this.currentRunId = event.run_id || null
       this.runStatus = 'running'
       this.pendingInterrupt = null
-      if (event.mode === 'create_agent') {
-        this.createAgentPublishReady = null
-      }
       this.nodes = {}
       this.stages = {}
       this.modelStreams = {}
@@ -694,13 +629,6 @@ export const useRuntimeStore = defineStore('runtime', {
         this.activeRequestId = null
       }
       this.pendingInterrupt = null
-      if (event.mode === 'create_agent' && event.payload?.publish_ready) {
-        this.createAgentPublishReady = {
-          ...event.payload.publish_ready,
-          session_id: event.payload?.agent_session?.session_id || this.activeAgentSessionId,
-          workspace_path: event.payload?.workspace_path || event.payload.publish_ready?.source_workspace || null,
-        }
-      }
 
       // 同步 agent session
       this._syncAgentSessionFromRunEvent(event)
@@ -1146,20 +1074,6 @@ export const useRuntimeStore = defineStore('runtime', {
       this._setRequestDispatchState(event.request_id, dispatchState, event.payload)
     },
 
-    _restoreSessionSnapshot(payload: Record<string, any> | undefined) {
-      const snapshot = factorySessionSnapshotView(payload)
-      if (!snapshot.scope) return
-      const activate = this._shouldActivateConversationScope(snapshot.scope)
-      const restore = () => this._applyFactorySessionSnapshot(snapshot, payload, activate)
-      if (activate) {
-        this._switchConversationScope(snapshot.scope)
-        restore()
-        this._saveActiveConversationScope()
-      } else {
-        this._projectConversationScope(snapshot.scope, restore)
-      }
-    },
-
     _restoreAgentPackageSession(session: any, packageId: string | null = null) {
       if (!session?.session_id) return
       const snapshot = agentPackageSessionSnapshotView(session, packageId)
@@ -1174,42 +1088,6 @@ export const useRuntimeStore = defineStore('runtime', {
       } else {
         this._projectConversationScope(scope, restore)
       }
-    },
-
-    _applyFactorySessionSnapshot(
-      snapshot: ReturnType<typeof factorySessionSnapshotView>,
-      payload: Record<string, any> | undefined,
-      activate: boolean,
-    ) {
-      this.activeFactorySessionId = String(
-        payload?.session_id || payload?.session?.session_id || '',
-      ).trim() || null
-      this.activeAgentSessionId = null
-      if (activate) this.currentMode = snapshot.restoredMode
-      if (!payload?.force_restore && this._hasLiveConversationState() && this._hasVisibleConversationContent()) {
-        return
-      }
-      if (!snapshot.hasMessages && snapshot.processEvents.length === 0) return
-      this.transcript = snapshot.transcript
-      this.conversationTurns = snapshot.conversationTurns
-      this._reconcileRestoredTurnStatuses(
-        new Set(
-          Object.values(this.activeRequests)
-            .filter(request => request.status === 'running')
-            .map(request => request.requestId),
-        ),
-      )
-      this.tools = snapshot.tools
-      this.pendingInterrupt = snapshot.pendingInterrupt
-      this._restoreProcessEvents(snapshot.processEvents)
-      this._restoreActiveTurnFromSnapshot(snapshot.activeTurn, {
-        mode: snapshot.restoredMode,
-        conversationScope: snapshot.scope,
-        payload: {
-          session_id: payload?.session_id || payload?.session?.session_id || null,
-          package_id: payload?.package_id || payload?.session?.evolve_agent_package_id || null,
-        },
-      })
     },
 
     _applyAgentPackageSessionSnapshot(
@@ -1279,39 +1157,6 @@ export const useRuntimeStore = defineStore('runtime', {
       this.workspaceEntries = []
     },
 
-    enterFactoryConversation(mode: 'create_agent' | 'evolve_agent', packageId: string | null = null) {
-      if (mode !== 'evolve_agent') this._clearAgentPackageSelectionIntent()
-      const scope = conversationScopeForMode(mode, {
-        package_id: packageId,
-        session_id: null,
-      })
-      if (scope) {
-        this._switchConversationScope(scope)
-      }
-      this.currentMode = mode
-      this.activeFactorySessionId = null
-      this.activeAgentSessionId = null
-    },
-
-    expectFactorySession(
-      sessionId: string,
-      mode: 'create_agent' | 'evolve_agent',
-    ) {
-      if (mode !== 'evolve_agent') this._clearAgentPackageSelectionIntent()
-      const session = this.sessions.find((item: any) => String(item?.session_id || '') === sessionId)
-      const packageId = mode === 'evolve_agent'
-        ? String(session?.evolve_agent_package_id || this.selectedAgentPackage?.package_id || '').trim() || null
-        : null
-      const scope = conversationScopeForMode(mode, {
-        session_id: sessionId,
-        package_id: packageId,
-      })
-      if (scope) this._switchConversationScope(scope)
-      this.currentMode = mode
-      this.activeFactorySessionId = sessionId
-      this.activeAgentSessionId = null
-    },
-
     expectAgentPackageSession(
       packageId: string,
       sessionId: string,
@@ -1323,24 +1168,7 @@ export const useRuntimeStore = defineStore('runtime', {
       this.activeAgentSessionId = sessionId
     },
 
-    showEmptyFactoryConversation(
-      mode: 'create_agent' | 'evolve_agent',
-      packageId: string | null = null,
-    ) {
-      if (mode !== 'evolve_agent') this._clearAgentPackageSelectionIntent()
-      const scope = conversationScopeForMode(mode, {
-        package_id: packageId,
-        session_id: null,
-      })
-      if (scope) {
-        this._resetConversationScope(scope)
-      }
-      this.currentMode = mode
-      this.activeFactorySessionId = null
-      this.activeAgentSessionId = null
-    },
-
-    expectAgentPackageSelection(packageId: string, purpose: 'run' | 'evolution') {
+    expectAgentPackageSelection(packageId: string, purpose: 'run') {
       this.agentPackageSelectionIntent = {
         packageId: String(packageId || '').trim() || null,
         purpose,
@@ -1353,7 +1181,7 @@ export const useRuntimeStore = defineStore('runtime', {
 
     ownsAgentPackageSelection(event: FactoryFrontendEvent): boolean {
       const packageId = String(event.payload?.package_id || event.payload?.package?.package_id || '').trim()
-      const purpose = event.payload?.purpose === 'evolution' ? 'evolution' : 'run'
+      const purpose = 'run'
       return Boolean(packageId)
         && this.agentPackageSelectionIntent.packageId === packageId
         && this.agentPackageSelectionIntent.purpose === purpose
@@ -1375,17 +1203,6 @@ export const useRuntimeStore = defineStore('runtime', {
         this.agentSessions[index] = { ...this.agentSessions[index], ...session }
       } else {
         this.agentSessions.unshift(session)
-      }
-    },
-
-    _upsertFactorySession(session: any) {
-      if (!session?.session_id) return
-      if (!isStandaloneFactorySession(session)) return
-      const index = this.sessions.findIndex((item) => item.session_id === session.session_id)
-      if (index >= 0) {
-        this.sessions[index] = { ...this.sessions[index], ...session }
-      } else {
-        this.sessions.unshift(session)
       }
     },
 
@@ -1447,7 +1264,6 @@ export const useRuntimeStore = defineStore('runtime', {
       this.activeRequestId = restored.activeRequestId ?? null
       this.runStatus = restored.runStatus ?? 'idle'
       this.pendingInterrupt = restored.pendingInterrupt ?? null
-      this.createAgentPublishReady = restored.createAgentPublishReady ?? null
       this.currentRunId = restored.currentRunId ?? null
       this.nodes = restored.nodes || {}
       this.stages = restored.stages || {}
@@ -1528,34 +1344,6 @@ export const useRuntimeStore = defineStore('runtime', {
       }
     },
 
-    _promoteFactoryScopeFromSessionEvent(event: FactoryFrontendEvent): boolean {
-      const sessionId = String(
-        event.session_id || event.payload?.session_id || event.payload?.session?.session_id || '',
-      ).trim()
-      if (!sessionId) return false
-      const eventRequest = event.request_id ? this.activeRequests[event.request_id] : null
-      const nextScope = conversationScopeForMode(event.mode || eventRequest?.mode || this.currentMode, {
-        ...(event.payload || {}),
-        session_id: sessionId,
-      })
-      const previousScope = [eventRequest?.conversationScope, this.activeConversationScope]
-        .find((scope) => isMoreSpecificConversationScope(scope, nextScope))
-      if (!previousScope || !nextScope) return false
-      this._renameConversationScope(previousScope, nextScope)
-      Object.values(this.activeRequests)
-        .filter((request) => request.conversationScope === nextScope)
-        .forEach((request) => {
-          request.payload = {
-            ...(request.payload || {}),
-            session_id: sessionId,
-          }
-        })
-      if (this.activeConversationScope !== nextScope) return false
-      this.activeFactorySessionId = sessionId
-      this.activeAgentSessionId = null
-      return true
-    },
-
     _hasLiveConversationState(): boolean {
       return Boolean(
         this.pendingInterrupt ||
@@ -1621,7 +1409,6 @@ export const useRuntimeStore = defineStore('runtime', {
       this.activeRequestId = null
       this.runStatus = 'idle'
       this.pendingInterrupt = null
-      this.createAgentPublishReady = null
       this.currentRunId = null
       this.nodes = {}
       this.stages = {}
@@ -1657,7 +1444,7 @@ export const useRuntimeStore = defineStore('runtime', {
       attachments: TranscriptItem['attachments'] = [],
     ) {
       const conversationScope = requestId
-        ? scopeFromMessageMetadata(metadata, this.currentMode, this.activeFactorySessionId)
+        ? scopeFromMessageMetadata(metadata, this.currentMode)
         : null
       if (conversationScope) {
         this._switchConversationScope(conversationScope)
@@ -1771,10 +1558,6 @@ export const useRuntimeStore = defineStore('runtime', {
       this._saveActiveConversationScope()
     },
 
-    clearCreateAgentPublishReady() {
-      this.createAgentPublishReady = null
-    },
-
   },
 })
 
@@ -1832,7 +1615,7 @@ function activeRequestSource(
 }
 
 function normalizeFactoryMode(value: unknown): FactoryMode | null {
-  if (value === 'create_agent' || value === 'evolve_agent' || value === 'agent_package' || value === 'agent_group') {
+  if (value === 'agent_package' || value === 'agent_group') {
     return value
   }
   return null

@@ -98,7 +98,7 @@ const capsuleTitle = computed(() => {
     ? t('backgroundTask.capsule.approval')
     : task.pending_interaction?.kind === 'ask_user' || task.pending_interaction?.kind === 'resource_request'
       ? t('backgroundTask.capsule.answer')
-      : taskTypeLabel(task.type, task.status)
+      : taskTypeLabel(task.status)
   const target = task.assignee_package_id || task.task_text || t('backgroundTask.stackTitle')
   return `${prefix} · ${target}`
 })
@@ -170,13 +170,11 @@ function compareNewest(left: BackgroundTask, right: BackgroundTask): number {
   return Date.parse(right.updated_at || right.created_at) - Date.parse(left.updated_at || left.created_at)
 }
 
-function taskTypeLabel(type: BackgroundTask['type'], status: BackgroundTask['status']): string {
+function taskTypeLabel(status: BackgroundTask['status']): string {
   if (status === 'queued') return t('backgroundTask.capsule.queued')
   if (status === 'succeeded') return t('backgroundTask.capsule.completed')
   if (status === 'failed') return t('backgroundTask.capsule.failed')
   if (status === 'cancelled' || status === 'cancelling') return t('backgroundTask.capsule.stopping')
-  if (type === 'manufacture') return t('backgroundTask.capsule.manufacturing')
-  if (type === 'evolve') return t('backgroundTask.capsule.evolving')
   return t('backgroundTask.capsule.delegating')
 }
 </script>

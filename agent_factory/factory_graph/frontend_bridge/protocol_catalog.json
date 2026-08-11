@@ -1,8 +1,6 @@
 {
   "version": "factory_frontend.v1",
   "modes": [
-    "create_agent",
-    "evolve_agent",
     "agent_package",
     "agent_group"
   ],
@@ -30,7 +28,6 @@
     "send_agent_package_message",
     "run_agent_package",
     "run_agent_group_member",
-    "run_agent_evolution",
     "resume_interrupt",
     "steer_runtime_request",
     "cancel_runtime_request",
@@ -148,10 +145,6 @@
     "scheduler_run_cancelled",
     "scheduler_feedback_completed",
     "scheduler_feedback_failed",
-    "scheduler_seed_detected",
-    "scheduler_seed_applied",
-    "scheduler_seed_unchanged",
-    "scheduler_seed_failed",
     "interrupt_requested",
     "runtime_paused",
     "runtime_resumed",

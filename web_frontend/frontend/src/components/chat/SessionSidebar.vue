@@ -109,13 +109,11 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { NButton, NEmpty, NIcon, NInput, NList, NListItem, NScrollbar, NTag, NText, useDialog } from 'naive-ui'
 import { Add, ChatbubbleEllipses, Search, TrashOutline } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
-import { useSessionStore } from '@/stores/session'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useAgentStore } from '@/stores/agent'
 import { useCommand } from '@/composables/useCommand'
 import { useConversationSessionNavigation } from '@/composables/useConversationSessionNavigation'
 import { useAgentSessionNavigation } from '@/composables/agent/useAgentSessionNavigation'
-import type { SessionView } from '@/stores/session'
 import type { AgentSessionView } from '@/stores/agent'
 import type { WorkspaceProjectView } from '@/api/workspace'
 
@@ -131,7 +129,6 @@ const emit = defineEmits<{
   requestNewAgentSession: [packageId: string, initialWorkspaceId: string | null]
 }>()
 
-const sessionStore = useSessionStore()
 const runtimeStore = useRuntimeStore()
 const agentStore = useAgentStore()
 const commands = useCommand()
@@ -143,21 +140,13 @@ const dialog = useDialog()
 
 const panelTitle = computed(() => props.title || t('sessions.main'))
 
-const activeSessionMode = computed<'create_agent' | 'evolve_agent' | null>(() => {
-  if (runtimeStore.currentMode === 'create_agent') return 'create_agent'
-  if (runtimeStore.currentMode === 'evolve_agent') return 'evolve_agent'
-  return null
-})
 const activeAgentPackageId = computed(() => agentStore.activeChatPackageId)
 const filteredSessions = computed(() => {
   const query = searchQuery.value.toLowerCase()
-  const sessions: ConversationSession[] = activeAgentPackageId.value
+  const sessions: AgentSessionView[] = activeAgentPackageId.value
     ? agentStore.agentSessions.filter((session) => session.package_id === activeAgentPackageId.value)
-    : activeSessionMode.value
-      ? sessionStore.sessions
-      : []
+    : []
   return sessions.filter((session) => {
-    if (!sessionBelongsToActiveMode(session)) return false
     if (!query) return true
     return (
       sessionTitle(session).toLowerCase().includes(query) ||
@@ -176,74 +165,31 @@ function openNewSessionDialog() {
   emit('requestNewAgentSession', packageId, runtimeStore.activeWorkspaceId)
 }
 
-type ConversationSession = SessionView | AgentSessionView
-
-function handleSelectSession(session: ConversationSession) {
-  if (isAgentSession(session)) {
-    void openAgentSession(session)
-    return
-  }
-  if (activeSessionMode.value) {
-    commands.switchSession(session.session_id, activeSessionMode.value)
-  }
+function handleSelectSession(session: AgentSessionView) {
+  void openAgentSession(session)
 }
 
-function confirmDeleteSession(session: ConversationSession) {
+function confirmDeleteSession(session: AgentSessionView) {
   dialog.warning({
     title: t('sessions.deleteTitle'),
     content: t('sessions.deleteContent', { title: sessionTitle(session) }),
     positiveText: t('common.delete'),
     negativeText: t('common.cancel'),
     onPositiveClick: () => {
-      if (isAgentSession(session)) {
-        void commands.deleteAgentPackageSession(session.package_id, session.session_id)
-        return
-      }
-      if (activeSessionMode.value) {
-        commands.deleteSession(session.session_id, activeSessionMode.value)
-      }
+      void commands.deleteAgentPackageSession(session.package_id, session.session_id)
     },
   })
 }
 
-function sessionBelongsToActiveMode(session: ConversationSession): boolean {
-  if (isAgentSession(session)) {
-    return session.package_id === activeAgentPackageId.value
-  }
-  if (!activeSessionMode.value) return false
-  if (activeSessionMode.value === 'evolve_agent') {
-    const packageId = agentStore.selectedPackageId
-    if (packageId && session.evolve_agent_package_id !== packageId) return false
-  }
-  if (session.session_id === sessionStore.currentSessionId && runtimeStore.currentMode === activeSessionMode.value) {
-    return true
-  }
-  if (session.current_mode === activeSessionMode.value) return true
-  if (sessionTurnCount(session) > 0) return true
-  if (activeSessionMode.value === 'create_agent') return Boolean(session.create_agent_session_id)
-  return Boolean(session.evolve_agent_package_id)
+function sessionTurnCount(session: AgentSessionView): number {
+  return session.turn_count
 }
 
-function sessionTurnCount(session: ConversationSession): number {
-  if (isAgentSession(session)) return session.turn_count
-  const modeCounts = session.mode_turn_counts || {}
-  const count = activeSessionMode.value ? modeCounts[activeSessionMode.value] : undefined
-  if (typeof count === 'number') return count
-  if (activeSessionMode.value === 'create_agent') return session.create_agent_turn_count
-  if (activeSessionMode.value === 'evolve_agent') return session.evolve_agent_turn_count || 0
-  return 0
+function sessionTitle(session: AgentSessionView): string {
+  return session.display_title || session.first_user_input || t('sessions.newSession')
 }
 
-function sessionTitle(session: ConversationSession): string {
-  if (isAgentSession(session)) {
-    return session.display_title || session.first_user_input || t('sessions.newSession')
-  }
-  const modeTitle = activeSessionMode.value ? session.mode_titles?.[activeSessionMode.value] : null
-  return modeTitle || session.display_title || session.first_user_input || t('sessions.newSession')
-}
-
-function sessionWorkspace(session: ConversationSession): WorkspaceProjectView | null {
-  if (!isAgentSession(session)) return null
+function sessionWorkspace(session: AgentSessionView): WorkspaceProjectView | null {
   if (session.workspace) {
     return {
       ...session.workspace,
@@ -256,7 +202,7 @@ function sessionWorkspace(session: ConversationSession): WorkspaceProjectView | 
   return null
 }
 
-function sessionWorkspaceLabel(session: ConversationSession): string {
+function sessionWorkspaceLabel(session: AgentSessionView): string {
   const workspace = sessionWorkspace(session)
   if (!workspace) return ''
   const kind = workspace.mode === 'project'
@@ -265,28 +211,20 @@ function sessionWorkspaceLabel(session: ConversationSession): string {
   return `${kind} · ${workspace.title}`
 }
 
-function sessionWorkspacePath(session: ConversationSession): string {
+function sessionWorkspacePath(session: AgentSessionView): string {
   return sessionWorkspace(session)?.workdir_root || ''
 }
 
-function isAgentSession(session: ConversationSession): session is AgentSessionView {
-  return typeof (session as AgentSessionView).package_id === 'string'
+function isActiveSession(session: AgentSessionView): boolean {
+  return session.session_id === agentStore.selectedSessionId
 }
 
-function isActiveSession(session: ConversationSession): boolean {
-  return isAgentSession(session)
-    ? session.session_id === agentStore.selectedSessionId
-    : session.session_id === sessionStore.currentSessionId
-}
-
-function sessionMode(session: ConversationSession): string {
-  return isAgentSession(session) ? 'agent_package' : activeSessionMode.value || 'agent_package'
+function sessionMode(_session: AgentSessionView): string {
+  return 'agent_package'
 }
 
 function modeLabel(mode: string): string {
   const labels: Record<string, string> = {
-    create_agent: t('sessions.modeCreate'),
-    evolve_agent: t('sessions.modeEvolve'),
     agent_package: t('sessions.modeAgent'),
   }
   return labels[mode] || mode
@@ -294,8 +232,6 @@ function modeLabel(mode: string): string {
 
 function modeTagType(mode: string): 'default' | 'success' | 'info' | 'warning' {
   const types: Record<string, any> = {
-    create_agent: 'info',
-    evolve_agent: 'warning',
     agent_package: 'success',
   }
   return types[mode] || 'default'
@@ -330,7 +266,6 @@ function refreshSessions() {
     void commands.listAgentPackageSessions(packageId)
     return
   }
-  commands.listSessions()
 }
 
 </script>

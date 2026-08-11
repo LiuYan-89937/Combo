@@ -15,7 +15,10 @@ from agent_factory.model_pool.schema import ModelBindingRuntimeOverrides
 from agent_factory.models import ChatModelSettings
 from agent_factory.models.content import content_to_text, strip_internal_snapshot_blocks
 from agent_factory.models.reasoning import reasoning_content_from_message
-from agent_factory.runtime_kernel.model_inputs import build_runtime_model_input
+from agent_factory.runtime_kernel.model_inputs import (
+    build_runtime_model_input,
+    legacy_system_prompt_from_binding,
+)
 from agent_factory.runtime_kernel.types import ModelInvocationResult
 from agent_factory.tooling.description_context import contextualize_tool_descriptions
 from agent_factory.tooling.model_visibility import tools_visible_to_model
@@ -106,7 +109,7 @@ class LangChainModelServiceAdapter:
         bound_model = _bind_tools(model, contextual_tools)
         envelope = build_runtime_model_input(
             state=state,
-            prompt_binding=prompt_binding or {},
+            system_prompt=legacy_system_prompt_from_binding(prompt_binding),
             messages=messages or [],
             tools=contextual_tools,
             image_input_enabled=image_input_enabled,

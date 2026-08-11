@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
-from uuid import uuid4
 
 from agent_factory.factory_graph.frontend_bridge.event_normalizer import RuntimeEventNormalizer, json_safe
 from agent_factory.factory_graph.frontend_bridge.protocol import (
@@ -24,14 +23,11 @@ from agent_factory.factory_graph.frontend_bridge.runtime_adapter_support import 
 )
 from agent_factory.factory_graph.frontend_bridge.runtime_adapter_types import (
     PendingAgentPackageRun,
-    PendingCreateAgentRun,
-    PendingEvolutionRun,
 )
 from agent_factory.runtime_attachments import (
     AttachmentImportError,
     attachment_import_error_payload,
     has_attachment_payload,
-    transcript_attachment_views,
 )
 from agent_factory.runtime_protocol.completion import runtime_completed, runtime_error_message
 
@@ -62,14 +58,10 @@ class RuntimeAgentPackageCommandMixin:
 
     def select_agent_package(self, command: FactoryFrontendCommand) -> None:
         package_id = str(command.payload.get("package_id") or "").strip()
-        purpose = str(command.payload.get("purpose") or "").strip()
         if not package_id:
             self._emit_error(command, "select_agent_package requires package_id")
             return
         package_info = self.agent_package_runtime.package_summary(package_id)
-        if purpose == "evolution":
-            self._select_evolution_agent_package(command, package_id=package_id, package_info=package_info)
-            return
         sessions = self.agent_package_runtime.list_sessions(package_id)
         self.mode = "agent_package"
         self.emit(
@@ -80,77 +72,6 @@ class RuntimeAgentPackageCommandMixin:
                 mode="agent_package",
                 payload={"package": package_info, "sessions": sessions},
             )
-        )
-
-    def _select_evolution_agent_package(
-        self,
-        command: FactoryFrontendCommand,
-        *,
-        package_id: str,
-        package_info: dict[str, Any],
-    ) -> None:
-        self._restore_evolution_package_session(package_id)
-        trace_payload: dict[str, Any] = {}
-        try:
-            trace_payload["latest_failed_trace_id"] = self.evolution_runtime.latest_failed_trace_id(package_id)
-        except Exception as exc:
-            trace_payload["latest_failed_trace_error"] = f"{type(exc).__name__}: {exc}"
-        self.emit(
-            event(
-                "agent_package_selected",
-                request_id=command.request_id,
-                session_id=self._session_id(),
-                mode="evolve_agent",
-                payload={
-                    "package": package_info,
-                    "package_id": package_id,
-                    "session": self._session_payload() if self.session_record is not None else None,
-                    "sessions": [],
-                    "purpose": "evolution",
-                    **trace_payload,
-                },
-            )
-        )
-
-    def _restore_evolution_package_session(self, package_id: str) -> None:
-        normalized_package_id = package_id.strip()
-        if not normalized_package_id:
-            raise ValueError("evolution package_id is required")
-        self.session_record = self._latest_session_for_start(
-            "evolve_agent",
-            normalized_package_id,
-        )
-        self.mode = "evolve_agent"
-        self.evolution_package_id = normalized_package_id
-
-    def _ensure_evolution_package_session(self, command: FactoryFrontendCommand, package_id: str) -> None:
-        normalized_package_id = package_id.strip()
-        if not normalized_package_id:
-            raise ValueError("evolution package_id is required")
-
-        current_package_id = (
-            str(getattr(self.session_record, "evolve_agent_package_id", "") or "").strip()
-            if self.session_record is not None
-            else ""
-        )
-        current_is_blank_evolution = (
-            self.session_record is not None
-            and self.session_record.current_mode == "evolve_agent"
-            and not current_package_id
-            and not self.session_record.evolve_agent_turns
-        )
-        if self.session_record is None:
-            existing = self.session_manager.latest_evolution_for_package(normalized_package_id)
-            self.session_record = existing or self.session_manager.create(mode="evolve_agent")
-        elif current_package_id != normalized_package_id and not current_is_blank_evolution:
-            existing = self.session_manager.latest_evolution_for_package(normalized_package_id)
-            self.session_record = existing or self.session_manager.create(mode="evolve_agent")
-
-        self.mode = "evolve_agent"
-        self.evolution_package_id = normalized_package_id
-        self.session_record = self.session_manager.set_evolution_package(
-            self.session_record.session_id,
-            normalized_package_id,
         )
 
     def delete_agent_package(self, command: FactoryFrontendCommand) -> None:
@@ -400,160 +321,6 @@ class RuntimeAgentPackageCommandMixin:
         except Exception as exc:
             normalizer.emit_run_failed(exc)
 
-    def run_agent_evolution(self, command: FactoryFrontendCommand) -> None:
-        package_id = str(command.payload.get("package_id") or self.evolution_package_id or "").strip()
-        message = str(command.payload.get("message") or command.message or "").strip()
-        if not package_id:
-            self._emit_error(command, "run_agent_evolution requires package_id")
-            return
-        if not message and not has_attachment_payload(command.payload.get("attachments")):
-            self._emit_error(command, "run_agent_evolution requires message")
-            return
-        if self.pending_evolution_run is not None:
-            if interrupt_accepts_message(self.pending_evolution_run):
-                self._resume_evolution_interrupt(message_resume_command(command, message))
-            else:
-                self._emit_error(command, "cannot evolve an agent while an interrupt decision is pending")
-            return
-        self._ensure_evolution_package_session(command, package_id)
-        normalizer = RuntimeEventNormalizer(
-            emit=self.emit,
-            request_id=command.request_id,
-            session_id=self._session_id(),
-            mode="evolve_agent",
-            graph_id="agent_evolution",
-            producer_type="factory_runtime",
-        )
-        try:
-            self._commit_evolution_request(
-                message,
-                package_id=package_id,
-                request_id=command.request_id,
-                attachments=transcript_attachment_views(command.payload.get("attachments")),
-            )
-            run = self.evolution_runtime.stream(
-                package_id=package_id,
-                user_input=message,
-                request_id=command.request_id,
-                session_id=self._session_id(),
-                user_config=_runtime_user_config(command),
-                attachments=command.payload.get("attachments"),
-            )
-            self._consume_evolution_stream(package_id=package_id, run=run)
-        except AttachmentImportError as exc:
-            _emit_attachment_import_failed(normalizer, exc)
-            self._finish_evolution_turn(request_id=command.request_id, final_answer=None, status="failed")
-        except Exception as exc:
-            normalizer.emit_run_failed(exc)
-            self._finish_evolution_turn(request_id=command.request_id, final_answer=None, status="failed")
-
-    def _run_evolve_agent(self, command: FactoryFrontendCommand, message: str) -> None:
-        package_id = self.evolution_package_id or str(command.payload.get("package_id") or "").strip()
-        if not package_id:
-            self._emit_error(command, "select an agent with /evolve-agent before sending evolution requests")
-            return
-        self.run_agent_evolution(
-            FactoryFrontendCommand(
-                type="run_agent_evolution",
-                request_id=command.request_id,
-                session_id=command.session_id,
-                message=message,
-                payload={
-                    "package_id": package_id,
-                    "message": message,
-                    **(
-                        {"user_config": command.payload.get("user_config")}
-                        if command.payload.get("user_config")
-                        else {}
-                    ),
-                    **({"attachments": command.payload.get("attachments")} if command.payload.get("attachments") else {}),
-                },
-            )
-        )
-
-    def _consume_evolution_stream(self, *, package_id: str, run: Any) -> RuntimeStreamConsumeResult:
-        request_id = run.request_id
-        terminal_event: FactoryFrontendEvent | None = None
-        visible_output = VisibleAssistantOutputAccumulator()
-        for stream_mode, chunk in run.events:
-            if terminal_event is not None:
-                continue
-            if stream_mode != "frontend_event":
-                continue
-            item = chunk if isinstance(chunk, FactoryFrontendEvent) else FactoryFrontendEvent.model_validate(chunk)
-            visible_output.accept(item)
-            if item.event_type in INTERRUPT_TERMINAL_EVENT_TYPES:
-                session_id = self._session_id()
-                if not session_id:
-                    raise RuntimeError("agent evolution interrupt missing session_id")
-                def commit_interrupt() -> None:
-                    self._finish_evolution_turn(
-                        request_id=item.request_id,
-                        final_answer=visible_output.content,
-                        reasoning_content=visible_output.reasoning_content,
-                        status="interrupted",
-                        tool_activities=visible_output.tool_activities,
-                    )
-                    self.pending_evolution_run = PendingEvolutionRun(
-                        package_id=package_id,
-                        session_id=session_id,
-                        request_id=item.request_id,
-                        trace_id=run.trace_id,
-                        interrupt_id=_interrupt_id_from_event(item),
-                        interrupt_event_id=item.event_id,
-                        interrupt_payload=_interrupt_payload(item.payload),
-                    )
-                    self.emit(
-                        _frontend_scoped_agent_event(
-                            item,
-                            mode="evolve_agent",
-                            session_id=session_id,
-                            package_id=package_id,
-                        )
-                    )
-
-                commit_interrupt()
-                terminal_event = item
-                continue
-            if item.event_type in RUN_TERMINAL_EVENT_TYPES:
-                def commit_terminal() -> None:
-                    self.emit(
-                        _frontend_scoped_agent_event(
-                            item,
-                            mode="evolve_agent",
-                            session_id=self._session_id(),
-                            package_id=package_id,
-                        )
-                    )
-                    self._finish_evolution_turn(
-                        request_id=item.request_id,
-                        final_answer=visible_output.content,
-                        reasoning_content=visible_output.reasoning_content,
-                        status=runtime_stream_status(item),
-                        tool_activities=visible_output.tool_activities,
-                    )
-
-                commit_terminal()
-                terminal_event = item
-                continue
-            self.emit(
-                _frontend_scoped_agent_event(
-                    item,
-                    mode="evolve_agent",
-                    session_id=self._session_id(),
-                    package_id=package_id,
-                )
-            )
-        if terminal_event is not None:
-            return RuntimeStreamConsumeResult(
-                status=runtime_stream_status(terminal_event),
-                terminal_event=terminal_event,
-                final_answer=visible_output.content,
-                reasoning_content=visible_output.reasoning_content,
-                tool_activities=list(visible_output.tool_activities),
-            )
-        raise RuntimeError("agent evolution runtime stream ended without a terminal event")
-
     def _resume_agent_package_interrupt(
         self,
         command: FactoryFrontendCommand,
@@ -615,77 +382,6 @@ class RuntimeAgentPackageCommandMixin:
         except Exception as exc:
             pending.normalizer.emit_run_failed(exc)
 
-    def _resume_create_agent_interrupt(self, command: FactoryFrontendCommand) -> None:
-        pending = self.pending_create_agent_run
-        self.pending_create_agent_run = None
-        if pending is None:
-            self._emit_error(command, "no pending create-agent interrupt to resume")
-            return
-        factory_session_id = str(pending.factory_session_id or self._session_id() or "").strip()
-        factory_session = self.session_manager.load_if_exists(factory_session_id) if factory_session_id else None
-        if factory_session is None:
-            self._emit_error(command, "pending create-agent interrupt factory session is unavailable")
-            return
-        self.session_record = factory_session
-        self.mode = "create_agent"
-        resume_text = _resume_payload_text(command.payload)
-        normalizer = RuntimeEventNormalizer(
-            emit=self.emit,
-            request_id=command.request_id,
-            session_id=factory_session_id,
-            mode="create_agent",
-            graph_id="create_agent_react",
-            producer_type="factory_runtime",
-        )
-        try:
-            if resume_text:
-                self.session_record = self.session_manager.start_turn(
-                    self.session_record.session_id,
-                    "create_agent",
-                    request_id=command.request_id,
-                    user_input=resume_text,
-                )
-            run = self.create_agent_runtime.resume_stream(
-                session_id=pending.session_id,
-                resume_payload=command.payload,
-                request_id=command.request_id,
-            )
-            self._consume_create_agent_stream(run=run)
-        except Exception as exc:
-            normalizer.emit_run_failed(exc)
-            self._finish_host_create_agent_turn(request_id=command.request_id, final_answer=None, status="failed")
-
-    def _resume_evolution_interrupt(self, command: FactoryFrontendCommand) -> None:
-        pending = self.pending_evolution_run
-        self.pending_evolution_run = None
-        if pending is None:
-            self._emit_error(command, "no pending evolution interrupt to resume")
-            return
-        factory_session = self.session_manager.load_if_exists(pending.session_id)
-        if factory_session is None:
-            self._emit_error(command, "pending evolution interrupt factory session is unavailable")
-            return
-        self.session_record = factory_session
-        self.mode = "evolve_agent"
-        normalizer = RuntimeEventNormalizer(
-            emit=self.emit,
-            request_id=command.request_id,
-            session_id=pending.session_id,
-            mode="evolve_agent",
-            graph_id="agent_evolution",
-            producer_type="factory_runtime",
-        )
-        try:
-            run = self.evolution_runtime.resume_stream(
-                package_id=pending.package_id,
-                session_id=pending.session_id,
-                resume_payload=command.payload,
-                request_id=command.request_id,
-            )
-            self._consume_evolution_stream(package_id=pending.package_id, run=run)
-        except Exception as exc:
-            normalizer.emit_run_failed(exc)
-
     def cancel_runtime_request(self, command: FactoryFrontendCommand) -> None:
         reason = str(command.payload.get("reason") or "user_cancelled")
         target_request_id = str(command.payload.get("target_request_id") or "").strip() or None
@@ -697,16 +393,6 @@ class RuntimeAgentPackageCommandMixin:
             if self.agent_package_runtime
             else 0
         )
-        if self.evolution_runtime is not None:
-            cancelled += self.evolution_runtime.cancel_active_requests(
-                reason=reason,
-                request_id=target_request_id,
-            )
-        if self.create_agent_runtime is not None:
-            cancelled += self.create_agent_runtime.cancel_active_requests(
-                reason=reason,
-                request_id=target_request_id,
-            )
         if self.agent_package_runtime is not None:
             cancelled += int(self.agent_package_runtime.cancel_extension_request(target_request_id))
         if target_request_id and cancelled:
@@ -933,197 +619,6 @@ class RuntimeAgentPackageCommandMixin:
             status=result.status,
             tool_activities=result.tool_activities,
         )
-
-    def _run_create_agent(self, command: FactoryFrontendCommand, message: str) -> None:
-        agent_session_id = self._planned_host_create_agent_session_id()
-        normalizer = RuntimeEventNormalizer(
-            emit=self.emit,
-            request_id=command.request_id,
-            session_id=self._session_id(),
-            mode="create_agent",
-            graph_id="create_agent_react",
-            producer_type="factory_runtime",
-        )
-        try:
-            self._commit_host_create_agent_request(
-                message,
-                session_id=agent_session_id,
-                request_id=command.request_id,
-                attachments=transcript_attachment_views(command.payload.get("attachments")),
-            )
-            run = self.create_agent_runtime.stream(
-                user_input=message,
-                session_id=agent_session_id,
-                request_id=command.request_id,
-                user_config=_runtime_user_config(command),
-                attachments=command.payload.get("attachments"),
-            )
-            self._consume_create_agent_stream(run=run)
-        except AttachmentImportError as exc:
-            _emit_attachment_import_failed(normalizer, exc)
-            self._finish_host_create_agent_turn(request_id=command.request_id, final_answer=None, status="failed")
-        except Exception as exc:
-            normalizer.emit_run_failed(exc)
-            self._finish_host_create_agent_turn(request_id=command.request_id, final_answer=None, status="failed")
-
-    def _planned_host_create_agent_session_id(self) -> str:
-        if self.session_record is not None and self.session_record.create_agent_session_id:
-            return self.session_record.create_agent_session_id
-        return uuid4().hex
-
-    def _commit_host_create_agent_request(
-        self,
-        first_user_input: str,
-        *,
-        session_id: str,
-        request_id: str,
-        attachments: Any = None,
-    ) -> None:
-        self._remember_factory_first_user_input(first_user_input)
-        if self.session_record.create_agent_session_id != session_id:
-            self.session_record.create_agent_session_id = session_id
-        self.session_manager.save(self.session_record)
-        self.session_record = self.session_manager.start_turn(
-            self.session_record.session_id,
-            "create_agent",
-            request_id=request_id,
-            user_input=first_user_input,
-            attachments=attachments,
-        )
-
-    def _remember_factory_first_user_input(self, first_user_input: str) -> None:
-        if self.session_record is None:
-            mode = self.mode if self.mode in {"create_agent", "evolve_agent"} else None
-            if mode is None:
-                raise RuntimeError("factory session mode is not selected")
-            self.start_session(FactoryFrontendCommand(type="start_session", mode=mode))
-        self.session_record = self.session_manager.remember_first_user_input(
-            self.session_record.session_id,
-            first_user_input,
-        )
-
-    def _commit_evolution_request(
-        self,
-        first_user_input: str,
-        *,
-        package_id: str,
-        request_id: str,
-        attachments: Any = None,
-    ) -> None:
-        self._remember_factory_first_user_input(first_user_input)
-        self.evolution_package_id = package_id
-        self.session_record = self.session_manager.set_evolution_package(
-            self.session_record.session_id,
-            package_id,
-        )
-        self.session_record = self.session_manager.start_turn(
-            self.session_record.session_id,
-            "evolve_agent",
-            request_id=request_id,
-            user_input=first_user_input,
-            attachments=attachments,
-        )
-
-    def _finish_evolution_turn(
-        self,
-        *,
-        request_id: str,
-        final_answer: str | None,
-        status: str,
-        reasoning_content: str | None = None,
-        tool_activities: list[dict[str, Any]] | None = None,
-    ) -> None:
-        if self.session_record is None:
-            return
-        self.session_record = self.session_manager.finish_turn(
-            self.session_record.session_id,
-            "evolve_agent",
-            request_id=request_id,
-            final_answer=final_answer,
-            reasoning_content=reasoning_content,
-            status=status,
-            tool_activities=tool_activities,
-        )
-
-    def _consume_create_agent_stream(self, *, run: Any) -> RuntimeStreamConsumeResult:
-        request_id = run.request_id
-        terminal_event: FactoryFrontendEvent | None = None
-        visible_output = VisibleAssistantOutputAccumulator()
-        for stream_mode, chunk in run.events:
-            if terminal_event is not None:
-                continue
-            if stream_mode != "frontend_event":
-                raise RuntimeError(f"create-agent runtime emitted non-frontend event stream: {stream_mode}")
-            item = chunk if isinstance(chunk, FactoryFrontendEvent) else FactoryFrontendEvent.model_validate(chunk)
-            visible_output.accept(item)
-            if item.event_type in INTERRUPT_TERMINAL_EVENT_TYPES:
-                def commit_interrupt() -> None:
-                    self._finish_host_create_agent_turn(
-                        request_id=item.request_id,
-                        final_answer=visible_output.content,
-                        reasoning_content=visible_output.reasoning_content,
-                        status="interrupted",
-                        tool_activities=visible_output.tool_activities,
-                    )
-                    self.pending_create_agent_run = PendingCreateAgentRun(
-                        session_id=run.session_id,
-                        factory_session_id=self._session_id(),
-                        request_id=item.request_id,
-                        interrupt_id=_interrupt_id_from_event(item),
-                        interrupt_event_id=item.event_id,
-                        interrupt_payload=_interrupt_payload(item.payload),
-                    )
-                    self.emit(_frontend_scoped_agent_event(item, mode="create_agent", session_id=self._session_id()))
-
-                commit_interrupt()
-                terminal_event = item
-                continue
-            if item.event_type in RUN_TERMINAL_EVENT_TYPES:
-                def commit_terminal() -> None:
-                    self._finish_host_create_agent_turn(
-                        request_id=item.request_id,
-                        final_answer=visible_output.content,
-                        reasoning_content=visible_output.reasoning_content,
-                        status=runtime_stream_status(item),
-                        tool_activities=visible_output.tool_activities,
-                    )
-                    self.emit(_frontend_scoped_agent_event(item, mode="create_agent", session_id=self._session_id()))
-
-                commit_terminal()
-                terminal_event = item
-                continue
-            self.emit(_frontend_scoped_agent_event(item, mode="create_agent", session_id=self._session_id()))
-        if terminal_event is not None:
-            return RuntimeStreamConsumeResult(
-                status=runtime_stream_status(terminal_event),
-                terminal_event=terminal_event,
-                final_answer=visible_output.content,
-                reasoning_content=visible_output.reasoning_content,
-                tool_activities=list(visible_output.tool_activities),
-            )
-        raise RuntimeError("create-agent runtime stream ended without a terminal event")
-
-    def _finish_host_create_agent_turn(
-        self,
-        *,
-        request_id: str,
-        final_answer: str | None,
-        status: str,
-        reasoning_content: str | None = None,
-        tool_activities: list[dict[str, Any]] | None = None,
-    ) -> None:
-        if self.session_record is None:
-            return
-        self.session_record = self.session_manager.finish_turn(
-            self.session_record.session_id,
-            "create_agent",
-            request_id=request_id,
-            final_answer=final_answer,
-            reasoning_content=reasoning_content,
-            status=status,
-            tool_activities=tool_activities,
-        )
-
 
 def _frontend_scoped_agent_event(
     item: FactoryFrontendEvent,

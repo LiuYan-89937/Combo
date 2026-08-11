@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import os
-from typing import Any, Callable, Literal, Mapping
+from typing import Any, Callable, Literal, Mapping, Protocol
 
 from langgraph.types import interrupt
 from pydantic import BaseModel, ConfigDict, Field
@@ -87,6 +87,14 @@ class ToolApprovalTrustStore:
         return tool_id in self._trusted_tool_ids
 
 
+class ToolApprovalTrustResolver(Protocol):
+    def trust_tool(self, tool_id: str) -> None:
+        ...
+
+    def is_trusted(self, tool_id: str) -> bool:
+        ...
+
+
 DEFAULT_TOOL_APPROVAL_TRUST_STORE = ToolApprovalTrustStore()
 
 
@@ -105,6 +113,8 @@ class ToolExecutionGateway:
     max_revisions: int = 5
     output_store: ToolOutputStore | None = None
     output_policy: ToolOutputPolicy = field(default_factory=default_tool_output_policy)
+    approval_trust_store: ToolApprovalTrustResolver | None = DEFAULT_TOOL_APPROVAL_TRUST_STORE
+    compression_model_resolver: Callable[[], Any] | None = get_compression_model
 
     def execute(
         self,
@@ -265,8 +275,8 @@ class ToolExecutionGateway:
                 policy=self.output_policy,
                 compression_model=(
                     None
-                    if _runtime_stop_requested()
-                    else get_compression_model()
+                    if _runtime_stop_requested() or self.compression_model_resolver is None
+                    else self.compression_model_resolver()
                 ),
                 compression_config=self.spec.output_compression,
             )
@@ -290,7 +300,7 @@ class ToolExecutionGateway:
         """Return the human approval request this call would need, without executing it."""
         if self.approval_handler is not None:
             return None
-        if DEFAULT_TOOL_APPROVAL_TRUST_STORE.is_trusted(self.spec.id):
+        if self.approval_trust_store is not None and self.approval_trust_store.is_trusted(self.spec.id):
             return None
         input_errors = self.input_schema.errors_for(arguments)
         if input_errors:
@@ -386,9 +396,8 @@ class ToolExecutionGateway:
             return ToolApprovalDecision(action="approve")
         if current_tool_approval_override() is not None:
             return ToolApprovalDecision(action="approve")
-        if DEFAULT_TOOL_APPROVAL_TRUST_STORE.is_trusted(self.spec.id):
+        if self.approval_trust_store is not None and self.approval_trust_store.is_trusted(self.spec.id):
             return ToolApprovalDecision(action="approve")
-        handler = self.approval_handler or default_interrupt_approval
         effective_risk_level = tool_approval_effective_risk_level(
             spec=self.spec,
             risk=risk,
@@ -396,7 +405,14 @@ class ToolExecutionGateway:
         )
         if effective_risk_level != risk.risk_level:
             risk = risk.model_copy(update={"risk_level": effective_risk_level})
-        return handler(self.spec, self._public_arguments(arguments), risk)
+        if self.approval_handler is not None:
+            return self.approval_handler(self.spec, self._public_arguments(arguments), risk)
+        return interrupt_approval(
+            self.spec,
+            self._public_arguments(arguments),
+            risk,
+            trust=self.approval_trust_store,
+        )
 
     def _resolve_resources(self) -> dict[str, Any]:
         resources: dict[str, Any] = {}
@@ -534,7 +550,13 @@ def _current_tool_call_context(tool_id: str) -> dict[str, Any]:
     }
 
 
-def default_interrupt_approval(spec: ToolSpec, arguments: dict[str, Any], risk: ToolRiskResult) -> ToolApprovalDecision:
+def interrupt_approval(
+    spec: ToolSpec,
+    arguments: dict[str, Any],
+    risk: ToolRiskResult,
+    *,
+    trust: ToolApprovalTrustResolver | None,
+) -> ToolApprovalDecision:
     current = current_tool_call()
     decision = interrupt(
         {
@@ -555,7 +577,8 @@ def default_interrupt_approval(spec: ToolSpec, arguments: dict[str, Any], risk: 
         }
     )
     if _is_trust_tool(decision):
-        DEFAULT_TOOL_APPROVAL_TRUST_STORE.trust_tool(spec.id)
+        if trust is not None:
+            trust.trust_tool(spec.id)
         return ToolApprovalDecision(action="approve")
     return parse_approval_decision(decision)
 

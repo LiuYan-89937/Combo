@@ -10,10 +10,6 @@
       <template #icon><n-icon><AddCircleOutline /></n-icon></template>
       {{ t('references.addSelection') }}
     </n-button>
-    <n-button v-if="tipSourceKey" text size="small" @click="startTiping">
-      <template #icon><TipingIcon :size="18" /></template>
-      Tiping
-    </n-button>
   </div>
 </template>
 
@@ -24,20 +20,14 @@ import { AddCircleOutline } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import { useContextReferenceStore } from '@/stores/contextReferences'
 import { selectionContextReference } from '@/utils/contextReferences'
-import { useTipStore } from '@/stores/tips'
-import TipingIcon from './TipingIcon.vue'
 
 const { t } = useI18n()
 const message = useMessage()
 const referenceStore = useContextReferenceStore()
-const tipStore = useTipStore()
 const visible = ref(false)
 const menuRef = ref<HTMLElement | null>(null)
 const selectedText = ref('')
 const sourceLabel = ref('')
-const tipSourceKey = ref('')
-const selectionStart = ref<number | undefined>()
-const selectionEnd = ref<number | undefined>()
 const position = reactive({ x: 0, y: 0 })
 
 function handleContextMenu(event: MouseEvent) {
@@ -49,33 +39,13 @@ function handleContextMenu(event: MouseEvent) {
   }
   const target = event.target instanceof Element ? event.target : null
   const source = target?.closest('[data-reference-label]')
-  const tipSource = target?.closest('[data-tip-source-key]')
   selectedText.value = text
   sourceLabel.value = String(source?.getAttribute('data-reference-label') || document.title || 'Application selection')
-  const candidateTipKey = String(tipSource?.getAttribute('data-tip-source-key') || '')
-  tipSourceKey.value = tipStore.hasSource(candidateTipKey) ? candidateTipKey : ''
-  const selectionContainer = tipSource?.querySelector('.message-body') || tipSource
-  const offsets = selectionContainer && selection
-    ? selectionOffsets(selectionContainer, selection.getRangeAt(0))
-    : null
-  selectionStart.value = offsets?.start
-  selectionEnd.value = offsets?.end
   position.x = event.clientX
   position.y = event.clientY
   visible.value = true
   event.preventDefault()
   nextTick(() => alignMenuToViewport(event.clientX, event.clientY))
-}
-
-function startTiping() {
-  if (!tipSourceKey.value || !selectedText.value) return
-  tipStore.beginSelection(
-    tipSourceKey.value,
-    selectedText.value,
-    selectionStart.value,
-    selectionEnd.value,
-  )
-  visible.value = false
 }
 
 function addSelectionReference() {
@@ -90,15 +60,6 @@ function addSelectionReference() {
 
 function closeMenu() {
   visible.value = false
-}
-
-function selectionOffsets(container: Element, range: Range): { start: number; end: number } | null {
-  if (!container.contains(range.commonAncestorContainer)) return null
-  const prefix = range.cloneRange()
-  prefix.selectNodeContents(container)
-  prefix.setEnd(range.startContainer, range.startOffset)
-  const start = prefix.toString().length
-  return { start, end: start + range.toString().length }
 }
 
 function alignMenuToViewport(anchorX: number, anchorY: number) {

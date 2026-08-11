@@ -1,6 +1,11 @@
 """Runtime Kernel package."""
 
 from agent_factory.runtime_kernel.bindings import BindingSet, RuntimeServices
+from agent_factory.runtime_kernel.capability_state import (
+    CapabilityStateError,
+    bind_capability_snapshot,
+    require_bound_tool_ids,
+)
 from agent_factory.runtime_kernel.execution import ExecutionController
 from agent_factory.runtime_kernel.kernel import CompiledKernelApp, RuntimeKernelFacade, RuntimeKernelInstance
 from agent_factory.runtime_kernel.patterns import (
@@ -18,6 +23,7 @@ from agent_factory.runtime_kernel.wrappers import NodeWrapper, NodeWrapperRegist
 
 __all__ = [
     "BindingSet",
+    "CapabilityStateError",
     "CompiledKernelApp",
     "ExecutionController",
     "GraphPatternSpec",
@@ -31,6 +37,8 @@ __all__ = [
     "RuntimeKernelInstance",
     "RuntimeServices",
     "RuntimeState",
+    "bind_capability_snapshot",
+    "require_bound_tool_ids",
     "NodeWrapper",
     "NodeWrapperRegistry",
     "StrategyRegistry",

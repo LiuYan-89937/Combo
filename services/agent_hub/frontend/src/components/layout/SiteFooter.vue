@@ -22,8 +22,6 @@ const year = computed(() => new Date().getFullYear())
       <nav class="footer__cols" :aria-label="t('footer.product')">
         <div class="footer__col">
           <p class="footer__heading">{{ t('footer.product') }}</p>
-          <RouterLink to="/hub" class="footer__link">{{ t('nav.hub') }}</RouterLink>
-          <RouterLink to="/publish" class="footer__link">{{ t('nav.publish') }}</RouterLink>
           <RouterLink to="/#download" class="footer__link">{{ t('nav.download') }}</RouterLink>
           <RouterLink to="/changelog" class="footer__link">{{ t('nav.changelog') }}</RouterLink>
         </div>

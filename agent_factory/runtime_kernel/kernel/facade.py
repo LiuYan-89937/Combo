@@ -34,7 +34,7 @@ from agent_factory.runtime_kernel.kernel.run_context import (
 )
 from agent_factory.runtime_kernel.nodes.registry import NodeRegistry
 from agent_factory.runtime_kernel.node_providers import NodeProvider
-from agent_factory.runtime_kernel.model_operations import ModelOperationService
+from agent_factory.runtime_kernel.model_operations import LegacyRoleModelOperationService
 from agent_factory.runtime_kernel.nodes.standard import (
     CognitiveAnswerNode,
     CognitiveClarifyNode,
@@ -181,7 +181,7 @@ class RuntimeKernelFacade:
             self.background_workers.add(worker)
         services = RuntimeServices(
             model_service=None,
-            model_operation_service=ModelOperationService(role="main"),
+            model_operation_service=LegacyRoleModelOperationService(role="main"),
             tool_registry=InMemoryToolRegistry(),
             memory_store=memory_store,
             memory_system=memory_runtime,

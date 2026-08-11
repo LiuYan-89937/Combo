@@ -20,8 +20,6 @@ export interface DownloadTarget {
 }
 
 export interface PublicConfig {
-  /** Maximum upload size in bytes (backend default: 200 MiB). */
-  maxPackageBytes: number
   githubRepoUrl: string
   downloads: DownloadTarget[]
   totalDownloadCount: number
@@ -29,7 +27,6 @@ export interface PublicConfig {
 }
 
 const FALLBACK_CONFIG: PublicConfig = {
-  maxPackageBytes: 200 * 1024 * 1024,
   githubRepoUrl: 'https://github.com/LiuYan-89937/FastAgentFactory',
   downloads: [
     {
@@ -71,7 +68,6 @@ export async function loadPublicConfig(): Promise<PublicConfig> {
 
 function mergeConfig(remote: Partial<PublicConfig>): PublicConfig {
   return {
-    maxPackageBytes: remote.maxPackageBytes ?? FALLBACK_CONFIG.maxPackageBytes,
     githubRepoUrl: remote.githubRepoUrl || FALLBACK_CONFIG.githubRepoUrl,
     downloads: remote.releaseManaged
       ? remote.downloads ?? []

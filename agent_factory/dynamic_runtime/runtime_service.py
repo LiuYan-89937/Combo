@@ -1,0 +1,670 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from contextvars import copy_context
+from collections.abc import Callable
+import json
+import threading
+from typing import Any, Literal, Protocol
+
+from langchain_core.messages import BaseMessage, ToolMessage
+from langgraph.types import Command
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from agent_factory.dynamic_runtime.conversation_projection import (
+    conversation_to_graph_messages,
+    graph_messages_to_conversation,
+)
+from agent_factory.dynamic_runtime.execution_commits import (
+    RuntimeCancellationRequested,
+    RuntimeExecutionCommitStore,
+)
+from agent_factory.dynamic_runtime.model_service import RuntimeModelResolver, register_runtime_model_handle
+from agent_factory.dynamic_runtime.repositories import ConversationStore, RuntimeInstanceStore
+from agent_factory.dynamic_runtime.run_control import RuntimeRunControl, RuntimeRunControlRegistry
+from agent_factory.dynamic_runtime.services import DynamicRuntimeServiceSet
+from agent_factory.dynamic_runtime.snapshot_tool_registry import SnapshotToolRegistryLease
+from agent_factory.runtime_kernel.capability_state import bind_capability_snapshot
+from agent_factory.runtime_kernel.state import (
+    ConversationState,
+    ExecutionState,
+    RunState,
+    RuntimeConfigState,
+    RuntimeState,
+)
+from agent_factory.runtime_kernel.state.checkpoint_projection import runtime_checkpoint_payload
+from agent_factory.runtime_protocol import (
+    CapabilitySnapshot,
+    ConversationMessage,
+    RuntimeErrorEnvelope,
+    RuntimeInstance,
+    ToolCallPart,
+    ToolCallRecord,
+    ToolResultPart,
+)
+from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
+from agent_factory.tooling.execution_context import (
+    runtime_run_control_context,
+    tool_output_session_context,
+)
+
+
+RuntimeExecutionStatus = Literal["waiting_approval", "waiting_external", "completed", "failed", "cancelled"]
+
+
+class RuntimeLaunchContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    system_prompt: str
+    workspace_root_alias: str = "/workdir"
+    allow_external_paths: bool = False
+    workspace_mounts: tuple[dict[str, Any], ...] = ()
+    attachments: tuple[dict[str, Any], ...] = ()
+
+    @field_validator("system_prompt", "workspace_root_alias")
+    @classmethod
+    def _required_text(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("runtime launch text must not be empty")
+        return text
+
+
+class RuntimeLaunchContextResolver(Protocol):
+    def resolve(
+        self,
+        *,
+        instance: RuntimeInstance,
+        messages: list[ConversationMessage],
+        capability_snapshot: CapabilitySnapshot,
+    ) -> RuntimeLaunchContext:
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeExecutionResult:
+    runtime_instance: RuntimeInstance
+    capability_snapshot: CapabilitySnapshot
+    state: RuntimeState
+    graph_messages: tuple[BaseMessage, ...]
+    conversation_messages: tuple[ConversationMessage, ...]
+    status: RuntimeExecutionStatus
+    interrupt_payloads: tuple[dict[str, Any], ...] = ()
+
+
+class DynamicRuntimeService:
+    """Authoritative execution entrypoint for main and temporary runtimes."""
+
+    def __init__(
+        self,
+        *,
+        service_set: DynamicRuntimeServiceSet,
+        runtime_instances: RuntimeInstanceStore,
+        conversations: ConversationStore,
+        execution_commits: RuntimeExecutionCommitStore,
+        run_controls: RuntimeRunControlRegistry,
+        model_resolver: RuntimeModelResolver,
+        launch_context_resolver: RuntimeLaunchContextResolver,
+    ) -> None:
+        self._service_set = service_set
+        self._runtime_instances = runtime_instances
+        self._conversations = conversations
+        self._execution_commits = execution_commits
+        self._run_controls = run_controls
+        self._model_resolver = model_resolver
+        self._launch_context_resolver = launch_context_resolver
+
+    def execute(self, runtime_instance_id: str) -> RuntimeExecutionResult:
+        return self._run(runtime_instance_id=runtime_instance_id, resume_payload=None)
+
+    def resume(self, runtime_instance_id: str, *, resume_payload: dict[str, Any]) -> RuntimeExecutionResult:
+        if not isinstance(resume_payload, dict) or not resume_payload:
+            raise ValueError("runtime resume requires a non-empty resume_payload")
+        return self._run(runtime_instance_id=runtime_instance_id, resume_payload=resume_payload)
+
+    def _run(
+        self,
+        *,
+        runtime_instance_id: str,
+        resume_payload: dict[str, Any] | None,
+    ) -> RuntimeExecutionResult:
+        instance = self._runtime_instances.get(runtime_instance_id)
+        _validate_invocation_status(instance, resuming=resume_payload is not None)
+        claimed_instance = self._execution_commits.begin(
+            runtime_instance_id,
+            resuming=resume_payload is not None,
+        )
+        run_control = self._run_controls.register(claimed_instance.runtime_instance_id)
+        tool_registry_lease: SnapshotToolRegistryLease | None = None
+        model_registered = False
+        runtime_leases_owned_by_worker = False
+        runtime_leases_lock = threading.RLock()
+        runtime_leases_released = False
+
+        def release_runtime_leases() -> None:
+            nonlocal runtime_leases_released
+            with runtime_leases_lock:
+                if runtime_leases_released:
+                    return
+                runtime_leases_released = True
+            errors: list[BaseException] = []
+            if tool_registry_lease is not None:
+                try:
+                    tool_registry_lease.release()
+                except BaseException as exc:
+                    errors.append(exc)
+            if model_registered:
+                try:
+                    self._service_set.model_handles.release(claimed_instance.runtime_instance_id)
+                except BaseException as exc:
+                    errors.append(exc)
+            if errors:
+                raise RuntimeError(
+                    f"runtime lease release failed for {len(errors)} resource(s)"
+                ) from errors[0]
+
+        try:
+            snapshot = self._runtime_instances.capability_snapshot(claimed_instance.capability_snapshot_id)
+            if snapshot.snapshot_id != claimed_instance.request.capability_snapshot_id:
+                raise RuntimeError("runtime instance and capability snapshot identities differ")
+            tool_registry_lease = self._service_set.snapshot_tool_registries.materialize(
+                capability_snapshot=snapshot,
+                runtime_instance=claimed_instance,
+            )
+            canonical_messages = self._conversations.messages(claimed_instance.request.session_id)
+            current_user_message = _current_user_message(claimed_instance, canonical_messages)
+            launch_context = self._launch_context_resolver.resolve(
+                instance=claimed_instance,
+                messages=canonical_messages,
+                capability_snapshot=snapshot,
+            )
+            graph = self._service_set.graph_for(claimed_instance.request.strategy)
+            resolved_model = self._resolve_frozen_model(claimed_instance)
+            register_runtime_model_handle(
+                self._service_set.model_handles,
+                runtime_instance_id=claimed_instance.runtime_instance_id,
+                resolved=resolved_model,
+            )
+            model_registered = True
+            config = {
+                "configurable": {
+                    "thread_id": claimed_instance.runtime_instance_id,
+                    "checkpoint_ns": f"dynamic_runtime:{claimed_instance.request.strategy}",
+                }
+            }
+            if resume_payload is None:
+                graph_messages = conversation_to_graph_messages(canonical_messages)
+                state = _initial_state(
+                    instance=claimed_instance,
+                    snapshot=snapshot,
+                    current_user_message=current_user_message,
+                    launch_context=launch_context,
+                )
+                graph_input: Any = {
+                    "messages": graph_messages,
+                    "runtime": runtime_checkpoint_payload(state, mode="json"),
+                }
+            else:
+                graph_input = Command(resume=resume_payload)
+            fallback_raw = (
+                graph_input
+                if isinstance(graph_input, dict)
+                else (getattr(graph.graph_app.get_state(config), "values", None) or {})
+            )
+            with self._service_set.scoped_tool_registry.bind(tool_registry_lease):
+                runtime_leases_owned_by_worker = True
+                raw, graph_detached = _run_graph_with_control(
+                    graph_app=graph.graph_app,
+                    graph_input=graph_input,
+                    config=config,
+                    control=run_control,
+                    session_id=claimed_instance.request.session_id,
+                    fallback_raw=fallback_raw,
+                    on_complete=release_runtime_leases,
+                )
+            checkpoint = graph.graph_app.get_state(config)
+            authoritative = getattr(checkpoint, "values", None) or raw
+            if not isinstance(authoritative, dict):
+                raise RuntimeError("fixed runtime graph returned an invalid checkpoint projection")
+            state = RuntimeState.model_validate(authoritative.get("runtime") or {})
+            if graph_detached or run_control.drain_requested:
+                state.execution.interrupted = True
+                state.execution.finished = True
+                state.execution.finish_status = "cancelled"
+                state.execution.last_error_location = "runtime.cancel"
+            graph_messages = list(authoritative.get("messages") or [])
+            interrupts = _interrupt_payloads(raw=raw, checkpoint=checkpoint)
+            status = _execution_status(state=state, graph_messages=graph_messages, interrupts=interrupts)
+            projection_messages = list(graph_messages)
+            if status in {"completed", "failed", "cancelled"}:
+                projection_messages = _close_terminal_tool_calls(projection_messages, status=status)
+            projected_for_records = graph_messages_to_conversation(
+                graph_messages=projection_messages,
+                current_user_message_id=current_user_message.message_id,
+                session_id=claimed_instance.request.session_id,
+                turn_id=claimed_instance.request.turn_id,
+                runtime_instance_id=claimed_instance.runtime_instance_id,
+                request_id=claimed_instance.request.request_id,
+                task_revision=claimed_instance.request.task_revision,
+                capability_snapshot=snapshot,
+            )
+            projected_messages = (
+                [] if status in {"waiting_approval", "waiting_external"} else projected_for_records
+            )
+            error = _terminal_error(claimed_instance, status=status, state=state)
+            try:
+                committed_instance = self._execution_commits.commit(
+                    claimed_instance=claimed_instance,
+                    status=status,
+                    event_payload=_event_payload(
+                        claimed_instance,
+                        status=status,
+                        interrupts=interrupts,
+                        error=error,
+                    ),
+                    messages=projected_messages,
+                    tool_calls=_tool_call_records(
+                        projected_for_records,
+                        instance=claimed_instance,
+                        waiting_status=status,
+                    ),
+                    error=error,
+                )
+            except RuntimeCancellationRequested:
+                status = "cancelled"
+                latest = self._runtime_instances.get(claimed_instance.runtime_instance_id)
+                state.execution.interrupted = True
+                state.execution.finished = True
+                state.execution.finish_status = "cancelled"
+                state.execution.last_error_location = "runtime.cancel"
+                projection_messages = _close_terminal_tool_calls(graph_messages, status=status)
+                projected_for_records = graph_messages_to_conversation(
+                    graph_messages=projection_messages,
+                    current_user_message_id=current_user_message.message_id,
+                    session_id=claimed_instance.request.session_id,
+                    turn_id=claimed_instance.request.turn_id,
+                    runtime_instance_id=claimed_instance.runtime_instance_id,
+                    request_id=claimed_instance.request.request_id,
+                    task_revision=claimed_instance.request.task_revision,
+                    capability_snapshot=snapshot,
+                )
+                projected_messages = projected_for_records
+                error = _terminal_error(latest, status=status, state=state)
+                committed_instance = self._execution_commits.commit(
+                    claimed_instance=claimed_instance,
+                    status=status,
+                    event_payload=_event_payload(
+                        latest,
+                        status=status,
+                        interrupts=[],
+                        error=error,
+                    ),
+                    messages=projected_messages,
+                    tool_calls=_tool_call_records(
+                        projected_for_records,
+                        instance=claimed_instance,
+                        waiting_status=status,
+                    ),
+                    error=error,
+                )
+            return RuntimeExecutionResult(
+                runtime_instance=committed_instance,
+                capability_snapshot=snapshot,
+                state=state,
+                graph_messages=tuple(projection_messages),
+                conversation_messages=tuple(projected_messages),
+                status=status,
+                interrupt_payloads=tuple(interrupts),
+            )
+        except Exception as exc:
+            error = _exception_error(claimed_instance, exc)
+            try:
+                self._execution_commits.fail_claimed(claimed_instance, error)
+            except Exception as persistence_error:
+                raise RuntimeError("runtime execution failed and its terminal commit was rejected") from persistence_error
+            raise
+        finally:
+            if not runtime_leases_owned_by_worker:
+                release_runtime_leases()
+            self._run_controls.release(claimed_instance.runtime_instance_id, run_control)
+
+    def _resolve_frozen_model(self, instance: RuntimeInstance):
+        frozen = instance.request.policy_snapshot.model
+        resolved = self._model_resolver.resolve_chat_model(
+            operation=frozen.operation,
+            profile_id=frozen.profile_id,
+            expected_profile_revision=frozen.profile_revision,
+            expected_credential_revision=frozen.credential_revision,
+            reasoning_intensity=instance.request.policy_snapshot.reasoning_intensity,
+        )
+        if resolved.snapshot != frozen:
+            raise RuntimeError("resolved model does not match the runtime policy snapshot")
+        return resolved
+
+
+def _initial_state(
+    *,
+    instance: RuntimeInstance,
+    snapshot: CapabilitySnapshot,
+    current_user_message: ConversationMessage,
+    launch_context: RuntimeLaunchContext,
+) -> RuntimeState:
+    state = RuntimeState(
+        run=RunState(
+            run_id=instance.runtime_instance_id,
+            runtime_instance_id=instance.runtime_instance_id,
+            session_id=instance.request.session_id,
+            workspace_id=instance.request.workspace_id,
+            strategy=instance.request.strategy,
+        ),
+        runtime_config=RuntimeConfigState(
+            system_prompt=launch_context.system_prompt,
+            attachments=[dict(item) for item in launch_context.attachments],
+            workspace_root_alias=launch_context.workspace_root_alias,
+            allow_external_paths=launch_context.allow_external_paths,
+            workspace_mounts=[dict(item) for item in launch_context.workspace_mounts],
+        ),
+        conversation=ConversationState(
+            current_user_input=_message_text(current_user_message),
+            current_user_input_id=current_user_message.message_id,
+        ),
+        execution=ExecutionState(
+            max_retries=instance.request.policy_snapshot.max_model_attempts - 1,
+            timeout_seconds=instance.request.policy_snapshot.request_timeout_seconds,
+        ),
+    )
+    return bind_capability_snapshot(
+        state,
+        snapshot,
+        runtime_instance_id=instance.runtime_instance_id,
+    )
+
+
+def _current_user_message(
+    instance: RuntimeInstance,
+    messages: list[ConversationMessage],
+) -> ConversationMessage:
+    candidates = [
+        message
+        for message in messages
+        if message.turn_id == instance.request.turn_id
+        and message.role == "user"
+        and message.status != "cancelled"
+    ]
+    if len(candidates) != 1:
+        raise LookupError(
+            "runtime turn requires exactly one active user message: "
+            f"turn_id={instance.request.turn_id}, count={len(candidates)}"
+        )
+    return candidates[0]
+
+
+def _message_text(message: ConversationMessage) -> str:
+    chunks = [str(getattr(part, "text", "") or "").strip() for part in message.parts]
+    text = "\n".join(item for item in chunks if item)
+    if not text:
+        raise ValueError("runtime user message contains no text instruction")
+    return text
+
+
+def _validate_invocation_status(instance: RuntimeInstance, *, resuming: bool) -> None:
+    expected = {"waiting_approval", "waiting_external"} if resuming else {"queued"}
+    if instance.status not in expected:
+        action = "resume" if resuming else "execute"
+        raise RuntimeError(
+            f"cannot {action} runtime instance in status {instance.status!r}; "
+            f"expected one of {sorted(expected)}"
+        )
+
+
+def _interrupt_payloads(*, raw: Any, checkpoint: Any) -> list[dict[str, Any]]:
+    values: list[Any] = []
+    if isinstance(raw, dict):
+        values.extend(list(raw.get("__interrupt__") or []))
+    for task in list(getattr(checkpoint, "tasks", ()) or ()):
+        values.extend(list(getattr(task, "interrupts", ()) or ()))
+    payloads: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in values:
+        value = getattr(item, "value", item)
+        payload = dict(value) if isinstance(value, dict) else {"value": value}
+        marker = repr(sorted(payload.items(), key=lambda pair: str(pair[0])))
+        if marker not in seen:
+            seen.add(marker)
+            payloads.append(payload)
+    return payloads
+
+
+def _execution_status(
+    *,
+    state: RuntimeState,
+    graph_messages: list[BaseMessage],
+    interrupts: list[dict[str, Any]],
+) -> RuntimeExecutionStatus:
+    if state.execution.finish_status in {"cancelled", "interrupted"}:
+        return "cancelled"
+    if interrupts:
+        if any(str(item.get("kind") or item.get("type") or "").lower().find("approval") >= 0 for item in interrupts):
+            return "waiting_approval"
+        return "waiting_external"
+    missing = incomplete_tool_call_ids(graph_messages)
+    if missing:
+        state.execution.finished = True
+        state.execution.finish_status = "failed"
+        state.execution.last_error = "Runtime graph ended with incomplete tool calls: " + ", ".join(missing)
+        state.execution.last_error_location = "runtime.finalize"
+        return "failed"
+    if state.execution.finish_status == "completed" and not state.execution.last_error:
+        return "completed"
+    if not state.execution.finished:
+        state.execution.finished = True
+        state.execution.finish_status = "failed"
+        state.execution.last_error = state.execution.last_error or "Runtime graph stopped before a terminal node."
+        state.execution.last_error_location = state.execution.last_error_location or "runtime.finalize"
+    return "failed"
+
+
+def _close_terminal_tool_calls(
+    graph_messages: list[BaseMessage],
+    *,
+    status: RuntimeExecutionStatus,
+) -> list[BaseMessage]:
+    missing = incomplete_tool_call_ids(graph_messages)
+    if not missing:
+        return graph_messages
+    result_status = "cancelled" if status == "cancelled" else "failed"
+    error_code = "runtime_cancelled" if status == "cancelled" else "runtime_terminal_before_tool_result"
+    closed = list(graph_messages)
+    for tool_call_id in missing:
+        closed.append(
+            ToolMessage(
+                id=f"terminal:{tool_call_id}",
+                tool_call_id=tool_call_id,
+                content=json.dumps(
+                    {"status": result_status, "error_code": error_code},
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+            )
+        )
+    return closed
+
+
+def _tool_call_records(
+    messages: list[ConversationMessage],
+    *,
+    instance: RuntimeInstance,
+    waiting_status: RuntimeExecutionStatus,
+) -> tuple[ToolCallRecord, ...]:
+    if instance.attempt_id is None:
+        raise RuntimeError("claimed runtime instance has no attempt identity")
+    records: dict[str, dict[str, Any]] = {}
+    for message in messages:
+        for part in message.parts:
+            if isinstance(part, ToolCallPart):
+                initial_status = "waiting_approval" if waiting_status == "waiting_approval" else "proposed"
+                records[part.tool_call_id] = {
+                    "tool_call_id": part.tool_call_id,
+                    "runtime_instance_id": instance.runtime_instance_id,
+                    "request_id": instance.request.request_id,
+                    "turn_id": instance.request.turn_id,
+                    "attempt_id": instance.attempt_id,
+                    "capability_id": part.capability_id,
+                    "capability_revision": part.capability_revision,
+                    "model_alias": part.model_alias,
+                    "arguments": dict(part.arguments),
+                    "status": initial_status,
+                    "created_at": message.created_at,
+                    "updated_at": message.created_at,
+                }
+            elif isinstance(part, ToolResultPart):
+                record = records.get(part.tool_call_id)
+                if record is None:
+                    raise RuntimeError(f"tool result has no projected tool call: {part.tool_call_id}")
+                record["status"] = part.status
+                record["updated_at"] = message.created_at
+                if part.status == "completed":
+                    record["result"] = dict(part.output or {})
+                else:
+                    record["error_code"] = part.error_code
+    return tuple(ToolCallRecord.model_validate(record) for record in records.values())
+
+
+def _event_payload(
+    instance: RuntimeInstance,
+    *,
+    status: RuntimeExecutionStatus,
+    interrupts: list[dict[str, Any]],
+    error: RuntimeErrorEnvelope | None,
+) -> dict[str, Any]:
+    if status in {"waiting_approval", "waiting_external"}:
+        return {
+            "kind": f"runtime_{status}",
+            "status": status,
+            "details": {"interrupts": _json_safe(interrupts)},
+        }
+    if status == "completed":
+        return {"kind": "runtime_completed", "status": "completed"}
+    if error is None:
+        raise RuntimeError(f"terminal runtime status requires an error envelope: {status}")
+    return {"kind": status, "error": error.model_dump(mode="json")}
+
+
+def _terminal_error(
+    instance: RuntimeInstance,
+    *,
+    status: RuntimeExecutionStatus,
+    state: RuntimeState,
+) -> RuntimeErrorEnvelope | None:
+    if status not in {"failed", "cancelled"}:
+        return None
+    cancelled = status == "cancelled"
+    return RuntimeErrorEnvelope(
+        code="runtime_cancelled" if cancelled else "runtime_execution_failed",
+        category="cancelled" if cancelled else "internal",
+        terminal_status=status,
+        retryable=False,
+        user_message_key="runtime.cancelled" if cancelled else "runtime.error.execution_failed",
+        request_id=instance.request.request_id,
+        runtime_instance_id=instance.runtime_instance_id,
+        operation=instance.request.policy_snapshot.model.operation,
+        details={
+            "error_location": str(state.execution.last_error_location or "runtime.finalize"),
+        },
+    )
+
+
+def _exception_error(instance: RuntimeInstance, exc: Exception) -> RuntimeErrorEnvelope:
+    name = type(exc).__name__
+    lowered = name.lower()
+    if "timeout" in lowered:
+        category = "timeout"
+        code = "runtime_timeout"
+        retryable = True
+    elif "model" in lowered or "provider" in lowered:
+        category = "provider"
+        code = "runtime_model_unavailable"
+        retryable = True
+    elif isinstance(exc, (ValueError, LookupError)):
+        category = "validation"
+        code = "runtime_validation_failed"
+        retryable = False
+    else:
+        category = "internal"
+        code = "runtime_internal_error"
+        retryable = False
+    return RuntimeErrorEnvelope(
+        code=code,
+        category=category,
+        terminal_status="failed",
+        retryable=retryable,
+        user_message_key=f"runtime.error.{code}",
+        request_id=instance.request.request_id,
+        runtime_instance_id=instance.runtime_instance_id,
+        operation=instance.request.policy_snapshot.model.operation,
+        details={"exception_type": name},
+    )
+
+
+def _json_safe(value: Any) -> Any:
+    return json.loads(json.dumps(value, ensure_ascii=False, default=str))
+
+
+def _run_graph_with_control(
+    *,
+    graph_app: Any,
+    graph_input: Any,
+    config: dict[str, Any],
+    control: RuntimeRunControl,
+    session_id: str,
+    fallback_raw: dict[str, Any],
+    on_complete: Callable[[], None],
+) -> tuple[dict[str, Any], bool]:
+    if control.drain_requested:
+        on_complete()
+        return fallback_raw, True
+    completed = threading.Event()
+    outcome: dict[str, Any] = {"raw": fallback_raw}
+    context = copy_context()
+
+    def run() -> None:
+        try:
+            with (
+                tool_output_session_context(session_id),
+                runtime_run_control_context(control),
+            ):
+                for chunk in graph_app.stream(
+                    graph_input,
+                    config=config,
+                    stream_mode="values",
+                    durability="sync",
+                ):
+                    if isinstance(chunk, dict):
+                        outcome["raw"] = chunk
+        except BaseException as exc:
+            outcome["error"] = exc
+        finally:
+            try:
+                on_complete()
+            except BaseException as exc:
+                outcome.setdefault("error", exc)
+            finally:
+                completed.set()
+
+    worker = threading.Thread(
+        target=lambda: context.run(run),
+        name="dynamic-runtime-graph",
+        daemon=True,
+    )
+    try:
+        worker.start()
+    except BaseException:
+        on_complete()
+        raise
+    while not completed.wait(timeout=0.05):
+        if control.drain_requested:
+            return dict(outcome["raw"]), True
+    error = outcome.get("error")
+    if error is not None:
+        raise error
+    return dict(outcome["raw"]), False

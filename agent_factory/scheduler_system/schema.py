@@ -19,7 +19,6 @@ SchedulerUnattendedPolicy = Literal["deny_if_approval_required", "pause_and_wait
 SchedulerRunStatus = Literal["pending", "running", "completed", "failed", "skipped", "cancelled"]
 SchedulerFeedbackMode = Literal["llm_summary"]
 SchedulerFailureAction = Literal["pause"]
-SchedulerSeedSourceType = Literal["package_seed"]
 
 
 class SchedulerFailurePolicy(BaseModel):
@@ -90,85 +89,6 @@ class SchedulerExecutionConfig(BaseModel):
     runtime_request: dict[str, Any] = Field(default_factory=dict)
 
 
-class SchedulerJobOrigin(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    source_type: SchedulerSeedSourceType
-    package_id: str
-    seed_id: str
-    seed_hash: str
-
-    @field_validator("package_id", "seed_id", "seed_hash")
-    @classmethod
-    def _origin_text_is_not_empty(cls, value: str) -> str:
-        text = value.strip()
-        if not text:
-            raise ValueError("scheduler job origin fields must not be empty")
-        return text
-
-
-class SchedulerSeedPlan(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    seed_id: str
-    title: str
-    human_schedule: str
-    schedule_type: SchedulerScheduleType
-    schedule_expr: str
-    timezone: str = "Asia/Shanghai"
-    target: SchedulerTarget
-    task_content: str
-    enabled_on_apply: bool = True
-    failure_policy: SchedulerFailurePolicy = Field(default_factory=SchedulerFailurePolicy)
-    feedback: SchedulerFeedbackConfig = Field(default_factory=SchedulerFeedbackConfig)
-    source_slot_id: str
-    concurrency_policy: SchedulerConcurrencyPolicy = "skip"
-    max_concurrent_runs: int = Field(default=1, ge=1)
-    timeout_seconds: int = Field(default=900, ge=1)
-    unattended_policy: SchedulerUnattendedPolicy = "deny_if_approval_required"
-
-    @field_validator("seed_id", "title", "human_schedule", "schedule_expr", "timezone", "task_content", "source_slot_id")
-    @classmethod
-    def _seed_text_is_not_empty(cls, value: str) -> str:
-        text = value.strip()
-        if not text:
-            raise ValueError("scheduler seed fields must not be empty")
-        return text
-
-    @field_validator("seed_id")
-    @classmethod
-    def _seed_id_is_safe(cls, value: str) -> str:
-        text = value.strip()
-        if any(ch not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for ch in text):
-            raise ValueError("seed_id must use lowercase letters, numbers, underscore, or dash")
-        return text
-
-    @model_validator(mode="after")
-    def _validate_seed_schedule(self) -> "SchedulerSeedPlan":
-        _validate_schedule_expression(
-            schedule_type=self.schedule_type,
-            schedule_expr=self.schedule_expr,
-            timezone=self.timezone,
-        )
-        return self
-
-
-class SchedulerSeedContractConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    seeds: list[SchedulerSeedPlan] = Field(default_factory=list)
-
-    @field_validator("seeds")
-    @classmethod
-    def _seed_ids_are_unique(cls, values: list[SchedulerSeedPlan]) -> list[SchedulerSeedPlan]:
-        seen: set[str] = set()
-        for item in values:
-            if item.seed_id in seen:
-                raise ValueError(f"duplicate scheduler seed_id: {item.seed_id}")
-            seen.add(item.seed_id)
-        return values
-
-
 class SchedulerJob(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -189,7 +109,6 @@ class SchedulerJob(BaseModel):
     runtime_config: SchedulerExecutionConfig = Field(default_factory=SchedulerExecutionConfig)
     failure_policy: SchedulerFailurePolicy = Field(default_factory=SchedulerFailurePolicy)
     unattended_policy: SchedulerUnattendedPolicy = "deny_if_approval_required"
-    origin: SchedulerJobOrigin | None = None
     created_at: str = Field(default_factory=lambda: utc_now().isoformat())
     updated_at: str = Field(default_factory=lambda: utc_now().isoformat())
 

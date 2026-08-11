@@ -2,7 +2,7 @@
 /*
  * OAuth return landing. GitHub login redirects here; we re-check the session
  * (the server has just set the HttpOnly cookie) and then forward the user to
- * their intended destination — defaulting to the publish center. A ?status=
+ * their intended destination — defaulting to the home page. A ?status=
  * hint from the backend lets us show a failure state without a session probe.
  */
 import { onMounted, ref } from 'vue'
@@ -25,7 +25,7 @@ function safeReturnTo(): string {
   const value = typeof raw === 'string' ? raw : ''
   // Only allow same-origin absolute paths to avoid open-redirects.
   if (value.startsWith('/') && !value.startsWith('//')) return value
-  return '/publish'
+  return '/'
 }
 
 useSeo(() => ({ title: t('auth.processing'), path: '/auth/result', noindex: true }))
@@ -60,7 +60,7 @@ onMounted(async () => {
         <span class="card__icon card__icon--ok"><BaseIcon name="check" :size="28" /></span>
         <h1 class="card__title">{{ t('auth.success') }}</h1>
         <div class="card__actions">
-          <BaseButton to="/publish" icon-end="arrow-right">{{ t('auth.goPublish') }}</BaseButton>
+          <BaseButton to="/" icon-end="arrow-right">{{ t('notFound.goHome') }}</BaseButton>
         </div>
       </template>
 
@@ -69,8 +69,8 @@ onMounted(async () => {
         <h1 class="card__title">{{ t('auth.failed') }}</h1>
         <p class="card__body">{{ t('auth.failedBody') }}</p>
         <div class="card__actions">
-          <BaseButton icon="github" @click="auth.login('/publish')">{{ t('publish.loginButton') }}</BaseButton>
-          <BaseButton to="/hub" variant="secondary">{{ t('auth.goHub') }}</BaseButton>
+          <BaseButton icon="github" @click="auth.login('/admin')">{{ t('nav.login') }}</BaseButton>
+          <BaseButton to="/" variant="secondary">{{ t('notFound.goHome') }}</BaseButton>
         </div>
       </template>
     </div>

@@ -170,11 +170,18 @@ _MIGRATED_TASK_COLUMNS = (
 
 def _read_legacy_tasks(conn: Any) -> list[dict[str, Any]]:
     if _table_exists(conn, "background_tasks"):
-        return [dict(row) for row in conn.execute("select * from background_tasks").fetchall()]
+        return [
+            dict(row)
+            for row in conn.execute(
+                "select * from background_tasks where type in ('sub_agent','agent')"
+            ).fetchall()
+        ]
     tasks: list[dict[str, Any]] = []
     if _table_exists(conn, "collaboration_tasks"):
         for row in conn.execute("select * from collaboration_tasks").fetchall():
             item = dict(row)
+            if str(item.get("type") or "sub_agent").strip() not in {"sub_agent", "agent"}:
+                continue
             item["session_id"] = item.get("collaboration_id")
             item["type"] = item.get("type") or "sub_agent"
             item["request_id"] = item.get("request_id") or f"legacy:sub_agent:{item.get('task_id')}"
@@ -183,50 +190,6 @@ def _read_legacy_tasks(conn: Any) -> list[dict[str, Any]]:
                 "assignee_conversation_id"
             )
             tasks.append(item)
-    if _table_exists(conn, "collaboration_manufacturing_requests"):
-        for row in conn.execute("select * from collaboration_manufacturing_requests").fetchall():
-            item = dict(row)
-            request_id = str(item.get("request_id") or "").strip()
-            tasks.append(
-                {
-                    **item,
-                    "task_id": request_id,
-                    "session_id": item.get("collaboration_id"),
-                    "type": "manufacture",
-                    "request_id": f"legacy:manufacture:{request_id}",
-                    "task_text": item.get("purpose") or item.get("agent_name") or "",
-                    "assignee_session_id": item.get("create_agent_session_id"),
-                    "delivery_standard_json": "{}",
-                    "visible_context_json": "{}",
-                    "depends_on_json": "[]",
-                    "input_artifacts_json": "[]",
-                    "artifact_refs_json": "[]",
-                    "result_summary": "",
-                }
-            )
-    if _table_exists(conn, "collaboration_evolution_requests"):
-        for row in conn.execute("select * from collaboration_evolution_requests").fetchall():
-            item = dict(row)
-            request_id = str(item.get("request_id") or "").strip()
-            payload = _object(item.get("request_payload_json"))
-            tasks.append(
-                {
-                    **item,
-                    "task_id": request_id,
-                    "session_id": item.get("collaboration_id"),
-                    "type": "evolve",
-                    "request_id": f"legacy:evolve:{request_id}",
-                    "task_text": _legacy_evolution_task_text(payload, item.get("package_id")),
-                    "assignee_package_id": item.get("package_id"),
-                    "assignee_session_id": item.get("evolution_session_id"),
-                    "delivery_standard_json": "{}",
-                    "visible_context_json": "{}",
-                    "depends_on_json": "[]",
-                    "input_artifacts_json": "[]",
-                    "artifact_refs_json": "[]",
-                    "result_summary": "",
-                }
-            )
     return tasks
 
 
@@ -264,15 +227,6 @@ def _read_legacy_events(conn: Any) -> list[dict[str, Any]]:
             }
         )
     return events
-
-
-def _legacy_evolution_task_text(payload: dict[str, Any], package_id: Any) -> str:
-    for key in ("instruction", "goal", "request", "message", "task_text"):
-        value = str(payload.get(key) or "").strip()
-        if value:
-            return value
-    package = str(package_id or "").strip()
-    return f"进化 Agent {package}" if package else "进化 Agent"
 
 
 def _normalize_tasks(
@@ -372,10 +326,6 @@ def _task_type(value: Any) -> BackgroundTaskType:
     mapped = {"agent": "sub_agent"}.get(normalized, normalized)
     if mapped == "sub_agent":
         return "sub_agent"
-    if mapped == "manufacture":
-        return "manufacture"
-    if mapped == "evolve":
-        return "evolve"
     raise RuntimeError(f"unsupported legacy background-task type: {normalized or '<empty>'}")
 
 

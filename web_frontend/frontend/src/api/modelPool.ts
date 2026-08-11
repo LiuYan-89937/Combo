@@ -33,6 +33,7 @@ export interface ModelPoolCredential {
   api_key_fingerprint: string
   has_api_key: boolean
   enabled: boolean
+  revision: number
   created_at: string
   updated_at: string
 }
@@ -47,6 +48,7 @@ export interface ModelPoolProfile {
   model_name: string
   embedding_dimensions?: number | null
   enabled: boolean
+  revision: number
   capabilities: {
     input_modalities: string[]
     output_modalities: string[]

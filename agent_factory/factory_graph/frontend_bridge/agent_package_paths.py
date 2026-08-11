@@ -8,7 +8,6 @@ from agent_factory.runtime_contracts import LoadedAgentPackage
 from agent_factory.tooling.factory_extensions import default_system_agent_extension_root
 
 
-MANUFACTURING_PROBE_RUNTIME_NAMESPACE = ".manufacturing_probes"
 SESSION_WORKDIRS_DIR = "sessions"
 
 
@@ -46,26 +45,6 @@ def package_runtime_workspace(package_id: str) -> PackageRuntimeWorkspace:
     return PackageRuntimeWorkspace(
         root=root,
         workdir=root / "workdirs",
-        artifacts=root / "artifacts",
-        extensions=root / "extensions",
-    )
-
-
-def manufacturing_probe_runtime_workspace(workspace_id: str) -> PackageRuntimeWorkspace:
-    """Allocate one probe workspace inside the shared writable runtime mount."""
-
-    identifier = str(workspace_id or "").strip()
-    if not identifier or identifier in {".", ".."} or "/" in identifier or "\\" in identifier:
-        raise ValueError(f"invalid manufacturing workspace id: {workspace_id!r}")
-    runtime_parent = factory_artifact_path("agent_runtime", MANUFACTURING_PROBE_RUNTIME_NAMESPACE)
-    root = root_relative_path(
-        runtime_parent,
-        Path(identifier),
-        field_path="manufacturing probe runtime workspace",
-    )
-    return PackageRuntimeWorkspace(
-        root=root,
-        workdir=root / "workdir",
         artifacts=root / "artifacts",
         extensions=root / "extensions",
     )

@@ -8,19 +8,7 @@ import type {
   ToolActivity,
   TranscriptItem,
 } from '@/types/protocol'
-import { agentPackageConversationScope, conversationScopeForMode } from './scopes'
-
-export interface FactorySessionSnapshotView {
-  restoredMode: FactoryMode | null
-  scope: string | null
-  hasMessages: boolean
-  transcript: TranscriptItem[]
-  conversationTurns: ConversationTurn[]
-  activeTurn: ConversationTurn | null
-  processEvents: FactoryFrontendEvent[]
-  tools: ToolActivity[]
-  pendingInterrupt: FactoryFrontendEvent | null
-}
+import { agentPackageConversationScope } from './scopes'
 
 export interface AgentPackageSessionSnapshotView {
   sessionPackageId: string | null
@@ -33,51 +21,6 @@ export interface AgentPackageSessionSnapshotView {
   tools: ToolActivity[]
   pendingInterrupt: FactoryFrontendEvent | null
   scope: string
-}
-
-export function factorySessionSnapshotView(
-  payload: Record<string, any> | undefined,
-): FactorySessionSnapshotView {
-  const session = payload?.session || payload || {}
-  const snapshot = session.snapshot || payload?.snapshot || {}
-  const restoredMode = (snapshot.mode || session.current_mode || null) as FactoryMode | null
-  const scope = conversationScopeForMode(restoredMode, payload || {})
-  const restoredPackageId = restoredMode === 'evolve_agent'
-    ? String(session.evolve_agent_package_id || payload?.package_id || '').trim() || null
-    : null
-  const rawTurns = Array.isArray(snapshot.turns) ? snapshot.turns : []
-  const processEvents = normalizedProcessEvents(snapshot.process_events)
-  if (rawTurns.length > 0) {
-    const restored = conversationFromTurns(rawTurns, {
-      keyPrefix: `factory-restored-${session.session_id || 'session'}`,
-      mode: restoredMode,
-      packageId: restoredPackageId,
-      agentSessionId: null,
-      fallbackTimestamp: session.updated_at,
-    })
-    return {
-      restoredMode,
-      scope,
-      hasMessages: restored.transcript.length > 0,
-      transcript: restored.transcript,
-      conversationTurns: restored.conversationTurns,
-      activeTurn: restored.activeTurn,
-      processEvents,
-      tools: toolsFromTurns(restored.conversationTurns),
-      pendingInterrupt: pendingInterruptFrom(processEvents, restored.activeTurn),
-    }
-  }
-  return {
-    restoredMode,
-    scope,
-    hasMessages: false,
-    transcript: [],
-    conversationTurns: [],
-    activeTurn: null,
-    processEvents,
-    tools: [],
-    pendingInterrupt: null,
-  }
 }
 
 export function agentPackageSessionSnapshotView(

@@ -1,6 +1,6 @@
 import { requestJson } from './http'
 
-export type BackgroundTaskType = 'sub_agent' | 'manufacture' | 'evolve'
+export type BackgroundTaskType = 'sub_agent'
 export type BackgroundTaskStatus =
   | 'queued'
   | 'claimed'

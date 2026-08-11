@@ -4,7 +4,7 @@ from collections.abc import Iterator
 from typing import Any
 
 from langchain_core.messages import HumanMessage
-from langgraph.runtime import RunControl
+from agent_factory.dynamic_runtime.run_control import RuntimeRunControl
 from langgraph.types import Command
 
 from agent_factory.memory_system.config import should_enqueue_memory_write
@@ -53,7 +53,7 @@ class ExecutionController:
         state: RuntimeState,
         *,
         thread_id: str,
-        control: RunControl | None = None,
+        control: RuntimeRunControl | None = None,
     ) -> Iterator[tuple[str, Any]]:
         with (
             tool_output_session_context(state.run.session_id),
@@ -98,7 +98,7 @@ class ExecutionController:
         *,
         thread_id: str,
         resume_payload: dict[str, Any] | None = None,
-        control: RunControl | None = None,
+        control: RuntimeRunControl | None = None,
     ) -> Iterator[tuple[str, Any]]:
         with (
             tool_output_session_context(state.run.session_id),
@@ -174,14 +174,13 @@ class ExecutionController:
         *,
         thread_id: str,
         stream_input: Any | None = None,
-        control: RunControl | None = None,
+        control: RuntimeRunControl | None = None,
     ) -> Iterator[tuple[str, Any]]:
         yield from compiled_app.graph_app.stream(
             _graph_input(state) if stream_input is None else stream_input,
             config=_graph_config(state, thread_id=thread_id),
             stream_mode=["updates", "values", "debug", "custom"],
             durability="sync",
-            control=control,
         )
 
     def _final_state_from_raw(self, raw: dict[str, Any], *, messages: list[Any] | None = None) -> RuntimeState:

@@ -54,7 +54,7 @@ def evaluate_skill_tool_risk(arguments: dict[str, Any], context: dict[str, Any])
             return ToolRiskResult(
                 action="allow",
                 risk_level="medium",
-                reasons=["skill load exposes one enabled SKILL.md body to the model for the current manufacturing context"],
+                reasons=["skill load exposes one enabled SKILL.md body to the model for the current runtime context"],
                 facts={"skill": name, "current_system": current_system, "reason": reason},
             ).model_dump(mode="json")
         if action == "read_resource":

@@ -6,8 +6,7 @@ from pathlib import Path
 import threading
 from typing import Any, Callable
 
-from langgraph.errors import GraphDrained
-from langgraph.runtime import RunControl
+from agent_factory.dynamic_runtime.run_control import RuntimeRunControl
 
 from agent_factory.assembly.compiler import AgentAssemblyCompiler
 from agent_factory.factory_graph.frontend_bridge.event_normalizer import (
@@ -36,10 +35,9 @@ from agent_factory.scheduler_system.execution_config import (
     scheduler_run_timeout_seconds,
     scheduler_run_user_config,
 )
-from agent_factory.scheduler_system.seeds import apply_scheduler_seed_contract
 from agent_factory.knowledge_system.events import KNOWLEDGE_EVENT_TYPES
 from agent_factory.package_runtime.request_lifecycle import RuntimeRequestPolicy
-from agent_factory.package_runtime.run_control import RuntimeRunControlRegistry
+from agent_factory.dynamic_runtime.run_control import RuntimeRunControlRegistry
 from agent_factory.package_runtime.drained_checkpoint import (
     finalize_drained_runtime_checkpoint,
     repair_incomplete_message_checkpoint,
@@ -113,15 +111,15 @@ class PackageRuntimeCore:
     ) -> int:
         return self._run_controls.request_drain(
             reason=reason,
-            request_id=request_id,
+            runtime_instance_id=request_id,
         )
 
-    def _register_run_control(self, request_id: str | None, command_type: str) -> RunControl | None:
+    def _register_run_control(self, request_id: str | None, command_type: str) -> RuntimeRunControl | None:
         if command_type not in {"run_message", "resume_interrupt"} or not request_id:
             return None
         return self._run_controls.register(request_id)
 
-    def _forget_run_control(self, request_id: str | None, control: RunControl | None) -> None:
+    def _forget_run_control(self, request_id: str | None, control: RuntimeRunControl | None) -> None:
         if not request_id or control is None:
             return
         self._run_controls.release(request_id, control)
@@ -255,7 +253,6 @@ class PackageRuntimeCore:
             )
             self._configure_scheduler_runtime(runtime=self.compiled_runtime)
             self._configure_knowledge_runtime(runtime=self.compiled_runtime)
-            self._apply_scheduler_seeds(runtime=self.compiled_runtime)
             self.background_workers.add_many(runtime_build.background_workers)
             for lifecycle_event in self.background_workers.start_all():
                 if lifecycle_event.status == "failed":
@@ -329,7 +326,7 @@ class PackageRuntimeCore:
         normalizer: RuntimeEventNormalizer,
         payload: dict[str, Any],
         *,
-        run_control: RunControl | None = None,
+        run_control: RuntimeRunControl | None = None,
     ) -> int:
         message = str(payload.get("message") or "").strip()
         if not message and not has_attachment_payload(payload.get("attachments")):
@@ -374,7 +371,6 @@ class PackageRuntimeCore:
             status="running",
         )
         final_state = None
-        graph_drained = False
         stream_iter = facade.instance.controller.stream(
             compiled.compiled_app,
             run_context.state,
@@ -387,13 +383,11 @@ class PackageRuntimeCore:
                     return 0
                 if stream_mode == "runtime_final":
                     final_state = chunk
-        except GraphDrained:
-            graph_drained = True
         finally:
             close = getattr(stream_iter, "close", None)
             if callable(close):
                 close()
-        if graph_drained or bool(run_control and run_control.drain_requested):
+        if bool(run_control and run_control.drain_requested):
             return _emit_stopped_runtime(
                 normalizer,
                 run_context,
@@ -450,7 +444,7 @@ class PackageRuntimeCore:
         normalizer: RuntimeEventNormalizer,
         payload: dict[str, Any],
         *,
-        run_control: RunControl | None = None,
+        run_control: RuntimeRunControl | None = None,
     ) -> int:
         session_id = str(payload.get("session_id") or "").strip()
         resume_payload = payload.get("resume_payload")
@@ -476,7 +470,6 @@ class PackageRuntimeCore:
         run_context.state.execution.timeout_seconds = 0
         run_context.state.execution.max_retries = request_policy.max_retries
         final_state = None
-        graph_drained = False
         stream_iter = facade.instance.controller.stream_resume(
             compiled.compiled_app,
             run_context.state,
@@ -490,13 +483,11 @@ class PackageRuntimeCore:
                     return 0
                 if stream_mode == "runtime_final":
                     final_state = chunk
-        except GraphDrained:
-            graph_drained = True
         finally:
             close = getattr(stream_iter, "close", None)
             if callable(close):
                 close()
-        if graph_drained or bool(run_control and run_control.drain_requested):
+        if bool(run_control and run_control.drain_requested):
             return _emit_stopped_runtime(
                 normalizer,
                 run_context,
@@ -578,18 +569,6 @@ class PackageRuntimeCore:
         if knowledge_runtime is None:
             return
         knowledge_runtime.event_sink = self._knowledge_event_sink
-
-    def _apply_scheduler_seeds(self, *, runtime: CompiledPackageRuntime) -> None:
-        scheduler_runtime = getattr(runtime.compiled.compiled_app.services, "scheduler_runtime", None)
-        if scheduler_runtime is None:
-            return
-        contract = runtime.package.contracts.get("scheduler_seed") if isinstance(runtime.package.contracts, dict) else None
-        package_id = runtime.package.manifest.factory_run_id or runtime.package.package_root.name
-        apply_scheduler_seed_contract(
-            runtime=scheduler_runtime,
-            contract_payload=contract if isinstance(contract, dict) else None,
-            package_id=package_id,
-        )
 
     def _scheduled_graph_runner(self, *, runtime: CompiledPackageRuntime):
         def run(job, run_record) -> dict[str, Any]:

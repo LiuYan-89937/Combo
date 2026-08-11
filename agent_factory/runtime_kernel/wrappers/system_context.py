@@ -7,7 +7,6 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
 from agent_factory.context_system.events import emit_context_event
 from agent_factory.runtime_kernel.nodes.base import NodeExecutionContext
-from agent_factory.runtime_kernel.planning import is_plan_and_execute_pattern_id
 from agent_factory.runtime_kernel.state import RuntimeState
 
 
@@ -76,7 +75,7 @@ class ContextPrepareSystemWrapper:
 
 
 def _dynamic_evidence_enabled(*, state: RuntimeState, context: NodeExecutionContext) -> bool:
-    if not is_plan_and_execute_pattern_id(state.run.pattern_id):
+    if state.run.strategy != "plan_and_execute":
         return True
     return context.node_id in PLAN_AND_EXECUTE_DYNAMIC_CONTEXT_NODES
 

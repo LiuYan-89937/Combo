@@ -7,14 +7,6 @@ import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 
 const routes: RouteRecordRaw[] = [
   { path: '/', name: 'home', component: () => import('@/views/HomeView.vue') },
-  { path: '/hub', name: 'hub', component: () => import('@/views/HubView.vue') },
-  {
-    path: '/hub/:publisher/:packageId',
-    name: 'package',
-    component: () => import('@/views/PackageDetailView.vue'),
-    props: true,
-  },
-  { path: '/publish', name: 'publish', component: () => import('@/views/PublishView.vue') },
   { path: '/changelog', name: 'changelog', component: () => import('@/views/ChangelogView.vue') },
   { path: '/admin', name: 'admin', component: () => import('@/views/AdminView.vue') },
   { path: '/guide', name: 'guide', component: () => import('@/views/GuideView.vue') },

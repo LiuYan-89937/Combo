@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from agent_hub.app_releases import AppReleaseRegistry
+from agent_hub.app_releases import AppReleaseError, AppReleaseRegistry
 from agent_hub.auth import (
     OAUTH_STATE_COOKIE,
     SESSION_COOKIE,
@@ -24,19 +24,9 @@ from agent_hub.auth import (
 from agent_hub.config import ConfigurationError, Settings, get_settings
 from agent_hub.database import Database
 from agent_hub.oss_store import ObjectStore
-from agent_hub.registry import AgentHubRegistry, RegistryError
 
 
 LOGGER = logging.getLogger("agent_hub.api")
-
-
-class UploadCreateRequest(BaseModel):
-    filename: str = Field(min_length=1, max_length=200)
-    size_bytes: int = Field(gt=0)
-
-
-class ReviewRequest(BaseModel):
-    message: str = Field(default="", max_length=2_000)
 
 
 class DevicePollRequest(BaseModel):
@@ -74,7 +64,6 @@ class ApplicationServices:
         self.database = Database(settings)
         self.auth = AuthService(settings, self.database)
         self.object_store = ObjectStore(settings)
-        self.registry = AgentHubRegistry(settings, self.database, self.object_store)
         self.app_releases = AppReleaseRegistry(
             settings,
             self.database,
@@ -155,8 +144,13 @@ async def authorization_pending(_: Request, exc: AuthorizationPending) -> JSONRe
     )
 
 
-@app.exception_handler(RegistryError)
-async def registry_error(_: Request, exc: RegistryError) -> JSONResponse:
+@app.exception_handler(ConfigurationError)
+async def configuration_error(_: Request, exc: ConfigurationError) -> JSONResponse:
+    return _error_response(503, "configuration_error", str(exc))
+
+
+@app.exception_handler(AppReleaseError)
+async def app_release_error(_: Request, exc: AppReleaseError) -> JSONResponse:
     if exc.code.endswith("_not_found") or exc.code.endswith("_missing"):
         status = 404
     elif "state" in exc.code or "conflict" in exc.code:
@@ -164,11 +158,6 @@ async def registry_error(_: Request, exc: RegistryError) -> JSONResponse:
     else:
         status = 422
     return _error_response(status, exc.code, str(exc))
-
-
-@app.exception_handler(ConfigurationError)
-async def configuration_error(_: Request, exc: ConfigurationError) -> JSONResponse:
-    return _error_response(503, "configuration_error", str(exc))
 
 
 def services(request: Request) -> ApplicationServices:
@@ -326,32 +315,6 @@ def logout(
     return response
 
 
-@app.get("/api/v1/packages")
-def list_packages(
-    request: Request,
-    q: str = Query(default="", max_length=200),
-    limit: int = Query(default=20, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
-) -> dict[str, Any]:
-    return services(request).registry.list_packages(query=q, limit=limit, offset=offset)
-
-
-@app.get("/api/v1/packages/{publisher}/{package_id}")
-def package_detail(request: Request, publisher: str, package_id: str) -> dict[str, Any]:
-    return services(request).registry.package_detail(publisher, package_id)
-
-
-@app.get("/api/v1/releases/{release_id}")
-def release_detail(request: Request, release_id: str) -> dict[str, Any]:
-    return services(request).registry.release_detail(release_id)
-
-
-@app.get("/api/v1/releases/{release_id}/download")
-def release_download(request: Request, release_id: str) -> RedirectResponse:
-    url = services(request).registry.download_url(release_id)
-    return RedirectResponse(url, status_code=307)
-
-
 @app.get("/api/v1/app-releases")
 def list_app_releases(
     request: Request,
@@ -402,106 +365,6 @@ def app_update_manifest(
 @app.get("/api/v1/config/public")
 def public_config(request: Request) -> dict[str, Any]:
     return services(request).app_releases.public_config()
-
-
-@app.post("/api/v1/uploads", status_code=201)
-def create_upload(
-    request: Request,
-    payload: UploadCreateRequest,
-    user: Annotated[dict[str, Any], Depends(current_user)],
-) -> dict[str, Any]:
-    return services(request).registry.create_upload(
-        user=user,
-        filename=payload.filename,
-        expected_size=payload.size_bytes,
-    )
-
-
-@app.post("/api/v1/uploads/{upload_id}/complete")
-def complete_upload(
-    request: Request,
-    upload_id: str,
-    user: Annotated[dict[str, Any], Depends(current_user)],
-) -> dict[str, Any]:
-    return services(request).registry.complete_upload(upload_id, user=user)
-
-
-@app.get("/api/v1/uploads")
-def list_uploads(
-    request: Request,
-    user: Annotated[dict[str, Any], Depends(current_user)],
-    limit: int = Query(default=50, ge=1, le=100),
-) -> list[dict[str, Any]]:
-    return services(request).registry.list_uploads(user=user, limit=limit)
-
-
-@app.get("/api/v1/uploads/{upload_id}")
-def upload_detail(
-    request: Request,
-    upload_id: str,
-    user: Annotated[dict[str, Any], Depends(current_user)],
-) -> dict[str, Any]:
-    return services(request).registry.upload(upload_id, user=user)
-
-
-@app.get("/api/v1/admin/releases/pending")
-def pending_releases(
-    request: Request,
-    _: Annotated[dict[str, Any], Depends(admin_user)],
-    limit: int = Query(default=100, ge=1, le=200),
-) -> list[dict[str, Any]]:
-    return services(request).registry.pending_releases(limit=limit)
-
-
-@app.get("/api/v1/admin/releases/published")
-def published_releases(
-    request: Request,
-    _: Annotated[dict[str, Any], Depends(admin_user)],
-    limit: int = Query(default=100, ge=1, le=200),
-) -> list[dict[str, Any]]:
-    return services(request).registry.published_releases(limit=limit)
-
-
-@app.post("/api/v1/admin/releases/{release_id}/approve")
-def approve_release(
-    request: Request,
-    release_id: str,
-    payload: ReviewRequest,
-    admin: Annotated[dict[str, Any], Depends(admin_user)],
-) -> dict[str, Any]:
-    return services(request).registry.approve_release(
-        release_id,
-        admin=admin,
-        review_message=payload.message,
-    )
-
-
-@app.post("/api/v1/admin/releases/{release_id}/reject")
-def reject_release(
-    request: Request,
-    release_id: str,
-    payload: ReviewRequest,
-    admin: Annotated[dict[str, Any], Depends(admin_user)],
-) -> dict[str, Any]:
-    return services(request).registry.reject_release(
-        release_id,
-        admin=admin,
-        review_message=payload.message,
-    )
-
-
-@app.post("/api/v1/admin/releases/{release_id}/unpublish")
-def unpublish_release(
-    request: Request,
-    release_id: str,
-    payload: ReviewRequest,
-    admin: Annotated[dict[str, Any], Depends(admin_user)],
-) -> dict[str, Any]:
-    return services(request).registry.unpublish_release(
-        release_id,
-        admin=admin,
-        review_message=payload.message,
-    )
 
 
 @app.get("/api/v1/admin/app-releases")

@@ -5,28 +5,21 @@ from typing import Any
 from langchain_core.messages import ToolMessage
 
 from agent_factory.runtime_kernel.nodes.base import NodeExecutionContext
+from agent_factory.runtime_kernel.errors import RuntimeKernelError
 from agent_factory.runtime_kernel.plan_execute_tools import (
     PLAN_EXECUTE_CASUAL_NODE_ID,
     PLAN_EXECUTE_EXECUTOR_NODE_ID,
     PLAN_EXECUTE_FINAL_NODE_ID,
     PLAN_EXECUTE_PLANNER_NODE_ID,
-    merge_tool_ids,
+    available_tool_ids,
     plan_and_execute_delegated_tool_ids,
     plan_and_execute_runtime_plan_tool_ids,
-    system_tool_ids,
-    tool_access_ids,
-    tool_access_ids_for_node,
 )
 from agent_factory.runtime_kernel.planning import (
     RUNTIME_PLAN_TOOL_ID,
     execute_runtime_plan_action,
-    is_plan_and_execute_pattern_id,
 )
 from agent_factory.runtime_kernel.state import RuntimeState
-from agent_factory.runtime_kernel.nodes.standard.tool_visibility import (
-    runtime_excluded_tool_ids,
-    runtime_extra_allowed_tool_ids,
-)
 from agent_factory.tooling.langgraph_node import (
     build_tool_node_runner,
     latest_ai_tool_calls,
@@ -57,10 +50,9 @@ class OperationalToolCallNode:
         allowed_for_origin = (
             plan_and_execute_runtime_plan_tool_ids(
                 origin_node_id=origin_node_id,
-                all_bindings=context.all_bindings,
             )
-            if is_plan_and_execute_pattern_id(state.run.pattern_id)
-            else tool_access_ids_for_node(context.all_bindings, node_id=origin_node_id)
+            if state.run.strategy == "plan_and_execute"
+            else []
         )
         runtime_plan_messages, plan_patch, working_state = _execute_runtime_plan_calls(
             state,
@@ -69,21 +61,10 @@ class OperationalToolCallNode:
         )
 
         registry = context.services.tool_registry
-        if delegated_calls and (registry is None or not hasattr(registry, "model_tools")):
-            messages = [*runtime_plan_messages, *_tool_registry_missing_messages(delegated_calls)]
-            _results, failures, _policy_patch, route_decision = tool_messages_to_runtime_patch(messages)
-            return {
-                "messages": messages,
-                **plan_patch,
-                "tools": {
-                    "tool_failures": [*state.tools.tool_failures, *failures],
-                    "pending_tool_call": None,
-                    "pending_tool_calls": [],
-                },
-                "execution": {"current_node": context.node_id, "route_decision": route_decision},
-            }
+        if registry is None or not hasattr(registry, "model_tools"):
+            raise RuntimeKernelError("operational.tool_call requires a snapshot-bound tool registry.")
 
-        visible_tool_ids = _visible_tool_ids(state, context, registry, origin_node_id=origin_node_id)
+        visible_tool_ids = _visible_tool_ids(state, origin_node_id=origin_node_id)
         visible_tools = list(registry.model_tools(visible_tool_ids)) if delegated_calls else []
         messages: list[ToolMessage] = list(runtime_plan_messages)
         preflight = preflight_tool_calls(working_state, delegated_calls, visible_tools)
@@ -150,66 +131,28 @@ class OperationalToolCallNode:
 
 def _visible_tool_ids(
     state: RuntimeState,
-    context: NodeExecutionContext,
-    registry: Any,
     *,
     origin_node_id: str,
 ) -> list[str]:
-    if is_plan_and_execute_pattern_id(state.run.pattern_id):
+    if state.run.strategy == "plan_and_execute":
         visible_tool_ids = _plan_and_execute_delegated_tool_ids(
             state,
-            context,
-            registry,
             origin_node_id=origin_node_id,
         )
     else:
-        visible_tool_ids = merge_tool_ids([
-            *_allowed_tool_ids(context),
-            *runtime_extra_allowed_tool_ids(state),
-            *system_tool_ids(registry),
-        ])
-    excluded_tool_ids = set(runtime_excluded_tool_ids(state))
-    return [tool_id for tool_id in visible_tool_ids if tool_id not in excluded_tool_ids]
+        visible_tool_ids = available_tool_ids(state)
+    return visible_tool_ids
 
 
 def _plan_and_execute_delegated_tool_ids(
     state: RuntimeState,
-    context: NodeExecutionContext,
-    registry: Any,
     *,
     origin_node_id: str,
 ) -> list[str]:
     return plan_and_execute_delegated_tool_ids(
         origin_node_id=origin_node_id,
-        all_bindings=context.all_bindings,
-        registry=registry,
-        extra_tool_ids=runtime_extra_allowed_tool_ids(state),
+        state=state,
     )
-
-
-def _allowed_tool_ids(context: NodeExecutionContext) -> list[str]:
-    current_node_tool_ids = tool_access_ids(context.bindings)
-    if current_node_tool_ids:
-        return current_node_tool_ids
-    return tool_access_ids(context.all_bindings)
-
-
-def _tool_registry_missing_messages(tool_calls: list[dict[str, Any]]):
-    messages = []
-    for call in tool_calls:
-        tool_id = str(call.get("name") or "")
-        tool_call_id = str(call.get("id") or tool_id)
-        messages.append(
-            tool_observation_message(
-                status="tool_registry_missing",
-                tool_id=tool_id,
-                tool_call_id=tool_call_id,
-                message="tool registry missing",
-                arguments=dict(call.get("args") or {}),
-                retryable=False,
-            )
-        )
-    return messages
 
 
 def _origin_node_id(state: RuntimeState, tool_calls: list[dict[str, Any]]) -> str:
@@ -217,7 +160,7 @@ def _origin_node_id(state: RuntimeState, tool_calls: list[dict[str, Any]]) -> st
     origins.discard("")
     if len(origins) == 1:
         return next(iter(origins))
-    if is_plan_and_execute_pattern_id(state.run.pattern_id):
+    if state.run.strategy == "plan_and_execute":
         raise RuntimeError("plan_and_execute tool calls must carry exactly one origin_node_id")
     return ""
 
@@ -309,7 +252,7 @@ def _messages_with_tool_calls(messages: list[Any], tool_calls: list[dict[str, An
 
 
 def _caller_route_decision(state: RuntimeState, origin_node_id: str, route_decision: str) -> str:
-    if not is_plan_and_execute_pattern_id(state.run.pattern_id):
+    if state.run.strategy != "plan_and_execute":
         return route_decision
     if route_decision == "policy.blocked":
         return route_decision

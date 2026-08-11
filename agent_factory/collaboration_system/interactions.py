@@ -72,7 +72,7 @@ def project_pending_interaction(task: BackgroundTask) -> PendingInteraction | No
     resource_requests = _mapping_list(payload.get("resource_requests"))
     if resource_requests:
         kind: InteractionKind = "resource_request"
-    elif interrupt_type in {"ask_user", "create_agent_question", "agent_evolution_question"}:
+    elif interrupt_type == "ask_user":
         kind = "ask_user"
     elif str(payload.get("resume_kind") or "").strip() == "answer":
         kind = "ask_user"

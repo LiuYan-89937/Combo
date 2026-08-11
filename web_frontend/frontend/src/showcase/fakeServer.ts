@@ -7,8 +7,7 @@ interface ShowcaseBindings {
 }
 
 const bindingsByTarget = new Map<string, ShowcaseBindings>([
-  ['resource:create_agent', { mcp_server_ids: [], skill_ids: [] }],
-  ['resource:evolve_agent', { mcp_server_ids: [], skill_ids: [] }],
+  ['system:chat', { mcp_server_ids: [], skill_ids: [] }],
   [`package:${SHOWCASE_PACKAGE_ID}`, { mcp_server_ids: [], skill_ids: [] }],
 ])
 
@@ -253,16 +252,14 @@ function bindingsFor(key: string): ShowcaseBindings {
 function targetKeyFromUrl(url: URL): string {
   const packageId = String(url.searchParams.get('package_id') || '')
   if (packageId) return `package:${packageId}`
-  const resourceMode = String(url.searchParams.get('resource_mode') || 'create_agent')
-  return `resource:${resourceMode}`
+  return 'system:chat'
 }
 
 function targetKeyFromPayload(payload: Record<string, any>): string {
   const context = payload.context || {}
   const packageId = String(context.package_id || context.packageId || payload.package_id || '')
   if (packageId) return `package:${packageId}`
-  const resourceMode = String(context.resource_mode || context.resourceMode || payload.resource_mode || 'create_agent')
-  return `resource:${resourceMode}`
+  return 'system:chat'
 }
 
 function workspaceEntries(path: string): Array<Record<string, any>> {

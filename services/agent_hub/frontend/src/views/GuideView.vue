@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /*
- * Getting-started guide. A linear, numbered path from install to publish.
+ * Getting-started guide. A linear path from installation to dynamic execution.
  * Copy stays honest about what the product does; deep technical docs live in
  * the repo, linked at the end.
  */
@@ -13,7 +13,7 @@ import { useConfigStore } from '@/stores/config'
 const { t } = useI18n()
 const { config } = storeToRefs(useConfigStore())
 
-const steps = ['install', 'model', 'agent', 'workspace', 'import', 'publish', 'review']
+const steps = ['install', 'model', 'conversation', 'capabilities', 'workspace']
 
 useSeo(() => ({
   title: t('guide.title'),

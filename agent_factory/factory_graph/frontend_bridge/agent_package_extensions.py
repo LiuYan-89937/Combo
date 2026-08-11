@@ -700,39 +700,16 @@ def _model_permission_tools(package: LoadedAgentPackage) -> list[dict[str, Any]]
 
 def _system_agent_permission_tools(system_owner: SystemAgentExtensionOwner | None) -> list[dict[str, Any]]:
     try:
-        from agent_factory.create_agent.tooling import (
-            CREATE_AGENT_ASSIST_TOOL_IDS,
-            CREATE_AGENT_BUILTIN_TOOL_IDS,
-            build_create_agent_authoring_tool_spec,
-            build_create_agent_control_tool_spec,
-            build_create_agent_probe_tool_spec,
-            build_create_agent_stage_tool_spec,
-            build_create_agent_validate_tool_spec,
-            build_model_pool_select_tool_spec,
-        )
         from agent_factory.tooling.builtins.registry import (
-            get_always_available_system_tool_ids,
             get_builtin_tool_specs,
             get_read_only_system_tool_ids,
         )
     except Exception:
         return []
-    authoring_specs = [
-        build_create_agent_authoring_tool_spec(),
-        build_create_agent_control_tool_spec(),
-        build_model_pool_select_tool_spec(),
-        build_create_agent_probe_tool_spec(),
-        build_create_agent_validate_tool_spec(),
-    ]
-    if system_owner == "create_agent":
-        authoring_specs.append(build_create_agent_stage_tool_spec())
-    builtin_ids = CREATE_AGENT_BUILTIN_TOOL_IDS if system_owner in {"create_agent", "evolve_agent"} else CREATE_AGENT_ASSIST_TOOL_IDS
+    del system_owner
     read_only_ids = get_read_only_system_tool_ids()
-    allowed_builtin_ids = set(builtin_ids) | set(get_always_available_system_tool_ids())
     tools: list[dict[str, Any]] = []
     for spec in get_builtin_tool_specs():
-        if spec.id not in allowed_builtin_ids:
-            continue
         item = _public_tool_permission_item(
             tool_id=spec.id,
             name=humanize_identifier(spec.id) or spec.id,
@@ -741,19 +718,6 @@ def _system_agent_permission_tools(system_owner: SystemAgentExtensionOwner | Non
             risk_level=spec.risk_level,
             permission_scope="system",
             permission_tags=["read_only"] if spec.id in read_only_ids else [],
-            concurrent=spec.concurrent,
-        )
-        if item:
-            tools.append(item)
-    for spec in sorted(authoring_specs, key=lambda item: item.id):
-        item = _public_tool_permission_item(
-            tool_id=spec.id,
-            name=humanize_identifier(spec.id) or spec.id,
-            description=spec.description,
-            source="system",
-            risk_level=spec.risk_level,
-            permission_scope=spec.permission_scope,
-            permission_tags=spec.permission_tags,
             concurrent=spec.concurrent,
         )
         if item:

@@ -6,7 +6,6 @@ from agent_factory.runtime_contracts.schema import (
     ModelContract,
     ResourcesContract,
     SchedulerContract,
-    SchedulerSeedContract,
     ToolsContract,
 )
 
@@ -33,7 +32,3 @@ def default_dependencies_contract() -> DependenciesContract:
 
 def default_scheduler_contract() -> SchedulerContract:
     return SchedulerContract()
-
-
-def default_scheduler_seed_contract() -> SchedulerSeedContract:
-    return SchedulerSeedContract()

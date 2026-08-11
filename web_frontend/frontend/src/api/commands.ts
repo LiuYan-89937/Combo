@@ -172,28 +172,6 @@ export function sendAgentPackageMessageCommand(
   })
 }
 
-export function runAgentEvolutionCommand(
-  packageId: string,
-  message: string,
-  attachments?: RuntimeAttachmentInput[],
-  runtimeOptions?: RuntimeMainModelOptions,
-  sessionId?: string | null,
-): FactoryFrontendCommand {
-  const requestId = generateRequestId()
-  return createCommand('run_agent_evolution', {
-    request_id: requestId,
-    session_id: sessionId,
-    payload: runtimePayload(
-      {
-        package_id: packageId,
-        ...(attachments && attachments.length > 0 ? { attachments } : {}),
-      },
-      runtimeOptions
-    ),
-    message,
-  })
-}
-
 function runtimePayload(payload: Record<string, unknown>, runtimeOptions?: RuntimeMainModelOptions): Record<string, unknown> {
   const runtimeConfig = runtimeExecutionConfig(runtimeOptions, payload.user_config)
   if (!runtimeConfig) return payload

@@ -1,13 +1,11 @@
 export type WorkspaceScope = 'package' | 'runtime' | 'workdir' | 'artifacts' | 'extensions'
-export type WorkspaceResourceMode = 'package' | 'create_agent' | 'evolve_agent' | 'agent_group'
+export type WorkspaceResourceMode = 'package' | 'agent_group'
 
 export interface WorkspaceRequestContext {
   resourceMode?: WorkspaceResourceMode
   packageId?: string | null
   packageSessionId?: string | null
   workspaceId?: string | null
-  factorySessionId?: string | null
-  createAgentSessionId?: string | null
   groupId?: string | null
 }
 

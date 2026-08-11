@@ -22,7 +22,6 @@ from agent_factory.tooling.execution_context import (
     tool_call_context,
 )
 from agent_factory.tooling.gateway import (
-    DEFAULT_TOOL_APPROVAL_TRUST_STORE,
     TRUST_TOOL_ACTIONS,
     parse_approval_decision,
 )
@@ -64,7 +63,12 @@ class AgentFactoryToolNode:
         self.emit_event = emit_event
         self.stream_events = stream_events
         self._concurrent_by_name = {tool.name: _tool_concurrent(tool) for tool in tools}
+        self._serialization_key_by_name = {
+            tool.name: _tool_serialization_key(tool)
+            for tool in tools
+        }
         self._approval_request_by_name = {tool.name: _tool_approval_request(tool) for tool in tools}
+        self._trust_tool_by_name = {tool.name: _tool_trust_handler(tool) for tool in tools}
         self._sensitive_argument_paths_by_name = {
             tool.name: _tool_sensitive_argument_paths(tool) for tool in tools
         }
@@ -96,14 +100,21 @@ class AgentFactoryToolNode:
         outputs: list[ToolMessage] = []
         invalid_calls, executable_calls = _partition_invalid_tool_calls(tool_calls)
         outputs.extend(_invalid_tool_call_messages(invalid_calls))
-        for batch in _tool_call_batches(executable_calls, self._concurrent_by_name):
+        for batch in _tool_call_batches(
+            executable_calls,
+            self._concurrent_by_name,
+            self._serialization_key_by_name,
+        ):
             approval_requests = self._approval_requests_for_batch(batch, state=state)
             if approval_requests:
                 decision = interrupt(_batch_approval_payload(approval_requests))
                 parsed = parse_approval_decision(decision)
                 if _is_trust_tool_decision(decision):
                     for request in approval_requests:
-                        DEFAULT_TOOL_APPROVAL_TRUST_STORE.trust_tool(str(request.get("tool_name") or ""))
+                        tool_name = str(request.get("tool_name") or "")
+                        trust_tool = self._trust_tool_by_name.get(tool_name)
+                        if trust_tool is not None:
+                            trust_tool(tool_name)
                 if parsed.action != "approve":
                     outputs.extend(_approval_rejection_messages(batch, parsed.action, parsed.revision_guidance))
                     continue
@@ -300,6 +311,17 @@ def _tool_approval_request(tool: BaseTool) -> Callable[..., dict[str, Any] | Non
         return None
     approval_request = agent_factory.get("approval_request")
     return approval_request if callable(approval_request) else None
+
+
+def _tool_trust_handler(tool: BaseTool) -> Callable[[str], None] | None:
+    metadata = getattr(tool, "metadata", None)
+    if not isinstance(metadata, dict):
+        return None
+    agent_factory = metadata.get("agent_factory")
+    if not isinstance(agent_factory, dict):
+        return None
+    trust_tool = agent_factory.get("trust_tool")
+    return trust_tool if callable(trust_tool) else None
 
 
 def _tool_sensitive_argument_paths(tool: BaseTool) -> list[str]:
@@ -525,21 +547,32 @@ def tool_observation_message(
 def _tool_call_batches(
     tool_calls: Sequence[dict[str, Any]],
     concurrent_by_name: Mapping[str, bool],
+    serialization_key_by_name: Mapping[str, str | None],
 ) -> list[list[dict[str, Any]]]:
     batches: list[list[dict[str, Any]]] = []
+    batch_keys: list[set[str]] = []
     for call in tool_calls:
         tool_id = str(call.get("name") or "")
-        if concurrent_by_name.get(tool_id, True):
+        serialization_key = serialization_key_by_name.get(tool_id)
+        conflict_key = (
+            serialization_key
+            if serialization_key is not None
+            else (None if concurrent_by_name.get(tool_id, True) else f"tool:{tool_id}")
+        )
+        if conflict_key is None:
             if not batches:
                 batches.append([])
+                batch_keys.append(set())
             batches[0].append(call)
             continue
-        for batch in batches:
-            if all(str(item.get("name") or "") != tool_id for item in batch):
+        for index, batch in enumerate(batches):
+            if conflict_key not in batch_keys[index]:
                 batch.append(call)
+                batch_keys[index].add(conflict_key)
                 break
         else:
             batches.append([call])
+            batch_keys.append({conflict_key})
     return batches
 
 
@@ -582,6 +615,17 @@ def _tool_concurrent(tool: BaseTool) -> bool:
     if not isinstance(agent_factory, dict):
         return True
     return bool(agent_factory.get("concurrent", True))
+
+
+def _tool_serialization_key(tool: BaseTool) -> str | None:
+    metadata = getattr(tool, "metadata", None)
+    if not isinstance(metadata, dict):
+        return None
+    agent_factory = metadata.get("agent_factory")
+    if not isinstance(agent_factory, dict):
+        return None
+    value = str(agent_factory.get("serialization_key") or "").strip()
+    return value or None
 
 
 def _normalize_tool_call(

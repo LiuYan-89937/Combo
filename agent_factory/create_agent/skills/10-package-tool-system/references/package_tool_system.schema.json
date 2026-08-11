@@ -1,5 +1,0 @@
-{
-  "type": "object",
-  "title": "Package tool authoring call",
-  "additionalProperties": true
-}

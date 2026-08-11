@@ -120,6 +120,7 @@ class ModelPoolCredential(BaseModel):
     base_url: str
     api_key: str | None = None
     enabled: bool = True
+    revision: int = Field(default=1, ge=1)
     created_at: str = Field(default_factory=utc_now_text)
     updated_at: str = Field(default_factory=utc_now_text)
 
@@ -156,6 +157,7 @@ class ModelPoolCredential(BaseModel):
             api_key_fingerprint=self.api_key_fingerprint,
             has_api_key=bool(self.api_key),
             enabled=self.enabled,
+            revision=self.revision,
             created_at=self.created_at,
             updated_at=self.updated_at,
         )
@@ -172,6 +174,7 @@ class ModelPoolCredentialPublic(BaseModel):
     api_key_fingerprint: str = ""
     has_api_key: bool = False
     enabled: bool = True
+    revision: int = Field(default=1, ge=1)
     created_at: str = ""
     updated_at: str = ""
 
@@ -188,6 +191,7 @@ class ModelPoolProfile(BaseModel):
     model_name: str
     embedding_dimensions: int | None = Field(default=None, ge=1)
     enabled: bool = True
+    revision: int = Field(default=1, ge=1)
     capabilities: ModelPoolCapabilities = Field(default_factory=ModelPoolCapabilities)
     settings: ModelPoolRuntimeSettings = Field(default_factory=ModelPoolRuntimeSettings)
     limits: ModelPoolLimits = Field(default_factory=ModelPoolLimits)
@@ -271,6 +275,7 @@ class ModelPoolProfilePublic(BaseModel):
     model_name: str
     embedding_dimensions: int | None = Field(default=None, ge=1)
     enabled: bool = True
+    revision: int = Field(default=1, ge=1)
     capabilities: ModelPoolCapabilities = Field(default_factory=ModelPoolCapabilities)
     settings: ModelPoolRuntimeSettings = Field(default_factory=ModelPoolRuntimeSettings)
     limits: ModelPoolLimits = Field(default_factory=ModelPoolLimits)

@@ -40,9 +40,6 @@ class ObjectStore:
             "storage_class": str(information.storage_class or ""),
         }
 
-    def incoming_key(self, upload_id: str) -> str:
-        return self._key("incoming", f"{upload_id}.zip")
-
     def app_release_staging_key(
         self,
         *,
@@ -59,22 +56,6 @@ class ObjectStore:
             app_release_id,
             asset_id,
             safe_filename,
-        )
-
-    def release_key(
-        self,
-        *,
-        publisher: str,
-        package_id: str,
-        version: str,
-        digest: str,
-    ) -> str:
-        return self._key(
-            "packages",
-            publisher.casefold(),
-            package_id,
-            version,
-            f"{digest}.zip",
         )
 
     def create_upload_url(
@@ -107,14 +88,6 @@ class ObjectStore:
             raise FileNotFoundError(f"OSS object not found: {object_key}") from exc
         return int(metadata.content_length)
 
-    def download_to(self, object_key: str, target: Path) -> None:
-        self._validate_key(object_key)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            self.internal_bucket.get_object_to_file(object_key, str(target))
-        except oss2.exceptions.NoSuchKey as exc:
-            raise FileNotFoundError(f"OSS object not found: {object_key}") from exc
-
     def iter_object(
         self,
         object_key: str,
@@ -137,36 +110,9 @@ class ObjectStore:
         finally:
             result.close()
 
-    def promote(self, source_key: str, target_key: str) -> None:
-        self._validate_key(source_key)
-        self._validate_key(target_key)
-        if self.internal_bucket.object_exists(target_key):
-            raise FileExistsError(f"immutable release object already exists: {target_key}")
-        self.internal_bucket.copy_object(
-            self.settings.oss_bucket,
-            source_key,
-            target_key,
-        )
-        source_size = self.object_size(source_key)
-        target_size = self.object_size(target_key)
-        if source_size != target_size:
-            self.internal_bucket.delete_object(target_key)
-            raise ObjectStoreError(
-                f"promoted object size mismatch: source={source_size}, target={target_size}"
-            )
-
     def delete(self, object_key: str) -> None:
         self._validate_key(object_key)
         self.internal_bucket.delete_object(object_key)
-
-    def signed_download_url(self, object_key: str) -> str:
-        self._validate_key(object_key)
-        return self.public_bucket.sign_url(
-            "GET",
-            object_key,
-            self.settings.download_url_ttl_seconds,
-            slash_safe=True,
-        )
 
     def upload_backup(self, source: Path, object_key: str) -> None:
         self._validate_key(object_key)

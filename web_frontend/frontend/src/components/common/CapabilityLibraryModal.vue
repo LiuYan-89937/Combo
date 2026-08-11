@@ -11,30 +11,6 @@
 
     <section class="library-section">
       <div class="section-heading">
-        <span>{{ t('capabilityLibrary.agents') }}</span>
-        <small>{{ t('capabilityLibrary.agentsHint') }}</small>
-      </div>
-      <div class="library-grid agent-grid">
-        <button class="library-entry featured" type="button" @click="openRoute('Agents')">
-          <n-icon size="24"><CubeOutline /></n-icon>
-          <span><strong>{{ t('capabilityLibrary.localAgents') }}</strong><small>{{ t('capabilityLibrary.localAgentsHint') }}</small></span>
-          <n-icon class="entry-arrow"><ArrowForward /></n-icon>
-        </button>
-        <button class="library-entry" type="button" @click="openRoute('Agents')">
-          <n-icon size="22"><CheckmarkCircleOutline /></n-icon>
-          <span><strong>{{ t('route.agents') }}</strong><small>{{ t('capabilityLibrary.publishedHint') }}</small></span>
-          <n-icon class="entry-arrow"><ArrowForward /></n-icon>
-        </button>
-        <button class="library-entry" type="button" @click="openRoute('AgentHub')">
-          <n-icon size="22"><CloudDownloadOutline /></n-icon>
-          <span><strong>{{ t('route.agentHub') }}</strong><small>{{ t('capabilityLibrary.agentHubHint') }}</small></span>
-          <n-icon class="entry-arrow"><ArrowForward /></n-icon>
-        </button>
-      </div>
-    </section>
-
-    <section class="library-section">
-      <div class="section-heading">
         <span>{{ t('capabilityLibrary.resources') }}</span>
         <small>{{ t('capabilityLibrary.resourcesHint') }}</small>
       </div>
@@ -63,10 +39,6 @@
 <script setup lang="ts">
 import { NIcon, NModal } from 'naive-ui'
 import {
-  ArrowForward,
-  CheckmarkCircleOutline,
-  CloudDownloadOutline,
-  CubeOutline,
   ExtensionPuzzleOutline,
   LayersOutline,
   LibraryOutline,
@@ -80,7 +52,7 @@ const emit = defineEmits<{ 'update:show': [value: boolean] }>()
 const router = useRouter()
 const { t } = useI18n()
 
-function openRoute(name: 'Agents' | 'AgentHub' | 'Extensions' | 'Knowledge' | 'Scheduler' | 'ModelPool') {
+function openRoute(name: 'Extensions' | 'Knowledge' | 'Scheduler' | 'ModelPool') {
   emit('update:show', false)
   void router.push({ name })
 }
@@ -103,7 +75,6 @@ function openRoute(name: 'Agents' | 'AgentHub' | 'Extensions' | 'Knowledge' | 'S
 .section-heading span { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .section-heading small { color: var(--app-text-muted); font-size: 11px; }
 .library-grid { display: grid; gap: 10px; }
-.agent-grid { grid-template-columns: 1.2fr 1fr 1fr; }
 .resource-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .library-entry {
   display: grid;

@@ -16,7 +16,6 @@ class RuntimeResourceCommandMixin:
         action = str(command.payload.get("action") or "roots").strip()
         workspace_service = FrontendWorkspaceService(
             agent_package_runtime=self.agent_package_runtime,
-            session_manager=self.session_manager,
         )
         if action == "roots":
             result = workspace_service.roots(command.payload, session_record=self.session_record)
@@ -77,7 +76,6 @@ class RuntimeResourceCommandMixin:
         )
 
     def extensions_manage(self, command: FactoryFrontendCommand) -> None:
-        resource_mode = str(command.payload.get("resource_mode") or "").strip()
         package_id = _package_id_from_payload(command.payload)
         action = str(command.payload.get("action") or "list").strip()
         def emit_progress(server_id: str, line: str) -> None:
@@ -93,22 +91,13 @@ class RuntimeResourceCommandMixin:
             )
 
         progress = emit_progress if action in {"install_mcp", "test_mcp"} else None
-        if resource_mode in {"create_agent", "evolve_agent"}:
-            result = self.agent_package_runtime.system_extensions_manage(
-                resource_mode,
-                action,
-                command.payload,
-                request_id=command.request_id,
-                progress=progress,
-            )
-        else:
-            result = self.agent_package_runtime.extensions_manage(
-                package_id,
-                action,
-                command.payload,
-                request_id=command.request_id,
-                progress=progress,
-            )
+        result = self.agent_package_runtime.extensions_manage(
+            package_id,
+            action,
+            command.payload,
+            request_id=command.request_id,
+            progress=progress,
+        )
         event_type = "extension_configs_listed"
         if action in {
             "upsert_mcp",

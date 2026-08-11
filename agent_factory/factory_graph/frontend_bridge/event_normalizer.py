@@ -8,7 +8,7 @@ import uuid
 
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 
-from agent_factory.create_agent.output_safety import looks_like_internal_observation_payload
+from agent_factory.runtime_protocol.observations import looks_like_internal_observation_payload
 from agent_factory.factory_graph.frontend_bridge.protocol import (
     FactoryFrontendEvent,
     FactoryFrontendEventType,
@@ -361,10 +361,6 @@ class RuntimeEventNormalizer:
                 "scheduler_run_cancelled",
                 "scheduler_feedback_completed",
                 "scheduler_feedback_failed",
-                "scheduler_seed_detected",
-                "scheduler_seed_applied",
-                "scheduler_seed_unchanged",
-                "scheduler_seed_failed",
             },
         )
 

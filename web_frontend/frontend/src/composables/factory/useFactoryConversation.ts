@@ -52,7 +52,6 @@ export function useFactoryConversation() {
   ))
   const inputDisabled = computed(() => (
     runtimeStore.isInputLocked
-    || runtimeStore.isPublishConfirmationPending
     || chatModelProfiles.value.length === 0
     || (requiresRuntimeMainModel.value && !selectedMainModelProfileId.value)
     || (isAgentSessionLanding.value && !isAgentChatActive.value)
@@ -191,7 +190,6 @@ export function useFactoryConversation() {
 
   return {
     isAgentChatActive,
-    isAgentSessionLanding,
     inputPlaceholder,
     inputDisabled,
     modelConfigurationMissing,
