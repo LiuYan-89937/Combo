@@ -28,16 +28,6 @@ def emit_state_event(
     )
     services.observability_manager.emit(event)
     state.observability.events.append(event.model_dump(mode="json"))
-    trace_recorder = getattr(services, "trace_recorder", None)
-    if trace_recorder is not None:
-        trace_recorder.record_event(
-            trace_id=state.observability.trace_id,
-            run_id=state.run.run_id,
-            event_type=event_type,
-            node_id=node_id,
-            message=message,
-            payload=payload or {},
-        )
 
 
 def apply_node_metrics(state: RuntimeState, duration_seconds: float) -> None:

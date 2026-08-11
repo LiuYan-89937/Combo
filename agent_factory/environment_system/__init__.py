@@ -1,9 +1,10 @@
-from .pool import dependency_pool_path
-from .service import EnvironmentResolutionError, EnvironmentResolver, environment_lock_path
+from .pool import DependencyPoolError, dependency_pool_path
+from .service import DependencyPoolService, DependencyRequest, PreparedDependencyEnvironment
 
 __all__ = [
-    "EnvironmentResolutionError",
-    "EnvironmentResolver",
+    "DependencyPoolError",
+    "DependencyPoolService",
+    "DependencyRequest",
+    "PreparedDependencyEnvironment",
     "dependency_pool_path",
-    "environment_lock_path",
 ]

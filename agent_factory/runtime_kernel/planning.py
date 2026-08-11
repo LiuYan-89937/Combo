@@ -11,17 +11,6 @@ from agent_factory.runtime_kernel.state import PlanEvent, PlanState, PlanStep, R
 
 
 RUNTIME_PLAN_TOOL_ID = "runtime_plan"
-PLAN_AND_EXECUTE_PATTERN_ID = "plan_and_execute"
-
-
-def is_plan_and_execute_pattern_id(pattern_id: str | None) -> bool:
-    value = str(pattern_id or "").strip()
-    if value == PLAN_AND_EXECUTE_PATTERN_ID:
-        return True
-    namespace, separator, base_pattern_id = value.rpartition("__")
-    return bool(separator and namespace and base_pattern_id == PLAN_AND_EXECUTE_PATTERN_ID)
-
-
 PlanAction = Literal[
     "inspect",
     "create_plan",

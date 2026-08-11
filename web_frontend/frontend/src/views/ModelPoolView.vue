@@ -166,7 +166,8 @@
               <n-radio-group v-model:value="usageGroupBy" class="soft-segmented-control" @update:value="loadUsage">
                 <n-radio-button value="model">{{ t('modelPool.usageByModel') }}</n-radio-button>
                 <n-radio-button value="provider">{{ t('modelPool.usageByProvider') }}</n-radio-button>
-                <n-radio-button value="agent">{{ t('modelPool.usageByAgent') }}</n-radio-button>
+                <n-radio-button value="runtime_role">{{ t('modelPool.usageByRuntimeRole') }}</n-radio-button>
+                <n-radio-button value="strategy">{{ t('modelPool.usageByStrategy') }}</n-radio-button>
               </n-radio-group>
               <n-radio-group v-model:value="usageChartType" class="soft-segmented-control">
                 <n-radio-button value="line">{{ t('modelPool.usageLineChart') }}</n-radio-button>
@@ -201,8 +202,8 @@
               <strong>{{ formatPercent(usageSummary?.totals.cache_hit_ratio) }}</strong>
             </div>
             <div class="usage-metric">
-              <span>{{ t('modelPool.usageCost') }}</span>
-              <strong>{{ formatCost(usageSummary?.totals.estimated_cost) }}</strong>
+              <span>{{ t('modelPool.usageCacheWrite') }}</span>
+              <strong>{{ formatTokens(usageSummary?.totals.cache_write_tokens || 0) }}</strong>
             </div>
           </div>
 
@@ -549,7 +550,7 @@ const usageColumns = computed<DataTableColumns<ModelUsageGroup>>(() => [
   { title: t('modelPool.usageTotalTokens'), key: 'total_tokens', width: 120, render: (row) => formatTokens(row.totals.total_tokens) },
   { title: t('modelPool.usageReasoning'), key: 'reasoning_tokens', width: 120, render: (row) => formatTokens(row.totals.reasoning_tokens) },
   { title: t('modelPool.usageCacheHit'), key: 'cache_hit_ratio', width: 110, render: (row) => formatPercent(row.totals.cache_hit_ratio) },
-  { title: t('modelPool.usageCost'), key: 'estimated_cost', width: 110, render: (row) => formatCost(row.totals.estimated_cost) },
+  { title: t('modelPool.usageCacheWrite'), key: 'cache_write_tokens', width: 120, render: (row) => formatTokens(row.totals.cache_write_tokens) },
 ])
 const usageChartOptions = computed(() => {
   const summary = usageSummary.value
@@ -956,10 +957,6 @@ function formatPercent(value: number | null | undefined): string {
   return `${Math.round(Number(value) * 1000) / 10}%`
 }
 
-function formatCost(value: number | null | undefined): string {
-  if (value === null || value === undefined) return '-'
-  return `¥${new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 4 }).format(Number(value || 0))}`
-}
 </script>
 
 <style scoped>

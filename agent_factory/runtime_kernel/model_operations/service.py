@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
 from dataclasses import dataclass
 from threading import RLock
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from langchain_core.messages import BaseMessage, HumanMessage
@@ -19,31 +18,21 @@ from agent_factory.context_system.token_counter import (
     provider_token_budget_payload,
     token_count_from_usage_metadata,
 )
-from agent_factory.model_pool.runtime_override import (
-    resolve_runtime_main_chat_model_from_state,
-    resolve_runtime_reasoning_model,
-)
-from agent_factory.model_pool.schema import ModelBindingRuntimeOverrides
 from agent_factory.models.content import content_to_text, strip_internal_snapshot_blocks
 from agent_factory.models.message_layout import system_messages_first
 from agent_factory.models.reasoning import reasoning_content_from_message
 from agent_factory.models.usage import normalize_usage_metadata
-from agent_factory.runtime_kernel.adapters.model import (
-    ModelRole,
-    _bind_tools,
-    _configured_model_for_role,
-    _tool_calls_from_response,
-)
 from agent_factory.runtime_kernel.model_inputs import (
     build_runtime_model_input,
-    legacy_system_prompt_from_binding,
 )
+from agent_factory.runtime_kernel.model_operations.tool_calls import bind_tools, tool_calls_from_response
 from agent_factory.runtime_kernel.types import ModelInvocationResult
 from agent_factory.runtime_protocol import ModelSelectionSnapshot
 from agent_factory.tooling.description_context import contextualize_tool_descriptions
 from agent_factory.tooling.model_visibility import tools_visible_to_model
 
 _DEFAULT_STRUCTURED_METHOD = "json_mode"
+ModelRole = Literal["main", "task", "compression"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,14 +87,12 @@ class ModelInvocationOperations:
         self,
         *,
         state: Any,
-        prompt_binding: dict[str, Any] | None = None,
         messages: list[Any] | None = None,
         emit_event=None,
         model_role: ModelRole | None = None,
     ) -> ModelInvocationResult:
         return self.tool_bound_chat(
             state=state,
-            prompt_binding=prompt_binding,
             messages=messages,
             tools=[],
             emit_event=emit_event,
@@ -116,7 +103,6 @@ class ModelInvocationOperations:
         self,
         *,
         state: Any,
-        prompt_binding: dict[str, Any] | None = None,
         messages: list[Any] | None = None,
         tools: list[BaseTool] | None = None,
         emit_event=None,
@@ -132,18 +118,11 @@ class ModelInvocationOperations:
         )
         envelope = build_runtime_model_input(
             state=state,
-            system_prompt=self._system_prompt(state=state, prompt_binding=prompt_binding),
+            system_prompt=self._system_prompt(state=state),
             messages=messages or [],
             tools=tool_list,
             node_id=node_id,
             image_input_enabled=image_input_enabled,
-        )
-        trace_span_id = _start_trace_span(
-            state=state,
-            services=services,
-            node_id=node_id,
-            operation="tool_bound_chat",
-            payload={"model_role": effective_model_role, **envelope.diagnostics()},
         )
         stream_id = uuid4().hex
         _emit(
@@ -153,26 +132,17 @@ class ModelInvocationOperations:
         )
         try:
             response = _invoke_tool_bound_chat(
-                model=_bind_tools(model, tool_list),
+                model=bind_tools(model, tool_list),
                 messages=envelope.messages,
                 emit_event=emit_event,
                 stream_id=stream_id,
             )
         except Exception as exc:
             _emit(emit_event, "model_call_failed", {"operation": "tool_bound_chat", "error": str(exc)})
-            _finish_trace_span(
-                state=state,
-                services=services,
-                node_id=node_id,
-                span_id=trace_span_id,
-                operation="tool_bound_chat",
-                status="failed",
-                payload={"error": str(exc)},
-            )
             raise
         text = strip_internal_snapshot_blocks(content_to_text(getattr(response, "content", response))).strip()
         reasoning_content = reasoning_content_from_message(response)
-        tool_calls = _tool_calls_from_response(response)
+        tool_calls = tool_calls_from_response(response)
         usage_metadata = getattr(response, "usage_metadata", None) or {}
         _record_provider_token_budget(
             state=state,
@@ -180,8 +150,7 @@ class ModelInvocationOperations:
             model_role=effective_model_role,
             usage_metadata=usage_metadata,
         )
-        cache_metrics = _model_cache_metrics_payload(
-            state=state,
+        usage_observation = _model_usage_payload(
             node_id=node_id,
             model_metadata=metadata,
             usage_metadata=usage_metadata,
@@ -197,27 +166,13 @@ class ModelInvocationOperations:
                 "model_input": envelope.diagnostics(),
             },
         )
-        _emit(emit_event, "model_cache_metrics", cache_metrics)
+        _emit(emit_event, "model_usage_completed", usage_observation)
         _emit_provider_usage_context_window(
             state=state,
             services=services,
             node_id=node_id,
             response=response,
             model_role=effective_model_role,
-        )
-        _finish_trace_span(
-            state=state,
-            services=services,
-            node_id=node_id,
-            span_id=trace_span_id,
-            operation="tool_bound_chat",
-            status="completed",
-            payload={
-                "tool_call_count": len(tool_calls),
-                "usage_metadata": usage_metadata,
-                "model_input": envelope.diagnostics(),
-                "model_cache": cache_metrics,
-            },
         )
         return ModelInvocationResult(
             ai_message=response if isinstance(response, BaseMessage) else None,
@@ -239,7 +194,6 @@ class ModelInvocationOperations:
         *,
         output_model: type[BaseModel],
         state: Any,
-        prompt_binding: dict[str, Any] | None = None,
         messages: list[Any] | None = None,
         prebuilt_messages: list[Any] | None = None,
         structured_method: str | None = None,
@@ -259,7 +213,7 @@ class ModelInvocationOperations:
         else:
             envelope = build_runtime_model_input(
                 state=state,
-                system_prompt=self._system_prompt(state=state, prompt_binding=prompt_binding),
+                system_prompt=self._system_prompt(state=state),
                 messages=messages or [],
                 tools=[],
                 node_id=node_id,
@@ -290,13 +244,6 @@ class ModelInvocationOperations:
             request_messages=request_messages,
             tool_count=0,
         )
-        trace_span_id = _start_trace_span(
-            state=state,
-            services=services,
-            node_id=node_id,
-            operation="structured_json",
-            payload={"schema_name": output_model.__name__, **operation_context, "model_input": input_diagnostics},
-        )
         for attempt in range(1, attempts + 1):
             _emit(
                 emit_event,
@@ -322,8 +269,7 @@ class ModelInvocationOperations:
                     model_role=effective_model_role,
                     usage_metadata=usage_metadata,
                 )
-                cache_metrics = _model_cache_metrics_payload(
-                    state=state,
+                usage_observation = _model_usage_payload(
                     node_id=node_id,
                     model_metadata=metadata,
                     usage_metadata=usage_metadata,
@@ -339,28 +285,13 @@ class ModelInvocationOperations:
                         "model_input": input_diagnostics,
                     },
                 )
-                _emit(emit_event, "model_cache_metrics", cache_metrics)
+                _emit(emit_event, "model_usage_completed", usage_observation)
                 _emit_provider_usage_context_window(
                     state=state,
                     services=services,
                     node_id=node_id,
                     response=result,
                     model_role=effective_model_role,
-                )
-                _finish_trace_span(
-                    state=state,
-                    services=services,
-                    node_id=node_id,
-                    span_id=trace_span_id,
-                    operation="structured_json",
-                    status="completed",
-                    payload={
-                        "attempt": attempt,
-                        "schema_name": output_model.__name__,
-                        "usage_metadata": usage_metadata,
-                        "model_input": input_diagnostics,
-                        "model_cache": cache_metrics,
-                    },
                 )
                 return parsed
             except Exception as exc:
@@ -394,188 +325,7 @@ class ModelInvocationOperations:
                         request_messages=request_messages,
                         tool_count=0,
                     )
-        _finish_trace_span(
-            state=state,
-            services=services,
-            node_id=node_id,
-            span_id=trace_span_id,
-            operation="structured_json",
-            status="failed",
-            payload={"error": str(last_error), "schema_name": output_model.__name__},
-        )
         raise RuntimeError(f"structured model operation failed after {attempts} attempts: {last_error}")
-
-class LegacyRoleModelOperationService(ModelInvocationOperations):
-    """Legacy role-based resolver retained only until Package Runtime deletion."""
-
-    def __init__(
-        self,
-        *,
-        role: ModelRole = "main",
-        model: Any | None = None,
-        settings: Any | None = None,
-        models_by_role: Mapping[str, tuple[Any, Any]] | None = None,
-        require_runtime_profile: bool = False,
-        runtime_profile_overrides: ModelBindingRuntimeOverrides | None = None,
-    ) -> None:
-        self.model_role = role
-        self._model = model
-        self._settings = settings
-        self._models_by_role = dict(models_by_role or {})
-        self._require_runtime_profile = require_runtime_profile
-        self._runtime_profile_overrides = runtime_profile_overrides or ModelBindingRuntimeOverrides()
-
-    @staticmethod
-    def _system_prompt(*, state: Any, prompt_binding: dict[str, Any] | None) -> str:
-        return legacy_system_prompt_from_binding(prompt_binding)
-
-    def _resolve_model(self, role: ModelRole | None = None, *, state: Any | None = None) -> tuple[Any, dict[str, Any]]:
-        requested_role = role or self.model_role
-        if state is not None and (requested_role == "main" or self._require_runtime_profile):
-            override = resolve_runtime_main_chat_model_from_state(
-                state,
-                overrides=self._runtime_profile_overrides,
-            )
-            if override is not None:
-                return self._apply_runtime_reasoning(
-                    override.model,
-                    override.settings,
-                    state,
-                    {
-                        "runtime_model_override": True,
-                        "runtime_model_override_role": requested_role,
-                    },
-                    model_role="main",
-                    requested_model_role=requested_role,
-                )
-        if self._require_runtime_profile:
-            raise RuntimeError("runtime main model profile is not selected")
-        if self._models_by_role:
-            item = self._models_by_role.get(requested_role)
-            resolved_role = requested_role
-            if item is None:
-                item = self._fallback_model_item_for_role(requested_role, state=state)
-                resolved_role = "main"
-            if item is None:
-                raise RuntimeError(f"{requested_role} model is not configured for AgentPackage runtime")
-            model, settings = item
-            return self._apply_runtime_reasoning(
-                model,
-                settings,
-                state,
-                {
-                    "model": "injected",
-                },
-                model_role=resolved_role,
-                requested_model_role=requested_role,
-            )
-        if self._model is not None:
-            if role is not None and role != self.model_role:
-                model, settings = _configured_model_for_role(role)
-                if model is None:
-                    raise RuntimeError(f"{role} model is not configured for AgentPackage runtime")
-                resolved_role = self._model_role_from_settings(settings, default=role)
-                return self._apply_runtime_reasoning(
-                    model,
-                    settings,
-                    state,
-                    {},
-                    model_role=resolved_role,
-                    requested_model_role=role,
-                )
-            return self._apply_runtime_reasoning(
-                self._model,
-                self._settings,
-                state,
-                {"model": "injected"},
-                model_role=self.model_role,
-                requested_model_role=requested_role,
-            )
-        model, settings = _configured_model_for_role(requested_role)
-        if model is None:
-            raise RuntimeError(f"{requested_role} model is not configured for AgentPackage runtime")
-        resolved_role = self._model_role_from_settings(settings, default=requested_role)
-        return self._apply_runtime_reasoning(
-            model,
-            settings,
-            state,
-            {},
-            model_role=resolved_role,
-            requested_model_role=requested_role,
-        )
-
-    @staticmethod
-    def _apply_runtime_reasoning(
-        model: Any,
-        settings: Any,
-        state: Any | None,
-        metadata: dict[str, Any],
-        *,
-        model_role: ModelRole,
-        requested_model_role: ModelRole | None = None,
-    ) -> tuple[Any, dict[str, Any]]:
-        if state is not None:
-            if settings is None:
-                _, settings = _configured_model_for_role(model_role)
-            if settings is None:
-                raise RuntimeError(f"{model_role} model settings are not configured")
-            model, settings = resolve_runtime_reasoning_model(model, settings, state)
-        requested_role = requested_model_role or model_role
-        result = {
-            **metadata,
-            **(settings.metadata() if hasattr(settings, "metadata") else {}),
-            "model_role": model_role,
-            "requested_model_role": requested_role,
-        }
-        if requested_role != model_role:
-            result["model_role_fallback"] = model_role
-        return model, result
-
-    @staticmethod
-    def _model_role_from_settings(settings: Any, *, default: ModelRole) -> ModelRole:
-        configured_role = getattr(settings, "role", None)
-        if configured_role in {"main", "task", "compression"}:
-            return configured_role
-        return default
-
-    def _fallback_model_item_for_role(self, role: ModelRole, *, state: Any | None = None) -> tuple[Any, Any] | None:
-        if role != "task":
-            return None
-        item = self._models_by_role.get("main")
-        if item is not None:
-            return item
-        if state is not None:
-            override = resolve_runtime_main_chat_model_from_state(
-                state,
-                overrides=self._runtime_profile_overrides,
-            )
-            if override is not None:
-                return override.model, override.settings
-        model, settings = _configured_model_for_role("main")
-        if model is None:
-            return None
-        return model, settings
-
-    def model_for_role(self, role: str | None = None) -> Any | None:
-        requested_role = role if role in {"main", "task", "compression"} else self.model_role
-        try:
-            model, _metadata = self._resolve_model(requested_role)  # type: ignore[arg-type]
-        except RuntimeError:
-            return None
-        return model
-
-    def context_limits_for_role(
-        self,
-        role: str | None = None,
-        *,
-        state: Any | None = None,
-    ) -> dict[str, int | None]:
-        requested_role = role if role in {"main", "task", "compression"} else self.model_role
-        _model, metadata = self._resolve_model(requested_role, state=state)  # type: ignore[arg-type]
-        return {
-            "max_input_tokens": metadata.get("max_input_tokens"),
-            "compression_trigger_tokens": metadata.get("compression_trigger_tokens"),
-        }
 
 
 class ModelOperationService(ModelInvocationOperations):
@@ -588,9 +338,7 @@ class ModelOperationService(ModelInvocationOperations):
         self._registry = registry
 
     @staticmethod
-    def _system_prompt(*, state: Any, prompt_binding: dict[str, Any] | None) -> str:
-        if prompt_binding:
-            raise RuntimeError("fixed runtime model operations do not accept prompt bindings")
+    def _system_prompt(*, state: Any) -> str:
         runtime_config = getattr(state, "runtime_config", None)
         system_prompt = str(getattr(runtime_config, "system_prompt", "") or "").strip()
         if not system_prompt:
@@ -775,9 +523,8 @@ def _emit_model_message_completed(emit_event, *, stream_id: str, response: Any) 
     )
 
 
-def _model_cache_metrics_payload(
+def _model_usage_payload(
     *,
-    state: Any,
     node_id: str | None,
     model_metadata: dict[str, Any],
     usage_metadata: dict[str, Any],
@@ -786,82 +533,22 @@ def _model_cache_metrics_payload(
     normalized_usage = normalize_usage_metadata(usage_metadata)
     input_tokens = normalized_usage.input_tokens
     output_tokens = normalized_usage.output_tokens
-    cached_input_tokens = normalized_usage.cache_hit_tokens
-    hit_ratio = None
-    if input_tokens and cached_input_tokens is not None:
-        hit_ratio = round(float(cached_input_tokens) / float(input_tokens), 6)
     return {
-        "version": "runtime_model_cache_metrics.v0",
-        "node_id": node_id,
-        "agent_id": str(getattr(getattr(state, "run", None), "agent_id", "") or ""),
-        "session_id": str(getattr(getattr(state, "run", None), "session_id", "") or ""),
-        "run_id": str(getattr(getattr(state, "run", None), "run_id", "") or ""),
-        "pattern_id": str(getattr(getattr(state, "run", None), "pattern_id", "") or ""),
-        "model_role": model_metadata.get("model_role"),
-        "model": model_metadata.get("model"),
-        "provider": model_metadata.get("provider"),
-        "provider_display_name": model_metadata.get("provider_display_name"),
+        "version": "runtime_model_usage_observation.v1",
+        "node_id": str(node_id or "model"),
+        "model_operation": model_metadata.get("model_operation"),
         "model_profile_id": model_metadata.get("model_profile_id"),
-        "model_source": model_metadata.get("model_source"),
-        "provider_cache": {
-            "available": cached_input_tokens is not None,
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "cached_input_tokens": cached_input_tokens,
-            "cache_miss_tokens": normalized_usage.cache_miss_tokens,
-            "reasoning_tokens": normalized_usage.reasoning_tokens,
-            "total_tokens": normalized_usage.total_tokens,
-            "hit_ratio": hit_ratio,
-            "source": "normalized_provider_usage" if cached_input_tokens is not None else None,
-        },
+        "model_profile_revision": model_metadata.get("model_profile_revision"),
+        "provider": model_metadata.get("provider"),
+        "model_name": model_metadata.get("model"),
+        "input_tokens": int(input_tokens or 0),
+        "output_tokens": int(output_tokens or 0),
+        "total_tokens": int(normalized_usage.total_tokens or 0),
+        "reasoning_tokens": int(normalized_usage.reasoning_tokens or 0),
+        "cache_read_tokens": int(normalized_usage.cache_hit_tokens or 0),
+        "cache_write_tokens": int(normalized_usage.cache_write_tokens or 0),
         "model_input": input_diagnostics,
     }
-
-
-def _start_trace_span(
-    *,
-    state: Any,
-    services: Any | None,
-    node_id: str | None,
-    operation: str,
-    payload: dict[str, Any],
-) -> str | None:
-    recorder = getattr(services, "trace_recorder", None) if services is not None else None
-    if recorder is None or state is None:
-        return None
-    return recorder.start_span(
-        trace_id=state.observability.trace_id,
-        run_id=state.run.run_id,
-        span_kind="model.call",
-        name=operation,
-        node_id=node_id,
-        payload=payload,
-    )
-
-
-def _finish_trace_span(
-    *,
-    state: Any,
-    services: Any | None,
-    node_id: str | None,
-    span_id: str | None,
-    operation: str,
-    status: str,
-    payload: dict[str, Any],
-) -> None:
-    recorder = getattr(services, "trace_recorder", None) if services is not None else None
-    if recorder is None or state is None or span_id is None:
-        return
-    recorder.finish_span(
-        trace_id=state.observability.trace_id,
-        run_id=state.run.run_id,
-        span_id=span_id,
-        span_kind="model.call",
-        name=operation,
-        status=status,
-        node_id=node_id,
-        payload=payload,
-    )
 
 
 def _structured_input_diagnostics(
@@ -875,11 +562,9 @@ def _structured_input_diagnostics(
     else:
         diagnostics = {
             "stable_prefix_digest": "",
-            "knowledge_guidance_digest": "",
             "dynamic_evidence_digest": "",
             "tool_surface_digest": "",
             "stable_system_chars": 0,
-            "knowledge_guidance_chars": 0,
             "dynamic_evidence_chars": 0,
             "history_message_count": _base_message_count(request_messages),
             "tool_count": tool_count,

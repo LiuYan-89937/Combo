@@ -147,16 +147,14 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
 
 
 def _session_key(resources: dict[str, Any]) -> str:
-    runtime_config = resources.get("runtime_execution_config")
-    identity = runtime_config.get("identity") if isinstance(runtime_config, dict) else None
+    identity = resources.get("runtime_identity")
     values = identity if isinstance(identity, dict) else {}
-    agent_id = _optional_text(values.get("agent_id")) or "agent"
-    session_id = _optional_text(values.get("session_id"))
-    workspace_id = _optional_text(values.get("workspace_id"))
-    scope_id = session_id or workspace_id
-    if not scope_id:
-        raise RuntimeError("browser tools require an active Agent session identity")
-    return f"{agent_id}:{scope_id}"
+    runtime_instance_id = _optional_text(values.get("runtime_instance_id"))
+    attempt_id = _optional_text(values.get("attempt_id"))
+    generation = values.get("generation")
+    if not runtime_instance_id or not attempt_id or not isinstance(generation, int):
+        raise RuntimeError("browser tools require an owned runtime attempt identity")
+    return f"{generation}:{runtime_instance_id}:{attempt_id}"
 
 
 def _target(arguments: dict[str, Any]) -> dict[str, Any]:

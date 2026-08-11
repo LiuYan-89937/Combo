@@ -9,7 +9,7 @@ import sqlite3
 import threading
 from typing import Any, Literal
 
-from agent_factory.sqlite_runtime import connect_sqlite, sqlite_session
+from agent_factory.sqlite_runtime import connect_sqlite
 
 
 LangGraphCheckpointerBackend = Literal["sqlite", "memory"]
@@ -108,59 +108,6 @@ def delete_sqlite_checkpoint_thread(checkpoint_path: Path, thread_id: str) -> bo
     with closing(connect_sqlite(path, check_same_thread=False)) as connection:
         saver = sqlite_saver(connection)
         return delete_checkpoint_thread(saver, normalized_thread_id)
-
-
-def migrate_legacy_instance_checkpoints(checkpoint_path: Path) -> int:
-    """Merge pre-package-scope checkpoint databases into one package store.
-
-    Older runtimes created one database below ``instances/<hash>`` for each
-    session bridge. The migration is additive and idempotent: source databases
-    remain untouched and existing package-store rows win on key conflicts.
-    """
-
-    target = checkpoint_path.expanduser().resolve()
-    legacy_root = target.parent / "instances"
-    sources = sorted(
-        path.resolve()
-        for path in legacy_root.glob(f"*/{target.name}")
-        if path.is_file() and path.resolve() != target
-    )
-    if not sources:
-        return 0
-    sqlite_saver = importlib.import_module("langgraph.checkpoint.sqlite").SqliteSaver
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with closing(connect_sqlite(target, check_same_thread=False)) as connection:
-        saver = sqlite_saver(connection)
-        setup = getattr(saver, "setup", None)
-        if callable(setup):
-            setup()
-    migrated = 0
-    with sqlite_session(target, timeout_ms=30000) as conn:
-        for index, source in enumerate(sources):
-            alias = f"legacy_{index}"
-            conn.execute(f"attach database ? as {alias}", (str(source),))
-            try:
-                tables = {
-                    str(row[0])
-                    for row in conn.execute(
-                        f"select name from {alias}.sqlite_master where type = 'table'"
-                    ).fetchall()
-                }
-                if "checkpoints" in tables:
-                    before = conn.total_changes
-                    conn.execute(
-                        f"insert or ignore into main.checkpoints select * from {alias}.checkpoints"
-                    )
-                    migrated += conn.total_changes - before
-                if "writes" in tables:
-                    conn.execute(f"insert or ignore into main.writes select * from {alias}.writes")
-                conn.commit()
-            except Exception:
-                conn.rollback()
-                raise
-            finally:
-                conn.execute(f"detach database {alias}")
-    return migrated
 
 
 def close_shared_sqlite_checkpointers(*, under_root: Path | None = None) -> None:

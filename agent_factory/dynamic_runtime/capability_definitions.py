@@ -17,6 +17,14 @@ CapabilityPlatform = Literal["any", "macos-arm64", "windows-x86_64", "linux-x86_
 ToolApprovalAction = Literal["inherit", "allow", "ask", "deny"]
 ToolRiskLevel = Literal["low", "medium", "high"]
 ToolEffect = Literal["read", "write", "delete", "process", "network", "credential", "external_side_effect"]
+RuntimeResourceName = Literal[
+    "filesystem",
+    "process_runtime",
+    "runtime_identity",
+    "browser_runtime",
+    "knowledge_runtime",
+    "scheduler_runtime",
+]
 
 
 class SkillContentRef(FrozenProtocolModel):
@@ -135,6 +143,7 @@ class ToolDefinition(FrozenProtocolModel):
     implementation: ToolImplementation
     runtime_policy: ToolRuntimePolicy = Field(default_factory=ToolRuntimePolicy)
     resource_bindings: tuple[ToolResourceBinding, ...] = ()
+    runtime_resources: tuple[RuntimeResourceName, ...] = ()
     effects: tuple[ToolEffect, ...]
     read_only: bool = False
     system_available: bool = False
@@ -158,7 +167,7 @@ class ToolDefinition(FrozenProtocolModel):
     def _description_is_present(cls, value: str) -> str:
         return _required_text(value, "tool model_description")
 
-    @field_validator("effects", "required_input_modalities", "output_modalities", "platforms")
+    @field_validator("effects", "runtime_resources", "required_input_modalities", "output_modalities", "platforms")
     @classmethod
     def _tuple_values_are_unique(cls, values: tuple[str, ...], info: object) -> tuple[str, ...]:
         if not values:

@@ -1,6 +1,6 @@
 import { requestJson, withQuery } from './http'
 
-export type ModelUsageGroupBy = 'model' | 'provider' | 'agent'
+export type ModelUsageGroupBy = 'model' | 'provider' | 'runtime_role' | 'strategy' | 'workspace' | 'session'
 export interface ModelPoolDefaults {
   context_window_tokens: number
   compression_trigger_tokens: number
@@ -147,21 +147,21 @@ export interface ModelUsageTotals {
   output_tokens: number
   total_tokens: number
   reasoning_tokens: number
-  cache_hit_tokens: number
-  cache_miss_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
   cache_hit_ratio: number | null
-  estimated_cost: number | null
 }
 
 export interface ModelUsageGroup {
   key: string
   label: string
   provider: string
-  provider_display_name: string
   model_name: string
   model_profile_id: string
-  agent_id: string
-  agent_label: string
+  runtime_role: string
+  strategy: string
+  workspace_id: string
+  session_id: string
   totals: ModelUsageTotals
 }
 

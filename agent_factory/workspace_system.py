@@ -24,7 +24,7 @@ class WorkspaceRecord(BaseModel):
     title: str
     mode: WorkspaceMode = "isolated"
     root_kind: WorkspaceRootKind = "managed"
-    owner_package_id: str | None = None
+    principal_id: str
     workdir_root: str
     mounts: list[WorkspaceMountRecord] = Field(default_factory=list)
     archived: bool = False
@@ -43,7 +43,7 @@ class WorkspaceStore:
         title: str | None = None,
         mode: WorkspaceMode = "isolated",
         root_kind: WorkspaceRootKind = "managed",
-        owner_package_id: str | None = None,
+        principal_id: str,
         workspace_id: str | None = None,
         workdir_root: Path | None = None,
     ) -> WorkspaceRecord:
@@ -64,7 +64,7 @@ class WorkspaceStore:
             title=str(title or "").strip() or "新工作区",
             mode=mode,
             root_kind=root_kind,
-            owner_package_id=str(owner_package_id or "").strip() or None,
+            principal_id=_identifier(principal_id),
             workdir_root=str(resolved_workdir),
             created_at=now,
             updated_at=now,

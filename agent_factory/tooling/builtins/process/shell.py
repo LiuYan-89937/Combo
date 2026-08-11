@@ -20,8 +20,6 @@ from agent_factory.tooling.execution_context import (
     current_tool_call,
     current_tool_event_sink,
 )
-from agent_factory.tooling.executor_fallback import executor_fallback_risk
-from agent_factory.tooling.risk import merge_risk_results
 from agent_factory.tooling.spec import ToolRiskResult
 
 
@@ -66,9 +64,7 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
         reasons=reasons,
         facts=facts,
     )
-    fallback_risk = executor_fallback_risk(arguments, context)
-    risks = [command_risk, *([fallback_risk] if fallback_risk is not None else [])]
-    return merge_risk_results(risks, base_risk_level="high").model_dump(mode="json")
+    return command_risk.model_dump(mode="json")
 
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:

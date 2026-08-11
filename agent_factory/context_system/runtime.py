@@ -271,82 +271,6 @@ class ContextSystemRuntime:
             injection_report=injection_report,
         )
 
-    def prepare_factory_values(
-        self,
-        *,
-        stage_id: str,
-        values: dict[str, Any],
-        services: Any = None,
-    ) -> dict[str, Any]:
-        if not self.config.enabled:
-            return values
-        query = ContextQuery(
-            node_id=stage_id,
-            impl="factory.model_call",
-            user_input=str(values.get("user_input") or values.get("requirement") or ""),
-            text=_factory_query_text(stage_id=stage_id, values=values),
-        )
-        policy = self.config.default_policy
-        candidates, retrieval_report = self._retrieve(
-            query=query,
-            policy=policy,
-            runtime_context=ContextSourceRuntime(
-                services=services,
-                factory_values=values,
-            ),
-        )
-        frame = assemble_context_frame(
-            node_id=stage_id,
-            query=query,
-            candidates=candidates,
-            policy=policy.assembly_policy(),
-        )
-        retrieval_report.selected_count = len(frame.items)
-        retrieval_report.token_estimate = frame.token_estimate
-        injection_report = ContextInjectionReport(
-            status="completed" if frame.text else "skipped",
-            node_id=stage_id,
-            item_count=len(frame.items),
-            token_estimate=frame.token_estimate,
-        )
-        event_sink = getattr(services, "context_event_sink", None)
-        emit_context_event(
-            services=services,
-            state=None,
-            event_type="context_retrieval_completed",
-            node_id=stage_id,
-            payload=retrieval_report.model_dump(mode="json"),
-            event_sink=event_sink,
-        )
-        emit_context_event(
-            services=services,
-            state=None,
-            event_type="context_assembly_completed",
-            node_id=stage_id,
-            payload=injection_report.model_dump(mode="json"),
-            event_sink=event_sink,
-        )
-        emit_context_event(
-            services=services,
-            state=None,
-            event_type="context_injection_completed",
-            node_id=stage_id,
-            payload=injection_report.model_dump(mode="json"),
-            event_sink=event_sink,
-        )
-        if not frame.text:
-            return values
-        return {
-            **values,
-            "context_frame": frame.model_dump(mode="json"),
-            "factory_operating_context": (
-                str(values.get("factory_operating_context") or "")
-                + "\n\n"
-                + frame.text
-                + "\nUse this context only when it is directly relevant."
-            ).strip(),
-        }
-
     def _retrieve(
         self,
         *,
@@ -481,7 +405,6 @@ def _state_with_turn_evidence(*, state: Any, node_id: str, frame: LLMContextFram
     }
     return updated
 
-
 def _effective_context_token_count(
     *,
     state: Any,
@@ -518,12 +441,3 @@ def _state_with_compressed_token_budget(
         "effective_context_source": compression_report.token_count_method or "compression_estimate",
     }
     return updated
-
-
-def _factory_query_text(*, stage_id: str, values: dict[str, Any]) -> str:
-    chunks = [stage_id]
-    for key in ("user_input", "requirement", "requirement_brief", "refined_requirement", "messages"):
-        value = values.get(key)
-        if value:
-            chunks.append(str(value))
-    return "\n".join(chunks)

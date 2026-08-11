@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import os
 from pathlib import Path
+from collections.abc import Callable
 from typing import Mapping
 
 from agent_factory.dynamic_runtime.capability_adapters import CapabilityAdapterRegistry
@@ -58,6 +59,7 @@ from agent_factory.dynamic_runtime.runtime_start import RuntimeStartStore
 from agent_factory.dynamic_runtime.resume import ResumeInterruptCommandHandler
 from agent_factory.dynamic_runtime.services import DynamicRuntimeServiceSet, DynamicRuntimeServicesFactory
 from agent_factory.model_pool.store import ModelPoolStore
+from agent_factory.model_pool.usage import ModelUsageStore
 from agent_factory.runtime_protocol import ApplicationGeneration
 from agent_factory.runtime_protocol.versioning import RUNTIME_PROTOCOL_VERSION, RUNTIME_SCHEMA_VERSION
 
@@ -90,6 +92,7 @@ class DynamicRuntimeStores:
     runtime_instances: RuntimeInstanceStore
     runtime_events: RuntimeEventStore
     tool_calls: ToolCallStore
+    model_usage: ModelUsageStore
     outbox: OutboxStore
     execution_commits: RuntimeExecutionCommitStore
     runtime_starts: RuntimeStartStore
@@ -134,9 +137,9 @@ class DynamicRuntimeApplication:
         cls,
         *,
         config: DynamicRuntimeApplicationConfig,
-        services_factory: DynamicRuntimeServicesFactory,
+        services_factory: DynamicRuntimeServicesFactory | Callable[[DynamicRuntimeStores], DynamicRuntimeServicesFactory],
         model_pool_store: ModelPoolStore,
-        launch_context_resolver: RuntimeLaunchContextResolver,
+        launch_context_resolver: RuntimeLaunchContextResolver | Callable[[DynamicRuntimeStores], RuntimeLaunchContextResolver],
         migration_registry: DynamicRuntimeMigrationRegistry | None = None,
     ) -> "DynamicRuntimeApplication":
         database = DynamicRuntimeDatabase(config.database_path)
@@ -147,7 +150,8 @@ class DynamicRuntimeApplication:
         generation = _starting_generation(config, stores.generations.next_generation_number())
         stores.generations.acquire(generation)
         try:
-            service_set = services_factory.build()
+            configured_services = services_factory(stores) if callable(services_factory) else services_factory
+            service_set = configured_services.build()
             model_resolver = RuntimeModelResolver(model_pool_store)
             adapters = CapabilityAdapterRegistry.build(default_capability_adapters())
             resolution_config = config.capability_resolution
@@ -176,7 +180,11 @@ class DynamicRuntimeApplication:
                 execution_commits=stores.execution_commits,
                 run_controls=stores.run_controls,
                 model_resolver=model_resolver,
-                launch_context_resolver=launch_context_resolver,
+                launch_context_resolver=(
+                    launch_context_resolver(stores)
+                    if callable(launch_context_resolver)
+                    else launch_context_resolver
+                ),
             )
             recovery_report = RuntimeRecoveryService(database).reconcile(
                 current_generation=generation.generation,
@@ -292,6 +300,7 @@ def _stores(database: DynamicRuntimeDatabase) -> DynamicRuntimeStores:
         runtime_instances=RuntimeInstanceStore(database),
         runtime_events=RuntimeEventStore(database),
         tool_calls=ToolCallStore(database),
+        model_usage=ModelUsageStore(database),
         outbox=OutboxStore(database),
         execution_commits=RuntimeExecutionCommitStore(database),
         runtime_starts=RuntimeStartStore(database),

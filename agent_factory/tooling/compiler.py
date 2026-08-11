@@ -1,25 +1,17 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
-from threading import RLock
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any, Callable, Mapping
 
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel
 
-from agent_factory.models import get_compression_model
-from agent_factory.tooling.entrypoint import ToolEntrypointLoader
-from agent_factory.tooling.entrypoints import EntrypointAdapterRegistry, MCPToolClient
 from agent_factory.tooling.execution_context import current_tool_call
-from agent_factory.tooling.approval_policy import ToolApprovalPolicyConfig, default_tool_approval_policy
-from agent_factory.tooling.envelope import is_tool_envelope, tool_envelope
+from agent_factory.tooling.approval_policy import ToolApprovalPolicyConfig
 from agent_factory.tooling.gateway import (
-    DEFAULT_TOOL_APPROVAL_TRUST_STORE,
     ToolApprovalHandler,
     ToolApprovalTrustResolver,
     ToolExecutionGateway,
-    default_tool_max_revisions,
 )
 from agent_factory.resource_system import RESOURCE_RESOLVER_KEY
 from agent_factory.tooling.output_store import (
@@ -28,8 +20,6 @@ from agent_factory.tooling.output_store import (
     ToolOutputStore,
     default_tool_output_policy,
 )
-from agent_factory.tooling.package_tool_spec import is_package_tool_entrypoint
-from agent_factory.tooling.risk import ToolRiskEvaluator
 from agent_factory.tooling.schema_compiler import compile_json_schema
 from agent_factory.tooling.spec import ToolSpec
 
@@ -42,61 +32,30 @@ class ToolCompiler:
     def __init__(
         self,
         *,
-        package_root: str | Path | None = None,
         resources: Mapping[str, Any] | None = None,
         approval_handler: ToolApprovalHandler | None = None,
-        approval_policy: ToolApprovalPolicyConfig | None = None,
-        max_revisions: int | None = None,
-        entrypoint_loader: ToolEntrypointLoader | None = None,
-        allowed_python_roots: list[str | Path] | None = None,
-        adapter_registry: EntrypointAdapterRegistry | None = None,
-        mcp_clients: Mapping[str, MCPToolClient] | None = None,
+        approval_policy: ToolApprovalPolicyConfig,
+        max_revisions: int,
         output_policy: ToolOutputPolicy | None = None,
-        compression_model_resolver: Callable[[], Any] | None = get_compression_model,
-        approval_trust_store: ToolApprovalTrustResolver | None = DEFAULT_TOOL_APPROVAL_TRUST_STORE,
+        compression_model_resolver: Callable[[], Any] | None = None,
+        approval_trust_store: ToolApprovalTrustResolver | None = None,
     ) -> None:
-        self.package_root = Path(package_root).resolve() if package_root else None
-        self.loader = entrypoint_loader or ToolEntrypointLoader(
-            package_root=package_root,
-            allowed_python_roots=allowed_python_roots,
-            adapter_registry=adapter_registry,
-            mcp_clients=mcp_clients,
-        )
+        if max_revisions < 1:
+            raise ValueError("max_revisions must be positive")
         self.resources = resources or {}
         self.approval_handler = approval_handler
-        self.approval_policy = approval_policy or default_tool_approval_policy()
-        self.max_revisions = max_revisions or default_tool_max_revisions()
+        self.approval_policy = approval_policy
+        self.max_revisions = max_revisions
         self.output_store = _output_store_from_resources(self.resources)
         self.output_policy = output_policy or default_tool_output_policy()
         self.compression_model_resolver = compression_model_resolver
         self.approval_trust_store = approval_trust_store
-
-    def compile(self, spec: ToolSpec) -> BaseTool:
-        try:
-            entrypoint = (
-                _lazy_package_entrypoint(spec, self.loader)
-                if _is_package_tool_spec(spec)
-                else self.loader.load(spec.entrypoint)
-            )
-            entrypoint = _entrypoint_for_spec(spec, entrypoint)
-            hard_risk_evaluator = self._load_hard_risk_evaluator(spec)
-            llm_risk_prompt = self._load_llm_risk_prompt(spec)
-        except Exception as exc:
-            raise ToolCompileError(f"cannot compile tool {spec.id}: {exc}") from exc
-        return self.compile_resolved(
-            spec,
-            entrypoint=entrypoint,
-            hard_risk_evaluator=hard_risk_evaluator,
-            llm_risk_prompt=llm_risk_prompt,
-        )
 
     def compile_resolved(
         self,
         spec: ToolSpec,
         *,
         entrypoint: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]],
-        hard_risk_evaluator: ToolRiskEvaluator | None = None,
-        llm_risk_prompt: str | None = None,
     ) -> BaseTool:
         """Compile an already materialized entrypoint without consulting a registry or filesystem."""
         if not callable(entrypoint):
@@ -113,8 +72,8 @@ class ToolCompiler:
             entrypoint=entrypoint,
             global_resources=self.resources,
             resource_resolver=self.resources.get(RESOURCE_RESOLVER_KEY),
-            hard_risk_evaluator=hard_risk_evaluator,
-            llm_risk_prompt=llm_risk_prompt,
+            hard_risk_evaluator=None,
+            llm_risk_prompt=None,
             approval_handler=self.approval_handler,
             approval_policy=self.approval_policy,
             max_revisions=self.max_revisions,
@@ -170,36 +129,6 @@ class ToolCompiler:
                 ensure_ascii=False,
             ),
         )
-
-    def compile_many(self, specs: Iterable[ToolSpec]) -> list[BaseTool]:
-        return [self.compile(spec) for spec in specs]
-
-    def _load_hard_risk_evaluator(self, spec: ToolSpec) -> ToolRiskEvaluator | None:
-        if not spec.risk_evaluator.hard:
-            return None
-        value = spec.risk_evaluator.hard
-        try:
-            return self.loader.load_risk_evaluator(value)
-        except Exception as exc:
-            raise ValueError(f"risk_evaluator.hard invalid entrypoint {value!r}: {exc}") from exc
-
-    def _load_llm_risk_prompt(self, spec: ToolSpec) -> str | None:
-        value = spec.risk_evaluator.llm
-        if not value:
-            return None
-        if self.package_root is None:
-            return value
-        candidate = (self.package_root / value).resolve()
-        try:
-            candidate.relative_to(self.package_root)
-        except ValueError as exc:
-            raise ToolCompileError(f"llm risk prompt escapes package root: {value}") from exc
-        if candidate.is_file():
-            return candidate.read_text(encoding="utf-8")
-        if value.endswith(".md"):
-            raise ToolCompileError(f"llm risk prompt file does not exist: {value}")
-        return value
-
 
 def _normalize_tool_arguments(value: Any) -> Any:
     if isinstance(value, BaseModel):
@@ -268,41 +197,3 @@ def _schema_accepts_null(schema: dict[str, Any]) -> bool:
 def _output_store_from_resources(resources: Mapping[str, Any]) -> ToolOutputStore | None:
     value = resources.get(TOOL_OUTPUT_STORE_RESOURCE)
     return value if isinstance(value, ToolOutputStore) else None
-
-
-def _entrypoint_for_spec(spec: ToolSpec, entrypoint):
-    if not _is_package_tool_spec(spec):
-        return entrypoint
-
-    def invoke(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
-        output = entrypoint(arguments=arguments, resources=resources)
-        if is_tool_envelope(output):
-            return output
-        if isinstance(output, dict):
-            return tool_envelope(
-                output,
-                evidence={"package_tool_output": {"wrapped_raw_output": True}},
-                summary=f"Package tool {spec.id} completed.",
-            )
-        return output
-
-    return invoke
-
-
-def _is_package_tool_spec(spec: ToolSpec) -> bool:
-    return spec.permission_scope == "package" and is_package_tool_entrypoint(spec.id, spec.entrypoint)
-
-
-def _lazy_package_entrypoint(spec: ToolSpec, loader: ToolEntrypointLoader):
-    cached_entrypoint = None
-    load_lock = RLock()
-
-    def invoke(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
-        nonlocal cached_entrypoint
-        if cached_entrypoint is None:
-            with load_lock:
-                if cached_entrypoint is None:
-                    cached_entrypoint = loader.load(spec.entrypoint)
-        return cached_entrypoint(arguments=arguments, resources=resources)
-
-    return invoke

@@ -9,7 +9,7 @@ import sqlite3
 from agent_factory.sqlite_runtime import DEFAULT_SQLITE_BUSY_TIMEOUT_MS, connect_sqlite
 
 
-DYNAMIC_RUNTIME_DATABASE_SCHEMA = "dynamic_runtime_database.v8"
+DYNAMIC_RUNTIME_DATABASE_SCHEMA = "dynamic_runtime_database.v9"
 
 
 @dataclass(frozen=True, slots=True)
@@ -653,6 +653,46 @@ def _default_migrations() -> tuple[MigrationStep, ...]:
                 """,
             ),
         ),
+        MigrationStep(
+            version=9,
+            name="runtime_model_usage_ledger",
+            statements=(
+                """
+                create table runtime_model_usage (
+                  usage_id text primary key,
+                  observation_event_id text not null unique,
+                  principal_id text not null references principals(principal_id),
+                  request_id text not null,
+                  runtime_instance_id text not null references runtime_instances(runtime_instance_id),
+                  attempt_id text not null,
+                  session_id text not null references conversations(session_id),
+                  turn_id text not null references conversation_turns(turn_id),
+                  workspace_id text not null references workspaces(workspace_id),
+                  task_revision integer not null check (task_revision >= 1),
+                  runtime_role text not null check (runtime_role in ('main','temporary')),
+                  strategy text not null check (strategy in ('react','plan_and_execute')),
+                  node_id text not null,
+                  model_operation text not null check (model_operation in ('main_turn','temporary_turn')),
+                  model_profile_id text not null,
+                  model_profile_revision integer not null check (model_profile_revision >= 1),
+                  provider text not null,
+                  model_name text not null,
+                  input_tokens integer not null check (input_tokens >= 0),
+                  output_tokens integer not null check (output_tokens >= 0),
+                  total_tokens integer not null check (total_tokens >= 0),
+                  reasoning_tokens integer not null check (reasoning_tokens >= 0),
+                  cache_read_tokens integer not null check (cache_read_tokens >= 0),
+                  cache_write_tokens integer not null check (cache_write_tokens >= 0),
+                  payload_json text not null,
+                  created_at text not null
+                )
+                """,
+                "create index idx_runtime_model_usage_created on runtime_model_usage(created_at)",
+                "create index idx_runtime_model_usage_profile on runtime_model_usage(model_profile_id, created_at)",
+                "create index idx_runtime_model_usage_runtime on runtime_model_usage(runtime_instance_id, created_at)",
+                "create index idx_runtime_model_usage_workspace on runtime_model_usage(workspace_id, created_at)",
+            ),
+        ),
     )
 
 
@@ -704,4 +744,9 @@ def _schema_allowlist() -> set[tuple[str, str]]:
         ("table", "capability_approval_grants"),
         ("index", "idx_capability_approval_active_scope"),
         ("index", "idx_capability_approval_lookup"),
+        ("table", "runtime_model_usage"),
+        ("index", "idx_runtime_model_usage_created"),
+        ("index", "idx_runtime_model_usage_profile"),
+        ("index", "idx_runtime_model_usage_runtime"),
+        ("index", "idx_runtime_model_usage_workspace"),
     }

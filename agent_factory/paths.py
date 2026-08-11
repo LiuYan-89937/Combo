@@ -5,7 +5,6 @@ from pathlib import Path
 
 
 PROJECT_ROOT_ENV = "AGENTFACTORY_PROJECT_ROOT"
-SYSTEM_PACKAGE_ROOT_ENV = "AGENTFACTORY_SYSTEM_PACKAGE_ROOT"
 
 
 def project_root() -> Path:
@@ -32,10 +31,3 @@ def factory_artifact_root() -> Path:
 
 def factory_artifact_path(*parts: str) -> Path:
     return factory_artifact_root().joinpath(*parts)
-
-
-def system_package_root() -> Path:
-    configured = os.getenv(SYSTEM_PACKAGE_ROOT_ENV)
-    if configured:
-        return resolve_project_path(configured).resolve()
-    return project_root() / "SystemPackage"

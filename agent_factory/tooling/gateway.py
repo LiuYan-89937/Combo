@@ -13,7 +13,6 @@ from agent_factory.tooling.execution_context import (
     current_tool_approval_override,
     current_tool_call,
     current_tool_event_sink,
-    current_tool_runtime_resource_overrides,
     current_runtime_run_control,
     execute_with_runtime_cancellation,
 )
@@ -42,7 +41,7 @@ from agent_factory.tooling.risk import ToolRiskEvaluator, call_llm_risk_evaluato
 from agent_factory.tooling.schema_compiler import CompiledJsonSchema
 from agent_factory.tooling.spec import ToolObservation, ToolRiskContext, ToolRiskResult, ToolSpec
 from agent_factory.tooling.envelope import unpack_tool_envelope
-from agent_factory.tooling.runtime_resources import merge_runtime_resource, resolve_resource_selector
+from agent_factory.tooling.runtime_resources import resolve_resource_selector
 
 
 ToolApprovalAction = Literal["approve", "deny", "revise"]
@@ -440,22 +439,7 @@ class ToolExecutionGateway:
                 if message.startswith("resource_required:") or "not declared by package" in message:
                     raise KeyError(message) from exc
                 raise
-        base_missing = False
-        try:
-            base = resolve_resource_selector(self.global_resources, selector)
-        except KeyError:
-            base = None
-            base_missing = True
-        overrides = current_tool_runtime_resource_overrides()
-        try:
-            override = resolve_resource_selector(overrides, selector)
-        except KeyError:
-            if base_missing:
-                raise KeyError(selector)
-            return base
-        if base_missing:
-            return override
-        return merge_runtime_resource(base, override)
+        return resolve_resource_selector(self.global_resources, selector)
 
     def _emit_execution_started(
         self,

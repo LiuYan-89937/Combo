@@ -14,11 +14,13 @@ from agent_factory.dynamic_runtime.persistence_helpers import (
     insert_message,
 )
 from agent_factory.dynamic_runtime.repositories import utc_now_text
+from agent_factory.model_pool.usage import insert_runtime_model_usage
 from agent_factory.runtime_protocol import (
     ConversationMessage,
     ConversationTurn,
     RuntimeErrorEnvelope,
     RuntimeInstance,
+    RuntimeModelUsage,
     ToolCallRecord,
 )
 from agent_factory.runtime_protocol.events import RuntimeEventPayload
@@ -116,6 +118,7 @@ class RuntimeExecutionCommitStore:
         event_payload: RuntimeEventPayload | dict[str, Any],
         messages: Iterable[ConversationMessage] = (),
         tool_calls: Iterable[ToolCallRecord] = (),
+        model_usage: Iterable[RuntimeModelUsage] = (),
         error: RuntimeErrorEnvelope | None = None,
     ) -> RuntimeInstance:
         if status not in {"waiting_approval", "waiting_external", "completed", "failed", "cancelled"}:
@@ -168,6 +171,9 @@ class RuntimeExecutionCommitStore:
                 insert_message(conn, message)
             for tool_call in tool_calls:
                 _upsert_tool_call(conn, tool_call, current=current, now=now)
+            for usage in model_usage:
+                _validate_model_usage_owner(usage, current)
+                insert_runtime_model_usage(conn, usage)
 
             _replace_instance_row(
                 conn,
@@ -204,6 +210,34 @@ def _load_instance(conn: Any, runtime_instance_id: str) -> RuntimeInstance:
     if row is None:
         raise LookupError(f"runtime instance not found: {runtime_instance_id}")
     return RuntimeInstance.model_validate_json(str(row["payload_json"]))
+
+
+def _validate_model_usage_owner(usage: RuntimeModelUsage, instance: RuntimeInstance) -> None:
+    request = instance.request
+    if (
+        usage.principal_id,
+        usage.request_id,
+        usage.runtime_instance_id,
+        usage.attempt_id,
+        usage.session_id,
+        usage.turn_id,
+        usage.workspace_id,
+        usage.task_revision,
+        usage.runtime_role,
+        usage.strategy,
+    ) != (
+        request.principal_id,
+        request.request_id,
+        instance.runtime_instance_id,
+        instance.attempt_id,
+        request.session_id,
+        request.turn_id,
+        request.workspace_id,
+        request.task_revision,
+        request.runtime_role,
+        request.strategy,
+    ):
+        raise RuntimeError("model usage ownership differs from the committing runtime attempt")
 
 
 def _load_turn(conn: Any, turn_id: str) -> ConversationTurn:

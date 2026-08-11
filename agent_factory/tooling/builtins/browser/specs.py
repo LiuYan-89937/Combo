@@ -16,7 +16,7 @@ _OPEN_PAGE_ID = {
 }
 _RUNTIME_RESOURCES = {
     "browser_runtime": BROWSER_RUNTIME_RESOURCE,
-    "runtime_execution_config": "runtime_execution_config",
+    "runtime_identity": "runtime_identity",
     "filesystem": "filesystem",
 }
 _TARGET = {

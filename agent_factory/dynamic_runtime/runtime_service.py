@@ -38,6 +38,7 @@ from agent_factory.runtime_protocol import (
     ConversationMessage,
     RuntimeErrorEnvelope,
     RuntimeInstance,
+    RuntimeModelUsage,
     ToolCallPart,
     ToolCallRecord,
     ToolResultPart,
@@ -268,6 +269,7 @@ class DynamicRuntimeService:
                         instance=claimed_instance,
                         waiting_status=status,
                     ),
+                    model_usage=_model_usage_records(claimed_instance, state.observability.events),
                     error=error,
                 )
             except RuntimeCancellationRequested:
@@ -305,6 +307,7 @@ class DynamicRuntimeService:
                         instance=claimed_instance,
                         waiting_status=status,
                     ),
+                    model_usage=_model_usage_records(claimed_instance, state.observability.events),
                     error=error,
                 )
             return RuntimeExecutionResult(
@@ -528,6 +531,70 @@ def _tool_call_records(
                 else:
                     record["error_code"] = part.error_code
     return tuple(ToolCallRecord.model_validate(record) for record in records.values())
+
+
+def _model_usage_records(
+    instance: RuntimeInstance,
+    observations: list[dict[str, Any]],
+) -> tuple[RuntimeModelUsage, ...]:
+    if instance.attempt_id is None:
+        raise RuntimeError("runtime model usage requires a claimed attempt identity")
+    request = instance.request
+    frozen_model = request.policy_snapshot.model
+    records: list[RuntimeModelUsage] = []
+    for observation in observations:
+        if str(observation.get("event_type") or "") != "model_usage_completed":
+            continue
+        payload = observation.get("payload")
+        if not isinstance(payload, dict):
+            raise RuntimeError("model usage observation payload must be an object")
+        if str(payload.get("version") or "") != "runtime_model_usage_observation.v1":
+            raise RuntimeError("model usage observation uses an unsupported schema")
+        observed_model = (
+            str(payload.get("model_operation") or ""),
+            str(payload.get("model_profile_id") or ""),
+            int(payload.get("model_profile_revision") or 0),
+            str(payload.get("provider") or ""),
+            str(payload.get("model_name") or ""),
+        )
+        frozen_identity = (
+            frozen_model.operation,
+            frozen_model.profile_id,
+            frozen_model.profile_revision,
+            frozen_model.provider,
+            frozen_model.model_name,
+        )
+        if observed_model != frozen_identity:
+            raise RuntimeError("model usage observation differs from the frozen model selection")
+        records.append(
+            RuntimeModelUsage(
+                observation_event_id=str(observation.get("event_id") or ""),
+                principal_id=request.principal_id,
+                request_id=request.request_id,
+                runtime_instance_id=instance.runtime_instance_id,
+                attempt_id=instance.attempt_id,
+                session_id=request.session_id,
+                turn_id=request.turn_id,
+                workspace_id=request.workspace_id,
+                task_revision=request.task_revision,
+                runtime_role=request.runtime_role,
+                strategy=request.strategy,
+                node_id=str(payload.get("node_id") or ""),
+                model_operation=frozen_model.operation,
+                model_profile_id=frozen_model.profile_id,
+                model_profile_revision=frozen_model.profile_revision,
+                provider=frozen_model.provider,
+                model_name=frozen_model.model_name,
+                input_tokens=int(payload.get("input_tokens") or 0),
+                output_tokens=int(payload.get("output_tokens") or 0),
+                total_tokens=int(payload.get("total_tokens") or 0),
+                reasoning_tokens=int(payload.get("reasoning_tokens") or 0),
+                cache_read_tokens=int(payload.get("cache_read_tokens") or 0),
+                cache_write_tokens=int(payload.get("cache_write_tokens") or 0),
+                created_at=str(observation.get("created_at") or ""),
+            )
+        )
+    return tuple(records)
 
 
 def _event_payload(

@@ -36,7 +36,6 @@ class CognitiveAnswerNode:
         visible_tools = _visible_tools(context, state)
         result = model_operation_service.tool_bound_chat(
             state=state,
-            prompt_binding=None,
             messages=context.graph_messages,
             tools=visible_tools,
             emit_event=context.emit_event,

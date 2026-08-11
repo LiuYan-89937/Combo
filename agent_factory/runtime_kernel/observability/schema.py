@@ -10,12 +10,7 @@ from agent_factory.event_persistence import EventPersistence, event_persistence
 
 
 class RuntimeObservationEvent(BaseModel):
-    """Runtime-local observation event.
-
-    This is not the durable trace fact schema. Runtime observations feed
-    in-process state and UI events; durable causality is written by
-    agent_factory.trace_system.
-    """
+    """Runtime-local observation projected into the owning runtime event stream."""
 
     model_config = ConfigDict(extra="forbid")
 

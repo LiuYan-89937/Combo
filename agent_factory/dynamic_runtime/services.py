@@ -41,13 +41,9 @@ class DynamicRuntimeServicesFactory:
         memory_store: Any,
         context_system: Any,
         context_engine: Any,
-        memory_system: Any | None = None,
-        knowledge_runtime: Any | None = None,
         artifact_store: Any | None = None,
         scheduler_store: Any | None = None,
         scheduler_runtime: Any | None = None,
-        trace_recorder: Any | None = None,
-        trace_reader: Any | None = None,
         runtime_resources: dict[str, Any] | None = None,
         tool_runtime_resources: dict[str, Any] | None = None,
     ) -> None:
@@ -59,13 +55,9 @@ class DynamicRuntimeServicesFactory:
         self._memory_store = _required_dependency(memory_store, "memory_store")
         self._context_system = _required_dependency(context_system, "context_system")
         self._context_engine = _required_dependency(context_engine, "context_engine")
-        self._memory_system = memory_system
-        self._knowledge_runtime = knowledge_runtime
         self._artifact_store = artifact_store
         self._scheduler_store = scheduler_store
         self._scheduler_runtime = scheduler_runtime
-        self._trace_recorder = trace_recorder
-        self._trace_reader = trace_reader
         self._runtime_resources = dict(runtime_resources or {})
         self._tool_runtime_resources = dict(tool_runtime_resources or {})
 
@@ -76,8 +68,6 @@ class DynamicRuntimeServicesFactory:
             model_operation_service=ModelOperationService(model_handles),
             tool_registry=scoped_tool_registry,
             memory_store=self._memory_store,
-            memory_system=self._memory_system,
-            knowledge_runtime=self._knowledge_runtime,
             context_system=self._context_system,
             context_engine=self._context_engine,
             observability_manager=ObservabilityManager(),
@@ -85,8 +75,6 @@ class DynamicRuntimeServicesFactory:
             scheduler_store=self._scheduler_store,
             scheduler_runtime=self._scheduler_runtime,
             artifact_store=self._artifact_store,
-            trace_recorder=self._trace_recorder,
-            trace_reader=self._trace_reader,
             runtime_resources=self._runtime_resources,
             tool_runtime_resources=self._tool_runtime_resources,
         )

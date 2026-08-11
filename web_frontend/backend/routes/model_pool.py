@@ -28,7 +28,7 @@ from agent_factory.model_pool.schema import (
 from agent_factory.model_pool.store import ModelPoolRevisionConflict, ModelPoolStoreError
 
 
-def create_model_pool_router() -> APIRouter:
+def create_model_pool_router(*, usage_store: ModelUsageStore) -> APIRouter:
     router = APIRouter(prefix="/api/model-pool")
 
     @router.get("/providers")
@@ -114,9 +114,9 @@ def create_model_pool_router() -> APIRouter:
     @router.get("/usage")
     async def usage_summary(group_by: str = "model", days: int = 14):
         value = group_by.strip().lower()
-        if value not in {"model", "provider", "agent"}:
+        if value not in {"model", "provider", "runtime_role", "strategy", "workspace", "session"}:
             raise HTTPException(status_code=400, detail="unsupported usage group_by")
-        return ModelUsageStore().summary(group_by=value, days=days)
+        return usage_store.summary(group_by=value, days=days)
 
     @router.post("/profiles")
     def create_profile(payload: dict[str, Any]):

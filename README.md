@@ -1,198 +1,53 @@
 # FastAgentFactory
 
-本地优先、跨平台的 AI Agent 制造与运行工作台。
+本地优先、跨平台的动态 Agent 运行时桌面应用。
 
-FastAgentFactory 将模型配置、Agent 制造与进化、会话工作区、工具审批、MCP、Skill、知识库、长期记忆、定时任务和多 Agent 协作整合在一个桌面应用中。安装包内置 Python 后端与运行依赖，日常使用不要求单独安装 Python、Node.js 或 Docker。
+FastAgentFactory 以一条统一主对话链为产品入口。每次请求都从模型、工具、资源和依赖四个能力池冻结不可变快照，再由固定的 React 或 Plan-and-Execute 图执行。系统不再制造、发布或运行独立 Agent 包，也不通过可变全局注册表决定一次运行的能力边界。
+
+> 当前仓库正在完成动态运行时重构。旧 AgentPackage、制造、进化、群聊和 Package 分发链已移除；能力控制面、记忆、知识库和调度链仍以 `docs/DYNAMIC_AGENT_RUNTIME_REFACTOR.md` 为验收依据。
+
+## 核心模型
+
+- 一条主对话链：用户始终与主 Agent 交互。
+- 两张固定执行图：React 负责快速执行，Plan-and-Execute 负责显式计划与步骤推进。
+- 四个能力池：模型、工具、资源和依赖分别发布、验证、激活和撤销。
+- 不可变运行快照：请求开始后，能力版本、模型策略和运行身份不再随控制面变化。
+- 动态运行身份：以 principal、request、runtime instance、attempt、session、turn、workspace 和 task revision 表达归属。
+- 单一工作区边界：文件、进程、浏览器、调度任务和可恢复状态都绑定到工作区或运行实例。
+- 统一观测账本：事件、提交记录和模型用量使用动态运行时身份，不保留 Agent 或 Package 维度。
 
 ## 安装
 
 ### macOS
 
-1. 在 Apple Silicon（M 系列）Mac 上下载 `aarch64` `.dmg`。
-2. 打开镜像，将 FastAgentFactory 拖入 `Applications`。
-3. 启动应用。当前不提供 Intel Mac 安装包。
+在 Apple Silicon Mac 上下载 `aarch64` `.dmg`，打开镜像后将 FastAgentFactory 拖入 `Applications`。当前不提供 Intel Mac 安装包。
 
 ### Windows
 
-1. 下载 Windows x64 的 NSIS `.exe` 安装程序。
-2. 完成安装并启动 FastAgentFactory。
+下载 Windows x64 的 NSIS `.exe` 安装程序。正式构建目标为 `x86_64-pc-windows-msvc`，不是原生 ARM64 发行版。
 
-当前 Windows 正式构建目标为 `x86_64-pc-windows-msvc`。Windows ARM64 设备只有在系统支持 x64 应用仿真时才能运行该安装包；它不是原生 ARM64 发行版。
+桌面安装包包含前端、Python 后端和基础运行依赖。只有用户发布的能力明确依赖外部命令时，才需要在主机上另行准备对应运行环境。
 
-安装包已经包含前端、Python 后端和基础运行依赖。只有在添加需要 `npx`、`uvx` 或其他本地命令的 MCP 时，才需要自行安装对应命令。
+## 使用入口
 
-## 首次使用
+### 模型与凭据
 
-### 1. 添加模型
+进入「模型与凭据」后：
 
-打开「模型池」，依次完成：
+1. 创建供应商凭据，配置 Base URL 和 API Key。
+2. 创建模型 Profile，声明模型名称、输入模态、工具调用和结构化输出能力。
+3. 完成连接验证并启用 Profile。
+4. 在主对话中选择主模型和执行策略。
 
-1. 添加供应商凭证，填写 Base URL 和 API Key。
-2. 添加模型 Profile，填写模型名并选择工具调用、结构化输出、推理和输入模态等能力。
-3. 点击「测试连接」确认模型可用。
-4. 回到对话输入框选择模型。
+模型调用只使用请求开始时冻结的 Profile 快照。模型用量在供应商返回真实 usage 后写入运行事务账本。
 
-应用不再从 `.env` 读取主模型配置。没有可用文本模型时，输入框不会提供虚假的“默认模型”，而是提示先到模型池添加模型。
+### 统一对话
 
-上下文窗口以当前模型 Profile 为准；未填写时默认 `256K`，压缩阈值未填写时默认 `200K`。请求无响应超时默认 `300` 秒，模型输出、工具或节点产生有效进展后会重新计时；节点最大重试次数默认 `5` 次，均可在右上角设置中调整。
+新建或打开会话，选择运行策略与审批模式后发送消息。`auto` 策略由主运行时在 React 和 Plan-and-Execute 之间路由；显式策略则固定使用相应执行图。
 
-### 2. 开始闲聊
+每次请求都会生成新的 runtime instance 和 attempt，并记录对应的 task revision。控制面在请求执行期间发生的发布、激活或撤销不会改变该请求已经冻结的能力集合。
 
-「闲聊」是内置的系统 Agent，使用方式与其他 Agent 一致，但在侧边栏保留独立入口。
-
-你可以：
-
-- 直接发送文本问题。
-- 上传文档、图片或文本附件。
-- 让 Agent 使用工作区读写文件。
-- 查看推理内容、工具调用和审批状态。
-- 在回复过程中继续发送消息，后续消息会进入队列。
-- 在聊天记录中点击附件，直接在对应会话工作区预览。
-
-附件原文件会保存到当前会话工作区；解析出的文本进入模型上下文，图片则可以发送给支持图片输入的模型。
-
-闲聊内置隔离的 Playwright 浏览器，可打开动态网页、读取页面、点击和输入、切换页面、上传或下载工作区文件。浏览器上下文按 Agent 会话隔离，默认禁止访问本机和私有网络地址。`browser_screenshot` 只会提供给模型池中已声明支持图片输入的模型；纯文本模型仍可使用其余浏览器工具。
-
-通过当前打包脚本生成的安装包会包含 Chromium。源码开发环境首次使用前需要执行：
-
-```bash
-uv sync --extra web
-uv run playwright install chromium
-```
-
-### 3. 配置通知
-
-在右上角设置中可以分别控制：
-
-- 对话回复完成
-- 多 Agent 协作完成
-- Agent 群聊任务完成
-- 定时任务完成
-
-应用位于后台时使用 macOS 或 Windows 原生通知；当前任务正在前台显示时不会重复提醒。
-
-## 制造 Agent
-
-进入「Agent 制造」，描述你需要的 Agent。建议同时说明：
-
-- Agent 的用途和目标用户
-- 需要接收的输入
-- 期望输出和文件格式
-- 可以使用的工具、Skill 或知识
-- 必须遵守的限制
-- 可验证的验收标准
-
-制造过程会生成结构化 AgentPackage，并完成工具编译、依赖准备和 probe。Probe 异步运行，可以查看当前阶段、耗时、日志和失败原因，不会长时间占住整个应用。
-
-制造完成后确认发布，即可在「已发布 Agent」中看到新 Agent。
-
-## 运行已发布 Agent
-
-进入「已发布 Agent」，选择目标 Agent 并创建会话。
-
-- 发送第一条消息时会自动初始化 Agent。
-- 也可以提前点击「初始化」预热依赖和运行环境。
-- 每个会话拥有独立工作区、checkpoint、trace 和附件目录。
-- 同一个 Agent 可以创建多个互不混淆的会话。
-- 工具产生的文件会出现在右侧工作区。
-- 工作区文件可以预览、在系统文件管理器中打开或另存为。
-- 删除会话时会停止仍在运行的请求，并清理对应会话工作区和运行记录。
-
-首次初始化可能需要构建 Python wheel 或准备 npm 依赖，因此会比后续启动更慢。相同依赖会进入本地共享依赖池，之后可由其他 Agent 复用。
-
-## 进化 Agent
-
-进入「Agent 进化」，选择已有 AgentPackage 并描述需要改变的行为。
-
-进化适合：
-
-- 增加或替换工具
-- 安装新的 Skill
-- 调整提示词和输出格式
-- 修改依赖
-- 修复已有 Agent 的行为问题
-
-进化会话与普通运行会话分离。修改完成后需要重新验证并发布，已发布版本才会更新。
-
-## 多 Agent 协作
-
-进入「多 Agent 协作」，选择主 Agent 并创建协作任务。
-
-主 Agent 可以：
-
-1. 根据任务选择合适的已发布 Agent。
-2. 拆分带依赖关系的子任务。
-3. 调度子 Agent 执行。
-4. 检查子 Agent 的工作区和交付结果。
-5. 要求修改或继续后续任务。
-6. 汇总最终结果。
-
-协作使用与普通对话相同的模型、工具、依赖和会话运行逻辑。子 Agent 会话仍可单独打开查看。
-
-## Agent 群聊
-
-Agent 群聊适合让多个 Agent 在同一讨论中协作。可以通过 `@` 指定需要回复的 Agent，也可以观察成员任务和运行状态。
-
-群聊成员仍使用各自的 AgentPackage、扩展和运行工作区，不会因为处于同一群聊而合并私有文件。
-
-## 知识库
-
-进入「知识库」添加：
-
-- 单个文件
-- 文件夹
-- URL
-- 文本笔记
-
-系统会根据文件类型完成解析、分块和索引。知识源可以绑定到闲聊或指定 AgentPackage，不同 Agent 不会默认共享私有知识。
-
-## MCP 与 Skill
-
-进入「扩展管理」配置扩展。
-
-### 添加 MCP
-
-支持三种连接方式：
-
-- `stdio`：本地命令，例如 `npx`、`uvx` 或自有可执行文件。
-- `streamable_http`：远程 Streamable HTTP MCP。
-- `sse`：远程 SSE MCP。
-
-应用不预装搜索 MCP，也不会启动 SearXNG 或 Docker 容器。你可以导入 MCP JSON，并在原始配置基础上继续编辑。添加前建议先执行连接测试。
-
-MCP Header 和环境变量保存在本机扩展配置中，不要提交或分享包含真实 Token 的配置。
-
-### 安装本地 Skill
-
-点击安装 Skill，直接从文件系统选择 Skill 文件夹。启用后的 Skill 会绑定到当前目标 Agent。
-
-已装配 Skill 的名称会进入 Agent 系统提示词，Skill 正文仍按需加载，避免无条件占用上下文。
-
-### 使用 SkillHUB
-
-后端启动后会在后台检查并准备 SkillHUB CLI，不阻塞应用初始化。自动准备失败不会影响其他功能，错误会写入后端日志；此时可以在扩展管理中查看状态并重试。
-
-通过 SkillHUB 安装的 Skill 只写入当前目标 Agent 的扩展目录。
-
-## 定时任务
-
-进入「定时任务」可以创建：
-
-- Agent 对话任务
-- 脚本任务
-- 工具调用任务
-
-支持 Cron、固定间隔和指定时间。任务使用保存时的目标和运行配置，并继承全局请求超时与最大重试设置。任务结束后可以发送应用内或系统通知。
-
-## 会话与上下文
-
-- 模型用量只在供应商返回真实 usage 后更新，不使用请求前的不完整本地估算覆盖前端显示。
-- 达到当前模型的压缩阈值后，系统先压缩历史上下文，再继续处理排队消息。
-- 压缩不会改变原始聊天记录的展示顺序。
-- 工具调用、工具结果和回复正文会按实际发生顺序恢复，不会在刷新后全部堆到最后一条消息下。
-- 中途切换输入框模型只影响下一次发起的请求，不会修改已经运行中的模型调用。
-
-## 数据、工作区与日志
+## 数据与工作区
 
 用户数据默认位于：
 
@@ -204,35 +59,31 @@ Windows:
 %LOCALAPPDATA%\com.fastagentfactory.app\.agentfactory\
 ```
 
-后端日志：
+后端日志位于：
 
 ```text
 <应用数据目录>/.agentfactory/logs/backend.log
 ```
 
-重新安装或升级应用不会主动覆盖已有模型配置、Agent 包、会话和工作区。只有主动清理应用数据或手动删除上述目录时，这些内容才会消失。
+重新安装或升级应用不会主动删除已有会话、运行记录、模型配置或工作区。主动清理应用数据前应先备份需要保留的内容。
 
-如果出现 `Failed to fetch`、后端初始化超时或发布失败，优先查看 `backend.log` 中对应时间的完整异常。
-
-## 应用更新
-
-桌面应用在本地后端初始化完成后，每次启动异步检查一次正式版本更新。没有新版本
-或检查网络暂时不可用时不会打断启动；发现新版本后会展示版本号和更新日志，由用户
-选择是否下载。更新包下载完成并通过 Tauri 签名校验后，应用会先关闭本地 Python
-后端，再安装并重启。
-
-## 架构简介
+## 架构
 
 ```text
 Tauri 桌面应用
-├── Vue 3 前端
-├── Rust 桌面进程：单实例、后端生命周期、原生通知与文件操作
-└── Python FastAPI + Agent Runtime：模型、工具、会话、工作区与扩展
+├── Vue 3：统一对话与控制面
+├── Rust：单实例、后端生命周期、原生通知与文件操作
+└── Python FastAPI
+    ├── Dynamic Runtime：身份、策略、快照、执行与提交
+    ├── Runtime Kernel：固定 React / Plan-and-Execute 图
+    ├── Capability Stores：模型、工具、资源与依赖
+    ├── Workspace Runtime：文件、进程和浏览器资源
+    └── Model Pool：凭据、Profile 与调用适配
 ```
 
-应用启动时由 Rust 进程分配动态本地端口并启动 Python 后端，前端等待 `/health` 就绪后再连接 SSE 事件流。应用退出时会终止对应后端进程树。
+Rust 进程启动 Python 后端并分配动态本地端口，前端等待 `/health` 就绪后连接事件流。应用退出时终止其负责的后端进程树。
 
-桌面版不依赖 Docker。Agent 使用本地子进程、独立工作区、环境锁和共享依赖池进行逻辑隔离。该机制不等同于虚拟机或内核级安全沙箱，不应在未受控主机上运行来源不明的高风险代码。
+工作区与子进程隔离是应用级逻辑边界，不等同于虚拟机或内核级安全沙箱。高风险工具和外部能力仍需遵守审批、租约和网络出口策略。
 
 ## 本地开发
 
@@ -252,7 +103,7 @@ uv sync --extra web
 npm --prefix web_frontend/frontend ci
 ```
 
-Web 开发需要分别运行后端和前端：
+分别启动 Web 后端和前端：
 
 ```bash
 uv run --extra web python web_frontend/backend/event_api_server.py
@@ -262,7 +113,7 @@ uv run --extra web python web_frontend/backend/event_api_server.py
 npm --prefix web_frontend/frontend run dev
 ```
 
-Tauri 开发：
+启动 Tauri 开发环境：
 
 ```bash
 cd src-tauri
@@ -277,59 +128,39 @@ cargo tauri dev
 ./scripts/package_macos.sh
 ```
 
-产物：
-
-```text
-src-tauri/target/release/bundle/dmg/FastAgentFactory_<version>_<arch>.dmg
-src-tauri/target/release/bundle/macos/FastAgentFactory_<version>_<arch>.app.tar.gz
-src-tauri/target/release/bundle/macos/FastAgentFactory_<version>_<arch>.app.tar.gz.sig
-```
-
-macOS 脚本默认从
-`~/.fastagentfactory/updater/fastagentfactory.key` 读取 Tauri 更新签名私钥。
-该文件不得提交到 Git，也不能丢失。
+更新签名私钥默认读取自 `~/.fastagentfactory/updater/fastagentfactory.key`。该文件不得提交到仓库，也不能在不同平台构建中使用不一致的密钥。
 
 ### Windows
-
-Windows 构建机需要 Rust、Node.js、Visual Studio 2022 Build Tools、Desktop development with C++ workload、x64 MSVC 工具链和 Windows SDK。
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\package_windows.ps1
 ```
 
-脚本只生成 x64 NSIS `.exe`，不生成 MSI：
-
-```text
-src-tauri\target\x86_64-pc-windows-msvc\release\bundle\nsis\*.exe
-src-tauri\target\x86_64-pc-windows-msvc\release\bundle\nsis\*.exe.sig
-```
-
-Windows 必须使用与 macOS 相同的更新签名私钥。将私钥安全复制到
-`%USERPROFILE%\.fastagentfactory\updater\fastagentfactory.key`，或仅在当前
-PowerShell 进程设置 `TAURI_SIGNING_PRIVATE_KEY`。
-
-完整 Windows 构建日志位于：
-
-```text
-build\logs\windows-package.log
-```
+Windows 脚本生成 x64 NSIS 安装包。完整构建日志位于 `build/logs/windows-package.log`。
 
 ## 目录结构
 
 ```text
 FastAgentFactory/
-├── agent_factory/          Python Agent 运行时
-├── SystemPackage/          内置系统 AgentPackage
+├── agent_factory/          Python 动态运行时与固定执行图
 ├── web_frontend/
-│   ├── backend/            FastAPI 后端
-│   └── frontend/           Vue 前端
-├── src-tauri/              Tauri/Rust 桌面应用
-└── scripts/                桌面安装包构建脚本
+│   ├── backend/            FastAPI 应用装配与 HTTP API
+│   └── frontend/           Vue 统一对话与控制面
+├── src-tauri/              Tauri/Rust 桌面进程
+├── services/agent_hub/     官网、OAuth 与桌面版本发布服务
+├── docs/                   架构和重构规范
+└── scripts/                审计与桌面构建脚本
 ```
+
+`services/agent_hub` 只负责官网、GitHub OAuth、桌面版本、更新日志和安装包分发，不保存或分发运行时能力。
 
 ## 安全提示
 
-- 本地逻辑隔离不等同于安全沙箱。
-- 未知 MCP 和高风险工具应保留人工批准。
-- 不要将模型凭证、MCP Token、应用数据目录或用户工作区提交到 Git。
-- 使用来源不明的 AgentPackage 前，应检查依赖、工具权限、脚本和网络访问范围。
+- 不要将模型凭据、访问令牌、应用数据目录或用户工作区提交到 Git。
+- 外部 MCP、Skill、进程和网络能力必须经过发布校验，并在运行时受快照、租约和审批约束。
+- 本地逻辑隔离不能代替操作系统沙箱。
+- 不可信代码或依赖应在受控环境中检查后再发布为能力。
+
+## 重构规范
+
+动态运行时的身份模型、控制面协议、事务边界和完成门槛见 [`docs/DYNAMIC_AGENT_RUNTIME_REFACTOR.md`](docs/DYNAMIC_AGENT_RUNTIME_REFACTOR.md)。

@@ -19,13 +19,9 @@ class RuntimeServices(BaseModel):
     context_engine: object
     observability_manager: object
     checkpointer: object
-    memory_system: object | None = None
-    knowledge_runtime: object | None = None
     scheduler_store: object | None = None
     scheduler_runtime: object | None = None
     artifact_store: object | None = None
-    trace_recorder: object | None = None
-    trace_reader: object | None = None
     runtime_resources: dict[str, Any] = Field(default_factory=dict)
     tool_runtime_resources: dict[str, Any] = Field(default_factory=dict)
 

@@ -8,7 +8,6 @@ from typing import Any
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
-from agent_factory.knowledge_system.guidance import KNOWLEDGE_GUIDANCE_CONTEXT_KEY
 from agent_factory.models.message_layout import system_messages_first
 from agent_factory.models.temporal_context import current_date_system_context
 from agent_factory.runtime_attachments import (
@@ -25,7 +24,6 @@ from agent_factory.runtime_defaults import (
 from agent_factory.runtime_kernel.tool_governance import tool_governance_prompt
 from agent_factory.tooling.builtins.filesystem.guidance import WRITE_STRATEGY_GUIDANCE
 
-LEGACY_AGENT_SYSTEM_PROMPT = "You are the generated Agent runtime model. Answer the user directly and concisely."
 RUNTIME_REACT_PROTOCOL = (
     "Runtime ReAct protocol: use the conversation history as the source of truth. "
     "When tools are available and useful, call them with the model's native tool_call mechanism only. "
@@ -61,11 +59,9 @@ PLAN_EXECUTE_PROJECTED_HISTORY_NODES = frozenset(
 class ModelInputEnvelope:
     messages: list[Any]
     stable_prefix_digest: str
-    knowledge_guidance_digest: str
     dynamic_evidence_digest: str
     tool_surface_digest: str
     stable_system_chars: int
-    knowledge_guidance_chars: int
     dynamic_evidence_chars: int
     history_message_count: int
     tool_count: int
@@ -75,11 +71,9 @@ class ModelInputEnvelope:
     def diagnostics(self) -> dict[str, Any]:
         return {
             "stable_prefix_digest": self.stable_prefix_digest,
-            "knowledge_guidance_digest": self.knowledge_guidance_digest,
             "dynamic_evidence_digest": self.dynamic_evidence_digest,
             "tool_surface_digest": self.tool_surface_digest,
             "stable_system_chars": self.stable_system_chars,
-            "knowledge_guidance_chars": self.knowledge_guidance_chars,
             "dynamic_evidence_chars": self.dynamic_evidence_chars,
             "history_message_count": self.history_message_count,
             "tool_count": self.tool_count,
@@ -105,14 +99,6 @@ def build_runtime_model_input(
         node_id=node_id,
         image_input_enabled=image_input_enabled,
     )
-
-
-def legacy_system_prompt_from_binding(prompt_binding: dict[str, Any] | None) -> str:
-    """Translate the retired prompt-binding shape at the legacy boundary only."""
-
-    if not isinstance(prompt_binding, dict):
-        return LEGACY_AGENT_SYSTEM_PROMPT
-    return str(prompt_binding.get("template") or "").strip() or LEGACY_AGENT_SYSTEM_PROMPT
     dynamic_evidence = _dynamic_evidence_text(
         state=state,
         node_id=node_id,
@@ -125,18 +111,6 @@ def legacy_system_prompt_from_binding(prompt_binding: dict[str, Any] | None) -> 
             additional_kwargs={"kind": "runtime_temporal_context"},
         ),
     ]
-    knowledge_guidance = _knowledge_guidance_text(state)
-    if knowledge_guidance:
-        system_messages.append(
-            SystemMessage(
-                content=knowledge_guidance,
-                additional_kwargs={
-                    "kind": "runtime_knowledge_guidance",
-                    "source": "knowledge_catalog",
-                    "node_id": node_id or "",
-                },
-            )
-        )
     if dynamic_evidence:
         system_messages.append(
             SystemMessage(
@@ -152,24 +126,15 @@ def legacy_system_prompt_from_binding(prompt_binding: dict[str, Any] | None) -> 
     return ModelInputEnvelope(
         messages=request_messages,
         stable_prefix_digest=_digest_text(stable_system),
-        knowledge_guidance_digest=_digest_text(knowledge_guidance),
         dynamic_evidence_digest=_digest_text(dynamic_evidence),
         tool_surface_digest=_tool_surface_digest(tools),
         stable_system_chars=len(stable_system),
-        knowledge_guidance_chars=len(knowledge_guidance),
         dynamic_evidence_chars=len(dynamic_evidence),
         history_message_count=len(history_messages),
         tool_count=len(tools),
         image_input_enabled=image_input_enabled,
         image_attachment_count=visual_attachment_count,
     )
-
-
-def _knowledge_guidance_text(state: Any) -> str:
-    model_context = getattr(getattr(state, "context", None), "model_context", {}) or {}
-    if not isinstance(model_context, dict):
-        return ""
-    return str(model_context.get(KNOWLEDGE_GUIDANCE_CONTEXT_KEY) or "").strip()
 
 
 def _stable_system_prompt(*, system_prompt: str, state: Any, node_id: str | None = None) -> str:

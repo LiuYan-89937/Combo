@@ -39,8 +39,7 @@
       "resources/README.md": "README.md",
       "../agent_factory": "agent_factory",
       "../web_frontend/backend": "web_frontend/backend",
-      "../web_frontend/frontend/dist": "web_frontend/dist",
-      "../SystemPackage": "SystemPackage"
+      "../web_frontend/frontend/dist": "web_frontend/dist"
     },
     "externalBin": [],
     "macOS": {

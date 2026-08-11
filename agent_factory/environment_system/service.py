@@ -1,340 +1,501 @@
+"""Content-addressed dependency environment preparation service."""
+
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
 import hashlib
 import json
-import platform
-import threading
-from collections.abc import Callable
-from datetime import UTC, datetime
 from pathlib import Path
+import platform
+import subprocess
+import sys
+import sysconfig
+import threading
 from typing import Any
 
-from agent_factory.agent_runtime_bridge.dependencies import load_dependencies_contract
+from agent_factory.runtime_protocol import CapabilityRevisionRef, DependencyEnvironmentRef
 
-from .pool import DependencyPoolError, DependencyPoolResolution
-from .python_requirements import PythonRequirementError, normalize_python_requirements
-from agent_factory.native_runtime.dependency_pool import NativeDependencyPool
-from .versions import DEPENDENCY_POOL_VERSION, ENVIRONMENT_LOCK_VERSION
+from .pool import (
+    DependencyPool,
+    DependencyPoolError,
+    DependencyPoolResolution,
+    _sha256_file,
+    _normalized_values,
+)
+from .python_requirements import (
+    PythonRequirementError,
+    normalize_python_requirements,
+)
+from agent_factory.observed_process import (
+    ObservedProcessCancelled,
+    ObservedProcessInactivityTimeout,
+    run_observed_process,
+)
 
 
-EnvironmentProgress = Callable[[str, dict[str, Any]], None]
+DependencyProgress = Callable[[str, dict[str, Any]], None]
 
 
-class EnvironmentResolutionError(RuntimeError):
-    def __init__(self, status: str, message: str) -> None:
-        super().__init__(message)
-        self.status = status
+@dataclass(frozen=True, slots=True)
+class DependencyRequest:
+    capability_refs: tuple[CapabilityRevisionRef, ...]
+    python_requirements: tuple[str, ...] = ()
+    npm_requirements: tuple[str, ...] = ()
+    required_executables: tuple[str, ...] = ()
+    timeout_seconds: int | None = None
+
+    def __post_init__(self) -> None:
+        if not self.capability_refs:
+            raise ValueError("dependency request requires capability revision references")
+        if any(item.kind != "dependency" for item in self.capability_refs):
+            raise ValueError("dependency request may only contain dependency capabilities")
+        identities = {(item.capability_id, item.revision, item.content_digest) for item in self.capability_refs}
+        if len(identities) != len(self.capability_refs):
+            raise ValueError("dependency request capability references must be unique")
+        if self.timeout_seconds is not None and self.timeout_seconds < 1:
+            raise ValueError("dependency request timeout_seconds must be positive")
 
 
-class EnvironmentResolver:
-    """Resolves AgentPackage dependency declarations into local shared-pool references."""
+@dataclass(frozen=True, slots=True)
+class PreparedDependencyEnvironment:
+    reference: DependencyEnvironmentRef
+    pool: dict[str, Any]
+    required_executables: tuple[str, ...]
+    runtime_compatibility: dict[str, str]
 
-    def __init__(self, pool: NativeDependencyPool | None = None) -> None:
-        self.pool = pool or NativeDependencyPool()
+
+class DependencyPoolService(DependencyPool):
+    """Prepare immutable environments from normalized capability dependencies."""
 
     def ensure(
         self,
-        package_root: str | Path,
+        request: DependencyRequest,
         *,
-        on_progress: EnvironmentProgress | None = None,
+        on_progress: DependencyProgress | None = None,
         cancel_event: threading.Event | None = None,
-    ) -> dict[str, Any]:
-        root = Path(package_root).expanduser().resolve()
-        _notify(on_progress, "checking_contract", package_root=str(root))
-        contract = load_dependencies_contract(root)
-        config = contract.config
-        base_image = str(config.base_image or "local-python").strip()
-        if contract.enabled and config.system_packages:
-            raise EnvironmentResolutionError(
-                "local_system_dependencies_unsupported",
-                "The package contains legacy system_packages metadata that the local runtime cannot materialize. "
-                "Inspect required commands and rewrite the dependency contract with system_binaries.",
-            )
-        if not _has_materializable_dependencies(enabled=contract.enabled, config=config):
-            request = _dependency_request(
-                enabled=contract.enabled,
-                base_image=base_image,
-                base_digest="",
-                architecture=_local_architecture(),
-                config=config,
-            )
-            request_fingerprint = _fingerprint(request)
-            existing = self._read_lock_payload(root)
-            if self._is_reusable_lock(existing, request_fingerprint):
-                _notify(on_progress, "ready", cache_status="lock_hit", dependency_count=0)
-                return existing
-            result = self._write_lock(
-                root,
-                _empty_dependency_lock_payload(
-                    base_image=base_image,
-                    request=request,
-                    request_fingerprint=request_fingerprint,
-                ),
-            )
-            _notify(on_progress, "ready", cache_status="lock_created", dependency_count=0)
-            return result
-        _notify(on_progress, "checking_runtime", runtime="local")
-        architecture = _local_architecture()
-        allowed = set(config.platform_architectures)
-        if allowed and architecture not in allowed:
-            raise EnvironmentResolutionError(
-                "platform_mismatch",
-                f"package requires architectures {sorted(allowed)}, current local architecture is {architecture}",
-            )
-        request = _dependency_request(
-            enabled=contract.enabled,
-            base_image=base_image,
-            base_digest="",
-            architecture=architecture,
-            config=config,
+    ) -> PreparedDependencyEnvironment:
+        compatibility = self._native_runtime_compatibility()
+        normalized_request = {
+            "capability_refs": [
+                item.model_dump(mode="json")
+                for item in sorted(request.capability_refs, key=lambda item: (item.capability_id, item.revision))
+            ],
+            "python_requirements": normalize_python_requirements(list(request.python_requirements)),
+            "npm_requirements": _normalized_values(list(request.npm_requirements)),
+            "required_executables": _normalized_values(list(request.required_executables)),
+            "runtime_compatibility": compatibility,
+        }
+        resolution = self._resolve(
+            python_requirements=normalized_request["python_requirements"],
+            npm_requirements=normalized_request["npm_requirements"],
+            timeout_seconds=request.timeout_seconds,
+            on_progress=on_progress,
+            cancel_event=cancel_event,
         )
-        request_fingerprint = _fingerprint(request)
-        existing = self._read_lock_payload(root)
-        if self._is_reusable_lock(existing, request_fingerprint):
-            _notify(
-                on_progress,
-                "ready",
-                cache_status="lock_hit",
-                dependency_count=_dependency_count(request),
-            )
-            return existing
-        _notify(
-            on_progress,
-            "resolving_dependencies",
-            cache_status="resolving_profile",
-            dependency_count=_dependency_count(request),
+        digest = _fingerprint({"request": normalized_request, "pool": resolution.to_lock_payload()})
+        return PreparedDependencyEnvironment(
+            reference=DependencyEnvironmentRef(
+                environment_id=f"dependency-environment-{digest}",
+                revision=1,
+                content_digest=digest,
+                capability_refs=tuple(normalized_request_ref for normalized_request_ref in sorted(
+                    request.capability_refs,
+                    key=lambda item: (item.capability_id, item.revision, item.content_digest),
+                )),
+            ),
+            pool=resolution.to_lock_payload(),
+            required_executables=tuple(normalized_request["required_executables"]),
+            runtime_compatibility=compatibility,
         )
+
+    def _resolve(
+        self,
+        *,
+        python_requirements: list[str],
+        npm_requirements: list[str],
+        timeout_seconds: int | None,
+        on_progress: DependencyProgress | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> DependencyPoolResolution:
+        """Resolve Python and npm dependencies into the local shared pool."""
+        self.root.mkdir(parents=True, exist_ok=True)
+
         try:
-            resolution = self.pool.resolve_native(
-                python_requirements=request["python_requirements"],
-                npm_requirements=request["npm_requirements"],
-                timeout_seconds=config.install_timeout_seconds,
+            normalized_python_requirements = normalize_python_requirements(python_requirements)
+        except PythonRequirementError as exc:
+            raise DependencyPoolError("unsupported", str(exc)) from exc
+
+        # Local profile request.
+        profile_request = {
+            "runtime_compatibility": self._native_runtime_compatibility(),
+            "python_requirements": normalized_python_requirements,
+            "npm_requirements": _normalized_values(npm_requirements),
+        }
+
+        profile_key = _fingerprint(profile_request)
+
+        _notify(on_progress, "waiting_for_dependency_profile", profile_key=profile_key)
+        with self._profile_lock(profile_key):
+            _notify(on_progress, "checking_dependency_profile", profile_key=profile_key)
+            existing = self._read_profile(profile_key)
+            if existing is not None and self.references_available(existing.to_lock_payload()):
+                _notify(on_progress, "dependency_profile_cache_hit", profile_key=profile_key)
+                return DependencyPoolResolution(
+                    python_entries=existing.python_entries,
+                    system_entries=existing.system_entries,
+                    npm_profile=existing.npm_profile,
+                    profile_key=profile_key,
+                    cache_status="profile_hit",
+                )
+
+            # Resolve Python dependencies using local venv
+            python_entries = self._resolve_python_native(
+                requirements=normalized_python_requirements,
+                timeout_seconds=timeout_seconds,
                 on_progress=on_progress,
                 cancel_event=cancel_event,
             )
-        except DependencyPoolError as exc:
-            raise EnvironmentResolutionError(exc.status, str(exc)) from exc
-        _notify(
-            on_progress,
-            "dependency_profile_ready",
-            cache_status=resolution.cache_status,
-            profile_key=resolution.profile_key,
-            python_artifact_count=len(resolution.python_entries),
-            system_artifact_count=len(resolution.system_entries),
-            npm_profile_ready=resolution.npm_profile is not None,
-        )
-        payload = {
-            "version": ENVIRONMENT_LOCK_VERSION,
-            "status": "ready",
-            "request_fingerprint": request_fingerprint,
-            "image": base_image,
-            "image_digest": "",
-            "platform": _local_platform(),
-            "requirements": request,
-            "pool": resolution.to_lock_payload(),
-            "verified_at": _now(),
+
+            system_entries: list[dict[str, str]] = []
+
+            # NPM resolution using local npm (if available)
+            npm_profile = self._resolve_npm_native(
+                requirements=_normalized_values(npm_requirements),
+                timeout_seconds=timeout_seconds,
+                on_progress=on_progress,
+                cancel_event=cancel_event,
+            )
+
+            resolution = DependencyPoolResolution(
+                python_entries=python_entries,
+                system_entries=system_entries,
+                npm_profile=npm_profile,
+                profile_key=profile_key,
+                cache_status="resolved",
+            )
+
+            with self._exclusive_lock():
+                self._write_profile(profile_key, resolution, request=profile_request)
+
+            _notify(
+                on_progress,
+                "dependency_profile_stored",
+                profile_key=profile_key,
+                python_artifact_count=len(python_entries),
+                npm_profile_ready=npm_profile is not None,
+            )
+            return resolution
+
+    def _native_runtime_compatibility(self) -> dict[str, str]:
+        """Get runtime compatibility info from current Python environment."""
+        # Try to read OS info
+        os_release: dict[str, str] = {}
+        os_release_path = Path("/etc/os-release")
+        if os_release_path.is_file():
+            try:
+                for line in os_release_path.read_text(encoding="utf-8").splitlines():
+                    if "=" in line:
+                        key, value = line.split("=", 1)
+                        os_release[key] = value.strip('"')
+            except Exception:
+                pass
+
+        return {
+            "architecture": platform.machine().lower(),
+            "implementation": platform.python_implementation().lower(),
+            "python_version": platform.python_version(),
+            "python_cache_tag": str(sys.implementation.cache_tag or ""),
+            "python_platform": sysconfig.get_platform(),
+            "libc": ":".join(platform.libc_ver()),
+            "os_id": os_release.get("ID", "").strip('"'),
+            "os_version_id": os_release.get("VERSION_ID", "").strip('"'),
         }
-        result = self._write_lock(root, payload)
-        _notify(
-            on_progress,
-            "ready",
-            cache_status="pool_ready",
-            dependency_count=_dependency_count(request),
-        )
-        return result
 
-    def read_lock(self, package_root: str | Path) -> dict[str, Any]:
-        root = Path(package_root).expanduser().resolve()
-        value = self._read_lock_payload(root)
-        if not self._is_ready_lock(value):
-            raise EnvironmentResolutionError(
-                "environment_lock_invalid",
-                f"package environment lock is missing or incompatible: {environment_lock_path(root)}",
-            )
-        return value
+    def _resolve_python_native(
+        self,
+        *,
+        requirements: list[str],
+        timeout_seconds: int | None,
+        on_progress: DependencyProgress | None,
+        cancel_event: threading.Event | None,
+    ) -> list[dict[str, str]]:
+        """Build Python wheels using a local virtual environment."""
+        if not requirements:
+            return []
 
-    def require_ready(self, package_root: str | Path) -> dict[str, Any]:
-        """Validate the current dependency lock without installing anything."""
-        root = Path(package_root).expanduser().resolve()
-        contract = load_dependencies_contract(root)
-        config = contract.config
-        base_image = str(config.base_image or "local-python").strip()
-        if contract.enabled and config.system_packages:
-            raise EnvironmentResolutionError(
-                "local_system_dependencies_unsupported",
-                "The package contains legacy system_packages metadata that the local runtime cannot materialize. "
-                "Inspect required commands and rewrite the dependency contract with system_binaries.",
-            )
-        if not _has_materializable_dependencies(enabled=contract.enabled, config=config):
-            request = _dependency_request(
-                enabled=contract.enabled,
-                base_image=base_image,
-                base_digest="",
-                architecture=_local_architecture(),
-                config=config,
-            )
-            request_fingerprint = _fingerprint(request)
-            value = self._read_lock_payload(root)
-            return (
-                value
-                if self._is_reusable_lock(value, request_fingerprint)
-                else _empty_dependency_lock_payload(
-                    base_image=base_image,
-                    request=request,
-                    request_fingerprint=request_fingerprint,
-                )
-            )
-        architecture = _local_architecture()
-        allowed = set(config.platform_architectures)
-        if allowed and architecture not in allowed:
-            raise EnvironmentResolutionError(
-                "platform_mismatch",
-                f"package requires architectures {sorted(allowed)}, current local architecture is {architecture}",
-            )
-        request = _dependency_request(
-            enabled=contract.enabled,
-            base_image=base_image,
-            base_digest="",
-            architecture=architecture,
-            config=config,
-        )
-        request_fingerprint = _fingerprint(request)
-        value = self._read_lock_payload(root)
-        if not self._is_reusable_lock(value, request_fingerprint):
-            raise EnvironmentResolutionError(
-                "environment_not_prepared",
-                "package dependencies are not prepared for the current contract; run a successful tool probe "
-                "or dependency preparation before final validation and publish",
-            )
-        return value
-
-    def materialize_lock_without_installation(self, package_root: str | Path) -> dict[str, Any]:
-        """Write a lock only when the dependency contract requires no installation."""
-        root = Path(package_root).expanduser().resolve()
-        contract = load_dependencies_contract(root)
-        if _has_materializable_dependencies(enabled=contract.enabled, config=contract.config):
-            return self.require_ready(root)
-        return self.ensure(root)
-
-    def _is_reusable_lock(self, value: dict[str, Any] | None, request_fingerprint: str) -> bool:
-        return bool(
-            self._is_ready_lock(value)
-            and value.get("request_fingerprint") == request_fingerprint
-            and self.pool.references_available(value.get("pool"))
-        )
-
-    def _is_ready_lock(self, value: dict[str, Any] | None) -> bool:
-        return bool(
-            isinstance(value, dict)
-            and value.get("version") == ENVIRONMENT_LOCK_VERSION
-            and value.get("status") == "ready"
-            and isinstance(value.get("image"), str)
-            and value["image"]
-            and isinstance(value.get("pool"), dict)
-            and value["pool"].get("version") == DEPENDENCY_POOL_VERSION
-            and self.pool.references_available(value["pool"])
-        )
-
-    def _read_lock_payload(self, package_root: Path) -> dict[str, Any] | None:
-        path = environment_lock_path(package_root)
-        if not path.is_file():
-            return None
         try:
-            value = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
+            requirements = normalize_python_requirements(requirements)
+        except PythonRequirementError as exc:
+            raise DependencyPoolError("unsupported", str(exc)) from exc
+
+        pip_cache = self.root / "python" / "download_cache"
+        pip_cache.mkdir(parents=True, exist_ok=True)
+
+        with self._staging_directory() as staging:
+            wheel_output = staging / "wheels"
+            wheel_output.mkdir()
+            wheelhouse = staging / "wheelhouse"
+            wheelhouse.mkdir()
+
+            # Materialize existing wheels as find-links source
+            self._materialize_python_wheelhouse(wheelhouse)
+
+            # Create temporary venv for isolation
+            venv_dir = staging / "venv"
+            _notify(on_progress, "creating_python_build_environment")
+            self._create_venv(
+                venv_dir,
+                timeout_seconds=timeout_seconds,
+                on_progress=on_progress,
+                cancel_event=cancel_event,
+            )
+
+            # Use venv pip to build wheels
+            venv_pip = venv_dir / "bin" / "pip"
+            if not venv_pip.exists():
+                # Windows path
+                venv_pip = venv_dir / "Scripts" / "pip.exe"
+
+            command = [
+                str(venv_pip),
+                "wheel",
+                "--disable-pip-version-check",
+                "--prefer-binary",
+                "--find-links",
+                str(wheelhouse),
+                "--wheel-dir",
+                str(wheel_output),
+                "--cache-dir",
+                str(pip_cache),
+                *requirements,
+            ]
+
+            _notify(
+                on_progress,
+                "building_python_wheels",
+                requirement_count=len(requirements),
+            )
+            try:
+                completed = run_observed_process(
+                    command,
+                    inactivity_timeout_seconds=timeout_seconds,
+                    cancel_event=cancel_event,
+                    on_output=_output_notifier(on_progress, stage="building_python_wheels"),
+                )
+            except ObservedProcessCancelled as exc:
+                raise DependencyPoolError("cancelled", "Python wheel build was cancelled") from exc
+            except ObservedProcessInactivityTimeout as exc:
+                raise DependencyPoolError(
+                    "build_failed",
+                    f"Python wheel build produced no observable progress for {timeout_seconds}s",
+                ) from exc
+            except subprocess.TimeoutExpired as exc:
+                raise DependencyPoolError(
+                    "build_failed",
+                    f"Python wheel build timed out after {timeout_seconds}s",
+                ) from exc
+
+            if completed.returncode != 0:
+                detail = (
+                    completed.stderr or completed.stdout or "wheel build failed"
+                ).strip()
+                raise DependencyPoolError("build_failed", f"wheel build failed: {detail[-4000:]}")
+
+            # Collect wheels
+            wheels = sorted(
+                path for path in wheel_output.iterdir() if path.is_file() and path.suffix == ".whl"
+            )
+            unsupported = sorted(
+                path.name
+                for path in wheel_output.iterdir()
+                if path.is_file() and path.suffix != ".whl"
+            )
+
+            if unsupported:
+                raise DependencyPoolError(
+                    "build_failed",
+                    "Python dependency build returned non-wheel artifacts: " + ", ".join(unsupported),
+                )
+
+            if not wheels:
+                raise DependencyPoolError(
+                    "build_failed", "Python dependency resolution returned no wheel artifacts"
+                )
+
+            _notify(on_progress, "storing_python_wheels", wheel_count=len(wheels))
+            return [self._store_wheel(wheel) for wheel in wheels]
+
+    def _resolve_npm_native(
+        self,
+        *,
+        requirements: list[str],
+        timeout_seconds: int | None,
+        on_progress: DependencyProgress | None,
+        cancel_event: threading.Event | None,
+    ) -> dict[str, str] | None:
+        """Resolve npm dependencies using the local npm executable."""
+        if not requirements:
             return None
-        return value if isinstance(value, dict) else None
 
-    def _write_lock(self, package_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
-        path = environment_lock_path(package_root)
-        temporary = path.with_suffix(".json.tmp")
-        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        temporary.replace(path)
-        return payload
+        from .pool import _assert_installable_requirements
+        _assert_installable_requirements(requirements, ecosystem="npm")
+
+        # Check if npm is available
+        import shutil as sh
+        npm = sh.which("npm")
+        if not npm:
+            raise DependencyPoolError(
+                "build_failed",
+                "npm is not available on this system. Install Node.js to use npm dependencies.",
+            )
+
+        npm_root = self.root / "npm"
+        cache_root = npm_root / "cache"
+        cache_root.mkdir(parents=True, exist_ok=True)
+
+        with self._staging_directory() as staging:
+            project = staging / "project"
+            project.mkdir()
+
+            import json
+            (project / "package.json").write_text(
+                json.dumps({"private": True}, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            command = [
+                npm,
+                "install",
+                "--omit=dev",
+                "--ignore-scripts",
+                "--cache",
+                str(cache_root),
+                "--prefix",
+                str(project),
+                *requirements,
+            ]
+
+            _notify(
+                on_progress,
+                "installing_npm_dependencies",
+                requirement_count=len(requirements),
+            )
+            try:
+                completed = run_observed_process(
+                    command,
+                    inactivity_timeout_seconds=timeout_seconds,
+                    cancel_event=cancel_event,
+                    on_output=_output_notifier(on_progress, stage="installing_npm_dependencies"),
+                )
+            except ObservedProcessCancelled as exc:
+                raise DependencyPoolError("cancelled", "npm dependency installation was cancelled") from exc
+            except ObservedProcessInactivityTimeout as exc:
+                raise DependencyPoolError(
+                    "build_failed",
+                    f"npm install produced no observable progress for {timeout_seconds}s",
+                ) from exc
+            except subprocess.TimeoutExpired as exc:
+                raise DependencyPoolError(
+                    "build_failed", f"npm install timed out after {timeout_seconds}s"
+                ) from exc
+
+            if completed.returncode != 0:
+                detail = (completed.stderr or completed.stdout or "npm install failed").strip()
+                raise DependencyPoolError("build_failed", f"npm install failed: {detail[-4000:]}")
+
+            lock_path = project / "package-lock.json"
+            node_modules = project / "node_modules"
+
+            if not lock_path.is_file() or not node_modules.is_dir():
+                raise DependencyPoolError(
+                    "build_failed",
+                    "npm dependency resolution did not produce a package lock and node_modules",
+                )
+
+            from pathlib import PurePosixPath
+            profile_hash = _sha256_file(lock_path)
+            relative = PurePosixPath("npm") / "profiles" / profile_hash
+            target = self.root / relative
+
+            with self._exclusive_lock():
+                if not target.exists():
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    import shutil as sh
+                    sh.move(str(project), str(target))
+
+            return {"path": relative.as_posix(), "sha256": profile_hash}
+
+    def _create_venv(
+        self,
+        venv_dir: Path,
+        *,
+        timeout_seconds: int | None,
+        on_progress: DependencyProgress | None,
+        cancel_event: threading.Event | None,
+    ) -> None:
+        """Create a temporary virtual environment for isolated pip operations."""
+        command = [sys.executable, "-m", "venv", str(venv_dir)]
+
+        try:
+            completed = run_observed_process(
+                command,
+                inactivity_timeout_seconds=timeout_seconds,
+                cancel_event=cancel_event,
+                on_output=_output_notifier(
+                    on_progress,
+                    stage="creating_python_build_environment",
+                ),
+            )
+        except ObservedProcessCancelled as exc:
+            raise DependencyPoolError("cancelled", "venv creation was cancelled") from exc
+        except ObservedProcessInactivityTimeout as exc:
+            raise DependencyPoolError(
+                "build_failed",
+                f"venv creation produced no observable progress for {timeout_seconds}s",
+            ) from exc
+        except subprocess.TimeoutExpired as exc:
+            raise DependencyPoolError(
+                "build_failed", f"venv creation timed out after {timeout_seconds}s"
+            ) from exc
+
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout or "venv creation failed").strip()
+            raise DependencyPoolError("build_failed", f"venv creation failed: {detail[-4000:]}")
 
 
-def environment_lock_path(package_root: str | Path) -> Path:
-    return Path(package_root).expanduser().resolve() / "environment.lock.json"
-
-
-def _dependency_request(
-    *,
-    enabled: bool,
-    base_image: str,
-    base_digest: str,
-    architecture: str,
-    config: Any,
-) -> dict[str, Any]:
-    try:
-        python_requirements = normalize_python_requirements(config.python_requirements) if enabled else []
-    except PythonRequirementError as exc:
-        raise EnvironmentResolutionError("dependency_declaration_invalid", str(exc)) from exc
-    return {
-        "enabled": bool(enabled),
-        "base_image": base_image,
-        "base_digest": base_digest,
-        "architecture": architecture,
-        "python_requirements": python_requirements,
-        "system_packages": _normalized_values(config.system_packages) if enabled else [],
-        "npm_requirements": _normalized_values(config.npm_requirements) if enabled else [],
-        "system_binaries": _normalized_values(config.system_binaries) if enabled else [],
-        "verification_commands": config.verification_commands if enabled else [],
-        "install_timeout_seconds": config.install_timeout_seconds,
-    }
-
-
-def _normalized_values(values: list[str]) -> list[str]:
-    return sorted({value.strip() for value in values if value and value.strip()})
-
-
-def _has_materializable_dependencies(*, enabled: bool, config: Any) -> bool:
-    return bool(enabled and (config.python_requirements or config.npm_requirements))
-
-
-def _dependency_count(request: dict[str, Any]) -> int:
-    return sum(
-        len(request.get(key) or [])
-        for key in ("python_requirements", "npm_requirements")
-    )
-
-
-def _empty_dependency_lock_payload(
-    *,
-    base_image: str,
-    request: dict[str, Any],
-    request_fingerprint: str,
-) -> dict[str, Any]:
-    return {
-        "version": ENVIRONMENT_LOCK_VERSION,
-        "status": "ready",
-        "request_fingerprint": request_fingerprint,
-        "image": base_image,
-        "image_digest": "",
-        "platform": _local_platform(),
-        "requirements": request,
-        "pool": DependencyPoolResolution([], [], None).to_lock_payload(),
-        "verified_at": _now(),
-    }
-
-
-def _notify(callback: EnvironmentProgress | None, stage: str, **payload: Any) -> None:
+def _notify(
+    callback: DependencyProgress | None,
+    stage: str,
+    **detail: Any,
+) -> None:
     if callback is not None:
-        callback(stage, payload)
+        callback(stage, detail)
+
+
+def _output_notifier(
+    callback: DependencyProgress | None,
+    *,
+    stage: str,
+) -> Callable[[str, str], None] | None:
+    if callback is None:
+        return None
+
+    def notify_output(stream: str, line: str) -> None:
+        message = line.strip()
+        if message:
+            callback(
+                "dependency_process_output",
+                {
+                    "stage": stage,
+                    "stream": stream,
+                    "message": message,
+                },
+            )
+
+    return notify_output
 
 
 def _fingerprint(value: dict[str, Any]) -> str:
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
-
-
-def _local_architecture() -> str:
-    value = platform.machine().strip().lower()
-    return {"aarch64": "arm64", "x86_64": "amd64"}.get(value, value)
-
-
-def _local_platform() -> dict[str, str]:
-    return {"os": platform.system().lower(), "architecture": _local_architecture()}
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()

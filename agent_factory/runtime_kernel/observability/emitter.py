@@ -1,14 +1,12 @@
 from __future__ import annotations
 
+from typing import Any
+
 from agent_factory.runtime_kernel.observability.schema import RuntimeObservationEvent
 
 
 class ObservabilityManager:
-    """In-process runtime observation buffer.
-
-    The manager no longer owns trace spans or trace summaries. Durable trace
-    facts are written by trace_system.TraceRecorder.
-    """
+    """In-process projection of observations emitted by a fixed runtime graph."""
 
     def __init__(self) -> None:
         self.events: list[RuntimeObservationEvent] = []

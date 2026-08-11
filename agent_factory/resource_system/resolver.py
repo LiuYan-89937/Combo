@@ -3,16 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from agent_factory.resource_system.schema import ResourceDescriptor
 from agent_factory.resource_system.store import ResourceStore, ResourceStoreError
-from agent_factory.runtime_contracts.schema import ResourceDescriptor
 
 
 RESOURCE_RESOLVER_KEY = "resource_resolver"
 
 
 @dataclass(frozen=True, slots=True)
-class PackageResourceResolver:
-    package_id: str
+class CapabilityResourceResolver:
     descriptors: dict[str, ResourceDescriptor]
     store: ResourceStore
 
@@ -22,8 +21,8 @@ class PackageResourceResolver:
     def resolve(self, resource_id: str) -> Any:
         descriptor = self.descriptors.get(resource_id)
         if descriptor is None:
-            raise ResourceStoreError(f"resource is not declared by package: {resource_id}")
-        return self.store.resolve(self.package_id, descriptor)
+            raise ResourceStoreError(f"resource is not present in the capability snapshot: {resource_id}")
+        return self.store.resolve(descriptor)
 
     def resolve_selector(self, selector: str) -> Any:
         resource_id, *path = [item for item in selector.split(".") if item]

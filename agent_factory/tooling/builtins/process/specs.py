@@ -87,13 +87,6 @@ PROCESS_TOOL_SPECS: list[ToolSpec] = [
                     "default": 12000,
                     "description": "本次返回的 stdout/stderr 尾部最大字符数。",
                 },
-                "fallback_reason": {
-                    "type": "string",
-                    "description": (
-                        "executor 节点调用时必填：说明为什么当前可用的 package/runtime "
-                        "工具无法完成此计划步骤，必须退回平台 Shell。"
-                    ),
-                },
             },
             "required": ["command"],
             "additionalProperties": False,

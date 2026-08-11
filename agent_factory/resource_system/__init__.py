@@ -1,5 +1,13 @@
+from .resolver import CapabilityResourceResolver, RESOURCE_RESOLVER_KEY
+from .schema import ResourceDescriptor, ResourceIdentity
 from .store import ResourceStore, ResourceStoreError, resource_store_path
-from .resolver import PackageResourceResolver, RESOURCE_RESOLVER_KEY
-from .migration import migrate_package_resources
 
-__all__ = ["PackageResourceResolver", "RESOURCE_RESOLVER_KEY", "ResourceStore", "ResourceStoreError", "migrate_package_resources", "resource_store_path"]
+__all__ = [
+    "CapabilityResourceResolver",
+    "RESOURCE_RESOLVER_KEY",
+    "ResourceDescriptor",
+    "ResourceIdentity",
+    "ResourceStore",
+    "ResourceStoreError",
+    "resource_store_path",
+]

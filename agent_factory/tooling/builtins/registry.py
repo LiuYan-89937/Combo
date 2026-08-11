@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-from agent_factory.tooling.builtins.background_tasks.specs import get_background_tasks_tool_specs
 from agent_factory.tooling.builtins.browser.specs import get_browser_tool_specs
 from agent_factory.tooling.builtins.filesystem.specs import get_filesystem_tool_specs
-from agent_factory.tooling.builtins.knowledge.specs import get_knowledge_tool_specs
 from agent_factory.tooling.builtins.network.specs import get_network_tool_specs
 from agent_factory.tooling.builtins.process.specs import get_process_tool_specs
 from agent_factory.tooling.builtins.resource_set.specs import get_resource_set_tool_specs
-from agent_factory.tooling.builtins.scheduler.specs import get_scheduler_tool_specs
-from agent_factory.tooling.builtins.skillhub.specs import get_skillhub_tool_specs
 from agent_factory.tooling.builtins.tool_output.specs import get_tool_output_tool_specs
 from agent_factory.tooling.spec import ToolSpec
 
@@ -22,12 +18,8 @@ IMPLEMENTED_BUILTIN_TOOL_IDS = {
     "shell",
     "shell_status",
     "shell_stop",
-    "scheduler",
-    "knowledge",
-    "skillhub",
     "tool_output",
     "resource_set",
-    "background_tasks",
     "browser_open",
     "browser_snapshot",
     "browser_click",
@@ -51,12 +43,8 @@ READ_ONLY_SYSTEM_TOOL_IDS = {
     "grep",
     "ls",
     "shell_status",
-    "knowledge",
-    "scheduler",
-    "skillhub",
     "tool_output",
     "resource_set",
-    "background_tasks",
     "browser_snapshot",
     "browser_extract",
     "browser_screenshot",
@@ -69,12 +57,8 @@ def get_builtin_tool_specs() -> list[ToolSpec]:
         *get_filesystem_tool_specs(),
         *get_process_tool_specs(),
         *get_network_tool_specs(),
-        *get_scheduler_tool_specs(),
-        *get_knowledge_tool_specs(),
-        *get_skillhub_tool_specs(),
         *get_tool_output_tool_specs(),
         *get_resource_set_tool_specs(),
-        *get_background_tasks_tool_specs(),
         *get_browser_tool_specs(),
     ]
     return [tool for tool in catalog if tool.id in IMPLEMENTED_BUILTIN_TOOL_IDS]

@@ -37,7 +37,7 @@ from agent_factory.model_pool.schema import (
 from agent_factory.model_pool.providers import list_model_pool_provider_profiles
 from agent_factory.model_pool.selector import ModelPoolSelector
 from agent_factory.model_pool.store import ModelPoolStore
-from agent_factory.model_pool.usage import ModelUsageStore, record_model_usage_frontend_event
+from agent_factory.model_pool.usage import ModelUsageStore
 
 __all__ = [
     "MODEL_POOL_STORE_PATH_ENV",
@@ -74,5 +74,4 @@ __all__ = [
     "resolve_image_generation_binding",
     "resolve_image_generation_model_profile",
     "resolve_model_pool_store_path",
-    "record_model_usage_frontend_event",
 ]

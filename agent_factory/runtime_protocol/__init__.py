@@ -58,6 +58,7 @@ from agent_factory.runtime_protocol.capabilities import (
 )
 from agent_factory.runtime_protocol.admission import AdmissionLease, AdmissionRequest, ModelOperation
 from agent_factory.runtime_protocol.model_stream import ModelStreamNormalizer, NormalizedModelStreamEvent
+from agent_factory.runtime_protocol.model_usage import RuntimeModelUsage
 from agent_factory.runtime_protocol.navigation import DeepLinkResolution, DeepLinkResolver
 from agent_factory.runtime_protocol.state_machines import InvalidStateTransition, require_transition
 from agent_factory.runtime_protocol.commands import (
@@ -139,6 +140,7 @@ __all__ = [
     "ModelOperation",
     "ModelStreamNormalizer",
     "NormalizedModelStreamEvent",
+    "RuntimeModelUsage",
     "DeepLinkResolution",
     "DeepLinkResolver",
     "InvalidStateTransition",

@@ -279,7 +279,7 @@ def _compile_tool(
     runtime_instance: RuntimeInstance,
     maximum_argument_revisions: int,
 ):
-    expected_resources = tuple(item.name for item in definition.resource_bindings)
+    expected_resources = (*definition.runtime_resources, *(item.name for item in definition.resource_bindings))
     if set(resources) != set(expected_resources):
         raise ValueError("materialized Tool resources differ from the immutable resource bindings")
     spec = ToolSpec(

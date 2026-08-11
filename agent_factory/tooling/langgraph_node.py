@@ -26,7 +26,6 @@ from agent_factory.tooling.gateway import (
     parse_approval_decision,
 )
 from agent_factory.tooling.redaction import redact_json_pointer_paths
-from agent_factory.tooling.runtime_resources import runtime_resource_overrides_from_state
 
 ToolEventCallback = Callable[[dict[str, Any]], None]
 
@@ -152,7 +151,6 @@ class AgentFactoryToolNode:
                 tool_call_id=tool_call_id,
                 origin_node_id=self.origin_node_id,
                 origin_impl=self.origin_impl,
-                runtime_resource_overrides=runtime_resource_overrides_from_state(state),
             ):
                 request = approval_request(dict(call.get("args") or {}), tool_call_id=tool_call_id)
             if isinstance(request, dict):
@@ -213,7 +211,6 @@ class AgentFactoryToolNode:
             origin_node_id=self.origin_node_id,
             origin_impl=self.origin_impl,
             event_sink=self._emit,
-            runtime_resource_overrides=runtime_resource_overrides_from_state(request.state),
         ):
             result = execute(request)
         if isinstance(result, ToolMessage):

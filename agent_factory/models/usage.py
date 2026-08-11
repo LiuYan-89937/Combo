@@ -12,6 +12,7 @@ class NormalizedModelUsage:
     reasoning_tokens: int | None = None
     cache_hit_tokens: int | None = None
     cache_miss_tokens: int | None = None
+    cache_write_tokens: int | None = None
 
     def model_payload(self) -> dict[str, int | None]:
         return {
@@ -21,6 +22,7 @@ class NormalizedModelUsage:
             "reasoning_tokens": self.reasoning_tokens,
             "cache_hit_tokens": self.cache_hit_tokens,
             "cache_miss_tokens": self.cache_miss_tokens,
+            "cache_write_tokens": self.cache_write_tokens,
         }
 
 
@@ -33,11 +35,18 @@ def normalize_usage_metadata(usage: Any) -> NormalizedModelUsage:
     total_tokens = _first_int(usage, "total_tokens")
     cache_hit_tokens = _first_int(usage, "prompt_cache_hit_tokens", "cache_hit_tokens")
     cache_miss_tokens = _first_int(usage, "prompt_cache_miss_tokens", "cache_miss_tokens")
+    cache_write_tokens = _first_int(usage, "prompt_cache_write_tokens", "cache_write_tokens")
 
     input_details = _first_dict(usage, "input_token_details", "prompt_tokens_details")
     if input_details:
         cache_hit_tokens = cache_hit_tokens or _first_int(input_details, "cache_read", "cached_tokens")
         cache_miss_tokens = cache_miss_tokens or _first_int(input_details, "cache_miss", "uncached_tokens")
+        cache_write_tokens = cache_write_tokens or _first_int(
+            input_details,
+            "cache_creation",
+            "cache_write",
+            "cache_creation_input_tokens",
+        )
 
     output_details = _first_dict(usage, "output_token_details", "completion_tokens_details")
     reasoning_tokens = _first_int(usage, "reasoning_tokens")
@@ -54,6 +63,7 @@ def normalize_usage_metadata(usage: Any) -> NormalizedModelUsage:
         reasoning_tokens=reasoning_tokens,
         cache_hit_tokens=cache_hit_tokens,
         cache_miss_tokens=cache_miss_tokens,
+        cache_write_tokens=cache_write_tokens,
     )
 
 

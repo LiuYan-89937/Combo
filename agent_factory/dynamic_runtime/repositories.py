@@ -43,6 +43,29 @@ class ConversationIdentity:
     status: str
 
 
+@dataclass(frozen=True, slots=True)
+class ConversationSummary:
+    session_id: str
+    principal_id: str
+    workspace_id: str
+    title: str
+    revision: int
+    status: str
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class WorkspaceIdentity:
+    workspace_id: str
+    principal_id: str
+    kind: str
+    managed_path: str | None
+    mount_record_id: str | None
+    revision: int
+    status: str
+
+
 class ConversationStore:
     def __init__(self, database: DynamicRuntimeDatabase) -> None:
         self._database = database
@@ -75,6 +98,54 @@ class ConversationStore:
                     _required_text(workspace_id, "workspace_id"),
                     _required_text(principal_id, "principal_id"),
                     _required_text(managed_path, "managed_path"),
+                    now,
+                    now,
+                ),
+            )
+
+    def create_managed_conversation(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        principal_id: str,
+        managed_path: str,
+        title: str,
+    ) -> None:
+        now = utc_now_text()
+        owner = _required_text(principal_id, "principal_id")
+        with self._database.transaction() as conn:
+            conn.execute(
+                "insert or ignore into principals(principal_id, created_at) values (?, ?)",
+                (owner, now),
+            )
+            conn.execute(
+                """
+                insert into workspaces(
+                  workspace_id, principal_id, kind, managed_path, mount_record_id,
+                  revision, status, created_at, updated_at
+                ) values (?, ?, 'managed', ?, null, 1, 'active', ?, ?)
+                """,
+                (
+                    _required_text(workspace_id, "workspace_id"),
+                    owner,
+                    _required_text(managed_path, "managed_path"),
+                    now,
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                insert into conversations(
+                  session_id, principal_id, workspace_id, title, revision,
+                  status, created_at, updated_at
+                ) values (?, ?, ?, ?, 1, 'active', ?, ?)
+                """,
+                (
+                    _required_text(session_id, "session_id"),
+                    owner,
+                    _required_text(workspace_id, "workspace_id"),
+                    _required_text(title, "title"),
                     now,
                     now,
                 ),
@@ -148,6 +219,56 @@ class ConversationStore:
             session_id=str(row["session_id"]),
             principal_id=str(row["principal_id"]),
             workspace_id=str(row["workspace_id"]),
+            revision=int(row["revision"]),
+            status=str(row["status"]),
+        )
+
+    def list_for_principal(self, principal_id: str) -> list[ConversationSummary]:
+        owner = _required_text(principal_id, "principal_id")
+        with self._database.connection(query_only=True) as conn:
+            rows = conn.execute(
+                """
+                select session_id, principal_id, workspace_id, title, revision,
+                       status, created_at, updated_at
+                from conversations
+                where principal_id = ?
+                order by updated_at desc, session_id
+                """,
+                (owner,),
+            ).fetchall()
+        return [
+            ConversationSummary(
+                session_id=str(row["session_id"]),
+                principal_id=str(row["principal_id"]),
+                workspace_id=str(row["workspace_id"]),
+                title=str(row["title"]),
+                revision=int(row["revision"]),
+                status=str(row["status"]),
+                created_at=str(row["created_at"]),
+                updated_at=str(row["updated_at"]),
+            )
+            for row in rows
+        ]
+
+    def require_workspace(self, workspace_id: str) -> WorkspaceIdentity:
+        value = _required_text(workspace_id, "workspace_id")
+        with self._database.connection(query_only=True) as conn:
+            row = conn.execute(
+                """
+                select workspace_id, principal_id, kind, managed_path, mount_record_id,
+                       revision, status
+                from workspaces where workspace_id = ?
+                """,
+                (value,),
+            ).fetchone()
+        if row is None:
+            raise LookupError(f"workspace not found: {value}")
+        return WorkspaceIdentity(
+            workspace_id=str(row["workspace_id"]),
+            principal_id=str(row["principal_id"]),
+            kind=str(row["kind"]),
+            managed_path=str(row["managed_path"]) if row["managed_path"] is not None else None,
+            mount_record_id=str(row["mount_record_id"]) if row["mount_record_id"] is not None else None,
             revision=int(row["revision"]),
             status=str(row["status"]),
         )

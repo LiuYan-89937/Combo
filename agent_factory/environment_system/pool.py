@@ -17,7 +17,7 @@ from packaging.utils import InvalidWheelFilename, canonicalize_name, parse_wheel
 from agent_factory.file_lock import exclusive_file_lock
 from agent_factory.paths import factory_artifact_path
 
-from .versions import DEPENDENCY_POOL_VERSION
+DEPENDENCY_POOL_VERSION = "dependency_pool.v3"
 
 
 class DependencyPoolError(RuntimeError):
@@ -44,7 +44,7 @@ class DependencyPoolResolution:
 
 
 class DependencyPool:
-    """Content-addressed dependency artifacts shared by all AgentPackages."""
+    """Internal content-addressed artifact storage used by the dependency service."""
 
     def __init__(self, root: Path | None = None) -> None:
         self.root = (root or factory_artifact_path("dependency_pool")).resolve()

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import json
+from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -36,12 +37,29 @@ class RequestPrincipalResolver(Protocol):
 class DynamicRuntimeApiConfig:
     keepalive_seconds: float
     replay_limit: int
+    managed_workspace_root: Path
 
     def __post_init__(self) -> None:
         if self.keepalive_seconds <= 0:
             raise ValueError("keepalive_seconds must be positive")
         if self.replay_limit < 1:
             raise ValueError("replay_limit must be positive")
+        root = Path(self.managed_workspace_root).expanduser().resolve()
+        object.__setattr__(self, "managed_workspace_root", root)
+
+
+class ConversationCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str
+
+    @field_validator("title")
+    @classmethod
+    def _title_is_present(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("conversation title must not be empty")
+        return text
 
 
 class RuntimePolicyWriteRequest(BaseModel):
@@ -101,6 +119,55 @@ def create_dynamic_runtime_router(
     config: DynamicRuntimeApiConfig,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/runtime")
+
+    @router.get("/conversations")
+    async def list_conversations(request: Request) -> dict[str, object]:
+        principal_id = principal_resolver.resolve(request)
+        return {
+            "conversations": [
+                asdict(item)
+                for item in application.stores.conversations.list_for_principal(principal_id)
+            ]
+        }
+
+    @router.post("/conversations", status_code=201)
+    async def create_conversation(
+        request: Request,
+        payload: ConversationCreateRequest,
+    ) -> dict[str, object]:
+        principal_id = principal_resolver.resolve(request)
+        session_id = uuid4().hex
+        workspace_id = uuid4().hex
+        workspace_path = config.managed_workspace_root / workspace_id
+        workspace_path.mkdir(parents=True, exist_ok=False)
+        store = application.stores.conversations
+        try:
+            store.create_managed_conversation(
+                session_id=session_id,
+                workspace_id=workspace_id,
+                principal_id=principal_id,
+                managed_path=str(workspace_path),
+                title=payload.title,
+            )
+        except Exception:
+            workspace_path.rmdir()
+            raise
+        identity = store.require_identity(session_id)
+        return {"conversation": asdict(identity), "title": payload.title}
+
+    @router.get("/conversations/{session_id}")
+    async def conversation(request: Request, session_id: str) -> dict[str, object]:
+        principal_id = principal_resolver.resolve(request)
+        identity = application.stores.conversations.require_identity(session_id)
+        if identity.principal_id != principal_id:
+            raise HTTPException(status_code=404, detail="conversation not found")
+        return {
+            "conversation": asdict(identity),
+            "messages": [
+                item.model_dump(mode="json")
+                for item in application.stores.conversations.messages(session_id)
+            ],
+        }
 
     @router.post("/handshake", response_model=RuntimeProtocolHandshakeResult)
     async def handshake(payload: RuntimeProtocolHandshake) -> RuntimeProtocolHandshakeResult:

@@ -1,47 +1,25 @@
-"""Runtime Kernel package."""
+"""Fixed execution kernel for dynamic runtime instances."""
 
-from agent_factory.runtime_kernel.bindings import BindingSet, RuntimeServices
 from agent_factory.runtime_kernel.capability_state import (
     CapabilityStateError,
     bind_capability_snapshot,
     require_bound_tool_ids,
 )
-from agent_factory.runtime_kernel.execution import ExecutionController
-from agent_factory.runtime_kernel.kernel import CompiledKernelApp, RuntimeKernelFacade, RuntimeKernelInstance
-from agent_factory.runtime_kernel.patterns import (
-    GraphPatternSpec,
-    PatternCatalogItemSpec,
-    PatternMetadataSpec,
-    PatternStructureSummary,
-    PatternRegistry,
-    PatternValidator,
+from agent_factory.runtime_kernel.fixed_graphs import (
+    CompiledRuntimeGraph,
+    FixedGraphStrategy,
+    build_fixed_runtime_graph,
 )
-from agent_factory.runtime_kernel.patterns.compiler import PatternCompiler
+from agent_factory.runtime_kernel.services import RuntimeServices
 from agent_factory.runtime_kernel.state import RuntimeState
-from agent_factory.runtime_kernel.strategies import StrategyRegistry, StrategySpec
-from agent_factory.runtime_kernel.wrappers import NodeWrapper, NodeWrapperRegistry, wrap_node
 
 __all__ = [
-    "BindingSet",
     "CapabilityStateError",
-    "CompiledKernelApp",
-    "ExecutionController",
-    "GraphPatternSpec",
-    "PatternCatalogItemSpec",
-    "PatternMetadataSpec",
-    "PatternStructureSummary",
-    "PatternCompiler",
-    "PatternRegistry",
-    "PatternValidator",
-    "RuntimeKernelFacade",
-    "RuntimeKernelInstance",
+    "CompiledRuntimeGraph",
+    "FixedGraphStrategy",
     "RuntimeServices",
     "RuntimeState",
     "bind_capability_snapshot",
+    "build_fixed_runtime_graph",
     "require_bound_tool_ids",
-    "NodeWrapper",
-    "NodeWrapperRegistry",
-    "StrategyRegistry",
-    "StrategySpec",
-    "wrap_node",
 ]

@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime, timezone
 from time import perf_counter
-import traceback
 from typing import Any
 
 from langchain_core.messages import RemoveMessage
@@ -25,7 +24,6 @@ from agent_factory.runtime_kernel.state.runtime_graph import (
     validate_patch_sections,
 )
 from agent_factory.runtime_kernel.state import RuntimeState, merge_state_patch
-from agent_factory.runtime_kernel.trace_policy import classify_node_failure
 from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
 
 
@@ -59,17 +57,6 @@ def make_fixed_runner(
             return runtime_graph_patch(state)
 
         started = perf_counter()
-        trace_recorder = getattr(services, "trace_recorder", None)
-        trace_span_id = None
-        if trace_recorder is not None:
-            trace_span_id = trace_recorder.start_span(
-                trace_id=state.observability.trace_id,
-                run_id=state.run.run_id,
-                span_kind="node_execution",
-                name=node_id,
-                node_id=node_id,
-                payload={"impl": implementation.impl_id, "node_id": node_id},
-            )
         emit_state_event(
             services,
             state,
@@ -91,15 +78,6 @@ def make_fixed_runner(
             emit_runtime_node_event(event)
             if event.persistence == "durable":
                 emitted_events.append(event.model_dump(mode="json"))
-            if trace_recorder is not None:
-                trace_recorder.record_event(
-                    trace_id=state.observability.trace_id,
-                    run_id=state.run.run_id,
-                    event_type=event.event_type,
-                    node_id=node_id,
-                    message=event.message,
-                    payload=event.payload,
-                )
             emit_runtime_tool_activity(payload, node_id=node_id)
 
         context = NodeExecutionContext(
@@ -149,17 +127,6 @@ def make_fixed_runner(
                 node_id=node_id,
                 payload={"impl": implementation.impl_id, "duration_ms": duration_ms},
             )
-            if trace_recorder is not None and trace_span_id is not None:
-                trace_recorder.finish_span(
-                    trace_id=updated.observability.trace_id,
-                    run_id=updated.run.run_id,
-                    span_id=trace_span_id,
-                    span_kind="node_execution",
-                    name=node_id,
-                    status="completed",
-                    node_id=node_id,
-                    payload={"node_id": node_id, "duration_ms": duration_ms},
-                )
             return runtime_graph_patch(updated, messages=messages_patch)
         except GraphInterrupt:
             raise
@@ -167,25 +134,6 @@ def make_fixed_runner(
             failed = active_state
             failed.execution.retry_count += 1
             _finish(failed, status="failed", error=str(exc), location=node_id)
-            failure = classify_node_failure(node_impl=implementation.impl_id, error=exc)
-            if trace_recorder is not None and failure.domain == "runtime_kernel":
-                trace_recorder.suppress_trace(
-                    trace_id=failed.observability.trace_id,
-                    run_id=failed.run.run_id,
-                    reason=failure.reason,
-                    payload={
-                        "node_id": node_id,
-                        "node_impl": implementation.impl_id,
-                        "error_type": type(exc).__name__,
-                        "error": str(exc),
-                        "traceback": "".join(
-                            traceback.TracebackException.from_exception(
-                                exc,
-                                capture_locals=False,
-                            ).format()
-                        ),
-                    },
-                )
             emit_state_event(
                 services,
                 failed,
@@ -193,17 +141,6 @@ def make_fixed_runner(
                 node_id=node_id,
                 payload={"impl": implementation.impl_id, "error": str(exc)},
             )
-            if trace_recorder is not None and trace_span_id is not None:
-                trace_recorder.finish_span(
-                    trace_id=failed.observability.trace_id,
-                    run_id=failed.run.run_id,
-                    span_id=trace_span_id,
-                    span_kind="node_execution",
-                    name=node_id,
-                    status="failed",
-                    node_id=node_id,
-                    payload={"node_id": node_id, "error": str(exc)},
-                )
             return runtime_graph_patch(failed)
 
     return runner
