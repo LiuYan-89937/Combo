@@ -93,9 +93,11 @@ PROCESS_TOOL_SPECS: list[ToolSpec] = [
         },
         output_schema=_PROCESS_OUTPUT_SCHEMA,
         resources=_PROCESS_RESOURCE,
+        effects=["process", "write"],
         risk_level="high",
         risk_evaluator=ToolRiskEvaluatorConfig(hard=f"{_PROCESS_MODULE}.shell:evaluate_risk"),
         concurrent=False,
+        max_parallel_calls=1,
     ),
     ToolSpec(
         id="shell_status",
@@ -121,9 +123,12 @@ PROCESS_TOOL_SPECS: list[ToolSpec] = [
         },
         output_schema=_PROCESS_OUTPUT_SCHEMA,
         resources=_PROCESS_RESOURCE,
+        effects=["read"],
+        read_only=True,
         risk_level="low",
         risk_evaluator=ToolRiskEvaluatorConfig(hard=f"{_PROCESS_MODULE}.shell_status:evaluate_risk"),
         concurrent=True,
+        max_parallel_calls=4,
     ),
     ToolSpec(
         id="shell_stop",
@@ -153,9 +158,11 @@ PROCESS_TOOL_SPECS: list[ToolSpec] = [
         },
         output_schema=_PROCESS_OUTPUT_SCHEMA,
         resources=_PROCESS_RESOURCE,
+        effects=["process"],
         risk_level="medium",
         risk_evaluator=ToolRiskEvaluatorConfig(hard=f"{_PROCESS_MODULE}.shell_stop:evaluate_risk"),
         concurrent=False,
+        max_parallel_calls=1,
     ),
 ]
 

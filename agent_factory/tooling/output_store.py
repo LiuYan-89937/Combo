@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import json
-import os
 from pathlib import Path
 import re
 from typing import Any
@@ -16,15 +15,17 @@ from agent_factory.tooling.spec import ToolOutputCompressionActionConfig, ToolOu
 
 
 TOOL_OUTPUT_STORE_RESOURCE = "tool_output_store"
-TOOL_OUTPUT_MAX_MODEL_CHARS_ENV = "AGENTFACTORY_TOOL_OUTPUT_MAX_MODEL_CHARS"
 DEFAULT_TOOL_OUTPUT_MAX_MODEL_CHARS = 12000
-MIN_TOOL_OUTPUT_MAX_MODEL_CHARS = 1000
 _OUTPUT_ID_RE = re.compile(r"^toolout_[a-f0-9]{32}$")
 
 
 @dataclass(frozen=True, slots=True)
 class ToolOutputPolicy:
     max_model_chars: int = DEFAULT_TOOL_OUTPUT_MAX_MODEL_CHARS
+
+    def __post_init__(self) -> None:
+        if self.max_model_chars < 1_000:
+            raise ValueError("tool output model projection limit must be at least 1000 characters")
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,15 +154,6 @@ class ToolOutputStore:
         return self.records_dir / f"{output_id}.json"
 
 
-def default_tool_output_policy() -> ToolOutputPolicy:
-    raw = os.getenv(TOOL_OUTPUT_MAX_MODEL_CHARS_ENV, str(DEFAULT_TOOL_OUTPUT_MAX_MODEL_CHARS)).strip()
-    try:
-        value = int(raw)
-    except ValueError:
-        value = DEFAULT_TOOL_OUTPUT_MAX_MODEL_CHARS
-    return ToolOutputPolicy(max_model_chars=max(value, MIN_TOOL_OUTPUT_MAX_MODEL_CHARS))
-
-
 def project_tool_output(
     *,
     output: dict[str, Any],
@@ -169,15 +161,14 @@ def project_tool_output(
     tool_call_id: str | None,
     arguments: dict[str, Any] | None = None,
     store: ToolOutputStore | None,
-    policy: ToolOutputPolicy | None = None,
+    policy: ToolOutputPolicy,
     compression_model: Any | None = None,
     compression_config: ToolOutputCompressionConfig | None = None,
 ) -> ToolOutputProjection:
-    effective_policy = policy or default_tool_output_policy()
     effective_max_chars = (
         compression_config.max_model_chars
         if compression_config is not None and compression_config.max_model_chars is not None
-        else effective_policy.max_model_chars
+        else policy.max_model_chars
     )
     raw_text = _json_text(output)
     if len(raw_text) <= effective_max_chars:

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+
+from agent_factory.runtime_protocol import RuntimeExecutionIdentity
 from uuid import uuid4
 
 from agent_factory.tooling.builtins.browser.runtime import (
@@ -148,13 +150,9 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
 
 def _session_key(resources: dict[str, Any]) -> str:
     identity = resources.get("runtime_identity")
-    values = identity if isinstance(identity, dict) else {}
-    runtime_instance_id = _optional_text(values.get("runtime_instance_id"))
-    attempt_id = _optional_text(values.get("attempt_id"))
-    generation = values.get("generation")
-    if not runtime_instance_id or not attempt_id or not isinstance(generation, int):
+    if not isinstance(identity, RuntimeExecutionIdentity):
         raise RuntimeError("browser tools require an owned runtime attempt identity")
-    return f"{generation}:{runtime_instance_id}:{attempt_id}"
+    return f"{identity.generation}:{identity.runtime_instance_id}:{identity.attempt_id}"
 
 
 def _target(arguments: dict[str, Any]) -> dict[str, Any]:

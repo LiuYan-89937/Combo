@@ -22,6 +22,8 @@ RuntimeResourceName = Literal[
     "process_runtime",
     "runtime_identity",
     "browser_runtime",
+    "capability_catalog",
+    "memory_store",
     "knowledge_runtime",
     "scheduler_runtime",
 ]
@@ -29,7 +31,7 @@ RuntimeResourceName = Literal[
 
 class SkillContentRef(FrozenProtocolModel):
     logical_path: str
-    kind: Literal["reference", "template", "example", "asset", "script"]
+    kind: Literal["instructions", "reference", "template", "example", "asset", "script"]
     media_type: str
     blob_id: str
     content_digest: str
@@ -55,18 +57,15 @@ class SkillContentRef(FrozenProtocolModel):
 
 
 class SkillDefinition(FrozenProtocolModel):
-    schema_version: Literal["skill_definition.v1"] = "skill_definition.v1"
-    instructions: str
+    schema_version: Literal["skill_definition.v2"] = "skill_definition.v2"
+    instructions: SkillContentRef
     contents: tuple[SkillContentRef, ...] = ()
-
-    @field_validator("instructions")
-    @classmethod
-    def _instructions_are_present(cls, value: str) -> str:
-        return _required_text(value, "skill instructions")
 
     @model_validator(mode="after")
     def _content_paths_are_unique(self) -> "SkillDefinition":
-        paths = [item.logical_path for item in self.contents]
+        if self.instructions.kind != "instructions":
+            raise ValueError("skill instruction reference must use kind=instructions")
+        paths = [self.instructions.logical_path, *(item.logical_path for item in self.contents)]
         if len(paths) != len(set(paths)):
             raise ValueError("skill content logical paths must be unique")
         return self
@@ -75,6 +74,7 @@ class SkillDefinition(FrozenProtocolModel):
 class ToolImplementation(FrozenProtocolModel):
     kind: Literal["python_module", "python_source", "managed_process"]
     entrypoint: str
+    hard_risk_evaluator_entrypoint: str | None = None
     source_blob_id: str | None = None
     source_digest: str | None = None
 
@@ -84,6 +84,14 @@ class ToolImplementation(FrozenProtocolModel):
         text = _required_text(value, "tool entrypoint")
         if ":" not in text:
             raise ValueError("tool entrypoint must identify an adapter target and callable")
+        return text
+
+    @field_validator("hard_risk_evaluator_entrypoint")
+    @classmethod
+    def _optional_risk_entrypoint(cls, value: str | None) -> str | None:
+        text = _optional_text(value)
+        if text is not None and ":" not in text:
+            raise ValueError("tool hard risk evaluator entrypoint must identify a target and callable")
         return text
 
     @field_validator("source_blob_id")
@@ -110,6 +118,7 @@ class ToolRuntimePolicy(FrozenProtocolModel):
     approval: ToolApprovalAction = "inherit"
     risk_level: ToolRiskLevel = "low"
     allow_parallel_calls: bool = True
+    max_parallel_calls: int = Field(default=1, ge=1)
     serialization_key: str | None = None
     timeout_seconds: float = Field(default=300.0, gt=0)
     output_projection: Literal["compress", "passthrough"] = "compress"
@@ -120,6 +129,50 @@ class ToolRuntimePolicy(FrozenProtocolModel):
     @classmethod
     def _optional_serialization_key(cls, value: str | None) -> str | None:
         return _optional_text(value)
+
+    @model_validator(mode="after")
+    def _parallel_limit_matches_policy(self) -> "ToolRuntimePolicy":
+        if not self.allow_parallel_calls and self.max_parallel_calls != 1:
+            raise ValueError("non-parallel tool policy must use max_parallel_calls=1")
+        return self
+
+
+class ToolLoopPolicy(FrozenProtocolModel):
+    max_calls: int | None = Field(default=None, ge=1)
+    max_identical_calls: int | None = Field(default=None, ge=1)
+    max_semantic_calls: int | None = Field(default=None, ge=1)
+    max_consecutive_failures: int | None = Field(default=None, ge=1)
+    max_consecutive_empty_results: int | None = Field(default=None, ge=1)
+    max_consecutive_no_new_evidence: int | None = Field(default=None, ge=1)
+    semantic_argument_pointers: tuple[str, ...] = ()
+    evidence_output_pointers: tuple[str, ...] = ()
+
+    @field_validator("semantic_argument_pointers", "evidence_output_pointers")
+    @classmethod
+    def _pointers_are_unique(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        if len(values) != len(set(values)) or any(not value.startswith("/") for value in values):
+            raise ValueError("tool loop policy pointers must be unique JSON Pointers")
+        return values
+
+    @model_validator(mode="after")
+    def _bounded_policy_has_total_limit(self) -> "ToolLoopPolicy":
+        bounded = (
+            self.max_identical_calls,
+            self.max_semantic_calls,
+            self.max_consecutive_failures,
+            self.max_consecutive_empty_results,
+            self.max_consecutive_no_new_evidence,
+        )
+        if any(value is not None for value in bounded) and self.max_calls is None:
+            raise ValueError("bounded tool loop policy requires max_calls")
+        if self.max_semantic_calls is not None and not self.semantic_argument_pointers:
+            raise ValueError("max_semantic_calls requires semantic argument pointers")
+        if (
+            self.max_consecutive_empty_results is not None
+            or self.max_consecutive_no_new_evidence is not None
+        ) and not self.evidence_output_pointers:
+            raise ValueError("empty-result limits require evidence output pointers")
+        return self
 
 
 class ToolResourceBinding(FrozenProtocolModel):
@@ -135,13 +188,15 @@ class ToolResourceBinding(FrozenProtocolModel):
 
 
 class ToolDefinition(FrozenProtocolModel):
-    schema_version: Literal["tool_definition.v1"] = "tool_definition.v1"
+    schema_version: Literal["tool_definition.v2"] = "tool_definition.v2"
     model_alias: str
     model_description: str
+    schema_error_guidance: str = ""
     input_schema: dict[str, JsonValue]
     output_schema: dict[str, JsonValue]
     implementation: ToolImplementation
     runtime_policy: ToolRuntimePolicy = Field(default_factory=ToolRuntimePolicy)
+    loop_policy: ToolLoopPolicy = Field(default_factory=ToolLoopPolicy)
     resource_bindings: tuple[ToolResourceBinding, ...] = ()
     runtime_resources: tuple[RuntimeResourceName, ...] = ()
     effects: tuple[ToolEffect, ...]
@@ -300,7 +355,7 @@ class MCPSchemaEvidence(FrozenProtocolModel):
 
 
 class MCPToolDefinition(FrozenProtocolModel):
-    schema_version: Literal["mcp_tool_definition.v1"] = "mcp_tool_definition.v1"
+    schema_version: Literal["mcp_tool_definition.v2"] = "mcp_tool_definition.v2"
     server_capability_id: str
     upstream_tool_name: str
     model_alias: str
@@ -308,6 +363,7 @@ class MCPToolDefinition(FrozenProtocolModel):
     input_schema: MCPSchemaEvidence
     output_schema: MCPSchemaEvidence
     runtime_policy: ToolRuntimePolicy = Field(default_factory=lambda: ToolRuntimePolicy(risk_level="medium"))
+    effects: tuple[ToolEffect, ...]
 
     @field_validator("server_capability_id", "upstream_tool_name", "model_description")
     @classmethod
@@ -321,6 +377,13 @@ class MCPToolDefinition(FrozenProtocolModel):
         if not MODEL_ALIAS_PATTERN.fullmatch(text):
             raise ValueError("MCP tool model_alias must be lowercase snake_case and at most 64 characters")
         return text
+
+    @field_validator("effects")
+    @classmethod
+    def _effects_are_unique(cls, values: tuple[ToolEffect, ...]) -> tuple[ToolEffect, ...]:
+        if not values or len(values) != len(set(values)):
+            raise ValueError("MCP tool effects must be non-empty and unique")
+        return values
 
 
 class DependencyArtifact(FrozenProtocolModel):

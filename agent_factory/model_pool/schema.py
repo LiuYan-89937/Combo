@@ -16,12 +16,8 @@ from agent_factory.models.capabilities import resolve_provider_profile
 from agent_factory.models.protocol import ModelReasoningSettings, StructuredOutputMethod
 
 
-# ``ModelBindingRole`` is used by agent package contracts and intentionally
-# remains chat-only.  The model pool has one additional infrastructure role
-# for the embedding model used by RAG and semantic memory.
 ModelPoolProfileKind = Literal["chat", "embedding", "image_generation"]
 ModelPoolRole = Literal["main", "task", "compression", "embedding"]
-ModelBindingRole = Literal["main", "task", "compression"]
 ModelBindingSource = Literal["model_pool", "runtime"]
 ModelPoolModality = Literal["text", "image", "audio"]
 ModelToolCapability = Literal["image_input", "image_output", "image_edit", "audio_input", "audio_output"]

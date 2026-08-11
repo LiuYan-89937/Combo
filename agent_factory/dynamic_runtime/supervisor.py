@@ -15,12 +15,18 @@ FailureReporter = Callable[[str, BaseException], None]
 @dataclass(frozen=True, slots=True)
 class DynamicRuntimeSupervisorConfig:
     command_worker_count: int
+    temporary_worker_count: int
+    temporary_claim_lease_seconds: int
     idle_poll_seconds: float
     generation_renew_seconds: float
 
     def __post_init__(self) -> None:
         if self.command_worker_count < 1:
             raise ValueError("command_worker_count must be positive")
+        if self.temporary_worker_count < 1:
+            raise ValueError("temporary_worker_count must be positive")
+        if self.temporary_claim_lease_seconds < 1:
+            raise ValueError("temporary_claim_lease_seconds must be positive")
         if self.idle_poll_seconds <= 0:
             raise ValueError("idle_poll_seconds must be positive")
         if self.generation_renew_seconds <= 0:
@@ -48,6 +54,7 @@ class DynamicRuntimeSupervisor:
         self._command_wakeup: asyncio.Queue[None] = asyncio.Queue(maxsize=1)
         self._control_wakeup: asyncio.Queue[None] = asyncio.Queue(maxsize=1)
         self._outbox_wakeup: asyncio.Queue[None] = asyncio.Queue(maxsize=1)
+        self._temporary_wakeup: asyncio.Queue[None] = asyncio.Queue(maxsize=1)
         self._tasks: list[asyncio.Task[None]] = []
 
     @property
@@ -71,10 +78,18 @@ class DynamicRuntimeSupervisor:
                 name="dynamic-runtime-command-control",
             ),
             asyncio.create_task(self._outbox_loop(), name="dynamic-runtime-outbox"),
+            *(
+                asyncio.create_task(
+                    self._temporary_loop(worker_index),
+                    name=f"dynamic-runtime-temporary-{worker_index}",
+                )
+                for worker_index in range(self._config.temporary_worker_count)
+            ),
             asyncio.create_task(self._generation_loop(), name="dynamic-runtime-generation"),
         ]
         self.notify_commands()
         self.notify_outbox()
+        self.notify_temporary_tasks()
 
     async def stop(self) -> None:
         tasks = tuple(self._tasks)
@@ -83,6 +98,7 @@ class DynamicRuntimeSupervisor:
         self._stop.set()
         self.notify_commands()
         self.notify_outbox()
+        self.notify_temporary_tasks()
         await asyncio.gather(*tasks, return_exceptions=True)
         self._tasks.clear()
 
@@ -92,6 +108,9 @@ class DynamicRuntimeSupervisor:
 
     def notify_outbox(self) -> None:
         _notify(self._outbox_wakeup)
+
+    def notify_temporary_tasks(self) -> None:
+        _notify(self._temporary_wakeup)
 
     async def _command_loop(self, worker_index: int, *, lane: str = "work") -> None:
         component = f"command_dispatcher[{lane}:{worker_index}]"
@@ -126,6 +145,26 @@ class DynamicRuntimeSupervisor:
                 continue
             await self._wait_for(self._outbox_wakeup)
 
+    async def _temporary_loop(self, worker_index: int) -> None:
+        component = f"temporary_runtime[{worker_index}]"
+        while not self._stop.is_set():
+            try:
+                claim = await asyncio.to_thread(
+                    self._application.stores.delegations.claim_next,
+                    generation=self._application.generation.generation,
+                    lease_seconds=self._config.temporary_claim_lease_seconds,
+                )
+                if claim is None:
+                    await self._wait_for(self._temporary_wakeup)
+                    continue
+                await asyncio.to_thread(self._application.runtime_service.execute_delegated, claim)
+                self.notify_outbox()
+            except BaseException as exc:
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
+                self._report_failure(component, exc)
+                await self._wait_for(self._temporary_wakeup)
+
     async def _generation_loop(self) -> None:
         while not self._stop.is_set():
             try:
@@ -145,6 +184,7 @@ class DynamicRuntimeSupervisor:
                 self._stop.set()
                 self.notify_commands()
                 self.notify_outbox()
+                self.notify_temporary_tasks()
                 return
 
     async def _wait_for(self, wakeup: asyncio.Queue[None]) -> None:

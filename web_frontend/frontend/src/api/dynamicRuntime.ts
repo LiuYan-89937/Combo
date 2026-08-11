@@ -67,6 +67,8 @@ export interface RuntimePolicy {
   request_timeout_seconds: number
   max_model_attempts: number
   max_parallel_temporary_agents: number
+  max_temporary_delegation_depth: number
+  delegation_grant_ttl_seconds: number
   timezone: string
 }
 

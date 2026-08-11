@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from dataclasses import dataclass, field
+from types import MappingProxyType
+from collections.abc import Mapping
 from typing import Any
 
 from agent_factory.tooling.spec import ToolRiskResult
@@ -9,6 +12,71 @@ from agent_factory.tooling.workspace_paths import workspace_path_candidate
 
 SENSITIVE_FILE_NAMES = {".env", ".env.local", ".env.production", "id_rsa", "id_ed25519"}
 SENSITIVE_DIR_NAMES = {".ssh", ".gnupg", "secrets", "secret", "credentials"}
+
+
+@dataclass(frozen=True, slots=True)
+class FilesystemRuntimeResource:
+    root: Path
+    staged_write_store: Any
+    transaction_store: Any
+    allow_external: bool = False
+    allowed_roots: tuple[Path, ...] = ()
+    mounts: Mapping[str, Path] = field(default_factory=dict)
+    protected_write_paths: tuple[Path, ...] = ()
+    read_only_paths: tuple[Path, ...] = ()
+    managed_paths: Mapping[Path, Mapping[str, Any]] = field(default_factory=dict)
+    managed_write_paths: Mapping[Path, Mapping[str, Any]] = field(default_factory=dict)
+    allowed_write_paths: tuple[Path, ...] = ()
+    write_scope_enforced: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "root", self.root.expanduser().resolve())
+        for field_name in (
+            "allowed_roots",
+            "protected_write_paths",
+            "read_only_paths",
+            "allowed_write_paths",
+        ):
+            object.__setattr__(
+                self,
+                field_name,
+                tuple(Path(path).expanduser().resolve() for path in getattr(self, field_name)),
+            )
+        object.__setattr__(self, "mounts", MappingProxyType(dict(self.mounts)))
+        object.__setattr__(self, "managed_paths", MappingProxyType(dict(self.managed_paths)))
+        object.__setattr__(self, "managed_write_paths", MappingProxyType(dict(self.managed_write_paths)))
+
+    def tool_resource_context(self) -> dict[str, Any]:
+        return {
+            "schema": "filesystem_runtime_context.v1",
+            "root": str(self.root),
+            "allow_external": self.allow_external,
+            "allowed_roots": [str(path) for path in self.allowed_roots],
+            "protected_write_paths": [str(path) for path in self.protected_write_paths],
+            "read_only_paths": [str(path) for path in self.read_only_paths],
+            "managed_paths": {str(path): dict(spec) for path, spec in self.managed_paths.items()},
+            "managed_write_paths": {
+                str(path): dict(spec) for path, spec in self.managed_write_paths.items()
+            },
+            "allowed_write_paths": [str(path) for path in self.allowed_write_paths],
+            "write_scope_enforced": self.write_scope_enforced,
+        }
+
+
+def require_filesystem_runtime(resources: dict[str, Any]) -> FilesystemRuntimeResource:
+    runtime = resources.get("filesystem")
+    if not isinstance(runtime, FilesystemRuntimeResource):
+        raise RuntimeError("owned filesystem runtime resource is not configured")
+    return runtime
+
+
+def _filesystem_context(resources: dict[str, Any]) -> FilesystemRuntimeResource | dict[str, Any]:
+    value = resources.get("filesystem")
+    if isinstance(value, FilesystemRuntimeResource):
+        return value
+    if isinstance(value, dict) and value.get("schema") == "filesystem_runtime_context.v1":
+        return value
+    raise RuntimeError("filesystem runtime context is not configured")
 
 
 def required_string(arguments: dict[str, Any], key: str) -> str:
@@ -27,45 +95,24 @@ def positive_int(value: Any, key: str) -> int:
 
 
 def filesystem_boundary(resources: dict[str, Any]) -> tuple[Path, bool]:
-    config = resources.get("filesystem", {})
-    if isinstance(config, str):
-        root_value: Any = config
-        allow_external = False
-    elif isinstance(config, dict):
-        root_value = config.get("root") or config.get("cwd") or "."
-        allow_external = bool(config.get("allow_external", False))
-    else:
-        root_value = "."
-        allow_external = False
-    root = Path(str(root_value)).expanduser().resolve()
-    return root, allow_external
+    runtime = _filesystem_context(resources)
+    if isinstance(runtime, FilesystemRuntimeResource):
+        return runtime.root, runtime.allow_external
+    return Path(str(runtime["root"])).resolve(), bool(runtime.get("allow_external", False))
 
 
 def filesystem_allowed_roots(resources: dict[str, Any]) -> tuple[Path, ...]:
-    config = resources.get("filesystem", {})
-    values = config.get("allowed_roots", []) if isinstance(config, dict) else []
-    if not isinstance(values, list):
-        return ()
-    return tuple(
-        Path(value).expanduser().resolve(strict=False)
-        for value in values
-        if isinstance(value, str) and value.strip()
-    )
+    runtime = _filesystem_context(resources)
+    if isinstance(runtime, FilesystemRuntimeResource):
+        return runtime.allowed_roots
+    return tuple(Path(str(value)).resolve() for value in runtime.get("allowed_roots", ()))
 
 
 def filesystem_mounts(resources: dict[str, Any]) -> dict[str, Path]:
-    config = resources.get("filesystem", {})
-    values = config.get("mounts", {}) if isinstance(config, dict) else {}
-    if not isinstance(values, dict):
-        return {}
-    return {
-        str(name): Path(value).expanduser().resolve(strict=False)
-        for name, value in values.items()
-        if isinstance(name, str)
-        and name.strip()
-        and isinstance(value, str)
-        and value.strip()
-    }
+    runtime = _filesystem_context(resources)
+    if isinstance(runtime, FilesystemRuntimeResource):
+        return dict(runtime.mounts)
+    return {}
 
 
 def resolve_path(
@@ -237,81 +284,78 @@ def _is_sensitive_path(path: Path) -> bool:
 
 
 def _is_protected_write_path(path: Path, *, root: Path, resources: dict[str, Any]) -> bool:
-    config = resources.get("filesystem", {})
-    values = config.get("protected_write_paths", []) if isinstance(config, dict) else []
-    if not isinstance(values, list):
-        return False
-    for value in values:
-        if not isinstance(value, str) or not value.strip():
-            continue
-        requested = Path(value).expanduser()
-        candidate = requested if requested.is_absolute() else root / requested
-        resolved = candidate.resolve(strict=False)
+    for resolved in _context_paths(resources, "protected_write_paths"):
         if path == resolved or resolved in path.parents:
             return True
     return False
 
 
 def _is_read_only_write_path(path: Path, *, root: Path, resources: dict[str, Any]) -> bool:
-    config = resources.get("filesystem", {})
-    values = config.get("read_only_paths", []) if isinstance(config, dict) else []
-    if not isinstance(values, list):
-        return False
-    return _path_matches_focus_files(path, root=root, focus_files=values)
+    return _path_matches_focus_files(
+        path,
+        focus_files=_context_paths(resources, "read_only_paths"),
+    )
 
 
 def _managed_path_spec(path: Path, *, root: Path, resources: dict[str, Any]) -> dict[str, Any] | None:
-    config = resources.get("filesystem", {})
-    values = config.get("managed_paths", {}) if isinstance(config, dict) else {}
-    if not isinstance(values, dict):
-        return None
-    for raw_path, raw_spec in values.items():
-        if not isinstance(raw_path, str) or not raw_path.strip():
-            continue
-        requested = Path(raw_path).expanduser()
-        candidate = requested if requested.is_absolute() else root / requested
-        if path != candidate.resolve(strict=False):
-            continue
-        return raw_spec if isinstance(raw_spec, dict) else {}
-    return None
+    spec = _context_mapping(resources, "managed_paths").get(path)
+    return dict(spec) if spec is not None else None
 
 
 def _managed_write_path_spec(path: Path, *, root: Path, resources: dict[str, Any]) -> dict[str, Any] | None:
-    config = resources.get("filesystem", {})
-    values = config.get("managed_write_paths", {}) if isinstance(config, dict) else {}
-    if not isinstance(values, dict):
-        return None
-    for raw_path, raw_spec in values.items():
-        if not isinstance(raw_path, str) or not raw_path.strip():
-            continue
-        requested = Path(raw_path).expanduser()
-        candidate = requested if requested.is_absolute() else root / requested
-        resolved = candidate.resolve(strict=False)
+    for resolved, spec in _context_mapping(resources, "managed_write_paths").items():
         if path == resolved or resolved in path.parents:
-            return raw_spec if isinstance(raw_spec, dict) else {}
+            return dict(spec)
     return None
 
 
 def _is_allowed_write_path(path: Path, *, root: Path, resources: dict[str, Any]) -> bool:
-    config = resources.get("filesystem", {})
-    values = config.get("allowed_write_paths", []) if isinstance(config, dict) else []
-    if not isinstance(values, list) or not values:
+    values = _context_paths(resources, "allowed_write_paths")
+    runtime = _filesystem_context(resources)
+    enforced = (
+        runtime.write_scope_enforced
+        if isinstance(runtime, FilesystemRuntimeResource)
+        else bool(runtime.get("write_scope_enforced", False))
+    )
+    if not enforced:
         return True
-    return _path_matches_focus_files(path, root=root, focus_files=values)
+    return _path_matches_focus_files(path, focus_files=values)
 
 
-def _path_matches_focus_files(path: Path, *, root: Path, focus_files: list[Any]) -> bool:
+def _path_matches_focus_files(path: Path, *, focus_files: tuple[Path, ...]) -> bool:
     if not focus_files:
         return False
-    for value in focus_files:
-        if not isinstance(value, str) or not value.strip():
-            continue
-        requested = Path(value).expanduser()
-        candidate = requested if requested.is_absolute() else root / requested
-        resolved = candidate.resolve(strict=False)
+    for resolved in focus_files:
         if path == resolved or resolved in path.parents:
             return True
     return False
+
+
+def _context_paths(resources: dict[str, Any], field_name: str) -> tuple[Path, ...]:
+    runtime = _filesystem_context(resources)
+    if isinstance(runtime, FilesystemRuntimeResource):
+        return tuple(getattr(runtime, field_name))
+    values = runtime.get(field_name, ())
+    if not isinstance(values, list):
+        raise ValueError(f"filesystem runtime context {field_name} must be an array")
+    return tuple(Path(str(value)).resolve() for value in values)
+
+
+def _context_mapping(
+    resources: dict[str, Any],
+    field_name: str,
+) -> dict[Path, Mapping[str, Any]]:
+    runtime = _filesystem_context(resources)
+    if isinstance(runtime, FilesystemRuntimeResource):
+        return dict(getattr(runtime, field_name))
+    values = runtime.get(field_name, {})
+    if not isinstance(values, dict):
+        raise ValueError(f"filesystem runtime context {field_name} must be an object")
+    return {
+        Path(str(path)).resolve(): dict(spec)
+        for path, spec in values.items()
+        if isinstance(spec, dict)
+    }
 
 
 def _focus_write_facts(path: Path, *, root: Path, resources: dict[str, Any]) -> dict[str, Any]:

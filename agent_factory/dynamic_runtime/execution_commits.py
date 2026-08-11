@@ -18,6 +18,7 @@ from agent_factory.model_pool.usage import insert_runtime_model_usage
 from agent_factory.runtime_protocol import (
     ConversationMessage,
     ConversationTurn,
+    DelegatedTaskEvent,
     RuntimeErrorEnvelope,
     RuntimeInstance,
     RuntimeModelUsage,
@@ -42,7 +43,13 @@ class RuntimeExecutionCommitStore:
     def __init__(self, database: DynamicRuntimeDatabase) -> None:
         self._database = database
 
-    def begin(self, runtime_instance_id: str, *, resuming: bool) -> RuntimeInstance:
+    def begin(
+        self,
+        runtime_instance_id: str,
+        *,
+        resuming: bool,
+        delegation_claim_id: str | None = None,
+    ) -> RuntimeInstance:
         now = utc_now_text()
         with self._database.transaction() as conn:
             instance = _load_instance(conn, runtime_instance_id)
@@ -69,34 +76,39 @@ class RuntimeExecutionCommitStore:
                     "error": None,
                 }
             )
-            turn = _load_turn(conn, instance.request.turn_id)
-            if turn.session_id != instance.request.session_id:
-                raise RuntimeError("runtime instance and conversation turn sessions differ")
-            if resuming:
+            turn: ConversationTurn | None = None
+            if instance.request.runtime_role == "main":
+                if delegation_claim_id is not None:
+                    raise ValueError("main runtime execution cannot use a delegation claim")
+                turn = _load_turn(conn, instance.request.turn_id)
+                if turn.session_id != instance.request.session_id:
+                    raise RuntimeError("runtime instance and conversation turn sessions differ")
                 require_transition(
                     turn.status,
                     "running",
                     CONVERSATION_TURN_TRANSITIONS,
                     machine="conversation turn",
+                )
+                updated_turn = turn.model_copy(
+                    update={
+                        "status": "running",
+                        "active_runtime_instance_id": instance.runtime_instance_id,
+                        "updated_at": now,
+                        "terminal_at": None,
+                    }
                 )
             else:
-                require_transition(
-                    turn.status,
-                    "running",
-                    CONVERSATION_TURN_TRANSITIONS,
-                    machine="conversation turn",
+                _begin_delegated_task(
+                    conn,
+                    instance=instance,
+                    delegation_claim_id=delegation_claim_id,
+                    resuming=resuming,
+                    now=now,
                 )
-            updated_turn = turn.model_copy(
-                update={
-                    "status": "running",
-                    "active_runtime_instance_id": instance.runtime_instance_id,
-                    "updated_at": now,
-                    "terminal_at": None,
-                }
-            )
 
             _replace_instance_row(conn, updated_instance, expected_status=instance.status, expected_attempt=instance.attempt_id)
-            _replace_turn_row(conn, updated_turn, expected_status=turn.status)
+            if turn is not None:
+                _replace_turn_row(conn, updated_turn, expected_status=turn.status)
             if resuming:
                 _resume_waiting_tool_calls(conn, instance.runtime_instance_id, now=now)
             event = runtime_event_for_instance(
@@ -153,22 +165,34 @@ class RuntimeExecutionCommitStore:
                     "error": error,
                 }
             )
-            turn = _load_turn(conn, current.request.turn_id)
-            if turn.active_runtime_instance_id != current.runtime_instance_id:
-                raise RuntimeError("conversation turn is owned by a different runtime instance")
-            require_transition(turn.status, status, CONVERSATION_TURN_TRANSITIONS, machine="conversation turn")
-            updated_turn = turn.model_copy(
-                update={
-                    "status": status,
-                    "updated_at": now,
-                    "terminal_at": terminal_at,
-                }
-            )
-
             committed_messages = tuple(_committed_message(message, committed_at=now) for message in messages)
-            for message in committed_messages:
-                _validate_message_owner(message, current)
-                insert_message(conn, message)
+            turn: ConversationTurn | None = None
+            if current.request.runtime_role == "main":
+                turn = _load_turn(conn, current.request.turn_id)
+                if turn.active_runtime_instance_id != current.runtime_instance_id:
+                    raise RuntimeError("conversation turn is owned by a different runtime instance")
+                require_transition(turn.status, status, CONVERSATION_TURN_TRANSITIONS, machine="conversation turn")
+                updated_turn = turn.model_copy(
+                    update={
+                        "status": status,
+                        "updated_at": now,
+                        "terminal_at": terminal_at,
+                    }
+                )
+                for message in committed_messages:
+                    _validate_message_owner(message, current)
+                    insert_message(conn, message)
+            else:
+                if committed_messages:
+                    raise RuntimeError("temporary runtime cannot commit conversation messages")
+                _commit_delegated_task(
+                    conn,
+                    instance=current,
+                    status=status,
+                    event_payload=event_payload,
+                    now=now,
+                    terminal_at=terminal_at,
+                )
             for tool_call in tool_calls:
                 _upsert_tool_call(conn, tool_call, current=current, now=now)
             for usage in model_usage:
@@ -181,7 +205,8 @@ class RuntimeExecutionCommitStore:
                 expected_status=current.status,
                 expected_attempt=current.attempt_id,
             )
-            _replace_turn_row(conn, updated_turn, expected_status=turn.status)
+            if turn is not None:
+                _replace_turn_row(conn, updated_turn, expected_status=turn.status)
             event = runtime_event_for_instance(
                 updated_instance,
                 payload=event_payload,
@@ -200,6 +225,162 @@ class RuntimeExecutionCommitStore:
             event_payload={"kind": "failed", "error": error.model_dump(mode="json")},
             error=error,
         )
+
+
+def _begin_delegated_task(
+    conn: Any,
+    *,
+    instance: RuntimeInstance,
+    delegation_claim_id: str | None,
+    resuming: bool,
+    now: str,
+) -> None:
+    request = instance.request
+    if request.task_id is None or request.delegation_grant_id is None:
+        raise RuntimeError("temporary runtime is missing delegated task authority")
+    row = conn.execute(
+        """
+        select task.status, task.claim_id, task.claimed_generation, task.claim_expires_at,
+               task.child_runtime_instance_id, grant.status as grant_status, grant.expires_at
+        from delegated_task_revisions as task
+        join delegation_grants as grant on grant.grant_id = task.delegation_grant_id
+        where task.task_id = ? and task.task_revision = ?
+          and task.delegation_grant_id = ?
+        """,
+        (request.task_id, request.task_revision, request.delegation_grant_id),
+    ).fetchone()
+    if row is None or str(row["child_runtime_instance_id"]) != instance.runtime_instance_id:
+        raise PermissionError("temporary runtime has no matching delegated task")
+    if str(row["grant_status"]) != "active" or str(row["expires_at"]) <= now:
+        raise PermissionError("temporary runtime delegation grant is unavailable")
+    expected_status = "waiting" if resuming else "queued"
+    if str(row["status"]) != expected_status:
+        raise RuntimeError("delegated task status differs from runtime execution state")
+    if resuming:
+        if delegation_claim_id is not None:
+            raise ValueError("resumed delegated task cannot use a queue claim")
+        claim_clause = "claim_id is null"
+        parameters: tuple[Any, ...] = (now, request.task_id, request.task_revision)
+    else:
+        if not delegation_claim_id:
+            raise ValueError("new temporary runtime execution requires a queue claim")
+        if (
+            str(row["claim_id"] or "") != delegation_claim_id
+            or int(row["claimed_generation"] or 0) != instance.generation
+            or str(row["claim_expires_at"] or "") <= now
+        ):
+            raise RuntimeError("delegated task queue claim is invalid or expired")
+        claim_clause = "claim_id = ? and claimed_generation = ? and claim_expires_at > ?"
+        parameters = (
+            now,
+            request.task_id,
+            request.task_revision,
+            delegation_claim_id,
+            instance.generation,
+            now,
+        )
+    changed = conn.execute(
+        f"""
+        update delegated_task_revisions
+        set status = 'running', claim_id = null, claimed_generation = null,
+            claim_expires_at = null, updated_at = ?
+        where task_id = ? and task_revision = ? and status = '{expected_status}'
+          and {claim_clause}
+        """,
+        parameters,
+    ).rowcount
+    if changed != 1:
+        raise RuntimeError("delegated task execution claim compare-and-set failed")
+
+
+def _commit_delegated_task(
+    conn: Any,
+    *,
+    instance: RuntimeInstance,
+    status: str,
+    event_payload: RuntimeEventPayload | dict[str, Any],
+    now: str,
+    terminal_at: str | None,
+) -> None:
+    request = instance.request
+    if request.task_id is None or request.delegation_grant_id is None or instance.attempt_id is None:
+        raise RuntimeError("temporary runtime commit is missing delegated task authority")
+    task_status = "waiting" if status in {"waiting_approval", "waiting_external"} else status
+    changed = conn.execute(
+        """
+        update delegated_task_revisions
+        set status = ?, updated_at = ?, terminal_at = ?
+        where task_id = ? and task_revision = ? and delegation_grant_id = ?
+          and child_runtime_instance_id = ? and status = 'running'
+        """,
+        (
+            task_status,
+            now,
+            terminal_at,
+            request.task_id,
+            request.task_revision,
+            request.delegation_grant_id,
+            instance.runtime_instance_id,
+        ),
+    ).rowcount
+    if changed != 1:
+        raise RuntimeError("delegated task commit compare-and-set failed")
+    sequence = int(
+        conn.execute(
+            """
+            select coalesce(max(sequence), 0) + 1 from delegated_task_events
+            where task_id = ? and task_revision = ?
+            """,
+            (request.task_id, request.task_revision),
+        ).fetchone()[0]
+    )
+    event_type = {
+        "waiting_approval": "approval_required",
+        "waiting_external": "question",
+        "completed": "result",
+        "failed": "failed",
+        "cancelled": "cancelled",
+    }[status]
+    payload = (
+        event_payload.model_dump(mode="json")
+        if hasattr(event_payload, "model_dump")
+        else dict(event_payload)
+    )
+    event = DelegatedTaskEvent(
+        event_id=f"delegated_task_event:{request.task_id}:{request.task_revision}:{sequence}",
+        task_id=request.task_id,
+        task_revision=request.task_revision,
+        sequence=sequence,
+        event_type=event_type,
+        principal_id=request.principal_id,
+        parent_runtime_instance_id=request.parent_runtime_instance_id or "",
+        child_runtime_instance_id=instance.runtime_instance_id,
+        child_attempt_id=instance.attempt_id,
+        payload=payload,
+        created_at=now,
+    )
+    conn.execute(
+        """
+        insert into delegated_task_events(
+          event_id, task_id, task_revision, sequence, event_type,
+          principal_id, parent_runtime_instance_id, child_runtime_instance_id,
+          child_attempt_id, payload_json, created_at
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            event.event_id,
+            event.task_id,
+            event.task_revision,
+            event.sequence,
+            event.event_type,
+            event.principal_id,
+            event.parent_runtime_instance_id,
+            event.child_runtime_instance_id,
+            event.child_attempt_id,
+            event.model_dump_json(),
+            event.created_at,
+        ),
+    )
 
 
 def _load_instance(conn: Any, runtime_instance_id: str) -> RuntimeInstance:

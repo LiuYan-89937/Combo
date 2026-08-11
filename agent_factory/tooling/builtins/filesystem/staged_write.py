@@ -18,6 +18,7 @@ from agent_factory.tooling.builtins.filesystem.common import (
     filesystem_boundary,
     resolve_path,
     write_focus_facts,
+    require_filesystem_runtime,
 )
 from agent_factory.tooling.builtins.filesystem.text_changes import atomic_write_file
 
@@ -51,7 +52,10 @@ class StagedWrite:
 
 
 class StagedWriteStore:
-    def __init__(self) -> None:
+    def __init__(self, *, ttl_seconds: int) -> None:
+        if ttl_seconds < 60:
+            raise ValueError("staged write TTL must be at least 60 seconds")
+        self._ttl_seconds = ttl_seconds
         self._writes: dict[str, StagedWrite] = {}
         self._lock = RLock()
 
@@ -78,7 +82,7 @@ class StagedWriteStore:
                 snapshot=snapshot,
                 create_dirs=create_dirs,
                 created_at=now.isoformat(),
-                expires_at=(now + timedelta(seconds=_staged_write_ttl_seconds())).isoformat(),
+                expires_at=(now + timedelta(seconds=self._ttl_seconds)).isoformat(),
             )
             staged.staging_file.touch()
             self._writes[staged.write_id] = staged
@@ -128,8 +132,12 @@ class StagedWriteStore:
             staged = self._writes.pop(write_id)
             _remove_staging(staged)
 
-
-STAGED_WRITE_STORE = StagedWriteStore()
+    def close(self) -> None:
+        with self._lock:
+            staged_writes = tuple(self._writes.values())
+            self._writes.clear()
+        for staged in staged_writes:
+            _remove_staging(staged)
 
 
 def start_staged_write(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
@@ -146,7 +154,7 @@ def start_staged_write(arguments: dict[str, Any], resources: dict[str, Any]) -> 
     expected_hash = str(arguments.get("expected_hash") or "").strip()
     if expected_hash and expected_hash != snapshot.content_hash:
         raise ValueError("expected_hash does not match current file content")
-    staged = STAGED_WRITE_STORE.create(
+    staged = _store(resources).create(
         root=root,
         target=target,
         display_path=path,
@@ -171,9 +179,9 @@ def append_staged_write(arguments: dict[str, Any], resources: dict[str, Any]) ->
     content = arguments.get("content")
     if not isinstance(content, str):
         raise ValueError("content must be a string")
-    staged = STAGED_WRITE_STORE.get(write_id)
+    staged = _store(resources).get(write_id)
     _validate_workspace(staged, resources)
-    staged = STAGED_WRITE_STORE.append(write_id, content)
+    staged = _store(resources).append(write_id, content)
     return {
         "action": "append",
         "status": "staging",
@@ -186,8 +194,9 @@ def append_staged_write(arguments: dict[str, Any], resources: dict[str, Any]) ->
 
 def commit_staged_write(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     write_id = _required_text(arguments, "write_id")
-    _validate_workspace(STAGED_WRITE_STORE.get(write_id), resources)
-    staged = STAGED_WRITE_STORE.take(write_id)
+    store = _store(resources)
+    _validate_workspace(store.get(write_id), resources)
+    staged = store.take(write_id)
     created_directories: list[Path] = []
     try:
         _validate_workspace(staged, resources)
@@ -237,9 +246,10 @@ def commit_staged_write(arguments: dict[str, Any], resources: dict[str, Any]) ->
 
 def abort_staged_write(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     write_id = _required_text(arguments, "write_id")
-    staged = STAGED_WRITE_STORE.get(write_id)
+    store = _store(resources)
+    staged = store.get(write_id)
     _validate_workspace(staged, resources)
-    staged = STAGED_WRITE_STORE.abort(write_id)
+    staged = store.abort(write_id)
     return {
         "action": "abort",
         "status": "aborted",
@@ -324,11 +334,8 @@ def _required_text(arguments: dict[str, Any], key: str) -> str:
     return value.strip()
 
 
-def _staged_write_ttl_seconds() -> int:
-    raw = os.getenv("AGENTFACTORY_STAGED_WRITE_TTL_SECONDS")
-    if not raw:
-        return DEFAULT_STAGED_WRITE_TTL_SECONDS
-    try:
-        return max(60, int(raw))
-    except ValueError:
-        return DEFAULT_STAGED_WRITE_TTL_SECONDS
+def _store(resources: dict[str, Any]) -> StagedWriteStore:
+    store = require_filesystem_runtime(resources).staged_write_store
+    if not isinstance(store, StagedWriteStore):
+        raise RuntimeError("filesystem staged write store is not configured")
+    return store

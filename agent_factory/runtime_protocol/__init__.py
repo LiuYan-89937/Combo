@@ -20,6 +20,7 @@ from agent_factory.runtime_protocol.contracts import (
     PolicyValueSource,
     ModelSelectionSnapshot,
     RouteDecision,
+    RuntimeExecutionIdentity,
     RuntimeInstance,
     RuntimePolicySnapshot,
     RuntimeRequest,
@@ -59,6 +60,8 @@ from agent_factory.runtime_protocol.capabilities import (
 from agent_factory.runtime_protocol.admission import AdmissionLease, AdmissionRequest, ModelOperation
 from agent_factory.runtime_protocol.model_stream import ModelStreamNormalizer, NormalizedModelStreamEvent
 from agent_factory.runtime_protocol.model_usage import RuntimeModelUsage
+from agent_factory.runtime_protocol.memory import MemoryKind, MemoryRevision, MemoryScope, MemoryStatus
+from agent_factory.runtime_protocol.delegation import DelegatedTaskEvent, DelegatedTaskEventType, DelegationGrant
 from agent_factory.runtime_protocol.navigation import DeepLinkResolution, DeepLinkResolver
 from agent_factory.runtime_protocol.state_machines import InvalidStateTransition, require_transition
 from agent_factory.runtime_protocol.commands import (
@@ -111,6 +114,7 @@ __all__ = [
     "PolicyValueSource",
     "ModelSelectionSnapshot",
     "RouteDecision",
+    "RuntimeExecutionIdentity",
     "RuntimeEvent",
     "ArtifactPart",
     "AttachmentPart",
@@ -141,6 +145,13 @@ __all__ = [
     "ModelStreamNormalizer",
     "NormalizedModelStreamEvent",
     "RuntimeModelUsage",
+    "MemoryKind",
+    "MemoryRevision",
+    "MemoryScope",
+    "MemoryStatus",
+    "DelegationGrant",
+    "DelegatedTaskEvent",
+    "DelegatedTaskEventType",
     "DeepLinkResolution",
     "DeepLinkResolver",
     "InvalidStateTransition",

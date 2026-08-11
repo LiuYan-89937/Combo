@@ -28,7 +28,7 @@ from agent_factory.tooling.output_store import (
     ToolOutputPolicy,
     ToolOutputStore,
 )
-from agent_factory.tooling.spec import ToolOutputCompressionConfig, ToolSpec
+from agent_factory.tooling.spec import ToolLoopPolicyConfig, ToolOutputCompressionConfig, ToolSpec
 
 
 ToolEntrypoint = Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
@@ -38,11 +38,14 @@ ReleaseCallback = Callable[[], None]
 @dataclass(frozen=True, slots=True)
 class ToolEntrypointLease:
     entrypoint: ToolEntrypoint
+    hard_risk_evaluator: ToolEntrypoint | None
     release_callback: ReleaseCallback
 
     def __post_init__(self) -> None:
         if not callable(self.entrypoint) or not callable(self.release_callback):
             raise TypeError("tool entrypoint lease requires callable entrypoint and release callback")
+        if self.hard_risk_evaluator is not None and not callable(self.hard_risk_evaluator):
+            raise TypeError("tool entrypoint lease risk evaluator must be callable")
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,6 +202,7 @@ class ExplicitToolCapabilityRuntimeAdapter:
             tool = _compile_tool(
                 definition=definition,
                 entrypoint=entrypoint.entrypoint,
+                hard_risk_evaluator=entrypoint.hard_risk_evaluator,
                 resources=resources.resources,
                 output=output,
                 approval=approval,
@@ -273,6 +277,7 @@ def _compile_tool(
     *,
     definition: ToolDefinition,
     entrypoint: ToolEntrypoint,
+    hard_risk_evaluator: ToolEntrypoint | None,
     resources: Mapping[str, Any],
     output: ToolOutputRuntimeLease,
     approval: ToolApprovalRuntimeLease,
@@ -285,19 +290,23 @@ def _compile_tool(
     spec = ToolSpec(
         id=definition.model_alias,
         description=definition.model_description,
+        schema_error_guidance=definition.schema_error_guidance,
         entrypoint=definition.implementation.entrypoint,
         input_schema=definition.input_schema,
         output_schema=definition.output_schema,
         resources={name: name for name in expected_resources},
         risk_level=definition.runtime_policy.risk_level,
         concurrent=definition.runtime_policy.allow_parallel_calls,
-        permission_scope="capability",
-        permission_tags=list(definition.effects),
+        max_parallel_calls=definition.runtime_policy.max_parallel_calls,
         output_compression=ToolOutputCompressionConfig(
             max_model_chars=definition.runtime_policy.output_max_model_chars,
         ),
         output_projection=definition.runtime_policy.output_projection,
         sensitive_argument_paths=list(definition.sensitive_argument_paths),
+        loop_policy=ToolLoopPolicyConfig.model_validate(definition.loop_policy.model_dump(mode="json")),
+        effects=list(definition.effects),
+        read_only=definition.read_only,
+        system_available=definition.system_available,
     )
     return _compiler(
         spec=spec,
@@ -307,7 +316,11 @@ def _compile_tool(
         output=output,
         approval=approval,
         maximum_argument_revisions=maximum_argument_revisions,
-    ).compile_resolved(spec, entrypoint=entrypoint)
+    ).compile_resolved(
+        spec,
+        entrypoint=entrypoint,
+        hard_risk_evaluator=hard_risk_evaluator,
+    )
 
 
 def _compile_mcp_tool(
@@ -327,11 +340,12 @@ def _compile_mcp_tool(
         output_schema=definition.output_schema.canonical_schema,
         risk_level=definition.runtime_policy.risk_level,
         concurrent=definition.runtime_policy.allow_parallel_calls,
-        permission_scope="capability",
+        max_parallel_calls=definition.runtime_policy.max_parallel_calls,
         output_compression=ToolOutputCompressionConfig(
             max_model_chars=definition.runtime_policy.output_max_model_chars,
         ),
         output_projection=definition.runtime_policy.output_projection,
+        effects=list(definition.effects),
     )
     return _compiler(
         spec=spec,

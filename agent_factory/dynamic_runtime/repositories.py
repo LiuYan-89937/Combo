@@ -7,9 +7,11 @@ from typing import Any, Literal
 from agent_factory.dynamic_runtime.database import DynamicRuntimeDatabase
 from agent_factory.dynamic_runtime.persistence_helpers import (
     advance_conversation_revision,
+    insert_runtime_instance,
     insert_message,
     insert_outbox,
     insert_turn,
+    upsert_capability_snapshot,
 )
 from agent_factory.runtime_protocol import (
     CapabilitySnapshot,
@@ -530,40 +532,8 @@ class RuntimeInstanceStore:
         if snapshot.snapshot_id != instance.capability_snapshot_id:
             raise ValueError("runtime instance references a different capability snapshot")
         with self._database.transaction() as conn:
-            conn.execute(
-                """
-                insert or ignore into capability_snapshots(
-                  snapshot_id, content_digest, payload_json, created_at
-                ) values (?, ?, ?, ?)
-                """,
-                (snapshot.snapshot_id, snapshot.content_digest, snapshot.model_dump_json(), utc_now_text()),
-            )
-            conn.execute(
-                """
-                insert into runtime_instances(
-                  runtime_instance_id, request_id, session_id, turn_id,
-                  parent_runtime_instance_id, capability_snapshot_id, generation,
-                  status, attempt_id, last_event_sequence, payload_json,
-                  created_at, updated_at, terminal_at
-                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    instance.runtime_instance_id,
-                    instance.request.request_id,
-                    instance.request.session_id,
-                    instance.request.turn_id,
-                    instance.request.parent_runtime_instance_id,
-                    instance.capability_snapshot_id,
-                    instance.generation,
-                    instance.status,
-                    instance.attempt_id,
-                    instance.last_event_sequence,
-                    instance.model_dump_json(),
-                    instance.created_at,
-                    instance.updated_at,
-                    instance.terminal_at,
-                ),
-            )
+            upsert_capability_snapshot(conn, snapshot)
+            insert_runtime_instance(conn, instance)
             insert_outbox(conn, outbox)
 
     def get(self, runtime_instance_id: str) -> RuntimeInstance:

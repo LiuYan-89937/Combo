@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 from agent_factory.runtime_kernel.errors import RuntimeKernelError
 
@@ -14,7 +14,7 @@ class RuntimeServices(BaseModel):
 
     model_operation_service: object
     tool_registry: object
-    memory_store: object
+    graph_store: object
     context_system: object
     context_engine: object
     observability_manager: object
@@ -22,8 +22,7 @@ class RuntimeServices(BaseModel):
     scheduler_store: object | None = None
     scheduler_runtime: object | None = None
     artifact_store: object | None = None
-    runtime_resources: dict[str, Any] = Field(default_factory=dict)
-    tool_runtime_resources: dict[str, Any] = Field(default_factory=dict)
+    runtime_context_resources: object
 
     def get_required(self, name: str) -> Any:
         value = getattr(self, name, None)

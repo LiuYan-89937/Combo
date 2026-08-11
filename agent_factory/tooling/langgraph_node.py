@@ -62,6 +62,9 @@ class AgentFactoryToolNode:
         self.emit_event = emit_event
         self.stream_events = stream_events
         self._concurrent_by_name = {tool.name: _tool_concurrent(tool) for tool in tools}
+        self._max_parallel_by_name = {
+            tool.name: _tool_max_parallel_calls(tool) for tool in tools
+        }
         self._serialization_key_by_name = {
             tool.name: _tool_serialization_key(tool)
             for tool in tools
@@ -102,6 +105,7 @@ class AgentFactoryToolNode:
         for batch in _tool_call_batches(
             executable_calls,
             self._concurrent_by_name,
+            self._max_parallel_by_name,
             self._serialization_key_by_name,
         ):
             approval_requests = self._approval_requests_for_batch(batch, state=state)
@@ -544,10 +548,12 @@ def tool_observation_message(
 def _tool_call_batches(
     tool_calls: Sequence[dict[str, Any]],
     concurrent_by_name: Mapping[str, bool],
+    max_parallel_by_name: Mapping[str, int],
     serialization_key_by_name: Mapping[str, str | None],
 ) -> list[list[dict[str, Any]]]:
     batches: list[list[dict[str, Any]]] = []
     batch_keys: list[set[str]] = []
+    batch_counts: list[dict[str, int]] = []
     for call in tool_calls:
         tool_id = str(call.get("name") or "")
         serialization_key = serialization_key_by_name.get(tool_id)
@@ -556,20 +562,21 @@ def _tool_call_batches(
             if serialization_key is not None
             else (None if concurrent_by_name.get(tool_id, True) else f"tool:{tool_id}")
         )
-        if conflict_key is None:
-            if not batches:
-                batches.append([])
-                batch_keys.append(set())
-            batches[0].append(call)
-            continue
+        maximum = max_parallel_by_name.get(tool_id, 1)
         for index, batch in enumerate(batches):
-            if conflict_key not in batch_keys[index]:
-                batch.append(call)
+            if conflict_key is not None and conflict_key in batch_keys[index]:
+                continue
+            if batch_counts[index].get(tool_id, 0) >= maximum:
+                continue
+            batch.append(call)
+            if conflict_key is not None:
                 batch_keys[index].add(conflict_key)
-                break
+            batch_counts[index][tool_id] = batch_counts[index].get(tool_id, 0) + 1
+            break
         else:
             batches.append([call])
-            batch_keys.append({conflict_key})
+            batch_keys.append({conflict_key} if conflict_key is not None else set())
+            batch_counts.append({tool_id: 1})
     return batches
 
 
@@ -623,6 +630,17 @@ def _tool_serialization_key(tool: BaseTool) -> str | None:
         return None
     value = str(agent_factory.get("serialization_key") or "").strip()
     return value or None
+
+
+def _tool_max_parallel_calls(tool: BaseTool) -> int:
+    metadata = getattr(tool, "metadata", None)
+    if not isinstance(metadata, dict):
+        return 1
+    agent_factory = metadata.get("agent_factory")
+    if not isinstance(agent_factory, dict):
+        return 1
+    value = agent_factory.get("max_parallel_calls", 1)
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 1 else 1
 
 
 def _normalize_tool_call(

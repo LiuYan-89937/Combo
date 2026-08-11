@@ -1,0 +1,1 @@
+"""Stable capability catalog tool."""

@@ -17,8 +17,12 @@ def get_tool_output_tool_specs() -> list[ToolSpec]:
             input_schema=_input_schema(),
             output_schema={"type": "object"},
             resources={TOOL_OUTPUT_STORE_RESOURCE: TOOL_OUTPUT_STORE_RESOURCE},
+            effects=["read"],
+            read_only=True,
+            system_available=True,
             risk_level="low",
             concurrent=True,
+            max_parallel_calls=4,
             output_projection="passthrough",
         )
     ]

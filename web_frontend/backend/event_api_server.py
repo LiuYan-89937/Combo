@@ -17,6 +17,7 @@ from web_frontend.backend.dynamic_runtime_api import (
 from web_frontend.backend.event_loop_watchdog import EventLoopWatchdog
 from web_frontend.backend.parent_process_watchdog import start_parent_process_watchdog
 from web_frontend.backend.routes.files import create_file_router
+from web_frontend.backend.routes.browser_views import create_browser_view_router
 from web_frontend.backend.routes.model_pool import create_model_pool_router
 from web_frontend.backend.runtime_backend import RuntimeBackend, RuntimeBackendConfig
 
@@ -95,6 +96,7 @@ def create_app(config: RuntimeBackendConfig | None = None) -> FastAPI:
     )
     application.include_router(create_model_pool_router(usage_store=backend.application.stores.model_usage))
     application.include_router(create_file_router())
+    application.include_router(create_browser_view_router(logger, backend.browser_runtime))
     return application
 
 

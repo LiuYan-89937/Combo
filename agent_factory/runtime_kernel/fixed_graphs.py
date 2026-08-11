@@ -105,7 +105,7 @@ def build_fixed_runtime_graph(
 
     return CompiledRuntimeGraph(
         strategy=strategy,
-        graph_app=graph.compile(checkpointer=services.checkpointer, store=services.memory_store),
+        graph_app=graph.compile(checkpointer=services.checkpointer, store=services.graph_store),
         services=services,
         node_runners=node_runners,
     )

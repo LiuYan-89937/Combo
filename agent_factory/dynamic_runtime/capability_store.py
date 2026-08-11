@@ -7,6 +7,7 @@ from agent_factory.dynamic_runtime.database import DynamicRuntimeDatabase
 from agent_factory.runtime_protocol import (
     CapabilityActivation,
     CapabilityDraft,
+    CapabilityHealthReceipt,
     CapabilityIndexRevision,
     CapabilityKind,
     CapabilityRevision,
@@ -228,6 +229,196 @@ class CapabilityStore:
             )
         return revision
 
+    def publish_active_revision(
+        self,
+        *,
+        revision: CapabilityRevision,
+        index: CapabilityIndexRevision,
+        activation: CapabilityActivation,
+        health: CapabilityHealthReceipt,
+        expected_draft_revision: int,
+        expected_activation_revision: int | None,
+    ) -> ActiveCapability:
+        """Atomically publish, index, health-check, and activate one validated draft."""
+        if activation.status != "active":
+            raise ValueError("publication activation must be active")
+        if (
+            index.source_capability_id != revision.capability_id
+            or index.source_revision != revision.revision
+            or index.source_digest != revision.content_digest
+        ):
+            raise CapabilityConflictError("publication index does not match capability revision")
+        if (
+            activation.capability_id != revision.capability_id
+            or activation.kind != revision.kind
+            or activation.revision != revision.revision
+            or activation.content_digest != revision.content_digest
+            or activation.index_revision_id != index.index_revision_id
+        ):
+            raise CapabilityConflictError("publication activation does not match capability revision")
+        if (
+            health.capability_id != revision.capability_id
+            or health.kind != revision.kind
+            or health.revision != revision.revision
+            or health.content_digest != revision.content_digest
+            or health.status != "healthy"
+        ):
+            raise CapabilityConflictError("publication health receipt does not match capability revision")
+
+        with self._database.transaction() as conn:
+            draft_row = self._draft_row(conn, revision.capability_id)
+            draft = CapabilityDraft.model_validate_json(str(draft_row["payload_json"]))
+            if draft.draft_revision != expected_draft_revision:
+                raise CapabilityConflictError("capability draft revision changed before publication")
+            self._require_revision_matches_draft(revision, draft)
+            receipt = conn.execute(
+                """
+                select 1 from capability_validation_receipts
+                where receipt_id = ? and capability_id = ? and draft_revision = ?
+                  and content_digest = ? and status = 'passed'
+                """,
+                (
+                    revision.validation_receipt_id,
+                    revision.capability_id,
+                    expected_draft_revision,
+                    revision.content_digest,
+                ),
+            ).fetchone()
+            if receipt is None:
+                raise CapabilityConflictError("publication requires a matching passed validation receipt")
+            next_revision = int(
+                conn.execute(
+                    "select coalesce(max(revision), 0) + 1 from capability_revisions where capability_id = ?",
+                    (revision.capability_id,),
+                ).fetchone()[0]
+            )
+            if revision.revision != next_revision:
+                raise CapabilityConflictError(
+                    f"capability revision must be {next_revision}, got {revision.revision}"
+                )
+            expected_document = {
+                "display_name": revision.content.display_name,
+                "description": revision.content.description,
+                "keywords": revision.content.keywords,
+            }
+            actual_document = {
+                "display_name": index.document.display_name,
+                "description": index.document.description,
+                "keywords": index.document.keywords,
+            }
+            if actual_document != expected_document:
+                raise CapabilityConflictError("publication index differs from capability content")
+
+            current_activation = conn.execute(
+                "select kind, namespace, activation_revision from capability_activations where capability_id = ?",
+                (revision.capability_id,),
+            ).fetchone()
+            if current_activation is None:
+                if expected_activation_revision is not None or activation.activation_revision != 1:
+                    raise CapabilityConflictError("first activation must start at revision 1")
+            else:
+                current_revision = int(current_activation["activation_revision"])
+                if expected_activation_revision != current_revision:
+                    raise CapabilityConflictError("capability activation revision changed")
+                if activation.activation_revision != current_revision + 1:
+                    raise CapabilityConflictError("activation revision must increment current revision")
+                if (
+                    str(current_activation["kind"]) != revision.kind
+                    or str(current_activation["namespace"]) != revision.namespace
+                ):
+                    raise CapabilityConflictError("capability kind and namespace are immutable")
+
+            conn.execute(
+                """
+                insert into capability_revisions(
+                  capability_id, kind, revision, namespace, content_digest,
+                  validation_receipt_id, payload_json, published_by_principal_id, published_at
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    revision.capability_id,
+                    revision.kind,
+                    revision.revision,
+                    revision.namespace,
+                    revision.content_digest,
+                    revision.validation_receipt_id,
+                    revision.model_dump_json(),
+                    revision.published_by_principal_id,
+                    revision.published_at,
+                ),
+            )
+            conn.execute(
+                """
+                insert into capability_index_revisions(
+                  index_revision_id, capability_id, source_revision, source_digest,
+                  index_digest, payload_json, created_at
+                ) values (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    index.index_revision_id,
+                    index.source_capability_id,
+                    index.source_revision,
+                    index.source_digest,
+                    index.index_digest,
+                    index.model_dump_json(),
+                    index.created_at,
+                ),
+            )
+            if current_activation is None:
+                conn.execute(
+                    """
+                    insert into capability_activations(
+                      capability_id, kind, namespace, activation_revision, status,
+                      revision, content_digest, index_revision_id, payload_json,
+                      changed_by_principal_id, changed_at
+                    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    self._activation_values(activation, revision.namespace),
+                )
+            else:
+                changed = conn.execute(
+                    """
+                    update capability_activations
+                    set activation_revision = ?, status = 'active', revision = ?,
+                        content_digest = ?, index_revision_id = ?, payload_json = ?,
+                        changed_by_principal_id = ?, changed_at = ?
+                    where capability_id = ? and activation_revision = ?
+                    """,
+                    (
+                        activation.activation_revision,
+                        activation.revision,
+                        activation.content_digest,
+                        activation.index_revision_id,
+                        activation.model_dump_json(),
+                        activation.changed_by_principal_id,
+                        activation.changed_at,
+                        activation.capability_id,
+                        expected_activation_revision,
+                    ),
+                ).rowcount
+                if changed != 1:
+                    raise CapabilityConflictError("capability activation changed during publication")
+            conn.execute(
+                """
+                insert into capability_health_receipts(
+                  receipt_id, capability_id, kind, revision, content_digest,
+                  status, payload_json, checked_at, valid_until
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    health.receipt_id,
+                    health.capability_id,
+                    health.kind,
+                    health.revision,
+                    health.content_digest,
+                    health.status,
+                    health.model_dump_json(),
+                    health.checked_at,
+                    health.valid_until,
+                ),
+            )
+        return ActiveCapability(activation=activation, revision=revision, index_revision=index)
+
     def revision(self, capability_id: str, revision: int) -> CapabilityRevision:
         with self._database.connection(query_only=True) as conn:
             row = conn.execute(
@@ -237,6 +428,17 @@ class CapabilityStore:
         if row is None:
             raise CapabilityNotFoundError(f"capability revision not found: {capability_id}@{revision}")
         return CapabilityRevision.model_validate_json(str(row["payload_json"]))
+
+    def latest_revision(self, capability_id: str) -> CapabilityRevision | None:
+        with self._database.connection(query_only=True) as conn:
+            row = conn.execute(
+                """
+                select payload_json from capability_revisions
+                where capability_id = ? order by revision desc limit 1
+                """,
+                (_required_text(capability_id, "capability_id"),),
+            ).fetchone()
+        return CapabilityRevision.model_validate_json(str(row["payload_json"])) if row else None
 
     def add_index_revision(self, index: CapabilityIndexRevision) -> CapabilityIndexRevision:
         with self._database.transaction() as conn:

@@ -17,6 +17,8 @@ from agent_factory.runtime_protocol import (
     ConversationMessage,
     RuntimeInstance,
 )
+from agent_factory.dynamic_runtime.capability_blob_store import CapabilityBlobStore
+from agent_factory.dynamic_runtime.capability_definitions import SkillDefinition
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,16 +112,27 @@ class CapabilityInstructionRenderer(Protocol):
 
 
 class SnapshotCapabilityInstructionRenderer:
-    """Render only prompt fragments frozen inside the capability snapshot."""
+    """Lazy-load selected Skill instructions and render frozen prompt fragments."""
+
+    def __init__(self, blobs: CapabilityBlobStore) -> None:
+        self._blobs = blobs
 
     def render(self, snapshot: CapabilitySnapshot) -> str:
         sections: list[str] = []
         for projection in snapshot.projections:
-            fragments = tuple(
+            fragments = [
                 fragment.strip()
                 for fragment in projection.model_prompt_fragments
                 if fragment.strip()
-            )
+            ]
+            if projection.kind == "skill":
+                if projection.runtime_definition_schema != "skill_definition.v2":
+                    raise RuntimeError("selected Skill projection uses an unsupported definition schema")
+                skill = SkillDefinition.model_validate(projection.runtime_definition)
+                instructions = self._blobs.read_text(skill.instructions).strip()
+                if not instructions:
+                    raise RuntimeError("selected Skill instruction blob is empty")
+                fragments.append(instructions)
             if not fragments:
                 continue
             sections.append(

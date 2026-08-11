@@ -11,7 +11,7 @@
 - GitHub Browser OAuth；
 - 仅管理员可见的应用 Release 管理控制台。
 
-官网不提供 AgentPackage 社区、Package 搜索、上传、下载、静态校验或人工审核。桌面端也不应从官网导入 AgentPackage。
+官网不提供运行时能力社区、能力搜索、上传、下载、静态校验或人工审核。桌面端也不从官网导入运行时能力。
 
 ## 2. 目标架构文案
 
@@ -25,7 +25,7 @@
   → 在本地工作区产生文件、产物与可恢复状态
 ```
 
-禁止重新出现以下旧概念：制造 Agent、进化 Agent、已发布 Agent、AgentPackage、Package 实例、Package 分发和 AgentHub 社区。
+禁止重新引入已经移除的目录包、多入口工作流、实例分发或社区能力市场。
 
 ## 3. 页面与路由
 
@@ -110,7 +110,7 @@
 
 - TypeScript 与 Vue 类型检查通过。
 - `/hub`、`/publish` 和 Package detail 不在路由、sitemap、robots、导航或构建 chunk 中。
-- 中英文源码不包含制造、进化、AgentPackage 发布与社区分发文案。
+- 中英文源码不包含已经移除的目录包、多入口工作流或社区分发文案。
 - 下载、OAuth、管理员 Release 和 Updater 使用真实后端协议；静态构建成功不等于运行链路通过。
 - 桌面实景演示不会自动滚动页面、抢焦点或调用生产写接口。
 - 最终部署产物和源码执行同一旧语义扫描。

@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-import atexit
 import ipaddress
 import json
 import logging
-import os
 import socket
 import threading
 import time
@@ -22,7 +20,7 @@ BROWSER_RUNTIME_RESOURCE = "browser_runtime"
 LOGGER = logging.getLogger(__name__)
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class BrowserRuntimeConfig:
     headless: bool = True
     allow_private_hosts: bool = False
@@ -37,40 +35,6 @@ class BrowserRuntimeConfig:
     host_validation_ttl_seconds: int = 300
     executable_path: str | None = None
 
-    @classmethod
-    def from_environment(cls) -> BrowserRuntimeConfig:
-        return cls(
-            headless=_env_bool("AGENTFACTORY_BROWSER_HEADLESS", True),
-            allow_private_hosts=_env_bool("AGENTFACTORY_BROWSER_ALLOW_PRIVATE_HOSTS", False),
-            default_timeout_ms=_env_int("AGENTFACTORY_BROWSER_TIMEOUT_MS", 30_000, minimum=1_000),
-            navigation_timeout_ms=_env_int(
-                "AGENTFACTORY_BROWSER_NAVIGATION_TIMEOUT_MS",
-                45_000,
-                minimum=1_000,
-            ),
-            max_contexts=_env_int("AGENTFACTORY_BROWSER_MAX_CONTEXTS", 24, minimum=1),
-            max_pages_per_context=_env_int("AGENTFACTORY_BROWSER_MAX_PAGES", 12, minimum=1),
-            idle_context_seconds=_env_int(
-                "AGENTFACTORY_BROWSER_IDLE_CONTEXT_SECONDS",
-                1_800,
-                minimum=60,
-            ),
-            viewport_width=_env_int("AGENTFACTORY_BROWSER_VIEWPORT_WIDTH", 1440, minimum=320),
-            viewport_height=_env_int("AGENTFACTORY_BROWSER_VIEWPORT_HEIGHT", 900, minimum=240),
-            max_snapshot_links=_env_int(
-                "AGENTFACTORY_BROWSER_MAX_SNAPSHOT_LINKS",
-                200,
-                minimum=1,
-            ),
-            host_validation_ttl_seconds=_env_int(
-                "AGENTFACTORY_BROWSER_HOST_VALIDATION_TTL_SECONDS",
-                300,
-                minimum=1,
-            ),
-            executable_path=_optional_env("AGENTFACTORY_BROWSER_EXECUTABLE_PATH"),
-        )
-
-
 @dataclass(slots=True)
 class BrowserSession:
     context: Any
@@ -83,8 +47,8 @@ class BrowserSession:
 class BrowserRuntime:
     """One managed Chromium process with an isolated BrowserContext per Agent session."""
 
-    def __init__(self, config: BrowserRuntimeConfig | None = None) -> None:
-        self.config = config or BrowserRuntimeConfig.from_environment()
+    def __init__(self, config: BrowserRuntimeConfig) -> None:
+        self.config = config
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(
             target=self._run_loop,
@@ -954,21 +918,6 @@ class BrowserRuntime:
             session.active_page_id = page_id
 
 
-_DEFAULT_BROWSER_RUNTIME: BrowserRuntime | None = None
-_DEFAULT_BROWSER_RUNTIME_LOCK = threading.Lock()
-
-
-def default_browser_runtime() -> BrowserRuntime:
-    global _DEFAULT_BROWSER_RUNTIME
-    if _DEFAULT_BROWSER_RUNTIME is not None:
-        return _DEFAULT_BROWSER_RUNTIME
-    with _DEFAULT_BROWSER_RUNTIME_LOCK:
-        if _DEFAULT_BROWSER_RUNTIME is None:
-            _DEFAULT_BROWSER_RUNTIME = BrowserRuntime()
-            atexit.register(_DEFAULT_BROWSER_RUNTIME.shutdown)
-    return _DEFAULT_BROWSER_RUNTIME
-
-
 def _validated_network_url(url: str):
     parsed = urlparse(str(url or "").strip())
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
@@ -995,29 +944,3 @@ def _non_network_url(url: str) -> bool:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
-
-
-def _optional_env(name: str) -> str | None:
-    value = str(os.getenv(name) or "").strip()
-    return value or None
-
-
-def _env_bool(name: str, default: bool) -> bool:
-    value = str(os.getenv(name) or "").strip().lower()
-    if not value:
-        return default
-    if value in {"1", "true", "yes", "on"}:
-        return True
-    if value in {"0", "false", "no", "off"}:
-        return False
-    raise ValueError(f"{name} must be a boolean")
-
-
-def _env_int(name: str, default: int, *, minimum: int) -> int:
-    value = str(os.getenv(name) or "").strip()
-    if not value:
-        return default
-    parsed = int(value)
-    if parsed < minimum:
-        raise ValueError(f"{name} must be at least {minimum}")
-    return parsed

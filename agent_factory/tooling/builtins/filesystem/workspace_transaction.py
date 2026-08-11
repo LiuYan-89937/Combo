@@ -16,6 +16,7 @@ from agent_factory.tooling.builtins.filesystem.common import (
     assert_not_protected_write_path,
     filesystem_boundary,
     resolve_path,
+    require_filesystem_runtime,
 )
 from agent_factory.tooling.builtins.filesystem.text_changes import text_change_summary
 DEFAULT_TRANSACTION_TTL_SECONDS = 600
@@ -48,7 +49,10 @@ class WorkspaceTransactionPlan:
 
 
 class WorkspaceTransactionStore:
-    def __init__(self) -> None:
+    def __init__(self, *, ttl_seconds: int) -> None:
+        if ttl_seconds < 60:
+            raise ValueError("workspace transaction TTL must be at least 60 seconds")
+        self.ttl_seconds = ttl_seconds
         self._plans: dict[str, WorkspaceTransactionPlan] = {}
         self._lock = RLock()
 
@@ -81,9 +85,6 @@ class WorkspaceTransactionStore:
         ]
         for transaction_id in expired:
             self._plans.pop(transaction_id, None)
-
-
-TRANSACTION_STORE = WorkspaceTransactionStore()
 
 
 def preview_transaction(
@@ -179,24 +180,26 @@ def preview_transaction(
     )
     now = datetime.now(UTC)
     transaction_id = uuid4().hex
+    store = _store(resources)
     plan = WorkspaceTransactionPlan(
         transaction_id=transaction_id,
         workspace_root=root,
         created_at=now.isoformat(),
-        expires_at=(now + timedelta(seconds=_transaction_ttl_seconds())).isoformat(),
+        expires_at=(now + timedelta(seconds=store.ttl_seconds)).isoformat(),
         operations=tuple(normalized_operations),
         snapshots=snapshots,
         final_files=final_files,
         affected_files=affected_files,
     )
-    TRANSACTION_STORE.put(plan)
+    store.put(plan)
     return _plan_payload(plan, status="preview_ready")
 
 
 def commit_transaction(transaction_id: str, resources: dict[str, Any]) -> dict[str, Any]:
     root, _allow_external = filesystem_boundary(resources)
-    with TRANSACTION_STORE.commit_lock():
-        plan = TRANSACTION_STORE.get(transaction_id)
+    store = _store(resources)
+    with store.commit_lock():
+        plan = store.get(transaction_id)
         if plan.workspace_root != root:
             raise ValueError("transaction belongs to a different workspace")
         try:
@@ -204,7 +207,7 @@ def commit_transaction(transaction_id: str, resources: dict[str, Any]) -> dict[s
             _validate_snapshots(plan)
             _apply_transaction(plan)
         finally:
-            TRANSACTION_STORE.remove(transaction_id)
+            store.remove(transaction_id)
     return _plan_payload(plan, status="committed")
 
 
@@ -482,11 +485,8 @@ def _string_value(value: dict[str, Any], key: str, *, index: int) -> str:
     return text
 
 
-def _transaction_ttl_seconds() -> int:
-    raw = os.getenv("AGENTFACTORY_WORKSPACE_TRANSACTION_TTL_SECONDS")
-    if not raw:
-        return DEFAULT_TRANSACTION_TTL_SECONDS
-    try:
-        return max(60, int(raw))
-    except ValueError:
-        return DEFAULT_TRANSACTION_TTL_SECONDS
+def _store(resources: dict[str, Any]) -> WorkspaceTransactionStore:
+    store = require_filesystem_runtime(resources).transaction_store
+    if not isinstance(store, WorkspaceTransactionStore):
+        raise RuntimeError("filesystem transaction store is not configured")
+    return store

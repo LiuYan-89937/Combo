@@ -9,6 +9,7 @@ from agent_factory.dynamic_runtime.capability_adapters import (
     CapabilityRuntimeProjection,
 )
 from agent_factory.dynamic_runtime.capability_store import ActiveCapability, CapabilityStore
+from agent_factory.dynamic_runtime.capability_definitions import ToolDefinition
 from agent_factory.dynamic_runtime.model_service import ResolvedRuntimePolicy
 from agent_factory.runtime_protocol import (
     CapabilityDependencyRef,
@@ -160,7 +161,22 @@ class MainTurnCapabilityResolver:
         policy: ResolvedRuntimePolicy,
         workspace_id: str,
     ) -> CapabilitySnapshot:
-        principal_id = _require_text(envelope.principal_id, "command principal_id")
+        return self.resolve_requirements(
+            principal_id=envelope.principal_id,
+            requirements=route.capability_requirements,
+            policy=policy,
+            workspace_id=workspace_id,
+        )
+
+    def resolve_requirements(
+        self,
+        *,
+        principal_id: str,
+        requirements: tuple[str, ...],
+        policy: ResolvedRuntimePolicy,
+        workspace_id: str,
+    ) -> CapabilitySnapshot:
+        principal_id = _require_text(principal_id, "runtime principal_id")
         resolved_workspace_id = _require_text(workspace_id, "workspace_id")
         if policy.snapshot.principal_id != principal_id:
             raise CapabilityResolutionError("runtime policy principal differs from command principal")
@@ -170,7 +186,7 @@ class MainTurnCapabilityResolver:
         if len(active_by_id) != len(active):
             raise CapabilityResolutionError("active capability store returned duplicate capability IDs")
         matches = self._search_index.search(
-            requirements=route.capability_requirements,
+            requirements=requirements,
             candidates=active,
         )
         matches_by_id = _unique_search_matches(matches)
@@ -296,6 +312,14 @@ class MainTurnCapabilityResolver:
             reasons[capability_id] = reason
             return True
 
+        for capability_id in _system_available_capability_ids(active):
+            if select(
+                capability_id,
+                score=None,
+                reason="declared as a stable system capability by the active revision",
+            ):
+                accepted_roots.add(capability_id)
+
         for match in sorted(matches_by_id.values(), key=lambda item: (-item.score, item.capability_id)):
             if select(match.capability_id, score=match.score, reason=match.reason):
                 accepted_roots.add(match.capability_id)
@@ -361,6 +385,19 @@ class MainTurnCapabilityResolver:
             tool_aliases=tool_aliases,
             dependency_environment=environment,
         )
+
+
+def _system_available_capability_ids(
+    active: tuple[ActiveCapability, ...],
+) -> tuple[str, ...]:
+    capability_ids: list[str] = []
+    for item in active:
+        if item.revision.kind != "tool":
+            continue
+        definition = ToolDefinition.model_validate(item.revision.content.definition)
+        if definition.system_available:
+            capability_ids.append(item.revision.capability_id)
+    return tuple(sorted(capability_ids))
 
 
 def _unique_search_matches(

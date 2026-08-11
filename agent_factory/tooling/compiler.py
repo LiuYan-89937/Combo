@@ -18,7 +18,6 @@ from agent_factory.tooling.output_store import (
     TOOL_OUTPUT_STORE_RESOURCE,
     ToolOutputPolicy,
     ToolOutputStore,
-    default_tool_output_policy,
 )
 from agent_factory.tooling.schema_compiler import compile_json_schema
 from agent_factory.tooling.spec import ToolSpec
@@ -36,7 +35,7 @@ class ToolCompiler:
         approval_handler: ToolApprovalHandler | None = None,
         approval_policy: ToolApprovalPolicyConfig,
         max_revisions: int,
-        output_policy: ToolOutputPolicy | None = None,
+        output_policy: ToolOutputPolicy,
         compression_model_resolver: Callable[[], Any] | None = None,
         approval_trust_store: ToolApprovalTrustResolver | None = None,
     ) -> None:
@@ -47,7 +46,7 @@ class ToolCompiler:
         self.approval_policy = approval_policy
         self.max_revisions = max_revisions
         self.output_store = _output_store_from_resources(self.resources)
-        self.output_policy = output_policy or default_tool_output_policy()
+        self.output_policy = output_policy
         self.compression_model_resolver = compression_model_resolver
         self.approval_trust_store = approval_trust_store
 
@@ -56,6 +55,7 @@ class ToolCompiler:
         spec: ToolSpec,
         *,
         entrypoint: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]],
+        hard_risk_evaluator: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]] | None = None,
     ) -> BaseTool:
         """Compile an already materialized entrypoint without consulting a registry or filesystem."""
         if not callable(entrypoint):
@@ -72,7 +72,7 @@ class ToolCompiler:
             entrypoint=entrypoint,
             global_resources=self.resources,
             resource_resolver=self.resources.get(RESOURCE_RESOLVER_KEY),
-            hard_risk_evaluator=None,
+            hard_risk_evaluator=hard_risk_evaluator,
             llm_risk_prompt=None,
             approval_handler=self.approval_handler,
             approval_policy=self.approval_policy,
@@ -104,6 +104,7 @@ class ToolCompiler:
                 "agent_factory": {
                     "tool_id": spec.id,
                     "concurrent": spec.concurrent,
+                    "max_parallel_calls": spec.max_parallel_calls,
                     "risk_level": spec.risk_level,
                     "approval_request": gateway.approval_request,
                     "trust_tool": (

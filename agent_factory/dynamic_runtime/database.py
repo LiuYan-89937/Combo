@@ -9,7 +9,7 @@ import sqlite3
 from agent_factory.sqlite_runtime import DEFAULT_SQLITE_BUSY_TIMEOUT_MS, connect_sqlite
 
 
-DYNAMIC_RUNTIME_DATABASE_SCHEMA = "dynamic_runtime_database.v9"
+DYNAMIC_RUNTIME_DATABASE_SCHEMA = "dynamic_runtime_database.v11"
 
 
 @dataclass(frozen=True, slots=True)
@@ -693,6 +693,126 @@ def _default_migrations() -> tuple[MigrationStep, ...]:
                 "create index idx_runtime_model_usage_workspace on runtime_model_usage(workspace_id, created_at)",
             ),
         ),
+        MigrationStep(
+            version=10,
+            name="scoped_memory_revisions",
+            statements=(
+                """
+                create table memory_revisions (
+                  memory_id text not null,
+                  revision integer not null check (revision >= 1),
+                  principal_id text not null references principals(principal_id),
+                  scope text not null check (scope in ('user','workspace')),
+                  workspace_id text references workspaces(workspace_id),
+                  kind text not null check (kind in ('constraint','preference','decision','fact','artifact')),
+                  status text not null check (status in ('active','deleted')),
+                  content_digest text not null,
+                  payload_json text not null,
+                  source_session_id text not null references conversations(session_id),
+                  source_turn_id text not null references conversation_turns(turn_id),
+                  created_by_runtime_instance_id text not null references runtime_instances(runtime_instance_id),
+                  created_at text not null,
+                  primary key(memory_id, revision),
+                  check ((scope = 'user' and workspace_id is null)
+                    or (scope = 'workspace' and workspace_id is not null))
+                )
+                """,
+                "create index idx_memory_revisions_owner on memory_revisions(principal_id, scope, workspace_id, created_at)",
+                "create index idx_memory_revisions_digest on memory_revisions(principal_id, scope, workspace_id, content_digest)",
+                """
+                create table memory_heads (
+                  memory_id text primary key,
+                  revision integer not null check (revision >= 1),
+                  principal_id text not null references principals(principal_id),
+                  scope text not null check (scope in ('user','workspace')),
+                  workspace_id text references workspaces(workspace_id),
+                  status text not null check (status in ('active','deleted')),
+                  content_digest text not null,
+                  updated_at text not null,
+                  foreign key(memory_id, revision) references memory_revisions(memory_id, revision),
+                  check ((scope = 'user' and workspace_id is null)
+                    or (scope = 'workspace' and workspace_id is not null))
+                )
+                """,
+                "create index idx_memory_heads_owner on memory_heads(principal_id, scope, workspace_id, status, updated_at)",
+            ),
+        ),
+        MigrationStep(
+            version=11,
+            name="delegated_runtime_authority",
+            statements=(
+                """
+                create table delegation_grants (
+                  grant_id text primary key,
+                  principal_id text not null references principals(principal_id),
+                  parent_runtime_instance_id text not null references runtime_instances(runtime_instance_id),
+                  child_runtime_instance_id text not null unique references runtime_instances(runtime_instance_id),
+                  task_id text not null,
+                  task_revision integer not null check (task_revision >= 1),
+                  parent_task_revision integer not null check (parent_task_revision >= 1),
+                  parent_capability_snapshot_id text not null references capability_snapshots(snapshot_id),
+                  child_capability_snapshot_id text not null references capability_snapshots(snapshot_id),
+                  workspace_id text not null references workspaces(workspace_id),
+                  status text not null check (status in ('active','revoked','expired')),
+                  state_revision integer not null check (state_revision >= 1),
+                  content_digest text not null unique,
+                  payload_json text not null,
+                  expires_at text not null,
+                  created_at text not null,
+                  updated_at text not null,
+                  unique(task_id, task_revision)
+                )
+                """,
+                "create index idx_delegation_grants_parent on delegation_grants(parent_runtime_instance_id, status, expires_at)",
+                "create index idx_delegation_grants_principal on delegation_grants(principal_id, status, expires_at)",
+                """
+                create table delegated_task_revisions (
+                  task_id text not null,
+                  task_revision integer not null check (task_revision >= 1),
+                  parent_task_revision integer not null check (parent_task_revision >= 1),
+                  principal_id text not null references principals(principal_id),
+                  parent_runtime_instance_id text not null references runtime_instances(runtime_instance_id),
+                  child_runtime_instance_id text not null unique references runtime_instances(runtime_instance_id),
+                  delegation_grant_id text not null unique references delegation_grants(grant_id),
+                  capability_snapshot_id text not null references capability_snapshots(snapshot_id),
+                  workspace_id text not null references workspaces(workspace_id),
+                  status text not null check (status in ('queued','running','waiting','completed','failed','cancelled','superseded')),
+                  claim_id text,
+                  claimed_generation integer,
+                  claim_expires_at text,
+                  payload_json text not null,
+                  created_at text not null,
+                  updated_at text not null,
+                  terminal_at text,
+                  primary key(task_id, task_revision),
+                  check ((status in ('completed','failed','cancelled','superseded')) = (terminal_at is not null)),
+                  check ((claim_id is null and claimed_generation is null and claim_expires_at is null)
+                    or (claim_id is not null and claimed_generation is not null and claim_expires_at is not null))
+                )
+                """,
+                "create index idx_delegated_tasks_parent on delegated_task_revisions(parent_runtime_instance_id, status, created_at)",
+                "create index idx_delegated_tasks_principal on delegated_task_revisions(principal_id, status, created_at)",
+                "create index idx_delegated_tasks_claim on delegated_task_revisions(status, claim_expires_at, created_at)",
+                """
+                create table delegated_task_events (
+                  event_id text primary key,
+                  task_id text not null,
+                  task_revision integer not null,
+                  sequence integer not null check (sequence >= 1),
+                  event_type text not null check (event_type in ('progress','question','approval_required','capability_request','artifact','result','failed','cancelled')),
+                  principal_id text not null references principals(principal_id),
+                  parent_runtime_instance_id text not null references runtime_instances(runtime_instance_id),
+                  child_runtime_instance_id text not null references runtime_instances(runtime_instance_id),
+                  child_attempt_id text not null,
+                  payload_json text not null,
+                  created_at text not null,
+                  unique(task_id, task_revision, sequence),
+                  foreign key(task_id, task_revision) references delegated_task_revisions(task_id, task_revision)
+                )
+                """,
+                "create index idx_delegated_task_events_parent on delegated_task_events(parent_runtime_instance_id, created_at)",
+            ),
+        ),
     )
 
 
@@ -749,4 +869,18 @@ def _schema_allowlist() -> set[tuple[str, str]]:
         ("index", "idx_runtime_model_usage_profile"),
         ("index", "idx_runtime_model_usage_runtime"),
         ("index", "idx_runtime_model_usage_workspace"),
+        ("table", "memory_revisions"),
+        ("index", "idx_memory_revisions_owner"),
+        ("index", "idx_memory_revisions_digest"),
+        ("table", "memory_heads"),
+        ("index", "idx_memory_heads_owner"),
+        ("table", "delegation_grants"),
+        ("index", "idx_delegation_grants_parent"),
+        ("index", "idx_delegation_grants_principal"),
+        ("table", "delegated_task_revisions"),
+        ("index", "idx_delegated_tasks_parent"),
+        ("index", "idx_delegated_tasks_principal"),
+        ("index", "idx_delegated_tasks_claim"),
+        ("table", "delegated_task_events"),
+        ("index", "idx_delegated_task_events_parent"),
     }

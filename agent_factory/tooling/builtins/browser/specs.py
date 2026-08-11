@@ -3,7 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 
 from agent_factory.tooling.builtins.browser.runtime import BROWSER_RUNTIME_RESOURCE
-from agent_factory.tooling.spec import ToolLoopPolicyConfig, ToolRiskLevel, ToolSpec
+from agent_factory.tooling.spec import ToolEffect, ToolLoopPolicyConfig, ToolRiskLevel, ToolSpec
 
 _STRING = {"type": "string"}
 _ACTIVE_PAGE_ID = {
@@ -55,6 +55,7 @@ def _spec(
     risk_level: ToolRiskLevel = "low",
     concurrent: bool = False,
     passthrough: bool = False,
+    effects: tuple[ToolEffect, ...] = ("network",),
 ) -> ToolSpec:
     return ToolSpec(
         id=tool_id,
@@ -75,8 +76,10 @@ def _spec(
         resources=dict(_RUNTIME_RESOURCES),
         risk_level=risk_level,
         concurrent=concurrent,
+        max_parallel_calls=1,
         output_projection="passthrough" if passthrough else "compress",
         loop_policy=ToolLoopPolicyConfig(max_calls=40, max_identical_calls=4),
+        effects=list(effects),
     )
 
 
@@ -103,6 +106,7 @@ def get_browser_tool_specs() -> list[ToolSpec]:
             output_properties={**_PAGE_RESULT_PROPERTIES, "status_code": {"type": "integer"}},
             output_required=[*list(_PAGE_RESULT_PROPERTIES), "status_code"],
             risk_level="medium",
+            effects=("network", "external_side_effect"),
         ),
         _spec(
             "browser_snapshot",
@@ -139,6 +143,7 @@ def get_browser_tool_specs() -> list[ToolSpec]:
             {"page_id": _ACTIVE_PAGE_ID, "target": deepcopy(_TARGET)},
             required=["target"],
             risk_level="medium",
+            effects=("network", "external_side_effect"),
         ),
         _spec(
             "browser_type",
@@ -152,6 +157,7 @@ def get_browser_tool_specs() -> list[ToolSpec]:
             },
             required=["target", "text"],
             risk_level="medium",
+            effects=("network", "external_side_effect"),
         ),
         _spec(
             "browser_select",
@@ -163,6 +169,7 @@ def get_browser_tool_specs() -> list[ToolSpec]:
             },
             required=["target", "values"],
             risk_level="medium",
+            effects=("network", "external_side_effect"),
         ),
         _spec(
             "browser_press",
@@ -170,6 +177,7 @@ def get_browser_tool_specs() -> list[ToolSpec]:
             {"page_id": _ACTIVE_PAGE_ID, "target": deepcopy(_TARGET), "key": _STRING},
             required=["key"],
             risk_level="medium",
+            effects=("network", "external_side_effect"),
         ),
         _spec(
             "browser_scroll",
@@ -273,6 +281,7 @@ def get_browser_tool_specs() -> list[ToolSpec]:
                 "size_bytes",
             ],
             risk_level="medium",
+            effects=("network", "write"),
         ),
         _spec(
             "browser_upload",
@@ -289,6 +298,7 @@ def get_browser_tool_specs() -> list[ToolSpec]:
             },
             output_required=[*list(_PAGE_RESULT_PROPERTIES), "uploaded"],
             risk_level="high",
+            effects=("network", "external_side_effect"),
         ),
         _spec(
             "browser_tabs",

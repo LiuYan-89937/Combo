@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-import os
+from dataclasses import dataclass
 from typing import Any, Callable, Literal, Mapping, Protocol
 
 from langgraph.types import interrupt
@@ -20,18 +19,10 @@ from agent_factory.tooling.output_store import (
     ToolOutputPolicy,
     ToolOutputProjection,
     ToolOutputStore,
-    default_tool_output_policy,
     project_tool_output,
 )
-from agent_factory.tooling.builtins.resource_set.resource_set import (
-    RESOURCE_SET_STORE_KEY,
-    ResourceSetStore,
-    auto_record_path,
-)
-from agent_factory.models import get_compression_model
 from agent_factory.tooling.approval_policy import (
     ToolApprovalPolicyConfig,
-    default_tool_approval_policy,
     tool_approval_effective_risk_level,
     tool_approval_policy_action,
 )
@@ -75,26 +66,12 @@ class ToolApprovalRequest(BaseModel):
     risk_facts: dict[str, Any] = Field(default_factory=dict)
 
 
-class ToolApprovalTrustStore:
-    def __init__(self) -> None:
-        self._trusted_tool_ids: set[str] = set()
-
-    def trust_tool(self, tool_id: str) -> None:
-        self._trusted_tool_ids.add(tool_id)
-
-    def is_trusted(self, tool_id: str) -> bool:
-        return tool_id in self._trusted_tool_ids
-
-
 class ToolApprovalTrustResolver(Protocol):
     def trust_tool(self, tool_id: str) -> None:
         ...
 
     def is_trusted(self, tool_id: str) -> bool:
         ...
-
-
-DEFAULT_TOOL_APPROVAL_TRUST_STORE = ToolApprovalTrustStore()
 
 
 @dataclass(slots=True)
@@ -104,16 +81,16 @@ class ToolExecutionGateway:
     output_schema: CompiledJsonSchema
     entrypoint: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
     global_resources: Mapping[str, Any]
+    approval_policy: ToolApprovalPolicyConfig
+    max_revisions: int
+    output_policy: ToolOutputPolicy
     resource_resolver: Any | None = None
     hard_risk_evaluator: ToolRiskEvaluator | None = None
     llm_risk_prompt: str | None = None
     approval_handler: ToolApprovalHandler | None = None
-    approval_policy: ToolApprovalPolicyConfig = field(default_factory=default_tool_approval_policy)
-    max_revisions: int = 5
     output_store: ToolOutputStore | None = None
-    output_policy: ToolOutputPolicy = field(default_factory=default_tool_output_policy)
-    approval_trust_store: ToolApprovalTrustResolver | None = DEFAULT_TOOL_APPROVAL_TRUST_STORE
-    compression_model_resolver: Callable[[], Any] | None = get_compression_model
+    approval_trust_store: ToolApprovalTrustResolver | None = None
+    compression_model_resolver: Callable[[], Any] | None = None
 
     def execute(
         self,
@@ -258,10 +235,6 @@ class ToolExecutionGateway:
                 contract_status="invalid",
                 errors=output_errors,
             )
-        # Auto-record explored paths in the resource set
-        resource_set_store = self.global_resources.get(RESOURCE_SET_STORE_KEY)
-        if isinstance(resource_set_store, ResourceSetStore):
-            auto_record_path(resource_set_store, self.spec.id, arguments)
         projection = (
             ToolOutputProjection(output=output)
             if self.spec.output_projection == "passthrough"
@@ -436,7 +409,7 @@ class ToolExecutionGateway:
                 return self.resource_resolver.resolve_selector(selector)
             except Exception as exc:
                 message = str(exc)
-                if message.startswith("resource_required:") or "not declared by package" in message:
+                if message.startswith("resource_required:"):
                     raise KeyError(message) from exc
                 raise
         return resolve_resource_selector(self.global_resources, selector)
@@ -507,15 +480,6 @@ class ToolExecutionGateway:
 def _runtime_stop_requested() -> bool:
     control = current_runtime_run_control()
     return bool(control is not None and getattr(control, "drain_requested", False))
-
-
-def default_tool_max_revisions() -> int:
-    raw = os.getenv("AGENTFACTORY_TOOL_MAX_REVISIONS", "5").strip()
-    try:
-        value = int(raw)
-    except ValueError:
-        return 5
-    return max(value, 1)
 
 
 def _risk_guidance(risk: ToolRiskResult) -> str:

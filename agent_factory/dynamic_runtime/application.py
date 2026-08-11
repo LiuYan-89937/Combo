@@ -30,6 +30,7 @@ from agent_factory.dynamic_runtime.cancellation import (
 )
 from agent_factory.dynamic_runtime.dispatcher import CommandDispatcher, CommandHandler
 from agent_factory.dynamic_runtime.execution_commits import RuntimeExecutionCommitStore
+from agent_factory.dynamic_runtime.delegation_store import DelegationStore
 from agent_factory.dynamic_runtime.lifecycle_repositories import (
     ApplicationGenerationStore,
     CutoverManifestStore,
@@ -38,6 +39,7 @@ from agent_factory.dynamic_runtime.lifecycle_repositories import (
     RevocationStore,
 )
 from agent_factory.dynamic_runtime.model_service import RuntimeModelResolver
+from agent_factory.dynamic_runtime.memory_store import ScopedMemoryStore
 from agent_factory.dynamic_runtime.main_turn import (
     ExecutionRouter,
     MainTurnCommandHandler,
@@ -93,6 +95,8 @@ class DynamicRuntimeStores:
     runtime_events: RuntimeEventStore
     tool_calls: ToolCallStore
     model_usage: ModelUsageStore
+    memories: ScopedMemoryStore
+    delegations: DelegationStore
     outbox: OutboxStore
     execution_commits: RuntimeExecutionCommitStore
     runtime_starts: RuntimeStartStore
@@ -140,6 +144,7 @@ class DynamicRuntimeApplication:
         services_factory: DynamicRuntimeServicesFactory | Callable[[DynamicRuntimeStores], DynamicRuntimeServicesFactory],
         model_pool_store: ModelPoolStore,
         launch_context_resolver: RuntimeLaunchContextResolver | Callable[[DynamicRuntimeStores], RuntimeLaunchContextResolver],
+        capability_bootstrap: Callable[[DynamicRuntimeStores, CapabilityAdapterRegistry], None],
         migration_registry: DynamicRuntimeMigrationRegistry | None = None,
     ) -> "DynamicRuntimeApplication":
         database = DynamicRuntimeDatabase(config.database_path)
@@ -154,6 +159,8 @@ class DynamicRuntimeApplication:
             service_set = configured_services.build()
             model_resolver = RuntimeModelResolver(model_pool_store)
             adapters = CapabilityAdapterRegistry.build(default_capability_adapters())
+            adapters.require_complete()
+            capability_bootstrap(stores, adapters)
             resolution_config = config.capability_resolution
             capability_resolver = MainTurnCapabilityResolver(
                 store=stores.capabilities,
@@ -185,6 +192,7 @@ class DynamicRuntimeApplication:
                     if callable(launch_context_resolver)
                     else launch_context_resolver
                 ),
+                delegations=stores.delegations,
             )
             recovery_report = RuntimeRecoveryService(database).reconcile(
                 current_generation=generation.generation,
@@ -301,6 +309,8 @@ def _stores(database: DynamicRuntimeDatabase) -> DynamicRuntimeStores:
         runtime_events=RuntimeEventStore(database),
         tool_calls=ToolCallStore(database),
         model_usage=ModelUsageStore(database),
+        memories=ScopedMemoryStore(database),
+        delegations=DelegationStore(database),
         outbox=OutboxStore(database),
         execution_commits=RuntimeExecutionCommitStore(database),
         runtime_starts=RuntimeStartStore(database),

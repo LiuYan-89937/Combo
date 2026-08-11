@@ -181,9 +181,13 @@ class WindowsPowerShellRuntime(ShellRuntime):
         return completed.returncode == 0
 
 
-def resolve_shell_runtime() -> ShellRuntime:
+def resolve_shell_runtime(environment: Mapping[str, str]) -> ShellRuntime:
+    search_path = environment.get("PATH")
     if os.name == "nt":
-        executable = _find_executable(("pwsh.exe", "pwsh", "powershell.exe", "powershell"))
+        executable = _find_executable(
+            ("pwsh.exe", "pwsh", "powershell.exe", "powershell"),
+            search_path=search_path,
+        )
         if executable is None:
             raise ShellRuntimeUnavailable(
                 "PowerShell is required for the shell tool on Windows, but neither pwsh nor "
@@ -191,9 +195,11 @@ def resolve_shell_runtime() -> ShellRuntime:
             )
         return WindowsPowerShellRuntime(
             executable,
-            taskkill_executable=_find_executable(("taskkill.exe", "taskkill")),
+            taskkill_executable=_find_executable(
+                ("taskkill.exe", "taskkill"), search_path=search_path
+            ),
         )
-    executable = _find_executable(("bash",))
+    executable = _find_executable(("bash",), search_path=search_path)
     if executable is None:
         raise ShellRuntimeUnavailable(
             "Bash is required for the shell tool on macOS and Linux, but it is not available on PATH"
@@ -201,13 +207,22 @@ def resolve_shell_runtime() -> ShellRuntime:
     return PosixBashRuntime(executable)
 
 
+def shell_runtime_from_identity(*, shell_id: str, executable: str) -> ShellRuntime:
+    path = Path(executable).expanduser().resolve()
+    if shell_id == "bash":
+        return PosixBashRuntime(path)
+    if shell_id == "powershell":
+        return WindowsPowerShellRuntime(path, taskkill_executable=None)
+    raise ValueError(f"unsupported frozen shell runtime: {shell_id}")
+
+
 def host_shell_display_name() -> str:
     return "PowerShell" if os.name == "nt" else "Bash"
 
 
-def _find_executable(candidates: tuple[str, ...]) -> Path | None:
+def _find_executable(candidates: tuple[str, ...], *, search_path: str | None) -> Path | None:
     for candidate in candidates:
-        resolved = shutil.which(candidate)
+        resolved = shutil.which(candidate, path=search_path)
         if resolved:
             return Path(resolved).resolve()
     return None

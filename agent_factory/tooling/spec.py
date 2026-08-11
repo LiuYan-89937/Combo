@@ -23,9 +23,9 @@ ToolExecutionStatus = Literal["completed", "failed"]
 ToolContractStatus = Literal["valid", "invalid"]
 
 ToolRiskLevel = Literal["low", "medium", "high"]
+ToolEffect = Literal["read", "write", "delete", "process", "network", "credential", "external_side_effect"]
 ToolRiskAction = Literal["inherit", "allow", "ask", "deny", "uncertain"]
 ToolLLMRiskMode = Literal["disabled", "on_uncertain", "always"]
-ToolPermissionScope = Literal["system", "package", "extension", "model", "capability"]
 ToolOutputCompressionMode = Literal["structured_json", "deterministic"]
 ToolOutputProjectionMode = Literal["compress", "passthrough"]
 
@@ -196,12 +196,14 @@ class ToolSpec(BaseModel):
     risk_level: ToolRiskLevel = "low"
     risk_evaluator: ToolRiskEvaluatorConfig = Field(default_factory=ToolRiskEvaluatorConfig)
     concurrent: bool = True
-    permission_scope: ToolPermissionScope = "package"
-    permission_tags: list[str] = Field(default_factory=list)
+    max_parallel_calls: int = Field(ge=1)
     output_compression: ToolOutputCompressionConfig = Field(default_factory=ToolOutputCompressionConfig)
     output_projection: ToolOutputProjectionMode = "compress"
     loop_policy: ToolLoopPolicyConfig = Field(default_factory=ToolLoopPolicyConfig)
     sensitive_argument_paths: list[str] = Field(default_factory=list)
+    effects: list[ToolEffect]
+    read_only: bool = False
+    system_available: bool = False
 
     @field_validator("id")
     @classmethod
@@ -243,22 +245,6 @@ class ToolSpec(BaseModel):
                 raise ValueError("resource local names and global keys must be non-empty")
         return value
 
-    @field_validator("permission_tags")
-    @classmethod
-    def validate_permission_tags(cls, value: list[str]) -> list[str]:
-        tags: list[str] = []
-        seen: set[str] = set()
-        for item in value:
-            tag = str(item).strip().lower().replace("-", "_")
-            if not tag:
-                continue
-            if not SNAKE_CASE_ID.fullmatch(tag):
-                raise ValueError("permission tags must be snake_case")
-            if tag not in seen:
-                tags.append(tag)
-                seen.add(tag)
-        return tags
-
     @field_validator("sensitive_argument_paths")
     @classmethod
     def validate_sensitive_argument_paths(cls, value: list[str]) -> list[str]:
@@ -271,6 +257,24 @@ class ToolSpec(BaseModel):
                 paths.append(path)
         return paths
 
+    @field_validator("effects")
+    @classmethod
+    def validate_effects(cls, value: list[ToolEffect]) -> list[ToolEffect]:
+        if not value:
+            raise ValueError("tool effects must not be empty")
+        if len(value) != len(set(value)):
+            raise ValueError("tool effects must be unique")
+        return value
+
+    @model_validator(mode="after")
+    def validate_read_only_effects(self) -> "ToolSpec":
+        mutating = {"write", "delete", "process", "network", "credential", "external_side_effect"}
+        if self.read_only and mutating.intersection(self.effects):
+            raise ValueError("read-only tool cannot declare mutating effects")
+        if not self.concurrent and self.max_parallel_calls != 1:
+            raise ValueError("non-concurrent tool must use max_parallel_calls=1")
+        return self
+
 
 class ModelToolView(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -279,8 +283,6 @@ class ModelToolView(BaseModel):
     description: str
     input_schema: dict[str, Any] = Field(default_factory=dict)
     risk_level: ToolRiskLevel = "low"
-    permission_scope: ToolPermissionScope = "package"
-    permission_tags: list[str] = Field(default_factory=list)
 
 
 class ToolObservation(BaseModel):
@@ -330,6 +332,4 @@ def model_tool_view(spec: ToolSpec) -> ModelToolView:
         description=spec.description,
         input_schema=spec.input_schema,
         risk_level=spec.risk_level,
-        permission_scope=spec.permission_scope,
-        permission_tags=spec.permission_tags,
     )

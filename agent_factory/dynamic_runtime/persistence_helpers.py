@@ -2,7 +2,63 @@ from __future__ import annotations
 
 import sqlite3
 
-from agent_factory.runtime_protocol import ConversationMessage, ConversationTurn, OutboxRecord
+from agent_factory.runtime_protocol import (
+    CapabilitySnapshot,
+    ConversationMessage,
+    ConversationTurn,
+    OutboxRecord,
+    RuntimeInstance,
+)
+from agent_factory.runtime_protocol.contracts import utc_now_text
+
+
+def upsert_capability_snapshot(conn: sqlite3.Connection, snapshot: CapabilitySnapshot) -> None:
+    row = conn.execute(
+        "select payload_json from capability_snapshots where snapshot_id = ? or content_digest = ?",
+        (snapshot.snapshot_id, snapshot.content_digest),
+    ).fetchone()
+    if row is not None:
+        existing = CapabilitySnapshot.model_validate_json(str(row["payload_json"]))
+        if existing != snapshot:
+            raise RuntimeError("capability snapshot identity or digest collision")
+        return
+    conn.execute(
+        """
+        insert into capability_snapshots(snapshot_id, content_digest, payload_json, created_at)
+        values (?, ?, ?, ?)
+        """,
+        (snapshot.snapshot_id, snapshot.content_digest, snapshot.model_dump_json(), utc_now_text()),
+    )
+
+
+def insert_runtime_instance(conn: sqlite3.Connection, instance: RuntimeInstance) -> None:
+    request = instance.request
+    conn.execute(
+        """
+        insert into runtime_instances(
+          runtime_instance_id, request_id, session_id, turn_id,
+          parent_runtime_instance_id, capability_snapshot_id, generation,
+          status, attempt_id, last_event_sequence, payload_json,
+          created_at, updated_at, terminal_at
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            instance.runtime_instance_id,
+            request.request_id,
+            request.session_id,
+            request.turn_id,
+            request.parent_runtime_instance_id,
+            instance.capability_snapshot_id,
+            instance.generation,
+            instance.status,
+            instance.attempt_id,
+            instance.last_event_sequence,
+            instance.model_dump_json(),
+            instance.created_at,
+            instance.updated_at,
+            instance.terminal_at,
+        ),
+    )
 
 
 def insert_outbox(conn: sqlite3.Connection, record: OutboxRecord) -> None:

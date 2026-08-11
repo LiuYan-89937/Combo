@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any
 
 from agent_factory.tooling.builtins.process.manager import (
-    PROCESS_MANAGER,
     ProcessCancellationCheck,
     ProcessOutputObserver,
     is_read_only_process_path,
@@ -12,8 +11,9 @@ from agent_factory.tooling.builtins.process.manager import (
     process_runtime_boundary,
     required_string,
     resolve_cwd,
+    require_process_runtime,
 )
-from agent_factory.tooling.builtins.process.runtime import resolve_shell_runtime
+from agent_factory.tooling.builtins.process.runtime import shell_runtime_from_identity
 from agent_factory.tooling.envelope import tool_envelope
 from agent_factory.tooling.execution_context import (
     current_runtime_run_control,
@@ -35,7 +35,13 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
     if cwd_result.action == "deny":
         return cwd_result.model_dump(mode="json")
     try:
-        shell_runtime = resolve_shell_runtime()
+        process_context = dict(context.get("resources") or {}).get("process_runtime")
+        if not isinstance(process_context, dict):
+            raise RuntimeError("process runtime risk context is unavailable")
+        shell_runtime = shell_runtime_from_identity(
+            shell_id=str(process_context.get("shell_id") or ""),
+            executable=str(process_context.get("shell_executable") or ""),
+        )
         analysis = shell_runtime.analyze(command)
     except (RuntimeError, ValueError) as exc:
         return ToolRiskResult(
@@ -87,7 +93,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         raise PermissionError(f"cwd is read-only runtime input: {cwd}")
     output_observer = _output_observer()
     return tool_envelope(
-        PROCESS_MANAGER.start(
+        require_process_runtime(resources).manager.start(
             command=command,
             cwd=cwd,
             mode=mode,

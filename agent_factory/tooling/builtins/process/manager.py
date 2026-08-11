@@ -1,17 +1,15 @@
 from __future__ import annotations
 
-import atexit
 from dataclasses import dataclass, field
 from pathlib import Path
 import logging
-import os
 import subprocess
 import threading
 import time
 import uuid
-from typing import Any, Callable, TextIO
+from typing import Any, Callable, Mapping, TextIO
 
-from agent_factory.tooling.builtins.process.runtime import ShellRuntime, resolve_shell_runtime
+from agent_factory.tooling.builtins.process.runtime import ShellRuntime
 from agent_factory.tooling.workspace_paths import workspace_path_candidate
 
 
@@ -80,9 +78,15 @@ class ManagedProcess:
 
 
 class ProcessManager:
-    def __init__(self) -> None:
+    def __init__(self, *, environment: Mapping[str, str], shell_runtime: ShellRuntime) -> None:
         self._lock = threading.RLock()
         self._processes: dict[str, ManagedProcess] = {}
+        self._environment = dict(environment)
+        self._shell_runtime = shell_runtime
+
+    @property
+    def shell_runtime(self) -> ShellRuntime:
+        return self._shell_runtime
 
     def start(
         self,
@@ -95,7 +99,7 @@ class ProcessManager:
         cancellation_requested: ProcessCancellationCheck | None = None,
     ) -> dict[str, Any]:
         process_id = uuid.uuid4().hex
-        shell_runtime = resolve_shell_runtime()
+        shell_runtime = self._shell_runtime
         process = subprocess.Popen(
             shell_runtime.command_argv(command),
             cwd=str(cwd),
@@ -105,7 +109,7 @@ class ProcessManager:
             text=True,
             encoding="utf-8",
             errors="replace",
-            env=shell_runtime.environment(os.environ),
+            env=shell_runtime.environment(self._environment),
             **shell_runtime.process_options(),
         )
         managed = ManagedProcess(
@@ -264,34 +268,41 @@ def _read_stream(stream: TextIO, buffer: OutputBuffer, output_changed: threading
         stream.close()
 
 
-PROCESS_MANAGER = ProcessManager()
-atexit.register(PROCESS_MANAGER.close)
+@dataclass(frozen=True, slots=True)
+class ProcessRuntimeResource:
+    manager: ProcessManager
+    root: Path
+    allow_external: bool = False
+    allowed_roots: tuple[Path, ...] = ()
+    read_only_paths: tuple[Path, ...] = ()
+
+    def tool_resource_context(self) -> dict[str, Any]:
+        return {
+            "schema": "process_runtime_context.v1",
+            "root": str(self.root),
+            "allow_external": self.allow_external,
+            "allowed_roots": [str(path) for path in self.allowed_roots],
+            "read_only_paths": [str(path) for path in self.read_only_paths],
+            "shell_id": self.manager.shell_runtime.shell_id,
+            "shell_executable": str(self.manager.shell_runtime.executable),
+        }
 
 
 def process_runtime_boundary(resources: dict[str, Any]) -> tuple[Path, bool]:
-    config = resources.get("process_runtime", {})
-    if isinstance(config, str):
-        root_value: Any = config
-        allow_external = False
-    elif isinstance(config, dict):
-        root_value = config.get("root") or config.get("cwd") or "."
-        allow_external = bool(config.get("allow_external", False))
-    else:
-        root_value = "."
-        allow_external = False
-    return Path(str(root_value)).expanduser().resolve(), allow_external
+    runtime = _process_context(resources)
+    if isinstance(runtime, ProcessRuntimeResource):
+        return runtime.root, runtime.allow_external
+    return Path(str(runtime["root"])).resolve(), bool(runtime.get("allow_external", False))
 
 
 def process_runtime_allowed_roots(resources: dict[str, Any]) -> tuple[Path, ...]:
-    config = resources.get("process_runtime", {})
-    values = config.get("allowed_roots", []) if isinstance(config, dict) else []
+    runtime = _process_context(resources)
+    if isinstance(runtime, ProcessRuntimeResource):
+        return runtime.allowed_roots
+    values = runtime.get("allowed_roots", ())
     if not isinstance(values, list):
-        return ()
-    return tuple(
-        Path(value).expanduser().resolve(strict=False)
-        for value in values
-        if isinstance(value, str) and value.strip()
-    )
+        raise ValueError("process runtime allowed_roots must be an array")
+    return tuple(Path(str(value)).resolve() for value in values)
 
 
 def resolve_cwd(
@@ -316,19 +327,32 @@ def resolve_cwd(
 
 
 def is_read_only_process_path(path: Path, *, root: Path, resources: dict[str, Any]) -> bool:
-    config = resources.get("process_runtime", {})
-    values = config.get("read_only_paths", []) if isinstance(config, dict) else []
-    if not isinstance(values, list):
-        return False
-    for value in values:
-        if not isinstance(value, str) or not value.strip():
-            continue
-        requested = Path(value).expanduser()
-        candidate = requested if requested.is_absolute() else root / requested
-        resolved = candidate.resolve(strict=False)
+    runtime = _process_context(resources)
+    values = (
+        runtime.read_only_paths
+        if isinstance(runtime, ProcessRuntimeResource)
+        else tuple(Path(str(value)).resolve() for value in runtime.get("read_only_paths", ()))
+    )
+    for resolved in values:
         if path == resolved or resolved in path.parents:
             return True
     return False
+
+
+def require_process_runtime(resources: dict[str, Any]) -> ProcessRuntimeResource:
+    runtime = resources.get("process_runtime")
+    if not isinstance(runtime, ProcessRuntimeResource):
+        raise RuntimeError("owned process runtime resource is not configured")
+    return runtime
+
+
+def _process_context(resources: dict[str, Any]) -> ProcessRuntimeResource | dict[str, Any]:
+    value = resources.get("process_runtime")
+    if isinstance(value, ProcessRuntimeResource):
+        return value
+    if isinstance(value, dict) and value.get("schema") == "process_runtime_context.v1":
+        return value
+    raise RuntimeError("process runtime context is not configured")
 
 
 def required_string(arguments: dict[str, Any], key: str) -> str:

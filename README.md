@@ -2,15 +2,15 @@
 
 本地优先、跨平台的动态 Agent 运行时桌面应用。
 
-FastAgentFactory 以一条统一主对话链为产品入口。每次请求都从模型、工具、资源和依赖四个能力池冻结不可变快照，再由固定的 React 或 Plan-and-Execute 图执行。系统不再制造、发布或运行独立 Agent 包，也不通过可变全局注册表决定一次运行的能力边界。
+FastAgentFactory 以一条统一主对话链为产品入口。每次请求从模型池解析模型策略，从 Skill、工具、MCP 和依赖四个能力池冻结不可变能力快照，再由固定的 React 或 Plan-and-Execute 图执行。系统不再制造、发布或运行独立 Agent 包，也不通过可变全局注册表决定一次运行的能力边界。
 
-> 当前仓库正在完成动态运行时重构。旧 AgentPackage、制造、进化、群聊和 Package 分发链已移除；能力控制面、记忆、知识库和调度链仍以 `docs/DYNAMIC_AGENT_RUNTIME_REFACTOR.md` 为验收依据。
+> 当前仓库正在完成动态运行时重构。旧的目录包与多入口产品链已移除；能力控制面、记忆、知识库和调度链仍以 `docs/DYNAMIC_AGENT_RUNTIME_REFACTOR.md` 为验收依据。
 
 ## 核心模型
 
 - 一条主对话链：用户始终与主 Agent 交互。
 - 两张固定执行图：React 负责快速执行，Plan-and-Execute 负责显式计划与步骤推进。
-- 四个能力池：模型、工具、资源和依赖分别发布、验证、激活和撤销。
+- 统一能力控制面：Skill、工具、MCP 和依赖共用草稿、验证、版本、索引、激活、健康与快照协议；模型池独立解析模型策略。
 - 不可变运行快照：请求开始后，能力版本、模型策略和运行身份不再随控制面变化。
 - 动态运行身份：以 principal、request、runtime instance、attempt、session、turn、workspace 和 task revision 表达归属。
 - 单一工作区边界：文件、进程、浏览器、调度任务和可恢复状态都绑定到工作区或运行实例。

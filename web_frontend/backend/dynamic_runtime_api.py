@@ -73,6 +73,8 @@ class RuntimePolicyWriteRequest(BaseModel):
     request_timeout_seconds: int = Field(ge=1)
     max_model_attempts: int = Field(ge=1)
     max_parallel_temporary_agents: int = Field(ge=1)
+    max_temporary_delegation_depth: int = Field(ge=0)
+    delegation_grant_ttl_seconds: int = Field(ge=1)
     timezone: str
 
     @field_validator("execution_preference")
@@ -211,6 +213,8 @@ def create_dynamic_runtime_router(
             request_timeout_seconds=payload.request_timeout_seconds,
             max_model_attempts=payload.max_model_attempts,
             max_parallel_temporary_agents=payload.max_parallel_temporary_agents,
+            max_temporary_delegation_depth=payload.max_temporary_delegation_depth,
+            delegation_grant_ttl_seconds=payload.delegation_grant_ttl_seconds,
             timezone=payload.timezone,
             updated_at=now,
         )

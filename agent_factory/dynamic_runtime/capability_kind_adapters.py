@@ -97,7 +97,8 @@ class TypedCapabilityAdapter(Generic[DefinitionT]):
 class SkillCapabilityAdapter(TypedCapabilityAdapter[SkillDefinition]):
     kind = "skill"
     adapter_id = "dynamic_runtime.skill"
-    definition_schema = "skill_definition.v1"
+    adapter_revision = "2"
+    definition_schema = "skill_definition.v2"
     definition_model = SkillDefinition
 
     def _project_definition(
@@ -110,14 +111,14 @@ class SkillCapabilityAdapter(TypedCapabilityAdapter[SkillDefinition]):
             revision,
             schema=self.definition_schema,
             definition=skill,
-            prompt_fragments=(skill.instructions,),
         )
 
 
 class ToolCapabilityAdapter(TypedCapabilityAdapter[ToolDefinition]):
     kind = "tool"
     adapter_id = "dynamic_runtime.tool"
-    definition_schema = "tool_definition.v1"
+    adapter_revision = "2"
+    definition_schema = "tool_definition.v2"
     definition_model = ToolDefinition
 
     def _validate_definition(
@@ -183,7 +184,8 @@ class MCPServerCapabilityAdapter(TypedCapabilityAdapter[MCPServerDefinition]):
 class MCPToolCapabilityAdapter(TypedCapabilityAdapter[MCPToolDefinition]):
     kind = "mcp_tool"
     adapter_id = "dynamic_runtime.mcp_tool"
-    definition_schema = "mcp_tool_definition.v1"
+    adapter_revision = "2"
+    definition_schema = "mcp_tool_definition.v2"
     definition_model = MCPToolDefinition
 
     def _validate_definition(

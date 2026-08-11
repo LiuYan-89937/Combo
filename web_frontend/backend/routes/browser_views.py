@@ -9,17 +9,17 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
-from agent_factory.tooling.builtins.browser.runtime import default_browser_runtime
+from agent_factory.tooling.builtins.browser.runtime import BrowserRuntime
 
 
-def create_browser_view_router(logger: logging.Logger) -> APIRouter:
+def create_browser_view_router(logger: logging.Logger, runtime: BrowserRuntime) -> APIRouter:
     router = APIRouter(prefix="/api/browser", tags=["browser"])
 
     @router.delete("/views/{view_id}/pages/{page_id}")
     async def close_browser_page(view_id: str, page_id: str) -> dict[str, Any]:
         try:
             return await asyncio.to_thread(
-                default_browser_runtime().close_view_page,
+                runtime.close_view_page,
                 view_id=view_id,
                 page_id=page_id,
             )
@@ -37,7 +37,6 @@ def create_browser_view_router(logger: logging.Logger) -> APIRouter:
     @router.websocket("/views/{view_id}/pages/{page_id}")
     async def browser_view(websocket: WebSocket, view_id: str, page_id: str) -> None:
         await websocket.accept()
-        runtime = default_browser_runtime()
         loop = asyncio.get_running_loop()
         frames: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=2)
 

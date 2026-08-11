@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from time import perf_counter
+from collections.abc import Mapping
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -48,7 +49,7 @@ class ContextSystemRuntime:
         sources: dict[str, ContextSource] | None = None,
     ) -> None:
         self.config = config or ContextContractConfig()
-        self.sources = sources or default_context_sources()
+        self.sources = dict(sources or {})
 
     def prepare_before_model_call(
         self,
@@ -58,7 +59,7 @@ class ContextSystemRuntime:
         impl: str,
         messages: list[Any],
         services: Any = None,
-        resources: dict[str, Any] | None = None,
+        resources: Mapping[str, Any] | None = None,
         enable_dynamic_evidence: bool = True,
     ) -> ContextPreparationResult:
         if not self.config.enabled:
@@ -351,8 +352,15 @@ class ContextSystemRuntime:
         )
 
 
-def default_context_runtime(config: ContextContractConfig | None = None) -> ContextSystemRuntime:
-    return ContextSystemRuntime(config=config or ContextContractConfig())
+def default_context_runtime(
+    *,
+    memory_store: Any,
+    config: ContextContractConfig | None = None,
+) -> ContextSystemRuntime:
+    return ContextSystemRuntime(
+        config=config or ContextContractConfig(),
+        sources=default_context_sources(memory_store),
+    )
 
 
 def _runtime_model_operation(services: Any) -> str:

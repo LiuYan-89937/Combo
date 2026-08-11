@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import json
-import os
-from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -113,60 +110,6 @@ class ToolApprovalPolicyConfig(BaseModel):
         return overrides
 
 
-def default_tool_approval_policy() -> ToolApprovalPolicyConfig:
-    policy = ToolApprovalPolicyConfig(mode=_env("AGENTFACTORY_TOOL_APPROVAL_MODE", "allow_below_high"))
-    overrides = {
-        "low": _env("AGENTFACTORY_TOOL_APPROVAL_LOW", ""),
-        "medium": _env("AGENTFACTORY_TOOL_APPROVAL_MEDIUM", ""),
-        "high": _env("AGENTFACTORY_TOOL_APPROVAL_HIGH", ""),
-    }
-    custom = {key: value for key, value in overrides.items() if value}
-    if custom:
-        policy = policy.model_copy(update={"mode": "custom", **custom})
-        policy = ToolApprovalPolicyConfig.model_validate(policy.model_dump(mode="json"))
-    return policy
-
-
-def resolve_tool_approval_policy(package_policy: ToolApprovalPolicyConfig | None) -> ToolApprovalPolicyConfig:
-    policy = default_tool_approval_policy()
-    return merge_tool_approval_policy(policy, package_policy)
-
-
-def load_tool_approval_policy_file(path: str | Path) -> ToolApprovalPolicyConfig | None:
-    policy_path = Path(path).expanduser()
-    if not policy_path.is_file():
-        return None
-    payload = json.loads(policy_path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError(f"{policy_path.name} must contain a JSON object")
-    policy_payload = payload.get("policy", payload)
-    if not isinstance(policy_payload, dict):
-        raise ValueError(f"{policy_path.name} policy must contain a JSON object")
-    return ToolApprovalPolicyConfig.model_validate(policy_payload)
-
-
-def merge_tool_approval_policy(
-    base_policy: ToolApprovalPolicyConfig,
-    override_policy: ToolApprovalPolicyConfig | None,
-) -> ToolApprovalPolicyConfig:
-    if override_policy is None:
-        return base_policy
-    payload = base_policy.model_dump(mode="json")
-    explicit_fields = set(override_policy.model_fields_set)
-    if "mode" in explicit_fields:
-        payload.update(_mode_defaults(override_policy.mode))
-        payload["mode"] = override_policy.mode
-    for field_name in ("low", "medium", "high"):
-        if field_name in explicit_fields:
-            payload[field_name] = getattr(override_policy, field_name)
-    if "tool_overrides" in explicit_fields:
-        payload["tool_overrides"] = {
-            **dict(payload.get("tool_overrides") or {}),
-            **override_policy.model_dump(mode="json").get("tool_overrides", {}),
-        }
-    return ToolApprovalPolicyConfig.model_validate(payload)
-
-
 def tool_approval_policy_action(
     *,
     spec: ToolSpec,
@@ -229,12 +172,7 @@ def _requirement_for_level(policy: ToolApprovalPolicyConfig, level: ToolRiskLeve
 
 def _is_strict_read_allowed(*, spec: ToolSpec, risk: ToolRiskResult, risk_level: ToolRiskLevel) -> bool:
     return (
-        spec.permission_scope == "system"
-        and "read_only" in spec.permission_tags
+        spec.read_only
         and risk.action == "allow"
         and risk_level == "low"
     )
-
-
-def _env(name: str, default: str) -> str:
-    return os.getenv(name, default).strip()

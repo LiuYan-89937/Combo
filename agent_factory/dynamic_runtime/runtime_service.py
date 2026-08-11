@@ -19,6 +19,7 @@ from agent_factory.dynamic_runtime.execution_commits import (
     RuntimeCancellationRequested,
     RuntimeExecutionCommitStore,
 )
+from agent_factory.dynamic_runtime.delegation_store import DelegatedTaskClaim, DelegationStore
 from agent_factory.dynamic_runtime.model_service import RuntimeModelResolver, register_runtime_model_handle
 from agent_factory.dynamic_runtime.repositories import ConversationStore, RuntimeInstanceStore
 from agent_factory.dynamic_runtime.run_control import RuntimeRunControl, RuntimeRunControlRegistry
@@ -35,10 +36,13 @@ from agent_factory.runtime_kernel.state import (
 from agent_factory.runtime_kernel.state.checkpoint_projection import runtime_checkpoint_payload
 from agent_factory.runtime_protocol import (
     CapabilitySnapshot,
+    AttachmentPart,
     ConversationMessage,
     RuntimeErrorEnvelope,
     RuntimeInstance,
     RuntimeModelUsage,
+    TaskEnvelope,
+    TextPart,
     ToolCallPart,
     ToolCallRecord,
     ToolResultPart,
@@ -106,6 +110,7 @@ class DynamicRuntimeService:
         run_controls: RuntimeRunControlRegistry,
         model_resolver: RuntimeModelResolver,
         launch_context_resolver: RuntimeLaunchContextResolver,
+        delegations: DelegationStore,
     ) -> None:
         self._service_set = service_set
         self._runtime_instances = runtime_instances
@@ -114,26 +119,44 @@ class DynamicRuntimeService:
         self._run_controls = run_controls
         self._model_resolver = model_resolver
         self._launch_context_resolver = launch_context_resolver
+        self._delegations = delegations
 
     def execute(self, runtime_instance_id: str) -> RuntimeExecutionResult:
-        return self._run(runtime_instance_id=runtime_instance_id, resume_payload=None)
+        return self._run(
+            runtime_instance_id=runtime_instance_id,
+            resume_payload=None,
+            delegation_claim_id=None,
+        )
+
+    def execute_delegated(self, claim: DelegatedTaskClaim) -> RuntimeExecutionResult:
+        return self._run(
+            runtime_instance_id=claim.child_runtime_instance_id,
+            resume_payload=None,
+            delegation_claim_id=claim.claim_id,
+        )
 
     def resume(self, runtime_instance_id: str, *, resume_payload: dict[str, Any]) -> RuntimeExecutionResult:
         if not isinstance(resume_payload, dict) or not resume_payload:
             raise ValueError("runtime resume requires a non-empty resume_payload")
-        return self._run(runtime_instance_id=runtime_instance_id, resume_payload=resume_payload)
+        return self._run(
+            runtime_instance_id=runtime_instance_id,
+            resume_payload=resume_payload,
+            delegation_claim_id=None,
+        )
 
     def _run(
         self,
         *,
         runtime_instance_id: str,
         resume_payload: dict[str, Any] | None,
+        delegation_claim_id: str | None,
     ) -> RuntimeExecutionResult:
         instance = self._runtime_instances.get(runtime_instance_id)
         _validate_invocation_status(instance, resuming=resume_payload is not None)
         claimed_instance = self._execution_commits.begin(
             runtime_instance_id,
             resuming=resume_payload is not None,
+            delegation_claim_id=delegation_claim_id,
         )
         run_control = self._run_controls.register(claimed_instance.runtime_instance_id)
         tool_registry_lease: SnapshotToolRegistryLease | None = None
@@ -172,8 +195,7 @@ class DynamicRuntimeService:
                 capability_snapshot=snapshot,
                 runtime_instance=claimed_instance,
             )
-            canonical_messages = self._conversations.messages(claimed_instance.request.session_id)
-            current_user_message = _current_user_message(claimed_instance, canonical_messages)
+            canonical_messages, current_user_message = self._runtime_input(claimed_instance)
             launch_context = self._launch_context_resolver.resolve(
                 instance=claimed_instance,
                 messages=canonical_messages,
@@ -212,7 +234,10 @@ class DynamicRuntimeService:
                 if isinstance(graph_input, dict)
                 else (getattr(graph.graph_app.get_state(config), "values", None) or {})
             )
-            with self._service_set.scoped_tool_registry.bind(tool_registry_lease):
+            with (
+                self._service_set.scoped_tool_registry.bind(tool_registry_lease),
+                self._service_set.scoped_context_resources.bind(claimed_instance),
+            ):
                 runtime_leases_owned_by_worker = True
                 raw, graph_detached = _run_graph_with_control(
                     graph_app=graph.graph_app,
@@ -250,7 +275,10 @@ class DynamicRuntimeService:
                 capability_snapshot=snapshot,
             )
             projected_messages = (
-                [] if status in {"waiting_approval", "waiting_external"} else projected_for_records
+                []
+                if claimed_instance.request.runtime_role == "temporary"
+                or status in {"waiting_approval", "waiting_external"}
+                else projected_for_records
             )
             error = _terminal_error(claimed_instance, status=status, state=state)
             try:
@@ -262,6 +290,7 @@ class DynamicRuntimeService:
                         status=status,
                         interrupts=interrupts,
                         error=error,
+                        graph_messages=projection_messages,
                     ),
                     messages=projected_messages,
                     tool_calls=_tool_call_records(
@@ -290,7 +319,11 @@ class DynamicRuntimeService:
                     task_revision=claimed_instance.request.task_revision,
                     capability_snapshot=snapshot,
                 )
-                projected_messages = projected_for_records
+                projected_messages = (
+                    []
+                    if claimed_instance.request.runtime_role == "temporary"
+                    else projected_for_records
+                )
                 error = _terminal_error(latest, status=status, state=state)
                 committed_instance = self._execution_commits.commit(
                     claimed_instance=claimed_instance,
@@ -300,6 +333,7 @@ class DynamicRuntimeService:
                         status=status,
                         interrupts=[],
                         error=error,
+                        graph_messages=projection_messages,
                     ),
                     messages=projected_messages,
                     tool_calls=_tool_call_records(
@@ -330,6 +364,19 @@ class DynamicRuntimeService:
             if not runtime_leases_owned_by_worker:
                 release_runtime_leases()
             self._run_controls.release(claimed_instance.runtime_instance_id, run_control)
+
+    def _runtime_input(
+        self,
+        instance: RuntimeInstance,
+    ) -> tuple[list[ConversationMessage], ConversationMessage]:
+        if instance.request.runtime_role == "main":
+            messages = self._conversations.messages(instance.request.session_id)
+            return messages, _current_user_message(instance, messages)
+        record = self._delegations.for_runtime(instance.runtime_instance_id)
+        if record.child_runtime.request != instance.request:
+            raise RuntimeError("delegated task runtime request changed after task creation")
+        message = _delegated_task_message(instance, record.envelope)
+        return [message], message
 
     def _resolve_frozen_model(self, instance: RuntimeInstance):
         frozen = instance.request.policy_snapshot.model
@@ -400,6 +447,42 @@ def _current_user_message(
             f"turn_id={instance.request.turn_id}, count={len(candidates)}"
         )
     return candidates[0]
+
+
+def _delegated_task_message(
+    instance: RuntimeInstance,
+    envelope: TaskEnvelope,
+) -> ConversationMessage:
+    if (
+        envelope.task_id != instance.request.task_id
+        or envelope.task_revision != instance.request.task_revision
+        or envelope.parent_runtime_instance_id != instance.request.parent_runtime_instance_id
+        or envelope.capability_snapshot_id != instance.capability_snapshot_id
+    ):
+        raise RuntimeError("delegated task envelope differs from the runtime request")
+    instruction = json.dumps(
+        {
+            "objective": envelope.objective,
+            "acceptance_criteria": list(envelope.acceptance_criteria),
+            "context_facts": list(envelope.context_facts),
+            "allowed_write_roots": list(envelope.allowed_write_roots),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return ConversationMessage(
+        message_id=f"delegated-task:{envelope.task_id}:{envelope.task_revision}",
+        session_id=instance.request.session_id,
+        turn_id=instance.request.turn_id,
+        role="user",
+        status="committed",
+        parts=(
+            TextPart(text=instruction),
+            *(AttachmentPart(attachment=item) for item in envelope.input_artifacts),
+        ),
+        created_at=envelope.created_at,
+        committed_at=envelope.created_at,
+    )
 
 
 def _message_text(message: ConversationMessage) -> str:
@@ -603,6 +686,7 @@ def _event_payload(
     status: RuntimeExecutionStatus,
     interrupts: list[dict[str, Any]],
     error: RuntimeErrorEnvelope | None,
+    graph_messages: list[BaseMessage],
 ) -> dict[str, Any]:
     if status in {"waiting_approval", "waiting_external"}:
         return {
@@ -611,10 +695,21 @@ def _event_payload(
             "details": {"interrupts": _json_safe(interrupts)},
         }
     if status == "completed":
-        return {"kind": "runtime_completed", "status": "completed"}
+        return {
+            "kind": "runtime_completed",
+            "status": "completed",
+            "result": _final_graph_message_content(graph_messages),
+        }
     if error is None:
         raise RuntimeError(f"terminal runtime status requires an error envelope: {status}")
     return {"kind": status, "error": error.model_dump(mode="json")}
+
+
+def _final_graph_message_content(messages: list[BaseMessage]) -> Any:
+    for message in reversed(messages):
+        if getattr(message, "type", "") in {"ai", "assistant"}:
+            return _json_safe(getattr(message, "content", ""))
+    raise RuntimeError("completed runtime has no assistant result message")
 
 
 def _terminal_error(

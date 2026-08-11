@@ -107,6 +107,8 @@ export const useRuntimeStore = defineStore('runtime', () => {
       request_timeout_seconds: policy.value?.request_timeout_seconds ?? 300,
       max_model_attempts: policy.value?.max_model_attempts ?? 2,
       max_parallel_temporary_agents: policy.value?.max_parallel_temporary_agents ?? 4,
+      max_temporary_delegation_depth: policy.value?.max_temporary_delegation_depth ?? 0,
+      delegation_grant_ttl_seconds: policy.value?.delegation_grant_ttl_seconds ?? 900,
       timezone: policy.value?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
     })
   }

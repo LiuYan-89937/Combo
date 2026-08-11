@@ -68,6 +68,8 @@ class UserRuntimePolicy(ProtocolModel):
     request_timeout_seconds: int = Field(default=300, ge=1)
     max_model_attempts: int = Field(default=1, ge=1)
     max_parallel_temporary_agents: int = Field(default=5, ge=1)
+    max_temporary_delegation_depth: int = Field(default=0, ge=0)
+    delegation_grant_ttl_seconds: int = Field(default=900, ge=1)
     timezone: str
     updated_at: str = Field(default_factory=utc_now_text)
 
@@ -118,6 +120,8 @@ class RuntimePolicySnapshot(FrozenProtocolModel):
     request_timeout_seconds: int = Field(ge=1)
     max_model_attempts: int = Field(ge=1)
     max_parallel_temporary_agents: int = Field(ge=1)
+    max_temporary_delegation_depth: int = Field(ge=0)
+    delegation_grant_ttl_seconds: int = Field(ge=1)
     timezone: str
     created_at: str = Field(default_factory=utc_now_text)
 
@@ -439,6 +443,8 @@ class RuntimeRequest(FrozenProtocolModel):
     approval_mode: ApprovalMode
     task_revision: int = Field(ge=1)
     parent_runtime_instance_id: str | None = None
+    task_id: str | None = None
+    delegation_grant_id: str | None = None
     created_at: str = Field(default_factory=utc_now_text)
 
     @field_validator(
@@ -453,7 +459,7 @@ class RuntimeRequest(FrozenProtocolModel):
     def _required_request_text(cls, value: str, info: Any) -> str:
         return _required_text(value, info.field_name)
 
-    @field_validator("parent_runtime_instance_id")
+    @field_validator("parent_runtime_instance_id", "task_id", "delegation_grant_id")
     @classmethod
     def _optional_parent_runtime(cls, value: str | None) -> str | None:
         return _optional_text(value)
@@ -464,6 +470,11 @@ class RuntimeRequest(FrozenProtocolModel):
             raise ValueError("main runtime cannot have parent_runtime_instance_id")
         if self.runtime_role == "temporary" and self.parent_runtime_instance_id is None:
             raise ValueError("temporary runtime requires parent_runtime_instance_id")
+        delegation_fields = (self.task_id, self.delegation_grant_id)
+        if self.runtime_role == "main" and any(item is not None for item in delegation_fields):
+            raise ValueError("main runtime cannot carry delegated task identity")
+        if self.runtime_role == "temporary" and any(item is None for item in delegation_fields):
+            raise ValueError("temporary runtime requires task and delegation grant identities")
         if self.approval_mode != self.policy_snapshot.approval_mode:
             raise ValueError("request approval_mode must match policy snapshot")
         if self.strategy != self.route_decision.strategy:
@@ -473,6 +484,53 @@ class RuntimeRequest(FrozenProtocolModel):
         expected_operation = "main_turn" if self.runtime_role == "main" else "temporary_turn"
         if self.policy_snapshot.model.operation != expected_operation:
             raise ValueError("request runtime_role does not match model operation")
+        return self
+
+
+class RuntimeExecutionIdentity(FrozenProtocolModel):
+    principal_id: str
+    request_id: str
+    runtime_instance_id: str
+    attempt_id: str
+    session_id: str
+    turn_id: str
+    workspace_id: str
+    runtime_role: RuntimeRole
+    parent_runtime_instance_id: str | None = None
+    task_id: str | None = None
+    delegation_grant_id: str | None = None
+    task_revision: int = Field(ge=1)
+    generation: int = Field(ge=1)
+
+    @field_validator(
+        "principal_id",
+        "request_id",
+        "runtime_instance_id",
+        "attempt_id",
+        "session_id",
+        "turn_id",
+        "workspace_id",
+    )
+    @classmethod
+    def _required_identity_text(cls, value: str, info: Any) -> str:
+        return _required_text(value, info.field_name)
+
+    @field_validator("parent_runtime_instance_id", "task_id", "delegation_grant_id")
+    @classmethod
+    def _optional_identity_parent(cls, value: str | None) -> str | None:
+        return _optional_text(value)
+
+    @model_validator(mode="after")
+    def _identity_role_matches_parent(self) -> "RuntimeExecutionIdentity":
+        if self.runtime_role == "main" and self.parent_runtime_instance_id is not None:
+            raise ValueError("main runtime identity cannot carry a parent runtime")
+        if self.runtime_role == "temporary" and self.parent_runtime_instance_id is None:
+            raise ValueError("temporary runtime identity requires a parent runtime")
+        delegation_fields = (self.task_id, self.delegation_grant_id)
+        if self.runtime_role == "main" and any(item is not None for item in delegation_fields):
+            raise ValueError("main runtime identity cannot carry delegated task identity")
+        if self.runtime_role == "temporary" and any(item is None for item in delegation_fields):
+            raise ValueError("temporary runtime identity requires task and grant identities")
         return self
 
 
@@ -565,24 +623,36 @@ class TaskEnvelope(FrozenProtocolModel):
     task_id: str
     principal_id: str
     parent_runtime_instance_id: str
+    delegation_grant_id: str
+    capability_snapshot_id: str
     task_revision: int = Field(ge=1)
+    parent_task_revision: int = Field(ge=1)
     objective: str
     acceptance_criteria: tuple[str, ...] = ()
-    visible_context: tuple[str, ...] = ()
+    context_facts: tuple[str, ...] = ()
     input_artifacts: tuple[AttachmentRevisionRef, ...] = ()
     workspace_id: str
     allowed_write_roots: tuple[str, ...] = ()
     capability_requirements: tuple[str, ...] = ()
+    approval_mode: ApprovalMode
     created_at: str = Field(default_factory=utc_now_text)
 
-    @field_validator("task_id", "principal_id", "parent_runtime_instance_id", "objective", "workspace_id")
+    @field_validator(
+        "task_id",
+        "principal_id",
+        "parent_runtime_instance_id",
+        "delegation_grant_id",
+        "capability_snapshot_id",
+        "objective",
+        "workspace_id",
+    )
     @classmethod
     def _required_envelope_text(cls, value: str, info: Any) -> str:
         return _required_text(value, info.field_name)
 
     @field_validator(
         "acceptance_criteria",
-        "visible_context",
+        "context_facts",
         "allowed_write_roots",
         "capability_requirements",
     )

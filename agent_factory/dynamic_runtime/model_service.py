@@ -145,6 +145,8 @@ class RuntimeModelResolver:
             request_timeout_seconds=policy.request_timeout_seconds,
             max_model_attempts=policy.max_model_attempts,
             max_parallel_temporary_agents=policy.max_parallel_temporary_agents,
+            max_temporary_delegation_depth=policy.max_temporary_delegation_depth,
+            delegation_grant_ttl_seconds=policy.delegation_grant_ttl_seconds,
             timezone=policy.timezone,
         )
         return ResolvedRuntimePolicy(snapshot=snapshot, chat_model=resolved)
