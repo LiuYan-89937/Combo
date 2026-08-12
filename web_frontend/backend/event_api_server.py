@@ -122,6 +122,8 @@ def create_app(config: RuntimeBackendConfig | None = None) -> FastAPI:
                 managed_workspace_root=backend.config.workspace_root,
                 maximum_skill_file_bytes=backend.config.maximum_skill_file_bytes,
                 maximum_skill_bytes=backend.config.maximum_skill_bytes,
+                maximum_tool_file_bytes=backend.config.maximum_tool_file_bytes,
+                maximum_tool_bytes=backend.config.maximum_tool_bytes,
             ),
         )
     )

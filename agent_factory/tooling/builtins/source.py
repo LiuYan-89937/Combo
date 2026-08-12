@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
 import json
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from agent_factory.dynamic_runtime.capability_definitions import (
     ToolLoopPolicy,
     ToolRuntimePolicy,
 )
+from agent_factory.dynamic_runtime.capability_blob_store import CapabilityBlobStore
 from agent_factory.runtime_protocol import CapabilityContent, CapabilityDraft
 from agent_factory.tooling.builtins.browser.specs import get_browser_tool_specs
 from agent_factory.tooling.builtins.capability.specs import get_capability_tool_specs
@@ -43,10 +45,11 @@ class BuiltinToolSourceConfig:
 
 
 class BuiltinToolCapabilitySource:
-    """Build-bound source artifacts; runtime resolution never consults this catalog."""
+    """Project trusted built-ins through the immutable ToolPackage protocol."""
 
-    def __init__(self, config: BuiltinToolSourceConfig) -> None:
+    def __init__(self, config: BuiltinToolSourceConfig, *, blobs: CapabilityBlobStore) -> None:
         self._config = config
+        self._blobs = blobs
 
     def drafts(self) -> tuple[CapabilityDraft, ...]:
         specs = (
@@ -91,6 +94,12 @@ class BuiltinToolCapabilitySource:
         })
         description = str(override.get("description") or spec.description).strip()
         display_name = str(override.get("display_name") or spec.id).strip()
+        package_files, package_digest = self._package_files(
+            spec=spec,
+            display_name=display_name,
+            description=description,
+            policy=policy,
+        )
         definition = ToolDefinition(
             model_alias=spec.id,
             model_description=description,
@@ -98,9 +107,14 @@ class BuiltinToolCapabilitySource:
             input_schema=spec.input_schema,
             output_schema=spec.output_schema,
             implementation=ToolImplementation(
-                kind="python_module",
-                entrypoint=spec.entrypoint,
-                hard_risk_evaluator_entrypoint=spec.risk_evaluator.hard,
+                kind="python_package",
+                entrypoint="main:run",
+                hard_risk_evaluator_entrypoint=(
+                    "main:evaluate_risk" if spec.risk_evaluator.hard is not None else None
+                ),
+                package_digest=package_digest,
+                package_files=package_files,
+                package_runtime="trusted_in_process",
             ),
             runtime_policy=policy,
             loop_policy=ToolLoopPolicy.model_validate(spec.loop_policy.model_dump(mode="json")),
@@ -127,6 +141,89 @@ class BuiltinToolCapabilitySource:
             ),
             updated_by_principal_id=config.publisher_principal_id,
         )
+
+    def _package_files(
+        self,
+        *,
+        spec: ToolSpec,
+        display_name: str,
+        description: str,
+        policy: ToolRuntimePolicy,
+    ):
+        module_name, function_name = spec.entrypoint.rsplit(":", 1)
+        lines = [
+            f"from {module_name} import {function_name} as _run",
+            "",
+            "def run(arguments, context):",
+            "    return _run(arguments=arguments, resources=context)",
+        ]
+        if spec.risk_evaluator.hard is not None:
+            risk_module, risk_function = spec.risk_evaluator.hard.rsplit(":", 1)
+            lines.extend([
+                "",
+                f"from {risk_module} import {risk_function} as _evaluate_risk",
+                "",
+                "def evaluate_risk(arguments, context):",
+                "    return _evaluate_risk(arguments, context)",
+            ])
+        manifest = {
+            "schema_version": "tool_package.v1",
+            "name": spec.id.replace("_", "-"),
+            "model_alias": spec.id,
+            "display_name": display_name,
+            "description": description,
+            "entrypoint": "main:run",
+            "schema_error_guidance": spec.schema_error_guidance,
+            "input_schema": spec.input_schema,
+            "output_schema": spec.output_schema,
+            "permissions": {
+                "approval": policy.approval,
+                "risk_level": policy.risk_level,
+                "effects": list(spec.effects),
+                "read_only": spec.read_only,
+                "sensitive_argument_paths": list(spec.sensitive_argument_paths),
+            },
+            "execution": {
+                "allow_parallel_calls": policy.allow_parallel_calls,
+                "max_parallel_calls": policy.max_parallel_calls,
+                "timeout_seconds": policy.timeout_seconds,
+                "output_projection": policy.output_projection,
+                "output_max_model_chars": policy.output_max_model_chars,
+                "retain_raw_output": policy.retain_raw_output,
+            },
+            "loop_policy": spec.loop_policy.model_dump(mode="json", exclude_none=True),
+            "runtime": {
+                "platforms": ["any"],
+                "required_input_modalities": ["text"],
+                "output_modalities": ["structured"],
+                "platform_resources": list(self._runtime_resources(spec)),
+                "system_available": spec.system_available,
+            },
+        }
+        contents = {
+            "TOOL.yaml": (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode("utf-8"),
+            "main.py": ("\n".join(lines) + "\n").encode("utf-8"),
+        }
+        files = tuple(
+            self._blobs.put_tool_package_file(
+                logical_path=path,
+                media_type="application/yaml" if path.endswith(".yaml") else "text/x-python",
+                content=content,
+            )
+            for path, content in contents.items()
+        )
+        payload = [
+            {
+                "logical_path": item.logical_path,
+                "content_digest": item.content_digest,
+                "size_bytes": item.size_bytes,
+            }
+            for item in sorted(files, key=lambda item: item.logical_path)
+        ]
+        package_digest = sha256(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        return files, package_digest
 
     def _overrides(self) -> dict[str, dict[str, object]]:
         path = self._config.overrides_path

@@ -7,6 +7,7 @@ environment.lock.json
 .venv/
 docs/*
 !docs/DYNAMIC_AGENT_RUNTIME_REFACTOR.md
+!docs/TOOL_PACKAGE.md
 !docs/refactor/
 !docs/refactor/**
 AGENT_GROUP_*.md

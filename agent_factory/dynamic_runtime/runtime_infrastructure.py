@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-import importlib
 from pathlib import Path
 from threading import RLock
 from types import MappingProxyType
@@ -30,6 +29,7 @@ from agent_factory.dynamic_runtime.snapshot_tool_execution import (
     ToolOutputRuntimeLease,
     ToolResourceLease,
 )
+from agent_factory.dynamic_runtime.tool_package_runtime import ToolPackageRuntime
 from agent_factory.dynamic_runtime.launch_context import (
     AttachmentLaunchResolver,
     WorkspaceLaunchProjection,
@@ -218,8 +218,11 @@ class RuntimeFilesystemResourcePool:
             resource.staged_write_store.close()
 
 
-class PythonModuleToolEntrypointResolver(SnapshotToolEntrypointResolver):
-    """Resolve a published Python module target only when its runtime lease begins."""
+class ToolEntrypointResolver(SnapshotToolEntrypointResolver):
+    """Route immutable Tool definitions to their trust-appropriate runtime adapter."""
+
+    def __init__(self, *, packages: ToolPackageRuntime) -> None:
+        self._packages = packages
 
     def acquire(
         self,
@@ -229,25 +232,11 @@ class PythonModuleToolEntrypointResolver(SnapshotToolEntrypointResolver):
         capability_snapshot: CapabilitySnapshot,
         runtime_instance: RuntimeInstance,
     ) -> ToolEntrypointLease:
-        if definition.implementation.kind != "python_module":
-            raise RuntimeError(
-                f"tool implementation kind requires an isolated runtime adapter: {definition.implementation.kind}"
-            )
-        module_name, function_name = _module_target(definition.implementation.entrypoint)
-        function = getattr(importlib.import_module(module_name), function_name, None)
-        if not callable(function):
-            raise RuntimeError(f"tool entrypoint is not callable: {definition.implementation.entrypoint}")
-        risk_evaluator = None
-        risk_target = definition.implementation.hard_risk_evaluator_entrypoint
-        if risk_target is not None:
-            risk_module_name, risk_function_name = _module_target(risk_target)
-            risk_evaluator = getattr(importlib.import_module(risk_module_name), risk_function_name, None)
-            if not callable(risk_evaluator):
-                raise RuntimeError(f"tool risk evaluator is not callable: {risk_target}")
-        return ToolEntrypointLease(
-            entrypoint=function,
-            hard_risk_evaluator=risk_evaluator,
-            release_callback=release_borrowed_runtime_resource,
+        return self._packages.acquire(
+            definition=definition,
+            projection=projection,
+            capability_snapshot=capability_snapshot,
+            runtime_instance=runtime_instance,
         )
 
 
@@ -511,13 +500,3 @@ def _release_callbacks(callbacks: list[ReleaseCallback]) -> None:
             errors.append(exc)
     if errors:
         raise BaseExceptionGroup("runtime resource release failed", errors)
-
-
-def _module_target(value: str) -> tuple[str, str]:
-    target = str(value or "").strip()
-    if ":" not in target:
-        raise ValueError("Python module tool entrypoint must use module:function")
-    module_name, function_name = (item.strip() for item in target.rsplit(":", 1))
-    if not module_name or not function_name:
-        raise ValueError("Python module tool entrypoint must include module and function")
-    return module_name, function_name

@@ -33,6 +33,13 @@
           <template #icon><n-icon><Add /></n-icon></template>
           {{ t('extensions.addServer') }}
         </n-button>
+        <template v-else-if="activePool === 'tools'">
+          <input ref="toolFolderInput" class="hidden-folder-input" type="file" webkitdirectory directory multiple @change="importToolFolder" />
+          <n-button type="primary" round :loading="importingTool" @click="toolFolderInput?.click()">
+            <template #icon><n-icon><Add /></n-icon></template>
+            上传 ToolPackage
+          </n-button>
+        </template>
         <n-space v-else-if="activePool === 'skills'">
           <input ref="skillFolderInput" class="hidden-folder-input" type="file" webkitdirectory directory multiple @change="importSkillFolder" />
           <n-button round :loading="importingSkill" @click="skillFolderInput?.click()">上传文件夹</n-button>
@@ -91,6 +98,7 @@
           <div class="editor-intro">
             <span class="type-pill">{{ editingTool.kind === 'mcp_tool' ? 'MCP TOOL' : 'TOOL' }}</span>
             <p>这里的设置会进入下一次能力快照，并直接约束运行时执行。</p>
+            <n-button v-if="editingTool.trust_level === 'local_user' && editingTool.details.implementation_kind === 'python_package'" size="small" secondary @click="openToolPackageEditor(editingTool)">编辑源码、依赖与资源</n-button>
           </div>
           <n-form label-placement="top" class="editor-form">
             <section class="form-section">
@@ -140,6 +148,35 @@
         </template>
       </n-drawer-content>
     </n-drawer>
+
+    <n-modal v-model:show="showToolPackageEditor" preset="card" class="skill-editor" :style="{ width: 'min(1120px, calc(100vw - 48px))' }" title="ToolPackage 编辑器" :bordered="false">
+      <n-spin :show="loadingToolPackage">
+        <template v-if="toolPackageDocument">
+          <div class="skill-editor-header">
+            <div><span class="type-pill">TOOL PACKAGE</span><strong>{{ toolPackageDocument.entrypoint }}</strong></div>
+            <span>{{ toolPackageDocument.source_path }}</span>
+          </div>
+          <div class="package-summary">
+            <span>{{ toolPackageDocument.files.length }} 个文件</span>
+            <span>{{ toolPackageDocument.python_requirements.length }} 项 Python 依赖</span>
+            <span>保存时重新校验、构建依赖并原子发布</span>
+          </div>
+          <div class="resource-editor">
+            <aside>
+              <button v-for="file in toolPackageDocument.files" :key="file.path" type="button" :class="{ active: selectedToolFilePath === file.path }" @click="selectedToolFilePath = file.path">
+                <span>{{ file.path }}</span><small>{{ formatBytes(file.size_bytes) }}{{ file.editable ? '' : ' · 只读' }}</small>
+              </button>
+            </aside>
+            <section v-if="selectedToolFile" class="resource-content">
+              <div class="pane-note"><strong>{{ selectedToolFile.path }}</strong><span>{{ selectedToolFile.editable ? 'UTF-8 文本；修改不会影响当前 revision，保存后才发布新 revision' : '二进制文件不能在线编辑' }}</span></div>
+              <n-input v-if="selectedToolFile.editable" v-model:value="toolPackageFiles[selectedToolFile.path]" type="textarea" class="code-editor" :autosize="{ minRows: 22, maxRows: 36 }" />
+              <n-empty v-else description="该文件只能通过重新上传 ToolPackage 更新" />
+            </section>
+          </div>
+        </template>
+      </n-spin>
+      <template #footer><n-space justify="end"><n-button @click="showToolPackageEditor = false">取消</n-button><n-button type="primary" :loading="savingToolPackage" :disabled="!toolPackageDocument" @click="saveToolPackageContent">校验并发布</n-button></n-space></template>
+    </n-modal>
 
     <n-modal v-model:show="showSkillEditor" preset="card" class="skill-editor" :style="{ width: 'min(1040px, calc(100vw - 48px))' }" title="Skill 编辑器" :bordered="false">
       <n-spin :show="loadingSkill">
@@ -238,6 +275,7 @@ import {
   type SkillEditorResource,
   type SkillHubResult,
   type ToolRuntimePolicyInput,
+  type ToolPackageEditorDocument,
 } from '@/api/capabilityPools'
 import type { McpServerConfig } from '@/api/resourceTypes'
 import type { ExtensionItemView } from '@/types/protocol'
@@ -275,6 +313,14 @@ const searchingSkillHub = ref(false)
 const installingSkill = ref('')
 const importingSkill = ref(false)
 const skillFolderInput = ref<HTMLInputElement | null>(null)
+const importingTool = ref(false)
+const toolFolderInput = ref<HTMLInputElement | null>(null)
+const showToolPackageEditor = ref(false)
+const loadingToolPackage = ref(false)
+const savingToolPackage = ref(false)
+const toolPackageDocument = ref<ToolPackageEditorDocument | null>(null)
+const selectedToolFilePath = ref('')
+const toolPackageFiles = reactive<Record<string, string>>({})
 const skillForm = reactive<{ metadata: Record<string, unknown>; instructions: string }>({ metadata: {}, instructions: '' })
 const toolForm = reactive<ToolRuntimePolicyInput & { display_name: string; description: string }>({
   display_name: '', description: '', approval: 'inherit', risk_level: 'low', allow_parallel_calls: true,
@@ -298,6 +344,7 @@ const activeHeading = computed(() => headings[activePool.value])
 const editingMcpConfig = computed(() => editingMcp.value?.details.registry_config as Record<string, unknown> | undefined || null)
 const editingMcpItem = computed<ExtensionItemView | null>(() => editingMcp.value ? ({ name: editingMcp.value.display_name, kind: 'mcp', enabled: true, payload: { ...(editingMcpConfig.value || {}), server_id: serverId(editingMcp.value), display_name: editingMcp.value.display_name, description: editingMcp.value.description } }) : null)
 const selectedResource = computed<SkillEditorResource | null>(() => skillDocument.value?.resources.find(item => item.path === selectedResourcePath.value) || null)
+const selectedToolFile = computed<SkillEditorResource | null>(() => toolPackageDocument.value?.files.find(item => item.path === selectedToolFilePath.value) || null)
 const approvalOptions = [
   { label: '跟随对话权限', value: 'inherit' }, { label: '自动放行', value: 'allow' },
   { label: '每次确认', value: 'ask' }, { label: '禁止调用', value: 'deny' },
@@ -319,7 +366,7 @@ function itemName(item: PoolItem) { return capabilityName(item) }
 function itemDescription(item: PoolItem) { return item.description || t('common.noDescription') }
 function itemEnabled(item: PoolItem) { return item.health === 'healthy' || item.health === null }
 function itemType(item: PoolItem) { return ({ mcp_server: 'MCP', mcp_tool: 'MCP TOOL', tool: 'TOOL', skill: 'SKILL' } as const)[item.kind] }
-function itemSource(item: PoolItem) { if (item.kind === 'mcp_tool') return '来自 MCP'; if (item.kind === 'tool') return '内置运行时'; if (item.kind === 'skill') return item.trust_level === 'local_user' ? '本地 Skill' : item.trust_level; return transportLabel(item) }
+function itemSource(item: PoolItem) { if (item.kind === 'mcp_tool') return '来自 MCP'; if (item.kind === 'tool') return item.trust_level === 'local_user' ? '本地 ToolPackage' : '内置运行时'; if (item.kind === 'skill') return item.trust_level === 'local_user' ? '本地 Skill' : item.trust_level; return transportLabel(item) }
 function itemFacts(item: PoolItem) {
   if (item.kind === 'mcp_server') return [`${mcpToolCount(item.capability_id)} 个工具`, `${item.details.max_parallel_requests || 1} 并发`]
   if (item.kind === 'skill') return [`${item.details.content_count || 1} 个文件`, formatBytes(Number(item.details.total_size_bytes || 0))]
@@ -340,17 +387,9 @@ async function openSkillHub() { showSkillHub.value = true; try { skillHubResult.
 async function searchSkillHub() { const query = skillHubQuery.value.trim(); if (!query || searchingSkillHub.value) return; searchingSkillHub.value = true; try { skillHubResult.value = await capabilityPoolsApi.searchSkillHub(query) } catch (error) { message.error(error instanceof Error ? error.message : String(error)) } finally { searchingSkillHub.value = false } }
 async function installSkillHub(skill: string) { if (!skill || installingSkill.value) return; installingSkill.value = skill; try { const result = await capabilityPoolsApi.installSkillHub(skill); snapshot.value = result.capability_pool; skillHubResult.value = result.skillhub; message.success(`Skill 已安装并发布：${skill}`) } catch (error) { message.error(error instanceof Error ? error.message : String(error)) } finally { installingSkill.value = '' } }
 async function importSkillFolder(event: Event) {
-  const input = event.target as HTMLInputElement
-  const selected = Array.from(input.files || [])
-  input.value = ''
-  if (!selected.length || importingSkill.value) return
-  const firstPath = (selected[0] as File & { webkitRelativePath?: string }).webkitRelativePath || selected[0].name
-  const rootName = firstPath.split('/')[0] || ''
-  const files = selected.map(file => {
-    const path = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
-    const parts = path.split('/')
-    return { file, relativePath: parts.length > 1 ? parts.slice(1).join('/') : parts[0] }
-  })
+  const selection = selectedFolder(event)
+  if (!selection || importingSkill.value) return
+  const { rootName, files } = selection
   if (!rootName || !files.some(item => item.relativePath === 'SKILL.md')) {
     message.error('请选择根目录包含 SKILL.md 的 Skill 文件夹')
     return
@@ -365,11 +404,74 @@ async function importSkillFolder(event: Event) {
     importingSkill.value = false
   }
 }
+async function importToolFolder(event: Event) {
+  const selection = selectedFolder(event)
+  if (!selection || importingTool.value) return
+  const { rootName, files } = selection
+  if (!files.some(item => item.relativePath === 'TOOL.yaml') || !files.some(item => item.relativePath === 'main.py')) {
+    message.error('请选择根目录同时包含 TOOL.yaml 和 main.py 的 ToolPackage 文件夹')
+    return
+  }
+  importingTool.value = true
+  try {
+    snapshot.value = await capabilityPoolsApi.importToolFolder(rootName, files)
+    message.success(`ToolPackage 已完成依赖校验并发布：${rootName}`)
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : String(error))
+  } finally {
+    importingTool.value = false
+  }
+}
+function selectedFolder(event: Event): { rootName: string; files: Array<{ file: File; relativePath: string }> } | null {
+  const input = event.target as HTMLInputElement
+  const selected = Array.from(input.files || [])
+  input.value = ''
+  if (!selected.length) return null
+  const firstPath = (selected[0] as File & { webkitRelativePath?: string }).webkitRelativePath || selected[0].name
+  const rootName = firstPath.split('/')[0] || ''
+  const files = selected.map(file => {
+    const path = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
+    const parts = path.split('/')
+    return { file, relativePath: parts.length > 1 ? parts.slice(1).join('/') : parts[0] }
+  })
+  return rootName ? { rootName, files } : null
+}
 function openItem(item: PoolItem) { editItem(item) }
 function editItem(item: PoolItem) { if (item.kind === 'mcp_server') { editingMcp.value = item; showMcpModal.value = true; return } if (item.kind === 'skill') { void openSkillEditor(item); return } openToolEditor(item) }
 function openToolEditor(item: CapabilityPoolItem) { editingTool.value = item; Object.assign(toolForm, { display_name: item.display_name, description: item.description, approval: item.details.approval || 'inherit', risk_level: item.details.risk_level || 'low', allow_parallel_calls: item.details.allow_parallel_calls !== false, max_parallel_calls: Number(item.details.max_parallel_calls || 1), timeout_seconds: Number(item.details.timeout_seconds || 300), output_projection: item.details.output_projection || 'compress', output_max_model_chars: Number(item.details.output_max_model_chars || 50000), retain_raw_output: item.details.retain_raw_output !== false }); showToolEditor.value = true }
 function normalizeParallel(value: boolean) { if (!value) toolForm.max_parallel_calls = 1 }
 async function saveTool() { if (!editingTool.value) return; savingTool.value = true; try { snapshot.value = await capabilityPoolsApi.updateTool(editingTool.value, { display_name: toolForm.display_name.trim(), description: toolForm.description.trim(), runtime_policy: { approval: toolForm.approval, risk_level: toolForm.risk_level, allow_parallel_calls: toolForm.allow_parallel_calls, max_parallel_calls: toolForm.allow_parallel_calls ? toolForm.max_parallel_calls : 1, timeout_seconds: toolForm.timeout_seconds, output_projection: toolForm.output_projection, output_max_model_chars: toolForm.output_max_model_chars, retain_raw_output: toolForm.retain_raw_output } }); showToolEditor.value = false; message.success('工具配置已发布') } catch (error) { message.error(error instanceof Error ? error.message : String(error)) } finally { savingTool.value = false } }
+async function openToolPackageEditor(item: CapabilityPoolItem) {
+  showToolPackageEditor.value = true
+  loadingToolPackage.value = true
+  toolPackageDocument.value = null
+  try {
+    const document = await capabilityPoolsApi.toolPackageEditor(item.capability_id)
+    toolPackageDocument.value = document
+    for (const key of Object.keys(toolPackageFiles)) delete toolPackageFiles[key]
+    document.files.filter(file => file.editable).forEach(file => { toolPackageFiles[file.path] = file.content || '' })
+    selectedToolFilePath.value = document.files.find(file => file.path === 'main.py')?.path || document.files[0]?.path || ''
+  } catch (error) {
+    showToolPackageEditor.value = false
+    message.error(error instanceof Error ? error.message : String(error))
+  } finally {
+    loadingToolPackage.value = false
+  }
+}
+async function saveToolPackageContent() {
+  if (!toolPackageDocument.value) return
+  savingToolPackage.value = true
+  try {
+    snapshot.value = await capabilityPoolsApi.updateToolPackageContent(toolPackageDocument.value, { ...toolPackageFiles })
+    showToolPackageEditor.value = false
+    showToolEditor.value = false
+    message.success('ToolPackage 已重新校验并发布')
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : String(error))
+  } finally {
+    savingToolPackage.value = false
+  }
+}
 async function openSkillEditor(item: CapabilityPoolItem) { showSkillEditor.value = true; loadingSkill.value = true; skillDocument.value = null; skillTab.value = 'metadata'; try { const document = await capabilityPoolsApi.skillEditor(item.capability_id); skillDocument.value = document; skillForm.metadata = structuredClone(document.metadata); skillForm.instructions = document.instructions; for (const key of Object.keys(skillResources)) delete skillResources[key]; document.resources.filter(resource => resource.editable).forEach(resource => { skillResources[resource.path] = resource.content || '' }); selectedResourcePath.value = document.resources[0]?.path || '' } catch (error) { showSkillEditor.value = false; message.error(error instanceof Error ? error.message : String(error)) } finally { loadingSkill.value = false } }
 async function saveSkillContent() { if (!skillDocument.value) return; savingSkill.value = true; try { snapshot.value = await capabilityPoolsApi.updateSkillContent(skillDocument.value, { metadata: skillForm.metadata, instructions: skillForm.instructions, resources: { ...skillResources } }); showSkillEditor.value = false; message.success('Skill 已校验并发布') } catch (error) { message.error(error instanceof Error ? error.message : String(error)) } finally { savingSkill.value = false } }
 async function saveMcpServers(servers: McpServerConfig[]) { if (!snapshot.value) return; savingMcp.value = true; try { let current = snapshot.value; if (editingMcp.value) { if (servers.length !== 1) throw new Error('编辑 MCP 时只能提交一个服务'); current = await capabilityPoolsApi.updateMcp(serverId(editingMcp.value), servers[0], current.mcp_registry_digest) } else { for (const server of servers) current = await capabilityPoolsApi.addMcp(server, current.mcp_registry_digest) } snapshot.value = current; showMcpModal.value = false; editingMcp.value = null; message.success('MCP 已保存') } catch (error) { message.error(error instanceof Error ? error.message : String(error)) } finally { savingMcp.value = false } }
@@ -386,6 +488,7 @@ onMounted(loadAll)
 .page-alert { max-width: 1540px; margin: 12px auto; }.pool-surface { max-width: 1540px; margin: 0 auto; padding: 24px; border: 1px solid var(--app-border); border-radius: 20px; background: var(--app-surface); }.pool-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; padding: 2px 2px 22px; border-bottom: 1px solid var(--app-border); }.pool-heading h2 { margin: 0; font-size: 22px; letter-spacing: -.02em; }
 .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; padding-top: 18px; }.pool-card { display: flex; min-height: 214px; flex-direction: column; padding: 17px 18px 14px; border: 1px solid var(--app-border); border-radius: 15px; background: var(--app-surface); cursor: pointer; transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease; }.pool-card:hover,.pool-card:focus-visible { transform: translateY(-2px); border-color: var(--app-border-focus); box-shadow: 0 12px 28px color-mix(in srgb, var(--app-text) 7%, transparent); outline: none; }.card-header,.card-footer,.status,.card-buttons,.skill-editor-header,.skill-editor-header > div,.section-row,.switch-line { display: flex; align-items: center; }.card-header,.card-footer,.section-row,.switch-line { justify-content: space-between; }.type-pill { display: inline-flex; width: fit-content; padding: 4px 7px; border-radius: 6px; background: var(--app-text); color: var(--app-surface); font-size: 9px; font-weight: 800; letter-spacing: .08em; }.status { gap: 6px; color: var(--app-text-muted); font-size: 10px; }.status i { width: 6px; height: 6px; border-radius: 50%; background: var(--app-success, #2ca66f); }.status.muted i { background: var(--app-text-muted); }.card-body { flex: 1; padding: 22px 0 14px; }.card-body h3 { margin: 0; overflow: hidden; font-size: 16px; letter-spacing: -.01em; text-overflow: ellipsis; white-space: nowrap; }.card-body p { display: -webkit-box; margin: 8px 0 0; overflow: hidden; color: var(--app-text-secondary); font-size: 12px; line-height: 1.6; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }.card-facts { display: flex; min-height: 24px; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }.card-facts span { padding: 3px 7px; border-radius: 6px; background: var(--app-surface-subtle, color-mix(in srgb, var(--app-text) 5%, transparent)); color: var(--app-text-muted); font-size: 9px; }.card-footer { min-height: 30px; padding-top: 11px; border-top: 1px solid var(--app-border); color: var(--app-text-muted); font-size: 10px; }.card-buttons { gap: 1px; }.empty-state { padding: 90px 0; }
 .editor-intro { padding: 2px 0 22px; border-bottom: 1px solid var(--app-border); }.editor-intro p { margin: 12px 0 0; color: var(--app-text-secondary); font-size: 12px; }.editor-form { display: grid; gap: 14px; padding-top: 18px; }.form-section { padding: 17px; border: 1px solid var(--app-border); border-radius: 13px; }.form-section.two-column { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }.section-title { display: grid; gap: 3px; margin-bottom: 15px; }.section-title.full { grid-column: 1 / -1; }.section-title strong,.switch-line strong { font-size: 13px; }.section-title span,.switch-line small { color: var(--app-text-muted); font-size: 10px; line-height: 1.5; }.section-row .section-title { margin-bottom: 10px; }.switch-line > span { display: grid; gap: 3px; }
+.editor-intro .n-button { margin-top: 14px; }.package-summary { display: flex; flex-wrap: wrap; gap: 8px; padding: 14px 0 0; }.package-summary span { padding: 5px 8px; border: 1px solid var(--app-border); border-radius: 7px; color: var(--app-text-secondary); font-size: 10px; }
 .skill-editor :deep(.n-card__content) { padding-top: 4px; }.skill-editor-header { justify-content: space-between; gap: 20px; min-width: 0; padding: 0 0 16px; border-bottom: 1px solid var(--app-border); }.skill-editor-header > div { gap: 10px; }.skill-editor-header > span { overflow: hidden; color: var(--app-text-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }.skill-pane { padding-top: 18px; }.narrow-pane { width: min(650px, 100%); }.pane-note { display: grid; gap: 3px; margin-bottom: 10px; }.pane-note span { color: var(--app-text-muted); font-size: 10px; }.code-editor :deep(textarea) { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; line-height: 1.65; }.resource-editor { display: grid; grid-template-columns: 260px minmax(0, 1fr); min-height: 470px; margin-top: 18px; overflow: hidden; border: 1px solid var(--app-border); border-radius: 12px; }.resource-editor aside { padding: 8px; overflow-y: auto; border-right: 1px solid var(--app-border); background: var(--app-surface-subtle, color-mix(in srgb, var(--app-text) 3%, transparent)); }.resource-editor aside button { display: grid; width: 100%; gap: 3px; padding: 10px; color: inherit; text-align: left; border: 0; border-radius: 8px; background: transparent; cursor: pointer; }.resource-editor aside button:hover,.resource-editor aside button.active { background: var(--app-surface); }.resource-editor aside span { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }.resource-editor aside small { color: var(--app-text-muted); font-size: 9px; }.resource-content { min-width: 0; padding: 15px; }.resource-empty { align-self: center; }
 .skillhub-panel { display: grid; gap: 18px; }.skillhub-status { display: flex; align-items: center; gap: 11px; padding: 14px; border: 1px solid var(--app-border); border-radius: 12px; }.skillhub-status > span { width: 8px; height: 8px; border-radius: 50%; background: var(--app-text-muted); }.skillhub-status > span.ready { background: var(--app-success, #2ca66f); }.skillhub-status div { display: grid; gap: 3px; }.skillhub-status small { color: var(--app-text-muted); font-size: 10px; }.skillhub-results { display: grid; gap: 8px; max-height: 440px; overflow-y: auto; }.skillhub-results article { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px 14px; padding: 14px; border: 1px solid var(--app-border); border-radius: 11px; }.skillhub-results article > div { display: flex; align-items: baseline; gap: 8px; }.skillhub-results article small { color: var(--app-text-muted); font-size: 9px; }.skillhub-results article p { grid-column: 1; margin: 0; color: var(--app-text-secondary); font-size: 11px; line-height: 1.6; }.skillhub-results article .n-button { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
 @media (max-width: 920px) { .library-header { align-items: flex-start; flex-direction: column; }.header-tools,.search-input { width: 100%; }.pool-switcher { grid-template-columns: repeat(2, 1fr); }.resource-editor { grid-template-columns: 210px minmax(0, 1fr); } }

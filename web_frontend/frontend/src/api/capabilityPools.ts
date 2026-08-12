@@ -79,6 +79,15 @@ export interface SkillHubInstallResult {
   capability_pool: CapabilityPoolSnapshot
 }
 
+export interface ToolPackageEditorDocument {
+  capability_id: string
+  content_digest: string
+  source_path: string
+  entrypoint: string
+  python_requirements: string[]
+  files: SkillEditorResource[]
+}
+
 export const capabilityPoolsApi = {
   snapshot: () => requestJson<CapabilityPoolSnapshot>('/api/runtime/capabilities'),
   skillHubStatus: () => requestJson<SkillHubResult>('/api/runtime/capabilities/skillhub/status'),
@@ -96,6 +105,13 @@ export const capabilityPoolsApi = {
     formData.append('relative_paths', JSON.stringify(files.map(item => item.relativePath)))
     files.forEach(item => formData.append('files', item.file, item.file.name))
     return requestFormJson<CapabilityPoolSnapshot>('/api/runtime/capabilities/skills/import', formData)
+  },
+  importToolFolder: (rootName: string, files: Array<{ file: File; relativePath: string }>) => {
+    const formData = new FormData()
+    formData.append('root_name', rootName)
+    formData.append('relative_paths', JSON.stringify(files.map(item => item.relativePath)))
+    files.forEach(item => formData.append('files', item.file, item.file.name))
+    return requestFormJson<CapabilityPoolSnapshot>('/api/runtime/capabilities/tools/import', formData)
   },
   probeMcp: (capabilityId: string) => requestJson<McpProbeResult>('/api/runtime/capabilities/mcp/probe', {
     method: 'POST',
@@ -128,6 +144,19 @@ export const capabilityPoolsApi = {
     {
       method: 'PUT',
       body: JSON.stringify({ expected_content_digest: item.content_digest, ...input }),
+    },
+  ),
+  toolPackageEditor: (capabilityId: string) => requestJson<ToolPackageEditorDocument>(
+    `/api/runtime/capabilities/tool-packages/${encodeURIComponent(capabilityId)}/editor`,
+  ),
+  updateToolPackageContent: (
+    document: ToolPackageEditorDocument,
+    files: Record<string, string>,
+  ) => requestJson<CapabilityPoolSnapshot>(
+    `/api/runtime/capabilities/tool-packages/${encodeURIComponent(document.capability_id)}/editor`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ expected_content_digest: document.content_digest, files }),
     },
   ),
   skillEditor: (capabilityId: string) => requestJson<SkillEditorDocument>(

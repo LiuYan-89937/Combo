@@ -68,6 +68,24 @@ class PreparedDependencyEnvironment:
 class DependencyPoolService(DependencyPool):
     """Prepare immutable environments from normalized capability dependencies."""
 
+    def resolve_profile(
+        self,
+        *,
+        python_requirements: tuple[str, ...] = (),
+        npm_requirements: tuple[str, ...] = (),
+        timeout_seconds: int | None = None,
+        on_progress: DependencyProgress | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> DependencyPoolResolution:
+        """Resolve a reusable dependency profile without inventing capability identities."""
+        return self._resolve(
+            python_requirements=list(python_requirements),
+            npm_requirements=list(npm_requirements),
+            timeout_seconds=timeout_seconds,
+            on_progress=on_progress,
+            cancel_event=cancel_event,
+        )
+
     def ensure(
         self,
         request: DependencyRequest,
@@ -86,9 +104,9 @@ class DependencyPoolService(DependencyPool):
             "required_executables": _normalized_values(list(request.required_executables)),
             "runtime_compatibility": compatibility,
         }
-        resolution = self._resolve(
-            python_requirements=normalized_request["python_requirements"],
-            npm_requirements=normalized_request["npm_requirements"],
+        resolution = self.resolve_profile(
+            python_requirements=tuple(normalized_request["python_requirements"]),
+            npm_requirements=tuple(normalized_request["npm_requirements"]),
             timeout_seconds=request.timeout_seconds,
             on_progress=on_progress,
             cancel_event=cancel_event,

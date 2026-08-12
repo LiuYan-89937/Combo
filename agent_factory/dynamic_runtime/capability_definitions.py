@@ -73,12 +73,40 @@ class SkillDefinition(FrozenProtocolModel):
         return self
 
 
+class ToolPackageFileRef(FrozenProtocolModel):
+    logical_path: str
+    media_type: str
+    blob_id: str
+    content_digest: str
+    size_bytes: int = Field(ge=0)
+
+    @field_validator("logical_path", "media_type", "blob_id")
+    @classmethod
+    def _required_text_fields(cls, value: str, info: object) -> str:
+        return _required_text(value, getattr(info, "field_name", "value"))
+
+    @field_validator("content_digest")
+    @classmethod
+    def _content_digest_is_sha256(cls, value: str) -> str:
+        return _sha256_text(value, "tool package file content digest")
+
+    @field_validator("logical_path")
+    @classmethod
+    def _logical_path_is_portable(cls, value: str) -> str:
+        text = value.replace("\\", "/")
+        if text.startswith("/") or any(part in {"", ".", ".."} for part in text.split("/")):
+            raise ValueError("tool package logical_path must be a normalized relative path")
+        return text
+
+
 class ToolImplementation(FrozenProtocolModel):
-    kind: Literal["python_module", "python_source", "managed_process"]
+    kind: Literal["python_package"] = "python_package"
     entrypoint: str
     hard_risk_evaluator_entrypoint: str | None = None
-    source_blob_id: str | None = None
-    source_digest: str | None = None
+    package_digest: str | None = None
+    package_files: tuple[ToolPackageFileRef, ...] = ()
+    python_requirements: tuple[str, ...] = ()
+    package_runtime: Literal["isolated", "trusted_in_process"] | None = None
 
     @field_validator("entrypoint")
     @classmethod
@@ -96,23 +124,50 @@ class ToolImplementation(FrozenProtocolModel):
             raise ValueError("tool hard risk evaluator entrypoint must identify a target and callable")
         return text
 
-    @field_validator("source_blob_id")
+    @field_validator("package_digest")
     @classmethod
-    def _optional_blob_id(cls, value: str | None) -> str | None:
-        return _optional_text(value)
+    def _optional_package_digest(cls, value: str | None) -> str | None:
+        return None if value is None else _sha256_text(value, "tool package digest")
 
-    @field_validator("source_digest")
+    @field_validator("package_files")
     @classmethod
-    def _optional_source_digest(cls, value: str | None) -> str | None:
-        return None if value is None else _sha256_text(value, "tool source digest")
+    def _package_paths_are_unique(
+        cls,
+        values: tuple[ToolPackageFileRef, ...],
+    ) -> tuple[ToolPackageFileRef, ...]:
+        paths = [item.logical_path.casefold() for item in values]
+        if len(paths) != len(set(paths)):
+            raise ValueError("tool package file paths must be cross-platform unique")
+        return values
+
+    @field_validator("python_requirements")
+    @classmethod
+    def _requirements_are_unique(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        normalized = tuple(_required_text(value, "Python requirement") for value in values)
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("tool package Python requirements must be unique")
+        return normalized
 
     @model_validator(mode="after")
     def _source_kind_matches_reference(self) -> "ToolImplementation":
-        has_source = self.source_blob_id is not None and self.source_digest is not None
-        if self.kind == "python_source" and not has_source:
-            raise ValueError("python_source implementation requires source blob and digest")
-        if self.kind != "python_source" and (self.source_blob_id is not None or self.source_digest is not None):
-            raise ValueError("only python_source implementation may carry source blob fields")
+        has_package = self.package_digest is not None and bool(self.package_files)
+        if not has_package:
+            raise ValueError("python_package implementation requires package files and digest")
+        if self.package_runtime is None:
+            raise ValueError("python_package implementation requires an explicit package runtime")
+        paths = {item.logical_path for item in self.package_files}
+        if "TOOL.yaml" not in paths or "main.py" not in paths:
+            raise ValueError("python_package implementation requires TOOL.yaml and main.py")
+        payload = [
+            {
+                "logical_path": item.logical_path,
+                "content_digest": item.content_digest,
+                "size_bytes": item.size_bytes,
+            }
+            for item in sorted(self.package_files, key=lambda item: item.logical_path)
+        ]
+        if self.package_digest != _json_digest(payload):
+            raise ValueError("tool package digest does not match package files")
         return self
 
 

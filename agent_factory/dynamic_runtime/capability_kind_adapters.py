@@ -117,7 +117,7 @@ class SkillCapabilityAdapter(TypedCapabilityAdapter[SkillDefinition]):
 class ToolCapabilityAdapter(TypedCapabilityAdapter[ToolDefinition]):
     kind = "tool"
     adapter_id = "dynamic_runtime.tool"
-    adapter_revision = "2"
+    adapter_revision = "3"
     definition_schema = "tool_definition.v2"
     definition_model = ToolDefinition
 
@@ -131,6 +131,24 @@ class ToolCapabilityAdapter(TypedCapabilityAdapter[ToolDefinition]):
             *_schema_diagnostics(tool.input_schema, path=("content", "definition", "input_schema")),
             *_schema_diagnostics(tool.output_schema, path=("content", "definition", "output_schema")),
         ]
+        if tool.implementation.package_runtime == "trusted_in_process" and draft.trust_level != "builtin":
+            diagnostics.append(
+                _diagnostic(
+                    code="trusted_tool_package_requires_builtin_trust",
+                    message="trusted in-process ToolPackages require builtin trust",
+                    path=("content", "definition", "implementation", "package_runtime"),
+                )
+            )
+        if tool.implementation.package_runtime == "isolated" and (
+            tool.runtime_resources or tool.system_available
+        ):
+            diagnostics.append(
+                _diagnostic(
+                    code="isolated_tool_package_requests_platform_resources",
+                    message="isolated ToolPackages cannot request in-process platform resources or system availability",
+                    path=("content", "definition", "runtime_resources"),
+                )
+            )
         diagnostics.extend(
             _resource_binding_diagnostics(
                 bindings=(

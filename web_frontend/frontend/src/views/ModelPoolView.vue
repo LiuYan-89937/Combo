@@ -13,7 +13,7 @@
       </n-button>
     </div>
 
-    <n-tabs type="line" animated>
+    <n-tabs v-model:value="activeTab" type="line" animated>
       <n-tab-pane name="profiles" :tab="t('modelPool.profiles')">
         <div class="tab-content">
           <div class="content-header">
@@ -84,7 +84,7 @@
             </template>
           </n-empty>
 
-          <div class="role-binding-panel">
+          <div ref="infrastructureBindingsPanel" class="role-binding-panel" tabindex="-1">
             <div class="content-header">
               <div class="context-title">
                 <n-text strong>{{ t('modelPool.infrastructureBindings') }}</n-text>
@@ -381,6 +381,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { use } from 'echarts/core'
 import { BarChart, LineChart } from 'echarts/charts'
 import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
@@ -439,8 +440,13 @@ use([BarChart, CanvasRenderer, GridComponent, LegendComponent, LineChart, Toolti
 const { t } = useI18n()
 const message = useMessage()
 const dialog = useDialog()
+const route = useRoute()
+const router = useRouter()
 
 const loading = ref(false)
+const activeTab = ref('profiles')
+const infrastructureBindingsPanel = ref<HTMLElement | null>(null)
+const embeddingSetupRequested = computed(() => route.query.setup === 'embedding')
 const saving = ref(false)
 const savingBindings = ref(false)
 const testingProfileId = ref<string | null>(null)
@@ -609,7 +615,28 @@ const usageChartOptions = computed(() => {
   }
 })
 
-onMounted(refresh)
+onMounted(async () => {
+  await refresh()
+  await focusRequestedSetup()
+})
+
+watch(
+  () => route.query.setup,
+  () => { void focusRequestedSetup() },
+)
+
+async function focusRequestedSetup(): Promise<void> {
+  if (!embeddingSetupRequested.value) return
+  activeTab.value = 'profiles'
+  await nextTick()
+  infrastructureBindingsPanel.value?.focus({ preventScroll: true })
+  infrastructureBindingsPanel.value?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  if (!profiles.value.some((profile) => profile.kind === 'embedding' && profile.enabled)) {
+    openProfile()
+    profileForm.kind = 'embedding'
+  }
+  await router.replace({ query: { ...route.query, setup: undefined } })
+}
 
 watch(
   () => profileForm.kind,
@@ -1014,6 +1041,12 @@ function formatCost(value: number | null | undefined): string {
   border: 1px solid var(--app-border);
   border-radius: 8px;
   background: var(--app-panel);
+}
+
+.role-binding-panel:focus {
+  border-color: var(--app-border-focus);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--app-text) 9%, transparent);
+  outline: none;
 }
 
 .role-binding-grid {

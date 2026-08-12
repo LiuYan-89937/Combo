@@ -66,10 +66,17 @@ from agent_factory.dynamic_runtime.skill_source import (
     FileSystemSkillSourceConfig,
     SkillSourceRoot,
 )
+from agent_factory.dynamic_runtime.tool_package_source import (
+    FileSystemToolCapabilitySource,
+    FileSystemToolSourceConfig,
+    ToolSourceRoot,
+)
+from agent_factory.dynamic_runtime.tool_package_runtime import ToolPackageRuntime
+from agent_factory.environment_system import DependencyPoolService
 from agent_factory.dynamic_runtime.application import DynamicRuntimeStores
 from agent_factory.dynamic_runtime.runtime_infrastructure import (
     ConversationWorkspaceLaunchResolver,
-    PythonModuleToolEntrypointResolver,
+    ToolEntrypointResolver,
     SharedToolOutputResolver,
     SnapshotRuntimeResourceProjector,
     RuntimeProcessResourcePool,
@@ -120,6 +127,11 @@ class RuntimeBackendConfig:
     skill_source_roots: tuple[SkillSourceRoot, ...]
     maximum_skill_file_bytes: int
     maximum_skill_bytes: int
+    tool_capability_source_prefix: str
+    tool_source_roots: tuple[ToolSourceRoot, ...]
+    maximum_tool_file_bytes: int
+    maximum_tool_bytes: int
+    tool_package_runtime_root: Path
     mcp_capability_source_prefix: str
     mcp_server_registry_path: Path
     browser_runtime: BrowserRuntimeConfig
@@ -167,6 +179,17 @@ class RuntimeBackendConfig:
             ),
             maximum_skill_file_bytes=4 * 1024 * 1024,
             maximum_skill_bytes=32 * 1024 * 1024,
+            tool_capability_source_prefix="filesystem-tool://",
+            tool_source_roots=(
+                ToolSourceRoot(
+                    root_id="local-tools",
+                    path=factory_artifact_path("extension_registry", "tools"),
+                    trust_level="local_user",
+                ),
+            ),
+            maximum_tool_file_bytes=8 * 1024 * 1024,
+            maximum_tool_bytes=64 * 1024 * 1024,
+            tool_package_runtime_root=factory_artifact_path("tool_package_runtime"),
             mcp_capability_source_prefix="mcp-config://",
             mcp_server_registry_path=factory_artifact_path(
                 "extension_registry", "mcp_servers.json"
@@ -203,6 +226,8 @@ class RuntimeBackend:
             skills_dir=config.skill_source_roots[0].path,
         )
         self._mcp_registry_lock = RLock()
+        self._tool_package_lock = RLock()
+        self.tool_package_runtime: ToolPackageRuntime | None = None
         try:
             self.application = self._open_application()
             self.frontend_events.bind_request_id_resolver(self._frontend_request_id)
@@ -373,6 +398,18 @@ class RuntimeBackend:
                         capabilities[-1]["details"] = {
                             **dict(capabilities[-1]["details"]),
                             "source_path": str(source_root.path / skill_parts[1]),
+                        }
+            if revision.kind == "tool" and revision.trust_level == "local_user":
+                tool_parts = revision.capability_id.removeprefix("tool://").split("/", 1)
+                if len(tool_parts) == 2:
+                    source_root = next(
+                        (root for root in self.config.tool_source_roots if root.root_id == tool_parts[0]),
+                        None,
+                    )
+                    if source_root is not None:
+                        capabilities[-1]["details"] = {
+                            **dict(capabilities[-1]["details"]),
+                            "source_path": str(source_root.path / tool_parts[1]),
                         }
         capabilities.sort(key=lambda value: (str(value["kind"]), str(value["namespace"])))
         registry = _read_mcp_registry(self.config.mcp_server_registry_path)
@@ -633,6 +670,181 @@ class RuntimeBackend:
             shutil.rmtree(staging_root, ignore_errors=True)
         return self.capability_pool_snapshot()
 
+    def import_tool_folder(self, source_path: str) -> dict[str, object]:
+        source = Path(source_path).expanduser().resolve()
+        if not source.is_dir() or not (source / "TOOL.yaml").is_file() or not (source / "main.py").is_file():
+            raise ValueError("Tool folder must contain TOOL.yaml and main.py at its root")
+        source_root = self.config.tool_source_roots[0]
+        with self._tool_package_lock:
+            staging_root = Path(tempfile.mkdtemp(prefix=".tool-import-", dir=source_root.path))
+            staged = staging_root / source.name
+            target: Path | None = None
+            try:
+                shutil.copytree(source, staged, symlinks=False)
+                validation_source = self._tool_capability_source((ToolSourceRoot(
+                    root_id=source_root.root_id,
+                    path=staging_root,
+                    trust_level=source_root.trust_level,
+                ),))
+                drafts = validation_source.drafts()
+                if len(drafts) != 1:
+                    raise ValueError("Tool folder must contain exactly one ToolPackage")
+                tool_name = drafts[0].capability_id.removeprefix(f"tool://{source_root.root_id}/")
+                target = (source_root.path / tool_name).resolve()
+                if source_root.path not in target.parents:
+                    raise ValueError("ToolPackage identity resolves outside the configured tool source")
+                if target.exists():
+                    raise RuntimeError("tool_already_exists")
+                if self.tool_package_runtime is None:
+                    raise RuntimeError("ToolPackage runtime is not initialized")
+                definition = ToolDefinition.model_validate(drafts[0].content.definition)
+                self.tool_package_runtime.prepare(definition)
+                os.replace(staged, target)
+                try:
+                    self._synchronize_tool_package_capabilities(
+                        self.application.stores,
+                        _capability_adapters(),
+                    )
+                except BaseException:
+                    shutil.rmtree(target, ignore_errors=True)
+                    self._synchronize_tool_package_capabilities(
+                        self.application.stores,
+                        _capability_adapters(),
+                    )
+                    raise
+            finally:
+                shutil.rmtree(staging_root, ignore_errors=True)
+        return self.capability_pool_snapshot()
+
+    def tool_package_editor_document(self, capability_id: str) -> dict[str, object]:
+        active, _, target = self._editable_tool_package(capability_id)
+        definition = ToolDefinition.model_validate(active.content.definition)
+        files: list[dict[str, object]] = []
+        for path in sorted(target.rglob("*"), key=lambda item: item.as_posix()):
+            if path.is_dir():
+                continue
+            if path.is_symlink() or not path.is_file():
+                raise ValueError(f"ToolPackage content must be a regular file: {path}")
+            raw = path.read_bytes()
+            try:
+                content = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                content = None
+            files.append({
+                "path": path.relative_to(target).as_posix(),
+                "size_bytes": len(raw),
+                "editable": content is not None,
+                "content": content,
+            })
+        return {
+            "capability_id": capability_id,
+            "content_digest": active.content_digest,
+            "source_path": str(target),
+            "entrypoint": definition.implementation.entrypoint,
+            "python_requirements": list(definition.implementation.python_requirements),
+            "files": files,
+        }
+
+    def replace_tool_package_content(
+        self,
+        *,
+        capability_id: str,
+        expected_content_digest: str,
+        files: dict[str, str],
+    ) -> dict[str, object]:
+        with self._tool_package_lock:
+            active, source_root, target = self._editable_tool_package(capability_id)
+            if active.content_digest != expected_content_digest:
+                raise RuntimeError("tool_revision_conflict")
+            existing = {
+                path.relative_to(target).as_posix(): path
+                for path in target.rglob("*")
+                if path.is_file() and not path.is_symlink()
+            }
+            normalized: dict[str, str] = {}
+            for logical_path, content in files.items():
+                path = Path(str(logical_path).replace("\\", "/"))
+                if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+                    raise ValueError(f"ToolPackage editor path is invalid: {logical_path}")
+                portable = path.as_posix()
+                if portable not in existing:
+                    raise ValueError(f"ToolPackage editor cannot create undeclared files: {portable}")
+                try:
+                    existing[portable].read_bytes().decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    raise ValueError(f"ToolPackage editor cannot replace binary content: {portable}") from exc
+                normalized[portable] = str(content)
+            if not normalized:
+                raise ValueError("ToolPackage editor requires at least one text file")
+
+            staging_root = Path(tempfile.mkdtemp(prefix=".tool-edit-", dir=source_root.path))
+            staged = staging_root / target.name
+            backup = source_root.path / f".{target.name}.backup-{uuid4().hex}"
+            try:
+                shutil.copytree(target, staged, symlinks=False)
+                for logical_path, content in normalized.items():
+                    (staged / logical_path).write_text(content, encoding="utf-8")
+                validation_source = self._tool_capability_source((ToolSourceRoot(
+                    root_id=source_root.root_id,
+                    path=staging_root,
+                    trust_level=source_root.trust_level,
+                ),))
+                drafts = validation_source.drafts()
+                if len(drafts) != 1 or drafts[0].capability_id != capability_id:
+                    raise ValueError("edited ToolPackage identity differs from the published capability")
+                if self.tool_package_runtime is None:
+                    raise RuntimeError("ToolPackage runtime is not initialized")
+                self.tool_package_runtime.prepare(
+                    ToolDefinition.model_validate(drafts[0].content.definition)
+                )
+                os.replace(target, backup)
+                os.replace(staged, target)
+                try:
+                    self._synchronize_tool_package_capabilities(
+                        self.application.stores,
+                        _capability_adapters(),
+                    )
+                except BaseException:
+                    shutil.rmtree(target, ignore_errors=True)
+                    os.replace(backup, target)
+                    self._synchronize_tool_package_capabilities(
+                        self.application.stores,
+                        _capability_adapters(),
+                    )
+                    raise
+                shutil.rmtree(backup, ignore_errors=True)
+            finally:
+                shutil.rmtree(staging_root, ignore_errors=True)
+        return self.capability_pool_snapshot()
+
+    def _editable_tool_package(self, capability_id: str):
+        active = next(
+            (
+                item.revision
+                for item in self.application.stores.capabilities.active_capabilities()
+                if item.revision.capability_id == capability_id and item.revision.kind == "tool"
+            ),
+            None,
+        )
+        if active is None:
+            raise LookupError(f"active ToolPackage capability not found: {capability_id}")
+        definition = ToolDefinition.model_validate(active.content.definition)
+        if definition.implementation.kind != "python_package":
+            raise ValueError("selected tool is not an editable ToolPackage")
+        identity = capability_id.removeprefix("tool://").split("/", 1)
+        if len(identity) != 2:
+            raise ValueError("ToolPackage capability identity is invalid")
+        source_root = next(
+            (root for root in self.config.tool_source_roots if root.root_id == identity[0]),
+            None,
+        )
+        if source_root is None:
+            raise ValueError("ToolPackage source is not editable")
+        target = (source_root.path / identity[1]).resolve()
+        if source_root.path not in target.parents or not (target / "TOOL.yaml").is_file():
+            raise ValueError("ToolPackage source is unavailable")
+        return active, source_root, target
+
     def skill_editor_document(self, capability_id: str) -> dict[str, object]:
         active, source_root, target = self._editable_skill(capability_id)
         metadata, instructions = _read_skill_manifest_document(target / "SKILL.md")
@@ -779,8 +991,76 @@ class RuntimeBackend:
         if not normalized_name or not normalized_description:
             raise ValueError("tool name and description must not be empty")
 
-        with self._mcp_registry_lock:
-            if active.kind == "tool":
+        lock = self._tool_package_lock if (
+            active.kind == "tool"
+            and active.trust_level == "local_user"
+            and current_definition.implementation.kind == "python_package"
+        ) else self._mcp_registry_lock
+        with lock:
+            if (
+                active.kind == "tool"
+                and active.trust_level == "local_user"
+                and current_definition.implementation.kind == "python_package"
+            ):
+                identity = active.capability_id.removeprefix("tool://").split("/", 1)
+                if len(identity) != 2:
+                    raise ValueError("ToolPackage capability identity is invalid")
+                source_root = next(
+                    (root for root in self.config.tool_source_roots if root.root_id == identity[0]),
+                    None,
+                )
+                if source_root is None:
+                    raise ValueError("ToolPackage source is not editable")
+                manifest_path = (source_root.path / identity[1] / "TOOL.yaml").resolve()
+                if source_root.path not in manifest_path.parents or not manifest_path.is_file():
+                    raise ValueError("ToolPackage source is unavailable")
+                previous = manifest_path.read_bytes()
+                document = YAML(typ="safe").load(previous.decode("utf-8"))
+                if not isinstance(document, dict):
+                    raise ValueError("TOOL.yaml must contain an object")
+                permissions = dict(document.get("permissions") or {})
+                execution = dict(document.get("execution") or {})
+                permissions.update({
+                    "approval": validated_policy.approval,
+                    "risk_level": validated_policy.risk_level,
+                })
+                execution.update({
+                    "allow_parallel_calls": validated_policy.allow_parallel_calls,
+                    "max_parallel_calls": validated_policy.max_parallel_calls,
+                    "timeout_seconds": validated_policy.timeout_seconds,
+                    "output_projection": validated_policy.output_projection,
+                    "output_max_model_chars": validated_policy.output_max_model_chars,
+                    "retain_raw_output": validated_policy.retain_raw_output,
+                })
+                document.update({
+                    "display_name": normalized_name,
+                    "description": normalized_description,
+                    "permissions": permissions,
+                    "execution": execution,
+                })
+                _write_yaml_document(manifest_path, document)
+                try:
+                    drafts = self._tool_capability_source().drafts()
+                    replacement = next(
+                        draft for draft in drafts if draft.capability_id == active.capability_id
+                    )
+                    if self.tool_package_runtime is None:
+                        raise RuntimeError("ToolPackage runtime is not initialized")
+                    self.tool_package_runtime.prepare(
+                        ToolDefinition.model_validate(replacement.content.definition)
+                    )
+                    self._synchronize_tool_package_capabilities(
+                        self.application.stores,
+                        _capability_adapters(),
+                    )
+                except BaseException:
+                    manifest_path.write_bytes(previous)
+                    self._synchronize_tool_package_capabilities(
+                        self.application.stores,
+                        _capability_adapters(),
+                    )
+                    raise
+            elif active.kind == "tool":
                 path = self.config.builtin_tool_overrides_path
                 document = _read_builtin_tool_overrides(path)
                 alias = current_definition.model_alias
@@ -911,8 +1191,16 @@ class RuntimeBackend:
                     )
                 },
             )
+            tool_package_runtime = ToolPackageRuntime(
+                blobs=capability_blobs,
+                runtime_root=config.tool_package_runtime_root,
+                dependency_pool=DependencyPoolService(),
+                conversations=stores.conversations,
+                base_environment=dict(config.process_environment),
+            )
+            self.tool_package_runtime = tool_package_runtime
             tool_adapter = ExplicitToolCapabilityRuntimeAdapter(
-                entrypoints=PythonModuleToolEntrypointResolver(),
+                entrypoints=ToolEntrypointResolver(packages=tool_package_runtime),
                 resources=resources,
                 outputs=outputs,
                 approvals=approvals,
@@ -951,6 +1239,7 @@ class RuntimeBackend:
         def bootstrap_capabilities(stores, adapters) -> None:
             stores.conversations.create_principal(config.capability_publisher_principal_id)
             self._synchronize_builtin_tool_capabilities(stores, adapters)
+            self._synchronize_tool_package_capabilities(stores, adapters)
             self._synchronize_skill_capabilities(stores, adapters)
             self._synchronize_mcp_capabilities(stores, adapters)
 
@@ -1016,7 +1305,12 @@ class RuntimeBackend:
             store=stores.capabilities,
             resolution_receipts=stores.capability_resolution_receipts,
             adapters=adapters,
-        ).synchronize(BuiltinToolCapabilitySource(source_config).drafts())
+        ).synchronize(
+            BuiltinToolCapabilitySource(
+                source_config,
+                blobs=CapabilityBlobStore(config.capability_blob_root),
+            ).drafts()
+        )
         self._refresh_capability_search_if_ready()
 
     def _skill_capability_source(
@@ -1034,6 +1328,38 @@ class RuntimeBackend:
             ),
             blobs=CapabilityBlobStore(config.capability_blob_root),
         )
+
+    def _tool_capability_source(
+        self,
+        roots: tuple[ToolSourceRoot, ...] | None = None,
+    ) -> FileSystemToolCapabilitySource:
+        config = self.config
+        return FileSystemToolCapabilitySource(
+            config=FileSystemToolSourceConfig(
+                roots=roots or config.tool_source_roots,
+                publisher_principal_id=config.capability_publisher_principal_id,
+                source_prefix=config.tool_capability_source_prefix,
+                maximum_file_bytes=config.maximum_tool_file_bytes,
+                maximum_tool_bytes=config.maximum_tool_bytes,
+            ),
+            blobs=CapabilityBlobStore(config.capability_blob_root),
+        )
+
+    def _synchronize_tool_package_capabilities(self, stores, adapters) -> None:
+        config = self.config
+        CapabilityBootstrapPublisher(
+            config=CapabilityBootstrapConfig(
+                publisher_principal_id=config.capability_publisher_principal_id,
+                managed_source_prefix=config.tool_capability_source_prefix,
+            ),
+            store=stores.capabilities,
+            resolution_receipts=stores.capability_resolution_receipts,
+            adapters=adapters,
+        ).synchronize(
+            self._tool_capability_source().drafts(),
+            deactivate_removed_sources=True,
+        )
+        self._refresh_capability_search_if_ready()
 
     def _synchronize_skill_capabilities(self, stores, adapters) -> None:
         config = self.config
@@ -1116,6 +1442,9 @@ def _capability_public_details(kind: str, raw_definition: dict[str, Any]) -> dic
             "read_only": definition.read_only,
             "system_available": definition.system_available,
             "effects": list(definition.effects),
+            "implementation_kind": definition.implementation.kind,
+            "package_file_count": len(definition.implementation.package_files),
+            "python_requirements": list(definition.implementation.python_requirements),
         }
     if kind == "mcp_server":
         definition = MCPServerDefinition.model_validate(raw_definition)
@@ -1173,6 +1502,8 @@ def _write_mcp_registry(path: Path, document: dict[str, Any]) -> None:
 def _initialize_capability_storage(config: RuntimeBackendConfig) -> None:
     for source_root in config.skill_source_roots:
         source_root.path.mkdir(parents=True, exist_ok=True)
+    for source_root in config.tool_source_roots:
+        source_root.path.mkdir(parents=True, exist_ok=True)
     config.builtin_tool_overrides_path.parent.mkdir(parents=True, exist_ok=True)
     registry_path = config.mcp_server_registry_path
     registry_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1216,6 +1547,25 @@ def _write_json_document(
             stream.write(serialized)
             stream.flush()
             os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _write_yaml_document(path: Path, document: dict[str, Any]) -> None:
+    yaml = YAML()
+    yaml.default_flow_style = False
+    yaml.allow_unicode = True
+    stream = StringIO()
+    yaml.dump(document, stream)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix="tool-manifest-", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            output.write(stream.getvalue())
+            output.flush()
+            os.fsync(output.fileno())
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)

@@ -53,6 +53,9 @@ class CapabilityPoolManager(Protocol):
     def import_skill_folder(self, source_path: str) -> dict[str, object]:
         ...
 
+    def import_tool_folder(self, source_path: str) -> dict[str, object]:
+        ...
+
     def add_mcp_server(
         self,
         server: dict[str, Any],
@@ -69,6 +72,18 @@ class CapabilityPoolManager(Protocol):
         display_name: str,
         description: str,
         runtime_policy: dict[str, Any],
+    ) -> dict[str, object]:
+        ...
+
+    def tool_package_editor_document(self, capability_id: str) -> dict[str, object]:
+        ...
+
+    def replace_tool_package_content(
+        self,
+        *,
+        capability_id: str,
+        expected_content_digest: str,
+        files: dict[str, str],
     ) -> dict[str, object]:
         ...
 
@@ -94,6 +109,8 @@ class DynamicRuntimeApiConfig:
     managed_workspace_root: Path
     maximum_skill_file_bytes: int
     maximum_skill_bytes: int
+    maximum_tool_file_bytes: int
+    maximum_tool_bytes: int
 
     def __post_init__(self) -> None:
         if self.keepalive_seconds <= 0:
@@ -104,6 +121,10 @@ class DynamicRuntimeApiConfig:
             raise ValueError("maximum_skill_file_bytes must be positive")
         if self.maximum_skill_bytes < self.maximum_skill_file_bytes:
             raise ValueError("maximum_skill_bytes must be at least maximum_skill_file_bytes")
+        if self.maximum_tool_file_bytes < 1:
+            raise ValueError("maximum_tool_file_bytes must be positive")
+        if self.maximum_tool_bytes < self.maximum_tool_file_bytes:
+            raise ValueError("maximum_tool_bytes must be at least maximum_tool_file_bytes")
         root = Path(self.managed_workspace_root).expanduser().resolve()
         object.__setattr__(self, "managed_workspace_root", root)
 
@@ -341,6 +362,20 @@ class ToolConfigurationWriteRequest(BaseModel):
         return text
 
 
+class ToolPackageContentWriteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_content_digest: str
+    files: dict[str, str]
+
+    @field_validator("expected_content_digest")
+    @classmethod
+    def _digest_is_present(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("expected_content_digest must not be empty")
+        return text
+
+
 class SkillContentWriteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_content_digest: str
@@ -441,8 +476,8 @@ def create_dynamic_runtime_router(
     ) -> dict[str, object]:
         principal_resolver.resolve(request)
         try:
-            paths = _skill_upload_paths(relative_paths, expected_count=len(files))
-            normalized_root = _portable_skill_root_name(root_name)
+            paths = _folder_upload_paths(relative_paths, expected_count=len(files), capability="Skill")
+            normalized_root = _portable_folder_root_name(root_name, capability="Skill")
             with tempfile.TemporaryDirectory(prefix="agentfactory-skill-upload-") as temporary:
                 source = Path(temporary) / normalized_root
                 source.mkdir()
@@ -462,6 +497,40 @@ def create_dynamic_runtime_router(
             if str(exc) == "skill_already_exists":
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
             raise HTTPException(status_code=502, detail="skill_synchronization_failed") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.post("/capabilities/tools/import", status_code=201)
+    async def import_tool_folder(
+        request: Request,
+        root_name: str = Form(...),
+        relative_paths: str = Form(...),
+        files: list[UploadFile] = File(...),
+    ) -> dict[str, object]:
+        principal_resolver.resolve(request)
+        try:
+            paths = _folder_upload_paths(relative_paths, expected_count=len(files), capability="ToolPackage")
+            normalized_root = _portable_folder_root_name(root_name, capability="ToolPackage")
+            with tempfile.TemporaryDirectory(prefix="agentfactory-tool-upload-") as temporary:
+                source = Path(temporary) / normalized_root
+                source.mkdir()
+                total_bytes = 0
+                for upload, relative_path in zip(files, paths, strict=True):
+                    destination = source / relative_path
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    total_bytes += await _write_bounded_upload(
+                        upload,
+                        destination,
+                        maximum_file_bytes=config.maximum_tool_file_bytes,
+                        capability="ToolPackage",
+                    )
+                    if total_bytes > config.maximum_tool_bytes:
+                        raise ValueError("ToolPackage exceeds configured byte limit")
+                return await asyncio.to_thread(capability_pools.import_tool_folder, str(source))
+        except RuntimeError as exc:
+            if str(exc) == "tool_already_exists":
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -567,6 +636,39 @@ def create_dynamic_runtime_router(
             if str(exc) == "tool_revision_conflict":
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
             raise HTTPException(status_code=502, detail="tool_synchronization_failed") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.get("/capabilities/tool-packages/{capability_id:path}/editor")
+    async def get_tool_package_editor(capability_id: str, request: Request) -> dict[str, object]:
+        principal_resolver.resolve(request)
+        try:
+            return await asyncio.to_thread(capability_pools.tool_package_editor_document, capability_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.put("/capabilities/tool-packages/{capability_id:path}/editor")
+    async def update_tool_package_content(
+        capability_id: str,
+        request: Request,
+        payload: ToolPackageContentWriteRequest,
+    ) -> dict[str, object]:
+        principal_resolver.resolve(request)
+        try:
+            return await asyncio.to_thread(
+                capability_pools.replace_tool_package_content,
+                capability_id=capability_id,
+                expected_content_digest=payload.expected_content_digest,
+                files=payload.files,
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            if str(exc) == "tool_revision_conflict":
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -853,32 +955,32 @@ def create_dynamic_runtime_router(
     return router
 
 
-def _skill_upload_paths(raw: str, *, expected_count: int) -> tuple[Path, ...]:
+def _folder_upload_paths(raw: str, *, expected_count: int, capability: str) -> tuple[Path, ...]:
     try:
         values = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise ValueError("Skill relative_paths must be valid JSON") from exc
+        raise ValueError(f"{capability} relative_paths must be valid JSON") from exc
     if not isinstance(values, list) or len(values) != expected_count:
-        raise ValueError("Skill relative_paths must correspond to uploaded files")
+        raise ValueError(f"{capability} relative_paths must correspond to uploaded files")
     paths: list[Path] = []
     portable: set[str] = set()
     for value in values:
         text = str(value or "").replace("\\", "/").strip("/")
         path = Path(text)
         if not text or path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
-            raise ValueError(f"Skill upload path is invalid: {value}")
+            raise ValueError(f"{capability} upload path is invalid: {value}")
         key = path.as_posix().casefold()
         if key in portable:
-            raise ValueError(f"Skill upload contains a cross-platform path collision: {value}")
+            raise ValueError(f"{capability} upload contains a cross-platform path collision: {value}")
         portable.add(key)
         paths.append(path)
     return tuple(paths)
 
 
-def _portable_skill_root_name(value: str) -> str:
+def _portable_folder_root_name(value: str, *, capability: str) -> str:
     name = str(value or "").strip()
     if not name or name in {".", ".."} or Path(name).name != name or "/" in name or "\\" in name:
-        raise ValueError("Skill folder name is invalid")
+        raise ValueError(f"{capability} folder name is invalid")
     return name
 
 
@@ -887,13 +989,14 @@ async def _write_bounded_upload(
     destination: Path,
     *,
     maximum_file_bytes: int,
+    capability: str = "Skill",
 ) -> int:
     written = 0
     with destination.open("xb") as stream:
         while chunk := await upload.read(1024 * 1024):
             written += len(chunk)
             if written > maximum_file_bytes:
-                raise ValueError(f"Skill file exceeds configured byte limit: {destination.name}")
+                raise ValueError(f"{capability} file exceeds configured byte limit: {destination.name}")
             stream.write(chunk)
     return written
 

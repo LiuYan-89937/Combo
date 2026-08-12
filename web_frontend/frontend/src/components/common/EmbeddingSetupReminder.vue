@@ -52,9 +52,13 @@ function dismiss() {
 }
 
 async function configure() {
+  const target = { name: 'ModelPool', query: { setup: 'embedding' } } as const
+  const resolved = router.resolve(target)
+  if (router.currentRoute.value.fullPath !== resolved.fullPath) {
+    await router.push(target)
+  }
   visible.value = false
   rememberDismissal()
-  await router.push({ name: 'ModelPool' })
 }
 </script>
 

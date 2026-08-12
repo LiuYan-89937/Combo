@@ -41,6 +41,7 @@ from agent_factory.dynamic_runtime.capability_definitions import (
     SkillDefinition,
     ToolDefinition,
     ToolImplementation,
+    ToolPackageFileRef,
     ToolResourceBinding,
     ToolRuntimePolicy,
 )
@@ -318,6 +319,7 @@ __all__ = [
     "ToolCallStore",
     "ToolDefinition",
     "ToolImplementation",
+    "ToolPackageFileRef",
     "ToolResourceBinding",
     "ToolRuntimePolicy",
     "ToolProjectionMaterializer",

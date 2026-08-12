@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import tempfile
 
-from agent_factory.dynamic_runtime.capability_definitions import SkillContentRef
+from agent_factory.dynamic_runtime.capability_definitions import SkillContentRef, ToolPackageFileRef
 
 
 class CapabilityBlobStore:
@@ -22,6 +22,33 @@ class CapabilityBlobStore:
         media_type: str,
         content: bytes,
     ) -> SkillContentRef:
+        stored = self._put_content(content)
+        return SkillContentRef(
+            logical_path=logical_path,
+            kind=kind,
+            media_type=media_type,
+            blob_id=stored[0],
+            content_digest=stored[1],
+            size_bytes=len(content),
+        )
+
+    def put_tool_package_file(
+        self,
+        *,
+        logical_path: str,
+        media_type: str,
+        content: bytes,
+    ) -> ToolPackageFileRef:
+        stored = self._put_content(content)
+        return ToolPackageFileRef(
+            logical_path=logical_path,
+            media_type=media_type,
+            blob_id=stored[0],
+            content_digest=stored[1],
+            size_bytes=len(content),
+        )
+
+    def _put_content(self, content: bytes) -> tuple[str, str]:
         digest = sha256(content).hexdigest()
         blob_id = f"sha256:{digest}"
         target = self._blob_path(digest)
@@ -42,19 +69,12 @@ class CapabilityBlobStore:
                     os.replace(temporary, target)
             finally:
                 temporary.unlink(missing_ok=True)
-        return SkillContentRef(
-            logical_path=logical_path,
-            kind=kind,
-            media_type=media_type,
-            blob_id=blob_id,
-            content_digest=digest,
-            size_bytes=len(content),
-        )
+        return blob_id, digest
 
-    def read(self, reference: SkillContentRef) -> bytes:
+    def read(self, reference: SkillContentRef | ToolPackageFileRef) -> bytes:
         algorithm, separator, digest = reference.blob_id.partition(":")
         if algorithm != "sha256" or not separator or digest != reference.content_digest:
-            raise ValueError("skill content reference has an unsupported blob identity")
+            raise ValueError("capability content reference has an unsupported blob identity")
         target = self._blob_path(digest)
         if not target.is_file():
             raise LookupError(f"capability blob is unavailable: {reference.blob_id}")
@@ -66,16 +86,16 @@ class CapabilityBlobStore:
         )
         return content
 
-    def read_text(self, reference: SkillContentRef) -> str:
+    def read_text(self, reference: SkillContentRef | ToolPackageFileRef) -> str:
         if not reference.media_type.startswith("text/") and reference.media_type not in {
             "application/json",
             "application/yaml",
         }:
-            raise TypeError(f"skill content is not textual: {reference.media_type}")
+            raise TypeError(f"capability content is not textual: {reference.media_type}")
         try:
             return self.read(reference).decode("utf-8")
         except UnicodeDecodeError as exc:
-            raise ValueError("skill text content is not valid UTF-8") from exc
+            raise ValueError("capability text content is not valid UTF-8") from exc
 
     def _blob_path(self, digest: str) -> Path:
         if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
