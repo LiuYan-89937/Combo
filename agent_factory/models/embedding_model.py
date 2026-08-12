@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, Any
 from langchain_core.embeddings import Embeddings
 from langchain_openai import OpenAIEmbeddings
 
+from agent_factory.model_pool.defaults import DEFAULT_EMBEDDING_BATCH_SIZE
+
 if TYPE_CHECKING:
     from agent_factory.model_pool.store import ModelPoolStore
 
@@ -19,6 +21,7 @@ class EmbeddingModelSettings:
     api_key: str | None
     base_url: str | None
     dims: int | None
+    batch_size: int = DEFAULT_EMBEDDING_BATCH_SIZE
     timeout_seconds: float | None = None
     profile_id: str | None = None
     source: str = "model_pool"
@@ -33,6 +36,31 @@ class ResolvedEmbeddingModel:
     profile_id: str | None
     model: Embeddings
     settings: EmbeddingModelSettings
+
+
+class BatchedEmbeddings(Embeddings):
+    """Apply one configured document-batch limit to every embedding consumer."""
+
+    def __init__(self, delegate: Embeddings, *, batch_size: int) -> None:
+        if batch_size < 1:
+            raise ValueError("embedding batch_size must be positive")
+        self._delegate = delegate
+        self._batch_size = batch_size
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        vectors: list[list[float]] = []
+        for offset in range(0, len(texts), self._batch_size):
+            batch = texts[offset:offset + self._batch_size]
+            batch_vectors = self._delegate.embed_documents(batch)
+            if len(batch_vectors) != len(batch):
+                raise RuntimeError(
+                    "embedding provider returned a different number of vectors than input texts"
+                )
+            vectors.extend(batch_vectors)
+        return vectors
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._delegate.embed_query(text)
 
 
 def get_embedding_model() -> Embeddings | None:
@@ -81,7 +109,10 @@ def _create_embedding_model(settings: EmbeddingModelSettings) -> Embeddings | No
     }
     if settings.timeout_seconds is not None:
         kwargs["timeout"] = settings.timeout_seconds
-    return OpenAIEmbeddings(**kwargs)
+    return BatchedEmbeddings(
+        OpenAIEmbeddings(**kwargs),
+        batch_size=settings.batch_size,
+    )
 
 
 def _embedding_settings() -> EmbeddingModelSettings:
@@ -131,6 +162,7 @@ def _model_pool_settings(
             api_key=credential.api_key,
             base_url=credential.base_url,
             dims=profile.embedding_dimensions,
+            batch_size=profile.embedding_batch_size or DEFAULT_EMBEDDING_BATCH_SIZE,
             timeout_seconds=profile.limits.timeout_seconds,
             profile_id=profile.profile_id,
             source="model_pool",
@@ -157,6 +189,10 @@ def _legacy_embedding_settings() -> EmbeddingModelSettings:
         api_key=os.getenv("AGENTFACTORY_EMBEDDING_API_KEY"),
         base_url=os.getenv("AGENTFACTORY_EMBEDDING_BASE_URL"),
         dims=_env_int("AGENTFACTORY_EMBEDDING_DIMS"),
+        batch_size=(
+            _env_int("AGENTFACTORY_EMBEDDING_BATCH_SIZE")
+            or DEFAULT_EMBEDDING_BATCH_SIZE
+        ),
         timeout_seconds=_env_float("AGENTFACTORY_EMBEDDING_TIMEOUT_SECONDS"),
         source="env_legacy",
     )

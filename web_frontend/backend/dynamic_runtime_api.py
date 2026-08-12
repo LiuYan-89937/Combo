@@ -56,6 +56,9 @@ class CapabilityPoolManager(Protocol):
     def import_tool_folder(self, source_path: str) -> dict[str, object]:
         ...
 
+    def create_tool_package(self, payload: dict[str, Any], main_source: str) -> dict[str, object]:
+        ...
+
     def add_mcp_server(
         self,
         server: dict[str, Any],
@@ -362,6 +365,49 @@ class ToolConfigurationWriteRequest(BaseModel):
         return text
 
 
+class ToolParameterWriteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    type: Literal["string", "integer", "number", "boolean", "object", "array"]
+    description: str
+    required: bool = True
+
+    @field_validator("description")
+    @classmethod
+    def _description_is_present(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("parameter description must not be empty")
+        return text
+
+
+class ToolPackageCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(pattern=r"^[a-z][a-z0-9-]{1,127}$")
+    model_alias: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    display_name: str
+    description: str
+    keywords: list[str] = Field(default_factory=list)
+    parameters: list[ToolParameterWriteRequest] = Field(default_factory=list)
+    dependencies: list[str] = Field(default_factory=list)
+    runtime_policy: ToolRuntimePolicyWriteRequest
+
+    @field_validator("display_name", "description")
+    @classmethod
+    def _required_text(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("ToolPackage fields must not be empty")
+        return text
+
+    @model_validator(mode="after")
+    def _unique_parameters(self) -> "ToolPackageCreateRequest":
+        names = [item.name for item in self.parameters]
+        if len(names) != len(set(names)):
+            raise ValueError("ToolPackage parameter names must be unique")
+        return self
+
+
 class ToolPackageContentWriteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_content_digest: str
@@ -527,6 +573,39 @@ def create_dynamic_runtime_router(
                     if total_bytes > config.maximum_tool_bytes:
                         raise ValueError("ToolPackage exceeds configured byte limit")
                 return await asyncio.to_thread(capability_pools.import_tool_folder, str(source))
+        except RuntimeError as exc:
+            if str(exc) == "tool_already_exists":
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.post("/capabilities/tools", status_code=201)
+    async def create_tool_package(
+        request: Request,
+        specification: str = Form(...),
+        main_file: UploadFile = File(...),
+    ) -> dict[str, object]:
+        principal_resolver.resolve(request)
+        try:
+            payload = ToolPackageCreateRequest.model_validate_json(specification)
+            with tempfile.TemporaryDirectory(prefix="agentfactory-tool-main-") as temporary:
+                destination = Path(temporary) / "main.py"
+                await _write_bounded_upload(
+                    main_file,
+                    destination,
+                    maximum_file_bytes=config.maximum_tool_file_bytes,
+                    capability="ToolPackage main.py",
+                )
+                try:
+                    main_source = destination.read_text(encoding="utf-8")
+                except UnicodeDecodeError as exc:
+                    raise ValueError("main.py must be UTF-8 text") from exc
+            return await asyncio.to_thread(
+                capability_pools.create_tool_package,
+                payload.model_dump(mode="json"),
+                main_source,
+            )
         except RuntimeError as exc:
             if str(exc) == "tool_already_exists":
                 raise HTTPException(status_code=409, detail=str(exc)) from exc

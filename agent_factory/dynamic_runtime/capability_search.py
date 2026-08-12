@@ -40,6 +40,13 @@ class CapabilityEmbeddingRuntime:
     embed_query: Callable[[str], list[float]]
 
 
+@dataclass(frozen=True, slots=True)
+class ActiveVectorIndexStatus:
+    generation_id: str
+    profile_id: str
+    capability_ids: frozenset[str]
+
+
 EmbeddingRuntimeResolver = Callable[[], CapabilityEmbeddingRuntime | None]
 
 
@@ -114,6 +121,37 @@ class HybridCapabilitySearchIndex:
         documents = tuple(_project_document(item) for item in candidates)
         _, dataset_digest, _ = self._ensure_lexical_generation(documents)
         self._schedule_embedding_generation(dataset_digest, documents)
+
+    def active_vector_index_status(self) -> ActiveVectorIndexStatus | None:
+        """Return only vectors belonging to the currently active hybrid generation."""
+
+        with self._database.connection(query_only=True) as conn:
+            generation = conn.execute(
+                """
+                select generation.generation_id, generation.embedding_profile_id
+                from capability_search_active_generation active
+                join capability_search_generations generation
+                  on generation.generation_id = active.generation_id
+                where active.singleton = 1
+                  and generation.status = 'active'
+                  and generation.search_mode = 'hybrid'
+                """
+            ).fetchone()
+            if generation is None:
+                return None
+            generation_id = str(generation["generation_id"])
+            rows = conn.execute(
+                """
+                select capability_id from capability_search_documents
+                where generation_id = ? and embedding_json is not null
+                """,
+                (generation_id,),
+            ).fetchall()
+        return ActiveVectorIndexStatus(
+            generation_id=generation_id,
+            profile_id=str(generation["embedding_profile_id"] or ""),
+            capability_ids=frozenset(str(row["capability_id"]) for row in rows),
+        )
 
     def close(self) -> None:
         if self._embedding_executor is not None:

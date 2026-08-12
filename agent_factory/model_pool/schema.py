@@ -12,6 +12,7 @@ from agent_factory.model_pool.providers import (
     image_generation_provider_capabilities,
     provider_supports_kind,
 )
+from agent_factory.model_pool.defaults import DEFAULT_EMBEDDING_BATCH_SIZE
 from agent_factory.models.capabilities import resolve_provider_profile
 from agent_factory.models.protocol import ModelReasoningSettings, StructuredOutputMethod
 
@@ -186,6 +187,7 @@ class ModelPoolProfile(BaseModel):
     credential_id: str
     model_name: str
     embedding_dimensions: int | None = Field(default=None, ge=1)
+    embedding_batch_size: int | None = Field(default=None, ge=1)
     enabled: bool = True
     revision: int = Field(default=1, ge=1)
     capabilities: ModelPoolCapabilities = Field(default_factory=ModelPoolCapabilities)
@@ -222,6 +224,8 @@ class ModelPoolProfile(BaseModel):
         if self.kind == "embedding":
             if self.embedding_dimensions is None:
                 raise ValueError("embedding profiles require embedding_dimensions")
+            if self.embedding_batch_size is None:
+                self.embedding_batch_size = DEFAULT_EMBEDDING_BATCH_SIZE
             # Embedding profiles do not expose chat/image capabilities. Keep
             # their serialized capability surface deterministic even when a
             # client omitted the optional capabilities object.
@@ -238,6 +242,8 @@ class ModelPoolProfile(BaseModel):
             return self
         if self.embedding_dimensions is not None:
             self.embedding_dimensions = None
+        if self.embedding_batch_size is not None:
+            self.embedding_batch_size = None
         if self.kind == "chat" and (
             self.limits.max_input_tokens is None
             or self.limits.compression_trigger_tokens is None
@@ -270,6 +276,7 @@ class ModelPoolProfilePublic(BaseModel):
     credential_id: str
     model_name: str
     embedding_dimensions: int | None = Field(default=None, ge=1)
+    embedding_batch_size: int | None = Field(default=None, ge=1)
     enabled: bool = True
     revision: int = Field(default=1, ge=1)
     capabilities: ModelPoolCapabilities = Field(default_factory=ModelPoolCapabilities)

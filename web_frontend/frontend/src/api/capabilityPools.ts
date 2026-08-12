@@ -16,6 +16,11 @@ export interface CapabilityPoolItem {
   source_uri: string
   trust_level: string
   health: string | null
+  indexing: {
+    vector: boolean
+    generation_id: string | null
+    embedding_profile_id: string | null
+  }
   definition_schema: string
   details: Record<string, unknown>
 }
@@ -42,6 +47,22 @@ export interface ToolRuntimePolicyInput {
   output_projection: 'compress' | 'passthrough'
   output_max_model_chars: number
   retain_raw_output: boolean
+}
+
+export interface ToolPackageCreateInput {
+  name: string
+  model_alias: string
+  display_name: string
+  description: string
+  keywords: string[]
+  parameters: Array<{
+    name: string
+    type: 'string' | 'integer' | 'number' | 'boolean' | 'object' | 'array'
+    description: string
+    required: boolean
+  }>
+  dependencies: string[]
+  runtime_policy: ToolRuntimePolicyInput
 }
 
 export interface SkillEditorResource {
@@ -106,12 +127,11 @@ export const capabilityPoolsApi = {
     files.forEach(item => formData.append('files', item.file, item.file.name))
     return requestFormJson<CapabilityPoolSnapshot>('/api/runtime/capabilities/skills/import', formData)
   },
-  importToolFolder: (rootName: string, files: Array<{ file: File; relativePath: string }>) => {
+  createToolPackage: (input: ToolPackageCreateInput, mainSource: string) => {
     const formData = new FormData()
-    formData.append('root_name', rootName)
-    formData.append('relative_paths', JSON.stringify(files.map(item => item.relativePath)))
-    files.forEach(item => formData.append('files', item.file, item.file.name))
-    return requestFormJson<CapabilityPoolSnapshot>('/api/runtime/capabilities/tools/import', formData)
+    formData.append('specification', JSON.stringify(input))
+    formData.append('main_file', new File([mainSource], 'main.py', { type: 'text/x-python' }))
+    return requestFormJson<CapabilityPoolSnapshot>('/api/runtime/capabilities/tools', formData)
   },
   probeMcp: (capabilityId: string) => requestJson<McpProbeResult>('/api/runtime/capabilities/mcp/probe', {
     method: 'POST',

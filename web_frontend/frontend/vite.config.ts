@@ -3,6 +3,8 @@ import vue from '@vitejs/plugin-vue'
 import UnoCSS from 'unocss/vite'
 import { fileURLToPath, URL } from 'node:url'
 
+const backendTarget = process.env.VITE_DEV_BACKEND_URL || 'http://localhost:8000'
+
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [
@@ -20,11 +22,11 @@ export default defineConfig({
     host: '127.0.0.1', // Bind to localhost for security
     proxy: {
       '/events': {
-        target: 'http://localhost:8000',
+        target: backendTarget,
         changeOrigin: true,
       },
       '/api': {
-        target: 'http://localhost:8000',
+        target: backendTarget,
         changeOrigin: true,
       },
     }

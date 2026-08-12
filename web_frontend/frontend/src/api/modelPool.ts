@@ -4,6 +4,7 @@ export type ModelUsageGroupBy = 'model' | 'provider' | 'agent'
 export interface ModelPoolDefaults {
   context_window_tokens: number
   compression_trigger_tokens: number
+  embedding_batch_size: number
 }
 
 export interface ModelProviderProfile {
@@ -47,6 +48,7 @@ export interface ModelPoolProfile {
   credential_id: string
   model_name: string
   embedding_dimensions?: number | null
+  embedding_batch_size?: number | null
   enabled: boolean
   revision: number
   capabilities: {

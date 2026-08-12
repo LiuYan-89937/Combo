@@ -344,6 +344,9 @@
           <n-form-item :label="t('modelPool.embeddingDimensions')" path="embedding_dimensions">
             <n-input-number v-model:value="profileForm.embedding_dimensions" :min="1" clearable />
           </n-form-item>
+          <n-form-item :label="t('modelPool.embeddingBatchSize')" path="embedding_batch_size">
+            <n-input-number v-model:value="profileForm.embedding_batch_size" :min="1" clearable />
+          </n-form-item>
           <n-form-item :label="t('modelPool.timeoutSeconds')">
             <n-input-number v-model:value="profileForm.timeout_seconds" :min="1" clearable />
           </n-form-item>
@@ -482,6 +485,7 @@ const profileForm = reactive({
   credential_id: '',
   model_name: '',
   embedding_dimensions: null as number | null,
+  embedding_batch_size: null as number | null,
   tool_calling: true,
   reasoning_supported: false,
   image_input: false,
@@ -544,6 +548,9 @@ const profileRules = computed<FormRules>(() => ({
   credential_id: [requiredValueRule(t('modelPool.selectCredentialFirst'))],
   model_name: [requiredTextRule(t('validation.required'))],
   embedding_dimensions: profileForm.kind === 'embedding'
+    ? [requiredValueRule(t('validation.required'))]
+    : [],
+  embedding_batch_size: profileForm.kind === 'embedding'
     ? [requiredValueRule(t('validation.required'))]
     : [],
 }))
@@ -744,6 +751,9 @@ function openProfile(item?: ModelPoolProfile): void {
   profileForm.credential_id = item?.credential_id || firstCredentialForKind(profileForm.kind)?.credential_id || ''
   profileForm.model_name = item?.model_name || ''
   profileForm.embedding_dimensions = item?.embedding_dimensions ?? null
+  profileForm.embedding_batch_size = item?.embedding_batch_size
+    ?? modelDefaults.value?.embedding_batch_size
+    ?? null
   profileForm.tool_calling = item?.capabilities.tool_calling ?? true
   profileForm.reasoning_supported = item?.capabilities.reasoning_supported ?? false
   profileForm.image_input = item?.capabilities.input_modalities.includes('image') ?? false
@@ -802,6 +812,7 @@ async function saveProfile(): Promise<void> {
       credential_id: profileForm.credential_id,
       model_name: profileForm.model_name,
       embedding_dimensions: isEmbeddingModel ? profileForm.embedding_dimensions : null,
+      embedding_batch_size: isEmbeddingModel ? profileForm.embedding_batch_size : null,
       enabled: profileEditing.value?.enabled ?? true,
       capabilities: {
         input_modalities: inputModalities,
@@ -948,6 +959,7 @@ function capabilityTags(profile: ModelPoolProfile): string[] {
   const tags: string[] = []
   if (profile.kind === 'embedding') {
     if (profile.embedding_dimensions) tags.push(`${t('modelPool.embeddingDimensions')}: ${profile.embedding_dimensions}`)
+    if (profile.embedding_batch_size) tags.push(`${t('modelPool.embeddingBatchSize')}: ${profile.embedding_batch_size}`)
     return tags
   }
   if (profile.kind === 'image_generation') {

@@ -359,6 +359,7 @@ class RuntimeBackend:
     def capability_pool_snapshot(self) -> dict[str, object]:
         capabilities: list[dict[str, object]] = []
         counts = {"skill": 0, "tool": 0, "mcp_server": 0, "mcp_tool": 0}
+        vector_index = self.application.capability_search.active_vector_index_status()
         for item in self.application.stores.capabilities.active_capabilities():
             revision = item.revision
             if revision.kind not in counts:
@@ -383,6 +384,18 @@ class RuntimeBackend:
                     "source_uri": revision.source_uri,
                     "trust_level": revision.trust_level,
                     "health": None if health is None else health.status,
+                    "indexing": {
+                        "vector": (
+                            vector_index is not None
+                            and revision.capability_id in vector_index.capability_ids
+                        ),
+                        "generation_id": (
+                            vector_index.generation_id if vector_index is not None else None
+                        ),
+                        "embedding_profile_id": (
+                            vector_index.profile_id if vector_index is not None else None
+                        ),
+                    },
                     "definition_schema": revision.content.definition_schema,
                     "details": _capability_public_details(
                         revision.kind,
@@ -715,6 +728,71 @@ class RuntimeBackend:
             finally:
                 shutil.rmtree(staging_root, ignore_errors=True)
         return self.capability_pool_snapshot()
+
+    def create_tool_package(self, payload: dict[str, Any], main_source: str) -> dict[str, object]:
+        """Assemble the internal package format from user-facing tool fields."""
+
+        source_root = self.config.tool_source_roots[0]
+        package_name = str(payload["name"])
+        input_properties = {
+            str(item["name"]): {
+                "type": str(item["type"]),
+                "description": str(item["description"]),
+            }
+            for item in payload["parameters"]
+        }
+        required = [
+            str(item["name"])
+            for item in payload["parameters"]
+            if bool(item["required"])
+        ]
+        runtime_policy = dict(payload["runtime_policy"])
+        manifest = {
+            "schema_version": "tool_package.v1",
+            "name": package_name,
+            "model_alias": str(payload["model_alias"]),
+            "display_name": str(payload["display_name"]),
+            "description": str(payload["description"]),
+            "keywords": list(payload["keywords"]),
+            "entrypoint": "main:run",
+            "input_schema": {
+                "type": "object",
+                "properties": input_properties,
+                "required": required,
+                "additionalProperties": False,
+            },
+            "output_schema": {"type": "object"},
+            "permissions": {
+                "approval": runtime_policy["approval"],
+                "risk_level": runtime_policy["risk_level"],
+                "effects": ["read"],
+                "read_only": True,
+            },
+            "execution": {
+                "allow_parallel_calls": runtime_policy["allow_parallel_calls"],
+                "max_parallel_calls": runtime_policy["max_parallel_calls"],
+                "timeout_seconds": runtime_policy["timeout_seconds"],
+                "output_projection": runtime_policy["output_projection"],
+                "output_max_model_chars": runtime_policy["output_max_model_chars"],
+                "retain_raw_output": runtime_policy["retain_raw_output"],
+            },
+        }
+        staging_parent = Path(tempfile.mkdtemp(prefix="agentfactory-tool-create-"))
+        source = staging_parent / package_name
+        source.mkdir()
+        try:
+            yaml = YAML()
+            yaml.default_flow_style = False
+            stream = StringIO()
+            yaml.dump(manifest, stream)
+            (source / "TOOL.yaml").write_text(stream.getvalue(), encoding="utf-8")
+            (source / "main.py").write_text(str(main_source), encoding="utf-8")
+            dependencies = [str(value).strip() for value in payload["dependencies"] if str(value).strip()]
+            if dependencies:
+                (source / "requirements.txt").write_text("\n".join(dependencies) + "\n", encoding="utf-8")
+            return self.import_tool_folder(str(source))
+        finally:
+            shutil.rmtree(staging_parent, ignore_errors=True)
 
     def tool_package_editor_document(self, capability_id: str) -> dict[str, object]:
         active, _, target = self._editable_tool_package(capability_id)

@@ -34,10 +34,9 @@
           {{ t('extensions.addServer') }}
         </n-button>
         <template v-else-if="activePool === 'tools'">
-          <input ref="toolFolderInput" class="hidden-folder-input" type="file" webkitdirectory directory multiple @change="importToolFolder" />
-          <n-button type="primary" round :loading="importingTool" @click="toolFolderInput?.click()">
+          <n-button type="primary" round @click="openToolCreator">
             <template #icon><n-icon><Add /></n-icon></template>
-            上传 ToolPackage
+            新建工具
           </n-button>
         </template>
         <n-space v-else-if="activePool === 'skills'">
@@ -61,9 +60,12 @@
         >
           <div class="card-header">
             <span class="type-pill">{{ itemType(item) }}</span>
-            <span class="status" :class="{ muted: !itemEnabled(item) }">
-              <i />{{ itemEnabled(item) ? '可用' : '停用' }}
-            </span>
+            <div class="card-statuses">
+              <span v-if="item.indexing.vector" class="status indexed"><i />{{ t('capabilityPools.indexed') }}</span>
+              <span class="status" :class="{ muted: !itemEnabled(item) }">
+                <i />{{ itemEnabled(item) ? t('capabilityPools.available') : t('capabilityPools.disabled') }}
+              </span>
+            </div>
           </div>
           <div class="card-body">
             <h3>{{ itemName(item) }}</h3>
@@ -148,6 +150,50 @@
         </template>
       </n-drawer-content>
     </n-drawer>
+
+    <n-modal v-model:show="showToolCreator" preset="card" class="tool-creator" :style="{ width: 'min(1120px, calc(100vw - 48px))' }" title="新建工具" :bordered="false">
+      <div class="creator-layout">
+        <n-form label-placement="top" class="creator-form">
+          <section class="form-section two-column">
+            <div class="section-title full"><strong>基本信息</strong><span>系统会据此生成并校验 TOOL.yaml。</span></div>
+            <n-form-item label="工具标识 *"><n-input v-model:value="toolCreateForm.name" placeholder="lowercase-kebab-case" /></n-form-item>
+            <n-form-item label="模型调用名称 *"><n-input v-model:value="toolCreateForm.model_alias" placeholder="lowercase_snake_case" /></n-form-item>
+            <n-form-item label="显示名称 *"><n-input v-model:value="toolCreateForm.display_name" /></n-form-item>
+            <n-form-item label="关键词"><n-dynamic-tags v-model:value="toolCreateForm.keywords" /></n-form-item>
+            <n-form-item class="full" label="工具说明 *"><n-input v-model:value="toolCreateForm.description" type="textarea" :autosize="{ minRows: 3, maxRows: 6 }" /></n-form-item>
+          </section>
+          <section class="form-section">
+            <div class="section-row"><div class="section-title"><strong>输入参数</strong><span>参数会生成 JSON Schema，并进入能力检索索引。</span></div><n-button size="small" @click="addToolParameter">添加参数</n-button></div>
+            <div v-for="(parameter, index) in toolCreateForm.parameters" :key="index" class="parameter-card">
+              <div class="parameter-head">
+                <span>参数 {{ index + 1 }}</span>
+                <n-button size="tiny" quaternary @click="toolCreateForm.parameters.splice(index, 1)">移除</n-button>
+              </div>
+              <div class="parameter-fields">
+                <n-form-item label="参数名"><n-input v-model:value="parameter.name" placeholder="例如 query" /></n-form-item>
+                <n-form-item label="数据类型"><n-select v-model:value="parameter.type" :options="parameterTypeOptions" /></n-form-item>
+                <n-form-item label="是否必填" class="required-field">
+                  <n-switch v-model:value="parameter.required"><template #checked>必填</template><template #unchecked>可选</template></n-switch>
+                </n-form-item>
+                <n-form-item label="参数说明" class="parameter-description">
+                  <n-input v-model:value="parameter.description" placeholder="说明参数的含义、格式与使用约束，帮助模型正确填写" />
+                </n-form-item>
+              </div>
+            </div>
+            <n-empty v-if="!toolCreateForm.parameters.length" description="该工具没有输入参数" />
+          </section>
+          <section class="form-section">
+            <div class="section-title"><strong>Python 依赖</strong><span>每项使用标准 requirement 格式，例如 requests&gt;=2.32。</span></div>
+            <n-dynamic-tags v-model:value="toolCreateForm.dependencies" />
+          </section>
+        </n-form>
+        <section class="source-pane">
+          <div class="section-row"><div class="pane-note"><strong>main.py *</strong><span>必须定义同步函数 run(arguments, context)，并返回 JSON 对象。</span></div><label class="file-button">上传 main.py<input type="file" accept=".py,text/x-python" @change="loadToolMainFile" /></label></div>
+          <CodeEditor v-model="toolCreateForm.main_source" language="python" :min-height="600" />
+        </section>
+      </div>
+      <template #footer><n-space justify="end"><n-button @click="showToolCreator = false">取消</n-button><n-button type="primary" :loading="creatingTool" @click="createToolPackage">校验并发布</n-button></n-space></template>
+    </n-modal>
 
     <n-modal v-model:show="showToolPackageEditor" preset="card" class="skill-editor" :style="{ width: 'min(1120px, calc(100vw - 48px))' }" title="ToolPackage 编辑器" :bordered="false">
       <n-spin :show="loadingToolPackage">
@@ -266,6 +312,7 @@ import {
 } from 'naive-ui'
 import { Add, Refresh, SearchOutline } from '@/components/icons'
 import McpConfigModal from '@/components/extensions/McpConfigModal.vue'
+import CodeEditor from '@/components/common/CodeEditor.vue'
 import {
   capabilityPoolsApi,
   type CapabilityPoolItem,
@@ -276,6 +323,7 @@ import {
   type SkillHubResult,
   type ToolRuntimePolicyInput,
   type ToolPackageEditorDocument,
+  type ToolPackageCreateInput,
 } from '@/api/capabilityPools'
 import type { McpServerConfig } from '@/api/resourceTypes'
 import type { ExtensionItemView } from '@/types/protocol'
@@ -313,14 +361,22 @@ const searchingSkillHub = ref(false)
 const installingSkill = ref('')
 const importingSkill = ref(false)
 const skillFolderInput = ref<HTMLInputElement | null>(null)
-const importingTool = ref(false)
-const toolFolderInput = ref<HTMLInputElement | null>(null)
+const showToolCreator = ref(false)
+const creatingTool = ref(false)
 const showToolPackageEditor = ref(false)
 const loadingToolPackage = ref(false)
 const savingToolPackage = ref(false)
 const toolPackageDocument = ref<ToolPackageEditorDocument | null>(null)
 const selectedToolFilePath = ref('')
 const toolPackageFiles = reactive<Record<string, string>>({})
+const toolCreateForm = reactive<ToolPackageCreateInput & { main_source: string }>({
+  name: '', model_alias: '', display_name: '', description: '', keywords: [], parameters: [], dependencies: [],
+  main_source: 'def run(arguments, context):\n    return {"result": ""}\n',
+  runtime_policy: {
+    approval: 'inherit', risk_level: 'low', allow_parallel_calls: true, max_parallel_calls: 1,
+    timeout_seconds: 300, output_projection: 'compress', output_max_model_chars: 50000, retain_raw_output: true,
+  },
+})
 const skillForm = reactive<{ metadata: Record<string, unknown>; instructions: string }>({ metadata: {}, instructions: '' })
 const toolForm = reactive<ToolRuntimePolicyInput & { display_name: string; description: string }>({
   display_name: '', description: '', approval: 'inherit', risk_level: 'low', allow_parallel_calls: true,
@@ -350,6 +406,7 @@ const approvalOptions = [
   { label: '每次确认', value: 'ask' }, { label: '禁止调用', value: 'deny' },
 ]
 const riskOptions = [{ label: '低风险', value: 'low' }, { label: '中风险', value: 'medium' }, { label: '高风险', value: 'high' }]
+const parameterTypeOptions = ['string', 'integer', 'number', 'boolean', 'object', 'array'].map(value => ({ label: value, value }))
 const skillDisplayName = computed({ get: () => String(skillForm.metadata.display_name || ''), set: value => { if (value.trim()) skillForm.metadata.display_name = value; else delete skillForm.metadata.display_name } })
 const skillDescription = computed({ get: () => String(skillForm.metadata.description || ''), set: value => { skillForm.metadata.description = value } })
 const skillKeywords = computed<string[]>({
@@ -404,22 +461,27 @@ async function importSkillFolder(event: Event) {
     importingSkill.value = false
   }
 }
-async function importToolFolder(event: Event) {
-  const selection = selectedFolder(event)
-  if (!selection || importingTool.value) return
-  const { rootName, files } = selection
-  if (!files.some(item => item.relativePath === 'TOOL.yaml') || !files.some(item => item.relativePath === 'main.py')) {
-    message.error('请选择根目录同时包含 TOOL.yaml 和 main.py 的 ToolPackage 文件夹')
-    return
-  }
-  importingTool.value = true
+function openToolCreator() { showToolCreator.value = true }
+function addToolParameter() { toolCreateForm.parameters.push({ name: '', type: 'string', description: '', required: true }) }
+async function loadToolMainFile(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  toolCreateForm.main_source = await file.text()
+}
+async function createToolPackage() {
+  if (creatingTool.value) return
+  creatingTool.value = true
   try {
-    snapshot.value = await capabilityPoolsApi.importToolFolder(rootName, files)
-    message.success(`ToolPackage 已完成依赖校验并发布：${rootName}`)
+    const { main_source, ...input } = toolCreateForm
+    snapshot.value = await capabilityPoolsApi.createToolPackage(structuredClone(input), main_source)
+    showToolCreator.value = false
+    message.success('工具已通过格式、入口与依赖校验并发布')
   } catch (error) {
     message.error(error instanceof Error ? error.message : String(error))
   } finally {
-    importingTool.value = false
+    creatingTool.value = false
   }
 }
 function selectedFolder(event: Event): { rootName: string; files: Array<{ file: File; relativePath: string }> } | null {
@@ -486,11 +548,12 @@ onMounted(loadAll)
 .title-block { max-width: 760px; }.eyebrow,.pool-kicker { display: block; margin-bottom: 9px; color: var(--app-text-muted); font-size: 10px; font-weight: 800; letter-spacing: .16em; }.title-block h1 { margin: 0; font-size: clamp(32px, 4vw, 48px); line-height: 1; letter-spacing: -.045em; }.title-block p,.pool-heading p { margin: 13px 0 0; color: var(--app-text-secondary); font-size: 13px; line-height: 1.6; }.header-tools { display: flex; align-items: center; gap: 8px; }.search-input { width: min(360px, 34vw); }
 .pool-switcher { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; max-width: 1540px; margin: 0 auto 16px; }.pool-switch { display: grid; grid-template-columns: 1fr auto; gap: 5px 14px; min-width: 0; padding: 16px 18px; color: inherit; text-align: left; border: 1px solid var(--app-border); border-radius: 14px; background: var(--app-surface); cursor: pointer; transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease; }.pool-switch:hover { transform: translateY(-1px); border-color: var(--app-border-focus); }.pool-switch.active { border-color: color-mix(in srgb, var(--app-text) 38%, var(--app-border)); box-shadow: inset 0 -2px 0 var(--app-text); }.switch-label { font-size: 12px; font-weight: 750; }.pool-switch strong { grid-row: span 2; align-self: center; font-size: 26px; letter-spacing: -.04em; }.pool-switch small { overflow: hidden; color: var(--app-text-muted); text-overflow: ellipsis; white-space: nowrap; }
 .page-alert { max-width: 1540px; margin: 12px auto; }.pool-surface { max-width: 1540px; margin: 0 auto; padding: 24px; border: 1px solid var(--app-border); border-radius: 20px; background: var(--app-surface); }.pool-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; padding: 2px 2px 22px; border-bottom: 1px solid var(--app-border); }.pool-heading h2 { margin: 0; font-size: 22px; letter-spacing: -.02em; }
-.card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; padding-top: 18px; }.pool-card { display: flex; min-height: 214px; flex-direction: column; padding: 17px 18px 14px; border: 1px solid var(--app-border); border-radius: 15px; background: var(--app-surface); cursor: pointer; transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease; }.pool-card:hover,.pool-card:focus-visible { transform: translateY(-2px); border-color: var(--app-border-focus); box-shadow: 0 12px 28px color-mix(in srgb, var(--app-text) 7%, transparent); outline: none; }.card-header,.card-footer,.status,.card-buttons,.skill-editor-header,.skill-editor-header > div,.section-row,.switch-line { display: flex; align-items: center; }.card-header,.card-footer,.section-row,.switch-line { justify-content: space-between; }.type-pill { display: inline-flex; width: fit-content; padding: 4px 7px; border-radius: 6px; background: var(--app-text); color: var(--app-surface); font-size: 9px; font-weight: 800; letter-spacing: .08em; }.status { gap: 6px; color: var(--app-text-muted); font-size: 10px; }.status i { width: 6px; height: 6px; border-radius: 50%; background: var(--app-success, #2ca66f); }.status.muted i { background: var(--app-text-muted); }.card-body { flex: 1; padding: 22px 0 14px; }.card-body h3 { margin: 0; overflow: hidden; font-size: 16px; letter-spacing: -.01em; text-overflow: ellipsis; white-space: nowrap; }.card-body p { display: -webkit-box; margin: 8px 0 0; overflow: hidden; color: var(--app-text-secondary); font-size: 12px; line-height: 1.6; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }.card-facts { display: flex; min-height: 24px; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }.card-facts span { padding: 3px 7px; border-radius: 6px; background: var(--app-surface-subtle, color-mix(in srgb, var(--app-text) 5%, transparent)); color: var(--app-text-muted); font-size: 9px; }.card-footer { min-height: 30px; padding-top: 11px; border-top: 1px solid var(--app-border); color: var(--app-text-muted); font-size: 10px; }.card-buttons { gap: 1px; }.empty-state { padding: 90px 0; }
+.card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; padding-top: 18px; }.pool-card { display: flex; min-height: 214px; flex-direction: column; padding: 17px 18px 14px; border: 1px solid var(--app-border); border-radius: 15px; background: var(--app-surface); cursor: pointer; transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease; }.pool-card:hover,.pool-card:focus-visible { transform: translateY(-2px); border-color: var(--app-border-focus); box-shadow: 0 12px 28px color-mix(in srgb, var(--app-text) 7%, transparent); outline: none; }.card-header,.card-footer,.card-statuses,.status,.card-buttons,.skill-editor-header,.skill-editor-header > div,.section-row,.switch-line { display: flex; align-items: center; }.card-header,.card-footer,.section-row,.switch-line { justify-content: space-between; }.card-statuses { gap: 10px; }.type-pill { display: inline-flex; width: fit-content; padding: 4px 7px; border-radius: 6px; background: var(--app-text); color: var(--app-surface); font-size: 9px; font-weight: 800; letter-spacing: .08em; }.status { gap: 6px; color: var(--app-text-muted); font-size: 10px; }.status i { width: 6px; height: 6px; border-radius: 50%; background: var(--app-success, #2ca66f); }.status.indexed i { background: var(--app-text); }.status.muted i { background: var(--app-text-muted); }.card-body { flex: 1; padding: 22px 0 14px; }.card-body h3 { margin: 0; overflow: hidden; font-size: 16px; letter-spacing: -.01em; text-overflow: ellipsis; white-space: nowrap; }.card-body p { display: -webkit-box; margin: 8px 0 0; overflow: hidden; color: var(--app-text-secondary); font-size: 12px; line-height: 1.6; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }.card-facts { display: flex; min-height: 24px; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }.card-facts span { padding: 3px 7px; border-radius: 6px; background: var(--app-surface-subtle, color-mix(in srgb, var(--app-text) 5%, transparent)); color: var(--app-text-muted); font-size: 9px; }.card-footer { min-height: 30px; padding-top: 11px; border-top: 1px solid var(--app-border); color: var(--app-text-muted); font-size: 10px; }.card-buttons { gap: 1px; }.empty-state { padding: 90px 0; }
 .editor-intro { padding: 2px 0 22px; border-bottom: 1px solid var(--app-border); }.editor-intro p { margin: 12px 0 0; color: var(--app-text-secondary); font-size: 12px; }.editor-form { display: grid; gap: 14px; padding-top: 18px; }.form-section { padding: 17px; border: 1px solid var(--app-border); border-radius: 13px; }.form-section.two-column { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }.section-title { display: grid; gap: 3px; margin-bottom: 15px; }.section-title.full { grid-column: 1 / -1; }.section-title strong,.switch-line strong { font-size: 13px; }.section-title span,.switch-line small { color: var(--app-text-muted); font-size: 10px; line-height: 1.5; }.section-row .section-title { margin-bottom: 10px; }.switch-line > span { display: grid; gap: 3px; }
 .editor-intro .n-button { margin-top: 14px; }.package-summary { display: flex; flex-wrap: wrap; gap: 8px; padding: 14px 0 0; }.package-summary span { padding: 5px 8px; border: 1px solid var(--app-border); border-radius: 7px; color: var(--app-text-secondary); font-size: 10px; }
+.creator-layout { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(0, .92fr); align-items: start; gap: 18px; max-height: 76vh; overflow: auto; }.creator-form { display: grid; min-width: 0; align-content: start; gap: 14px; }.creator-form .form-section,.source-pane { box-sizing: border-box; min-width: 0; }.parameter-card { margin-top: 10px; padding: 14px; border: 1px solid var(--app-border); border-radius: 11px; background: var(--app-surface-subtle, color-mix(in srgb, var(--app-text) 2%, transparent)); }.parameter-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 11px; }.parameter-head > span { color: var(--app-text-secondary); font-size: 11px; font-weight: 700; }.parameter-fields { display: grid; grid-template-columns: minmax(0, 1fr) 140px 82px; gap: 0 10px; }.parameter-fields :deep(.n-form-item) { min-width: 0; margin-bottom: 10px; }.parameter-description { grid-column: 1 / -1; }.required-field :deep(.n-form-item-blank) { align-items: center; }.source-pane { position: sticky; top: 0; padding: 17px; border: 1px solid var(--app-border); border-radius: 13px; }.file-button { position: relative; flex: none; padding: 6px 10px; border: 1px solid var(--app-border); border-radius: 8px; font-size: 11px; cursor: pointer; }.file-button input { position: absolute; width: 1px; height: 1px; opacity: 0; }.full { grid-column: 1 / -1; }
 .skill-editor :deep(.n-card__content) { padding-top: 4px; }.skill-editor-header { justify-content: space-between; gap: 20px; min-width: 0; padding: 0 0 16px; border-bottom: 1px solid var(--app-border); }.skill-editor-header > div { gap: 10px; }.skill-editor-header > span { overflow: hidden; color: var(--app-text-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }.skill-pane { padding-top: 18px; }.narrow-pane { width: min(650px, 100%); }.pane-note { display: grid; gap: 3px; margin-bottom: 10px; }.pane-note span { color: var(--app-text-muted); font-size: 10px; }.code-editor :deep(textarea) { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; line-height: 1.65; }.resource-editor { display: grid; grid-template-columns: 260px minmax(0, 1fr); min-height: 470px; margin-top: 18px; overflow: hidden; border: 1px solid var(--app-border); border-radius: 12px; }.resource-editor aside { padding: 8px; overflow-y: auto; border-right: 1px solid var(--app-border); background: var(--app-surface-subtle, color-mix(in srgb, var(--app-text) 3%, transparent)); }.resource-editor aside button { display: grid; width: 100%; gap: 3px; padding: 10px; color: inherit; text-align: left; border: 0; border-radius: 8px; background: transparent; cursor: pointer; }.resource-editor aside button:hover,.resource-editor aside button.active { background: var(--app-surface); }.resource-editor aside span { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }.resource-editor aside small { color: var(--app-text-muted); font-size: 9px; }.resource-content { min-width: 0; padding: 15px; }.resource-empty { align-self: center; }
 .skillhub-panel { display: grid; gap: 18px; }.skillhub-status { display: flex; align-items: center; gap: 11px; padding: 14px; border: 1px solid var(--app-border); border-radius: 12px; }.skillhub-status > span { width: 8px; height: 8px; border-radius: 50%; background: var(--app-text-muted); }.skillhub-status > span.ready { background: var(--app-success, #2ca66f); }.skillhub-status div { display: grid; gap: 3px; }.skillhub-status small { color: var(--app-text-muted); font-size: 10px; }.skillhub-results { display: grid; gap: 8px; max-height: 440px; overflow-y: auto; }.skillhub-results article { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px 14px; padding: 14px; border: 1px solid var(--app-border); border-radius: 11px; }.skillhub-results article > div { display: flex; align-items: baseline; gap: 8px; }.skillhub-results article small { color: var(--app-text-muted); font-size: 9px; }.skillhub-results article p { grid-column: 1; margin: 0; color: var(--app-text-secondary); font-size: 11px; line-height: 1.6; }.skillhub-results article .n-button { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
-@media (max-width: 920px) { .library-header { align-items: flex-start; flex-direction: column; }.header-tools,.search-input { width: 100%; }.pool-switcher { grid-template-columns: repeat(2, 1fr); }.resource-editor { grid-template-columns: 210px minmax(0, 1fr); } }
-@media (max-width: 620px) { .library-page { padding: 20px 14px; }.pool-switcher { grid-template-columns: 1fr 1fr; }.pool-switch { padding: 13px; }.pool-switch small { display: none; }.pool-surface { padding: 15px; }.pool-heading { align-items: flex-start; flex-direction: column; }.card-grid { grid-template-columns: 1fr; }.resource-editor { grid-template-columns: 1fr; }.resource-editor aside { max-height: 160px; border-right: 0; border-bottom: 1px solid var(--app-border); }.form-section.two-column { grid-template-columns: 1fr; } }
+@media (max-width: 920px) { .library-header { align-items: flex-start; flex-direction: column; }.header-tools,.search-input { width: 100%; }.pool-switcher { grid-template-columns: repeat(2, 1fr); }.resource-editor { grid-template-columns: 210px minmax(0, 1fr); }.creator-layout { grid-template-columns: 1fr; }.source-pane { position: static; }.parameter-fields { grid-template-columns: minmax(0, 1fr) 140px 82px; } }
+@media (max-width: 620px) { .library-page { padding: 20px 14px; }.pool-switcher { grid-template-columns: 1fr 1fr; }.pool-switch { padding: 13px; }.pool-switch small { display: none; }.pool-surface { padding: 15px; }.pool-heading { align-items: flex-start; flex-direction: column; }.card-grid { grid-template-columns: 1fr; }.resource-editor { grid-template-columns: 1fr; }.resource-editor aside { max-height: 160px; border-right: 0; border-bottom: 1px solid var(--app-border); }.form-section.two-column,.parameter-fields { grid-template-columns: 1fr; }.parameter-description { grid-column: auto; } }
 </style>

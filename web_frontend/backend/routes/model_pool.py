@@ -25,6 +25,7 @@ from agent_factory.model_pool.schema import (
     DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS,
     ModelProfileBinding,
 )
+from agent_factory.model_pool.defaults import DEFAULT_EMBEDDING_BATCH_SIZE
 from agent_factory.model_pool.store import ModelPoolRevisionConflict, ModelPoolStoreError
 
 
@@ -101,6 +102,7 @@ def create_model_pool_router(
             "defaults": {
                 "context_window_tokens": DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS,
                 "compression_trigger_tokens": DEFAULT_MODEL_COMPRESSION_TRIGGER_TOKENS,
+                "embedding_batch_size": DEFAULT_EMBEDDING_BATCH_SIZE,
             },
         }
 
