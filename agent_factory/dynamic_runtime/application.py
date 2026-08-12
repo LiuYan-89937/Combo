@@ -89,6 +89,7 @@ class DynamicRuntimeApplicationConfig:
     build_revision: str
     generation_lease_seconds: int
     capability_resolution: CapabilityResolutionConfig
+    main_agent_capability_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         path = Path(self.database_path).expanduser().resolve()
@@ -99,6 +100,11 @@ class DynamicRuntimeApplicationConfig:
             raise ValueError("generation_lease_seconds must be positive")
         object.__setattr__(self, "database_path", path)
         object.__setattr__(self, "build_revision", revision)
+        object.__setattr__(
+            self,
+            "main_agent_capability_ids",
+            tuple(dict.fromkeys(str(value).strip() for value in self.main_agent_capability_ids if str(value).strip())),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,6 +214,7 @@ class DynamicRuntimeApplication:
                     stores.capability_resolution_receipts,
                 ),
                 adapters=adapters,
+                main_agent_capability_ids=config.main_agent_capability_ids,
             )
             runtime_service = DynamicRuntimeService(
                 service_set=service_set,

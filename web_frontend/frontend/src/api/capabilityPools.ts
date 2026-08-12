@@ -31,6 +31,14 @@ export interface CapabilityPoolSnapshot {
   mcp_registry_digest: string
 }
 
+export interface MainAgentCapabilityProfile {
+  version: 'main_agent_capability_profile.v1'
+  revision: number
+  capability_ids: string[]
+  active_capability_ids: string[]
+  restart_required: boolean
+}
+
 export interface McpProbeResult {
   capability_id: string
   content_digest: string
@@ -111,6 +119,15 @@ export interface ToolPackageEditorDocument {
 
 export const capabilityPoolsApi = {
   snapshot: () => requestJson<CapabilityPoolSnapshot>('/api/runtime/capabilities'),
+  mainAgentProfile: () => requestJson<MainAgentCapabilityProfile>('/api/runtime/main-agent-capability-profile'),
+  updateMainAgentProfile: (profile: Pick<MainAgentCapabilityProfile, 'revision' | 'capability_ids'>) =>
+    requestJson<MainAgentCapabilityProfile>('/api/runtime/main-agent-capability-profile', {
+      method: 'PUT',
+      body: JSON.stringify({
+        expected_revision: profile.revision,
+        capability_ids: profile.capability_ids,
+      }),
+    }),
   skillHubStatus: () => requestJson<SkillHubResult>('/api/runtime/capabilities/skillhub/status'),
   searchSkillHub: (query: string) => requestJson<SkillHubResult>('/api/runtime/capabilities/skillhub/search', {
     method: 'POST',

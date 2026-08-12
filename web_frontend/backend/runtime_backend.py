@@ -104,6 +104,7 @@ from agent_factory.tooling.builtins.browser.runtime import BrowserRuntime, Brows
 from agent_factory.tooling.skillhub.service import SkillHubService
 from agent_factory.dynamic_runtime.mcp_runtime import MCPRuntimePool
 from agent_factory.dynamic_runtime.mcp_source import MCPConfigCapabilitySource, MCPConfigSourceConfig
+from agent_factory.dynamic_runtime.main_agent_profile import MainAgentCapabilityProfileStore
 from web_frontend.backend.frontend_event_bridge import FrontendEventBridge, RuntimeEventFanout
 from web_frontend.backend.attachment_upload_store import StagedAttachmentLaunchResolver
 
@@ -122,6 +123,7 @@ class RuntimeBackendConfig:
     capability_publisher_principal_id: str
     builtin_capability_source_prefix: str
     builtin_tool_overrides_path: Path
+    main_agent_capability_profile_path: Path
     skill_capability_source_prefix: str
     capability_blob_root: Path
     skill_source_roots: tuple[SkillSourceRoot, ...]
@@ -168,6 +170,9 @@ class RuntimeBackendConfig:
             builtin_tool_overrides_path=factory_artifact_path(
                 "extension_registry", "builtin_tool_overrides.json"
             ),
+            main_agent_capability_profile_path=factory_artifact_path(
+                "extension_registry", "main_agent_capability_profile.json"
+            ),
             skill_capability_source_prefix="filesystem-skill://",
             capability_blob_root=factory_artifact_path("capability_blobs"),
             skill_source_roots=(
@@ -205,6 +210,10 @@ class RuntimeBackend:
         self.config = config
         self.logger = logger
         _initialize_capability_storage(config)
+        self.main_agent_capability_profiles = MainAgentCapabilityProfileStore(
+            config.main_agent_capability_profile_path
+        )
+        self.active_main_agent_capability_profile = self.main_agent_capability_profiles.ensure()
         self.frontend_events = FrontendEventBridge(
             queue_capacity=config.subscriber_queue_capacity,
         )
@@ -444,6 +453,54 @@ class RuntimeBackend:
             "counts": counts,
             "capabilities": capabilities,
             "mcp_registry_digest": _json_digest(registry),
+        }
+
+    def main_agent_capability_profile(self) -> dict[str, object]:
+        return self._main_agent_capability_profile_view(
+            self.main_agent_capability_profiles.read()
+        )
+
+    def replace_main_agent_capability_profile(
+        self,
+        *,
+        expected_revision: int,
+        capability_ids: tuple[str, ...],
+    ) -> dict[str, object]:
+        self._validate_main_agent_profile_capabilities(capability_ids)
+        saved = self.main_agent_capability_profiles.replace(
+            expected_revision=expected_revision,
+            capability_ids=capability_ids,
+        )
+        return self._main_agent_capability_profile_view(saved)
+
+    def _validate_main_agent_profile_capabilities(self, capability_ids: tuple[str, ...]) -> None:
+        active = {
+            item.revision.capability_id: item
+            for item in self.application.stores.capabilities.active_capabilities()
+        }
+        invalid: list[str] = []
+        for capability_id in capability_ids:
+            item = active.get(capability_id)
+            if item is None or item.revision.kind not in {"skill", "tool", "mcp_server"}:
+                invalid.append(capability_id)
+                continue
+            if item.revision.kind == "tool" and ToolDefinition.model_validate(
+                item.revision.content.definition
+            ).system_available:
+                invalid.append(capability_id)
+        if invalid:
+            raise ValueError(
+                "capabilities cannot be enabled for the main Agent: " + ", ".join(invalid)
+            )
+
+    def _main_agent_capability_profile_view(self, saved) -> dict[str, object]:
+        active_ids = self.active_main_agent_capability_profile.capability_ids
+        return {
+            "version": "main_agent_capability_profile.v1",
+            "revision": saved.revision,
+            "capability_ids": list(saved.capability_ids),
+            "active_capability_ids": list(active_ids),
+            "restart_required": saved.capability_ids != active_ids,
         }
 
     def refresh_capability_search_embeddings(self) -> None:
@@ -1359,6 +1416,7 @@ class RuntimeBackend:
                     host_python_abi=str(sys.implementation.cache_tag or "") or None,
                     allowed_trust_levels=("builtin", "local_user", "verified_external"),
                 ),
+                main_agent_capability_ids=self.active_main_agent_capability_profile.capability_ids,
             ),
             services_factory=services,
             model_pool_store=ModelPoolStore(),
@@ -1602,6 +1660,7 @@ def _initialize_capability_storage(config: RuntimeBackendConfig) -> None:
     for source_root in config.tool_source_roots:
         source_root.path.mkdir(parents=True, exist_ok=True)
     config.builtin_tool_overrides_path.parent.mkdir(parents=True, exist_ok=True)
+    config.main_agent_capability_profile_path.parent.mkdir(parents=True, exist_ok=True)
     registry_path = config.mcp_server_registry_path
     registry_path.parent.mkdir(parents=True, exist_ok=True)
     try:

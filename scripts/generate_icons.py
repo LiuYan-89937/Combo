@@ -10,22 +10,28 @@ except ImportError:
     sys.exit(1)
 
 
-ICON_SAFE_MARGIN_RATIO = 0.055
+ICON_SAFE_MARGIN_RATIO = 0.025
+
+
+def normalized_brand_source(source_path: Path) -> Image.Image:
+    """裁掉母版透明留白，避免平台图标容器与源图安全区重复叠加。"""
+    with Image.open(source_path) as source:
+        foreground = source.convert("RGBA")
+    bounds = foreground.getchannel("A").getbbox()
+    if bounds is None:
+        raise ValueError(f"图标母版没有可见内容: {source_path}")
+    return foreground.crop(bounds)
 
 
 def create_icon(source_path: Path, size: int, output_path: Path):
-    """将透明 Combo 母版等比缩放到跨平台安全区。"""
+    """将规范化后的 Combo 母版等比缩放到单层跨平台安全区。"""
     margin = max(1, round(size * ICON_SAFE_MARGIN_RATIO))
     tile_size = size - margin * 2
-
-    with Image.open(source_path) as source:
-        foreground = source.convert("RGBA").resize(
-            (tile_size, tile_size),
-            Image.Resampling.LANCZOS,
-        )
+    source = normalized_brand_source(source_path)
+    source.thumbnail((tile_size, tile_size), Image.Resampling.LANCZOS)
 
     image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    image.alpha_composite(foreground, (margin, margin))
+    image.alpha_composite(source, ((size - source.width) // 2, (size - source.height) // 2))
     image.save(output_path, format='PNG')
     print(f"✓ 生成图标: {output_path} ({size}x{size})")
 

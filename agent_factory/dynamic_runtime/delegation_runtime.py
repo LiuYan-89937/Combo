@@ -263,8 +263,8 @@ class BoundDelegationRuntime:
 def _child_system_prompt(system_prompt: str) -> str:
     return (
         f"{system_prompt.strip()}\n\n"
-        "You are a single-level temporary agent. Work non-blockingly in the shared workspace and do not "
-        "delegate further. Only claim effects backed by native tool results. Use only the tools presented "
+        "Work non-blockingly in the shared workspace. Only claim effects backed by native tool results. "
+        "Use only the tools presented "
         "to the current graph node; tool availability can differ between planning, execution, and finalization. "
         "Before a tool call, put one concise user-facing sentence in the assistant content describing what you "
         "are doing now. Keep it factual, action-oriented, and free of private reasoning; this sentence is used "

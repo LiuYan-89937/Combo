@@ -67,6 +67,16 @@
 
             <div class="field-divider" aria-hidden="true"></div>
 
+            <div class="field-row">
+              <div class="field-copy">
+                <label class="field-label">{{ t('settings.mainAgentCapabilities') }}</label>
+                <p class="field-hint">{{ t('settings.mainAgentCapabilitiesHint') }}</p>
+              </div>
+              <n-button secondary @click="openMainAgentCapabilities">{{ t('settings.manageCapabilities') }}</n-button>
+            </div>
+
+            <div class="field-divider" aria-hidden="true"></div>
+
             <div class="field-block">
               <div class="field-block-head">
                 <label class="field-label">{{ t('settings.requestTimeout') }}</label>
@@ -342,6 +352,11 @@ const taskNotificationCategoryOptions = computed<Array<{
 function openModelPool(): void {
   show.value = false
   void router.push({ name: 'ModelPool' })
+}
+
+function openMainAgentCapabilities(): void {
+  show.value = false
+  void router.push({ name: 'MainAgentCapabilities' })
 }
 
 const conversationUsageText = computed(() => {

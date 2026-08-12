@@ -39,6 +39,17 @@ class CapabilityPoolManager(Protocol):
     def capability_pool_snapshot(self) -> dict[str, object]:
         ...
 
+    def main_agent_capability_profile(self) -> dict[str, object]:
+        ...
+
+    def replace_main_agent_capability_profile(
+        self,
+        *,
+        expected_revision: int,
+        capability_ids: tuple[str, ...],
+    ) -> dict[str, object]:
+        ...
+
     def probe_mcp_server(self, capability_id: str) -> dict[str, object]:
         ...
 
@@ -156,6 +167,23 @@ class ConversationCreateRequest(BaseModel):
         if not text:
             raise ValueError("conversation title must not be empty")
         return text
+
+
+class MainAgentCapabilityProfileWriteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(ge=1)
+    capability_ids: list[str]
+
+    @field_validator("capability_ids")
+    @classmethod
+    def _capability_ids_are_unique(cls, values: list[str]) -> list[str]:
+        normalized = [str(value or "").strip() for value in values]
+        if any(not value for value in normalized):
+            raise ValueError("main Agent capability profile contains an empty capability ID")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("main Agent capability profile contains duplicate capability IDs")
+        return normalized
 
 
 class RuntimePolicyWriteRequest(BaseModel):
@@ -490,6 +518,30 @@ def create_dynamic_runtime_router(
     async def capabilities(request: Request) -> dict[str, object]:
         principal_resolver.resolve(request)
         return await asyncio.to_thread(capability_pools.capability_pool_snapshot)
+
+    @router.get("/main-agent-capability-profile")
+    async def main_agent_capability_profile(request: Request) -> dict[str, object]:
+        principal_resolver.resolve(request)
+        return await asyncio.to_thread(capability_pools.main_agent_capability_profile)
+
+    @router.put("/main-agent-capability-profile")
+    async def replace_main_agent_capability_profile(
+        request: Request,
+        payload: MainAgentCapabilityProfileWriteRequest,
+    ) -> dict[str, object]:
+        principal_resolver.resolve(request)
+        try:
+            return await asyncio.to_thread(
+                capability_pools.replace_main_agent_capability_profile,
+                expected_revision=payload.expected_revision,
+                capability_ids=tuple(payload.capability_ids),
+            )
+        except RuntimeError as exc:
+            if str(exc) == "main_agent_capability_profile_revision_conflict":
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            raise
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @router.get("/capabilities/skillhub/status")
     async def skillhub_status(request: Request) -> dict[str, Any]:

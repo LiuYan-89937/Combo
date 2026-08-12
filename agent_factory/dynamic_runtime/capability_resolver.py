@@ -146,6 +146,7 @@ class MainTurnCapabilityResolver:
         health: CapabilityHealthResolver,
         dependency_environments: DependencyEnvironmentResolver,
         adapters: CapabilityAdapterRegistry,
+        main_agent_capability_ids: tuple[str, ...] = (),
     ) -> None:
         self._store = store
         self._search_index = search_index
@@ -154,6 +155,7 @@ class MainTurnCapabilityResolver:
         self._health = health
         self._dependency_environments = dependency_environments
         self._adapters = adapters
+        self._main_agent_capability_ids = tuple(dict.fromkeys(main_agent_capability_ids))
         self._adapters.require_complete()
 
     async def resolve(
@@ -170,6 +172,7 @@ class MainTurnCapabilityResolver:
             requirements=(),
             policy=policy,
             workspace_id=workspace_id,
+            required_capability_ids=self._main_agent_capability_ids,
         )
 
     def resolve_requirements(
@@ -181,6 +184,7 @@ class MainTurnCapabilityResolver:
         workspace_id: str,
         include_system_capabilities: bool = True,
         excluded_capability_ids: frozenset[str] = frozenset(),
+        required_capability_ids: tuple[str, ...] = (),
     ) -> CapabilitySnapshot:
         principal_id = _require_text(principal_id, "runtime principal_id")
         resolved_workspace_id = _require_text(workspace_id, "workspace_id")
@@ -359,6 +363,15 @@ class MainTurnCapabilityResolver:
                 ):
                     accepted_roots.add(capability_id)
 
+        for capability_id in _expand_main_agent_capability_ids(active, required_capability_ids):
+            if capability_id not in active_by_id or not select(
+                capability_id,
+                score=None,
+                reason="enabled by the main Agent capability profile",
+            ):
+                continue
+            accepted_roots.add(capability_id)
+
         unavailable_requirements: list[str] = []
         for requirement, matches in matches_by_requirement:
             accepted = False
@@ -491,6 +504,29 @@ def _is_system_available_tool(item: ActiveCapability) -> bool:
     if item.revision.kind != "tool":
         return False
     return ToolDefinition.model_validate(item.revision.content.definition).system_available
+
+
+def _expand_main_agent_capability_ids(
+    active: tuple[ActiveCapability, ...],
+    configured_ids: tuple[str, ...],
+) -> tuple[str, ...]:
+    active_by_id = {item.revision.capability_id: item for item in active}
+    expanded: list[str] = []
+    for capability_id in configured_ids:
+        if capability_id not in expanded:
+            expanded.append(capability_id)
+        item = active_by_id.get(capability_id)
+        if item is None or item.revision.kind != "mcp_server":
+            continue
+        for candidate in active:
+            if candidate.revision.kind != "mcp_tool":
+                continue
+            if any(
+                dependency.capability_id == capability_id and dependency.required
+                for dependency in candidate.revision.content.dependencies
+            ) and candidate.revision.capability_id not in expanded:
+                expanded.append(candidate.revision.capability_id)
+    return tuple(expanded)
 
 
 def _reachable_selected_capabilities(

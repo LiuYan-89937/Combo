@@ -61,6 +61,11 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/ModelPoolView.vue'),
   },
   {
+    path: '/main-agent-capabilities',
+    name: 'MainAgentCapabilities',
+    component: () => import('@/views/MainAgentCapabilitiesView.vue'),
+  },
+  {
     path: '/mascot-preview',
     name: 'MascotPreview',
     component: () => import('@/views/MascotPreviewView.vue'),
