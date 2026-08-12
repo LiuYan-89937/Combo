@@ -10,28 +10,67 @@ except ImportError:
     sys.exit(1)
 
 
-ICON_SAFE_MARGIN_RATIO = 0.025
+MASTER_ICON_SIZE = 1254
+ICON_TILE_RATIO = 0.82
+MASCOT_TO_TILE_RATIO = 0.72
+MASCOT_BACKGROUND_CUTOFF = 245
+TILE_CORNER_RATIO = 0.22
 
 
-def normalized_brand_source(source_path: Path) -> Image.Image:
-    """裁掉母版透明留白，避免平台图标容器与源图安全区重复叠加。"""
+def extract_black_mascot(source_path: Path) -> Image.Image:
+    """从浅色品牌母版中提取黑色 Combo 角色，保留抗锯齿透明边缘。"""
     with Image.open(source_path) as source:
-        foreground = source.convert("RGBA")
-    bounds = foreground.getchannel("A").getbbox()
+        grayscale = source.convert("L")
+
+    alpha = grayscale.point(
+        lambda value: 0
+        if value >= MASCOT_BACKGROUND_CUTOFF
+        else round(255 * (MASCOT_BACKGROUND_CUTOFF - value) / MASCOT_BACKGROUND_CUTOFF)
+    )
+    bounds = alpha.getbbox()
     if bounds is None:
-        raise ValueError(f"图标母版没有可见内容: {source_path}")
-    return foreground.crop(bounds)
+        raise ValueError(f"品牌母版中没有可提取的黑色角色: {source_path}")
+
+    alpha = alpha.crop(bounds)
+    mascot = Image.new("RGBA", alpha.size, (0, 0, 0, 255))
+    mascot.putalpha(alpha)
+    return mascot
+
+
+def create_master_icon(source_path: Path, output_path: Path) -> None:
+    """生成透明外沿、白色圆角底和黑色 Combo 角色的应用图标母版。"""
+    canvas = Image.new("RGBA", (MASTER_ICON_SIZE, MASTER_ICON_SIZE), (0, 0, 0, 0))
+    tile_size = round(MASTER_ICON_SIZE * ICON_TILE_RATIO)
+    tile_offset = (MASTER_ICON_SIZE - tile_size) // 2
+    tile = Image.new("RGBA", (tile_size, tile_size), (255, 255, 255, 255))
+
+    from PIL import ImageDraw
+
+    rounded_tile = Image.new("L", tile.size, 0)
+    ImageDraw.Draw(rounded_tile).rounded_rectangle(
+        (0, 0, tile_size - 1, tile_size - 1),
+        radius=round(tile_size * TILE_CORNER_RATIO),
+        fill=255,
+    )
+    tile.putalpha(rounded_tile)
+    canvas.alpha_composite(tile, (tile_offset, tile_offset))
+
+    mascot = extract_black_mascot(source_path)
+    mascot_limit = round(tile_size * MASCOT_TO_TILE_RATIO)
+    mascot.thumbnail((mascot_limit, mascot_limit), Image.Resampling.LANCZOS)
+    mascot_position = (
+        (MASTER_ICON_SIZE - mascot.width) // 2,
+        (MASTER_ICON_SIZE - mascot.height) // 2,
+    )
+    canvas.alpha_composite(mascot, mascot_position)
+    canvas.save(output_path, format="PNG")
+    print(f"✓ 生成品牌母版: {output_path} ({MASTER_ICON_SIZE}x{MASTER_ICON_SIZE})")
 
 
 def create_icon(source_path: Path, size: int, output_path: Path):
-    """将规范化后的 Combo 母版等比缩放到单层跨平台安全区。"""
-    margin = max(1, round(size * ICON_SAFE_MARGIN_RATIO))
-    tile_size = size - margin * 2
-    source = normalized_brand_source(source_path)
-    source.thumbnail((tile_size, tile_size), Image.Resampling.LANCZOS)
-
-    image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    image.alpha_composite(source, ((size - source.width) // 2, (size - source.height) // 2))
+    """将应用图标母版缩放为平台资源。"""
+    with Image.open(source_path) as source:
+        image = source.convert("RGBA").resize((size, size), Image.Resampling.LANCZOS)
     image.save(output_path, format='PNG')
     print(f"✓ 生成图标: {output_path} ({size}x{size})")
 
@@ -84,16 +123,19 @@ def create_ico(source_path: Path, output_ico: Path):
 def main():
     project_root = Path(__file__).parent.parent
     icons_dir = project_root / "src-tauri" / "icons"
-    source_path = project_root / "web_frontend" / "frontend" / "public" / "brand" / "combo" / "app-icon.png"
+    brand_dir = project_root / "web_frontend" / "frontend" / "public" / "brand" / "combo"
+    mascot_source_path = brand_dir / "logo-light.png"
+    source_path = brand_dir / "app-icon.png"
     icons_dir.mkdir(parents=True, exist_ok=True)
-    if not source_path.is_file():
-        print(f"品牌源图不存在: {source_path}")
+    if not mascot_source_path.is_file():
+        print(f"品牌源图不存在: {mascot_source_path}")
         sys.exit(1)
 
     print("=" * 60)
     print("Combo 图标生成工具")
     print("=" * 60)
 
+    create_master_icon(mascot_source_path, source_path)
     create_icon(source_path, 32, icons_dir / "32x32.png")
     create_icon(source_path, 128, icons_dir / "128x128.png")
     create_icon(source_path, 256, icons_dir / "128x128@2x.png")

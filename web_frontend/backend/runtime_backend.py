@@ -288,7 +288,8 @@ class RuntimeBackend:
                 """
                 select command_id from command_inbox
                 where json_extract(receipt_json, '$.runtime_instance_id') = ?
-                order by updated_at desc limit 1
+                  and command_kind = 'send_message'
+                order by queue_sequence limit 1
                 """,
                 (runtime_instance_id,),
             ).fetchone()

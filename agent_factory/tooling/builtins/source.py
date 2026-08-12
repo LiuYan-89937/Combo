@@ -154,8 +154,8 @@ class BuiltinToolCapabilitySource:
         lines = [
             f"from {module_name} import {function_name} as _run",
             "",
-            "def run(arguments, context):",
-            "    return _run(arguments=arguments, resources=context)",
+            "def run(arguments, resources):",
+            "    return _run(arguments=arguments, resources=resources)",
         ]
         if spec.risk_evaluator.hard is not None:
             risk_module, risk_function = spec.risk_evaluator.hard.rsplit(":", 1)
@@ -163,8 +163,8 @@ class BuiltinToolCapabilitySource:
                 "",
                 f"from {risk_module} import {risk_function} as _evaluate_risk",
                 "",
-                "def evaluate_risk(arguments, context):",
-                "    return _evaluate_risk(arguments, context)",
+                "def evaluate_risk(arguments, resources):",
+                "    return _evaluate_risk(arguments, resources)",
             ])
         manifest = {
             "schema_version": "tool_package.v1",

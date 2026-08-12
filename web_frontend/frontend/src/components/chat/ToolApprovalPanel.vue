@@ -227,26 +227,13 @@ function handleRevise() {
 
 <style scoped>
 .tool-approval-panel {
-  padding: var(--app-space-lg);
-  border: 1px solid var(--app-text);
-  border-radius: var(--app-radius-lg);
+  padding: 18px;
+  border: 1px solid var(--app-border);
+  border-radius: 20px;
   background: var(--app-surface);
   color: var(--app-text);
-  box-shadow: var(--app-shadow-md);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 7%);
   animation: app-fade-in-up 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
-  position: relative;
-}
-
-.tool-approval-panel::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 3px;
-  border-radius: var(--app-radius-lg) 0 0 var(--app-radius-lg);
-  background: var(--app-warning);
-  animation: app-pulse-soft 1.6s ease-in-out infinite;
 }
 
 .approval-header {
@@ -259,8 +246,8 @@ function handleRevise() {
 .approval-title {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 14px;
+  gap: 10px;
+  font-size: 15px;
   font-weight: 600;
 }
 
@@ -268,7 +255,7 @@ function handleRevise() {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  margin-top: 12px;
+  margin-top: 10px;
 }
 
 .approval-source {
@@ -278,7 +265,7 @@ function handleRevise() {
 }
 
 .approval-item {
-  padding-top: 12px;
+  padding: 14px 0 2px;
   border-top: 1px solid var(--app-divider);
 }
 
@@ -305,7 +292,7 @@ function handleRevise() {
 
 .risk-reason {
   max-width: 100%;
-  padding: 2px 8px;
+  padding: 3px 9px;
   border: 1px solid var(--app-border);
   border-radius: 999px;
   color: var(--app-text-secondary);
@@ -334,10 +321,12 @@ function handleRevise() {
 }
 
 .revision-row {
-  margin-top: 12px;
+  margin-top: 14px;
 }
 
 .approval-actions {
-  margin-top: 12px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--app-divider);
 }
 </style>

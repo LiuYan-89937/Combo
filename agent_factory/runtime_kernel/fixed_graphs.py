@@ -233,5 +233,5 @@ def _plan_and_execute_topology() -> FixedTopology:
             FixedEdge("commit", "finalize", "always"),
         ),
         success_nodes=frozenset({"finalize"}),
-        visible_model_nodes=frozenset({"final_answer"}),
+        visible_model_nodes=frozenset({"planner", "executor", "final_answer"}),
     )
