@@ -1,0 +1,28 @@
+{
+  "ok": true,
+  "chroma_key": {
+    "hex": "#00FF00",
+    "rgb": [
+      0,
+      255,
+      0
+    ],
+    "threshold": 96.0
+  },
+  "rows": [
+    {
+      "state": "failed",
+      "frames": [
+        "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/qa/rows/failed/frames/failed/00.png",
+        "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/qa/rows/failed/frames/failed/01.png",
+        "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/qa/rows/failed/frames/failed/02.png",
+        "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/qa/rows/failed/frames/failed/03.png",
+        "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/qa/rows/failed/frames/failed/04.png",
+        "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/qa/rows/failed/frames/failed/05.png",
+        "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/qa/rows/failed/frames/failed/06.png",
+        "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/qa/rows/failed/frames/failed/07.png"
+      ],
+      "method": "components"
+    }
+  ]
+}

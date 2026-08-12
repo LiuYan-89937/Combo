@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2.0",
-  "productName": "FastAgentFactory",
+  "productName": "Combo",
   "version": "0.1.6",
   "identifier": "com.fastagentfactory.app",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "FastAgentFactory",
+        "title": "Combo",
         "width": 1400,
         "height": 900,
         "resizable": true,
@@ -45,10 +45,10 @@
     "macOS": {
       "signingIdentity": "-"
     },
-    "copyright": "Copyright (c) 2026 FastAgentFactory Team",
+    "copyright": "Copyright (c) 2026 Combo Team",
     "category": "DeveloperTool",
-    "shortDescription": "AI Agent 工厂桌面应用",
-    "longDescription": "FastAgentFactory 是一个跨平台的 AI Agent 开发与运行环境，使用本地进程逻辑隔离"
+    "shortDescription": "动态智能体协作桌面应用",
+    "longDescription": "Combo 是一个以本地工作区为核心的动态智能体协作与运行环境"
   },
   "plugins": {
     "updater": {

@@ -18,8 +18,12 @@
         :aria-expanded="expanded"
       >
         <span class="task-stack-mark" :class="{ 'is-active': hasActiveTasks }" aria-hidden="true">
-          <span v-if="hasActiveTasks" class="task-stack-spinner" />
-          <span v-else>✓</span>
+          <SubAgentMascot
+            :status="primaryTask.status"
+            :task-id="primaryTask.task_id"
+            :awaiting-input="primaryRequiresAction"
+            :size="40"
+          />
         </span>
         <span class="task-stack-copy">
           <span class="task-stack-meta">
@@ -60,6 +64,7 @@ import { NPopover } from 'naive-ui'
 import { backgroundTasksApi, type BackgroundTask } from '@/api/backgroundTasks'
 import { useI18n } from '@/composables/useI18n'
 import BackgroundTaskCard from './BackgroundTaskCard.vue'
+import SubAgentMascot from '@/components/brand/SubAgentMascot.vue'
 
 const props = withDefaults(defineProps<{
   sessionId?: string | null
@@ -75,8 +80,8 @@ const { t } = useI18n()
 const popoverRef = ref<{ syncPosition: () => void } | null>(null)
 const tasks = ref<BackgroundTask[]>([])
 const expanded = ref(false)
-let pollTimer: ReturnType<typeof setTimeout> | null = null
-let elapsedTimer: ReturnType<typeof setInterval> | null = null
+let pollTimer: number | null = null
+let elapsedTimer: number | null = null
 let requestVersion = 0
 let refreshInFlight = false
 let refreshQueued = false
@@ -98,6 +103,10 @@ const requiresAction = computed(() => visibleTasks.value.some(task => (
   || task.pending_interaction?.kind === 'ask_user'
   || task.pending_interaction?.kind === 'resource_request'
 )))
+const primaryRequiresAction = computed(() => {
+  const kind = primaryTask.value?.pending_interaction?.kind
+  return kind === 'tool_approval' || kind === 'ask_user' || kind === 'resource_request'
+})
 const capsuleStatus = computed(() => {
   const task = primaryTask.value
   if (!task) return ''
@@ -195,19 +204,19 @@ function removeTask(taskId: string) {
 }
 
 function stopPolling() {
-  if (pollTimer) clearTimeout(pollTimer)
+  if (pollTimer !== null) window.clearTimeout(pollTimer)
   pollTimer = null
   refreshQueued = false
 }
 
 function stopElapsedClock() {
-  if (elapsedTimer) window.clearInterval(elapsedTimer)
+  if (elapsedTimer !== null) window.clearInterval(elapsedTimer)
   elapsedTimer = null
 }
 
 function scheduleRefresh(version: number, delay: number) {
-  if (pollTimer) clearTimeout(pollTimer)
-  pollTimer = setTimeout(() => {
+  if (pollTimer !== null) window.clearTimeout(pollTimer)
+  pollTimer = window.setTimeout(() => {
     pollTimer = null
     void refreshTasks(version)
   }, delay)
@@ -269,8 +278,7 @@ function formatDuration(startValue: string, endValue: string | null): string {
 .task-stack-summary { width: min(360px, calc(100vw - 48px)); min-height: 72px; display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 9px; color: var(--app-text); background: var(--app-surface); border: 1px solid var(--app-border); border-radius: 18px; box-shadow: 0 10px 28px color-mix(in srgb, var(--app-text) 11%, transparent); cursor: pointer; transition: transform .2s cubic-bezier(.16, 1, .3, 1), border-color .2s ease, box-shadow .2s ease; }
 .task-stack-summary:hover { transform: translateY(-1px); border-color: var(--app-border-hover); box-shadow: 0 14px 34px color-mix(in srgb, var(--app-text) 14%, transparent); }
 .task-stack-summary.requires-action { border-color: var(--app-text); }
-.task-stack-mark { width: 29px; height: 29px; flex: 0 0 auto; display: grid; place-items: center; border: 1px solid var(--app-border); border-radius: 50%; font-size: 11px; }
-.task-stack-spinner { width: 13px; height: 13px; border: 2px solid var(--app-divider); border-top-color: var(--app-text); border-radius: 50%; animation: task-stack-spin .9s linear infinite; }
+.task-stack-mark { width: 42px; height: 42px; flex: 0 0 auto; display: grid; overflow: hidden; place-items: center; border-radius: 12px; background: var(--app-surface-muted); }
 .task-stack-copy { min-width: 0; flex: 1; display: grid; gap: 6px; text-align: left; }
 .task-stack-meta { min-width: 0; display: flex; align-items: baseline; gap: 7px; color: var(--app-text-muted); }
 .task-stack-meta strong, .task-stack-meta small, .task-stack-summary-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -288,6 +296,5 @@ function formatDuration(startValue: string, endValue: string | null): string {
 .stack-popover-header button:hover { background: var(--app-surface-hover); }
 .task-stack-list { overflow-y: auto; }
 .task-stack-list :deep(.background-task-card + .background-task-card) { border-top: 1px solid var(--app-divider); }
-@keyframes task-stack-spin { to { transform: rotate(360deg); } }
 @keyframes task-popover-in { from { opacity: 0; transform: translateY(-7px) scale(.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
 </style>

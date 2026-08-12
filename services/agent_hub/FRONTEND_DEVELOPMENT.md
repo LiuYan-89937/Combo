@@ -1,8 +1,8 @@
-# FastAgentFactory 官网前端开发规格
+# Combo 官网前端开发规格
 
 ## 1. 产品边界
 
-官网用于展示 FastAgentFactory 动态 Agent Runtime，并提供：
+官网用于展示 Combo 动态 Agent Runtime，并提供：
 
 - 产品介绍与真实界面组件演示；
 - macOS、Windows 安装包下载与累计下载次数；

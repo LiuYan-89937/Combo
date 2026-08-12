@@ -9,7 +9,7 @@ import subprocess
 import sys
 import tempfile
 from threading import RLock
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from agent_factory.dynamic_runtime.capability_blob_store import CapabilityBlobStore
 from agent_factory.dynamic_runtime.capability_definitions import ToolDefinition
@@ -128,7 +128,12 @@ class ToolPackageRuntime:
             raise TypeError(f"trusted ToolPackage entrypoint is not callable: {target}")
         return function
 
-    def prepare(self, definition: ToolDefinition) -> tuple[Path, tuple[Path, ...]]:
+    def prepare(
+        self,
+        definition: ToolDefinition,
+        *,
+        on_progress: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> tuple[Path, tuple[Path, ...]]:
         implementation = definition.implementation
         if implementation.kind != "python_package" or implementation.package_digest is None:
             raise ValueError("ToolPackage preparation requires a python_package implementation")
@@ -137,6 +142,7 @@ class ToolPackageRuntime:
             resolution = self._dependency_pool.resolve_profile(
                 python_requirements=implementation.python_requirements,
                 timeout_seconds=max(1, int(definition.runtime_policy.timeout_seconds)),
+                on_progress=on_progress,
             )
             python_paths = tuple(
                 (self._dependency_pool.root / str(entry["path"])).resolve()

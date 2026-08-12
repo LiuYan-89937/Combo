@@ -1018,7 +1018,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "fast-agent-factory"
+name = "combo"
 version = "0.1.0"
 dependencies = [
  "rfd",

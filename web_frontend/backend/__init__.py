@@ -1,1 +1,1 @@
-"""FastAgentFactory web backend bridge package."""
+"""Combo web backend bridge package."""

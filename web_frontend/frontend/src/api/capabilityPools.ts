@@ -1,4 +1,4 @@
-import { requestFormJson, requestJson } from './http'
+import { requestFormJson, requestFormProgress, requestJson, type OperationProgress } from './http'
 import type { McpServerConfig } from './resourceTypes'
 
 export type CapabilityKind = 'skill' | 'tool' | 'mcp_server' | 'mcp_tool'
@@ -127,11 +127,34 @@ export const capabilityPoolsApi = {
     files.forEach(item => formData.append('files', item.file, item.file.name))
     return requestFormJson<CapabilityPoolSnapshot>('/api/runtime/capabilities/skills/import', formData)
   },
-  createToolPackage: (input: ToolPackageCreateInput, mainSource: string) => {
+  importToolFolder: (
+    rootName: string,
+    files: Array<{ file: File; relativePath: string }>,
+    onProgress: (progress: OperationProgress) => void,
+  ) => {
+    const formData = new FormData()
+    formData.append('root_name', rootName)
+    formData.append('relative_paths', JSON.stringify(files.map(item => item.relativePath)))
+    files.forEach(item => formData.append('files', item.file, item.file.name))
+    return requestFormProgress<CapabilityPoolSnapshot>(
+      '/api/runtime/capabilities/tools/import',
+      formData,
+      onProgress,
+    )
+  },
+  createToolPackage: (
+    input: ToolPackageCreateInput,
+    mainSource: string,
+    onProgress: (progress: OperationProgress) => void,
+  ) => {
     const formData = new FormData()
     formData.append('specification', JSON.stringify(input))
     formData.append('main_file', new File([mainSource], 'main.py', { type: 'text/x-python' }))
-    return requestFormJson<CapabilityPoolSnapshot>('/api/runtime/capabilities/tools', formData)
+    return requestFormProgress<CapabilityPoolSnapshot>(
+      '/api/runtime/capabilities/tools',
+      formData,
+      onProgress,
+    )
   },
   probeMcp: (capabilityId: string) => requestJson<McpProbeResult>('/api/runtime/capabilities/mcp/probe', {
     method: 'POST',

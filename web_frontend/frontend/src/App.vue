@@ -19,13 +19,29 @@
               preset="card"
               class="startup-dialog"
               style="width: min(420px, calc(100vw - 32px)); max-width: 420px"
-              :title="t('startup.title')"
+              :title="startupTitle"
             >
               <div class="startup-dialog-content" role="status" aria-live="polite">
-                <n-spin v-if="startupStore.initializing" size="large" />
-                <p>
-                  {{ startupStore.initializing ? t('startup.initializing') : t('startup.failed') }}
-                </p>
+                <ComboFrameAnimation
+                  v-if="startupStore.initializing"
+                  character="lead"
+                  action="idle"
+                  :size="132"
+                />
+                <ComboFrameAnimation
+                  v-else-if="startupStore.status === 'succeeded'"
+                  character="paired"
+                  action="complete"
+                  :size="132"
+                  :loop="false"
+                />
+                <ComboFrameAnimation
+                  v-else
+                  character="paired"
+                  action="error"
+                  :size="132"
+                />
+                <p>{{ startupMessage }}</p>
                 <n-text v-if="startupStore.error" type="error" class="startup-error">
                   {{ startupStore.error }}
                 </n-text>
@@ -60,6 +76,7 @@ import { createThemeOverrides } from '@/theme/naiveTheme'
 import AppContent from '@/layouts/AppContent.vue'
 import SelectionReferenceMenu from '@/components/chat/SelectionReferenceMenu.vue'
 import AppUpdateDialog from '@/components/common/AppUpdateDialog.vue'
+import ComboFrameAnimation from '@/components/brand/ComboFrameAnimation.vue'
 
 const route = useRoute()
 const { locale, t } = useI18n()
@@ -72,6 +89,14 @@ const naiveTheme = computed(() => (isDark.value ? darkTheme : null))
 const naiveLocale = computed(() => (locale.value === 'zh-CN' ? zhCN : enUS))
 const naiveDateLocale = computed(() => (locale.value === 'zh-CN' ? dateZhCN : dateEnUS))
 const themeOverrides = computed<GlobalThemeOverrides>(() => createThemeOverrides(palette.value))
+const startupTitle = computed(() => (
+  startupStore.status === 'failed' ? t('startup.failed') : t('startup.title')
+))
+const startupMessage = computed(() => {
+  if (startupStore.status === 'succeeded') return t('startup.succeeded')
+  if (startupStore.status === 'failed') return t('startup.failed')
+  return t('startup.initializing')
+})
 
 // 主题变化时同步注入 CSS 变量到 :root，并给 <html> 打上主题标记
 watchEffect(() => {
@@ -140,14 +165,15 @@ body {
   transition: background 0.3s var(--app-transition-fluid), color 0.3s var(--app-transition-fluid);
 }
 
-/* 背景微渐变增加呼吸感 */
 :root[data-theme='light'] body {
-  background: linear-gradient(180deg, #fbfbfd 0%, #f5f5f7 100%);
+  background: var(--app-surface);
 }
 
 :root[data-theme='dark'] body {
-  background: linear-gradient(180deg, #000000 0%, #1c1c1e 100%);
+  background: var(--app-surface);
 }
+
+::selection { color: var(--app-surface); background: var(--app-text); }
 
 code {
   font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
@@ -188,7 +214,7 @@ html {
 
 /* 可视化焦点环，键盘导航更友好 */
 :focus-visible {
-  outline: 2px solid var(--app-primary);
+  outline: 2px solid var(--app-text);
   outline-offset: 2px;
   border-radius: var(--app-radius-sm);
 }
@@ -356,8 +382,8 @@ html {
 
 /* 按钮按压反馈 */
 .n-button:active {
-  transform: scale(0.96);
-  transition-duration: 0.1s;
+  transform: translateY(1px) scale(0.985);
+  transition-duration: 0.08s;
 }
 
 /* 输入框 focus glow */
@@ -401,6 +427,14 @@ html {
 /* 全局 Naive UI 组件圆角统一 */
 .n-button {
   border-radius: var(--app-radius-md) !important;
+  font-weight: 620;
+  letter-spacing: -0.01em;
+  transition:
+    color var(--app-transition-fast),
+    background-color var(--app-transition-fast),
+    border-color var(--app-transition-fast),
+    box-shadow var(--app-transition-fast),
+    transform var(--app-transition-fast);
 }
 
 .n-input,
@@ -428,6 +462,18 @@ html {
   border-radius: var(--app-radius-lg) !important;
 }
 
+.n-popover {
+  border: 1px solid var(--app-border);
+  box-shadow: var(--app-shadow-lg) !important;
+}
+
+.n-base-select-menu,
+.n-dropdown-menu {
+  padding: 6px !important;
+  border: 1px solid var(--app-border);
+  box-shadow: var(--app-shadow-lg) !important;
+}
+
 .n-tag {
   border-radius: var(--app-radius-sm) !important;
 }
@@ -452,7 +498,7 @@ html {
   padding: 2px;
   border: 1px solid var(--app-border);
   border-radius: var(--app-radius-lg);
-  background: var(--app-surface-muted);
+  background: var(--app-surface-pressed);
 }
 
 .soft-segmented-control .n-radio-group__splitor {
@@ -484,9 +530,9 @@ html {
 }
 
 .soft-segmented-control .n-radio-button--checked {
-  background: var(--app-surface) !important;
-  color: var(--app-text-strong) !important;
-  box-shadow: var(--app-shadow-sm);
+  background: var(--app-text) !important;
+  color: var(--app-surface) !important;
+  box-shadow: none;
 }
 
 .soft-segmented-control .n-radio-button--focus .n-radio-button__state-border {

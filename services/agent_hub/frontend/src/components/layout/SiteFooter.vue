@@ -15,7 +15,7 @@ const year = computed(() => new Date().getFullYear())
   <footer class="footer">
     <div class="container footer__inner">
       <div class="footer__brand">
-        <span class="footer__name">FastAgentFactory</span>
+        <span class="footer__name">Combo</span>
         <p class="footer__tagline">{{ t('footer.tagline') }}</p>
       </div>
 
@@ -37,10 +37,10 @@ const year = computed(() => new Date().getFullYear())
     </div>
 
     <div class="container footer__base">
-      <span>© {{ year }} FastAgentFactory. {{ t('footer.rights') }}</span>
+      <span>© {{ year }} Combo. {{ t('footer.rights') }}</span>
       <a
         class="footer__feedback"
-        href="mailto:2775965605@qq.com?subject=FastAgentFactory%20Bug%20Feedback"
+        href="mailto:2775965605@qq.com?subject=Combo%20Bug%20Feedback"
       >
         {{ t('footer.bugFeedback') }}：2775965605@qq.com
       </a>

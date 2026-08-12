@@ -37,7 +37,7 @@ useSeo(() => ({
   jsonLd: {
     '@context': 'https://schema.org',
     '@type': 'SoftwareApplication',
-    name: 'FastAgentFactory',
+    name: 'Combo',
     applicationCategory: 'DeveloperApplication',
     operatingSystem: 'macOS, Windows',
     url: ORIGIN,
@@ -110,7 +110,7 @@ useSeo(() => ({
     <section class="section">
       <div class="container">
         <header class="block-head">
-          <span class="eyebrow">FastAgentFactory</span>
+          <span class="eyebrow">Combo</span>
           <h2 class="block-head__title">{{ t('home.pipelineTitle') }}</h2>
           <p class="block-head__sub">{{ t('home.pipelineSubtitle') }}</p>
         </header>

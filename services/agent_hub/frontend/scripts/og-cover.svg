@@ -25,7 +25,7 @@
     <rect x="26" y="26" width="12" height="12" rx="4" fill="#000000"/>
   </g>
 
-  <text x="180" y="196" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="34" font-weight="600" fill="#a3a3a3" letter-spacing="1">FastAgentFactory</text>
+  <text x="180" y="196" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="34" font-weight="600" fill="#a3a3a3" letter-spacing="1">Combo</text>
 
   <text x="92" y="360" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="92" font-weight="700" fill="#ffffff" letter-spacing="-3">制造真正能</text>
   <text x="92" y="470" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="92" font-weight="700" fill="#ffffff" letter-spacing="-3">工作的 Agent</text>

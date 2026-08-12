@@ -2,7 +2,9 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { initializeBackendUrl, restartBackend, waitForBackendReady } from '@/api/backendUrl'
 
-type StartupStatus = 'idle' | 'initializing' | 'ready' | 'failed'
+type StartupStatus = 'idle' | 'initializing' | 'succeeded' | 'ready' | 'failed'
+
+const SUCCESS_TRANSITION_DURATION = 1100
 
 export const useStartupStore = defineStore('startup', () => {
   const status = ref<StartupStatus>('idle')
@@ -18,7 +20,9 @@ export const useStartupStore = defineStore('startup', () => {
     error.value = ''
     initialization = initializeBackendUrl()
       .then(() => waitForBackendReady())
-      .then(() => {
+      .then(async () => {
+        status.value = 'succeeded'
+        await new Promise(resolve => window.setTimeout(resolve, SUCCESS_TRANSITION_DURATION))
         status.value = 'ready'
       })
       .catch((reason: unknown) => {

@@ -1,8 +1,8 @@
 [package]
-name = "fast-agent-factory"
+name = "combo"
 version = "0.1.0"
-description = "FastAgentFactory - 跨平台 AI Agent 工厂桌面应用"
-authors = ["FastAgentFactory Team"]
+description = "Combo - 动态智能体协作桌面应用"
+authors = ["Combo Team"]
 license = "MIT"
 repository = "https://github.com/LiuYan-89937/FastAgentFactory"
 edition = "2021"

@@ -98,7 +98,9 @@
         :description="t('sessions.empty')"
         size="small"
         class="sessions-empty"
-      />
+      >
+        <template #icon><ComboPngIcon name="empty-session" :size="56" /></template>
+      </n-empty>
     </n-scrollbar>
 
   </div>
@@ -108,6 +110,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { NButton, NEmpty, NIcon, NInput, NList, NListItem, NScrollbar, NTag, NText, useDialog } from 'naive-ui'
 import { Add, ChatbubbleEllipses, Search, TrashOutline } from '@/components/icons'
+import ComboPngIcon from '@/components/icons/ComboPngIcon.vue'
 import { useI18n } from '@/composables/useI18n'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useAgentStore } from '@/stores/agent'

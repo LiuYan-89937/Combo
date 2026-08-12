@@ -14,7 +14,9 @@
     </div>
     <p v-if="error" class="memory-error">{{ error }}</p>
     <n-spin :show="loading" size="small">
-      <n-empty v-if="!items.length && !loading" :description="t('status.memoryEmpty')" size="small" />
+      <n-empty v-if="!items.length && !loading" :description="t('status.memoryEmpty')" size="small">
+        <template #icon><ComboPngIcon name="empty-memory" :size="56" /></template>
+      </n-empty>
       <div v-else class="memory-list">
         <article v-for="item in items" :key="item.memory_id" class="memory-item">
           <div class="memory-item-heading">
@@ -44,6 +46,7 @@
 import { computed, ref, watch } from 'vue'
 import { NButton, NEmpty, NIcon, NInput, NPopconfirm, NSpin } from 'naive-ui'
 import { RefreshOutline, SearchOutline, TrashOutline } from '@/components/icons'
+import ComboPngIcon from '@/components/icons/ComboPngIcon.vue'
 import { memoryApi, type MemoryContextItemView } from '@/api/memory'
 import { useI18n } from '@/composables/useI18n'
 import { useResourceContext } from '@/composables/useResourceContext'

@@ -1,0 +1,28 @@
+{
+  "ok": true,
+  "chroma_key": {
+    "hex": "#00FF00",
+    "rgb": [
+      0,
+      255,
+      0
+    ],
+    "threshold": 96.0
+  },
+  "rows": [
+    {
+      "state": "running-right",
+      "frames": [
+        "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-lead/qa/rows/running-right/frames/running-right/00.png",
+        "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-lead/qa/rows/running-right/frames/running-right/01.png",
+        "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-lead/qa/rows/running-right/frames/running-right/02.png",
+        "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-lead/qa/rows/running-right/frames/running-right/03.png",
+        "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-lead/qa/rows/running-right/frames/running-right/04.png",
+        "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-lead/qa/rows/running-right/frames/running-right/05.png",
+        "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-lead/qa/rows/running-right/frames/running-right/06.png",
+        "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-lead/qa/rows/running-right/frames/running-right/07.png"
+      ],
+      "method": "components"
+    }
+  ]
+}

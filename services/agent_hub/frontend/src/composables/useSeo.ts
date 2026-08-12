@@ -8,7 +8,7 @@
  */
 import { onBeforeUnmount, watchEffect } from 'vue'
 
-const SITE_NAME = 'FastAgentFactory'
+const SITE_NAME = 'Combo'
 const ORIGIN = 'https://liuyanai.top'
 
 export interface SeoInput {

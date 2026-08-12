@@ -4,8 +4,9 @@ import asyncio
 from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
+import shutil
 import tempfile
-from typing import Any, Literal, Protocol
+from typing import Any, Callable, Literal, Protocol
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -53,10 +54,21 @@ class CapabilityPoolManager(Protocol):
     def import_skill_folder(self, source_path: str) -> dict[str, object]:
         ...
 
-    def import_tool_folder(self, source_path: str) -> dict[str, object]:
+    def import_tool_folder(
+        self,
+        source_path: str,
+        *,
+        on_progress: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> dict[str, object]:
         ...
 
-    def create_tool_package(self, payload: dict[str, Any], main_source: str) -> dict[str, object]:
+    def create_tool_package(
+        self,
+        payload: dict[str, Any],
+        main_source: str,
+        *,
+        on_progress: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> dict[str, object]:
         ...
 
     def add_mcp_server(
@@ -552,32 +564,41 @@ def create_dynamic_runtime_router(
         root_name: str = Form(...),
         relative_paths: str = Form(...),
         files: list[UploadFile] = File(...),
-    ) -> dict[str, object]:
+    ) -> StreamingResponse:
         principal_resolver.resolve(request)
+        temporary = Path(tempfile.mkdtemp(prefix="agentfactory-tool-upload-"))
         try:
             paths = _folder_upload_paths(relative_paths, expected_count=len(files), capability="ToolPackage")
             normalized_root = _portable_folder_root_name(root_name, capability="ToolPackage")
-            with tempfile.TemporaryDirectory(prefix="agentfactory-tool-upload-") as temporary:
-                source = Path(temporary) / normalized_root
-                source.mkdir()
-                total_bytes = 0
-                for upload, relative_path in zip(files, paths, strict=True):
-                    destination = source / relative_path
-                    destination.parent.mkdir(parents=True, exist_ok=True)
-                    total_bytes += await _write_bounded_upload(
-                        upload,
-                        destination,
-                        maximum_file_bytes=config.maximum_tool_file_bytes,
-                        capability="ToolPackage",
-                    )
-                    if total_bytes > config.maximum_tool_bytes:
-                        raise ValueError("ToolPackage exceeds configured byte limit")
-                return await asyncio.to_thread(capability_pools.import_tool_folder, str(source))
+            source = temporary / normalized_root
+            source.mkdir()
+            total_bytes = 0
+            for upload, relative_path in zip(files, paths, strict=True):
+                destination = source / relative_path
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                total_bytes += await _write_bounded_upload(
+                    upload,
+                    destination,
+                    maximum_file_bytes=config.maximum_tool_file_bytes,
+                    capability="ToolPackage",
+                )
+                if total_bytes > config.maximum_tool_bytes:
+                    raise ValueError("ToolPackage exceeds configured byte limit")
+
+            def run_import(report: Callable[[str, dict[str, Any]], None]) -> dict[str, object]:
+                try:
+                    return capability_pools.import_tool_folder(str(source), on_progress=report)
+                finally:
+                    shutil.rmtree(temporary, ignore_errors=True)
+
+            return _tool_preparation_response(run_import)
         except RuntimeError as exc:
+            shutil.rmtree(temporary, ignore_errors=True)
             if str(exc) == "tool_already_exists":
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         except ValueError as exc:
+            shutil.rmtree(temporary, ignore_errors=True)
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @router.post("/capabilities/tools", status_code=201)
@@ -585,7 +606,7 @@ def create_dynamic_runtime_router(
         request: Request,
         specification: str = Form(...),
         main_file: UploadFile = File(...),
-    ) -> dict[str, object]:
+    ) -> StreamingResponse:
         principal_resolver.resolve(request)
         try:
             payload = ToolPackageCreateRequest.model_validate_json(specification)
@@ -601,11 +622,16 @@ def create_dynamic_runtime_router(
                     main_source = destination.read_text(encoding="utf-8")
                 except UnicodeDecodeError as exc:
                     raise ValueError("main.py must be UTF-8 text") from exc
-            return await asyncio.to_thread(
-                capability_pools.create_tool_package,
-                payload.model_dump(mode="json"),
-                main_source,
-            )
+            normalized_payload = payload.model_dump(mode="json")
+
+            def run_create(report: Callable[[str, dict[str, Any]], None]) -> dict[str, object]:
+                return capability_pools.create_tool_package(
+                    normalized_payload,
+                    main_source,
+                    on_progress=report,
+                )
+
+            return _tool_preparation_response(run_create)
         except RuntimeError as exc:
             if str(exc) == "tool_already_exists":
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1032,6 +1058,60 @@ def create_dynamic_runtime_router(
         )
 
     return router
+
+
+ToolProgressCallback = Callable[[str, dict[str, Any]], None]
+ToolPreparationOperation = Callable[[ToolProgressCallback], dict[str, object]]
+
+
+def _tool_preparation_response(operation: ToolPreparationOperation) -> StreamingResponse:
+    async def stream():
+        loop = asyncio.get_running_loop()
+        progress_queue: asyncio.Queue[dict[str, object]] = asyncio.Queue(maxsize=256)
+
+        def report(stage: str, detail: dict[str, Any]) -> None:
+            event = {"type": "progress", "stage": stage, "detail": detail}
+
+            def enqueue() -> None:
+                if progress_queue.full():
+                    try:
+                        progress_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+                progress_queue.put_nowait(event)
+
+            loop.call_soon_threadsafe(enqueue)
+
+        worker = asyncio.create_task(asyncio.to_thread(operation, report))
+        while not worker.done() or not progress_queue.empty():
+            try:
+                event = await asyncio.wait_for(progress_queue.get(), timeout=0.15)
+            except TimeoutError:
+                continue
+            yield _ndjson_line(event)
+
+        try:
+            snapshot = worker.result()
+        except Exception as exc:
+            yield _ndjson_line({
+                "type": "failed",
+                "error": str(exc) or exc.__class__.__name__,
+            })
+            return
+        yield _ndjson_line({"type": "completed", "result": snapshot})
+
+    return StreamingResponse(
+        stream(),
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _ndjson_line(payload: dict[str, object]) -> bytes:
+    return (json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
 
 
 def _folder_upload_paths(raw: str, *, expected_count: int, capability: str) -> tuple[Path, ...]:

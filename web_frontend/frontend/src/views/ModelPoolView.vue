@@ -1004,10 +1004,12 @@ function formatCost(value: number | null | undefined): string {
 <style scoped>
 .model-pool-view {
   height: 100%;
-  padding: 18px 20px;
+  padding: clamp(20px, 3vw, 42px);
   overflow: auto;
   background: var(--app-surface);
 }
+
+.model-pool-view > * { width: min(1280px, 100%); margin-inline: auto; }
 
 .context-bar {
   display: flex;
@@ -1042,8 +1044,17 @@ function formatCost(value: number | null | undefined): string {
 }
 
 .model-list {
-  background: var(--app-panel);
+  overflow: hidden;
+  border-radius: var(--app-radius-lg);
+  background: var(--app-surface);
 }
+
+.model-list :deep(.n-list-item) {
+  padding: 18px 20px;
+  transition: background-color var(--app-transition-fast);
+}
+
+.model-list :deep(.n-list-item:hover) { background: var(--app-surface-muted); }
 
 .role-binding-panel {
   display: flex;
@@ -1051,13 +1062,13 @@ function formatCost(value: number | null | undefined): string {
   gap: 12px;
   padding: 14px;
   border: 1px solid var(--app-border);
-  border-radius: 8px;
-  background: var(--app-panel);
+  border-radius: var(--app-radius-lg);
+  background: var(--app-surface);
 }
 
 .role-binding-panel:focus {
   border-color: var(--app-border-focus);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--app-text) 9%, transparent);
+  box-shadow: 0 0 0 3px var(--app-focus-shadow);
   outline: none;
 }
 
@@ -1083,8 +1094,8 @@ function formatCost(value: number | null | undefined): string {
   gap: 6px;
   padding: 12px 14px;
   border: 1px solid var(--app-border);
-  border-radius: 8px;
-  background: var(--app-panel);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface-muted);
 }
 
 .usage-metric span {
@@ -1103,8 +1114,8 @@ function formatCost(value: number | null | undefined): string {
   min-height: 320px;
   padding: 12px;
   border: 1px solid var(--app-border);
-  border-radius: 8px;
-  background: var(--app-panel);
+  border-radius: var(--app-radius-lg);
+  background: var(--app-surface);
 }
 
 .usage-chart {

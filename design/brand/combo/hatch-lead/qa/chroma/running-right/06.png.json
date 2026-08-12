@@ -1,0 +1,19 @@
+{
+  "ok": true,
+  "input": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-lead/qa/rows/running-right/frames/running-right/06.png",
+  "output": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-lead/qa/clean-frames/running-right/06.png",
+  "chroma_key": "#00FF00",
+  "algorithm": "edge-local-chroma-spill-suppression",
+  "strength": 1,
+  "edge_radius": 5,
+  "spill_tolerance": 0.15,
+  "minimum_saturation": 0.1,
+  "changed_pixels": 4266,
+  "decontaminated_pixels": 2415,
+  "spill_suppressed_pixels": 4266,
+  "rejected_pixels": 0,
+  "changed_by_cell": {
+    "r0c0": 4266
+  },
+  "alpha_preserved": true
+}

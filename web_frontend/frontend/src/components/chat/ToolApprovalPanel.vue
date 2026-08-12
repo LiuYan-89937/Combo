@@ -2,9 +2,7 @@
   <section class="tool-approval-panel">
     <div class="approval-header">
       <div class="approval-title">
-        <n-icon size="18">
-          <ShieldCheckmark />
-        </n-icon>
+        <ComboMascot state="waiting" :size="52" />
         <span>{{ t('tool.pendingApproval') }}</span>
       </div>
       <n-tag size="small" :bordered="false">
@@ -109,8 +107,8 @@ import {
   CloseCircle,
   CreateOutline,
   Shield,
-  ShieldCheckmark,
 } from '@/components/icons'
+import ComboMascot from '@/components/brand/ComboMascot.vue'
 import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
 import { useRuntimeStore } from '@/stores/runtime'

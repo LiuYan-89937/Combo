@@ -17,6 +17,7 @@
         `side-${position(item.id).side}`,
         { 'is-dragging': draggingId === item.id },
       ]"
+      :data-onboarding="item.id === 'sessions' ? 'activity-dock' : undefined"
       :style="itemStyle(item.id)"
       @pointerdown="startDrag(item.id, $event)"
       @click.capture="captureClick"

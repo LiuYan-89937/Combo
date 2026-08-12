@@ -42,13 +42,13 @@ function signIn() {
 <template>
   <header class="header">
     <div class="container header__inner">
-      <RouterLink to="/" class="brand" aria-label="FastAgentFactory">
+      <RouterLink to="/" class="brand" aria-label="Combo">
         <span class="brand__mark" aria-hidden="true">
           <img src="/brand-mark.png" alt="" width="34" height="34" />
         </span>
         <span class="brand__wordmark" aria-hidden="true">
-          <span class="brand__name">Fast<span>Agent</span></span>
-          <span class="brand__factory">FACTORY</span>
+          <span class="brand__name">Combo</span>
+          <span class="brand__factory">AGENT RUNTIME</span>
         </span>
       </RouterLink>
 

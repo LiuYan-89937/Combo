@@ -44,7 +44,7 @@ onMounted(load)
   <div class="changelog">
     <section class="changelog__hero">
       <div class="container">
-        <span class="eyebrow">FastAgentFactory</span>
+        <span class="eyebrow">Combo</span>
         <h1>{{ t('changelog.title') }}</h1>
         <p>{{ t('changelog.subtitle') }}</p>
       </div>

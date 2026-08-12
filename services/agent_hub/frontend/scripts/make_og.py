@@ -45,7 +45,7 @@ for y in range(40, H, 34):
 d.rounded_rectangle((96, 150, 160, 214), radius=18, fill="#ffffff")
 d.rounded_rectangle((122, 176, 134, 188), radius=4, fill="#050505")
 
-d.text((184, 168), "FastAgentFactory", font=font(SANS, 34), fill="#9a9a9a")
+d.text((184, 168), "Combo", font=font(SANS, 34), fill="#9a9a9a")
 
 d.text((92, 286), "制造真正能", font=font(CJK, 92, index=CJK_INDEX), fill="#ffffff")
 d.text((92, 398), "工作的 Agent", font=font(CJK, 92, index=CJK_INDEX), fill="#ffffff")

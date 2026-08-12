@@ -1,4 +1,4 @@
-# FastAgentFactory 发布服务
+# Combo 发布服务
 
 该服务独立于桌面运行时，只负责官网、GitHub OAuth、桌面应用版本、更新日志、安装包下载计数和 Tauri Updater 清单。它不保存、校验、发布或分发运行时能力。
 

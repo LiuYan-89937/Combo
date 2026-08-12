@@ -43,7 +43,17 @@ export function createThemeOverrides(p: AppPalette): GlobalThemeOverrides {
       errorColorHover: p.errorHover,
       errorColorPressed: p.errorPressed,
     },
+    Tooltip: {
+      color: p.text,
+      textColor: p.surface,
+    },
     Button: {
+      heightMedium: '36px',
+      heightSmall: '30px',
+      heightTiny: '24px',
+      borderRadiusMedium: '12px',
+      borderRadiusSmall: '10px',
+      fontWeight: '620',
       color: p.controlSurface,
       colorHover: p.controlSurfaceHover,
       colorPressed: p.controlSurfacePressed,
@@ -112,6 +122,9 @@ export function createThemeOverrides(p: AppPalette): GlobalThemeOverrides {
       borderDisabledError: `1px solid ${p.controlDisabledBorder}`,
     },
     Input: {
+      heightMedium: '38px',
+      heightSmall: '34px',
+      borderRadius: '12px',
       color: p.surface,
       colorDisabled: p.controlDisabledSurface,
       colorFocus: p.surface,
@@ -124,6 +137,34 @@ export function createThemeOverrides(p: AppPalette): GlobalThemeOverrides {
       borderDisabled: `1px solid ${p.controlDisabledBorder}`,
       borderFocus: `1px solid ${p.borderFocus}`,
       boxShadowFocus: `0 0 0 2px ${p.focusShadow}`,
+    },
+    Select: {
+      peers: {
+        InternalSelection: {
+          heightMedium: '38px',
+          heightSmall: '34px',
+          borderRadius: '12px',
+          borderFocus: `1px solid ${p.borderFocus}`,
+          borderHover: `1px solid ${p.borderHover}`,
+          boxShadowFocus: `0 0 0 3px ${p.focusShadow}`,
+        },
+      },
+    },
+    Radio: {
+      dotColorActive: p.primary,
+      boxShadowActive: `inset 0 0 0 1px ${p.primary}`,
+      boxShadowFocus: `inset 0 0 0 1px ${p.primary}, 0 0 0 3px ${p.focusShadow}`,
+    },
+    Switch: {
+      railColorActive: p.primary,
+      loadingColor: p.primary,
+    },
+    Checkbox: {
+      colorChecked: p.primary,
+      colorTableHeader: p.surface,
+      borderChecked: `1px solid ${p.primary}`,
+      borderFocus: `1px solid ${p.primary}`,
+      boxShadowFocus: `0 0 0 3px ${p.focusShadow}`,
     },
     Menu: {
       itemColorActive: p.surfacePressed,
@@ -147,12 +188,37 @@ export function createThemeOverrides(p: AppPalette): GlobalThemeOverrides {
       color: p.surface,
       colorEmbedded: p.surfaceMuted,
       borderColor: p.border,
+      borderRadius: '20px',
     },
     Drawer: {
       color: p.surface,
     },
     Modal: {
       color: p.surfaceElevated,
+    },
+    Popover: {
+      color: p.surfaceElevated,
+      borderRadius: '16px',
+      boxShadow: p.shadowLg,
+    },
+    Dropdown: {
+      color: p.surfaceElevated,
+      borderRadius: '14px',
+      optionColorHover: p.surfaceMuted,
+      optionColorActive: p.surfacePressed,
+      optionTextColorActive: p.text,
+    },
+    Tag: {
+      borderRadius: '8px',
+    },
+    Progress: {
+      fillColor: p.primary,
+      railColor: p.surfacePressed,
+    },
+    LoadingBar: {
+      colorLoading: p.primary,
+      colorError: p.error,
+      height: '3px',
     },
   }
 }

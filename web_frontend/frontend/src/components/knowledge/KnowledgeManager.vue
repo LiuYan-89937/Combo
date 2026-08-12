@@ -120,11 +120,6 @@
         :description="t('knowledge.empty')"
         class="manager-empty"
       >
-        <template #icon>
-          <n-icon size="56" class="manager-empty-icon">
-            <Library />
-          </n-icon>
-        </template>
         <template #extra>
           <n-button type="primary" @click="showCreateModal = true">{{ t('knowledge.addFirst') }}</n-button>
         </template>
@@ -203,7 +198,7 @@ import {
   NTag,
   NText,
 } from 'naive-ui'
-import { Add, ArrowForward, Document, Library, Settings, EllipsisHorizontal } from '@/components/icons'
+import { Add, ArrowForward, Document, Settings, EllipsisHorizontal } from '@/components/icons'
 import { useKnowledgeManager } from '@/composables/knowledge/useKnowledgeManager'
 import KnowledgeSourceFormModal from './KnowledgeSourceFormModal.vue'
 import FilePreviewContent from '@/components/workspace/FilePreviewContent.vue'
@@ -615,12 +610,7 @@ function ingestionProgressStatus(source: KnowledgeSourceView): 'default' | 'succ
   animation: app-fade-in-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-.manager-empty-icon {
-  display: block;
-  color: var(--app-text-muted);
-  opacity: 0.55;
-  line-height: 1;
-}
+.manager-empty :deep(.n-empty__icon) { width: auto; height: auto; opacity: .9; }
 
 @media (max-width: 640px) {
   .knowledge-manager {

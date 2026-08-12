@@ -24,6 +24,11 @@ export interface BlobResponse {
   filename: string | null
 }
 
+export interface OperationProgress {
+  stage: string
+  detail: Record<string, unknown>
+}
+
 export interface ApiValidationIssue {
   path: string
   message: string
@@ -136,6 +141,62 @@ export async function requestFormJson<T>(url: string, formData: FormData): Promi
   })
   if (!response.ok) throw await apiErrorFromResponse(response)
   return response.json() as Promise<T>
+}
+
+export async function requestFormProgress<T>(
+  url: string,
+  formData: FormData,
+  onProgress: (progress: OperationProgress) => void,
+): Promise<T> {
+  const response = await fetch(await backendUrl(url), {
+    method: 'POST',
+    headers: {
+      'X-AgentFactory-Principal': runtimePrincipalId(),
+      'X-AgentFactory-Client': runtimeClientInstanceId(),
+      'X-AgentFactory-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
+    },
+    body: formData,
+  })
+  if (!response.ok) throw await apiErrorFromResponse(response)
+  if (!response.body) throw new Error('Progress response body is unavailable')
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let completed = false
+  let result: T | undefined
+
+  const consumeLine = (line: string) => {
+    if (!line.trim()) return
+    const event = JSON.parse(line) as {
+      type?: string
+      stage?: string
+      detail?: Record<string, unknown>
+      result?: T
+      error?: string
+    }
+    if (event.type === 'progress' && event.stage) {
+      onProgress({ stage: event.stage, detail: event.detail || {} })
+      return
+    }
+    if (event.type === 'failed') throw new Error(event.error || 'Operation failed')
+    if (event.type === 'completed') {
+      completed = true
+      result = event.result
+    }
+  }
+
+  while (true) {
+    const { done, value } = await reader.read()
+    buffer += decoder.decode(value, { stream: !done })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+    lines.forEach(consumeLine)
+    if (done) break
+  }
+  consumeLine(buffer)
+  if (!completed) throw new Error('Progress response ended before completion')
+  return result as T
 }
 
 export function withQuery(path: string, params: Record<string, string | number | undefined | null>): string {

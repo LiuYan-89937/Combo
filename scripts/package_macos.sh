@@ -64,7 +64,7 @@ case "${HOST_ARCH}" in
         RELEASE_ARCH="aarch64"
         ;;
     *)
-        fail "FastAgentFactory macOS packages support Apple Silicon only; current host: ${HOST_ARCH}"
+        fail "Combo macOS packages support Apple Silicon only; current host: ${HOST_ARCH}"
         ;;
 esac
 

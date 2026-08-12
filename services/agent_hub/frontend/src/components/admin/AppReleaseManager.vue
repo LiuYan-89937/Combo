@@ -462,7 +462,7 @@ onBeforeUnmount(() => {
           <input
             v-model="form.title"
             :disabled="!editable"
-            placeholder="FastAgentFactory 0.2.0"
+            placeholder="Combo 0.2.0"
             :class="{ 'field--error': submitted && errors.title }"
           />
           <small v-if="submitted && errors.title">{{ errors.title }}</small>

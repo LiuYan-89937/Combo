@@ -15,12 +15,11 @@
               role="status"
               :aria-label="t('factory.emptyChat')"
             >
-              <svg class="chat-empty-icon" viewBox="0 0 136 112" role="img" aria-hidden="true">
-                <path class="chat-empty-bubble chat-empty-bubble-back" d="M22 27.5C22 16.7 30.7 8 41.5 8h52C104.3 8 113 16.7 113 27.5v24C113 62.3 104.3 71 93.5 71H65l-15.8 17.5c-2.5 2.8-7.2 1-7.2-2.7V71h-.5C30.7 71 22 62.3 22 51.5v-24Z" />
-                <path class="chat-empty-bubble chat-empty-bubble-front" d="M8 45.5C8 34.7 16.7 26 27.5 26h52C90.3 26 99 34.7 99 45.5v24C99 80.3 90.3 89 79.5 89H51L35.2 106.5c-2.5 2.8-7.2 1-7.2-2.7V89h-.5C16.7 89 8 80.3 8 69.5v-24Z" />
-                <path class="chat-empty-line" d="M29 51h38M29 63h25" />
-                <circle class="chat-empty-dot" cx="77" cy="63" r="2.2" />
-              </svg>
+              <ComboMascot state="idle" :size="148" :aria-label="t('factory.emptyChat')" />
+              <div class="chat-empty-copy">
+                <strong>{{ t('factory.emptyChat') }}</strong>
+                <span>{{ t('factory.emptyChatHint') }}</span>
+              </div>
             </div>
 
             <template v-for="item in timelineItems" :key="`${item.kind}-${item.id}`">
@@ -120,6 +119,7 @@ import SchedulerRunStatusCard from '@/components/scheduler/SchedulerRunStatusCar
 import ConversationFloatingDock from '@/components/chat/ConversationFloatingDock.vue'
 import NewAgentSessionDialog from '@/components/agent/NewAgentSessionDialog.vue'
 import ContextProgressControl from '@/components/chat/ContextProgressControl.vue'
+import ComboMascot from '@/components/brand/ComboMascot.vue'
 import type { RuntimeAttachmentInput } from '@/types/protocol'
 import type { TranscriptItem } from '@/types/protocol'
 import { useContextReferenceStore } from '@/stores/contextReferences'
@@ -516,49 +516,14 @@ function routeQueryText(value: unknown): string | null {
 .chat-empty {
   display: grid;
   place-items: center;
-  margin-top: 15vh;
+  gap: 12px;
+  margin-top: 12vh;
   animation: app-fade-in-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-.chat-empty-icon {
-  width: 112px;
-  height: auto;
-  overflow: visible;
-  color: var(--app-text);
-  opacity: 0.72;
-  animation: empty-conversation-breathe 3.2s ease-in-out infinite;
-}
-
-.chat-empty-bubble {
-  fill: var(--app-surface);
-  stroke: currentColor;
-  stroke-linejoin: round;
-  stroke-width: 2.5;
-}
-
-.chat-empty-bubble-back {
-  opacity: 0.32;
-}
-
-.chat-empty-bubble-front {
-  opacity: 0.92;
-}
-
-.chat-empty-line {
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-width: 3;
-}
-
-.chat-empty-dot {
-  fill: currentColor;
-}
-
-@keyframes empty-conversation-breathe {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-3px); }
-}
+.chat-empty-copy { display: grid; gap: 5px; text-align: center; }
+.chat-empty-copy strong { font-size: 15px; letter-spacing: -.02em; }
+.chat-empty-copy span { color: var(--app-text-muted); font-size: 12px; }
 
 .approval-section {
   margin-top: var(--app-space-md);
@@ -568,6 +533,7 @@ function routeQueryText(value: unknown): string | null {
   margin-top: var(--app-space-lg);
   padding-top: var(--app-space-sm);
 }
+
 
 /* 窄屏适配 */
 @media (max-width: 768px) {

@@ -22,7 +22,7 @@ const source = computed(() => (
   <section class="product-showcase" aria-labelledby="product-showcase-title">
     <div class="container">
       <header class="product-showcase__head">
-        <span class="eyebrow">Inside FastAgentFactory</span>
+        <span class="eyebrow">Inside Combo</span>
         <h2 id="product-showcase-title">{{ t('home.showcaseTitle') }}</h2>
       </header>
 
@@ -32,7 +32,7 @@ const source = computed(() => (
             <span />
             <span />
             <span />
-            <strong>FastAgentFactory</strong>
+            <strong>Combo</strong>
           </div>
           <div class="product-showcase__viewport">
             <div v-if="!loaded" class="product-showcase__loading" aria-hidden="true">
@@ -42,7 +42,7 @@ const source = computed(() => (
             </div>
             <iframe
               :src="source"
-              title="FastAgentFactory 应用实时演示"
+              title="Combo 应用实时演示"
               tabindex="-1"
               inert
               loading="eager"

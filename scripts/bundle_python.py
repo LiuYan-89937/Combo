@@ -221,7 +221,7 @@ def main():
     resources_dir.mkdir(parents=True, exist_ok=True)
 
     print("=" * 60)
-    print("FastAgentFactory Python 打包工具")
+    print("Combo Python 打包工具")
     print("=" * 60)
 
     # 1. 下载 python-build-standalone

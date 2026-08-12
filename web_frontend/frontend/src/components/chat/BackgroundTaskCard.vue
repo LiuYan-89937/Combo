@@ -2,7 +2,12 @@
   <article class="background-task-card" :class="`task-state-${view.status}`">
     <header class="task-header">
       <span class="task-mark" aria-hidden="true">
-        <n-icon size="17"><component :is="kindIcon" /></n-icon>
+        <SubAgentMascot
+          :status="view.status"
+          :task-id="view.id"
+          :awaiting-input="Boolean(interaction)"
+          :size="42"
+        />
       </span>
       <span class="task-heading">
         <strong>{{ view.title }}</strong>
@@ -126,8 +131,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { NButton, NIcon, NInput } from 'naive-ui'
-import { Bot } from '@vicons/carbon'
+import { NButton, NInput } from 'naive-ui'
 import { useI18n } from '@/composables/useI18n'
 import {
   backgroundTasksApi,
@@ -135,6 +139,7 @@ import {
   type BackgroundTaskEvent,
   type InteractionAction,
 } from '@/api/backgroundTasks'
+import SubAgentMascot from '@/components/brand/SubAgentMascot.vue'
 
 const props = defineProps<{ task: BackgroundTask; fallbackTitle?: string }>()
 const emit = defineEmits<{ updated: [task: BackgroundTask]; deleted: [taskId: string] }>()
@@ -150,7 +155,6 @@ const events = ref<BackgroundTaskEvent[]>([])
 let pollTimer: ReturnType<typeof setTimeout> | null = null
 
 const interaction = computed(() => task.value.pending_interaction || null)
-const kindIcon = computed(() => Bot)
 const view = computed(() => buildView(task.value, events.value, props.fallbackTitle || t('backgroundTask.title')))
 const terminal = computed(() => ['succeeded', 'failed', 'cancelled'].includes(view.value.status))
 const statusLabel = computed(() => t(`backgroundTask.status.${view.value.status}` as any))
@@ -283,6 +287,7 @@ function buildView(current: BackgroundTask, timeline: BackgroundTaskEvent[], fal
   }
   const reports = Array.from(reportsByPhase.values())
   return {
+    id: current.task_id,
     title: current.agent_name || fallbackTitle,
     objective: current.task_text,
     status: current.status,
@@ -329,7 +334,7 @@ function formatTime(value: unknown): string {
 <style scoped>
 .background-task-card { display: grid; gap: 16px; padding: 18px; color: var(--app-text); background: var(--app-surface); }
 .task-header { display: flex; align-items: center; gap: 11px; }
-.task-mark { width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid var(--app-border); border-radius: 11px; }
+.task-mark { width: 46px; height: 46px; display: grid; overflow: hidden; place-items: center; border: 1px solid var(--app-border); border-radius: 13px; background: var(--app-surface-muted); }
 .task-heading { min-width: 0; flex: 1; display: grid; gap: 2px; }
 .task-status-label { flex: 0 0 auto; padding: 4px 8px; border: 1px solid var(--app-border); border-radius: 999px; color: var(--app-text-secondary); font-size: 10px; }
 .task-delete { flex: 0 0 auto; }
@@ -359,7 +364,7 @@ function formatTime(value: unknown): string {
 .interaction-actions { display: flex; justify-content: flex-end; }
 .artifact-list { display: flex; flex-wrap: wrap; gap: 6px; }
 .artifact-list span { padding: 5px 8px; border: 1px solid var(--app-border); border-radius: 8px; font-size: 11px; }
-.task-delivery p { margin: 0; padding: 10px; border-radius: 10px; background: var(--app-surface-subtle); font-size: 12px; line-height: 1.6; white-space: pre-wrap; }
+.task-delivery p { margin: 0; padding: 10px; border-radius: 10px; background: var(--app-surface-muted); font-size: 12px; line-height: 1.6; white-space: pre-wrap; }
 .task-notice { display: grid; gap: 4px; margin: 0; padding: 10px; border-radius: 10px; font-size: 12px; }
 .task-notice-error { color: var(--app-error); background: color-mix(in srgb, var(--app-error) 8%, transparent); }
 </style>

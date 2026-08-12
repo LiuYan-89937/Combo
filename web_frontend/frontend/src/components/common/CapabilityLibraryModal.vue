@@ -7,7 +7,9 @@
     :title="t('capabilityLibrary.title')"
     @update:show="emit('update:show', $event)"
   >
-    <p class="library-intro">{{ t('capabilityLibrary.description') }}</p>
+    <div class="library-lead">
+      <p class="library-intro">{{ t('capabilityLibrary.description') }}</p>
+    </div>
 
     <section class="library-section">
       <div class="section-heading">
@@ -85,7 +87,8 @@ function openCapabilityPool(pool: 'mcp' | 'tools' | 'skills') {
 </style>
 
 <style scoped>
-.library-intro { margin: -5px 0 24px; color: var(--app-text-muted); font-size: 13px; }
+.library-lead { display: flex; align-items: center; gap: 16px; margin: -10px 0 22px; padding: 8px 14px 8px 8px; border-radius: 16px; background: var(--app-surface-muted); }
+.library-intro { margin: 0; color: var(--app-text-secondary); font-size: 13px; line-height: 1.6; }
 .library-section + .library-section { margin-top: 26px; }
 .section-heading { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
 .section-heading span { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
@@ -107,7 +110,9 @@ function openCapabilityPool(pool: 'mcp' | 'tools' | 'skills') {
   cursor: pointer;
   transition: transform .24s cubic-bezier(.16, 1, .3, 1), border-color .2s ease, box-shadow .24s ease;
 }
-.library-entry:hover { transform: translateY(-3px); border-color: var(--app-text); box-shadow: 0 14px 30px color-mix(in srgb, var(--app-text) 9%, transparent); }
+.library-entry:hover { transform: translateY(-3px); border-color: var(--app-border-focus); box-shadow: 0 14px 30px color-mix(in srgb, var(--app-text) 9%, transparent); }
+.library-entry:hover > .n-icon { color: var(--app-text); transform: rotate(-4deg) scale(1.06); }
+.library-entry > .n-icon { transition: color var(--app-transition-fast), transform var(--app-transition-base); }
 .library-entry:active { transform: translateY(-1px) scale(.99); }
 .library-entry.featured { background: var(--app-text); color: var(--app-surface); border-color: var(--app-text); }
 .library-entry.compact { min-height: 76px; }

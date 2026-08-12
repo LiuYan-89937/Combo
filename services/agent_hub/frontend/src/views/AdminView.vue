@@ -13,7 +13,7 @@ const { user, resolved, loading, isAuthenticated, isAdmin } = storeToRefs(auth)
 
 useSeo(() => ({
   title: '管理控制台',
-  description: 'FastAgentFactory 应用发布与更新日志管理控制台。',
+  description: 'Combo 应用发布与更新日志管理控制台。',
   path: '/admin',
   noindex: true,
 }))

@@ -12,7 +12,7 @@ import shutil
 import sys
 import tempfile
 from threading import RLock
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 from ruamel.yaml import YAML
 
@@ -683,7 +683,12 @@ class RuntimeBackend:
             shutil.rmtree(staging_root, ignore_errors=True)
         return self.capability_pool_snapshot()
 
-    def import_tool_folder(self, source_path: str) -> dict[str, object]:
+    def import_tool_folder(
+        self,
+        source_path: str,
+        *,
+        on_progress: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> dict[str, object]:
         source = Path(source_path).expanduser().resolve()
         if not source.is_dir() or not (source / "TOOL.yaml").is_file() or not (source / "main.py").is_file():
             raise ValueError("Tool folder must contain TOOL.yaml and main.py at its root")
@@ -693,6 +698,7 @@ class RuntimeBackend:
             staged = staging_root / source.name
             target: Path | None = None
             try:
+                _report_tool_preparation(on_progress, "validating_tool_package")
                 shutil.copytree(source, staged, symlinks=False)
                 validation_source = self._tool_capability_source((ToolSourceRoot(
                     root_id=source_root.root_id,
@@ -711,9 +717,11 @@ class RuntimeBackend:
                 if self.tool_package_runtime is None:
                     raise RuntimeError("ToolPackage runtime is not initialized")
                 definition = ToolDefinition.model_validate(drafts[0].content.definition)
-                self.tool_package_runtime.prepare(definition)
+                self.tool_package_runtime.prepare(definition, on_progress=on_progress)
+                _report_tool_preparation(on_progress, "validating_tool_import")
                 os.replace(staged, target)
                 try:
+                    _report_tool_preparation(on_progress, "publishing_tool_package")
                     self._synchronize_tool_package_capabilities(
                         self.application.stores,
                         _capability_adapters(),
@@ -725,11 +733,18 @@ class RuntimeBackend:
                         _capability_adapters(),
                     )
                     raise
+                _report_tool_preparation(on_progress, "tool_package_published")
             finally:
                 shutil.rmtree(staging_root, ignore_errors=True)
         return self.capability_pool_snapshot()
 
-    def create_tool_package(self, payload: dict[str, Any], main_source: str) -> dict[str, object]:
+    def create_tool_package(
+        self,
+        payload: dict[str, Any],
+        main_source: str,
+        *,
+        on_progress: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> dict[str, object]:
         """Assemble the internal package format from user-facing tool fields."""
 
         source_root = self.config.tool_source_roots[0]
@@ -781,6 +796,7 @@ class RuntimeBackend:
         source = staging_parent / package_name
         source.mkdir()
         try:
+            _report_tool_preparation(on_progress, "assembling_tool_package")
             yaml = YAML()
             yaml.default_flow_style = False
             stream = StringIO()
@@ -790,7 +806,7 @@ class RuntimeBackend:
             dependencies = [str(value).strip() for value in payload["dependencies"] if str(value).strip()]
             if dependencies:
                 (source / "requirements.txt").write_text("\n".join(dependencies) + "\n", encoding="utf-8")
-            return self.import_tool_folder(str(source))
+            return self.import_tool_folder(str(source), on_progress=on_progress)
         finally:
             shutil.rmtree(staging_parent, ignore_errors=True)
 
@@ -1266,6 +1282,9 @@ class RuntimeBackend:
                         "capability_catalog",
                         "memory_store",
                         "delegation_runtime",
+                        "knowledge_runtime",
+                        "scheduler_runtime",
+                        "skillhub_runtime",
                     )
                 },
             )
@@ -1652,6 +1671,15 @@ def _write_yaml_document(path: Path, document: dict[str, Any]) -> None:
 def _json_digest(value: object) -> str:
     serialized = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _report_tool_preparation(
+    callback: Callable[[str, dict[str, Any]], None] | None,
+    stage: str,
+    **detail: Any,
+) -> None:
+    if callback is not None:
+        callback(stage, detail)
 
 
 def _read_skill_manifest_document(path: Path) -> tuple[dict[str, Any], str]:

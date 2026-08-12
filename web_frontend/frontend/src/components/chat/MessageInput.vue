@@ -1,5 +1,10 @@
 <template>
-  <div class="message-input-container" @dragover.prevent @drop.prevent="handleFileDrop">
+  <div
+    class="message-input-container"
+    data-onboarding="message-input"
+    @dragover.prevent
+    @drop.prevent="handleFileDrop"
+  >
     <div v-if="disabled && disabledHint" class="input-disabled-guidance" aria-live="polite">
       <RouterLink
         v-if="disabledHintRoute"
@@ -170,35 +175,43 @@
           </div>
         </n-popover>
 
-        <n-button
+        <ControlHint
           v-if="executionControlEnabled"
-          text
-          class="reasoning-button plan-mode-button"
-          :title="executionPreference === 'plan_and_execute' ? t('chat.planModeOn') : t('chat.planMode')"
-          :class="{ active: executionPreference === 'plan_and_execute' }"
-          :disabled="disabled"
-          :aria-pressed="executionPreference === 'plan_and_execute'"
-          :aria-label="t('chat.planMode')"
-          @click="togglePlanMode"
+          :label="executionPreference === 'plan_and_execute' ? t('chat.planModeOn') : t('chat.planMode')"
         >
-          <template #icon><n-icon><MapOutline /></n-icon></template>
-        </n-button>
+            <n-button
+              text
+              class="reasoning-button plan-mode-button"
+              :class="{ active: executionPreference === 'plan_and_execute' }"
+              :disabled="disabled"
+              :aria-pressed="executionPreference === 'plan_and_execute'"
+              :aria-label="t('chat.planMode')"
+              @click="togglePlanMode"
+            >
+              <ComboPngIcon
+                name="plan"
+                :size="42"
+                tone="black"
+              />
+            </n-button>
+        </ControlHint>
 
         <n-popover v-if="approvalControlEnabled" trigger="click" placement="top-start">
           <template #trigger>
-            <n-button
-              text
-              class="reasoning-button"
-              :disabled="disabled"
-              :aria-label="t('chat.approvalLabel')"
-              :title="`${t('chat.approvalLabel')}：${approvalLabel}`"
-            >
-              <template #icon>
-                <n-icon><ShieldCheckmarkOutline /></n-icon>
-              </template>
-              <span>{{ approvalLabel }}</span>
-              <n-icon size="12" class="reasoning-caret"><CaretDown /></n-icon>
-            </n-button>
+            <ControlHint :label="`${t('chat.approvalLabel')}：${approvalLabel}`">
+                <n-button
+                  text
+                  class="reasoning-button permission-mode-button"
+                  :disabled="disabled"
+                  :aria-label="t('chat.approvalLabel')"
+                >
+                  <span class="permission-icon-slot">
+                    <ComboPngIcon name="permission" :size="42" />
+                  </span>
+                  <span>{{ approvalLabel }}</span>
+                  <n-icon size="12" class="reasoning-caret"><CaretDown /></n-icon>
+                </n-button>
+            </ControlHint>
           </template>
           <div class="reasoning-popover">
             <div class="reasoning-popover-header">
@@ -239,23 +252,19 @@
 
       <div class="right-actions">
         <slot name="before-send"></slot>
-        <span
-          class="send-control"
-          :class="{ 'has-queued': queuedCount > 0 }"
-          :title="isRunning ? t('chat.queueSend') : t('common.send')"
-        >
-          <n-button
-            type="primary"
-            circle
-            class="send-button"
-            :disabled="!canSend"
-            :aria-label="isRunning ? t('chat.queueSend') : t('common.send')"
-            @click="handleSend"
-          >
-            <template #icon>
-              <n-icon><Send /></n-icon>
-            </template>
-          </n-button>
+        <span class="send-control" :class="{ 'has-queued': queuedCount > 0 }">
+          <ControlHint :label="isRunning ? t('chat.queueSend') : t('common.send')">
+              <n-button
+                type="primary"
+                circle
+                class="send-button"
+                :disabled="!canSend"
+                :aria-label="isRunning ? t('chat.queueSend') : t('common.send')"
+                @click="handleSend"
+              >
+                <ComboPngIcon name="send" :size="40" :tone="canSend ? 'white' : 'auto'" />
+              </n-button>
+          </ControlHint>
           <span v-if="queuedCount > 0" class="queued-count" aria-hidden="true">
             {{ queuedCount > 9 ? '9+' : queuedCount }}
           </span>
@@ -284,7 +293,9 @@
 import { ref, computed, watch, nextTick, onMounted } from 'vue'
 import { RouterLink, type RouteLocationRaw } from 'vue-router'
 import { NInput, NButton, NIcon, NText, NPopover, NRadioButton, NRadioGroup, NSelect, useMessage } from 'naive-ui'
-import { ArrowForward, AttachOutline, CaretDown, Close, CodeSlash, MapOutline, Send, ShieldCheckmarkOutline, Stop } from '@/components/icons'
+import { ArrowForward, AttachOutline, CaretDown, Close, CodeSlash, Stop } from '@/components/icons'
+import ComboPngIcon from '@/components/icons/ComboPngIcon.vue'
+import ControlHint from '@/components/common/ControlHint.vue'
 import ResourceIcon from '@/components/common/ResourceIcon.vue'
 import { useI18n } from '@/composables/useI18n'
 import { useFileCapabilities } from '@/composables/useFileCapabilities'
@@ -643,7 +654,7 @@ defineExpose({
   min-inline-size: 720px;
   gap: var(--app-space-md);
   padding: var(--app-space-md);
-  border: 1px solid var(--app-border);
+  border: 1px solid color-mix(in srgb, var(--app-text) 14%, transparent);
   border-radius: var(--app-radius-xl);
   background: var(--app-surface);
   transition: border-color var(--app-transition-base), box-shadow var(--app-transition-base);
@@ -651,7 +662,7 @@ defineExpose({
 
 .message-input-container:focus-within {
   border-color: var(--app-border-focus);
-  box-shadow: 0 0 0 3px var(--app-focus-shadow);
+  box-shadow: 0 0 0 4px var(--app-focus-shadow);
 }
 
 .input-disabled-guidance {
@@ -901,10 +912,17 @@ defineExpose({
 .model-selector-button {
   justify-content: space-between;
   padding: 0 12px;
-  color: var(--app-text-secondary);
-  border-color: var(--app-border);
+  color: var(--app-text);
+  border-color: color-mix(in srgb, var(--app-text) 14%, transparent);
   border-radius: 999px;
-  background: var(--app-surface);
+  background: var(--app-surface-muted);
+  box-shadow: inset 0 1px 0 var(--app-glass-border-light);
+}
+
+.model-selector-button:hover,
+.model-selector-button:focus-visible {
+  border-color: var(--app-border-hover);
+  background: var(--app-surface-pressed);
 }
 
 .model-selector-button span {
@@ -916,15 +934,42 @@ defineExpose({
 
 .reasoning-button {
   gap: var(--app-space-xs);
-  max-width: 100%;
+  max-width: none;
   white-space: nowrap;
 }
 
 .compact-icon-action,
 .plan-mode-button {
-  width: 28px;
-  min-width: 28px;
+  width: 48px;
+  min-width: 48px;
+  height: 48px;
   justify-content: center;
+}
+
+.reasoning-button:not(.plan-mode-button) {
+  min-height: 48px;
+}
+
+.reasoning-button :deep(.n-button__content) {
+  gap: 6px;
+}
+
+.reasoning-button :deep(.n-button__icon) {
+  flex: 0 0 auto;
+  margin: 0 !important;
+}
+
+.permission-mode-button {
+  padding: 0 12px 0 4px;
+}
+
+.permission-icon-slot {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  flex: 0 0 46px;
+  place-items: center;
+  overflow: visible !important;
 }
 
 .reasoning-button span {
@@ -937,7 +982,35 @@ defineExpose({
   color: var(--app-surface);
   border-radius: 8px;
   background: var(--app-text);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--app-text) 14%, transparent);
+  box-shadow: none;
+}
+
+.reasoning-button :deep(.combo-png-icon) {
+  opacity: .72;
+  transition: filter var(--app-transition-fast), opacity var(--app-transition-fast), transform var(--app-transition-fast);
+}
+
+.reasoning-button :deep(.n-button__icon),
+.send-button :deep(.n-button__icon) {
+  width: auto;
+  height: auto;
+  font-size: inherit;
+}
+
+.reasoning-button:hover :deep(.combo-png-icon),
+.reasoning-button:focus-visible :deep(.combo-png-icon) {
+  opacity: 1;
+  transform: translateY(-1px);
+}
+
+.plan-mode-button.active :deep(.combo-png-icon) {
+  filter: invert(1);
+  opacity: 1;
+  animation: combo-plan-activate .3s cubic-bezier(.16, 1, .3, 1);
+}
+
+:global(:root[data-theme='dark']) .plan-mode-button.active :deep(.combo-png-icon) {
+  filter: none;
 }
 
 .plan-mode-button.active:hover {
@@ -957,9 +1030,9 @@ defineExpose({
 
 .model-settings-popover {
   display: grid;
-  width: min(460px, calc(100vw - 32px));
-  gap: 14px;
-  padding: 6px;
+  width: min(410px, calc(100vw - 32px));
+  gap: 16px;
+  padding: 8px;
 }
 
 .model-settings-section + .model-settings-section {
@@ -977,8 +1050,9 @@ defineExpose({
   justify-content: space-between;
   gap: var(--app-space-sm);
   margin-bottom: var(--app-space-sm);
-  color: var(--app-text-secondary);
+  color: var(--app-text);
   font-size: var(--app-font-sm);
+  font-weight: 650;
 }
 
 .reasoning-options {
@@ -1006,7 +1080,34 @@ defineExpose({
 }
 
 .send-button {
+  width: 50px;
+  height: 50px;
   border-radius: 50%;
+  padding: 0;
+}
+
+.send-button :deep(.n-button__content),
+.send-button :deep(.n-button__icon) {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+}
+
+.send-button :deep(.combo-png-icon) {
+  transition: opacity var(--app-transition-fast), transform var(--app-transition-fast);
+}
+
+.send-button:disabled :deep(.combo-png-icon) {
+  opacity: .5;
+}
+
+.send-button:not(:disabled):hover :deep(.combo-png-icon) {
+  transform: translate(1px, -1px) rotate(-3deg);
+}
+
+.send-button:not(:disabled):active :deep(.combo-png-icon) {
+  transform: translate(3px, -2px) scale(.9);
 }
 
 .cancel-button {
@@ -1039,5 +1140,11 @@ defineExpose({
 
 .cancel-button {
   animation: app-pop-in 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes combo-plan-activate {
+  0% { transform: scale(.72) rotate(-5deg); }
+  65% { transform: scale(1.1) rotate(2deg); }
+  100% { transform: scale(1) rotate(0); }
 }
 </style>

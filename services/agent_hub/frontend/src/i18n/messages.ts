@@ -10,7 +10,7 @@ export interface Messages {
 }
 
 export const zh = {
-  brand: 'FastAgentFactory',
+  brand: 'Combo',
   nav: {
     product: '产品',
     guide: '使用指南',
@@ -60,7 +60,7 @@ export const zh = {
     title: '让 Agent 动态组成真正的工作能力',
     subtitle:
       '连接你自己的模型，在统一对话中按任务动态选择 Skill、工具与 MCP，通过 ReAct 或计划执行完成工作，并把结果留在本地工作区。',
-    ctaDownload: '下载 FastAgentFactory',
+    ctaDownload: '下载 Combo',
     ctaGithub: 'GitHub 仓库',
     showcaseTitle: '看见任务从对话变成结果',
     pipelineTitle: '从意图到交付的一体化链路',
@@ -82,13 +82,13 @@ export const zh = {
   },
   changelog: {
     title: '更新日志',
-    subtitle: '查看 FastAgentFactory 桌面应用的版本变化、修复内容与安装包。',
+    subtitle: '查看 Combo 桌面应用的版本变化、修复内容与安装包。',
     emptyTitle: '暂无更新日志',
     emptyBody: '第一个应用版本发布后会显示在这里。',
   },
   guide: {
     title: '使用指南',
-    subtitle: '第一次使用 FastAgentFactory 的完整路径。',
+    subtitle: '第一次使用 Combo 的完整路径。',
     fullDocs: '完整技术文档见仓库 README 与 docs 目录。',
     steps: {
       install: {
@@ -136,7 +136,7 @@ export const zh = {
 } as const
 
 export const en = {
-  brand: 'FastAgentFactory',
+  brand: 'Combo',
   nav: {
     product: 'Product',
     guide: 'Guide',
@@ -186,7 +186,7 @@ export const en = {
     title: 'Compose real agent capabilities at runtime',
     subtitle:
       'Connect your own models, dynamically resolve Skills, tools and MCP in one conversation, run with ReAct or planned execution, and keep deliverables in a local workspace.',
-    ctaDownload: 'Download FastAgentFactory',
+    ctaDownload: 'Download Combo',
     ctaGithub: 'GitHub repo',
     showcaseTitle: 'Watch a conversation become a deliverable',
     pipelineTitle: 'From intent to delivery, in one loop',
@@ -208,13 +208,13 @@ export const en = {
   },
   changelog: {
     title: 'Changelog',
-    subtitle: 'Desktop release notes, fixes and installers for FastAgentFactory.',
+    subtitle: 'Desktop release notes, fixes and installers for Combo.',
     emptyTitle: 'No releases yet',
     emptyBody: 'The first application release will appear here after it is published.',
   },
   guide: {
     title: 'Guide',
-    subtitle: 'A complete path for your first time with FastAgentFactory.',
+    subtitle: 'A complete path for your first time with Combo.',
     fullDocs: 'Full technical docs live in the repository README and docs directory.',
     steps: {
       install: {

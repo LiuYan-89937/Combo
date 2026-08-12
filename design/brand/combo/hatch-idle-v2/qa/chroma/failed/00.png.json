@@ -1,0 +1,19 @@
+{
+  "ok": true,
+  "input": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/qa/rows/failed/frames/failed/00.png",
+  "output": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/qa/clean-frames/failed/00.png",
+  "chroma_key": "#00FF00",
+  "algorithm": "edge-local-chroma-spill-suppression",
+  "strength": 1,
+  "edge_radius": 5,
+  "spill_tolerance": 0.15,
+  "minimum_saturation": 0.1,
+  "changed_pixels": 6467,
+  "decontaminated_pixels": 3198,
+  "spill_suppressed_pixels": 6467,
+  "rejected_pixels": 0,
+  "changed_by_cell": {
+    "r0c0": 6467
+  },
+  "alpha_preserved": true
+}

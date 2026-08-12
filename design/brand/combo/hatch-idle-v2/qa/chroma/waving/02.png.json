@@ -1,0 +1,19 @@
+{
+  "ok": true,
+  "input": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/qa/rows/waving/frames/waving/02.png",
+  "output": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/qa/clean-frames/waving/02.png",
+  "chroma_key": "#00FF00",
+  "algorithm": "edge-local-chroma-spill-suppression",
+  "strength": 1,
+  "edge_radius": 5,
+  "spill_tolerance": 0.15,
+  "minimum_saturation": 0.1,
+  "changed_pixels": 4835,
+  "decontaminated_pixels": 3108,
+  "spill_suppressed_pixels": 4835,
+  "rejected_pixels": 0,
+  "changed_by_cell": {
+    "r0c0": 4835
+  },
+  "alpha_preserved": true
+}

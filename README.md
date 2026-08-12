@@ -1,8 +1,8 @@
-# FastAgentFactory
+# Combo
 
 本地优先、跨平台的动态 Agent 运行时桌面应用。
 
-FastAgentFactory 以一条统一主对话链为产品入口。每次请求从模型池解析模型策略，从 Skill、工具、MCP 和依赖四个能力池冻结不可变能力快照，再由固定的 React 或 Plan-and-Execute 图执行。系统不再制造、发布或运行独立 Agent 包，也不通过可变全局注册表决定一次运行的能力边界。
+Combo 以一条统一主对话链为产品入口。每次请求从模型池解析模型策略，从 Skill、工具、MCP 和依赖四个能力池冻结不可变能力快照，再由固定的 React 或 Plan-and-Execute 图执行。系统不再制造、发布或运行独立 Agent 包，也不通过可变全局注册表决定一次运行的能力边界。
 
 > 当前仓库正在完成动态运行时重构。旧的目录包与多入口产品链已移除；能力控制面、记忆、知识库和调度链仍以 `docs/DYNAMIC_AGENT_RUNTIME_REFACTOR.md` 为验收依据。
 
@@ -20,7 +20,7 @@ FastAgentFactory 以一条统一主对话链为产品入口。每次请求从模
 
 ### macOS
 
-在 Apple Silicon Mac 上下载 `aarch64` `.dmg`，打开镜像后将 FastAgentFactory 拖入 `Applications`。当前不提供 Intel Mac 安装包。
+在 Apple Silicon Mac 上下载 `aarch64` `.dmg`，打开镜像后将 Combo 拖入 `Applications`。当前不提供 Intel Mac 安装包。
 
 ### Windows
 
@@ -141,7 +141,7 @@ Windows 脚本生成 x64 NSIS 安装包。完整构建日志位于 `build/logs/w
 ## 目录结构
 
 ```text
-FastAgentFactory/
+Combo/
 ├── agent_factory/          Python 动态运行时与固定执行图
 ├── web_frontend/
 │   ├── backend/            FastAPI 应用装配与 HTTP API

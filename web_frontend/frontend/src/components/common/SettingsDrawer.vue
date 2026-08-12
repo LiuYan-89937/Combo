@@ -199,7 +199,8 @@
           <div class="footer-title">{{ t('settings.about') }}</div>
           <div class="footer-brand-row">
             <div class="footer-brand">
-              FastAgentFactory
+              <ComboLogo :size="28" />
+              <span>Combo</span>
               <span class="footer-version">v{{ appUpdateStore.currentVersion || '—' }}</span>
             </div>
             <n-button
@@ -251,6 +252,7 @@ import type { ThemeMode } from '@/stores/ui'
 import { requestNativeTaskNotificationPermission } from '@/services/taskNotifications'
 import { useAppUpdateStore } from '@/stores/appUpdate'
 import { storageApi, type ConversationStorageUsage } from '@/api/storage'
+import ComboLogo from '@/components/brand/ComboLogo.vue'
 
 const props = defineProps<{
   show: boolean
@@ -637,7 +639,7 @@ function formatBytes(value: number): string {
   font-weight: 600;
   color: var(--app-text-strong);
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: var(--app-space-sm);
 }
 

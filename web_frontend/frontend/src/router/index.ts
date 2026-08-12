@@ -60,6 +60,11 @@ export const routes: RouteRecordRaw[] = [
     name: 'ModelPool',
     component: () => import('@/views/ModelPoolView.vue'),
   },
+  {
+    path: '/mascot-preview',
+    name: 'MascotPreview',
+    component: () => import('@/views/MascotPreviewView.vue'),
+  },
 ]
 
 const router = createRouter({
@@ -71,7 +76,7 @@ router.beforeEach((to, _from, next) => {
   if (typeof document !== 'undefined') {
     const storedLocale = typeof window === 'undefined' ? null : window.localStorage.getItem(localeStorageKey)
     const locale = storedLocale ? normalizeLocale(storedLocale) : detectBrowserLocale()
-    document.title = `${translate(locale, routeTitleKey(to.name))} - FastAgentFactory`
+    document.title = `${translate(locale, routeTitleKey(to.name))} - Combo`
   }
   next()
 })

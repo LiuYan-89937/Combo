@@ -59,7 +59,7 @@ def create_app(config: RuntimeBackendConfig | None = None) -> FastAPI:
             watchdog.stop()
 
     application = FastAPI(
-        title="FastAgentFactory Dynamic Runtime Service",
+        title="Combo Dynamic Runtime Service",
         lifespan=lifespan,
     )
     application.state.runtime_backend = backend

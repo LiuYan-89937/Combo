@@ -123,19 +123,15 @@ export const lightPalette: AppPalette = {
   primaryPressed: '#000000',
   primarySuppl: '#404040',
 
-  // 语义色（黑白为主）
   success: '#000000',
   successHover: '#262626',
   successPressed: '#000000',
-
   info: '#000000',
   infoHover: '#262626',
   infoPressed: '#000000',
-
   warning: '#737373',
   warningHover: '#525252',
   warningPressed: '#404040',
-
   error: '#000000',
   errorHover: '#262626',
   errorPressed: '#000000',
@@ -199,19 +195,15 @@ export const darkPalette: AppPalette = {
   primaryPressed: '#e5e5e5',
   primarySuppl: '#d4d4d4',
 
-  // 语义色（黑白为主）
   success: '#ffffff',
   successHover: '#fafafa',
   successPressed: '#e5e5e5',
-
   info: '#ffffff',
   infoHover: '#fafafa',
   infoPressed: '#e5e5e5',
-
   warning: '#a3a3a3',
   warningHover: '#d4d4d4',
   warningPressed: '#737373',
-
   error: '#ffffff',
   errorHover: '#fafafa',
   errorPressed: '#e5e5e5',

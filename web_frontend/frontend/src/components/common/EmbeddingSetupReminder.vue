@@ -7,9 +7,11 @@
     :title="t('embeddingSetup.title')"
     @after-leave="rememberDismissal"
   >
-    <div class="embedding-reminder">
-      <p>{{ t('embeddingSetup.description') }}</p>
-      <small>{{ t('embeddingSetup.fallback') }}</small>
+    <div class="embedding-reminder-layout">
+      <div class="embedding-reminder">
+        <p>{{ t('embeddingSetup.description') }}</p>
+        <small>{{ t('embeddingSetup.fallback') }}</small>
+      </div>
     </div>
     <template #footer>
       <n-space justify="end">
@@ -63,7 +65,9 @@ async function configure() {
 </script>
 
 <style scoped>
+.embedding-reminder-layout { display: grid; grid-template-columns: 108px minmax(0, 1fr); align-items: center; gap: 20px; }
 .embedding-reminder { display: grid; gap: 12px; }
 .embedding-reminder p { margin: 0; color: var(--app-text); font-size: 14px; line-height: 1.7; }
 .embedding-reminder small { color: var(--app-text-muted); font-size: 11px; line-height: 1.6; }
+@media (max-width: 520px) { .embedding-reminder-layout { grid-template-columns: 1fr; } .embedding-reminder-layout > :first-child { margin: 0 auto; } }
 </style>

@@ -76,11 +76,11 @@ export const designTokens: DesignTokens = {
   spaceXl: '32px',
   spaceXxl: '48px',
 
-  // 圆角（苹果风格 - 更大更柔和）
-  radiusSm: '10px',
-  radiusMd: '14px',
-  radiusLg: '24px',
-  radiusXl: '32px',
+  // Combo 圆角：小控件克制，容器保持柔和
+  radiusSm: '8px',
+  radiusMd: '12px',
+  radiusLg: '20px',
+  radiusXl: '28px',
   radiusPill: '999px',
 
   // 字号
@@ -97,10 +97,10 @@ export const designTokens: DesignTokens = {
   leadingRelaxed: '1.65',
 
   // 过渡（更流畅的曲线 + 弹性）
-  transitionFast: '0.18s cubic-bezier(0.34, 1.3, 0.64, 1)',
-  transitionBase: '0.35s cubic-bezier(0.34, 1.56, 0.64, 1)',
-  transitionSlow: '0.5s cubic-bezier(0.34, 1.56, 0.64, 1)',
-  transitionSpring: '0.5s cubic-bezier(0.34, 1.8, 0.64, 1)',
+  transitionFast: '0.14s cubic-bezier(0.2, 0.8, 0.2, 1)',
+  transitionBase: '0.22s cubic-bezier(0.16, 1, 0.3, 1)',
+  transitionSlow: '0.38s cubic-bezier(0.16, 1, 0.3, 1)',
+  transitionSpring: '0.46s cubic-bezier(0.2, 1.42, 0.34, 1)',
   transitionFluid: '0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94)',
 
   // 多层软阴影系统（苹果风格 - 极柔和）

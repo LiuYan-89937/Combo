@@ -75,11 +75,6 @@
         :description="t('scheduler.empty')"
         class="manager-empty"
       >
-        <template #icon>
-          <n-icon size="56" class="manager-empty-icon">
-            <Time />
-          </n-icon>
-        </template>
         <template #extra>
           <n-button type="primary" @click="showCreateModal = true">{{ t('scheduler.createFirst') }}</n-button>
         </template>
@@ -357,12 +352,7 @@ function refreshCurrentScheduler() {
   animation: app-fade-in-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-.manager-empty-icon {
-  display: block;
-  color: var(--app-text-muted);
-  opacity: 0.55;
-  line-height: 1;
-}
+.manager-empty :deep(.n-empty__icon) { width: auto; height: auto; opacity: .9; }
 
 @media (max-width: 640px) {
   .scheduler-manager {

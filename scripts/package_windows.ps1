@@ -111,7 +111,7 @@ foreach ($CommandName in @("cargo.exe", "rustup.exe", "npm.cmd", "curl.exe", "ta
 if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
     if (-not (Test-Path -LiteralPath $DefaultUpdaterKey -PathType Leaf)) {
         throw (
-            "Updater signing key not found. Copy the shared FastAgentFactory updater key to " +
+            "Updater signing key not found. Copy the shared Combo updater key to " +
             "$DefaultUpdaterKey or set TAURI_SIGNING_PRIVATE_KEY for this process."
         )
     }

@@ -3,7 +3,7 @@
   "app": {
     "windows": [
       {
-        "title": "FastAgentFactory",
+        "title": "Combo",
         "width": 1400,
         "height": 900,
         "resizable": true,

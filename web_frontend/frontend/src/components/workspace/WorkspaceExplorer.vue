@@ -110,7 +110,9 @@
           :description="t('workspace.emptyDirectory')"
           size="small"
           class="empty-tree"
-        />
+        >
+          <template #icon><ComboPngIcon name="empty-workspace" :size="52" /></template>
+        </n-empty>
       </div>
     </n-scrollbar>
   </div>
@@ -141,6 +143,7 @@ import {
   UnlinkOutline,
 } from '@/components/icons'
 import ResourceIcon from '@/components/common/ResourceIcon.vue'
+import ComboPngIcon from '@/components/icons/ComboPngIcon.vue'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useCommand } from '@/composables/useCommand'

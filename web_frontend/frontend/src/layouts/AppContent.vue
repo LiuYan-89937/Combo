@@ -36,7 +36,11 @@
     <DebugDrawer v-model:show="uiStore.debugDrawerOpen" />
 
     <SchedulerActivityDrawer />
-    <EmbeddingSetupReminder />
+    <EmbeddingSetupReminder v-if="guideResolved" />
+    <FirstRunGuide
+      v-model:show="guideOpen"
+      @complete="finishGuide"
+    />
 
     <!-- SSE 事件流初始化 -->
     <EventStreamManager v-if="runtimeServicesEnabled" />
@@ -44,6 +48,7 @@
 </template>
 
 <script setup lang="ts">
+import { onMounted, ref } from 'vue'
 import { useUiStore } from '@/stores/ui'
 import AppHeader from '@/components/common/AppHeader.vue'
 import AppLoadingBar from '@/components/common/AppLoadingBar.vue'
@@ -55,6 +60,11 @@ import SchedulerActivityDrawer from '@/components/scheduler/SchedulerActivityDra
 import EmbeddingSetupReminder from '@/components/common/EmbeddingSetupReminder.vue'
 import EventStreamManager from '@/components/common/EventStreamManager.vue'
 import BrowserPanel from '@/components/browser/BrowserPanel.vue'
+import FirstRunGuide from '@/components/onboarding/FirstRunGuide.vue'
+import {
+  completeFirstRunGuide,
+  hasCompletedFirstRunGuide,
+} from '@/services/firstRunGuide'
 
 withDefaults(defineProps<{
   runtimeServicesEnabled?: boolean
@@ -63,6 +73,17 @@ withDefaults(defineProps<{
 })
 
 const uiStore = useUiStore()
+const guideResolved = ref(hasCompletedFirstRunGuide())
+const guideOpen = ref(false)
+
+onMounted(() => {
+  if (!guideResolved.value) guideOpen.value = true
+})
+
+function finishGuide() {
+  completeFirstRunGuide()
+  guideResolved.value = true
+}
 </script>
 
 <style scoped>

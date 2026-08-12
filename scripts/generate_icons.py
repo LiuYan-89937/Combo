@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""从 FastAgentFactory 品牌源图生成 Tauri 应用图标。"""
+"""从 Combo 品牌源图生成 Tauri 应用图标。"""
 import sys
 from pathlib import Path
 
@@ -97,7 +97,7 @@ def main():
         sys.exit(1)
 
     print("=" * 60)
-    print("FastAgentFactory 图标生成工具")
+    print("Combo 图标生成工具")
     print("=" * 60)
 
     create_icon(source_path, 32, icons_dir / "32x32.png")

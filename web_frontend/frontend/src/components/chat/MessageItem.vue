@@ -45,12 +45,18 @@
           aria-live="polite"
           :aria-label="message.content || t('roles.assistantThinking')"
         >
+          <ComboFrameAnimation
+            character="lead"
+            action="running"
+            :size="38"
+          />
           <span class="thinking-label">{{ message.content || t('roles.assistantThinking') }}</span>
-          <span class="thinking-dots" aria-hidden="true">
-            <span class="thinking-dot"></span>
-            <span class="thinking-dot"></span>
-            <span class="thinking-dot"></span>
-          </span>
+          <ComboFrameAnimation
+            character="companion"
+            action="running"
+            :size="28"
+            :phase-offset="2"
+          />
         </div>
         <template v-else>
           <MessagePartRenderer
@@ -86,6 +92,7 @@ import { NAvatar, NButton, NIcon, NTag, NText } from 'naive-ui'
 import { ReturnUpBackOutline } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import MessagePartRenderer from './MessagePartRenderer.vue'
+import ComboFrameAnimation from '@/components/brand/ComboFrameAnimation.vue'
 import type { TranscriptItem } from '@/types/protocol'
 import { conversationVisibleParts } from '@/utils/toolPresentation'
 import type { WorkspaceRequestContext } from '@/api/resourceTypes'
@@ -336,12 +343,12 @@ function stableColorIndex(value: string, size: number): number {
 
 .thinking-content {
   width: fit-content;
-  min-height: 32px;
+  min-height: 46px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 10px;
-  padding: 5px 12px;
+  padding: 3px 12px 3px 6px;
   border: 1px solid var(--app-border);
   border-radius: 999px;
   background: var(--app-surface-muted);
@@ -353,38 +360,4 @@ function stableColorIndex(value: string, size: number): number {
   line-height: 20px;
 }
 
-.thinking-dots {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.thinking-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--app-text);
-  animation: thinking-pulse 1.05s ease-in-out infinite;
-}
-
-.thinking-dot:nth-child(2) {
-  animation-delay: 0.14s;
-}
-
-.thinking-dot:nth-child(3) {
-  animation-delay: 0.28s;
-}
-
-@keyframes thinking-pulse {
-  0%,
-  80%,
-  100% {
-    opacity: 0.32;
-    transform: translateY(0);
-  }
-  40% {
-    opacity: 1;
-    transform: translateY(-3px);
-  }
-}
 </style>

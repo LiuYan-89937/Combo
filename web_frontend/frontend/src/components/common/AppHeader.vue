@@ -7,8 +7,8 @@
   >
     <div class="header-left">
       <button class="brand" type="button" @click="openChat">
-        <img :src="appIcon" class="brand-logo" alt="FastAgentFactory" width="28" height="28" />
-        <span class="app-title">FastAgentFactory</span>
+        <ComboLogo class="brand-logo" :size="30" />
+        <span class="app-title">Combo</span>
       </button>
       <span
         class="connection-dot"
@@ -24,7 +24,13 @@
     </div>
 
     <div class="header-right">
-      <n-button secondary size="small" class="library-trigger" @click="capabilityLibraryOpen = true">
+      <n-button
+        secondary
+        size="small"
+        class="library-trigger"
+        data-onboarding="capability-library"
+        @click="capabilityLibraryOpen = true"
+      >
         <template #icon><n-icon><AppsOutline /></n-icon></template>
         {{ t('capabilityLibrary.title') }}
       </n-button>
@@ -60,7 +66,7 @@ import { computed, onMounted, ref, watchEffect } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { NButton, NIcon } from 'naive-ui'
 import { AppsOutline, Settings } from '@/components/icons'
-import appIcon from '@/assets/fast-agent-factory-icon.png'
+import ComboLogo from '@/components/brand/ComboLogo.vue'
 import { routeTitleKey } from '@/i18n'
 import { useI18n } from '@/composables/useI18n'
 import { useAgentStore } from '@/stores/agent'
@@ -125,7 +131,7 @@ function handleHeaderDoubleClick(event: MouseEvent): void {
 }
 
 watchEffect(() => {
-  if (typeof document !== 'undefined') document.title = `${currentRouteName.value} - FastAgentFactory`
+  if (typeof document !== 'undefined') document.title = `${currentRouteName.value} - Combo`
 })
 </script>
 
@@ -189,9 +195,8 @@ watchEffect(() => {
 .is-windows-desktop .header-right { align-self: stretch; }
 .header-center { display: flex; min-width: 0; justify-content: center; }
 .brand { display: inline-flex; min-width: 0; align-items: center; gap: 8px; padding: 0; border: 0; background: none; color: var(--app-text); cursor: pointer; }
-.brand-logo { width: 26px; height: 26px; object-fit: contain; transition: transform .28s cubic-bezier(.16, 1, .3, 1); }
+.brand-logo { transition: transform var(--app-transition-base); }
 .brand:hover .brand-logo { transform: rotate(-4deg) scale(1.06); }
-:root[data-theme='dark'] .brand-logo { filter: invert(1); }
 .app-title { font-family: 'Avenir Next', 'SF Pro Display', sans-serif; font-size: 15px; font-weight: 730; letter-spacing: -.045em; }
 .connection-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--app-text-subtle); transition: background .2s ease, transform .2s ease; }
 .connection-dot.is-connected { background: var(--app-success); }

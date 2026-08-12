@@ -1,7 +1,7 @@
 [project]
-name = "fast-agent-factory"
+name = "combo"
 version = "0.1.0"
-description = "Web-first Agent factory framework with reproducible runtime and lifecycle controls."
+description = "Dynamic agent collaboration runtime with reproducible lifecycle controls."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

@@ -1,6 +1,6 @@
 # Application Icons
 
-Application icons are generated from the FastAgentFactory brand source by
+Application icons are generated from the Combo brand source by
 `scripts/generate_icons.py`. The generated artwork uses a pure-white rounded
 tile with a transparent safety margin so Windows and older macOS releases do
 not render it as a hard-edged square.

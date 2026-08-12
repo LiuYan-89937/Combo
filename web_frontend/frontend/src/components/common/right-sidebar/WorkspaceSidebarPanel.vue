@@ -8,7 +8,9 @@
         @select-file="handleWorkspaceFileSelect"
       />
       <div v-else class="workspace-unavailable">
-        <n-empty :description="t('workspace.noActiveSession')" size="small" />
+        <n-empty :description="t('workspace.noActiveSession')" size="small">
+          <template #icon><ComboPngIcon name="empty-workspace" :size="60" /></template>
+        </n-empty>
       </div>
     </div>
     <div v-if="previewLoading && !runtimeStore.workspaceFile" class="workspace-loading">
@@ -36,6 +38,7 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import type { WorkspaceEntry } from '@/types/protocol'
 import FilePreview from '@/components/workspace/FilePreview.vue'
 import WorkspaceExplorer from '@/components/workspace/WorkspaceExplorer.vue'
+import ComboPngIcon from '@/components/icons/ComboPngIcon.vue'
 import { useI18n } from '@/composables/useI18n'
 
 const uiStore = useUiStore()
