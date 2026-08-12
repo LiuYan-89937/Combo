@@ -1,7 +1,7 @@
 # Application Icons
 
-Application icons are generated from the Combo brand source by
-`scripts/generate_icons.py`. The generated artwork uses a pure-white rounded
+Application icons are generated from the transparent Combo brand source by
+`scripts/generate_icons.py`. The generated artwork preserves the brand's black rounded
 tile with a transparent safety margin so Windows and older macOS releases do
 not render it as a hard-edged square.
 

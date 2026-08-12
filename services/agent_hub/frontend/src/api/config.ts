@@ -27,13 +27,13 @@ export interface PublicConfig {
 }
 
 const FALLBACK_CONFIG: PublicConfig = {
-  githubRepoUrl: 'https://github.com/LiuYan-89937/FastAgentFactory',
+  githubRepoUrl: 'https://github.com/LiuYan-89937/Combo',
   downloads: [
     {
       platform: 'macos',
       label: 'macOS',
       arch: 'Apple Silicon',
-      url: 'https://github.com/LiuYan-89937/FastAgentFactory/releases/download/v0.1.0/FastAgentFactory_0.1.0_aarch64.dmg',
+      url: 'https://github.com/LiuYan-89937/Combo/releases/download/v0.1.0/FastAgentFactory_0.1.0_aarch64.dmg',
       version: '0.1.0',
       sizeLabel: '296 MB',
       downloadCount: 0,
@@ -42,7 +42,7 @@ const FALLBACK_CONFIG: PublicConfig = {
       platform: 'windows',
       label: 'Windows',
       arch: 'x64',
-      url: 'https://github.com/LiuYan-89937/FastAgentFactory/releases/download/v0.1.0/FastAgentFactory_0.1.0_x64-setup.exe',
+      url: 'https://github.com/LiuYan-89937/Combo/releases/download/v0.1.0/FastAgentFactory_0.1.0_x64-setup.exe',
       version: '0.1.0',
       sizeLabel: '96.2 MB',
       downloadCount: 0,
