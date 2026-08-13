@@ -1012,35 +1012,105 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
             workspace_id = str(workspaces[0]["workspace_id"])
         if not any(item["workspace_id"] == workspace_id for item in workspaces):
             raise HTTPException(status_code=422, detail="scheduler job requires an owned workspace")
-        created = backend.application.stores.scheduler.create_job({**job, "workspace_id": workspace_id})
+        target = job.get("target") if isinstance(job.get("target"), dict) else None
+        if not target or target.get("target_type") not in {"graph_run", "script_run"}:
+            raise HTTPException(status_code=422, detail="scheduler target must be an agent or script task")
+        created = backend.application.stores.scheduler.create_job({
+            **job,
+            "principal_id": principal_id,
+            "workspace_id": workspace_id,
+            "timezone": str(job.get("timezone") or request.headers.get("X-AgentFactory-Timezone") or "UTC"),
+        })
+        backend.scheduler_service.synchronize()
         return {"event": _event("scheduler_job_created", {"job": created})}
 
     @router.post("/api/scheduler/jobs/{job_id}/pause")
     async def pause_scheduler_job(request: Request, job_id: str) -> dict[str, Any]:
-        _principal(request)
+        principal_id = _principal(request)
+        _owned_scheduler_job(backend, principal_id, job_id)
         backend.application.stores.scheduler.set_status(job_id, "paused")
+        backend.scheduler_service.synchronize()
         return await scheduler_jobs(request)
 
     @router.post("/api/scheduler/jobs/{job_id}/resume")
     async def resume_scheduler_job(request: Request, job_id: str) -> dict[str, Any]:
-        _principal(request)
+        principal_id = _principal(request)
+        _owned_scheduler_job(backend, principal_id, job_id)
         backend.application.stores.scheduler.set_status(job_id, "enabled")
+        backend.scheduler_service.synchronize()
         return await scheduler_jobs(request)
 
     @router.delete("/api/scheduler/jobs/{job_id}")
     async def delete_scheduler_job(request: Request, job_id: str) -> dict[str, Any]:
-        _principal(request)
+        principal_id = _principal(request)
+        _owned_scheduler_job(backend, principal_id, job_id)
         backend.application.stores.scheduler.set_status(job_id, "deleted")
+        backend.scheduler_service.synchronize()
         return {"event": _event("scheduler_job_deleted", {"job_id": job_id})}
 
     @router.get("/api/scheduler/runs")
     async def scheduler_runs(request: Request, job_id: str | None = None, limit: int = 20) -> dict[str, Any]:
-        _principal(request)
+        principal_id = _principal(request)
         return {"event": _event("scheduler_runs_listed", {
-            "runs": backend.application.stores.scheduler.runs(job_id=job_id, limit=limit),
+            "runs": backend.application.stores.scheduler.runs_for_principal(principal_id, job_id=job_id, limit=limit),
             "job_id": job_id,
             "limit": limit,
         })}
+
+    @router.get("/api/scheduler/runs/{run_id}/events")
+    async def scheduler_run_events(request: Request, run_id: str, after: int = 0) -> dict[str, Any]:
+        principal_id = _principal(request)
+        run = backend.application.stores.scheduler.require_run(run_id)
+        job = backend.application.stores.scheduler.require_job(str(run["job_id"]))
+        if str(job.get("principal_id") or "") != principal_id:
+            raise HTTPException(status_code=404, detail="scheduler run not found")
+        return {"events": backend.application.stores.scheduler.run_events(run_id, after=after)}
+
+    @router.post("/api/scheduler/runs/{run_id}/cancel")
+    async def cancel_scheduler_run(request: Request, run_id: str) -> dict[str, Any]:
+        principal_id = _principal(request)
+        run = backend.application.stores.scheduler.require_run(run_id)
+        job = backend.application.stores.scheduler.require_job(str(run["job_id"]))
+        if str(job.get("principal_id") or "") != principal_id:
+            raise HTTPException(status_code=404, detail="scheduler run not found")
+        return {"run": await backend.scheduler_service.cancel(run_id)}
+
+    @router.post("/api/scheduler/runs/{run_id}/interactions/{interaction_id}")
+    async def resolve_scheduler_run_interaction(
+        request: Request,
+        run_id: str,
+        interaction_id: str,
+    ) -> dict[str, Any]:
+        principal_id = _principal(request)
+        body = await request.json()
+        run = backend.application.stores.scheduler.require_run(run_id)
+        job = backend.application.stores.scheduler.require_job(str(run["job_id"]))
+        if str(job.get("principal_id") or "") != principal_id:
+            raise HTTPException(status_code=404, detail="scheduler run not found")
+        runtime_instance_id = str(run.get("runtime_instance_id") or "").strip()
+        request_id = str(run.get("request_id") or "").strip()
+        session_id = str(run.get("session_id") or "").strip()
+        if not runtime_instance_id or not request_id or not session_id:
+            raise HTTPException(status_code=409, detail="scheduler interaction identity is unavailable")
+        decision = str(body.get("decision") or "").strip()
+        if decision not in {"approve", "reject", "trust", "answer", "revise"}:
+            raise HTTPException(status_code=422, detail="unsupported scheduler interaction decision")
+        response = str(body.get("response") or "").strip()
+        _enqueue_runtime_control(
+            backend,
+            principal_id=principal_id,
+            session_id=session_id,
+            payload={
+                "kind": "resume_interrupt",
+                "runtime_instance_id": runtime_instance_id,
+                "request_id": request_id,
+                "interrupt_id": interaction_id,
+                "decision": decision,
+                **({"response": response} if decision in {"answer", "revise"} else {}),
+            },
+        )
+        updated = backend.application.stores.scheduler.update_run(run_id, status="running")
+        return {"run": updated}
 
     @router.post("/api/scheduler/jobs/{job_id}/run")
     async def run_scheduler_job(
@@ -1051,7 +1121,7 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
     ) -> dict[str, Any]:
         principal_id = _principal(request)
         try:
-            job = backend.application.stores.scheduler.require_job(job_id)
+            job = _owned_scheduler_job(backend, principal_id, job_id)
         except LookupError as exc:
             raise HTTPException(status_code=404, detail="scheduler job not found") from exc
         if job["status"] != "enabled":
@@ -1060,47 +1130,9 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
         workspace = backend.application.stores.conversations.require_workspace(workspace_id)
         if workspace.principal_id != principal_id:
             raise HTTPException(status_code=404, detail="scheduler workspace not found")
-        session_id = _ensure_conversation(
-            backend,
-            principal_id=principal_id,
-            requested_session_id=None,
-            requested_workspace_id=workspace_id,
-        )
-        run = backend.application.stores.scheduler.create_run(job_id=job_id, payload={"session_id": session_id})
-        runtime_config = dict(job.get("runtime_config") or {})
-        user_config = dict(runtime_config.get("user_config") or {})
-        user_config["approval_mode"] = str(job.get("approval_policy") or "ask")
-        _synchronize_policy(
-            backend,
-            principal_id=principal_id,
-            timezone=x_agentfactory_timezone,
-            command_payload={**runtime_config, "user_config": user_config, "execution_preference": job.get("strategy")},
-        )
-        command_id = f"scheduler_{run['run_id']}"
-        envelope = CommandEnvelope(
-            protocol_version=RuntimeProtocolDescriptor(build_revision=backend.config.build_revision).protocol_version,
-            command_id=command_id,
-            client_instance_id=x_agentfactory_client,
-            principal_id=principal_id,
-            session_id=session_id,
-            payload={
-                "kind": "send_message",
-                "message_id": uuid4().hex,
-                "content": str(job.get("task_content") or "").strip(),
-            },
-        )
-        receipt = backend.application.stores.commands.accept(
-            envelope,
-            CommandReceipt(
-                command_id=command_id,
-                client_instance_id=x_agentfactory_client,
-                principal_id=principal_id,
-                session_id=session_id,
-                status="received",
-            ),
-        )
-        backend.supervisor.notify_commands()
-        return {"accepted": receipt.status in {"received", "queued"}, "command": {"type": "scheduler_run", "request_id": command_id}}
+        del x_agentfactory_client, x_agentfactory_timezone
+        run = backend.scheduler_service.launch(job_id, trigger_source="manual")
+        return {"accepted": True, "command": {"type": "scheduler_run", "request_id": run["run_id"]}}
 
     return router
 
@@ -1998,6 +2030,16 @@ def _workspace_projects(backend: Any, principal_id: str) -> list[dict[str, Any]]
         for workspace in backend.application.stores.conversations.list_workspaces_for_principal(principal_id)
         if workspace.status == "active"
     ]
+
+
+def _owned_scheduler_job(backend: Any, principal_id: str, job_id: str) -> dict[str, Any]:
+    try:
+        job = backend.application.stores.scheduler.require_job(job_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="scheduler job not found") from exc
+    if str(job.get("principal_id") or "") != principal_id:
+        raise HTTPException(status_code=404, detail="scheduler job not found")
+    return job
 
 
 def _workspace_project_view(backend: Any, workspace: Any) -> dict[str, Any]:

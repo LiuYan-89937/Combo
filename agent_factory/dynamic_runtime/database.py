@@ -9,7 +9,7 @@ import sqlite3
 from agent_factory.sqlite_runtime import DEFAULT_SQLITE_BUSY_TIMEOUT_MS, connect_sqlite
 
 
-DYNAMIC_RUNTIME_DATABASE_SCHEMA = "dynamic_runtime_database.v20"
+DYNAMIC_RUNTIME_DATABASE_SCHEMA = "dynamic_runtime_database.v21"
 DYNAMIC_RUNTIME_SCHEMA_EPOCH = 2
 
 
@@ -1155,6 +1155,48 @@ def _default_migrations() -> tuple[MigrationStep, ...]:
                 """,
             ),
         ),
+        MigrationStep(
+            version=21,
+            name="scheduler_run_container",
+            statements=(
+                "alter table scheduler_jobs add column next_fire_at text",
+                "alter table scheduler_jobs add column last_fire_at text",
+                "alter table conversations add column source text not null default 'user' check (source in ('user', 'scheduler'))",
+                "alter table scheduler_runs rename to scheduler_runs_v20",
+                "drop index idx_scheduler_runs_job",
+                """
+                create table scheduler_runs (
+                  run_id text primary key,
+                  job_id text not null references scheduler_jobs(job_id),
+                  status text not null check (status in ('queued','running','waiting_approval','waiting_external','completed','failed','cancelled')),
+                  runtime_instance_id text references runtime_instances(runtime_instance_id),
+                  payload_json text not null,
+                  created_at text not null,
+                  updated_at text not null,
+                  terminal_at text
+                )
+                """,
+                """
+                insert into scheduler_runs(run_id, job_id, status, runtime_instance_id, payload_json, created_at, updated_at, terminal_at)
+                select run_id, job_id, status, runtime_instance_id, payload_json, created_at, updated_at, terminal_at
+                from scheduler_runs_v20
+                """,
+                "drop table scheduler_runs_v20",
+                "create index idx_scheduler_runs_job on scheduler_runs(job_id, created_at)",
+                "create unique index idx_scheduler_runs_fire on scheduler_runs(job_id, json_extract(payload_json, '$.scheduled_fire_at'))",
+                """
+                create table scheduler_run_events (
+                  run_id text not null references scheduler_runs(run_id) on delete cascade,
+                  sequence integer not null check (sequence >= 1),
+                  event_type text not null,
+                  payload_json text not null,
+                  created_at text not null,
+                  primary key(run_id, sequence)
+                )
+                """,
+                "create index idx_scheduler_run_events_created on scheduler_run_events(run_id, created_at)",
+            ),
+        ),
     )
 
 
@@ -1257,6 +1299,9 @@ def _schema_allowlist() -> set[tuple[str, str]]:
         ("index", "idx_scheduler_jobs_workspace"),
         ("table", "scheduler_runs"),
         ("index", "idx_scheduler_runs_job"),
+        ("index", "idx_scheduler_runs_fire"),
+        ("table", "scheduler_run_events"),
+        ("index", "idx_scheduler_run_events_created"),
         ("table", "workspace_mount_records"),
         ("index", "idx_workspace_mounts_owner"),
         ("table", "capability_search_generations"),

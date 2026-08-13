@@ -57,4 +57,3 @@ class RuntimeModelUsage(FrozenProtocolModel):
         if not text:
             raise ValueError(f"{getattr(info, 'field_name', 'value')} must not be empty")
         return text
-

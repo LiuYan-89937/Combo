@@ -12,7 +12,6 @@
             <div
               v-if="
                 timelineItems.length === 0
-                && activeSchedulerRunCards.length === 0
                 && !hasActiveStreams
               "
               class="chat-empty"
@@ -36,15 +35,6 @@
                 :workspace-context="messageWorkspaceContext"
               />
             </template>
-
-            <SchedulerRunStatusCard
-              v-for="notice in activeSchedulerRunCards"
-              :key="`scheduler-${notice.id}`"
-              :notice="notice"
-              dismissible
-              @details="uiStore.openSchedulerActivityDrawer"
-              @dismiss="runtimeStore.dismissSchedulerNoticeFromConversation(notice.id)"
-            />
 
           </div>
         </n-scrollbar>
@@ -114,7 +104,6 @@ import { useRoute, useRouter } from 'vue-router'
 import { NScrollbar } from 'naive-ui'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useAgentStore } from '@/stores/agent'
-import { useUiStore } from '@/stores/ui'
 import { useI18n } from '@/composables/useI18n'
 import { useFactoryConversation } from '@/composables/factory/useFactoryConversation'
 import { useFactoryMessageProjection } from '@/composables/factory/useFactoryMessageProjection'
@@ -123,7 +112,6 @@ import MessageItem from '@/components/chat/MessageItem.vue'
 import ToolTraceGroup from '@/components/chat/ToolTraceGroup.vue'
 import MessageInput from '@/components/chat/MessageInput.vue'
 import ToolApprovalPanel from '@/components/chat/ToolApprovalPanel.vue'
-import SchedulerRunStatusCard from '@/components/scheduler/SchedulerRunStatusCard.vue'
 import ConversationFloatingDock from '@/components/chat/ConversationFloatingDock.vue'
 import NewAgentSessionDialog from '@/components/agent/NewAgentSessionDialog.vue'
 import ContextProgressControl from '@/components/chat/ContextProgressControl.vue'
@@ -140,7 +128,6 @@ import { useAgentSessionNavigation } from '@/composables/agent/useAgentSessionNa
 
 const runtimeStore = useRuntimeStore()
 const agentStore = useAgentStore()
-const uiStore = useUiStore()
 const commands = useCommand()
 const workspaceStore = useWorkspaceStore()
 const route = useRoute()
@@ -208,11 +195,6 @@ const backgroundTaskSessionId = computed(() => (
   runtimeStore.activeAgentSessionId || runtimeStore.activeFactorySessionId || null
 ))
 
-const activeSchedulerRunCards = computed(() => {
-  const scope = runtimeStore.activeConversationScope
-  if (!scope) return []
-  return runtimeStore.schedulerRunNotices.filter((notice) => notice.conversationScope === scope)
-})
 
 function handleSend(message: string, attachments: RuntimeAttachmentInput[]) {
   const packageId = agentStore.activeChatPackageId
@@ -345,11 +327,6 @@ watch(
 
 watch(
   () => runtimeStore.tools.map((tool) => `${tool.activityKey}:${tool.status}:${tool.timestamp}`).join('|'),
-  followBottomIfNeeded,
-)
-
-watch(
-  () => activeSchedulerRunCards.value.map((notice) => `${notice.id}:${notice.status}`).join('|'),
   followBottomIfNeeded,
 )
 

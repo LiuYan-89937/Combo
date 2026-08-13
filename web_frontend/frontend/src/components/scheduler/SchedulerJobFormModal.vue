@@ -10,6 +10,13 @@
         />
       </n-form-item>
 
+      <n-form-item :label="t('scheduler.taskType')">
+        <n-radio-group v-model:value="formData.task_type">
+          <n-radio-button value="agent">{{ t('scheduler.agentTask') }}</n-radio-button>
+          <n-radio-button value="script">{{ t('scheduler.scriptTask') }}</n-radio-button>
+        </n-radio-group>
+      </n-form-item>
+
       <n-grid :cols="2" :x-gap="16">
         <n-form-item-gi :label="t('scheduler.strategy')">
           <n-select v-model:value="formData.strategy" :options="strategyOptions" />
@@ -20,17 +27,31 @@
       </n-grid>
 
       <n-grid :cols="2" :x-gap="16">
-        <n-form-item-gi :label="t('scheduler.cron')" path="schedule_expr">
-          <n-input v-model:value="formData.schedule_expr" placeholder="0 9 * * *" />
+        <n-form-item-gi :label="t('scheduler.scheduleType')">
+          <n-select v-model:value="formData.schedule_type" :options="scheduleTypeOptions" />
         </n-form-item-gi>
         <n-form-item-gi :label="t('scheduler.enabled')">
           <n-switch v-model:value="formData.enabled" />
         </n-form-item-gi>
       </n-grid>
 
-      <n-form-item :label="t('scheduler.task')" path="task_content">
+      <n-form-item :label="scheduleExpressionLabel" path="schedule_expr">
+        <n-input v-if="formData.schedule_type !== 'date'" v-model:value="formData.schedule_expr" :placeholder="scheduleExpressionPlaceholder" />
+        <n-date-picker v-else v-model:formatted-value="formData.schedule_expr" type="datetime" value-format="yyyy-MM-dd'T'HH:mm:ssXXX" clearable />
+      </n-form-item>
+
+      <n-form-item v-if="formData.task_type === 'agent'" :label="t('scheduler.task')" path="task_content">
         <n-input v-model:value="formData.task_content" type="textarea" :rows="4" :placeholder="t('scheduler.taskPlaceholder')" />
       </n-form-item>
+
+      <template v-else>
+        <n-form-item :label="t('scheduler.interpreter')">
+          <n-select v-model:value="formData.interpreter" :options="interpreterOptions" />
+        </n-form-item>
+        <n-form-item :label="t('scheduler.script')" path="script">
+          <n-input v-model:value="formData.script" type="textarea" :rows="7" :placeholder="t('scheduler.scriptPlaceholder')" />
+        </n-form-item>
+      </template>
 
       <n-alert v-if="!loadingWorkspaces && workspaceOptions.length === 0" type="warning" :show-icon="false">
         {{ t('scheduler.workspaceRequiredHint') }}
@@ -48,7 +69,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { NAlert, NButton, NForm, NFormItem, NFormItemGi, NGrid, NInput, NModal, NSelect, NSpace, NSwitch } from 'naive-ui'
+import { NAlert, NButton, NDatePicker, NForm, NFormItem, NFormItemGi, NGrid, NInput, NModal, NRadioButton, NRadioGroup, NSelect, NSpace, NSwitch } from 'naive-ui'
 import type { FormInst, FormRules } from 'naive-ui'
 import { workspaceApi, type WorkspaceProjectView } from '@/api/workspace'
 import type { SchedulerJobInput } from '@/api/resourceTypes'
@@ -81,18 +102,38 @@ const approvalOptions = computed(() => [
   { label: t('chat.approvalAsk'), value: 'ask' },
   { label: t('chat.approvalAlways'), value: 'always_approval' },
 ])
+const interpreterOptions = computed(() => [
+  { label: 'Shell', value: 'shell' },
+  { label: 'Python', value: 'python' },
+])
+const scheduleTypeOptions = computed(() => [
+  { label: t('scheduler.scheduleCron'), value: 'cron' },
+  { label: t('scheduler.scheduleInterval'), value: 'interval' },
+  { label: t('scheduler.scheduleDate'), value: 'date' },
+])
+const scheduleExpressionLabel = computed(() => ({
+  cron: t('scheduler.cron'),
+  interval: t('scheduler.intervalSeconds'),
+  date: t('scheduler.runDate'),
+}[formData.value.schedule_type]))
+const scheduleExpressionPlaceholder = computed(() => formData.value.schedule_type === 'cron' ? '0 9 * * *' : '3600')
 const rules = computed<FormRules>(() => ({
   workspace_id: [requiredTextRule(t('scheduler.validateWorkspace'))],
   schedule_expr: [requiredTextRule(t('scheduler.validateCron'))],
-  task_content: [requiredTextRule(t('scheduler.validateTask'))],
+  task_content: formData.value.task_type === 'agent' ? [requiredTextRule(t('scheduler.validateTask'))] : [],
+  script: formData.value.task_type === 'script' ? [requiredTextRule(t('scheduler.validateScript'))] : [],
 }))
 
 function emptyForm() {
   return {
     workspace_id: '',
+    task_type: 'agent' as 'agent' | 'script',
     task_content: '',
+    interpreter: 'shell' as 'shell' | 'python',
+    script: '',
     strategy: 'auto' as ExecutionPreference,
     approval_policy: 'ask' as ApprovalMode,
+    schedule_type: 'cron' as 'cron' | 'interval' | 'date',
     schedule_expr: '0 9 * * *',
     enabled: true,
   }
@@ -113,10 +154,14 @@ async function loadWorkspaces(): Promise<void> {
 function handleSubmit(): void {
   void formRef.value?.validate((errors) => {
     if (errors) return
+    const agentTask = formData.value.task_type === 'agent'
     emit('submit', {
       ...formData.value,
-      schedule_type: 'cron',
-      target: { target_type: 'graph_run', payload: { message: formData.value.task_content.trim() } },
+      task_content: agentTask ? formData.value.task_content.trim() : formData.value.script.trim(),
+      schedule_type: formData.value.schedule_type,
+      target: agentTask
+        ? { target_type: 'graph_run', payload: { message: formData.value.task_content.trim() } }
+        : { target_type: 'script_run', payload: { interpreter: formData.value.interpreter, script: formData.value.script.trim() } },
     })
     formData.value = emptyForm()
   })

@@ -38,6 +38,7 @@ class SendMessagePayload(FrozenProtocolModel):
     force_collaboration: bool = False
     visibility: Literal["public", "internal"] = "public"
     notification_event_ids: tuple[str, ...] = ()
+    scheduler_run_id: str | None = None
 
     @field_validator("message_id", "content")
     @classmethod
@@ -56,10 +57,18 @@ class SendMessagePayload(FrozenProtocolModel):
             raise ValueError("notification_event_ids must not contain empty values")
         return normalized
 
+    @field_validator("scheduler_run_id")
+    @classmethod
+    def _optional_scheduler_run_id(cls, value: str | None) -> str | None:
+        text = str(value or "").strip()
+        return text or None
+
     @model_validator(mode="after")
     def _internal_notification_identity_is_consistent(self) -> "SendMessagePayload":
         if self.notification_event_ids and self.visibility != "internal":
             raise ValueError("notification_event_ids require internal message visibility")
+        if self.scheduler_run_id is not None and self.visibility != "internal":
+            raise ValueError("scheduler_run_id requires internal message visibility")
         return self
 
 

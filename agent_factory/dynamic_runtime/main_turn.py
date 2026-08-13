@@ -5,7 +5,9 @@ from typing import Awaitable, Protocol
 from uuid import uuid4
 
 from agent_factory.dynamic_runtime.dispatcher import CommandOutcome
-from agent_factory.dynamic_runtime.capability_resolver import MainTurnCapabilityResolverProtocol
+from agent_factory.dynamic_runtime.capability_resolver import MainTurnCapabilityResolver, MainTurnCapabilityResolverProtocol
+from agent_factory.dynamic_runtime.delegated_model_selector import DelegatedTaskModelSelector
+from agent_factory.dynamic_runtime.delegation_policy import MAIN_RUNTIME_ONLY_CAPABILITY_IDS
 from agent_factory.dynamic_runtime.model_service import ResolvedRuntimePolicy, RuntimeModelResolver
 from agent_factory.dynamic_runtime.policy_repositories import UserRuntimePolicyStore
 from agent_factory.dynamic_runtime.repositories import ConversationStore, RuntimeInstanceStore, utc_now_text
@@ -77,6 +79,7 @@ class MainTurnCommandHandler:
         capability_resolver: MainTurnCapabilityResolverProtocol,
         runtime_starts: RuntimeStartStore,
         runtime_service: DynamicRuntimeService,
+        delegated_model_selector: DelegatedTaskModelSelector | None = None,
     ) -> None:
         self._conversations = conversations
         self._runtime_instances = runtime_instances
@@ -86,6 +89,7 @@ class MainTurnCommandHandler:
         self._capability_resolver = capability_resolver
         self._runtime_starts = runtime_starts
         self._runtime_service = runtime_service
+        self._delegated_model_selector = delegated_model_selector
 
     async def handle(
         self,
@@ -124,6 +128,24 @@ class MainTurnCommandHandler:
                 execution_preference=payload.execution_preference,
                 approval_mode=payload.approval_mode,
             )
+            if payload.scheduler_run_id is not None:
+                selector = self._delegated_model_selector
+                if selector is None:
+                    raise RuntimeError("scheduled agent model selector is unavailable")
+                selected = selector.select(
+                    task_description=payload.content,
+                    strategy=payload.execution_preference or policy.execution_preference,
+                    fallback_profile_id=str(policy.model_profile_id or ""),
+                )
+                selected_model = self._model_resolver.resolve_chat_model(
+                    operation="main_turn",
+                    profile_id=selected.profile_id,
+                    reasoning_intensity=policy.reasoning_intensity,
+                )
+                resolved_policy = ResolvedRuntimePolicy(
+                    snapshot=resolved_policy.snapshot.model_copy(update={"model": selected_model.snapshot}),
+                    chat_model=selected_model,
+                )
         except Exception:
             self._conversations.fail_pre_runtime_turn(source_command_id=envelope.command_id)
             return CommandOutcome(
@@ -146,12 +168,25 @@ class MainTurnCommandHandler:
                 rejection_code="execution_route_failed",
             )
         try:
-            capability_snapshot = await self._capability_resolver.resolve(
-                envelope=envelope,
-                route=route,
-                policy=resolved_policy,
-                workspace_id=conversation.workspace_id,
-            )
+            if payload.scheduler_run_id is not None:
+                resolver = self._capability_resolver
+                if not isinstance(resolver, MainTurnCapabilityResolver):
+                    raise RuntimeError("scheduled agent capability resolver is unavailable")
+                capability_snapshot = resolver.resolve_requirements(
+                    principal_id=envelope.principal_id,
+                    requirements=tuple(route.capability_requirements),
+                    policy=resolved_policy,
+                    workspace_id=conversation.workspace_id,
+                    include_system_capabilities=True,
+                    excluded_capability_ids=MAIN_RUNTIME_ONLY_CAPABILITY_IDS,
+                )
+            else:
+                capability_snapshot = await self._capability_resolver.resolve(
+                    envelope=envelope,
+                    route=route,
+                    policy=resolved_policy,
+                    workspace_id=conversation.workspace_id,
+                )
         except asyncio.CancelledError:
             self._conversations.cancel_pre_runtime_turn(source_command_id=envelope.command_id)
             raise
@@ -179,6 +214,7 @@ class MainTurnCommandHandler:
             approval_mode=resolved_policy.snapshot.approval_mode,
             force_collaboration=payload.force_collaboration,
             task_revision=turn.task_revision,
+            scheduler_run_id=payload.scheduler_run_id,
             created_at=now,
         )
         instance = RuntimeInstance(

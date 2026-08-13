@@ -25,6 +25,7 @@ def runtime_execution_identity(instance: RuntimeInstance) -> RuntimeExecutionIde
         parent_runtime_instance_id=request.parent_runtime_instance_id,
         task_id=request.task_id,
         delegation_grant_id=request.delegation_grant_id,
+        scheduler_run_id=request.scheduler_run_id,
         task_revision=request.task_revision,
         generation=instance.generation,
         memory_agent_write_enabled=request.policy_snapshot.memory_agent_write_enabled,

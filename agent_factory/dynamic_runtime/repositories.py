@@ -281,6 +281,7 @@ class ConversationStore:
         principal_id: str,
         workspace_id: str,
         title: str,
+        source: Literal["user", "scheduler"] = "user",
     ) -> None:
         now = utc_now_text()
         with self._database.transaction() as conn:
@@ -288,8 +289,8 @@ class ConversationStore:
                 """
                 insert into conversations(
                   session_id, principal_id, workspace_id, title, revision,
-                  status, created_at, updated_at
-                ) values (?, ?, ?, ?, 1, 'active', ?, ?)
+                  status, created_at, updated_at, source
+                ) values (?, ?, ?, ?, 1, 'active', ?, ?, ?)
                 """,
                 (
                     _required_text(session_id, "session_id"),
@@ -298,6 +299,7 @@ class ConversationStore:
                     _required_text(title, "title"),
                     now,
                     now,
+                    source,
                 ),
             )
 
@@ -329,7 +331,7 @@ class ConversationStore:
                 select session_id, principal_id, workspace_id, title, revision,
                        status, created_at, updated_at
                 from conversations
-                where principal_id = ?
+                where principal_id = ? and source = 'user'
                 order by updated_at desc, session_id
                 """,
                 (owner,),

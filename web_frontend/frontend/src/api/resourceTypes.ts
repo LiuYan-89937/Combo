@@ -75,7 +75,7 @@ export interface SkillConfig {
 }
 
 export type ScheduleType = 'cron' | 'interval' | 'date'
-export type SchedulerTargetType = 'graph_run' | 'script_run' | 'tool_call'
+export type SchedulerTargetType = 'graph_run' | 'script_run'
 export interface SchedulerJobInput {
   workspace_id: string
   task_content: string
@@ -96,16 +96,33 @@ export interface SchedulerJobInput {
         }
       }
     | {
-        target_type: 'script_run'
-        payload: {
-          command: string
+      target_type: 'script_run'
+      payload: {
+          interpreter: 'shell' | 'python'
+          script: string
         }
       }
-    | {
-        target_type: 'tool_call'
-        payload: {
-          tool_id: string
-          arguments?: Record<string, any>
-        }
-      }
+}
+
+export interface SchedulerRunView {
+  run_id: string
+  job_id: string
+  status: 'queued' | 'running' | 'waiting_approval' | 'waiting_external' | 'completed' | 'failed' | 'cancelled'
+  executor_type: 'agent' | 'script'
+  scheduled_at: string
+  started_at?: string | null
+  completed_at?: string | null
+  task_content?: string
+  result_summary?: string
+  result?: Record<string, unknown>
+  error?: Record<string, unknown>
+  job_snapshot?: Record<string, any>
+}
+
+export interface SchedulerRunEventView {
+  run_id: string
+  sequence: number
+  event_type: string
+  payload: Record<string, any>
+  created_at: string
 }

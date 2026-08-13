@@ -60,6 +60,8 @@ export const zh = {
   home: {
     badge: '你的模型 · 你的能力 · 你的工作区',
     title: '说出目标，剩下的让 Combo 组合起来',
+    heroTitleLead: '说出目标，',
+    heroTitleFocus: 'Combo 来组合',
     subtitle: '连接自己的模型、Skill、Tool 与 MCP。Combo 会根据任务组织执行、推进后台工作，并把结果留在你的本地工作区。',
     ctaDownload: '下载 Combo',
     ctaPlatformDownload: '下载 {platform} 版',
@@ -207,6 +209,8 @@ export const en = {
   home: {
     badge: 'Your models · Your capabilities · Your workspace',
     title: 'Name the goal. Let Combo put the work together.',
+    heroTitleLead: 'Name the goal.',
+    heroTitleFocus: 'Combo puts it together.',
     subtitle: 'Connect your own models, Skills, Tools, and MCP. Combo organizes execution, keeps longer work moving in the background, and delivers results to your local workspace.',
     ctaDownload: 'Download Combo',
     ctaPlatformDownload: 'Download for {platform}',

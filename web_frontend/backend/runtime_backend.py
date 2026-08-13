@@ -61,6 +61,7 @@ from agent_factory.dynamic_runtime.capability_definitions import (
 from agent_factory.dynamic_runtime.capability_catalog_runtime import CapabilityCatalogRuntime
 from agent_factory.dynamic_runtime.delegated_model_selector import DelegatedTaskModelSelector
 from agent_factory.dynamic_runtime.delegation_runtime import DelegationRuntimeCoordinator
+from agent_factory.dynamic_runtime.scheduler_service import SchedulerService
 from agent_factory.dynamic_runtime.capability_blob_store import CapabilityBlobStore
 from agent_factory.dynamic_runtime.skill_source import (
     FileSystemSkillCapabilitySource,
@@ -262,6 +263,8 @@ class RuntimeBackend:
             self.frontend_events.bind_request_id_resolver(self._frontend_request_id)
             self.frontend_events.bind_active_request_resolver(self._active_frontend_requests)
             self.frontend_events.bind_delegated_task_name_resolver(self._delegated_task_name)
+            self.frontend_events.bind_scheduler_run_resolver(self._scheduler_run_for_runtime)
+            self.frontend_events.bind_scheduler_event_sink(self._record_scheduler_runtime_event)
         except BaseException:
             self.browser_runtime.shutdown()
             self.process_resources.close()
@@ -271,7 +274,8 @@ class RuntimeBackend:
         dispatcher = self.application.main_command_dispatcher(
             execution_router=ExecutionRouter(
                 StructuredRouteAnalyzer.from_file(config.router_prompt_path)
-            )
+            ),
+            delegated_model_selector=self.delegated_model_selector,
         )
         self.conversation_lifecycle = ConversationLifecycleService(
             database=self.application.database,
@@ -312,6 +316,12 @@ class RuntimeBackend:
                 generation_renew_seconds=config.generation_renew_seconds,
             ),
             report_failure=self._report_failure,
+        )
+        self.scheduler_service = SchedulerService(
+            store=self.application.stores.scheduler,
+            conversations=self.application.stores.conversations,
+            commands=self.application.stores.commands,
+            notify_commands=self.supervisor.notify_commands,
         )
 
     def _frontend_request_id(self, runtime_instance_id: str, fallback: str) -> str:
@@ -361,6 +371,7 @@ class RuntimeBackend:
                          ) as runtime_status
                   from command_inbox
                   where principal_id = ? and command_kind = 'send_message'
+                    and json_extract(envelope_json, '$.payload.scheduler_run_id') is null
                 )
                 where status in ('queued', 'running')
                    or runtime_status in ('waiting_approval', 'waiting_external')
@@ -422,6 +433,7 @@ class RuntimeBackend:
 
     def start(self) -> None:
         self.supervisor.start()
+        self.scheduler_service.start()
 
     def capability_pool_snapshot(self) -> dict[str, object]:
         capabilities: list[dict[str, object]] = []
@@ -1488,6 +1500,7 @@ class RuntimeBackend:
         return self.capability_pool_snapshot()
 
     async def stop(self) -> None:
+        await self.scheduler_service.stop()
         await self.supervisor.stop()
         self.application.close()
         self.browser_runtime.shutdown()
@@ -1613,6 +1626,7 @@ class RuntimeBackend:
             self._synchronize_mcp_capabilities(stores, adapters)
 
         model_pool_store = ModelPoolStore()
+        self.delegated_model_selector = DelegatedTaskModelSelector(model_pool_store)
         application = DynamicRuntimeApplication.open(
             config=DynamicRuntimeApplicationConfig(
                 database_path=config.database_path,
@@ -1644,7 +1658,7 @@ class RuntimeBackend:
         delegation_runtime.bind(
             delegations=application.stores.delegations,
             model_resolver=application.model_resolver,
-            model_selector=DelegatedTaskModelSelector(model_pool_store),
+            model_selector=self.delegated_model_selector,
             capability_resolver=application.capability_resolver,
             generation=application.generation.generation,
         )
@@ -1657,9 +1671,33 @@ class RuntimeBackend:
         return application
 
     def _publish_runtime_observation(self, instance, chunk) -> None:
+        if instance.request.scheduler_run_id is not None:
+            self.application.stores.scheduler.record_runtime_observation(
+                instance.request.scheduler_run_id,
+                chunk,
+            )
+            return
         if instance.request.runtime_role == "temporary":
             self.application.stores.delegations.record_runtime_observation(instance, chunk)
         self.frontend_events.publish_observation(instance, chunk)
+
+    def _scheduler_run_for_runtime(self, runtime_instance_id: str) -> str | None:
+        try:
+            instance = self.application.stores.runtime_instances.get(runtime_instance_id)
+        except LookupError:
+            return None
+        return instance.request.scheduler_run_id
+
+    def _record_scheduler_runtime_event(self, run_id: str, event) -> None:
+        event_kind = str(event.payload.kind)
+        if event_kind not in {"approval_required", "question"}:
+            return
+        payload = event.payload.model_dump(mode="json")
+        self.application.stores.scheduler.append_run_event(run_id, event_kind, payload)
+        self.application.stores.scheduler.update_run(
+            run_id,
+            status="waiting_approval" if event_kind == "approval_required" else "waiting_external",
+        )
 
     def _synchronize_builtin_tool_capabilities(self, stores, adapters) -> None:
         config = self.config

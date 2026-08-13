@@ -298,6 +298,7 @@ class DynamicRuntimeApplication:
         self,
         *,
         execution_router: ExecutionRouter,
+        delegated_model_selector: object | None = None,
     ) -> CommandDispatcher:
         handlers: dict[str, CommandHandler] = {
             "cancel_command_request": CancelCommandRequestHandler(
@@ -313,6 +314,7 @@ class DynamicRuntimeApplication:
                 capability_resolver=self.capability_resolver,
                 runtime_starts=self.stores.runtime_starts,
                 runtime_service=self.runtime_service,
+                delegated_model_selector=delegated_model_selector,
             ),
             "set_execution_preference": SetExecutionPreferenceCommandHandler(
                 self.stores.runtime_policies

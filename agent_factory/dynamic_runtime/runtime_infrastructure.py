@@ -423,6 +423,8 @@ def runtime_resource_factory(
         if resource_name == "runtime_identity":
             return ProjectedRuntimeResource(value=runtime_execution_identity(instance))
         if resource_name == "delegation_runtime":
+            if instance.request.runtime_role != "main":
+                raise PermissionError("delegation runtime is available only to the main runtime")
             return ProjectedRuntimeResource(value=delegation_runtime.for_parent(instance))
         if resource_name == "skill_runtime":
             return ProjectedRuntimeResource(

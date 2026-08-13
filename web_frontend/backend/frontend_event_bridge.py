@@ -30,6 +30,8 @@ class FrontendEventBridge:
         self._frontend_request_id: Callable[[str, str], str] = lambda _runtime_id, request_id: request_id
         self._active_requests: Callable[[str], list[dict[str, Any]]] = lambda _principal_id: []
         self._delegated_task_name: Callable[[str], str | None] = lambda _task_id: None
+        self._scheduler_run_for_runtime: Callable[[str], str | None] = lambda _runtime_id: None
+        self._scheduler_event_sink: Callable[[str, RuntimeEvent], None] = lambda _run_id, _event: None
 
     def bind_request_id_resolver(self, resolver: Callable[[str, str], str]) -> None:
         self._frontend_request_id = resolver
@@ -45,6 +47,12 @@ class FrontendEventBridge:
         resolver: Callable[[str], str | None],
     ) -> None:
         self._delegated_task_name = resolver
+
+    def bind_scheduler_run_resolver(self, resolver: Callable[[str], str | None]) -> None:
+        self._scheduler_run_for_runtime = resolver
+
+    def bind_scheduler_event_sink(self, sink: Callable[[str, RuntimeEvent], None]) -> None:
+        self._scheduler_event_sink = sink
 
     def start(self, loop: asyncio.AbstractEventLoop) -> None:
         with self._lock:
@@ -71,6 +79,10 @@ class FrontendEventBridge:
     async def publish_record(self, record: OutboxRecord, *, principal_id: str) -> None:
         if record.aggregate_kind == "runtime_instance":
             event = RuntimeEvent.model_validate(record.payload)
+            scheduler_run_id = self._scheduler_run_for_runtime(event.runtime_instance_id)
+            if scheduler_run_id is not None:
+                self._scheduler_event_sink(scheduler_run_id, event)
+                return
             frontend_request_id = self._frontend_request_id(event.runtime_instance_id, event.request_id)
             projected_events = project_runtime_event(
                 event,
@@ -78,6 +90,12 @@ class FrontendEventBridge:
                 delegated_task_name=self._delegated_task_name(event.task_id or ""),
             )
         elif record.aggregate_kind == "command":
+            command_runtime_id = str(record.payload.get("runtime_instance_id") or "").strip()
+            if command_runtime_id and self._scheduler_run_for_runtime(command_runtime_id) is not None:
+                return
+            command_id = str(record.payload.get("command_id") or record.aggregate_id or "").strip()
+            if command_id.startswith("scheduler-"):
+                return
             projected_events = project_command_event(record)
         elif record.aggregate_kind == "delegated_task":
             projected_events = [project_delegated_task_record(record)]

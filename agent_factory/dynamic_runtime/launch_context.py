@@ -205,6 +205,7 @@ class ComposedRuntimeLaunchContextResolver(RuntimeLaunchContextResolver):
             capability_instructions=capability_instructions,
             delegation_notifications=delegation_notifications,
             force_collaboration=request.runtime_role == "main" and request.force_collaboration,
+            scheduled_run=request.scheduler_run_id is not None,
         )
         return RuntimeLaunchContext(
             system_prompt=system_prompt,
@@ -260,6 +261,7 @@ def _render_system_prompt(
     capability_instructions: str,
     delegation_notifications: str,
     force_collaboration: bool = False,
+    scheduled_run: bool = False,
 ) -> str:
     sections = [
         base.strip(),
@@ -283,6 +285,12 @@ def _render_system_prompt(
             "independent workstreams and delegate at least one substantive workstream to a child Agent before "
             "finishing the turn. Do not delegate ceremonial, empty, or duplicate work. If the request lacks "
             "enough information to define a substantive child objective, ask the necessary clarification instead."
+        )
+    if scheduled_run:
+        sections.append(
+            "This is an autonomous scheduled task execution. Work only on the scheduled objective in the bound "
+            "workspace, do not delegate to child Agents, and finish with a self-contained delivery that reports "
+            "verified results, produced files, and any unresolved blockers."
         )
     return "\n\n".join(sections)
 

@@ -58,7 +58,10 @@ useSeo(() => ({
       <div class="container hero__layout">
         <div class="hero__copy">
           <span class="hero__badge"><i />{{ t('home.badge') }}</span>
-          <h1>{{ t('home.title') }}</h1>
+          <h1>
+            <span>{{ t('home.heroTitleLead') }}</span>
+            <span class="hero-title__focus">{{ t('home.heroTitleFocus') }}</span>
+          </h1>
           <p>{{ t('home.subtitle') }}</p>
           <div class="hero__actions">
             <BaseButton
@@ -80,25 +83,18 @@ useSeo(() => ({
         </div>
 
         <div class="hero-scene" aria-hidden="true">
-          <div class="hero-scene__rhythm rhythm--one" /><div class="hero-scene__rhythm rhythm--two" /><div class="hero-scene__rhythm rhythm--three" />
           <div class="hero-scene__bubble">
             <span>{{ t('home.heroPrompt') }}</span>
             <i />
           </div>
           <div class="hero-scene__mascot">
-            <span class="mascot-halo" />
             <ComboFrameAnimation character="paired" action="thinking" :size="276" />
           </div>
-          <span class="capability-pill pill--skill"><i />Skill</span>
-          <span class="capability-pill pill--tool"><i />Tool</span>
-          <span class="capability-pill pill--mcp"><i />MCP</span>
-          <span class="capability-pill pill--knowledge"><i />Knowledge</span>
           <div class="hero-scene__task">
             <ComboFrameAnimation character="companion" action="running" :size="44" />
             <span><strong>{{ t('home.heroTaskTitle') }}</strong><small>{{ t('home.heroTaskBody') }}</small></span>
             <i />
           </div>
-          <div class="hero-scene__status"><i />{{ t('home.heroStatus') }}</div>
         </div>
       </div>
     </section>
@@ -118,10 +114,7 @@ useSeo(() => ({
             <p>{{ t(`home.capabilities.${capability.key}.description`) }}</p>
           </article>
           <div class="composer-center" aria-hidden="true">
-            <span class="composer-ring composer-ring--outer" />
-            <span class="composer-ring composer-ring--inner" />
             <ComboFrameAnimation character="paired" action="idle" :size="152" />
-            <strong>COMBO</strong>
           </div>
         </div>
       </div>
@@ -185,24 +178,22 @@ useSeo(() => ({
 .hero__layout { position: relative; display: grid; grid-template-columns: minmax(0, .94fr) minmax(480px, 1.06fr); align-items: center; gap: clamp(48px, 7vw, 110px); }
 .hero__copy { max-width: 690px; }
 .hero__badge { display: inline-flex; align-items: center; gap: 9px; padding: 6px 12px; border: 1px solid var(--border-strong); border-radius: 999px; color: var(--text-secondary); background: color-mix(in srgb, var(--surface) 84%, transparent); font: 10px/1.2 var(--font-mono); letter-spacing: .12em; text-transform: uppercase; }
-.hero__badge i, .hero-scene__status i { width: 6px; height: 6px; border-radius: 50%; background: var(--text-strong); animation: status-breathe 1.8s ease-in-out infinite; }
-.hero h1 { max-width: 740px; margin: 24px 0 24px; color: var(--text-strong); font-size: clamp(58px, 6.3vw, 94px); font-weight: 780; line-height: .96; letter-spacing: -.075em; text-wrap: balance; }
+.hero__badge i { width: 6px; height: 6px; border-radius: 50%; background: var(--text-strong); animation: status-breathe 1.8s ease-in-out infinite; }
+.hero h1 { display: grid; justify-items: start; max-width: 760px; margin: 24px 0 24px; color: var(--text-strong); font-size: clamp(58px, 6.3vw, 94px); font-weight: 780; line-height: .96; letter-spacing: -.075em; }
+.hero h1 > span:first-child { position: relative; z-index: 1; }
+.hero-title__focus { position: relative; z-index: 0; display: inline-block; margin-top: .08em; padding: .1em .18em .14em .12em; border-radius: .16em; color: var(--on-primary); background: var(--primary); font-size: .82em; line-height: .9; letter-spacing: -.065em; transform: rotate(-1.2deg); transform-origin: left center; }
+.hero-title__focus::after { position: absolute; right: -.12em; bottom: -.1em; width: .16em; height: .16em; border-radius: 50%; background: var(--primary); content: ''; }
 .hero__copy > p:not(.hero__note) { max-width: 640px; margin: 0; color: var(--text-secondary); font-size: clamp(17px, 1.5vw, 21px); line-height: 1.72; }
 .hero__actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 34px; }
 .hero__note { margin: 15px 0 0; color: var(--text-muted); font-size: 11px; }
 .hero-scene { position: relative; min-height: 590px; }
-.hero-scene::before { position: absolute; inset: 7% 3% 5%; border: 1px solid var(--border-strong); border-radius: 44% 56% 48% 52% / 50% 42% 58% 50%; background: color-mix(in srgb, var(--surface-subtle) 70%, transparent); content: ''; animation: scene-shape 13s ease-in-out infinite alternate; }
-.hero-scene__rhythm { position: absolute; left: 5%; width: 88%; height: 1px; background: linear-gradient(90deg, transparent, var(--border-strong) 18%, var(--border-strong) 82%, transparent); transform-origin: center; }
-.rhythm--one { top: 33%; transform: rotate(-5deg); }.rhythm--two { top: 50%; transform: rotate(3deg); }.rhythm--three { top: 66%; transform: rotate(-2deg); }
-.hero-scene__mascot { position: absolute; top: 48%; left: 50%; display: grid; place-items: center; transform: translate(-50%, -50%); }
-.mascot-halo { position: absolute; width: 270px; height: 270px; border: 1px solid var(--border-strong); border-radius: 50%; box-shadow: 0 0 0 38px color-mix(in srgb, var(--text-strong) 2%, transparent), 0 0 0 76px color-mix(in srgb, var(--text-strong) 1.2%, transparent); animation: halo-pulse 4s ease-in-out infinite; }
-.hero-scene__bubble { position: absolute; top: 6%; left: 2%; z-index: 2; display: flex; max-width: 330px; align-items: center; gap: 12px; padding: 14px 16px; border: 1px solid var(--border-strong); border-radius: 18px 18px 18px 4px; color: var(--text); background: color-mix(in srgb, var(--surface) 92%, transparent); box-shadow: var(--shadow-soft); font-size: 11px; line-height: 1.5; animation: float-soft 5.5s ease-in-out infinite; }
+.hero-scene::before { position: absolute; inset: 15% 8% 10%; border-radius: 34px; background: color-mix(in srgb, var(--text-strong) 3.5%, transparent); content: ''; transform: rotate(2deg); }
+.hero-scene::after { position: absolute; bottom: 18%; left: 50%; width: 280px; height: 30px; border-radius: 50%; background: color-mix(in srgb, var(--text-strong) 12%, transparent); filter: blur(16px); content: ''; transform: translateX(-50%); }
+.hero-scene__mascot { position: absolute; top: 49%; left: 50%; z-index: 1; display: grid; place-items: center; transform: translate(-50%, -50%); }
+.hero-scene__bubble { position: absolute; top: 8%; left: 0; z-index: 2; display: flex; max-width: 350px; align-items: center; gap: 12px; padding: 15px 17px; border: 1px solid var(--border-strong); border-radius: 18px 18px 18px 4px; color: var(--text); background: var(--surface); box-shadow: var(--shadow-soft); font-size: 11px; line-height: 1.5; animation: float-soft 5.5s ease-in-out infinite; }
 .hero-scene__bubble i { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--text-strong); }
-.capability-pill { position: absolute; z-index: 2; display: flex; align-items: center; gap: 7px; padding: 8px 11px; border: 1px solid var(--border-strong); border-radius: 999px; color: var(--text-secondary); background: color-mix(in srgb, var(--surface) 92%, transparent); box-shadow: var(--shadow-soft); font: 9px/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; animation: float-soft 6s ease-in-out infinite; }
-.capability-pill i { width: 5px; height: 5px; border-radius: 50%; background: var(--text-strong); }.pill--skill { top: 24%; left: 0; animation-delay: -1s; }.pill--tool { top: 20%; right: 1%; animation-delay: -3s; }.pill--mcp { bottom: 21%; left: 3%; animation-delay: -4s; }.pill--knowledge { right: 0; bottom: 29%; animation-delay: -2s; }
-.hero-scene__task { position: absolute; right: 4%; bottom: 5%; z-index: 3; display: grid; width: 230px; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 8px 10px 8px 6px; border: 1px solid var(--border-strong); border-radius: 18px; background: color-mix(in srgb, var(--surface) 94%, transparent); box-shadow: 0 18px 50px color-mix(in srgb, var(--text-strong) 12%, transparent); animation: float-soft 4.8s ease-in-out infinite -2s; }
+.hero-scene__task { position: absolute; right: 0; bottom: 7%; z-index: 3; display: grid; width: 244px; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 9px 11px 9px 7px; border: 1px solid var(--border-strong); border-radius: 18px; background: var(--surface); box-shadow: 0 18px 50px color-mix(in srgb, var(--text-strong) 12%, transparent); animation: float-soft 4.8s ease-in-out infinite -2s; }
 .hero-scene__task > span { display: grid; min-width: 0; gap: 2px; }.hero-scene__task strong { overflow: hidden; color: var(--text-strong); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }.hero-scene__task small { color: var(--text-muted); font-size: 8px; }.hero-scene__task > i { width: 6px; height: 6px; border-radius: 50%; background: var(--text-strong); animation: status-breathe 1.5s ease-in-out infinite; }
-.hero-scene__status { position: absolute; bottom: 8%; left: 8%; display: flex; align-items: center; gap: 8px; color: var(--text-muted); font: 8px/1 var(--font-mono); letter-spacing: .13em; text-transform: uppercase; }
 .section-head--split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, .65fr); align-items: end; gap: 50px; }
 .section-head h2 { max-width: 780px; margin: 12px 0 0; color: var(--text-strong); font-size: clamp(42px, 5.5vw, 74px); font-weight: 760; line-height: 1; letter-spacing: -.06em; }
 .section-head > p { margin: 0; color: var(--text-secondary); font-size: 16px; line-height: 1.75; }
@@ -215,9 +206,8 @@ useSeo(() => ({
 .capability-card h3 { margin: auto 0 10px; color: var(--text-strong); font-size: 25px; letter-spacing: -.04em; }
 .capability-card p { max-width: 390px; margin: 0; color: var(--text-secondary); font-size: 13px; line-height: 1.7; }
 .capability-card:nth-child(1), .capability-card:nth-child(3) { padding-right: 150px; }.capability-card:nth-child(2), .capability-card:nth-child(4) { padding-left: 150px; }
-.composer-center { position: absolute; top: 50%; left: 50%; z-index: 2; display: grid; width: 250px; height: 250px; place-items: center; border: 1px solid var(--border-strong); border-radius: 50%; background: color-mix(in srgb, var(--surface) 94%, transparent); box-shadow: 0 25px 70px color-mix(in srgb, var(--text-strong) 12%, transparent); transform: translate(-50%, -50%); }
-.composer-center > * { grid-area: 1 / 1; }.composer-center strong { align-self: end; margin-bottom: 31px; color: var(--text-muted); font: 8px/1 var(--font-mono); letter-spacing: .2em; }
-.composer-ring { width: 196px; height: 196px; border: 1px dashed var(--border-strong); border-radius: 50%; animation: spin-slow 22s linear infinite; }.composer-ring--inner { width: 145px; height: 145px; animation-direction: reverse; animation-duration: 16s; }
+.composer-center { position: absolute; top: 50%; left: 50%; z-index: 2; display: grid; width: 220px; height: 190px; place-items: center; border: 1px solid var(--border-strong); border-radius: 32px; background: color-mix(in srgb, var(--surface) 94%, transparent); box-shadow: 0 25px 70px color-mix(in srgb, var(--text-strong) 12%, transparent); transform: translate(-50%, -50%); }
+.composer-center > * { grid-area: 1 / 1; }
 
 .control-section { border-block: 1px solid var(--border); background: var(--surface-subtle); }
 .control-section__layout { display: grid; grid-template-columns: minmax(360px, .9fr) minmax(520px, 1.1fr); align-items: start; gap: clamp(52px, 8vw, 120px); }
@@ -230,9 +220,6 @@ useSeo(() => ({
 @keyframes float-soft { 50% { transform: translateY(-7px); } }
 @keyframes ambient-note { 50% { opacity: .45; transform: translateY(-18px) scale(1.5); } }
 @keyframes status-breathe { 50% { opacity: .3; transform: scale(.72); } }
-@keyframes scene-shape { to { border-radius: 54% 46% 57% 43% / 43% 56% 44% 57%; transform: rotate(2deg) scale(1.02); } }
-@keyframes halo-pulse { 50% { transform: scale(1.04); opacity: .72; } }
-@keyframes spin-slow { to { transform: rotate(360deg); } }
 
 @media (max-width: 1040px) {
   .hero__layout { grid-template-columns: 1fr; }.hero__copy { max-width: 820px; }.hero-scene { width: min(720px, 100%); min-height: 580px; margin: 0 auto; }
@@ -241,15 +228,15 @@ useSeo(() => ({
 }
 
 @media (max-width: 720px) {
-  .hero { min-height: auto; padding: 70px 0 48px; }.hero__layout { gap: 28px; }.hero h1 { margin-top: 20px; font-size: clamp(54px, 16vw, 72px); }.hero__copy > p:not(.hero__note) { font-size: 16px; }.hero__actions { align-items: stretch; flex-direction: column; }.hero__actions :deep(.btn) { width: 100%; }.hero-scene { min-height: 480px; transform: scale(.94); }.hero-scene__mascot :deep(.combo-frame-animation) { width: 220px !important; }.mascot-halo { width: 220px; height: 220px; }.hero-scene__bubble { top: 3%; left: 0; max-width: 245px; }.pill--skill { top: 25%; }.pill--tool { top: 20%; }.pill--mcp { bottom: 24%; }.pill--knowledge { right: -3%; bottom: 29%; }.hero-scene__task { right: 0; bottom: 2%; }.hero-scene__status { bottom: 8%; left: 0; }
+  .hero { min-height: auto; padding: 70px 0 48px; }.hero__layout { gap: 28px; }.hero h1 { margin-top: 20px; font-size: clamp(54px, 16vw, 72px); }.hero-title__focus { font-size: .72em; }.hero__copy > p:not(.hero__note) { font-size: 16px; }.hero__actions { align-items: stretch; flex-direction: column; }.hero__actions :deep(.btn) { width: 100%; }.hero-scene { min-height: 450px; transform: scale(.96); }.hero-scene::before { inset: 14% 2% 9%; }.hero-scene::after { bottom: 17%; width: 220px; }.hero-scene__mascot :deep(.combo-frame-animation) { width: 220px !important; }.hero-scene__bubble { top: 3%; left: 0; max-width: 245px; }.hero-scene__task { right: 0; bottom: 2%; }
   .section-head--split { grid-template-columns: 1fr; gap: 20px; }.section-head h2 { font-size: 46px; }
-  .capability-composer { min-height: auto; grid-template-columns: 1fr; margin-top: 38px; padding-top: 160px; }.capability-card, .capability-card:nth-child(n) { min-height: 210px; padding: 22px; }.composer-center { top: 0; width: 150px; height: 150px; transform: translate(-50%, 0); }.composer-center :deep(.combo-frame-animation) { width: 104px !important; }.composer-ring--outer { width: 128px; height: 128px; }.composer-ring--inner { width: 96px; height: 96px; }.composer-center strong { margin-bottom: 16px; }
+  .capability-composer { min-height: auto; grid-template-columns: 1fr; margin-top: 38px; padding-top: 150px; }.capability-card, .capability-card:nth-child(n) { min-height: 210px; padding: 22px; }.composer-center { top: 0; width: 150px; height: 130px; transform: translate(-50%, 0); }.composer-center :deep(.combo-frame-animation) { width: 104px !important; }
   .control-points { grid-template-columns: 1fr; }.control-points article { min-height: 180px; }.control-points article + article { border-top: 1px solid var(--border); border-left: 0; }.control-copy h2 { font-size: 47px; }
   .download-shell { grid-template-columns: 1fr; text-align: center; }.download-mascot { display: none; }.download-grid { grid-template-columns: 1fr; text-align: left; }.download-steps { align-items: flex-start; flex-direction: column; width: fit-content; margin: 0 auto; text-align: left; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .hero__atmosphere i, .hero__badge i, .hero-scene__bubble, .capability-pill, .hero-scene__task, .hero-scene__task > i, .mascot-halo, .composer-ring { animation: none; }
+  .hero__atmosphere i, .hero__badge i, .hero-scene__bubble, .hero-scene__task, .hero-scene__task > i { animation: none; }
   .capability-card { transition: none; }
 }
 </style>

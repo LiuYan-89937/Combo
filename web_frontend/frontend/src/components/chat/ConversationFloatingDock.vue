@@ -83,6 +83,7 @@
     </div>
 
     <BackgroundTaskStack :session-id="sessionId" compact />
+    <SchedulerRunCapsules />
 
   </div>
 </template>
@@ -99,6 +100,7 @@ import SessionsSidebarPanel from '@/components/common/right-sidebar/SessionsSide
 import WorkspaceSidebarPanel from '@/components/common/right-sidebar/WorkspaceSidebarPanel.vue'
 import ConversationMemoryPanel from './ConversationMemoryPanel.vue'
 import BackgroundTaskStack from './BackgroundTaskStack.vue'
+import SchedulerRunCapsules from '@/components/scheduler/SchedulerRunCapsules.vue'
 import PlanCapsule from './PlanCapsule.vue'
 
 type FloatingItemId = 'sessions' | 'workspace' | 'memory' | 'plan'

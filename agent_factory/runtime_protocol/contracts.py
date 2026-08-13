@@ -456,6 +456,7 @@ class RuntimeRequest(FrozenProtocolModel):
     parent_runtime_instance_id: str | None = None
     task_id: str | None = None
     delegation_grant_id: str | None = None
+    scheduler_run_id: str | None = None
     created_at: str = Field(default_factory=utc_now_text)
 
     @field_validator(
@@ -470,7 +471,7 @@ class RuntimeRequest(FrozenProtocolModel):
     def _required_request_text(cls, value: str, info: Any) -> str:
         return _required_text(value, info.field_name)
 
-    @field_validator("parent_runtime_instance_id", "task_id", "delegation_grant_id")
+    @field_validator("parent_runtime_instance_id", "task_id", "delegation_grant_id", "scheduler_run_id")
     @classmethod
     def _optional_parent_runtime(cls, value: str | None) -> str | None:
         return _optional_text(value)
@@ -484,6 +485,8 @@ class RuntimeRequest(FrozenProtocolModel):
         delegation_fields = (self.task_id, self.delegation_grant_id)
         if self.runtime_role == "main" and any(item is not None for item in delegation_fields):
             raise ValueError("main runtime cannot carry delegated task identity")
+        if self.runtime_role == "temporary" and self.scheduler_run_id is not None:
+            raise ValueError("temporary runtime cannot carry scheduler run identity")
         if self.runtime_role == "temporary" and self.force_collaboration:
             raise ValueError("temporary runtime cannot force child collaboration")
         if self.runtime_role == "temporary" and any(item is None for item in delegation_fields):
@@ -512,6 +515,7 @@ class RuntimeExecutionIdentity(FrozenProtocolModel):
     parent_runtime_instance_id: str | None = None
     task_id: str | None = None
     delegation_grant_id: str | None = None
+    scheduler_run_id: str | None = None
     task_revision: int = Field(ge=1)
     generation: int = Field(ge=1)
     memory_agent_write_enabled: bool = True
@@ -530,7 +534,7 @@ class RuntimeExecutionIdentity(FrozenProtocolModel):
     def _required_identity_text(cls, value: str, info: Any) -> str:
         return _required_text(value, info.field_name)
 
-    @field_validator("parent_runtime_instance_id", "task_id", "delegation_grant_id")
+    @field_validator("parent_runtime_instance_id", "task_id", "delegation_grant_id", "scheduler_run_id")
     @classmethod
     def _optional_identity_parent(cls, value: str | None) -> str | None:
         return _optional_text(value)
@@ -546,6 +550,8 @@ class RuntimeExecutionIdentity(FrozenProtocolModel):
             raise ValueError("main runtime identity cannot carry delegated task identity")
         if self.runtime_role == "temporary" and any(item is None for item in delegation_fields):
             raise ValueError("temporary runtime identity requires task and grant identities")
+        if self.runtime_role == "temporary" and self.scheduler_run_id is not None:
+            raise ValueError("temporary runtime identity cannot carry scheduler run identity")
         return self
 
 

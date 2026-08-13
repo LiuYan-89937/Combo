@@ -54,7 +54,7 @@ export function useShowcaseDirector() {
       appendMessage(message('user', [
         textPart('请分工完成东京五日亲子旅行手册，并给出可直接执行的最终版本。'),
       ]))
-      input.value = ''
+      updateInputValue(input, '')
     }
     await wait(900)
     appendMessage(message('assistant', [
@@ -183,12 +183,25 @@ export function useShowcaseDirector() {
   }
 
   async function typeText(input: HTMLTextAreaElement, text: string): Promise<void> {
-    input.value = ''
+    updateInputValue(input, '')
+    let value = ''
     for (const character of text) {
       if (stopped) return
-      input.value += character
+      value += character
+      updateInputValue(input, value)
       await wait(78)
     }
+  }
+
+  function updateInputValue(input: HTMLTextAreaElement, value: string): void {
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+    setter?.call(input, value)
+    input.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      composed: true,
+      data: value.slice(-1) || null,
+      inputType: value ? 'insertText' : 'deleteContentBackward',
+    }))
   }
 
   function id(prefix: string): string {
