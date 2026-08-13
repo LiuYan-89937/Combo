@@ -26,6 +26,10 @@ from agent_factory.runtime_kernel.state.runtime_graph import (
 from agent_factory.runtime_kernel.state import RuntimeState, merge_state_patch
 from agent_factory.runtime_protocol.messages import incomplete_tool_call_ids
 from agent_factory.tooling.execution_context import consume_runtime_inputs
+from agent_factory.tooling.execution_context import (
+    RuntimeModelGenerationInterrupted,
+    runtime_terminal_cancellation_requested,
+)
 
 
 NextNodeResolver = Callable[[str, str | None], tuple[str, str] | None]
@@ -173,6 +177,41 @@ def make_fixed_runner(
             return runtime_graph_patch(updated, messages=messages_patch)
         except GraphInterrupt:
             raise
+        except RuntimeModelGenerationInterrupted as exc:
+            interrupted = active_state
+            if runtime_terminal_cancellation_requested():
+                interrupted.execution.interrupted = True
+                _finish(interrupted, status="cancelled", location="runtime.cancel")
+                return runtime_graph_patch(interrupted, messages=messages_patch)
+            steered_messages = _consume_injected_messages()
+            if not steered_messages:
+                raise
+            interrupted.conversation.assistant_draft = None
+            interrupted.conversation.reasoning_content = None
+            interrupted.conversation.final_answer = None
+            interrupted.conversation.clarification_question = None
+            interrupted.execution.route_decision = "runtime.steered"
+            interrupted.execution.current_node = node_id
+            interrupted.execution.finished = False
+            interrupted.execution.interrupted = False
+            partial_messages = []
+            if exc.partial_text.strip():
+                partial_messages.append(
+                    AIMessage(
+                        content=exc.partial_text,
+                        additional_kwargs={"completion_reason": "user_interrupted"},
+                    )
+                )
+            _resolve_after_node(
+                state=interrupted,
+                node_id=node_id,
+                success_nodes=success_nodes,
+                next_node=next_node,
+            )
+            return runtime_graph_patch(
+                interrupted,
+                messages=[*messages_patch, *partial_messages, *steered_messages],
+            )
         except Exception as exc:
             failed = active_state
             failed.execution.retry_count += 1

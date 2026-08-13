@@ -36,8 +36,9 @@
     <DebugDrawer v-model:show="uiStore.debugDrawerOpen" />
 
     <SchedulerActivityDrawer />
-    <EmbeddingSetupReminder v-if="guideResolved" />
+    <EmbeddingSetupReminder v-if="runtimeServicesEnabled && guideResolved" />
     <FirstRunGuide
+      v-if="runtimeServicesEnabled"
       v-model:show="guideOpen"
       @complete="finishGuide"
     />
@@ -66,7 +67,7 @@ import {
   hasCompletedFirstRunGuide,
 } from '@/services/firstRunGuide'
 
-withDefaults(defineProps<{
+const props = withDefaults(defineProps<{
   runtimeServicesEnabled?: boolean
 }>(), {
   runtimeServicesEnabled: true,
@@ -77,7 +78,7 @@ const guideResolved = ref(hasCompletedFirstRunGuide())
 const guideOpen = ref(false)
 
 onMounted(() => {
-  if (!guideResolved.value) guideOpen.value = true
+  if (props.runtimeServicesEnabled && !guideResolved.value) guideOpen.value = true
 })
 
 function finishGuide() {

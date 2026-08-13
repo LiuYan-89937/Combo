@@ -1,7 +1,7 @@
 import { useRouter } from 'vue-router'
 import { useCommand } from '@/composables/useCommand'
 import { useAgentStore, type AgentRecentSessionView } from '@/stores/agent'
-import { agentSessionsLandingQuery } from '@/utils/agentSessionRoute'
+import { SYSTEM_CHAT_PACKAGE_ID } from '@/utils/resourceScope'
 
 export function useAgentSessionNavigation() {
   const router = useRouter()
@@ -9,33 +9,26 @@ export function useAgentSessionNavigation() {
   const agentStore = useAgentStore()
 
   async function openAgentSession(session: AgentRecentSessionView): Promise<void> {
-    const packageId = String(session.package_id || '').trim()
     const sessionId = String(session.session_id || '').trim()
-    if (!packageId || !sessionId) return
+    if (!sessionId) return
     await router.push({
-      name: 'Factory',
-      query: { package_id: packageId, session_id: sessionId },
+      name: 'ChatSession',
+      params: { sessionId },
     })
   }
 
   async function startNewAgentSession(packageId: string, workspaceId?: string | null): Promise<void> {
-    const normalizedPackageId = String(packageId || '').trim()
-    if (!normalizedPackageId) return
+    if (String(packageId || '').trim() !== SYSTEM_CHAT_PACKAGE_ID) return
     const normalizedWorkspaceId = String(workspaceId || '').trim() || null
     await router.push({
-      name: 'Factory',
-      query: {
-        package_id: normalizedPackageId,
-        new: '1',
-        ...(normalizedWorkspaceId ? { workspace_id: normalizedWorkspaceId } : {}),
-      },
+      name: 'ChatNew',
+      query: normalizedWorkspaceId ? { workspace: normalizedWorkspaceId } : {},
     })
   }
 
   async function openPackageAgentChat(packageId: string): Promise<void> {
-    const normalizedPackageId = String(packageId || '').trim()
-    if (!normalizedPackageId) return
-    await router.push({ name: 'Factory', query: { package_id: normalizedPackageId } })
+    if (String(packageId || '').trim() !== SYSTEM_CHAT_PACKAGE_ID) return
+    await openAgentSessions()
   }
 
   async function openMostRecentAgentSession(): Promise<boolean> {
@@ -49,7 +42,7 @@ export function useAgentSessionNavigation() {
   async function openAgentSessions(): Promise<void> {
     const opened = await openMostRecentAgentSession()
     if (opened) return
-    await router.push({ name: 'Factory', query: agentSessionsLandingQuery() })
+    await router.push({ name: 'ChatNew' })
   }
 
   return {

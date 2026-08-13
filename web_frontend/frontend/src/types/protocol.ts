@@ -335,6 +335,8 @@ export interface ToolActivity {
 
 export interface RuntimePlanView {
   version?: string
+  runtime_instance_id?: string | null
+  request_id?: string | null
   goal: string
   status: string
   current_step_id?: string | null

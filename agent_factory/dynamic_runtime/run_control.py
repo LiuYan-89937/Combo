@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 
 
@@ -19,7 +19,7 @@ class RuntimeInputInjection:
 
 
 class RuntimeRunControl:
-    """Cooperative graph cancellation with active tool-I/O hooks."""
+    """Own terminal cancellation, model-generation interruption, and steering input delivery."""
 
     __slots__ = (
         "_drain_event",
@@ -27,6 +27,10 @@ class RuntimeRunControl:
         "_tool_cancel_callbacks",
         "_tool_cancel_lock",
         "_input_injections",
+        "_claimed_input_injections",
+        "_input_checkpoint_callbacks",
+        "_model_cancel_callbacks",
+        "_generation_revision",
     )
 
     def __init__(self) -> None:
@@ -35,6 +39,10 @@ class RuntimeRunControl:
         self._tool_cancel_lock = threading.RLock()
         self._tool_cancel_callbacks: dict[str, Callable[[], None]] = {}
         self._input_injections: dict[str, RuntimeInputInjection] = {}
+        self._claimed_input_injections: dict[str, RuntimeInputInjection] = {}
+        self._input_checkpoint_callbacks: dict[str, Callable[[], None]] = {}
+        self._model_cancel_callbacks: dict[str, Callable[[], None]] = {}
+        self._generation_revision = 0
 
     def request_drain(self, reason: str = "shutdown") -> None:
         drain_reason = _required_text(reason, "reason")
@@ -43,7 +51,10 @@ class RuntimeRunControl:
                 return
             self._drain_reason = drain_reason
             self._drain_event.set()
-            callbacks = tuple(self._tool_cancel_callbacks.values())
+            callbacks = (
+                *self._model_cancel_callbacks.values(),
+                *self._tool_cancel_callbacks.values(),
+            )
         for callback in callbacks:
             try:
                 callback()
@@ -76,22 +87,104 @@ class RuntimeRunControl:
 
         return unregister
 
-    def submit_input(self, injection: RuntimeInputInjection) -> bool:
+    def begin_model_generation(self) -> int:
+        with self._tool_cancel_lock:
+            if self._drain_event.is_set():
+                raise RuntimeError(self._drain_reason or "runtime cancellation requested")
+            return self._generation_revision
+
+    def request_generation_interrupt(self) -> int:
+        """Invalidate only the active model generation; tools and the Runtime remain alive."""
+        with self._tool_cancel_lock:
+            if self._drain_event.is_set():
+                return self._generation_revision
+            self._generation_revision += 1
+            callbacks = tuple(self._model_cancel_callbacks.values())
+            revision = self._generation_revision
+        for callback in callbacks:
+            try:
+                callback()
+            except Exception:
+                continue
+        return revision
+
+    def generation_is_current(self, revision: int) -> bool:
+        with self._tool_cancel_lock:
+            return not self._drain_event.is_set() and revision == self._generation_revision
+
+    def register_model_cancellation(self, callback: Callable[[], None]) -> Callable[[], None]:
+        registration_id = uuid4().hex
+        with self._tool_cancel_lock:
+            cancel_now = self._drain_event.is_set()
+            if not cancel_now:
+                self._model_cancel_callbacks[registration_id] = callback
+        if cancel_now:
+            callback()
+
+        def unregister() -> None:
+            with self._tool_cancel_lock:
+                self._model_cancel_callbacks.pop(registration_id, None)
+
+        return unregister
+
+    def submit_input(
+        self,
+        injection: RuntimeInputInjection,
+        *,
+        on_checkpointed: Callable[[], None] | None = None,
+    ) -> bool:
         with self._tool_cancel_lock:
             if self._drain_event.is_set():
                 return False
             self._input_injections[injection.injection_id] = injection
+            if on_checkpointed is not None:
+                self._input_checkpoint_callbacks[injection.injection_id] = on_checkpointed
             return True
 
     def revoke_input(self, injection_id: str) -> None:
         with self._tool_cancel_lock:
             self._input_injections.pop(_required_text(injection_id, "injection_id"), None)
+            self._claimed_input_injections.pop(injection_id, None)
+            self._input_checkpoint_callbacks.pop(injection_id, None)
 
     def consume_inputs(self) -> tuple[RuntimeInputInjection, ...]:
         with self._tool_cancel_lock:
             inputs = tuple(self._input_injections.values())
             self._input_injections.clear()
+            self._claimed_input_injections.update(
+                (injection.injection_id, injection) for injection in inputs
+            )
         return inputs
+
+    def acknowledge_checkpointed_inputs(self, messages: list[Any]) -> tuple[str, ...]:
+        message_ids = {
+            str(getattr(message, "id", "") or "").strip()
+            for message in messages
+        }
+        message_ids.discard("")
+        with self._tool_cancel_lock:
+            acknowledged = tuple(
+                injection_id
+                for injection_id in self._claimed_input_injections
+                if injection_id in message_ids
+            )
+            callbacks = tuple(
+                (injection_id, self._input_checkpoint_callbacks.get(injection_id))
+                for injection_id in acknowledged
+            )
+        for injection_id, callback in callbacks:
+            if callback is not None:
+                callback()
+            with self._tool_cancel_lock:
+                self._claimed_input_injections.pop(injection_id, None)
+                self._input_checkpoint_callbacks.pop(injection_id, None)
+        return acknowledged
+
+    def restore_uncheckpointed_inputs(self) -> None:
+        with self._tool_cancel_lock:
+            for injection_id, injection in self._claimed_input_injections.items():
+                self._input_injections.setdefault(injection_id, injection)
+            self._claimed_input_injections.clear()
 
 
 class RuntimeRunControlRegistry:
@@ -130,11 +223,25 @@ class RuntimeRunControlRegistry:
         *,
         runtime_instance_id: str,
         injection: RuntimeInputInjection,
+        on_checkpointed: Callable[[], None] | None = None,
     ) -> bool:
         instance_id = _required_text(runtime_instance_id, "runtime_instance_id")
         with self._lock:
             control = self._controls.get(instance_id)
-        return control.submit_input(injection) if control is not None else False
+        return (
+            control.submit_input(injection, on_checkpointed=on_checkpointed)
+            if control is not None
+            else False
+        )
+
+    def request_generation_interrupt(self, *, runtime_instance_id: str) -> bool:
+        instance_id = _required_text(runtime_instance_id, "runtime_instance_id")
+        with self._lock:
+            control = self._controls.get(instance_id)
+        if control is None:
+            return False
+        control.request_generation_interrupt()
+        return True
 
     def revoke_input(self, *, runtime_instance_id: str, injection_id: str) -> None:
         instance_id = _required_text(runtime_instance_id, "runtime_instance_id")

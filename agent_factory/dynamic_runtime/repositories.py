@@ -657,6 +657,12 @@ class CommandInbox:
                     payload={
                         **queued.model_dump(mode="json"),
                         "command_kind": envelope.payload.kind,
+                        "request_source": (
+                            "internal"
+                            if isinstance(envelope.payload, SendMessagePayload)
+                            and envelope.payload.visibility == "internal"
+                            else "user"
+                        ),
                         "dispatch_state": "queued" if queue_position else "dispatching",
                         "queue_position": queue_position,
                     },

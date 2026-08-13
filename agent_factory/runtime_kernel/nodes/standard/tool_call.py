@@ -28,6 +28,7 @@ from agent_factory.tooling.langgraph_node import (
 )
 from agent_factory.tooling.envelope import runtime_wait_control
 from agent_factory.runtime_kernel.tool_governance import preflight_tool_calls, record_tool_call_outcomes
+from agent_factory.tooling.execution_context import runtime_terminal_cancellation_requested
 
 
 class OperationalToolCallNode:
@@ -104,6 +105,16 @@ class OperationalToolCallNode:
             "current_node": context.node_id,
             "route_decision": route_decision,
         }
+        if runtime_terminal_cancellation_requested():
+            execution_patch.update(
+                {
+                    "route_decision": "tool.interrupted",
+                    "interrupted": True,
+                    "finished": True,
+                    "finish_status": "cancelled",
+                    "last_error_location": "runtime.cancel.tool",
+                }
+            )
         if wait_control is not None:
             execution_patch.update(
                 {

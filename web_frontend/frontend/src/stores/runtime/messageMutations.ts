@@ -64,6 +64,13 @@ export function applyMessageCompleted(state: MessageMutationState, event: Factor
   if (hasAuthoritativeAssistantSnapshot(state, event)) return
   const messageId = messageIdFromEvent(event)
   if (!messageId) return
+  if (event.payload?.discard) {
+    state.transcript = state.transcript.filter((message) => message.id !== messageId)
+    state.conversationTurns.forEach((turn) => {
+      turn.assistantMessages = turn.assistantMessages.filter((message) => message.id !== messageId)
+    })
+    return
+  }
   const message = ensureMessage(state, event, messageId)
   message.status = event.payload?.status === 'failed' ? 'failed' : event.payload?.status === 'stopped' ? 'stopped' : 'completed'
   message.timestamp = event.timestamp

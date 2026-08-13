@@ -12,6 +12,8 @@ export const DEFAULT_EXECUTION_PREFERENCE: ExecutionPreference = 'auto'
 export const DEFAULT_MEMORY_WRITE_INTERVAL_TURNS = 3
 export const DEFAULT_MEMORY_MAX_INJECTED_ITEMS = 8
 export const DEFAULT_MEMORY_MAX_INJECTED_TOKENS = 1200
+export type RunningMessageMode = 'queue' | 'steer'
+export const DEFAULT_RUNNING_MESSAGE_MODE: RunningMessageMode = 'queue'
 
 const STORAGE_KEYS = {
   mainModelProfileId: 'fast-agent-factory.runtimeMainModelProfileId',
@@ -22,6 +24,7 @@ const STORAGE_KEYS = {
   approvalMode: 'fast-agent-factory.approvalMode',
   executionPreference: 'fast-agent-factory.executionPreference',
   forceCollaboration: 'combo.forceCollaboration',
+  runningMessageMode: 'combo.runningMessageMode',
 } as const
 
 export const useRuntimePreferencesStore = defineStore('runtimePreferences', () => {
@@ -33,6 +36,7 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
   const approvalMode = ref<ApprovalMode>(readStoredApprovalMode())
   const executionPreference = ref<ExecutionPreference>(readStoredExecutionPreference())
   const forceCollaboration = ref(readStoredBoolean(STORAGE_KEYS.forceCollaboration))
+  const runningMessageMode = ref<RunningMessageMode>(readStoredRunningMessageMode())
   const memoryAutoWriteEnabled = ref(true)
   const memoryWriteIntervalTurns = ref(DEFAULT_MEMORY_WRITE_INTERVAL_TURNS)
   const memoryAgentWriteEnabled = ref(true)
@@ -91,6 +95,11 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     forceCollaboration.value = value
     if (value) writeStoredValue(STORAGE_KEYS.forceCollaboration, 'true')
     else removeStoredValue(STORAGE_KEYS.forceCollaboration)
+  }
+
+  function setRunningMessageMode(value: RunningMessageMode): void {
+    runningMessageMode.value = value
+    writeStoredValue(STORAGE_KEYS.runningMessageMode, value)
   }
 
   function setMemoryAutoWriteEnabled(value: boolean): void {
@@ -185,6 +194,7 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     approvalMode,
     executionPreference,
     forceCollaboration,
+    runningMessageMode,
     memoryAutoWriteEnabled,
     memoryWriteIntervalTurns,
     memoryAgentWriteEnabled,
@@ -199,6 +209,7 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     setApprovalMode,
     setExecutionPreference,
     setForceCollaboration,
+    setRunningMessageMode,
     setMemoryAutoWriteEnabled,
     setMemoryWriteIntervalTurns,
     setMemoryAgentWriteEnabled,
@@ -217,6 +228,10 @@ function readStoredReasoningIntensity(): number | null {
   const stored = readStoredText(STORAGE_KEYS.reasoningIntensity)
   const value = Number(stored)
   return stored && Number.isInteger(value) && value >= 0 && value <= REASONING_INTENSITY_MAX ? value : null
+}
+
+function readStoredRunningMessageMode(): RunningMessageMode {
+  return readStoredText(STORAGE_KEYS.runningMessageMode) === 'steer' ? 'steer' : DEFAULT_RUNNING_MESSAGE_MODE
 }
 function readStoredInteger(key: string, fallback: number, minimum: number): number {
   const value = Number(readStoredText(key))

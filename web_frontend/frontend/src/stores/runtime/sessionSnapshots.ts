@@ -9,6 +9,7 @@ import type {
   TranscriptItem,
 } from '@/types/protocol'
 import { agentPackageConversationScope } from './scopes'
+import { isPlanCapsuleDismissed } from '@/utils/planCapsuleDismissals'
 
 export interface AgentPackageSessionSnapshotView {
   sessionPackageId: string | null
@@ -303,8 +304,10 @@ function contextWindowFromSession(session: any): ContextWindowView | null {
 function planFromSession(session: any): RuntimePlanView | null {
   const payload = session?.current_plan
   if (!payload || typeof payload !== 'object' || payload.version !== 'plan_state.v0') return null
-  return {
+  const plan: RuntimePlanView = {
     version: payload.version,
+    runtime_instance_id: payload.runtime_instance_id || null,
+    request_id: payload.request_id || null,
     goal: String(payload.goal || ''),
     status: String(payload.status || 'active'),
     current_step_id: payload.current_step_id || null,
@@ -312,6 +315,7 @@ function planFromSession(session: any): RuntimePlanView | null {
     source_node_id: payload.source_node_id || null,
     updatedAt: payload.updated_at || session.updated_at || undefined,
   }
+  return isPlanCapsuleDismissed(plan) ? null : plan
 }
 
 function optionalNumber(value: any): number | null {

@@ -55,24 +55,32 @@ class SteerRuntimeCommandHandler:
             role="user",
             content=message.content,
         )
-        if not self._run_controls.submit_input(
-            runtime_instance_id=active.runtime_instance_id,
-            injection=injection,
-        ):
-            return CommandOutcome(
-                status="rejected",
-                rejection_code="active_runtime_not_accepting_steering",
-            )
-        try:
+
+        def acknowledge_checkpoint() -> None:
             self._commands.complete_queued_as_steering(
                 command_id=payload.queued_command_id,
                 principal_id=envelope.principal_id,
                 session_id=envelope.session_id,
             )
-        except Exception:
+
+        if not self._run_controls.submit_input(
+            runtime_instance_id=active.runtime_instance_id,
+            injection=injection,
+            on_checkpointed=acknowledge_checkpoint,
+        ):
+            return CommandOutcome(
+                status="rejected",
+                rejection_code="active_runtime_not_accepting_steering",
+            )
+        if not self._run_controls.request_generation_interrupt(
+            runtime_instance_id=active.runtime_instance_id,
+        ):
             self._run_controls.revoke_input(
                 runtime_instance_id=active.runtime_instance_id,
                 injection_id=injection.injection_id,
             )
-            raise
+            return CommandOutcome(
+                status="rejected",
+                rejection_code="active_runtime_not_available_for_steering",
+            )
         return CommandOutcome(status="completed")

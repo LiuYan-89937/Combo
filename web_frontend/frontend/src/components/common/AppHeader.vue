@@ -19,7 +19,7 @@
     </div>
 
     <div class="header-center">
-      <span v-if="route.name === 'Factory'" class="conversation-title">{{ t('route.conversation') }}</span>
+      <span v-if="isChatRoute" class="conversation-title">{{ t('route.conversation') }}</span>
       <span v-else class="conversation-title">{{ currentRouteName }}</span>
     </div>
 
@@ -75,7 +75,6 @@ import { useAgentStore } from '@/stores/agent'
 import { useUiStore } from '@/stores/ui'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useCommand } from '@/composables/useCommand'
-import { SYSTEM_CHAT_PACKAGE_ID } from '@/utils/resourceScope'
 import CapabilityLibraryModal from '@/components/common/CapabilityLibraryModal.vue'
 import {
   closeDesktopWindow,
@@ -94,8 +93,9 @@ const agentStore = useAgentStore()
 const commands = useCommand()
 const isWindowsDesktop = ref(false)
 const capabilityLibraryOpen = ref(false)
+const isChatRoute = computed(() => route.name === 'ChatNew' || route.name === 'ChatSession')
 const currentRouteName = computed(() => {
-  if (route.name === 'Factory') return t('route.conversation')
+  if (isChatRoute.value) return t('route.conversation')
   return t(routeTitleKey(route.name))
 })
 const connectionStatusText = computed(() => ({
@@ -107,7 +107,7 @@ const connectionStatusText = computed(() => ({
 })[runtimeStore.connectionStatus])
 
 function openChat() {
-  void router.push({ name: 'Factory', query: { package_id: SYSTEM_CHAT_PACKAGE_ID } })
+  void router.push({ name: 'ChatNew' })
 }
 
 onMounted(async () => {

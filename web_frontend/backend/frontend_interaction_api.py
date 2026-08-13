@@ -1442,9 +1442,18 @@ def _session_current_plan(backend: Any, session_id: str) -> dict[str, Any] | Non
     if instance.request.strategy != "plan_and_execute":
         return None
     try:
-        return backend.application.runtime_service.current_plan(str(row["runtime_instance_id"]))
+        plan = backend.application.runtime_service.current_plan(str(row["runtime_instance_id"]))
     except (LookupError, RuntimeError, ValueError):
         return None
+    if plan is None:
+        return None
+    if instance.status == "cancelled" and plan.get("status") == "active":
+        plan = {**plan, "status": "cancelled", "current_step_id": None}
+    return {
+        **plan,
+        "runtime_instance_id": instance.runtime_instance_id,
+        "request_id": _frontend_request_for_runtime(backend, instance.runtime_instance_id),
+    }
 
 
 def _message_view(
@@ -1454,6 +1463,8 @@ def _message_view(
     request_id: str | None,
     turn_status: str,
 ) -> dict[str, Any] | None:
+    if message.visibility == "internal":
+        return None
     parts = []
     for part in message.parts:
         value = part.model_dump(mode="json")
@@ -1475,11 +1486,12 @@ def _message_view(
         "role": "assistant" if message.role == "tool" else message.role,
         "parts": parts,
         "timestamp": message.created_at,
-        "status": message.status,
+        "status": "stopped" if message.completion_reason == "user_interrupted" else message.status,
         "metadata": {
             "request_id": request_id,
             "dispatch_state": _turn_dispatch_state(turn_status),
             "visibility": message.visibility,
+            "completion_reason": message.completion_reason,
         },
     }
 
@@ -1569,7 +1581,13 @@ def _process_events(backend: Any, session_id: str) -> list[dict[str, Any]]:
     projected = []
     for event in events:
         request_id = backend._frontend_request_id(event.runtime_instance_id, event.request_id)
-        projected.extend(project_runtime_event(event, request_id=request_id))
+        projected.extend(
+            project_runtime_event(
+                event,
+                request_id=request_id,
+                delegated_task_name=backend._delegated_task_name(event.task_id or ""),
+            )
+        )
     return projected
 
 
@@ -1730,7 +1748,7 @@ def _delegated_task_row_view(backend: Any, row: Any) -> dict[str, Any]:
         "result_summary": _task_result_summary(result),
         "result": {"value": result} if result is not None else None,
         "error": _delegated_error_view(error),
-        "pending_interaction": _pending_task_interaction(latest),
+        "pending_interaction": _pending_task_interaction(latest, task_name=task.agent_name),
         "created_at": str(row["created_at"]),
         "updated_at": str(row["updated_at"]),
         "started_at": str(row["created_at"]),
@@ -1819,6 +1837,19 @@ def _runtime_activity_payload(payload: dict[str, Any]) -> dict[str, Any]:
 def _task_activity_payload(event_type: str, payload: dict[str, Any]) -> dict[str, Any] | None:
     if event_type == "activity":
         source_event_id = str(payload.get("source_event_id") or "runtime_activity_updated")
+        details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+        if str(payload.get("source") or "") == "tool":
+            tool_call_id = str(details.get("tool_call_id") or "").strip()
+            if not tool_call_id:
+                return None
+            return {
+                "phase_id": f"tool:{tool_call_id}",
+                "category": "tool",
+                "title": str(details.get("tool_name") or details.get("tool_id") or "").strip(),
+                "summary": str(payload.get("summary") or "").strip(),
+                "status": str(payload.get("status") or "running"),
+                "details": details,
+            }
         return {
             "phase_id": f"activity:{source_event_id}",
             "category": "activity",
@@ -1866,7 +1897,7 @@ def _latest_runtime_activity(events: list[Any]) -> dict[str, str]:
     return {}
 
 
-def _pending_task_interaction(event: Any) -> dict[str, Any] | None:
+def _pending_task_interaction(event: Any, *, task_name: str) -> dict[str, Any] | None:
     if event is None or event.event_type not in {"approval_required", "question"}:
         return None
     details = event.payload.get("details") if isinstance(event.payload.get("details"), dict) else {}
@@ -1881,7 +1912,11 @@ def _pending_task_interaction(event: Any) -> dict[str, Any] | None:
         "kind": "tool_approval" if event.event_type == "approval_required" else "ask_user",
         "title": "tool.pendingApproval" if event.event_type == "approval_required" else "backgroundTask.activity.input",
         "message": str(interrupt.get("message") or ""),
-        "source": {"task_id": event.task_id, "runtime_instance_id": event.child_runtime_instance_id},
+        "source": {
+            "task_id": event.task_id,
+            "task_name": task_name,
+            "runtime_instance_id": event.child_runtime_instance_id,
+        },
         "options": interrupt.get("choices") if isinstance(interrupt.get("choices"), list) else [],
         "requests": [dict(item) for item in requests if isinstance(item, dict)],
         "resource_requests": [],
@@ -1905,6 +1940,7 @@ def _delegated_error_view(value: Any) -> dict[str, Any] | None:
     details = value.get("details") if isinstance(value.get("details"), dict) else {}
     message = str(
         details.get("message")
+        or details.get("reason")
         or value.get("message")
         or value.get("user_message_key")
         or value.get("code")

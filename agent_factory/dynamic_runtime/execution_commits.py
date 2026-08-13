@@ -4,6 +4,9 @@ from typing import Any, Iterable
 from uuid import uuid4
 
 from agent_factory.dynamic_runtime.database import DynamicRuntimeDatabase
+from agent_factory.dynamic_runtime.delegated_task_transitions import (
+    commit_delegated_task_transition,
+)
 from agent_factory.dynamic_runtime.event_persistence import (
     insert_runtime_event_and_outbox,
     next_session_event_sequence,
@@ -19,7 +22,6 @@ from agent_factory.model_pool.usage import insert_runtime_model_usage
 from agent_factory.runtime_protocol import (
     ConversationMessage,
     ConversationTurn,
-    DelegatedTaskEvent,
     RuntimeErrorEnvelope,
     RuntimeInstance,
     RuntimeModelUsage,
@@ -304,121 +306,17 @@ def _commit_delegated_task(
     now: str,
     terminal_at: str | None,
 ) -> None:
-    request = instance.request
-    if request.task_id is None or request.delegation_grant_id is None or instance.attempt_id is None:
-        raise RuntimeError("temporary runtime commit is missing delegated task authority")
-    task_status = "waiting" if status in {"waiting_approval", "waiting_external"} else status
-    changed = conn.execute(
-        """
-        update delegated_task_revisions
-        set status = ?, updated_at = ?, terminal_at = ?
-        where task_id = ? and task_revision = ? and delegation_grant_id = ?
-          and child_runtime_instance_id = ? and status = 'running'
-        """,
-        (
-            task_status,
-            now,
-            terminal_at,
-            request.task_id,
-            request.task_revision,
-            request.delegation_grant_id,
-            instance.runtime_instance_id,
-        ),
-    ).rowcount
-    if changed != 1:
-        raise RuntimeError("delegated task commit compare-and-set failed")
-    sequence = int(
-        conn.execute(
-            """
-            select coalesce(max(sequence), 0) + 1 from delegated_task_events
-            where task_id = ? and task_revision = ?
-            """,
-            (request.task_id, request.task_revision),
-        ).fetchone()[0]
-    )
-    event_type = {
-        "waiting_approval": "approval_required",
-        "waiting_external": "question",
-        "completed": "result",
-        "failed": "failed",
-        "cancelled": "cancelled",
-    }[status]
-    payload = (
-        event_payload.model_dump(mode="json")
-        if hasattr(event_payload, "model_dump")
-        else dict(event_payload)
-    )
-    payload["session_id"] = request.session_id
-    event = DelegatedTaskEvent(
-        event_id=f"delegated_task_event:{request.task_id}:{request.task_revision}:{sequence}",
-        task_id=request.task_id,
-        task_revision=request.task_revision,
-        parent_task_revision=_load_instance(
-            conn,
-            request.parent_runtime_instance_id or "",
-        ).request.task_revision,
-        sequence=sequence,
-        event_type=event_type,
-        principal_id=request.principal_id,
-        parent_runtime_instance_id=request.parent_runtime_instance_id or "",
-        child_runtime_instance_id=instance.runtime_instance_id,
-        child_attempt_id=instance.attempt_id,
-        payload=payload,
-        created_at=now,
-    )
-    conn.execute(
-        """
-        insert into delegated_task_events(
-          event_id, task_id, task_revision, sequence, event_type,
-          principal_id, parent_runtime_instance_id, child_runtime_instance_id,
-          child_attempt_id, payload_json, created_at
-        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            event.event_id,
-            event.task_id,
-            event.task_revision,
-            event.sequence,
-            event.event_type,
-            event.principal_id,
-            event.parent_runtime_instance_id,
-            event.child_runtime_instance_id,
-            event.child_attempt_id,
-            event.model_dump_json(),
-            event.created_at,
-        ),
-    )
-    insert_outbox(
+    if instance.attempt_id is None:
+        raise RuntimeError("temporary runtime commit has no execution attempt identity")
+    commit_delegated_task_transition(
         conn,
-        OutboxRecord(
-            aggregate_kind="delegated_task",
-            aggregate_id=event.task_id,
-            aggregate_revision=event.task_revision,
-            event_id=event.event_id,
-            event_kind=f"delegated_task_{event.event_type}",
-            payload=event.model_dump(mode="json"),
-            created_at=now,
-            updated_at=now,
-        ),
+        instance=instance,
+        status=status,
+        event_payload=event_payload,
+        now=now,
+        terminal_at=terminal_at,
+        expected_task_status="running",
     )
-    if event.event_type in {"result", "failed", "cancelled"}:
-        conn.execute(
-            """
-            insert into delegated_task_notifications(
-              event_id, task_id, task_revision, principal_id, session_id,
-              payload_json, delivered_runtime_instance_id, created_at, delivered_at
-            ) values (?, ?, ?, ?, ?, ?, null, ?, null)
-            """,
-            (
-                event.event_id,
-                event.task_id,
-                event.task_revision,
-                event.principal_id,
-                request.session_id,
-                event.model_dump_json(),
-                event.created_at,
-            ),
-        )
 
 
 def _load_instance(conn: Any, runtime_instance_id: str) -> RuntimeInstance:

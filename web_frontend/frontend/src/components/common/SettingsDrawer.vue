@@ -2,6 +2,31 @@
   <n-drawer v-model:show="show" :width="drawerWidth" placement="right" class="glass-drawer">
     <n-drawer-content :title="t('settings.title')" closable class="glass-drawer-content">
       <div class="settings-body">
+        <section class="settings-group">
+          <header class="group-header">
+            <div class="group-icon" aria-hidden="true">
+              <n-icon size="18"><ChatbubbleEllipsesOutline /></n-icon>
+            </div>
+            <div class="group-title-block">
+              <div class="group-title">{{ t('settings.groupConversation') }}</div>
+              <div class="group-desc">{{ t('settings.groupConversationDesc') }}</div>
+            </div>
+          </header>
+
+          <div class="group-body">
+            <div class="field-row">
+              <div class="field-copy">
+                <label class="field-label">{{ t('settings.runningMessageMode') }}</label>
+                <p class="field-hint">{{ t('settings.runningMessageModeHint') }}</p>
+              </div>
+              <n-radio-group v-model:value="runningMessageMode" size="small" class="field-control soft-segmented-control">
+                <n-radio-button value="queue">{{ t('settings.runningMessageQueue') }}</n-radio-button>
+                <n-radio-button value="steer">{{ t('settings.runningMessageSteer') }}</n-radio-button>
+              </n-radio-group>
+            </div>
+          </div>
+        </section>
+
         <!-- 分组：外观与语言 -->
         <section class="settings-group">
           <header class="group-header">
@@ -303,7 +328,7 @@ import {
   NSwitch,
   useDialog,
 } from 'naive-ui'
-import { ColorPalette, NotificationsOutline, Refresh, ServerOutline, Time, TrashOutline } from '@/components/icons'
+import { ChatbubbleEllipsesOutline, ColorPalette, NotificationsOutline, Refresh, ServerOutline, Time, TrashOutline } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import { useUiStore } from '@/stores/ui'
 import { useRuntimePreferencesStore } from '@/stores/runtimePreferences'
@@ -386,6 +411,13 @@ const maxParallelSubAgents = computed({
   get: () => runtimePreferences.maxParallelSubAgents,
   set: (value: number | null) => {
     if (value !== null) runtimePreferences.setMaxParallelSubAgents(value)
+  },
+})
+
+const runningMessageMode = computed({
+  get: () => runtimePreferences.runningMessageMode,
+  set: (value: import('@/stores/runtimePreferences').RunningMessageMode) => {
+    runtimePreferences.setRunningMessageMode(value)
   },
 })
 

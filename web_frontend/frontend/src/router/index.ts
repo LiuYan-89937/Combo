@@ -15,11 +15,16 @@ import {
 export const routes: RouteRecordRaw[] = [
   {
     path: '/',
-    redirect: '/factory',
+    redirect: '/chat/new',
   },
   {
-    path: '/factory',
-    name: 'Factory',
+    path: '/chat/new',
+    name: 'ChatNew',
+    component: () => import('@/views/FactoryView.vue'),
+  },
+  {
+    path: '/chat/:sessionId',
+    name: 'ChatSession',
     component: () => import('@/views/FactoryView.vue'),
   },
   {

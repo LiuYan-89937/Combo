@@ -90,6 +90,30 @@ class CapabilityPoolManager(Protocol):
     ) -> dict[str, object]:
         ...
 
+    def delete_mcp_server(
+        self,
+        server_id: str,
+        *,
+        expected_registry_digest: str,
+    ) -> dict[str, object]:
+        ...
+
+    def delete_tool_package(
+        self,
+        capability_id: str,
+        *,
+        expected_content_digest: str,
+    ) -> dict[str, object]:
+        ...
+
+    def delete_skill(
+        self,
+        capability_id: str,
+        *,
+        expected_content_digest: str,
+    ) -> dict[str, object]:
+        ...
+
     def replace_tool_configuration(
         self,
         *,
@@ -754,6 +778,28 @@ def create_dynamic_runtime_router(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    @router.delete("/capabilities/mcp/{server_id}")
+    async def delete_mcp_server(
+        server_id: str,
+        request: Request,
+        expected_registry_digest: str,
+    ) -> dict[str, object]:
+        principal_resolver.resolve(request)
+        try:
+            return await asyncio.to_thread(
+                capability_pools.delete_mcp_server,
+                server_id,
+                expected_registry_digest=expected_registry_digest,
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            if str(exc) == "mcp_registry_revision_conflict":
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            raise HTTPException(status_code=502, detail="mcp_discovery_failed") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     @router.put("/capabilities/skills")
     async def update_skill(
         request: Request,
@@ -766,6 +812,28 @@ def create_dynamic_runtime_router(
                 capability_id=payload.capability_id,
                 source_path=payload.source_path,
                 expected_content_digest=payload.expected_content_digest,
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            if str(exc) == "skill_revision_conflict":
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            raise HTTPException(status_code=502, detail="skill_synchronization_failed") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.delete("/capabilities/skills/{capability_id:path}")
+    async def delete_skill(
+        capability_id: str,
+        request: Request,
+        expected_content_digest: str,
+    ) -> dict[str, object]:
+        principal_resolver.resolve(request)
+        try:
+            return await asyncio.to_thread(
+                capability_pools.delete_skill,
+                capability_id,
+                expected_content_digest=expected_content_digest,
             )
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -791,6 +859,28 @@ def create_dynamic_runtime_router(
                 display_name=payload.display_name,
                 description=payload.description,
                 runtime_policy=payload.runtime_policy.model_dump(mode="json"),
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            if str(exc) == "tool_revision_conflict":
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            raise HTTPException(status_code=502, detail="tool_synchronization_failed") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.delete("/capabilities/tools/{capability_id:path}")
+    async def delete_tool_package(
+        capability_id: str,
+        request: Request,
+        expected_content_digest: str,
+    ) -> dict[str, object]:
+        principal_resolver.resolve(request)
+        try:
+            return await asyncio.to_thread(
+                capability_pools.delete_tool_package,
+                capability_id,
+                expected_content_digest=expected_content_digest,
             )
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc

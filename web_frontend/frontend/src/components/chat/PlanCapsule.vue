@@ -46,6 +46,24 @@
           <em>{{ stepStatus(step.status) }}</em>
         </article>
       </div>
+      <footer class="plan-actions" @pointerdown.stop>
+        <button
+          v-if="plan.status === 'active'"
+          type="button"
+          class="plan-action"
+          @click.stop="cancelPlan"
+        >
+          {{ t('planCapsule.cancel') }}
+        </button>
+        <button
+          v-else
+          type="button"
+          class="plan-action"
+          @click.stop="deletePlanCapsule"
+        >
+          {{ t('planCapsule.delete') }}
+        </button>
+      </footer>
     </section>
   </n-popover>
 </template>
@@ -56,12 +74,14 @@ import { NIcon, NPopover } from 'naive-ui'
 import { ListOutline } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import { useRuntimeStore } from '@/stores/runtime'
+import { useCommand } from '@/composables/useCommand'
 import type { PlanStepStatus } from '@/types/protocol'
 
 withDefaults(defineProps<{ side?: 'left' | 'right' }>(), { side: 'left' })
 
 const { t } = useI18n()
 const runtimeStore = useRuntimeStore()
+const commands = useCommand()
 const plan = computed(() => runtimeStore.currentPlan)
 const completedCount = computed(() => plan.value?.steps.filter(step => (
   step.status === 'completed' || step.status === 'skipped'
@@ -79,6 +99,16 @@ const statusLabel = computed(() => t(`planCapsule.status.${plan.value?.status ||
 
 function stepStatus(status: PlanStepStatus): string {
   return t(`planCapsule.step.${status}` as any)
+}
+
+function cancelPlan() {
+  const requestId = plan.value?.request_id || null
+  if (!requestId) return
+  commands.cancelRequest('user_cancelled_plan', requestId)
+}
+
+function deletePlanCapsule() {
+  runtimeStore.dismissCurrentPlan(plan.value?.request_id || null)
 }
 </script>
 
@@ -113,5 +143,8 @@ function stepStatus(status: PlanStepStatus): string {
 .node-copy strong { font-size:12px; line-height:1.4; }
 .node-copy small { color:var(--app-text-muted); font-size:10px; line-height:1.45; }
 .node-copy .node-result { color:var(--app-text); }
+.plan-actions { display:flex; justify-content:flex-end; padding:0 18px 16px; }
+.plan-action { min-height:30px; padding:0 12px; border:1px solid var(--app-border); border-radius:999px; background:transparent; color:var(--app-text); font:inherit; font-size:10px; cursor:pointer; }
+.plan-action:hover { background:var(--app-surface-muted); }
 @media (prefers-reduced-motion:reduce) { .plan-capsule { transition:none; } }
 </style>

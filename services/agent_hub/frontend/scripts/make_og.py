@@ -1,58 +1,62 @@
 #!/usr/bin/env python3
-"""Render the social share cover (og-cover.png) with PIL.
+"""Generate Combo's social preview from the canonical PNG brand assets."""
 
-Kept as a build asset generator; run manually when the brand copy changes.
-Uses macOS system fonts so CJK renders correctly.
-"""
-import os
+from pathlib import Path
+
 from PIL import Image, ImageDraw, ImageFont
 
-W, H = 1200, 630
-OUT = os.path.join(os.path.dirname(__file__), "..", "public", "og-cover.png")
 
-# PingFang is not always openable via FreeType; Heiti SC (index 1) is reliable.
-CJK = "/System/Library/Fonts/STHeiti Medium.ttc"
-CJK_INDEX = 1
-SANS = "/System/Library/Fonts/Helvetica.ttc"
+WIDTH, HEIGHT = 1200, 630
+ROOT = Path(__file__).resolve().parents[1]
+OUTPUT = ROOT / "public" / "og-cover.png"
+LOGO = ROOT / "public" / "brand" / "combo" / "logo-mark.png"
+MASCOT = ROOT / "public" / "brand" / "combo" / "frames" / "paired" / "idle" / "frame-01.png"
+CHINESE_FONT = "/System/Library/Fonts/STHeiti Medium.ttc"
+LATIN_FONT = "/System/Library/Fonts/Helvetica.ttc"
 
 
-def font(path, size, index=0):
+def font(path: str, size: int, index: int = 0) -> ImageFont.FreeTypeFont:
     return ImageFont.truetype(path, size, index=index)
 
 
-img = Image.new("RGB", (W, H), "#000000")
-d = ImageDraw.Draw(img)
+def fit(image: Image.Image, maximum: tuple[int, int]) -> Image.Image:
+    copy = image.copy()
+    copy.thumbnail(maximum, Image.Resampling.LANCZOS)
+    return copy
 
-# Subtle radial-ish vignette using concentric rectangles (top-right lighter).
-for i in range(60):
-    shade = 10 + int(i * 0.25)
-    box = (W - i * 26, -i * 14, W, H)
-    d.rectangle(box, fill=(shade, shade, shade))
 
-img = Image.new("RGB", (W, H), "#050505")
-d = ImageDraw.Draw(img)
+canvas = Image.new("RGB", (WIDTH, HEIGHT), "#f7f7f5")
+draw = ImageDraw.Draw(canvas)
 
-# Dot grid, fading toward bottom-left.
-for y in range(40, H, 34):
-    for x in range(40, W, 34):
-        # fade: brighter toward top-right
-        fx = x / W
-        fy = 1 - (y / H)
-        a = max(0, int(26 * (0.3 + 0.7 * (fx * 0.6 + fy * 0.6))))
-        d.ellipse((x, y, x + 3, y + 3), fill=(255, 255, 255, a) if False else (a, a, a))
+for x in range(40, WIDTH, 32):
+    for y in range(38, HEIGHT, 32):
+        draw.ellipse((x, y, x + 2, y + 2), fill="#deded9")
 
-# Brand mark
-d.rounded_rectangle((96, 150, 160, 214), radius=18, fill="#ffffff")
-d.rounded_rectangle((122, 176, 134, 188), radius=4, fill="#050505")
+draw.rounded_rectangle((56, 52, WIDTH - 56, HEIGHT - 52), radius=44, fill="#ffffff", outline="#ddddda", width=2)
 
-d.text((184, 168), "Combo", font=font(SANS, 34), fill="#9a9a9a")
+logo = fit(Image.open(LOGO).convert("RGBA"), (58, 58))
+canvas.paste(logo, (94, 91), logo)
+draw.text((162, 102), "Combo", font=font(LATIN_FONT, 34), fill="#0a0a0a")
+draw.text((164, 139), "LOCAL AGENT WORKSPACE", font=font(LATIN_FONT, 11), fill="#777777")
 
-d.text((92, 286), "制造真正能", font=font(CJK, 92, index=CJK_INDEX), fill="#ffffff")
-d.text((92, 398), "工作的 Agent", font=font(CJK, 92, index=CJK_INDEX), fill="#ffffff")
+draw.text((92, 232), "说出目标，", font=font(CHINESE_FONT, 74, index=1), fill="#0a0a0a")
+draw.text((92, 320), "剩下的让 Combo 组合起来", font=font(CHINESE_FONT, 64, index=1), fill="#0a0a0a")
+draw.text((96, 444), "你的模型 · 你的能力 · 你的工作区", font=font(CHINESE_FONT, 27, index=1), fill="#777777")
 
-d.text((96, 540), "Local-first · Cross-platform · Build · Run · Distribute",
-       font=font(SANS, 28), fill="#6f6f6f")
+draw.ellipse((835, 120, 1090, 375), fill="#f1f1ee", outline="#d9d9d4", width=2)
+mascot = fit(Image.open(MASCOT).convert("RGBA"), (230, 230))
+mascot_x = 962 - mascot.width // 2
+mascot_y = 248 - mascot.height // 2
+canvas.paste(mascot, (mascot_x, mascot_y), mascot)
 
-os.makedirs(os.path.dirname(OUT), exist_ok=True)
-img.save(OUT, "PNG")
-print("wrote", os.path.normpath(OUT))
+for label, position in (("SKILL", (790, 424)), ("TOOL", (910, 462)), ("MCP", (1020, 418))):
+    x, y = position
+    draw.rounded_rectangle((x, y, x + 80, y + 34), radius=17, fill="#ffffff", outline="#d6d6d2", width=2)
+    draw.text((x + 18, y + 10), label, font=font(LATIN_FONT, 11), fill="#444444")
+
+draw.rounded_rectangle((92, 519, 317, 567), radius=24, fill="#090909")
+draw.text((135, 533), "Download Combo", font=font(LATIN_FONT, 16), fill="#ffffff")
+
+OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+canvas.save(OUTPUT, "PNG", optimize=True)
+print(f"wrote {OUTPUT}")

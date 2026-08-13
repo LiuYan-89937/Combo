@@ -1,66 +1,75 @@
 <template>
-  <n-popover
-    ref="popoverRef"
-    v-if="visibleTasks.length && primaryTask"
-    trigger="click"
-    :show="expanded"
-    :placement="side === 'left' ? 'bottom-start' : 'bottom-end'"
-    :flip="false"
-    :show-arrow="false"
-    raw
-    @update:show="expanded = $event"
-  >
-    <template #trigger>
-      <button
-        class="task-stack-summary"
-        :class="{ 'has-multiple': visibleTasks.length > 1, 'requires-action': requiresAction }"
-        type="button"
-        :aria-expanded="expanded"
+  <div v-if="visibleTasks.length" ref="layerRef" class="task-capsule-layer">
+    <div
+      v-for="(task, index) in visibleTasks"
+      :key="task.task_id"
+      :ref="value => setTaskElement(task.task_id, value)"
+      class="task-capsule-anchor"
+      :class="[`side-${taskPosition(task.task_id, index).side}`, { 'is-dragging': draggingTaskId === task.task_id }]"
+      :style="taskStyle(task.task_id, index)"
+      @pointerdown="startTaskDrag(task.task_id, index, $event)"
+      @click.capture="captureTaskClick"
+    >
+      <n-popover
+        :ref="value => setPopoverRef(task.task_id, value)"
+        trigger="click"
+        :show="expandedTaskId === task.task_id"
+        :placement="taskPosition(task.task_id, index).side === 'left' ? 'bottom-start' : 'bottom-end'"
+        :show-arrow="false"
+        raw
+        @update:show="setExpandedTask(task.task_id, $event)"
       >
-        <span class="task-stack-mark" :class="{ 'is-active': hasActiveTasks }" aria-hidden="true">
-          <SubAgentMascot
-            :status="primaryTask.status"
-            :task-id="primaryTask.task_id"
-            :awaiting-input="primaryRequiresAction"
-            :size="40"
-          />
-        </span>
-        <span class="task-stack-copy">
-          <span class="task-stack-meta">
-            <strong>{{ primaryAgentName }}</strong>
-            <small v-if="primaryModelName" class="task-stack-model">{{ primaryModelName }}</small>
-            <small>{{ elapsedLabel }}</small>
+        <template #trigger>
+          <button
+            class="task-capsule"
+            :class="{ 'requires-action': taskRequiresAction(task) }"
+            type="button"
+            :aria-expanded="expandedTaskId === task.task_id"
+          >
+          <span class="task-capsule-mascot" aria-hidden="true">
+            <SubAgentMascot
+              :status="task.status"
+              :task-id="task.task_id"
+              :awaiting-input="taskRequiresAction(task)"
+              :size="36"
+            />
           </span>
-          <span class="task-stack-summary-text">{{ currentActivitySummary }}</span>
-        </span>
-        <span v-if="visibleTasks.length > 1" class="task-stack-count">+{{ visibleTasks.length - 1 }}</span>
-        <span class="task-stack-chevron" aria-hidden="true">⌄</span>
-      </button>
-    </template>
+          <span class="task-capsule-copy">
+            <span class="task-capsule-meta">
+              <strong>{{ taskAgentName(task) }}</strong>
+              <small v-if="taskModelName(task)" class="task-capsule-model">{{ taskModelName(task) }}</small>
+              <small>{{ taskElapsedLabel(task) }}</small>
+            </span>
+            <span class="task-capsule-summary">{{ taskActivitySummary(task) }}</span>
+          </span>
+          <span class="task-capsule-chevron" aria-hidden="true">⌄</span>
+          </button>
+        </template>
 
-    <section class="task-stack-popover" :class="`dock-side-${side}`">
-      <header class="stack-popover-header">
-        <div>
-          <strong>{{ t('backgroundTask.stackTitle') }}</strong>
-          <small>{{ t('backgroundTask.stackCount', { count: visibleTasks.length }) }}</small>
-        </div>
-        <button type="button" :aria-label="t('common.close')" @click="expanded = false">×</button>
-      </header>
-      <div class="task-stack-list">
-        <BackgroundTaskCard
-          v-for="task in visibleTasks"
-          :key="task.task_id"
-          :task="task"
-          @updated="reconcileOne"
-          @deleted="removeTask"
-        />
-      </div>
-    </section>
-  </n-popover>
+        <section class="task-popover">
+          <header class="task-popover-header">
+            <div>
+              <strong>{{ taskAgentName(task) }}</strong>
+              <small v-if="taskModelName(task)">{{ taskModelName(task) }}</small>
+            </div>
+            <button type="button" :aria-label="t('common.close')" @click="expandedTaskId = null">×</button>
+          </header>
+          <div class="task-detail">
+            <BackgroundTaskCard
+              :task="task"
+              @updated="reconcileOne"
+              @deleted="removeTask"
+            />
+          </div>
+        </section>
+      </n-popover>
+    </div>
+  </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import type { ComponentPublicInstance, CSSProperties } from 'vue'
 import { NPopover } from 'naive-ui'
 import { backgroundTasksApi, type BackgroundTask } from '@/api/backgroundTasks'
 import { useI18n } from '@/composables/useI18n'
@@ -70,17 +79,34 @@ import SubAgentMascot from '@/components/brand/SubAgentMascot.vue'
 const props = withDefaults(defineProps<{
   sessionId?: string | null
   compact?: boolean
-  side?: 'left' | 'right'
 }>(), {
   sessionId: null,
   compact: false,
-  side: 'left',
 })
 
+type DockSide = 'left' | 'right'
+interface TaskPosition { side: DockSide; y: number }
+interface TaskDragState {
+  taskId: string
+  pointerId: number
+  offsetX: number
+  offsetY: number
+  x: number
+  y: number
+  originClientX: number
+  originClientY: number
+  moved: boolean
+}
+
 const { t } = useI18n()
-const popoverRef = ref<{ syncPosition: () => void } | null>(null)
+const popoverRefs = new Map<string, { syncPosition: () => void }>()
+const taskElements = new Map<string, HTMLElement>()
+const layerRef = ref<HTMLElement | null>(null)
 const tasks = ref<BackgroundTask[]>([])
-const expanded = ref(false)
+const expandedTaskId = ref<string | null>(null)
+const taskPositions = ref<Record<string, TaskPosition>>(loadTaskPositions())
+const taskDrag = ref<TaskDragState | null>(null)
+const suppressTaskClick = ref(false)
 let pollTimer: number | null = null
 let elapsedTimer: number | null = null
 let requestVersion = 0
@@ -88,7 +114,7 @@ let refreshInFlight = false
 let refreshQueued = false
 const currentTime = ref(Date.now())
 
-defineExpose({ syncPosition })
+const draggingTaskId = computed(() => taskDrag.value?.taskId || null)
 
 const visibleTasks = computed(() => {
   const active = tasks.value.filter(task => !isTerminal(task.status)).sort(compareNewest)
@@ -97,35 +123,162 @@ const visibleTasks = computed(() => {
     .sort(compareNewest)
   return [...active, ...completed]
 })
-const primaryTask = computed(() => visibleTasks.value[0] || null)
-const hasActiveTasks = computed(() => visibleTasks.value.some(task => !isTerminal(task.status)))
 const requiresAction = computed(() => visibleTasks.value.some(task => (
   task.pending_interaction?.kind === 'tool_approval'
   || task.pending_interaction?.kind === 'ask_user'
   || task.pending_interaction?.kind === 'resource_request'
 )))
-const primaryRequiresAction = computed(() => {
-  const kind = primaryTask.value?.pending_interaction?.kind
+
+function loadTaskPositions(): Record<string, TaskPosition> {
+  if (typeof window === 'undefined') return {}
+  try {
+    const stored = JSON.parse(window.localStorage.getItem('combo.backgroundTaskPositions') || '{}')
+    if (!stored || typeof stored !== 'object') return {}
+    return Object.fromEntries(
+      Object.entries(stored).flatMap(([taskId, value]) => {
+        const candidate = value as Partial<TaskPosition> | null
+        if (
+          (candidate?.side === 'left' || candidate?.side === 'right')
+          && Number.isFinite(candidate.y)
+        ) {
+          return [[taskId, { side: candidate.side, y: clamp(Number(candidate.y), 0, 1) }]]
+        }
+        return []
+      }),
+    )
+  } catch {
+    return {}
+  }
+}
+
+function saveTaskPositions() {
+  window.localStorage.setItem('combo.backgroundTaskPositions', JSON.stringify(taskPositions.value))
+}
+
+function taskPosition(taskId: string, index: number): TaskPosition {
+  return taskPositions.value[taskId] || {
+    side: 'right',
+    y: clamp(.58 + index * .1, 0, .9),
+  }
+}
+
+function taskStyle(taskId: string, index: number): CSSProperties {
+  const drag = taskDrag.value
+  if (drag?.taskId === taskId) {
+    return { left: `${drag.x}px`, right: 'auto', top: `${drag.y}px` }
+  }
+  const element = taskElements.get(taskId)
+  const layer = layerRef.value
+  const availableHeight = Math.max(0, (layer?.clientHeight || 0) - (element?.offsetHeight || 0) - 16)
+  return { top: `${8 + availableHeight * taskPosition(taskId, index).y}px` }
+}
+
+function setTaskElement(taskId: string, value: Element | ComponentPublicInstance | null) {
+  const element = value instanceof HTMLElement
+    ? value
+    : value && '$el' in value && value.$el instanceof HTMLElement
+      ? value.$el
+      : null
+  if (element) taskElements.set(taskId, element)
+  else taskElements.delete(taskId)
+}
+
+function startTaskDrag(taskId: string, index: number, event: PointerEvent) {
+  if (event.button !== 0 || !layerRef.value) return
+  const element = taskElements.get(taskId)
+  if (!element) return
+  const layerRect = layerRef.value.getBoundingClientRect()
+  const itemRect = element.getBoundingClientRect()
+  taskDrag.value = {
+    taskId,
+    pointerId: event.pointerId,
+    offsetX: event.clientX - itemRect.left,
+    offsetY: event.clientY - itemRect.top,
+    x: itemRect.left - layerRect.left,
+    y: itemRect.top - layerRect.top,
+    originClientX: event.clientX,
+    originClientY: event.clientY,
+    moved: false,
+  }
+  window.addEventListener('pointermove', handleTaskDrag)
+  window.addEventListener('pointerup', finishTaskDrag)
+  window.addEventListener('pointercancel', finishTaskDrag)
+  if (!taskPositions.value[taskId]) {
+    taskPositions.value = { ...taskPositions.value, [taskId]: taskPosition(taskId, index) }
+  }
+}
+
+function handleTaskDrag(event: PointerEvent) {
+  const drag = taskDrag.value
+  const layer = layerRef.value
+  if (!drag || !layer || event.pointerId !== drag.pointerId) return
+  const bounds = layer.getBoundingClientRect()
+  const element = taskElements.get(drag.taskId)
+  const width = element?.offsetWidth || 340
+  const height = element?.offsetHeight || 58
+  drag.x = clamp(event.clientX - bounds.left - drag.offsetX, 8, Math.max(8, bounds.width - width - 8))
+  drag.y = clamp(event.clientY - bounds.top - drag.offsetY, 8, Math.max(8, bounds.height - height - 8))
+  if (Math.hypot(event.clientX - drag.originClientX, event.clientY - drag.originClientY) > 5) {
+    drag.moved = true
+  }
+  taskDrag.value = { ...drag }
+  popoverRefs.get(drag.taskId)?.syncPosition()
+}
+
+function finishTaskDrag(event: PointerEvent) {
+  const drag = taskDrag.value
+  const layer = layerRef.value
+  if (!drag || !layer || event.pointerId !== drag.pointerId) return
+  stopTaskDragListeners()
+  if (!drag.moved) {
+    taskDrag.value = null
+    return
+  }
+  event.preventDefault()
+  suppressTaskClick.value = true
+  expandedTaskId.value = null
+  const element = taskElements.get(drag.taskId)
+  const side = drag.x + (element?.offsetWidth || 340) / 2 < layer.clientWidth / 2 ? 'left' : 'right'
+  const availableHeight = Math.max(1, layer.clientHeight - (element?.offsetHeight || 58) - 16)
+  taskPositions.value = {
+    ...taskPositions.value,
+    [drag.taskId]: { side, y: clamp((drag.y - 8) / availableHeight, 0, 1) },
+  }
+  saveTaskPositions()
+  taskDrag.value = null
+  window.setTimeout(() => { suppressTaskClick.value = false }, 160)
+}
+
+function captureTaskClick(event: MouseEvent) {
+  if (!suppressTaskClick.value) return
+  event.preventDefault()
+  event.stopPropagation()
+}
+
+function stopTaskDragListeners() {
+  window.removeEventListener('pointermove', handleTaskDrag)
+  window.removeEventListener('pointerup', finishTaskDrag)
+  window.removeEventListener('pointercancel', finishTaskDrag)
+}
+
+function clamp(value: number, minimum: number, maximum: number) {
+  return Math.max(minimum, Math.min(maximum, value))
+}
+
+function taskRequiresAction(task: BackgroundTask): boolean {
+  const kind = task.pending_interaction?.kind
   return kind === 'tool_approval' || kind === 'ask_user' || kind === 'resource_request'
-})
-const capsuleStatus = computed(() => {
-  const task = primaryTask.value
-  if (!task) return ''
-  return task.pending_interaction?.kind === 'tool_approval'
-    ? t('backgroundTask.capsule.approval')
-    : task.pending_interaction?.kind === 'ask_user' || task.pending_interaction?.kind === 'resource_request'
-      ? t('backgroundTask.capsule.answer')
-      : taskTypeLabel(task.status)
-})
-const primaryAgentName = computed(() => String(
-  primaryTask.value?.agent_name || t('backgroundTask.memberFallback'),
-))
-const primaryModelName = computed(() => String(
-  primaryTask.value?.model?.model_name || '',
-).trim())
-const currentActivitySummary = computed(() => {
-  const task = primaryTask.value
-  if (!task) return t('backgroundTask.stackTitle')
+}
+
+function taskAgentName(task: BackgroundTask): string {
+  return String(task.agent_name || t('backgroundTask.memberFallback'))
+}
+
+function taskModelName(task: BackgroundTask): string {
+  return String(task.model?.model_name || '').trim()
+}
+
+function taskActivitySummary(task: BackgroundTask): string {
   if (task.pending_interaction?.kind === 'tool_approval') {
     return task.pending_interaction.message || t('backgroundTask.pendingApproval')
   }
@@ -134,18 +287,18 @@ const currentActivitySummary = computed(() => {
   }
   if (task.status === 'failed') return task.error?.message || t('backgroundTask.failedFallback')
   if (task.status === 'succeeded' && task.result_summary) return task.result_summary
-  return task.activity_summary || task.task_text || capsuleStatus.value
-})
-const elapsedLabel = computed(() => {
-  const task = primaryTask.value
-  if (!task) return ''
+  return task.activity_summary || task.task_text || taskTypeLabel(task.status)
+}
+
+function taskElapsedLabel(task: BackgroundTask): string {
   const terminal = isTerminal(task.status)
   const duration = formatDuration(task.started_at || task.created_at, terminal ? task.completed_at || task.updated_at : null)
   return t(terminal ? 'backgroundTask.finishedIn' : 'backgroundTask.processedFor', { duration })
-})
+}
 
 watch(requiresAction, (next, previous) => {
-  if (next && !previous) expanded.value = true
+  if (!next || previous) return
+  expandedTaskId.value = visibleTasks.value.find(taskRequiresAction)?.task_id || null
 })
 
 watch(
@@ -154,13 +307,14 @@ watch(
     requestVersion += 1
     stopPolling()
     tasks.value = []
-    expanded.value = false
+    expandedTaskId.value = null
     void refreshTasks(requestVersion)
   },
   { immediate: true },
 )
 
 onBeforeUnmount(() => {
+  stopTaskDragListeners()
   requestVersion += 1
   stopPolling()
   stopElapsedClock()
@@ -205,6 +359,27 @@ function reconcileOne(updated: BackgroundTask) {
 function removeTask(taskId: string) {
   const index = tasks.value.findIndex(task => task.task_id === taskId)
   if (index >= 0) tasks.value.splice(index, 1)
+  popoverRefs.delete(taskId)
+  taskElements.delete(taskId)
+  if (taskPositions.value[taskId]) {
+    const nextPositions = { ...taskPositions.value }
+    delete nextPositions[taskId]
+    taskPositions.value = nextPositions
+    saveTaskPositions()
+  }
+  if (expandedTaskId.value === taskId) expandedTaskId.value = null
+}
+
+function setExpandedTask(taskId: string, visible: boolean) {
+  expandedTaskId.value = visible ? taskId : null
+}
+
+function setPopoverRef(taskId: string, value: Element | ComponentPublicInstance | null) {
+  if (value && 'syncPosition' in value) {
+    popoverRefs.set(taskId, value as unknown as { syncPosition: () => void })
+  } else {
+    popoverRefs.delete(taskId)
+  }
 }
 
 function stopPolling() {
@@ -233,10 +408,6 @@ function handleTaskEvent(event: Event) {
   const activeSessionId = String(props.sessionId || '').trim()
   if (updatedSessionId && updatedSessionId !== activeSessionId) return
   scheduleRefresh(requestVersion, 50)
-}
-
-function syncPosition() {
-  popoverRef.value?.syncPosition()
 }
 
 function isTerminal(status: BackgroundTask['status']): boolean {
@@ -279,27 +450,30 @@ function formatDuration(startValue: string, endValue: string | null): string {
 </script>
 
 <style scoped>
-.task-stack-summary { width: min(360px, calc(100vw - 48px)); min-height: 72px; display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 9px; color: var(--app-text); background: var(--app-surface); border: 1px solid var(--app-border); border-radius: 18px; box-shadow: 0 10px 28px color-mix(in srgb, var(--app-text) 11%, transparent); cursor: pointer; transition: transform .2s cubic-bezier(.16, 1, .3, 1), border-color .2s ease, box-shadow .2s ease; }
-.task-stack-summary:hover { transform: translateY(-1px); border-color: var(--app-border-hover); box-shadow: 0 14px 34px color-mix(in srgb, var(--app-text) 14%, transparent); }
-.task-stack-summary.requires-action { border-color: var(--app-text); }
-.task-stack-mark { width: 42px; height: 42px; flex: 0 0 auto; display: grid; overflow: hidden; place-items: center; border-radius: 12px; background: var(--app-surface-muted); }
-.task-stack-copy { min-width: 0; flex: 1; display: grid; gap: 6px; text-align: left; }
-.task-stack-meta { min-width: 0; display: flex; align-items: baseline; gap: 7px; color: var(--app-text-muted); }
-.task-stack-meta strong, .task-stack-meta small, .task-stack-summary-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.task-stack-meta strong { color: var(--app-text); font-size: 12px; font-weight: 620; }
-.task-stack-meta small { font-size: 10px; }
-.task-stack-model { max-width: 132px; padding: 1px 5px; border-radius: 999px; background: var(--app-surface-muted); color: var(--app-text-secondary); }
-.task-stack-summary-text { padding-top: 6px; border-top: 1px solid var(--app-divider); color: var(--app-text-secondary); font-size: 11px; line-height: 1.35; }
-.task-stack-count { flex: 0 0 auto; display: grid; min-width: 25px; height: 25px; place-items: center; border: 1px solid var(--app-border); border-radius: 999px; color: var(--app-text-secondary); font-size: 10px; }
-.task-stack-chevron { color: var(--app-text-muted); font-size: 11px; }
-.task-stack-popover { width: min(480px, calc(100vw - 32px)); max-height: min(72vh, 680px); overflow: hidden; display: grid; grid-template-rows: auto minmax(0, 1fr); color: var(--app-text); background: var(--app-surface); border: 1px solid var(--app-border); border-radius: 18px; box-shadow: 0 28px 80px color-mix(in srgb, var(--app-text) 18%, transparent); animation: task-popover-in .24s cubic-bezier(.16, 1, .3, 1) both; }
-.stack-popover-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--app-divider); }
-.stack-popover-header > div { display: flex; align-items: baseline; gap: 8px; }
-.stack-popover-header strong { font-size: 13px; }
-.stack-popover-header small { color: var(--app-text-muted); font-size: 11px; }
-.stack-popover-header button { width: 28px; height: 28px; border: 0; border-radius: 50%; color: var(--app-text); background: transparent; font-size: 18px; cursor: pointer; }
-.stack-popover-header button:hover { background: var(--app-surface-hover); }
-.task-stack-list { overflow-y: auto; }
-.task-stack-list :deep(.background-task-card + .background-task-card) { border-top: 1px solid var(--app-divider); }
+.task-capsule-layer { position: absolute; z-index: 3; inset: 0; overflow: hidden; pointer-events: none; }
+.task-capsule-anchor { position: absolute; pointer-events: auto; touch-action: none; user-select: none; }
+.task-capsule-anchor.side-left { left: 12px; right: auto; }
+.task-capsule-anchor.side-right { right: 12px; left: auto; }
+.task-capsule-anchor.is-dragging { z-index: 4; cursor: grabbing; }
+.task-capsule { width: min(340px, calc(100vw - 48px)); height: 58px; display: flex; align-items: center; gap: 8px; padding: 5px 12px 5px 7px; overflow: hidden; color: var(--app-text); background: var(--app-surface); border: 1px solid var(--app-border); border-radius: var(--app-radius-pill); box-shadow: 0 7px 20px color-mix(in srgb, var(--app-text) 8%, transparent); cursor: pointer; transition: border-color .18s ease; }
+.task-capsule:hover { border-color: var(--app-border-hover); }
+.task-capsule.requires-action { border-color: var(--app-text); }
+.task-capsule-mascot { width: 40px; height: 40px; flex: 0 0 auto; display: grid; place-items: center; }
+.task-capsule-copy { min-width: 0; flex: 1; display: grid; gap: 3px; text-align: left; }
+.task-capsule-meta { min-width: 0; display: flex; align-items: baseline; gap: 6px; color: var(--app-text-muted); }
+.task-capsule-meta strong, .task-capsule-meta small, .task-capsule-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-capsule-meta strong { color: var(--app-text); font-size: 12px; font-weight: 620; }
+.task-capsule-meta small { font-size: 9px; }
+.task-capsule-model { max-width: 120px; }
+.task-capsule-summary { color: var(--app-text-secondary); font-size: 10px; line-height: 1.35; }
+.task-capsule-chevron { flex: 0 0 auto; color: var(--app-text-muted); font-size: 11px; }
+.task-popover { width: min(480px, calc(100vw - 32px)); max-height: min(72vh, 680px); overflow: hidden; display: grid; grid-template-rows: auto minmax(0, 1fr); color: var(--app-text); background: var(--app-surface); border: 1px solid var(--app-border); border-radius: var(--app-radius-lg); box-shadow: 0 28px 80px color-mix(in srgb, var(--app-text) 18%, transparent); animation: task-popover-in .24s cubic-bezier(.16, 1, .3, 1) both; }
+.task-popover-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--app-divider); }
+.task-popover-header > div { display: flex; align-items: baseline; gap: 8px; }
+.task-popover-header strong { font-size: 13px; }
+.task-popover-header small { color: var(--app-text-muted); font-size: 11px; }
+.task-popover-header button { width: 28px; height: 28px; border: 0; border-radius: 50%; color: var(--app-text); background: transparent; font-size: 18px; cursor: pointer; }
+.task-popover-header button:hover { background: var(--app-surface-hover); }
+.task-detail { overflow-y: auto; }
 @keyframes task-popover-in { from { opacity: 0; transform: translateY(-7px) scale(.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
 </style>

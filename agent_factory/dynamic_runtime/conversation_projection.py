@@ -43,6 +43,11 @@ def conversation_to_graph_messages(messages: list[ConversationMessage]) -> list[
                         content=text,
                         id=message.message_id,
                         tool_calls=tool_calls,
+                        additional_kwargs=(
+                            {"completion_reason": message.completion_reason}
+                            if message.completion_reason
+                            else {}
+                        ),
                     )
                 )
             continue
@@ -121,6 +126,7 @@ def graph_messages_to_conversation(
                         runtime_instance_id=runtime_instance_id,
                         request_id=request_id,
                         task_revision=task_revision,
+                        completion_reason=_completion_reason(message),
                     )
                 )
             continue
@@ -153,6 +159,7 @@ def _runtime_message(
     runtime_instance_id: str,
     request_id: str,
     task_revision: int,
+    completion_reason: str | None = None,
 ) -> ConversationMessage:
     payload: dict[str, Any] = {
         "session_id": session_id,
@@ -162,11 +169,17 @@ def _runtime_message(
         "source_runtime_instance_id": runtime_instance_id,
         "source_request_id": request_id,
         "source_task_revision": task_revision,
+        "completion_reason": completion_reason,
     }
     value = str(message_id or "").strip()
     if value:
         payload["message_id"] = value
     return ConversationMessage.model_validate(payload)
+
+
+def _completion_reason(message: BaseMessage) -> str | None:
+    value = str(getattr(message, "additional_kwargs", {}).get("completion_reason") or "").strip()
+    return value or None
 
 
 def _current_turn_boundary(messages: list[BaseMessage], message_id: str) -> int:

@@ -29,6 +29,7 @@ class FrontendEventBridge:
         self._lock = RLock()
         self._frontend_request_id: Callable[[str, str], str] = lambda _runtime_id, request_id: request_id
         self._active_requests: Callable[[str], list[dict[str, Any]]] = lambda _principal_id: []
+        self._delegated_task_name: Callable[[str], str | None] = lambda _task_id: None
 
     def bind_request_id_resolver(self, resolver: Callable[[str, str], str]) -> None:
         self._frontend_request_id = resolver
@@ -38,6 +39,12 @@ class FrontendEventBridge:
         resolver: Callable[[str], list[dict[str, Any]]],
     ) -> None:
         self._active_requests = resolver
+
+    def bind_delegated_task_name_resolver(
+        self,
+        resolver: Callable[[str], str | None],
+    ) -> None:
+        self._delegated_task_name = resolver
 
     def start(self, loop: asyncio.AbstractEventLoop) -> None:
         with self._lock:
@@ -65,7 +72,11 @@ class FrontendEventBridge:
         if record.aggregate_kind == "runtime_instance":
             event = RuntimeEvent.model_validate(record.payload)
             frontend_request_id = self._frontend_request_id(event.runtime_instance_id, event.request_id)
-            projected_events = project_runtime_event(event, request_id=frontend_request_id)
+            projected_events = project_runtime_event(
+                event,
+                request_id=frontend_request_id,
+                delegated_task_name=self._delegated_task_name(event.task_id or ""),
+            )
         elif record.aggregate_kind == "command":
             projected_events = project_command_event(record)
         elif record.aggregate_kind == "delegated_task":
@@ -197,6 +208,7 @@ _MODEL_MESSAGE_EVENT_TYPES = frozenset(
         "model_reasoning_completed",
         "model_stream_delta",
         "model_message_completed",
+        "model_generation_interrupted",
     }
 )
 
@@ -370,6 +382,54 @@ def _message_events_from_model_event(
         return events
     if event_type == "model_stream_delta":
         return events
+    if event_type == "model_generation_interrupted":
+        reasoning_content = str(event_payload.get("reasoning_content") or "")
+        content = str(event_payload.get("content") or "")
+        if reasoning_content:
+            events.append(
+                _frontend_event(
+                    event_type="message_part_completed",
+                    payload={
+                        **source,
+                        **_message_part_identity(stream_id, "reasoning"),
+                        "part_status": "completed",
+                        "format": "markdown",
+                        "content": reasoning_content,
+                    },
+                    event_id=f"{event_id}:message-reasoning-interrupted",
+                    **common,
+                )
+            )
+        if content:
+            events.append(
+                _frontend_event(
+                    event_type="message_part_completed",
+                    payload={
+                        **source,
+                        **_message_part_identity(stream_id, "text"),
+                        "part_status": "completed",
+                        "format": "markdown",
+                        "content": content,
+                    },
+                    event_id=f"{event_id}:message-text-interrupted",
+                    **common,
+                )
+            )
+        events.append(
+            _frontend_event(
+                event_type="message_completed",
+                payload={
+                    **source,
+                    **_message_identity(stream_id),
+                    "status": "stopped",
+                    "discard": not bool(content or reasoning_content),
+                    "completion_reason": "user_interrupted",
+                },
+                event_id=f"{event_id}:message-superseded",
+                **common,
+            )
+        )
+        return events
     if event_type != "model_message_completed":
         return []
     reasoning_content = str(event_payload.get("reasoning_content") or "")
@@ -437,7 +497,12 @@ def _message_part_identity(stream_id: str, part_type: str) -> dict[str, str]:
     }
 
 
-def project_runtime_event(event: RuntimeEvent, *, request_id: str) -> list[dict[str, Any]]:
+def project_runtime_event(
+    event: RuntimeEvent,
+    *,
+    request_id: str,
+    delegated_task_name: str | None = None,
+) -> list[dict[str, Any]]:
     kind = event.payload.kind
     mapping = {
         "runtime_queued": "runtime_request_queued",
@@ -480,6 +545,7 @@ def project_runtime_event(event: RuntimeEvent, *, request_id: str) -> list[dict[
             "choices": payload.get("choices") or interrupt.get("choices"),
             "requests": requests,
             "source_task_id": source.get("task_id"),
+            "source_task_name": delegated_task_name,
             "source_runtime_role": source.get("runtime_role"),
             "source_runtime_instance_id": event.runtime_instance_id,
             "parent_runtime_instance_id": source.get("parent_runtime_instance_id"),
@@ -492,6 +558,7 @@ def project_runtime_event(event: RuntimeEvent, *, request_id: str) -> list[dict[
             "principal_id": None,
             "runtime_role": event.runtime_role,
             "source_task_id": event.task_id,
+            "source_task_name": delegated_task_name,
         }
     )
     return [
@@ -511,6 +578,7 @@ def project_runtime_event(event: RuntimeEvent, *, request_id: str) -> list[dict[
 def project_command_event(record: OutboxRecord) -> list[dict[str, Any]]:
     raw = dict(record.payload)
     command_kind = str(raw.pop("command_kind", "") or "")
+    request_source = str(raw.pop("request_source", "user") or "user")
     dispatch_state = str(raw.pop("dispatch_state", "") or "")
     queue_position = raw.pop("queue_position", None)
     try:
@@ -553,6 +621,7 @@ def project_command_event(record: OutboxRecord) -> list[dict[str, Any]]:
             "principal_id": receipt.principal_id,
             "package_id": "factory_chat",
             "agent_session_id": receipt.session_id,
+            "request_source": request_source,
         }
     )
     return [

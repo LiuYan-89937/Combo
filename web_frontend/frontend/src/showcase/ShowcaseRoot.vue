@@ -7,7 +7,7 @@
     <n-message-provider>
       <n-notification-provider>
         <n-dialog-provider>
-          <div class="showcase-root" :class="{ 'is-resetting': resetting }">
+          <div class="showcase-root">
             <AppContent :runtime-services-enabled="false" />
           </div>
         </n-dialog-provider>
@@ -17,7 +17,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { dateZhCN, zhCN } from 'naive-ui'
 import AppContent from '@/layouts/AppContent.vue'
 import { applyPaletteToRoot } from '@/theme/cssVariables'
@@ -29,12 +29,7 @@ import { useShowcaseDirector } from './director'
 const uiStore = useUiStore()
 const palette = computed(() => getPalette(false))
 const themeOverrides = computed(() => createThemeOverrides(palette.value))
-const resetting = ref(false)
-const director = useShowcaseDirector({
-  onResetTransition: (active) => {
-    resetting.value = active
-  },
-})
+const director = useShowcaseDirector()
 
 uiStore.setThemeMode('light')
 applyPaletteToRoot(palette.value)
@@ -50,12 +45,7 @@ onBeforeUnmount(() => director.stop())
   width: 100%;
   height: 100%;
   opacity: 1;
-  transition: opacity 520ms ease;
   pointer-events: none;
   user-select: none;
-}
-
-.showcase-root.is-resetting {
-  opacity: 0;
 }
 </style>

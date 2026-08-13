@@ -12,7 +12,8 @@
         </span>
         <span class="summary-chevron" aria-hidden="true">⌄</span>
       </summary>
-      <div class="markdown-content reasoning-markdown" v-html="renderedReasoning"></div>
+      <StreamingReasoningText v-if="isStreaming" :text="part.text" />
+      <div v-else class="markdown-content reasoning-markdown" v-html="renderedReasoning"></div>
     </details>
 
     <div
@@ -129,6 +130,7 @@
 import { computed, ref } from 'vue'
 import ResourceIcon from '@/components/common/ResourceIcon.vue'
 import ToolExecutionCard from '@/components/chat/ToolExecutionCard.vue'
+import StreamingReasoningText from '@/components/chat/StreamingReasoningText.vue'
 import { useI18n } from '@/composables/useI18n'
 import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
 import { useWorkspaceFileOpener } from '@/composables/useWorkspaceFileOpener'
@@ -161,7 +163,7 @@ const renderedText = computed(() => (
     : ''
 ))
 const renderedReasoning = computed(() => (
-  props.part.type === 'reasoning'
+  props.part.type === 'reasoning' && !isStreaming.value
     ? renderMarkdown(props.part.text, {
         streaming: isStreaming.value,
         surface: 'reasoning',
@@ -354,6 +356,9 @@ details[open] > summary .summary-chevron {
 }
 
 .reasoning-markdown {
+  max-block-size: min(42vh, 32rem);
+  overflow: auto;
+  overscroll-behavior: contain;
   padding: 0 var(--app-space-md) var(--app-space-md);
   color: var(--app-text-muted);
 }

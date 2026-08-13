@@ -111,6 +111,7 @@ export function useAgentPackageCommands() {
     runtimeOptions?: commands.RuntimeMainModelOptions,
     displayUserInput?: string | null,
     workspaceId?: string | null,
+    steerActiveRuntime = false,
   ) => {
     const command = commands.sendAgentPackageMessageCommand(
       packageId,
@@ -121,7 +122,16 @@ export function useAgentPackageCommands() {
       displayUserInput,
       workspaceId,
     )
-    transport.sendRuntimeCommand(command)
+    const accepted = transport.sendRuntimeCommand(command)
+    if (steerActiveRuntime) {
+      void accepted.then((response) => transport.sendRuntimeCommand(
+        commands.steerRuntimeRequestCommand({
+          queuedRequestId: response.receipt.command_id,
+          sessionId: response.receipt.session_id || undefined,
+          mode: 'agent_package',
+        }),
+      ))
+    }
     return command
   }
 

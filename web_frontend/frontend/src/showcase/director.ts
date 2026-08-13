@@ -1,10 +1,7 @@
 import { nextTick } from 'vue'
-import { knowledgeSourceView, schedulerJobView } from '@/stores/runtime/viewMappers'
 import { useAgentStore } from '@/stores/agent'
-import { useKnowledgeStore } from '@/stores/knowledge'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useRuntimePreferencesStore } from '@/stores/runtimePreferences'
-import { useSchedulerStore } from '@/stores/scheduler'
 import { useUiStore } from '@/stores/ui'
 import type { ChatMessagePart, TranscriptItem } from '@/types/protocol'
 import { showcaseRouter } from './router'
@@ -14,22 +11,12 @@ import {
   agentPackage,
 } from './fakeServer'
 
-interface ShowcaseDirectorOptions {
-  onResetTransition: (active: boolean) => void
-}
-
-type ExtensionKind = 'mcp' | 'skill'
-
 const BASE_TIME = '2026-07-29T02:20:00.000Z'
 const CHAT_PACKAGE_ID = 'factory_chat'
-const SCENE_GAP_MS = 950
-const READING_PAUSE_MS = 2200
 
-export function useShowcaseDirector(options: ShowcaseDirectorOptions) {
+export function useShowcaseDirector() {
   const runtimeStore = useRuntimeStore()
   const agentStore = useAgentStore()
-  const knowledgeStore = useKnowledgeStore()
-  const schedulerStore = useSchedulerStore()
   const uiStore = useUiStore()
   const preferences = useRuntimePreferencesStore()
   let stopped = false
@@ -48,79 +35,28 @@ export function useShowcaseDirector(options: ShowcaseDirectorOptions) {
   }
 
   async function play(): Promise<void> {
-    while (!stopped) {
-      cycle += 1
-      await conversationScene()
-      await transition()
-      await collaborationScene()
-      await transition()
-      await knowledgeScene()
-      await transition()
-      await schedulerScene()
-      await transition()
-      await extensionScene('mcp')
-      await transition()
-      await extensionScene('skill')
-      if (stopped) return
-      await wait(READING_PAUSE_MS)
-      options.onResetTransition(true)
-      await wait(620)
-      options.onResetTransition(false)
-      await wait(420)
-    }
-  }
-
-  async function conversationScene(): Promise<void> {
-    await showcaseRouter.replace({
-      name: 'Factory',
-      query: { package_id: CHAT_PACKAGE_ID, new: '1' },
-    })
-    await waitForView('.factory-view')
-    agentStore.enterAgentChat(CHAT_PACKAGE_ID, null)
-    runtimeStore.showEmptyAgentPackageSession(CHAT_PACKAGE_ID)
-    resetConversation()
-    uiStore.setConversationDockPanel('workspace')
-    await wait(850)
-
-    const input = await waitForElement<HTMLTextAreaElement>('.message-input-container textarea')
-    if (!input) return
-    await typeText(input, '帮我把下周东京出差和周末亲子行程安排在一起')
-    appendMessage(message('user', [
-      textPart('帮我把下周东京出差和周末亲子行程安排在一起'),
-    ]))
-    input.value = ''
-    await wait(1050)
-
-    appendMessage(message('assistant', [
-      textPart('可以。我会把工作日会议、通勤距离和周末亲子活动一起考虑，先整理成一个不会赶路的五日安排。'),
-    ], { display_name: '闲聊' }))
-    await wait(1500)
-    appendMessage(message('assistant', [
-      toolPart('workspace_write', 'completed', {
-        path: 'output/东京五日安排.md',
-      }, {
-        path: 'output/东京五日安排.md',
-        status: 'created',
-      }),
-      textPart('初版已经放进工作区：周四、周五以会议为主，周末安排上野、浅草和台场，并预留了雨天替代方案。'),
-    ], { display_name: '闲聊' }))
-    await wait(READING_PAUSE_MS)
+    cycle += 1
+    await collaborationScene()
   }
 
   async function collaborationScene(): Promise<void> {
     await showcaseRouter.replace({
-      name: 'Factory',
-      query: { package_id: CHAT_PACKAGE_ID, new: '1' },
+      name: 'ChatNew',
     })
     await waitForView('.factory-view')
     agentStore.enterAgentChat(CHAT_PACKAGE_ID, null)
     runtimeStore.showEmptyAgentPackageSession(CHAT_PACKAGE_ID)
     resetConversation()
-    uiStore.setConversationDockPanel('workspace')
-    appendMessage(message('user', [
-      textPart('请分工完成东京五日亲子旅行手册，并给出可直接执行的最终版本。'),
-    ]))
-    await wait(1000)
+    uiStore.setConversationDockPanel(null)
+    const input = await waitForElement<HTMLTextAreaElement>('.message-input-container textarea')
+    if (input) {
+      await typeText(input, '请分工完成东京五日亲子旅行手册，并给出可直接执行的最终版本。')
+      appendMessage(message('user', [
+        textPart('请分工完成东京五日亲子旅行手册，并给出可直接执行的最终版本。'),
+      ]))
+      input.value = ''
+    }
+    await wait(900)
     appendMessage(message('assistant', [
       textPart('我已拆分任务：调研员核对实时资料，行程编排师处理路线与节奏，文档交付员负责最终手册。'),
       toolPart('delegate', 'running', {
@@ -145,51 +81,6 @@ export function useShowcaseDirector(options: ShowcaseDirectorOptions) {
       textPart('协作完成。最终版本包含每日路线、交通换乘、预算、预约清单与雨天备选。'),
       artifactPart('东京五日亲子旅行手册.pdf', 'output/东京五日亲子旅行手册.pdf'),
     ], { display_name: '主 Agent' }))
-    await wait(READING_PAUSE_MS)
-  }
-
-  async function knowledgeScene(): Promise<void> {
-    await showcaseRouter.replace({ name: 'Knowledge' })
-    await waitForView('.knowledge-manager')
-    await nextTick()
-    seedKnowledge()
-    await wait(1200)
-    const cards = [...document.querySelectorAll<HTMLElement>('.source-card')]
-    scrollWithinContainer(
-      cards[1],
-      document.querySelector<HTMLElement>('.source-list .n-scrollbar-container'),
-    )
-    await wait(2800)
-  }
-
-  async function schedulerScene(): Promise<void> {
-    await showcaseRouter.replace({ name: 'Scheduler' })
-    await waitForView('.scheduler-manager')
-    await nextTick()
-    seedScheduler()
-    await wait(3800)
-  }
-
-  async function extensionScene(kind: ExtensionKind): Promise<void> {
-    await showcaseRouter.replace({ name: 'Extensions' })
-    await waitForView('.extension-workbench')
-    await wait(1150)
-    window.dispatchEvent(new CustomEvent('fastagentfactory:showcase-extension-bind', {
-      detail: {
-        kind,
-        identifier: kind === 'mcp' ? 'tavily_search' : 'travel_itinerary',
-        targetId: `package:${SHOWCASE_PACKAGE_ID}`,
-      },
-    }))
-    await wait(4100)
-  }
-
-  async function transition(): Promise<void> {
-    if (stopped) return
-    options.onResetTransition(true)
-    await wait(360)
-    options.onResetTransition(false)
-    await wait(SCENE_GAP_MS)
   }
 
   function seedAgents(): void {
@@ -237,50 +128,6 @@ export function useShowcaseDirector(options: ShowcaseDirectorOptions) {
       visible_in_agent_session_list: true,
     }])
     runtimeStore.connectionStatus = 'connected'
-  }
-
-  function seedKnowledge(): void {
-    const rawSources = [
-      knowledgeSource('tokyo-travel', '东京旅行资料', 42, 'ready'),
-      knowledgeSource('family-preferences', '家庭偏好与预算', 8, 'ready'),
-      knowledgeSource('transport-booking', '交通与预约指南', 19, 'ready'),
-    ]
-    knowledgeStore.setSources(rawSources.map((source) => knowledgeSourceView(source, BASE_TIME)))
-  }
-
-  function seedScheduler(): void {
-    schedulerStore.setJobs([
-      schedulerJobView({
-        job_id: 'weekly-travel-update',
-        task_content: '每周更新目的地开放时间',
-        schedule_expr: '每周一 09:00 · Asia/Shanghai',
-        enabled: true,
-        target: {
-          target_type: 'graph_run',
-          payload: { package_id: SHOWCASE_PACKAGE_ID },
-        },
-      }),
-      schedulerJobView({
-        job_id: 'departure-reminder',
-        task_content: '出发前 24 小时生成行前提醒',
-        schedule_expr: '2026-08-07 08:30 · Asia/Shanghai',
-        enabled: true,
-        target: {
-          target_type: 'tool_call',
-          payload: { tool_id: 'travel_reminder' },
-        },
-      }),
-      schedulerJobView({
-        job_id: 'budget-summary',
-        task_content: '每晚汇总当日预算与次日安排',
-        schedule_expr: '每天 21:30 · Asia/Tokyo',
-        enabled: false,
-        target: {
-          target_type: 'graph_run',
-          payload: { package_id: SHOWCASE_PACKAGE_ID },
-        },
-      }),
-    ])
   }
 
   function resetConversation(): void {
@@ -342,25 +189,6 @@ export function useShowcaseDirector(options: ShowcaseDirectorOptions) {
       input.value += character
       await wait(78)
     }
-  }
-
-  function scrollWithinContainer(
-    target: HTMLElement | undefined,
-    container: HTMLElement | null,
-  ): void {
-    if (!target || !container) return
-    const targetRect = target.getBoundingClientRect()
-    const containerRect = container.getBoundingClientRect()
-    const centeredTop = (
-      container.scrollTop
-      + targetRect.top
-      - containerRect.top
-      - (container.clientHeight - targetRect.height) / 2
-    )
-    container.scrollTo({
-      top: Math.max(0, centeredTop),
-      behavior: 'smooth',
-    })
   }
 
   function id(prefix: string): string {
@@ -434,20 +262,4 @@ export function useShowcaseDirector(options: ShowcaseDirectorOptions) {
     }
   }
 
-}
-
-function knowledgeSource(
-  sourceId: string,
-  displayName: string,
-  documentCount: number,
-  status: string,
-) {
-  return {
-    source_id: sourceId,
-    display_name: displayName,
-    mount_mode: 'local',
-    status,
-    document_count: documentCount,
-    updated_at: BASE_TIME,
-  }
 }

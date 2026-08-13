@@ -18,6 +18,7 @@ from agent_factory.runtime_protocol import (
     RuntimeInstance,
 )
 from agent_factory.dynamic_runtime.delegation_store import DelegationStore
+from agent_factory.dynamic_runtime.prompt_policies import EVIDENCE_FIRST_POLICY
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,6 +263,7 @@ def _render_system_prompt(
 ) -> str:
     sections = [
         base.strip(),
+        EVIDENCE_FIRST_POLICY,
         (
             "Runtime time context:\n"
             f"- Current date: {clock.local_date}\n"
@@ -291,13 +293,28 @@ def render_delegation_notifications(events: tuple[Any, ...]) -> str:
     entries = []
     for index, event in enumerate(events, start=1):
         payload = event.payload if isinstance(event.payload, dict) else {}
+        task_name = str(payload.get("agent_name") or f"Delegated task {index}").strip()
+        objective = str(payload.get("objective") or "").strip()
         error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
         details = error.get("details") if isinstance(error.get("details"), dict) else {}
-        reason = str(details.get("message") or error.get("message") or "").strip()
-        suffix = f" Reason: {reason}" if reason else ""
-        entries.append(
-            f"- Delegated task {index} finished with status {event.event_type}.{suffix}"
-        )
+        reason = str(
+            details.get("reason")
+            or details.get("message")
+            or error.get("message")
+            or ""
+        ).strip()
+        suffix = f" Reason: {reason}." if reason else ""
+        if event.event_type == "cancelled" and payload.get("cancel_source") == "user":
+            entries.append(
+                f"- The user cancelled child Agent '{task_name}' while it was working on: {objective}. "
+                "Summarize the authoritative progress and evidence already available, state what remains incomplete, "
+                f"and report the cancellation to the user without restarting the task.{suffix}"
+            )
+        else:
+            entries.append(
+                f"- Child Agent '{task_name}' finished with status {event.event_type}. "
+                f"Objective: {objective}.{suffix}"
+            )
     return (
         "Delegated task completion notifications received since the previous main runtime. "
         "Treat these as authoritative child results, inspect details with delegation_status without supplying "

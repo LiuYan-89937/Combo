@@ -1,6 +1,5 @@
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import { useRoute } from 'vue-router'
 import {
   isAvailableChatModelProfile,
   modelPoolApi,
@@ -14,11 +13,9 @@ import { useRuntimePreferencesStore } from '@/stores/runtimePreferences'
 import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
 import type { RuntimeAttachmentInput, TranscriptAttachmentView } from '@/types/protocol'
-import { isAgentSessionsLanding } from '@/utils/agentSessionRoute'
 import { SYSTEM_CHAT_PACKAGE_ID } from '@/utils/resourceScope'
 
 export function useFactoryConversation() {
-  const route = useRoute()
   const runtimeStore = useRuntimeStore()
   const agentStore = useAgentStore()
   const uiStore = useUiStore()
@@ -33,15 +30,14 @@ export function useFactoryConversation() {
     approvalMode,
     executionPreference,
     forceCollaboration,
+    runningMessageMode,
   } = storeToRefs(runtimePreferences)
 
   const isAgentChatActive = computed(() => Boolean(agentStore.activeChatPackageId))
   const requiresRuntimeMainModel = computed(() => (
     !agentStore.activeChatPackageId || agentStore.activeChatPackageId === SYSTEM_CHAT_PACKAGE_ID
   ))
-  const isAgentSessionLanding = computed(() => (
-    route.name === 'Factory' && isAgentSessionsLanding(route.query)
-  ))
+  const isAgentSessionLanding = computed(() => false)
   const runtimeMainModelOptions = computed(() => (
     chatModelProfiles.value.map((profile) => ({
       label: profile.display_name || profile.model_name || profile.profile_id,
@@ -165,6 +161,7 @@ export function useFactoryConversation() {
         runtimeModelOptions(),
         undefined,
         agentSessionId ? null : newSessionWorkspaceId,
+        runtimeStore.hasActiveRun && runningMessageMode.value === 'steer',
       )
       runtimeStore.addUserMessage(message, command.request_id, {
         mode: 'agent_package',
@@ -229,6 +226,7 @@ export function useFactoryConversation() {
     approvalMode,
     executionPreference,
     forceCollaboration,
+    runningMessageMode,
     selectedMainModelProfileId,
     sendMessage,
     steerQueuedRequest,

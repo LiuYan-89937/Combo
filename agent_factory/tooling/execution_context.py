@@ -43,6 +43,19 @@ class RuntimeToolExecutionCancelled(RuntimeError):
     pass
 
 
+class RuntimeModelGenerationInterrupted(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        partial_text: str = "",
+        reasoning_content: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.partial_text = str(partial_text or "")
+        self.reasoning_content = str(reasoning_content or "")
+
+
 @contextmanager
 def tool_call_context(
     *,
@@ -120,12 +133,79 @@ def current_runtime_run_control() -> Any | None:
     return _RUNTIME_RUN_CONTROL.get()
 
 
+def runtime_terminal_cancellation_requested() -> bool:
+    control = current_runtime_run_control()
+    return bool(control is not None and getattr(control, "drain_requested", False))
+
+
 def consume_runtime_inputs() -> tuple[Any, ...]:
     control = current_runtime_run_control()
     consume = getattr(control, "consume_inputs", None)
     if not callable(consume):
         return ()
     return tuple(consume())
+
+
+def begin_runtime_model_generation() -> int:
+    control = current_runtime_run_control()
+    begin = getattr(control, "begin_model_generation", None)
+    if callable(begin):
+        try:
+            return int(begin())
+        except RuntimeError as exc:
+            raise RuntimeModelGenerationInterrupted(str(exc)) from exc
+    return 0
+
+
+def runtime_model_generation_is_current(revision: int) -> bool:
+    control = current_runtime_run_control()
+    current = getattr(control, "generation_is_current", None)
+    return bool(current(revision)) if callable(current) else True
+
+
+def register_runtime_model_cancellation(callback: Callable[[], None]) -> Callable[[], None]:
+    control = current_runtime_run_control()
+    register = getattr(control, "register_model_cancellation", None)
+    if callable(register):
+        return register(callback)
+    if control is not None and bool(getattr(control, "drain_requested", False)):
+        callback()
+    return lambda: None
+
+
+def execute_runtime_model_invocation(operation: Callable[[], Any], *, revision: int) -> Any:
+    """Make a non-streaming provider call interruptible without making interruption terminal."""
+    control = current_runtime_run_control()
+    if control is None:
+        return operation()
+    completed = threading.Event()
+    cancelled = threading.Event()
+    outcome: dict[str, Any] = {}
+    context = copy_context()
+
+    def run() -> None:
+        try:
+            outcome["value"] = context.run(operation)
+        except BaseException as exc:
+            outcome["error"] = exc
+        finally:
+            completed.set()
+
+    unregister = register_runtime_model_cancellation(cancelled.set)
+    worker = threading.Thread(target=run, name="agentfactory-model-call", daemon=True)
+    worker.start()
+    try:
+        while not completed.is_set():
+            if cancelled.wait(timeout=0.05) or not runtime_model_generation_is_current(revision):
+                raise RuntimeModelGenerationInterrupted("Model generation was superseded.")
+        if cancelled.is_set() or not runtime_model_generation_is_current(revision):
+            raise RuntimeModelGenerationInterrupted("Model generation was superseded.")
+        error = outcome.get("error")
+        if error is not None:
+            raise error
+        return outcome.get("value")
+    finally:
+        unregister()
 
 
 def register_runtime_tool_cancellation(callback: Callable[[], None]) -> Callable[[], None]:

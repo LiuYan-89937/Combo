@@ -591,10 +591,10 @@ onMounted(() => {
 .browser-panel { position: fixed; z-index: 35; width: clamp(360px, 30vw, 460px); min-width: 0; display: flex; flex-direction: column; overflow: visible; transition: width .26s cubic-bezier(.16, 1, .3, 1); }
 .browser-panel.minimized { width: min(340px, calc(100vw - 20px)); }
 .browser-panel.dragging { transition: none; user-select: none; }
-.page-capsule-stack { display: flex; max-height: 176px; flex-direction: column; align-items: flex-end; gap: 5px; padding: 8px 8px 2px; overflow-y: auto; scrollbar-width: none; }
+.page-capsule-stack { display: flex; max-height: 192px; flex-direction: column; align-items: flex-end; gap: 8px; padding: 8px 8px 3px; overflow-y: auto; scrollbar-width: none; }
 .page-capsule-stack::-webkit-scrollbar { display: none; }
-.page-capsule { width: min(100%, 360px); min-height: 46px; display: flex; align-items: center; border: 1px solid var(--app-divider); border-radius: 999px; background: color-mix(in srgb, var(--app-surface-elevated) 94%, transparent); backdrop-filter: blur(18px); transition: width .2s ease, transform .2s ease, border-color .2s ease; }
-.page-capsule.active { width: 100%; border-color: var(--app-border-focus); cursor: grab; touch-action: none; user-select: none; }
+.page-capsule { width: min(100%, 360px); height: 48px; display: flex; align-items: center; overflow: hidden; border: 1px solid var(--app-border); border-radius: var(--app-radius-pill); background: var(--app-surface); box-shadow: 0 7px 20px color-mix(in srgb, var(--app-text) 8%, transparent); transition: width .2s ease, transform .2s ease, border-color .2s ease, box-shadow .2s ease; }
+.page-capsule.active { width: 100%; border-color: var(--app-border-focus); box-shadow: 0 11px 26px color-mix(in srgb, var(--app-text) 12%, transparent); cursor: grab; touch-action: none; user-select: none; }
 .browser-panel.dragging .page-capsule.active { cursor: grabbing; }
 .capsule-select { min-width: 0; flex: 1; display: flex; align-items: center; gap: 9px; padding: 9px 8px 9px 13px; text-align: left; }
 .capsule-copy { min-width: 0; display: grid; gap: 1px; }

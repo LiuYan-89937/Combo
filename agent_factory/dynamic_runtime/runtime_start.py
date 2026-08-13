@@ -24,6 +24,7 @@ from agent_factory.runtime_protocol import (
     ConversationTurn,
     OutboxRecord,
     RuntimeInstance,
+    SendMessagePayload,
 )
 
 
@@ -107,6 +108,12 @@ class RuntimeStartStore:
                     payload={
                         **attached_receipt.model_dump(mode="json"),
                         "command_kind": envelope.payload.kind,
+                        "request_source": (
+                            "internal"
+                            if isinstance(envelope.payload, SendMessagePayload)
+                            and envelope.payload.visibility == "internal"
+                            else "user"
+                        ),
                     },
                     created_at=now,
                     updated_at=now,

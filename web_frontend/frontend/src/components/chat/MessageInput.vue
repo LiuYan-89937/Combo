@@ -328,6 +328,7 @@ const props = withDefaults(
     isRunning?: boolean
     queuedCount?: number
     queuedMessages?: QueuedMessageView[]
+    runningMessageMode?: 'queue' | 'steer'
     rows?: number
     maxRows?: number
     attachmentsEnabled?: boolean
@@ -351,6 +352,7 @@ const props = withDefaults(
     isRunning: false,
     queuedCount: 0,
     queuedMessages: () => [],
+    runningMessageMode: 'queue',
     rows: 3,
     maxRows: 10,
     attachmentsEnabled: true,
@@ -431,7 +433,8 @@ const primaryAction = computed<'send' | 'cancel'>(() => (
 ))
 const primaryActionLabel = computed(() => {
   if (primaryAction.value === 'cancel') return t('common.stop')
-  return props.isRunning ? t('chat.queueSend') : t('common.send')
+  if (!props.isRunning) return t('common.send')
+  return props.runningMessageMode === 'steer' ? t('chat.steerSend') : t('chat.queueSend')
 })
 const canUsePrimaryAction = computed(() => (
   primaryAction.value === 'cancel' || canSend.value

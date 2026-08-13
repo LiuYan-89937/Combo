@@ -137,6 +137,7 @@ class ConversationMessage(ProtocolModel):
     committed_at: str | None = None
     visibility: Literal["public", "internal"] = "public"
     notification_event_ids: tuple[str, ...] = ()
+    completion_reason: Literal["user_interrupted"] | None = None
 
     @field_validator("message_id", "session_id", "turn_id")
     @classmethod
@@ -179,6 +180,8 @@ class ConversationMessage(ProtocolModel):
             raise ValueError("assistant and tool messages require complete runtime attribution")
         if self.notification_event_ids and (self.role != "user" or self.visibility != "internal"):
             raise ValueError("notification_event_ids require an internal user message")
+        if self.completion_reason is not None and self.role != "assistant":
+            raise ValueError("completion_reason is only valid for assistant messages")
         return self
 
 

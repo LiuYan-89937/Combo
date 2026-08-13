@@ -3,7 +3,11 @@
     <div class="chat-container">
       <!-- 消息列表 -->
       <div class="messages-section">
-        <n-scrollbar ref="scrollbarRef" class="messages-scrollbar">
+        <n-scrollbar
+          ref="scrollbarRef"
+          class="messages-scrollbar"
+          @scroll="handleMessagesScroll"
+        >
           <div class="messages-list">
             <div
               v-if="
@@ -12,14 +16,8 @@
                 && !hasActiveStreams
               "
               class="chat-empty"
-              role="status"
-              :aria-label="t('factory.emptyChat')"
             >
-              <ComboMascot state="idle" :size="148" :aria-label="t('factory.emptyChat')" />
-              <div class="chat-empty-copy">
-                <strong>{{ t('factory.emptyChat') }}</strong>
-                <span>{{ t('factory.emptyChatHint') }}</span>
-              </div>
+              <ComboMascot state="idle" :size="148" />
             </div>
 
             <template v-for="item in timelineItems" :key="`${item.kind}-${item.id}`">
@@ -68,6 +66,7 @@
           :is-running="runtimeStore.hasActiveRun"
           :queued-count="runtimeStore.queuedRequestCount"
           :queued-messages="runtimeStore.queuedMessages"
+          :running-message-mode="runningMessageMode"
           attachments-enabled
           model-selector-enabled
           :model-options="runtimeMainModelOptions"
@@ -110,7 +109,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted, watch, nextTick } from 'vue'
+import { computed, ref, onBeforeUnmount, onMounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { NScrollbar } from 'naive-ui'
 import { useRuntimeStore } from '@/stores/runtime'
@@ -135,7 +134,6 @@ import { useContextReferenceStore } from '@/stores/contextReferences'
 import { messageContextReference } from '@/utils/contextReferences'
 import { useResourceContext } from '@/composables/useResourceContext'
 import { useWorkspaceStore } from '@/stores/workspace'
-import { isAgentSessionsLanding as routeIsAgentSessionsLanding } from '@/utils/agentSessionRoute'
 import { SYSTEM_CHAT_PACKAGE_ID } from '@/utils/resourceScope'
 import { agentPackageConversationScope } from '@/stores/runtime/scopes'
 import { useAgentSessionNavigation } from '@/composables/agent/useAgentSessionNavigation'
@@ -153,6 +151,9 @@ const inputRef = ref()
 const referenceStore = useContextReferenceStore()
 const resourceContext = useResourceContext()
 const { startNewAgentSession } = useAgentSessionNavigation()
+let followBottomFrame: number | null = null
+let followBottomScheduled = false
+const followsLatestMessage = ref(true)
 type PendingWorkspaceAction = {
   kind: 'new_session'
   packageId: string
@@ -181,6 +182,7 @@ const {
   reasoningIntensity,
   executionPreference,
   forceCollaboration,
+  runningMessageMode,
   approvalMode,
   selectedMainModelProfileId,
   setSelectedMainModelProfileId,
@@ -268,6 +270,7 @@ function sendAndFollow(
   workspaceId?: string | null,
 ): boolean {
   if (!sendMessage(message, attachments, workspaceId)) return false
+  followsLatestMessage.value = true
   nextTick(() => {
     scrollToBottom()
   })
@@ -308,15 +311,31 @@ function scrollContainer(): HTMLElement | null {
 function isNearBottom(): boolean {
   const container = scrollContainer()
   if (!container) return true
-  return container.scrollHeight - container.scrollTop - container.clientHeight < 96
+  return container.scrollHeight - container.scrollTop - container.clientHeight < 48
+}
+
+function handleMessagesScroll() {
+  followsLatestMessage.value = isNearBottom()
 }
 
 function followBottomIfNeeded() {
-  const shouldFollow = isNearBottom()
+  if (!followsLatestMessage.value || followBottomScheduled) return
+  followBottomScheduled = true
   nextTick(() => {
-    if (shouldFollow) scrollToBottom()
+    followBottomFrame = window.requestAnimationFrame(() => {
+      followBottomFrame = null
+      followBottomScheduled = false
+      if (!followsLatestMessage.value) return
+      scrollToBottom()
+    })
   })
 }
+
+onBeforeUnmount(() => {
+  if (followBottomFrame !== null) window.cancelAnimationFrame(followBottomFrame)
+  followBottomFrame = null
+  followBottomScheduled = false
+})
 
 // 监听消息变化，自动滚动
 watch(
@@ -362,25 +381,20 @@ watch(
 watch(
   () => `${agentStore.activeChatPackageId || ''}:${runtimeStore.activeAgentSessionId || ''}`,
   () => {
-    const packageId = agentStore.activeChatPackageId
     const sessionId = runtimeStore.activeAgentSessionId
-    if (route.name !== 'Factory' || !packageId) return
+    if (route.name !== 'ChatNew' && route.name !== 'ChatSession') return
     if (
       !sessionId
       && agentStore.selectedSessionId === null
-      && routeQueryText(route.query.package_id) === packageId
-      && Boolean(routeQueryText(route.query.session_id))
+      && route.name === 'ChatSession'
       && runtimeStore.currentMode === 'agent_package'
     ) {
-      void router.replace({ name: 'Factory', query: { package_id: packageId, new: '1' } })
+      void router.replace({ name: 'ChatNew' })
       return
     }
     if (!sessionId) return
-    if (routeQueryText(route.query.package_id) !== packageId || routeQueryText(route.query.new) !== '1') return
-    if (
-      routeQueryText(route.query.session_id) === sessionId
-    ) return
-    void router.replace({ name: 'Factory', query: { package_id: packageId, session_id: sessionId } })
+    if (route.name !== 'ChatNew') return
+    void router.replace({ name: 'ChatSession', params: { sessionId } })
   },
 )
 
@@ -390,48 +404,19 @@ async function activateCurrentRoute(): Promise<void> {
 }
 
 async function openRoutedAgentSession(version: number): Promise<boolean> {
-  if (route.name !== 'Factory') return false
-  if (routeIsAgentSessionsLanding(route.query)) {
-    agentStore.leaveAgentChat()
-    runtimeStore.showEmptyAgentPackageSession()
-    if (agentStore.agentPackages.length === 0) commands.listAgentPackages()
-    return true
-  }
-  const packageId = routeQueryText(route.query.package_id)
-  const sessionId = routeQueryText(route.query.session_id)
-  if (!packageId) {
-    await router.replace({
-      name: 'Factory',
-      query: { package_id: SYSTEM_CHAT_PACKAGE_ID },
-    })
-    return true
-  }
+  if (route.name !== 'ChatNew' && route.name !== 'ChatSession') return false
+  const packageId = SYSTEM_CHAT_PACKAGE_ID
+  const sessionId = routeParamText(route.params.sessionId)
   activateAgentWorkspace()
-  if (!sessionId && routeQueryText(route.query.new) === '1') {
-    const workspaceId = routeQueryText(route.query.workspace_id)
+  if (route.name === 'ChatNew') {
+    const workspaceId = routeQueryText(route.query.workspace)
     if (emptyAgentRouteIsActive(packageId, workspaceId)) return true
     agentStore.enterAgentChat(packageId, null)
     runtimeStore.showEmptyAgentPackageSession(packageId, workspaceId)
     await commands.selectAgentPackage(packageId)
     return true
   }
-  if (!sessionId) {
-    const rememberedSessionId = agentStore.lastAgentSession?.packageId === packageId
-      ? agentStore.lastAgentSession.sessionId
-      : null
-    agentStore.enterAgentChat(packageId, null)
-    runtimeStore.showEmptyAgentPackageSession(packageId)
-    await commands.listAgentPackageSessions(packageId)
-    if (version !== routeActivationVersion || routeQueryText(route.query.package_id) !== packageId) return true
-    const preferred = preferredSessionForPackage(packageId, rememberedSessionId)
-    await router.replace({
-      name: 'Factory',
-      query: preferred
-        ? { package_id: packageId, session_id: preferred.session_id }
-        : { package_id: packageId, new: '1' },
-    })
-    return true
-  }
+  if (!sessionId) return false
   const routedScope = agentPackageConversationScope(packageId, sessionId)
   if (
     agentStore.activeChatPackageId === packageId
@@ -456,21 +441,10 @@ function activateAgentWorkspace(): void {
   workspaceStore.setScope('workdir')
 }
 
-function preferredSessionForPackage(packageId: string, rememberedSessionId: string | null) {
-  const sessions = agentStore.agentSessions
-    .filter((session) => session.package_id === packageId)
-    .sort((left, right) => (right.updated_at || right.created_at).localeCompare(left.updated_at || left.created_at))
-  if (rememberedSessionId) {
-    const preferred = sessions.find((session) => session.session_id === rememberedSessionId)
-    if (preferred) return preferred
-  }
-  return sessions[0] || null
-}
-
 function routeMatchesAgentSession(packageId: string, sessionId: string): boolean {
-  return route.name === 'Factory'
-    && routeQueryText(route.query.package_id) === packageId
-    && routeQueryText(route.query.session_id) === sessionId
+  return packageId === SYSTEM_CHAT_PACKAGE_ID
+    && route.name === 'ChatSession'
+    && routeParamText(route.params.sessionId) === sessionId
 }
 
 function emptyAgentRouteIsActive(packageId: string, workspaceId: string | null): boolean {
@@ -482,6 +456,12 @@ function emptyAgentRouteIsActive(packageId: string, workspaceId: string | null):
 }
 
 function routeQueryText(value: unknown): string | null {
+  const raw = Array.isArray(value) ? value[0] : value
+  const text = String(raw || '').trim()
+  return text || null
+}
+
+function routeParamText(value: unknown): string | null {
   const raw = Array.isArray(value) ? value[0] : value
   const text = String(raw || '').trim()
   return text || null
@@ -527,14 +507,13 @@ function routeQueryText(value: unknown): string | null {
 .chat-empty {
   display: grid;
   place-items: center;
-  gap: 12px;
   margin-top: 12vh;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
   animation: app-fade-in-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
-
-.chat-empty-copy { display: grid; gap: 5px; text-align: center; }
-.chat-empty-copy strong { font-size: 15px; letter-spacing: -.02em; }
-.chat-empty-copy span { color: var(--app-text-muted); font-size: 12px; }
 
 .approval-section {
   margin-top: var(--app-space-md);

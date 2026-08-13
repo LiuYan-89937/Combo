@@ -4,6 +4,9 @@ from dataclasses import dataclass
 from uuid import uuid4
 
 from agent_factory.dynamic_runtime.database import DynamicRuntimeDatabase
+from agent_factory.dynamic_runtime.delegated_task_transitions import (
+    commit_delegated_task_transition,
+)
 from agent_factory.dynamic_runtime.dispatcher import CommandOutcome
 from agent_factory.dynamic_runtime.event_persistence import (
     insert_runtime_event_and_outbox,
@@ -91,8 +94,31 @@ class RuntimeCancellationStore:
 
             cancelled = _cancelled_instance(requested, now=now)
             _replace_instance(conn, cancelled, expected_status=current.status)
-            _cancel_turn(conn, cancelled, now=now)
-            _cancel_tool_calls(conn, cancelled, now=now)
+            if cancelled.request.runtime_role == "temporary":
+                commit_delegated_task_transition(
+                    conn,
+                    instance=cancelled,
+                    status="cancelled",
+                    event_payload={
+                        "kind": "cancelled",
+                        "error": cancelled.error.model_dump(mode="json"),
+                    },
+                    now=now,
+                    terminal_at=now,
+                    expected_task_status=(
+                        "waiting"
+                        if current.status in {"waiting_approval", "waiting_external"}
+                        else "queued"
+                    ),
+                )
+            else:
+                _cancel_turn(conn, cancelled, now=now)
+            _cancel_tool_calls(
+                conn,
+                cancelled,
+                now=now,
+                commit_conversation_result=cancelled.request.runtime_role == "main",
+            )
             event = runtime_event_for_instance(
                 cancelled,
                 payload={"kind": "cancelled", "error": cancelled.error.model_dump(mode="json")},
@@ -214,7 +240,13 @@ def _cancel_turn(conn, instance: RuntimeInstance, *, now: str) -> None:
         raise RuntimeError("conversation turn cancellation compare-and-set failed")
 
 
-def _cancel_tool_calls(conn, instance: RuntimeInstance, *, now: str) -> None:
+def _cancel_tool_calls(
+    conn,
+    instance: RuntimeInstance,
+    *,
+    now: str,
+    commit_conversation_result: bool,
+) -> None:
     rows = conn.execute(
         """
         select payload_json from tool_calls
@@ -236,28 +268,29 @@ def _cancel_tool_calls(conn, instance: RuntimeInstance, *, now: str) -> None:
         ).rowcount
         if changed != 1:
             raise RuntimeError("tool call cancellation compare-and-set failed")
-        insert_message(
-            conn,
-            ConversationMessage(
-                message_id=uuid4().hex,
-                session_id=instance.request.session_id,
-                turn_id=instance.request.turn_id,
-                role="tool",
-                status="committed",
-                parts=(
-                    ToolResultPart(
-                        tool_call_id=current.tool_call_id,
-                        status="cancelled",
-                        error_code="runtime_cancelled",
+        if commit_conversation_result:
+            insert_message(
+                conn,
+                ConversationMessage(
+                    message_id=uuid4().hex,
+                    session_id=instance.request.session_id,
+                    turn_id=instance.request.turn_id,
+                    role="tool",
+                    status="committed",
+                    parts=(
+                        ToolResultPart(
+                            tool_call_id=current.tool_call_id,
+                            status="cancelled",
+                            error_code="runtime_cancelled",
+                        ),
                     ),
+                    source_runtime_instance_id=instance.runtime_instance_id,
+                    source_request_id=instance.request.request_id,
+                    source_task_revision=instance.request.task_revision,
+                    created_at=now,
+                    committed_at=now,
                 ),
-                source_runtime_instance_id=instance.runtime_instance_id,
-                source_request_id=instance.request.request_id,
-                source_task_revision=instance.request.task_revision,
-                created_at=now,
-                committed_at=now,
-            ),
-        )
+            )
 
 
 def _require_active_generation(conn, generation: int, *, now: str) -> None:

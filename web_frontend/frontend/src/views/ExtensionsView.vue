@@ -98,6 +98,22 @@
               <n-button size="small" quaternary @click.stop="editItem(item)">
                 编辑
               </n-button>
+              <n-popconfirm
+                v-if="canDeleteItem(item)"
+                positive-text="删除"
+                negative-text="取消"
+                @positive-click="deleteItem(item)"
+              >
+                <template #trigger>
+                  <n-button
+                    size="small"
+                    quaternary
+                    :loading="deletingId === item.capability_id"
+                    @click.stop
+                  >删除</n-button>
+                </template>
+                {{ deleteConfirmation(item) }}
+              </n-popconfirm>
             </div>
           </footer>
         </article>
@@ -365,7 +381,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import {
   NAlert, NButton, NDrawer, NDrawerContent, NDynamicTags, NEmpty, NForm, NFormItem, NIcon,
   NInput, NInputGroup, NInputNumber, NModal, NRadio, NRadioGroup, NSelect, NSpace, NSpin, NSwitch,
-  NTabPane, NTabs, useMessage,
+  NTabPane, NTabs, NPopconfirm, useMessage,
 } from 'naive-ui'
 import { Add, Refresh, SearchOutline } from '@/components/icons'
 import McpConfigModal from '@/components/extensions/McpConfigModal.vue'
@@ -402,6 +418,7 @@ const query = ref('')
 const activePool = computed(() => props.pool)
 const probingId = ref('')
 const probeResult = ref<McpProbeResult | null>(null)
+const deletingId = ref('')
 const showMcpModal = ref(false)
 const savingMcp = ref(false)
 const editingMcp = ref<CapabilityPoolItem | null>(null)
@@ -490,6 +507,15 @@ function capabilitiesOf(kind: CapabilityPoolItem['kind']) { return (snapshot.val
 function matches(values: unknown[]) { const needle = query.value.trim().toLocaleLowerCase(); return !needle || values.some(value => String(value || '').toLocaleLowerCase().includes(needle)) }
 function filterCapabilities(items: CapabilityPoolItem[]) { return items.filter(item => matches([item.display_name, item.description, item.namespace, ...item.keywords, capabilityName(item)])) }
 function isMcpServer(item: PoolItem): item is CapabilityPoolItem { return item.kind === 'mcp_server' }
+function canDeleteItem(item: PoolItem) {
+  return item.kind === 'mcp_server'
+    || (item.kind === 'skill' && item.trust_level === 'local_user')
+    || (item.kind === 'tool' && item.trust_level === 'local_user' && item.details.implementation_kind === 'python_package')
+}
+function deleteConfirmation(item: PoolItem) {
+  if (item.kind === 'mcp_server') return `删除 ${itemName(item)}，并移除该服务发现的全部工具？`
+  return `删除 ${itemName(item)}？此操作会移除对应的本地文件。`
+}
 function itemKey(item: PoolItem) { return item.capability_id }
 function itemName(item: PoolItem) { return capabilityName(item) }
 function itemDescription(item: PoolItem) { return item.description || t('common.noDescription') }
@@ -517,6 +543,24 @@ function formatBytes(value: number) { if (value < 1024) return `${value} B`; if 
 
 async function loadAll() { loading.value = true; loadError.value = ''; try { snapshot.value = await capabilityPoolsApi.snapshot() } catch (error) { loadError.value = error instanceof Error ? error.message : String(error) } finally { loading.value = false } }
 async function probeMcp(item: CapabilityPoolItem) { probingId.value = item.capability_id; probeResult.value = null; try { probeResult.value = await capabilityPoolsApi.probeMcp(item.capability_id) } catch (error) { message.error(error instanceof Error ? error.message : String(error)) } finally { probingId.value = '' } }
+async function deleteItem(item: PoolItem) {
+  if (!snapshot.value || deletingId.value || !canDeleteItem(item)) return
+  deletingId.value = item.capability_id
+  try {
+    if (item.kind === 'mcp_server') {
+      snapshot.value = await capabilityPoolsApi.deleteMcp(serverId(item), snapshot.value.mcp_registry_digest)
+    } else if (item.kind === 'skill') {
+      snapshot.value = await capabilityPoolsApi.deleteSkill(item)
+    } else {
+      snapshot.value = await capabilityPoolsApi.deleteTool(item)
+    }
+    message.success(`${itemName(item)} 已删除`)
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : String(error))
+  } finally {
+    deletingId.value = ''
+  }
+}
 function openAddMcp() { editingMcp.value = null; showMcpModal.value = true }
 async function openSkillHub() { showSkillHub.value = true; try { skillHubResult.value = await capabilityPoolsApi.skillHubStatus() } catch (error) { message.error(error instanceof Error ? error.message : String(error)) } }
 async function searchSkillHub() { const query = skillHubQuery.value.trim(); if (!query || searchingSkillHub.value) return; searchingSkillHub.value = true; try { skillHubResult.value = await capabilityPoolsApi.searchSkillHub(query) } catch (error) { message.error(error instanceof Error ? error.message : String(error)) } finally { searchingSkillHub.value = false } }

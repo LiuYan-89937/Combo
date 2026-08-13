@@ -89,7 +89,12 @@ from agent_factory.dynamic_runtime.runtime_infrastructure import (
 from agent_factory.model_pool import ModelPoolStore
 from agent_factory.paths import factory_artifact_path, project_root
 from agent_factory.resource_system import ResourceStore
-from agent_factory.runtime_protocol import CommandReceipt
+from agent_factory.runtime_protocol import (
+    CapabilityActivation,
+    CommandEnvelope,
+    CommandReceipt,
+    SendMessagePayload,
+)
 from agent_factory.runtime_kernel.context.engine import ContextEngine
 from agent_factory.runtime_kernel.persistence import (
     LangGraphCheckpointerConfig,
@@ -249,11 +254,14 @@ class RuntimeBackend:
         )
         self._mcp_registry_lock = RLock()
         self._tool_package_lock = RLock()
+        self._skill_package_lock = RLock()
+        self._main_agent_profile_lock = RLock()
         self.tool_package_runtime: ToolPackageRuntime | None = None
         try:
             self.application = self._open_application()
             self.frontend_events.bind_request_id_resolver(self._frontend_request_id)
             self.frontend_events.bind_active_request_resolver(self._active_frontend_requests)
+            self.frontend_events.bind_delegated_task_name_resolver(self._delegated_task_name)
         except BaseException:
             self.browser_runtime.shutdown()
             self.process_resources.close()
@@ -319,12 +327,30 @@ class RuntimeBackend:
             ).fetchone()
         return str(row["command_id"]) if row is not None else fallback
 
+    def _delegated_task_name(self, task_id: str) -> str | None:
+        normalized_task_id = str(task_id or "").strip()
+        if not normalized_task_id:
+            return None
+        with self.application.database.connection(query_only=True) as connection:
+            row = connection.execute(
+                """
+                select json_extract(payload_json, '$.agent_name') as agent_name
+                from delegated_task_revisions
+                where task_id = ? order by task_revision desc limit 1
+                """,
+                (normalized_task_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        name = str(row["agent_name"] or "").strip()
+        return name or None
+
     def _active_frontend_requests(self, principal_id: str) -> list[dict[str, Any]]:
         with self.application.database.connection(query_only=True) as connection:
             rows = connection.execute(
                 """
                 select * from (
-                  select command_id, session_id, status, receipt_json,
+                  select command_id, session_id, status, receipt_json, envelope_json,
                          queue_sequence, received_at, updated_at,
                          (
                            select runtime.status from runtime_instances as runtime
@@ -353,6 +379,13 @@ class RuntimeBackend:
                 queue_position = queued_positions.get(session_id, 0) + 1
                 queued_positions[session_id] = queue_position
             receipt = CommandReceipt.model_validate_json(str(row["receipt_json"]))
+            envelope = CommandEnvelope.model_validate_json(str(row["envelope_json"]))
+            request_source = (
+                "internal"
+                if isinstance(envelope.payload, SendMessagePayload)
+                and envelope.payload.visibility == "internal"
+                else "user"
+            )
             dispatch_state = self._active_request_dispatch_state(
                 command_status=status,
                 runtime_status=runtime_status,
@@ -363,8 +396,8 @@ class RuntimeBackend:
                     "status": "running",
                     "mode": "agent_package",
                     "run_id": receipt.runtime_instance_id,
-                    "background": False,
-                    "source": "user",
+                    "background": request_source != "user",
+                    "source": request_source,
                     "started_at": str(row["received_at"]),
                     "completed_at": None,
                     "payload": {
@@ -491,12 +524,30 @@ class RuntimeBackend:
         expected_revision: int,
         capability_ids: tuple[str, ...],
     ) -> dict[str, object]:
-        self._validate_main_agent_profile_capabilities(capability_ids)
-        saved = self.main_agent_capability_profiles.replace(
-            expected_revision=expected_revision,
-            capability_ids=capability_ids,
-        )
+        with self._main_agent_profile_lock:
+            self._validate_main_agent_profile_capabilities(capability_ids)
+            saved = self.main_agent_capability_profiles.replace(
+                expected_revision=expected_revision,
+                capability_ids=capability_ids,
+            )
         return self._main_agent_capability_profile_view(saved)
+
+    def _remove_main_agent_profile_capabilities(self, capability_ids: set[str]) -> None:
+        if not capability_ids:
+            return
+        with self._main_agent_profile_lock:
+            current = self.main_agent_capability_profiles.read()
+            retained = tuple(
+                capability_id
+                for capability_id in current.capability_ids
+                if capability_id not in capability_ids
+            )
+            if retained == current.capability_ids:
+                return
+            self.main_agent_capability_profiles.replace(
+                expected_revision=current.revision,
+                capability_ids=retained,
+            )
 
     def _validate_main_agent_profile_capabilities(self, capability_ids: tuple[str, ...]) -> None:
         active = {
@@ -665,6 +716,81 @@ class RuntimeBackend:
                 raise
         return self.capability_pool_snapshot()
 
+    def delete_mcp_server(
+        self,
+        server_id: str,
+        *,
+        expected_registry_digest: str,
+    ) -> dict[str, object]:
+        normalized_id = str(server_id or "").strip()
+        with self._mcp_registry_lock:
+            path = self.config.mcp_server_registry_path
+            current = _read_mcp_registry(path)
+            if _json_digest(current) != expected_registry_digest:
+                raise RuntimeError("mcp_registry_revision_conflict")
+            matches = [
+                item for item in current["servers"]
+                if str(item.get("server_id") or "").strip() == normalized_id
+            ]
+            if len(matches) != 1:
+                raise LookupError(f"MCP server not found: {normalized_id}")
+            server_capability_id = f"mcp-server://{normalized_id}"
+            removed_capability_ids = {
+                item.revision.capability_id
+                for item in self.application.stores.capabilities.active_capabilities()
+                if item.revision.capability_id == server_capability_id
+                or (
+                    item.revision.kind == "mcp_tool"
+                    and MCPToolDefinition.model_validate(
+                        item.revision.content.definition
+                    ).server_capability_id == server_capability_id
+                )
+            }
+            replacement = {
+                **current,
+                "servers": [
+                    item for item in current["servers"]
+                    if str(item.get("server_id") or "").strip() != normalized_id
+                ],
+            }
+            _write_mcp_registry(path, replacement)
+            try:
+                self._synchronize_mcp_capabilities(
+                    self.application.stores,
+                    _capability_adapters(),
+                )
+                self._deactivate_capabilities(removed_capability_ids)
+            except BaseException:
+                _write_mcp_registry(path, current)
+                self._synchronize_mcp_capabilities(
+                    self.application.stores,
+                    _capability_adapters(),
+                )
+                raise
+        self._remove_main_agent_profile_capabilities({server_capability_id})
+        return self.capability_pool_snapshot()
+
+    def _deactivate_capabilities(self, capability_ids: set[str]) -> None:
+        active = {
+            item.revision.capability_id: item
+            for item in self.application.stores.capabilities.active_capabilities()
+            if item.revision.capability_id in capability_ids
+        }
+        for item in active.values():
+            current = item.activation
+            self.application.stores.capabilities.set_activation(
+                CapabilityActivation(
+                    capability_id=current.capability_id,
+                    kind=current.kind,
+                    activation_revision=current.activation_revision + 1,
+                    status="inactive",
+                    changed_by_principal_id=self.config.capability_publisher_principal_id,
+                ),
+                expected_activation_revision=current.activation_revision,
+            )
+        if active:
+            self._refresh_capability_search_if_ready()
+
     def replace_skill(
         self,
         *,
@@ -764,6 +890,25 @@ class RuntimeBackend:
             shutil.rmtree(staging_root, ignore_errors=True)
         return self.capability_pool_snapshot()
 
+    def delete_skill(
+        self,
+        capability_id: str,
+        *,
+        expected_content_digest: str,
+    ) -> dict[str, object]:
+        active, source_root, target = self._editable_skill(capability_id)
+        self._delete_source_package(
+            active=active,
+            source_root=source_root,
+            target=target,
+            expected_content_digest=expected_content_digest,
+            revision_conflict="skill_revision_conflict",
+            synchronize=self._synchronize_skill_capabilities,
+            lock=self._skill_package_lock,
+        )
+        self._remove_main_agent_profile_capabilities({capability_id})
+        return self.capability_pool_snapshot()
+
     def import_tool_folder(
         self,
         source_path: str,
@@ -818,6 +963,49 @@ class RuntimeBackend:
             finally:
                 shutil.rmtree(staging_root, ignore_errors=True)
         return self.capability_pool_snapshot()
+
+    def delete_tool_package(
+        self,
+        capability_id: str,
+        *,
+        expected_content_digest: str,
+    ) -> dict[str, object]:
+        active, source_root, target = self._editable_tool_package(capability_id)
+        self._delete_source_package(
+            active=active,
+            source_root=source_root,
+            target=target,
+            expected_content_digest=expected_content_digest,
+            revision_conflict="tool_revision_conflict",
+            synchronize=self._synchronize_tool_package_capabilities,
+            lock=self._tool_package_lock,
+        )
+        self._remove_main_agent_profile_capabilities({capability_id})
+        return self.capability_pool_snapshot()
+
+    def _delete_source_package(
+        self,
+        *,
+        active,
+        source_root,
+        target: Path,
+        expected_content_digest: str,
+        revision_conflict: str,
+        synchronize: Callable[[Any, Any], None],
+        lock: RLock,
+    ) -> None:
+        if active.content_digest != expected_content_digest:
+            raise RuntimeError(revision_conflict)
+        with lock:
+            backup = source_root.path / f".{target.name}.deleting-{uuid4().hex}"
+            os.replace(target, backup)
+            try:
+                synchronize(self.application.stores, _capability_adapters())
+            except BaseException:
+                os.replace(backup, target)
+                synchronize(self.application.stores, _capability_adapters())
+                raise
+            shutil.rmtree(backup)
 
     def create_tool_package(
         self,

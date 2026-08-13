@@ -175,7 +175,7 @@ async function isCurrentTargetVisible(target: TaskNotificationTarget): Promise<b
   if (!(await isAppFocused()) || !router) return false
   const routeName = String(router.currentRoute.value.name || '')
   if (target.kind === 'scheduler') return routeName === 'Scheduler'
-  if (routeName !== 'Factory') return false
+  if (routeName !== 'ChatNew' && routeName !== 'ChatSession') return false
   const runtimeStore = useRuntimeStore()
   if (target.conversationScope) {
     return runtimeStore.activeConversationScope === target.conversationScope
@@ -195,16 +195,13 @@ async function openNotificationTarget(target: TaskNotificationTarget): Promise<v
   }
   if (target.mode === 'agent_package' && target.packageId && target.sessionId) {
     await router.push({
-      name: 'Factory',
-      query: {
-        package_id: target.packageId,
-        session_id: target.sessionId,
-      },
+      name: 'ChatSession',
+      params: { sessionId: target.sessionId },
     })
     await focusPromise
     return
   }
-  await router.push({ name: 'Factory' })
+  await router.push({ name: 'ChatNew' })
   await focusPromise
 }
 

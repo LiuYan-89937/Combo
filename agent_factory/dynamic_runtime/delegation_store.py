@@ -736,9 +736,40 @@ def _delegated_observation_activities(chunk: Any) -> tuple[dict[str, Any], ...]:
         return ()
     chunk_type = str(chunk.get("type") or "")
     payload = chunk.get("payload")
-    if chunk_type != "node_event" or not isinstance(payload, dict):
+    if not isinstance(payload, dict):
         return ()
-    if str(payload.get("event_type") or "") != "runtime_activity_updated":
+    if chunk_type == "tool_activity":
+        raw_events = payload.get("events")
+        if not isinstance(raw_events, list):
+            return ()
+        activities: list[dict[str, Any]] = []
+        for raw_event in raw_events:
+            if not isinstance(raw_event, dict):
+                continue
+            event_type = str(raw_event.get("event_type") or "")
+            if event_type not in {
+                "tool_call_proposed",
+                "tool_call_started",
+                "tool_call_completed",
+                "tool_call_failed",
+                "tool_contract_invalid",
+            }:
+                continue
+            tool_call_id = str(raw_event.get("tool_call_id") or "").strip()
+            if not tool_call_id:
+                continue
+            activities.append(
+                {
+                    "summary": str(raw_event.get("message") or raw_event.get("status") or event_type),
+                    "status": str(raw_event.get("status") or "running"),
+                    "source": "tool",
+                    "source_event_id": f"tool:{tool_call_id}:{event_type}",
+                    "created_at": utc_now_text(),
+                    "details": _json_record(raw_event),
+                }
+            )
+        return tuple(activities)
+    if chunk_type != "node_event" or str(payload.get("event_type") or "") != "runtime_activity_updated":
         return ()
     body = payload.get("payload")
     details = _json_record(body if isinstance(body, dict) else {})

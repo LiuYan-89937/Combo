@@ -51,12 +51,14 @@
       </span>
     </section>
 
-    <section v-if="view.reports.length" class="task-section">
-      <h4>{{ t('backgroundTask.activity') }}</h4>
+    <details v-if="view.reports.length" class="task-section task-trace" open>
+      <summary>{{ t('backgroundTask.activity') }}</summary>
       <ToolExecutionChain v-if="view.toolExecutions.length" :executions="view.toolExecutions" />
       <div v-if="view.progressReports.length" class="progress-report-list">
         <div v-for="report in view.progressReports" :key="report.phaseId" class="progress-report-item">
-          <span class="status-dot" :class="`dot-${normalizeStatus(report.status)}`" />
+          <span class="progress-report-rail" aria-hidden="true">
+            <span class="status-dot" :class="`dot-${normalizeStatus(report.status)}`" />
+          </span>
           <span>
             <strong>{{ report.title }}</strong>
             <small>{{ report.summary }}</small>
@@ -64,7 +66,7 @@
           <time>{{ formatTime(report.occurredAt) }}</time>
         </div>
       </div>
-    </section>
+    </details>
 
     <section v-if="interaction" class="task-interaction">
       <div v-if="interaction.kind === 'tool_approval'" class="interaction-copy">
@@ -333,7 +335,7 @@ interface ActivityReport {
 function toolExecutionFromReport(report: ActivityReport): ToolExecutionMessagePart[] {
   if (report.category !== 'tool' || !report.details) return []
   const details = report.details
-  const toolName = String(details.model_alias || report.title || '').trim()
+  const toolName = String(details.model_alias || details.tool_name || details.tool_id || report.title || '').trim()
   if (!toolName) return []
   const errorCode = String(details.error_code || '').trim()
   return [{
@@ -342,8 +344,8 @@ function toolExecutionFromReport(report: ActivityReport): ToolExecutionMessagePa
     toolName,
     callId: String(details.tool_call_id || '').trim() || null,
     arguments: details.arguments ?? {},
-    output: details.result ?? null,
-    error: errorCode || undefined,
+    output: details.result ?? details.output ?? details.observation ?? null,
+    error: errorCode || (typeof details.error === 'string' ? details.error : undefined),
     approvalState: report.status === 'approval' ? 'pending' : undefined,
     artifacts: [],
     status: toolMessageStatus(report.status),
@@ -413,9 +415,17 @@ function formatTime(value: unknown): string {
 .dot-succeeded { background: var(--app-success); }
 .dot-failed, .dot-cancelled { background: var(--app-error); }
 .task-section { display: grid; gap: 9px; }
-.task-section h4 { margin: 0; font-size: 12px; }
+.task-trace > summary { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; cursor: pointer; list-style: none; }
+.task-trace > summary::-webkit-details-marker { display: none; }
+.task-trace > summary::before { content: '⌄'; color: var(--app-text-muted); transition: transform .18s ease; }
+.task-trace:not([open]) > summary::before { transform: rotate(-90deg); }
+.task-trace[open] > summary { margin-bottom: 9px; }
 .progress-report-list { display: grid; gap: 9px; }
-.progress-report-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 9px; align-items: start; }
+.progress-report-item { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 0; align-items: stretch; }
+.progress-report-rail { position: relative; display: flex; justify-content: center; }
+.progress-report-rail::after { content: ''; position: absolute; top: 18px; bottom: -14px; width: 1px; background: var(--app-border-hover); }
+.progress-report-item:last-child .progress-report-rail::after { display: none; }
+.progress-report-rail .status-dot { position: relative; z-index: 1; margin-top: 5px; border: 2px solid var(--app-surface); box-shadow: 0 0 0 1px var(--app-border-hover); }
 .progress-report-item > span:nth-child(2) { display: grid; gap: 2px; }
 .progress-report-item time { color: var(--app-text-muted); font-size: 10px; }
 .task-interaction { display: grid; gap: 12px; }

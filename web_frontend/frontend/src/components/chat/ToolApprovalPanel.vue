@@ -10,8 +10,8 @@
       </n-tag>
     </div>
 
-    <p v-if="sourceTaskId" class="approval-source">
-      {{ t('tool.approvalSourceTask', { task: sourceTaskId }) }}
+    <p v-if="sourceTaskName" class="approval-source">
+      {{ t('tool.approvalSourceTask', { task: sourceTaskName }) }}
     </p>
 
     <div class="approval-list">
@@ -128,10 +128,10 @@ const { t } = useI18n()
 const revisionGuidance = ref('')
 
 const requests = computed<ApprovalRequest[]>(() => props.requests || runtimeStore.currentApprovalRequests)
-const sourceTaskId = computed(() => (
+const sourceTaskName = computed(() => (
   props.requests
     ? ''
-    : String(runtimeStore.pendingInterrupt?.payload?.source_task_id || '').trim()
+    : String(runtimeStore.pendingInterrupt?.payload?.source_task_name || '').trim()
 ))
 
 function requestKey(request: ApprovalRequest, index: number): string {

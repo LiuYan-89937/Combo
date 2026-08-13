@@ -107,6 +107,7 @@ import {
   normalizeLocale,
   translate,
 } from '@/i18n'
+import { dismissPlanCapsule, restorePlanCapsule } from '@/utils/planCapsuleDismissals'
 import {
   isStandaloneAgentSession,
 } from '@/utils/sessionPresentation'
@@ -599,6 +600,8 @@ export const useRuntimeStore = defineStore('runtime', {
         return
       }
       this._registerActiveRequest(event, 'running')
+      const request = event.request_id ? this.activeRequests[event.request_id] : null
+      if (request?.background) return
       this._syncAgentSessionFromRunEvent(event)
       this._setRequestDispatchState(event.request_id, 'running', event.payload)
       // 清空当前 run 的临时状态
@@ -638,6 +641,12 @@ export const useRuntimeStore = defineStore('runtime', {
         : reportedStatus === 'waiting_for_workers'
           ? 'waiting_for_workers'
           : 'completed'
+      const existingRequest = event.request_id ? this.activeRequests[event.request_id] : null
+      if (existingRequest?.background) {
+        this._completeActiveRequest(event, completedStatus)
+        reconcileCompletedAssistantSnapshot(this, event)
+        return
+      }
       if (isSchedulerRequest(event.request_id) && event.request_id !== this.activeRequestId) {
         this._completeActiveRequest(event, completedStatus)
         return
@@ -668,6 +677,11 @@ export const useRuntimeStore = defineStore('runtime', {
     },
 
     _handleRunCancelled(event: FactoryFrontendEvent) {
+      const existingRequest = event.request_id ? this.activeRequests[event.request_id] : null
+      if (existingRequest?.background) {
+        this._completeActiveRequest(event, 'cancelled')
+        return
+      }
       if (isSchedulerRequest(event.request_id) && event.request_id !== this.activeRequestId) {
         this._completeActiveRequest(event, 'cancelled')
         return
@@ -682,6 +696,17 @@ export const useRuntimeStore = defineStore('runtime', {
       )
       this.runStatus = 'cancelled'
       const requestId = event.request_id || this.activeRequestId || null
+      if (
+        this.currentPlan?.status === 'active'
+        && (!this.currentPlan.request_id || this.currentPlan.request_id === requestId)
+      ) {
+        this.currentPlan = {
+          ...this.currentPlan,
+          status: 'cancelled',
+          current_step_id: null,
+          updatedAt: event.timestamp,
+        }
+      }
       this.pendingInterrupt = null
       this._syncAgentSessionFromRunEvent(event)
       Object.values(this.modelStreams).forEach((stream) => {
@@ -701,6 +726,11 @@ export const useRuntimeStore = defineStore('runtime', {
     },
 
     _handleRunFailed(event: FactoryFrontendEvent) {
+      const existingRequest = event.request_id ? this.activeRequests[event.request_id] : null
+      if (existingRequest?.background) {
+        this._completeActiveRequest(event, 'failed')
+        return
+      }
       if (isSchedulerRequest(event.request_id) && event.request_id !== this.activeRequestId) {
         this._completeActiveRequest(event, 'failed')
         return
@@ -848,8 +878,10 @@ export const useRuntimeStore = defineStore('runtime', {
       const payload = event.payload
       if (!payload || payload.version !== 'plan_state.v0') return
 
-      this.currentPlan = {
+      const nextPlan = {
         version: payload.version,
+        runtime_instance_id: payload.runtime_instance_id || event.run_id || null,
+        request_id: payload.request_id || event.request_id || null,
         goal: payload.goal || '',
         status: payload.status || 'active',
         current_step_id: payload.current_step_id || null,
@@ -857,6 +889,16 @@ export const useRuntimeStore = defineStore('runtime', {
         source_node_id: payload.source_node_id || null,
         updatedAt: event.timestamp,
       }
+      restorePlanCapsule(nextPlan)
+      this.currentPlan = nextPlan
+    },
+
+    dismissCurrentPlan(requestId: string | null = null) {
+      if (!this.currentPlan) return
+      if (requestId && this.currentPlan.request_id && this.currentPlan.request_id !== requestId) return
+      dismissPlanCapsule(this.currentPlan)
+      this.currentPlan = null
+      this._saveActiveConversationScope()
     },
 
     /**
@@ -892,7 +934,9 @@ export const useRuntimeStore = defineStore('runtime', {
     _handleToolApprovalRequested(event: FactoryFrontendEvent) {
       if (isBackgroundEvent(event, this.activeRequestId)) return
       applyToolApprovalRequested(this, event)
-      this._promoteAgentPackageScopeFromEvent(event)
+      if (!String(event.payload?.source_task_id || '').trim()) {
+        this._promoteAgentPackageScopeFromEvent(event)
+      }
     },
 
     _handleToolApprovalResolved(event: FactoryFrontendEvent) {
@@ -1000,7 +1044,7 @@ export const useRuntimeStore = defineStore('runtime', {
         mode: event.mode || existing?.mode || null,
         runId: event.run_id || event.payload?.run_id || existing?.runId || null,
         conversationScope,
-        background: source === 'scheduler',
+        background: source !== 'user',
         source,
         startedAt: existing?.startedAt || event.timestamp,
         completedAt: status === 'running' ? existing?.completedAt || null : event.timestamp,
@@ -1024,7 +1068,8 @@ export const useRuntimeStore = defineStore('runtime', {
     _handleRuntimeRequestDispatched(event: FactoryFrontendEvent) {
       this._registerActiveRequest(event, 'running')
       this._setRequestDispatchState(event.request_id, 'running', event.payload)
-      if (isSchedulerRequest(event.request_id)) return
+      const request = event.request_id ? this.activeRequests[event.request_id] : null
+      if (request?.source !== 'user') return
       this.activeRequestId = event.request_id || this.activeRequestId
       this.runStatus = 'running'
       this.pendingInterrupt = null

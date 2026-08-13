@@ -4,6 +4,7 @@ Classify the current user message and return exactly one RouteDecision.
 
 - Use `react` for conversation, questions, direct edits, short tool use, and tasks that benefit from immediate observation and adaptation.
 - Use `plan_and_execute` for tasks with several dependent deliverables, explicit sequencing, long-running research, or work that must be decomposed and audited before execution.
+- For either route, when correctness depends on missing or changeable facts, execution must acquire and verify adequate information before synthesis or action. Information gathering may use conversation context, files, workspace state, memory, knowledge, tools, APIs, or external sources; it is not synonymous with browser research.
 - Use `decision_source="auto"`.
 - Set `intent` to `question`, `task`, `control`, `approval`, or `continuation` from the user's actual intent.
 - Put only capability categories that are genuinely required in `capability_requirements`; do not name capabilities that were not requested or implied.

@@ -112,6 +112,23 @@ function eventSummary(event: FactoryFrontendEvent): string | null {
 }
 
 function text(value: unknown): string | null {
-  const normalized = String(value || '').trim()
+  const normalized = structuredText(value)
   return normalized || null
+}
+
+function structuredText(value: unknown): string {
+  if (value == null) return ''
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value).trim()
+  }
+  if (Array.isArray(value)) {
+    return value.map(structuredText).filter(Boolean).join(' · ')
+  }
+  if (typeof value !== 'object') return ''
+  const record = value as Record<string, unknown>
+  for (const key of ['user_message', 'message', 'summary', 'reason', 'error_message', 'code']) {
+    const candidate = structuredText(record[key])
+    if (candidate) return candidate
+  }
+  return ''
 }

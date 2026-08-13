@@ -1,4 +1,4 @@
-import { requestFormJson, requestFormProgress, requestJson, type OperationProgress } from './http'
+import { requestFormJson, requestFormProgress, requestJson, type OperationProgress, withQuery } from './http'
 import type { McpServerConfig } from './resourceTypes'
 
 export type CapabilityKind = 'skill' | 'tool' | 'mcp_server' | 'mcp_tool'
@@ -185,6 +185,21 @@ export const capabilityPoolsApi = {
       method: 'PUT',
       body: JSON.stringify(mcpWritePayload({ ...server, server_id: serverId }, expectedRegistryDigest)),
     }),
+  deleteMcp: (serverId: string, expectedRegistryDigest: string) =>
+    requestJson<CapabilityPoolSnapshot>(withQuery(
+      `/api/runtime/capabilities/mcp/${encodeURIComponent(serverId)}`,
+      { expected_registry_digest: expectedRegistryDigest },
+    ), { method: 'DELETE' }),
+  deleteSkill: (item: Pick<CapabilityPoolItem, 'capability_id' | 'content_digest'>) =>
+    requestJson<CapabilityPoolSnapshot>(withQuery(
+      `/api/runtime/capabilities/skills/${encodeURIComponent(item.capability_id)}`,
+      { expected_content_digest: item.content_digest },
+    ), { method: 'DELETE' }),
+  deleteTool: (item: Pick<CapabilityPoolItem, 'capability_id' | 'content_digest'>) =>
+    requestJson<CapabilityPoolSnapshot>(withQuery(
+      `/api/runtime/capabilities/tools/${encodeURIComponent(item.capability_id)}`,
+      { expected_content_digest: item.content_digest },
+    ), { method: 'DELETE' }),
   updateSkill: (capabilityId: string, sourcePath: string, expectedContentDigest: string) =>
     requestJson<CapabilityPoolSnapshot>('/api/runtime/capabilities/skills', {
       method: 'PUT',

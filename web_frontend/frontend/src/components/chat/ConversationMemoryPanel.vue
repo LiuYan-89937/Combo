@@ -79,6 +79,13 @@ const memoryActivityText = computed(() => {
 
 async function refresh() {
   const serial = ++requestSerial
+  const workspaceId = runtimeStore.activeWorkspaceId
+  if (!workspaceId) {
+    items.value = []
+    error.value = ''
+    loading.value = false
+    return
+  }
   loading.value = true
   error.value = ''
   try {
@@ -86,7 +93,7 @@ async function refresh() {
       query.value.trim(),
       resourceContext.packageIdForApi.value,
       8,
-      runtimeStore.activeWorkspaceId,
+      workspaceId,
     )
     if (serial === requestSerial) items.value = [...(response.items || [])].sort(memorySort)
   } catch (cause) {
@@ -138,7 +145,8 @@ function formatTime(value: string): string {
 
 watch(contextKey, () => {
   items.value = []
-  void refresh()
+  error.value = ''
+  if (runtimeStore.activeWorkspaceId) void refresh()
 }, { immediate: true })
 </script>
 

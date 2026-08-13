@@ -16,6 +16,6 @@ app.use(createPinia())
 app.use(showcaseRouter)
 app.use(naive)
 
-void showcaseRouter.replace({ name: 'Factory', query: { package_id: 'factory_chat', new: '1' } }).then(() => {
+void showcaseRouter.replace({ name: 'ChatNew' }).then(() => {
   app.mount('#app')
 })

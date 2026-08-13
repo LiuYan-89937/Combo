@@ -11,7 +11,10 @@
     :class="{ 'is-tinted': Boolean(tint) }"
     aria-hidden="true"
   >
-    <span v-if="tint" class="tinted-frame" />
+    <template v-if="tint">
+      <img class="tint-base" :src="frameSource" alt="" draggable="false" />
+      <span class="tinted-frame" />
+    </template>
     <img v-else :src="frameSource" alt="" draggable="false" />
   </span>
 </template>
@@ -131,15 +134,25 @@ function handlePageVisibility() {
 }
 
 .tinted-frame {
+  grid-area: 1 / 1;
   display: block;
   width: 100%;
   height: 100%;
   background: var(--combo-frame-tint);
+  mix-blend-mode: screen;
   mask: var(--combo-frame-source) center / contain no-repeat;
   -webkit-mask: var(--combo-frame-source) center / contain no-repeat;
 }
 
+.tint-base {
+  grid-area: 1 / 1;
+}
+
 :root[data-theme='dark'] .combo-frame-animation img {
   filter: invert(1);
+}
+
+:root[data-theme='dark'] .combo-frame-animation.is-tinted img {
+  filter: none;
 }
 </style>

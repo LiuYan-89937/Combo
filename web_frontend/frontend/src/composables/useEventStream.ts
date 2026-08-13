@@ -22,8 +22,25 @@ let client: EventStreamClient | null = null
 const status = ref<ConnectionStatus>('disconnected')
 let initialized = false
 let activeEventStreamId: string | null = null
+const STREAM_RENDER_INTERVAL_MS = 32
+const BATCHED_STREAM_EVENTS = new Set([
+  'message_part_delta',
+  'model_reasoning_delta',
+  'model_stream_delta',
+])
+let pendingStreamEvents: FactoryFrontendEvent[] = []
+let streamFlushTimer: number | null = null
 
 export function applyRuntimeEvent(event: FactoryFrontendEvent): void {
+  if (BATCHED_STREAM_EVENTS.has(event.event_type)) {
+    enqueueStreamEvent(event)
+    return
+  }
+  flushStreamEvents()
+  applyRuntimeEventImmediately(event)
+}
+
+function applyRuntimeEventImmediately(event: FactoryFrontendEvent): void {
   if (event.event_type === 'runtime_ready') {
     activeEventStreamId = String(event.payload?.event_stream_id || '').trim() || null
   }
@@ -44,6 +61,25 @@ export function applyRuntimeEvent(event: FactoryFrontendEvent): void {
     void restoreActiveConversation(runtimeStore).catch((error) => {
       console.error('Failed to restore active conversation after the event stream connected:', error)
     })
+  }
+}
+
+function enqueueStreamEvent(event: FactoryFrontendEvent): void {
+  pendingStreamEvents.push(event)
+  if (streamFlushTimer !== null) return
+  streamFlushTimer = window.setTimeout(flushStreamEvents, STREAM_RENDER_INTERVAL_MS)
+}
+
+function flushStreamEvents(): void {
+  if (streamFlushTimer !== null) {
+    window.clearTimeout(streamFlushTimer)
+    streamFlushTimer = null
+  }
+  if (pendingStreamEvents.length === 0) return
+  const queued = pendingStreamEvents
+  pendingStreamEvents = []
+  for (const event of queued) {
+    applyRuntimeEventImmediately(event)
   }
 }
 
@@ -121,6 +157,7 @@ export function useEventStream() {
   }
 
   function disconnect() {
+    flushStreamEvents()
     if (!client) return
     client.disconnect()
     client = null

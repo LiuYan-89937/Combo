@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+from contextvars import copy_context
 from dataclasses import dataclass
+from queue import Empty, Queue
 from threading import RLock
+from threading import Thread
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -30,6 +33,13 @@ from agent_factory.runtime_kernel.types import ModelInvocationResult
 from agent_factory.runtime_protocol import ModelSelectionSnapshot
 from agent_factory.tooling.description_context import contextualize_tool_descriptions
 from agent_factory.tooling.model_visibility import tools_visible_to_model
+from agent_factory.tooling.execution_context import (
+    RuntimeModelGenerationInterrupted,
+    begin_runtime_model_generation,
+    execute_runtime_model_invocation,
+    register_runtime_model_cancellation,
+    runtime_model_generation_is_current,
+)
 
 _DEFAULT_STRUCTURED_METHOD = "json_mode"
 ModelRole = Literal["main", "task", "compression"]
@@ -175,6 +185,19 @@ class ModelInvocationOperations:
                 emit_event=emit_event,
                 stream_id=stream_id,
             )
+        except RuntimeModelGenerationInterrupted as exc:
+            _emit(
+                emit_event,
+                "model_generation_interrupted",
+                {
+                    "operation": "tool_bound_chat",
+                    "stream_id": stream_id,
+                    "content": exc.partial_text,
+                    "reasoning_content": exc.reasoning_content,
+                    "completion_reason": "user_interrupted",
+                },
+            )
+            raise
         except Exception as exc:
             _emit(emit_event, "model_call_failed", {"operation": "tool_bound_chat", "error": str(exc)})
             raise
@@ -293,7 +316,11 @@ class ModelInvocationOperations:
                 {"operation": "structured_json", "attempt": attempt, "max_attempts": attempts, **operation_context},
             )
             try:
-                result = invocation.model.invoke(request_messages)
+                generation_revision = begin_runtime_model_generation()
+                result = execute_runtime_model_invocation(
+                    lambda: invocation.model.invoke(request_messages),
+                    revision=generation_revision,
+                )
                 if isinstance(result, output_model):
                     parsed = result
                 else:
@@ -330,6 +357,16 @@ class ModelInvocationOperations:
                     model_role=effective_model_role,
                 )
                 return parsed
+            except RuntimeModelGenerationInterrupted:
+                _emit(
+                    emit_event,
+                    "model_generation_interrupted",
+                    {
+                        "operation": "structured_json",
+                        "attempt": attempt,
+                    },
+                )
+                raise
             except Exception as exc:
                 last_error = exc
                 _emit(
@@ -461,13 +498,62 @@ def _invoke_tool_bound_chat(
     stream_id: str,
 ) -> Any:
     messages = system_messages_first(messages)
+    generation_revision = begin_runtime_model_generation()
     stream = getattr(model, "stream", None)
     if not callable(stream):
-        return model.invoke(messages)
+        return execute_runtime_model_invocation(
+            lambda: model.invoke(messages),
+            revision=generation_revision,
+        )
     chunks: list[Any] = []
     reasoning_parts: list[str] = []
+    cancelled = False
+    stream_iterator = stream(messages)
+    stream_events: Queue[tuple[str, Any]] = Queue()
+    context = copy_context()
+
+    def produce() -> None:
+        try:
+            for chunk in stream_iterator:
+                if cancelled:
+                    break
+                stream_events.put(("chunk", chunk))
+        except BaseException as exc:
+            if not cancelled:
+                stream_events.put(("error", exc))
+        finally:
+            stream_events.put(("completed", None))
+
+    def cancel_stream() -> None:
+        nonlocal cancelled
+        cancelled = True
+        close = getattr(stream_iterator, "close", None)
+        if callable(close):
+            try:
+                close()
+            except (RuntimeError, ValueError):
+                pass
+
+    unregister = register_runtime_model_cancellation(cancel_stream)
+    producer = Thread(
+        target=lambda: context.run(produce),
+        name="agentfactory-model-stream",
+        daemon=True,
+    )
+    producer.start()
     try:
-        for chunk in stream(messages):
+        while True:
+            if cancelled or not runtime_model_generation_is_current(generation_revision):
+                raise RuntimeModelGenerationInterrupted("Model generation was superseded.")
+            try:
+                event_type, value = stream_events.get(timeout=0.05)
+            except Empty:
+                continue
+            if event_type == "completed":
+                break
+            if event_type == "error":
+                raise value
+            chunk = value
             chunks.append(chunk)
             reasoning_delta = reasoning_content_from_message(chunk)
             if reasoning_delta:
@@ -492,12 +578,33 @@ def _invoke_tool_bound_chat(
                         "content_mode": "delta",
                     },
                 )
+    except RuntimeModelGenerationInterrupted as exc:
+        partial_text = ""
+        if chunks:
+            partial_text = strip_internal_snapshot_blocks(
+                content_to_text(getattr(_merge_stream_chunks(chunks), "content", ""))
+            )
+        raise RuntimeModelGenerationInterrupted(
+            str(exc),
+            partial_text=partial_text,
+            reasoning_content="".join(reasoning_parts),
+        ) from exc
     except (AttributeError, NotImplementedError):
         if chunks:
             raise
-        return model.invoke(messages)
+        return execute_runtime_model_invocation(
+            lambda: model.invoke(messages),
+            revision=generation_revision,
+        )
+    finally:
+        unregister()
+    if cancelled or not runtime_model_generation_is_current(generation_revision):
+        raise RuntimeModelGenerationInterrupted("Model generation was superseded.")
     if not chunks:
-        return model.invoke(messages)
+        return execute_runtime_model_invocation(
+            lambda: model.invoke(messages),
+            revision=generation_revision,
+        )
     response = _merge_stream_chunks(chunks)
     if reasoning_parts and not reasoning_content_from_message(response):
         _attach_reasoning_content(response, "".join(reasoning_parts))

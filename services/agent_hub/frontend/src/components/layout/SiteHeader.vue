@@ -24,6 +24,8 @@ const menuOpen = ref(false)
 
 const links = computed(() => [
   { to: '/', label: t('nav.product'), exact: true },
+  { to: '/#how-it-works', label: t('nav.howItWorks') },
+  { to: '/#capabilities', label: t('nav.capabilities') },
   { to: '/changelog', label: t('nav.changelog') },
   { to: '/guide', label: t('nav.guide') },
 ])
@@ -34,9 +36,6 @@ watch(
   () => (menuOpen.value = false),
 )
 
-function signIn() {
-  auth.login()
-}
 </script>
 
 <template>
@@ -44,11 +43,11 @@ function signIn() {
     <div class="container header__inner">
       <RouterLink to="/" class="brand" aria-label="Combo">
         <span class="brand__mark" aria-hidden="true">
-          <img src="/brand-mark.png" alt="" width="34" height="34" />
+          <img src="/brand/combo/logo-mark.png" alt="" width="34" height="34" />
         </span>
         <span class="brand__wordmark" aria-hidden="true">
           <span class="brand__name">Combo</span>
-          <span class="brand__factory">AGENT RUNTIME</span>
+          <span class="brand__factory">LOCAL AGENT WORKSPACE</span>
         </span>
       </RouterLink>
 
@@ -86,10 +85,7 @@ function signIn() {
             <span class="header__user-name">{{ user.display_name || user.github_login }}</span>
           </RouterLink>
         </template>
-        <button v-else type="button" class="header__login" @click="signIn">
-          <BaseIcon name="github" :size="17" />
-          {{ t('nav.login') }}
-        </button>
+        <a v-else href="/#download" class="header__login"><BaseIcon name="download" :size="16" />{{ t('nav.download') }}</a>
       </div>
 
       <button
@@ -122,10 +118,7 @@ function signIn() {
           <div class="sheet__row">
             <LangToggle />
             <ThemeToggle />
-            <button v-if="!isAuthenticated" type="button" class="header__login" @click="signIn">
-              <BaseIcon name="github" :size="17" />
-              {{ t('nav.login') }}
-            </button>
+            <a v-if="!isAuthenticated" href="/#download" class="header__login"><BaseIcon name="download" :size="16" />{{ t('nav.download') }}</a>
             <span v-else class="sheet__user">{{ user?.display_name || user?.github_login }}</span>
           </div>
         </div>

@@ -279,7 +279,7 @@ class DynamicRuntimeService:
                 self._service_set.scoped_context_resources.bind(claimed_instance),
             ):
                 runtime_leases_owned_by_worker = True
-                raw, graph_detached = _run_graph_with_control(
+                raw = _run_graph_with_control(
                     graph_app=graph.graph_app,
                     graph_input=graph_input,
                     config=config,
@@ -298,12 +298,13 @@ class DynamicRuntimeService:
             if not isinstance(authoritative, dict):
                 raise RuntimeError("fixed runtime graph returned an invalid checkpoint projection")
             state = RuntimeState.model_validate(authoritative.get("runtime") or {})
-            if graph_detached or run_control.drain_requested:
+            if run_control.drain_requested:
                 state.execution.interrupted = True
                 state.execution.finished = True
                 state.execution.finish_status = "cancelled"
                 state.execution.last_error_location = "runtime.cancel"
             graph_messages = list(authoritative.get("messages") or [])
+            run_control.acknowledge_checkpointed_inputs(graph_messages)
             interrupts = _interrupt_payloads(raw=raw, checkpoint=checkpoint)
             status = _execution_status(state=state, graph_messages=graph_messages, interrupts=interrupts)
             projection_messages = list(graph_messages)
@@ -1007,10 +1008,10 @@ def _run_graph_with_control(
     fallback_raw: dict[str, Any],
     on_complete: Callable[[], None],
     on_observation: Callable[[Any], None] | None,
-) -> tuple[dict[str, Any], bool]:
+) -> dict[str, Any]:
     if control.drain_requested:
         on_complete()
-        return fallback_raw, True
+        return fallback_raw
     completed = threading.Event()
     outcome: dict[str, Any] = {"raw": fallback_raw}
     context = copy_context()
@@ -1029,9 +1030,13 @@ def _run_graph_with_control(
                 ):
                     if mode == "values" and isinstance(chunk, dict):
                         outcome["raw"] = chunk
+                        control.acknowledge_checkpointed_inputs(
+                            list(chunk.get("messages") or [])
+                        )
                     elif mode == "custom" and on_observation is not None:
                         on_observation(chunk)
         except BaseException as exc:
+            control.restore_uncheckpointed_inputs()
             outcome["error"] = exc
         finally:
             try:
@@ -1051,10 +1056,8 @@ def _run_graph_with_control(
     except BaseException:
         on_complete()
         raise
-    while not completed.wait(timeout=0.05):
-        if control.drain_requested:
-            return dict(outcome["raw"]), True
+    completed.wait()
     error = outcome.get("error")
     if error is not None:
         raise error
-    return dict(outcome["raw"]), False
+    return dict(outcome["raw"])

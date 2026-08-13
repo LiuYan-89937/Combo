@@ -45,6 +45,7 @@ export interface ConversationMessage {
   parts: ConversationPart[]
   created_at: string
   committed_at: string | null
+  completion_reason?: 'user_interrupted' | null
 }
 
 export interface RuntimeEvent {

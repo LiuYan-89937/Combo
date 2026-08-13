@@ -202,7 +202,7 @@ class ModelPoolStore:
     def list_credentials(self) -> list[ModelPoolCredential]:
         with self._connect() as conn:
             rows = conn.execute(
-                "select payload_json from model_credentials order by updated_at desc, credential_id asc"
+                "select payload_json from model_credentials order by created_at desc, credential_id asc"
             ).fetchall()
         return [ModelPoolCredential.model_validate_json(str(row["payload_json"])) for row in rows]
 
@@ -391,7 +391,7 @@ class ModelPoolStore:
         query = "select payload_json from model_pool_profiles"
         if clauses:
             query += " where " + " and ".join(clauses)
-        query += " order by updated_at desc, profile_id asc"
+        query += " order by created_at desc, profile_id asc"
         with self._connect() as conn:
             rows = conn.execute(query, args).fetchall()
         return [ModelPoolProfile.model_validate_json(str(row["payload_json"])) for row in rows]

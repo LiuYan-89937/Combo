@@ -22,6 +22,7 @@ PlanAction = Literal[
     "revise_step",
     "complete_plan",
     "fail_plan",
+    "cancel_plan",
 ]
 
 
@@ -87,9 +88,13 @@ def runtime_plan_model_tool() -> StructuredTool:
         name=RUNTIME_PLAN_TOOL_ID,
         description=(
             "Manage the current run's dynamic plan state. Create outcome-oriented plan steps before execution. "
+            "When the outcome depends on missing, current, or source-sensitive facts, make evidence gathering "
+            "and verification an explicit prerequisite step before synthesis or delivery. "
             "A plan step should describe an analytical, verification, construction, or delivery objective; "
             "do not make steps merely a list of tool calls. Put useful tool ids in tool_hints. "
             "Use it to inspect, create, start, complete, fail, skip, add, revise, complete, or fail plan steps. "
+            "Cancel a plan only when the user explicitly requests cancellation, the task is superseded, or "
+            "continuing the plan is no longer meaningful; include a concrete reason. "
             "Do not write the whole plan state directly."
         ),
         args_schema=RuntimePlanToolInput,
@@ -133,6 +138,13 @@ def _apply_action(plan: PlanState, request: RuntimePlanToolInput) -> PlanState:
         return _finish_plan(plan, status="completed", reason=request.reason)
     if action == "fail_plan":
         return _finish_plan(plan, status="failed", reason=request.reason)
+    if action == "cancel_plan":
+        _require_active_plan(plan)
+        return _finish_plan(
+            plan,
+            status="cancelled",
+            reason=_required_text(request.reason, "reason"),
+        )
     raise ValueError(f"unsupported plan action: {action}")
 
 
@@ -299,12 +311,22 @@ def _skip_step(plan: PlanState, request: RuntimePlanToolInput) -> PlanState:
     return plan
 
 
-def _finish_plan(plan: PlanState, *, status: Literal["completed", "failed"], reason: str) -> PlanState:
+def _finish_plan(
+    plan: PlanState,
+    *,
+    status: Literal["completed", "failed", "cancelled"],
+    reason: str,
+) -> PlanState:
     if plan.status == "empty":
         raise ValueError("cannot finish an empty plan")
     plan.status = status
     plan.current_step_id = None
-    plan.events.append(_event("plan_completed" if status == "completed" else "plan_failed", reason=reason))
+    event_kind = {
+        "completed": "plan_completed",
+        "failed": "plan_failed",
+        "cancelled": "plan_cancelled",
+    }[status]
+    plan.events.append(_event(event_kind, reason=reason))
     return plan
 
 
