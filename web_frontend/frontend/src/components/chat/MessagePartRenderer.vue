@@ -123,6 +123,18 @@
     <div v-else-if="part.type === 'status'" class="status-part">
       {{ part.message }}
     </div>
+
+    <button
+      v-else-if="part.type === 'delegated_delivery'"
+      type="button"
+      class="delegated-delivery-capsule"
+      @click="reopenDelegatedTask"
+    >
+      <span class="delegated-delivery-dot" :class="`status-${part.terminalStatus}`" aria-hidden="true"></span>
+      <strong>{{ part.taskName || t('backgroundTask.memberFallback') }}</strong>
+      <span>{{ delegatedDeliveryLabel }}</span>
+      <span class="delegated-delivery-chevron" aria-hidden="true">›</span>
+    </button>
   </div>
 </template>
 
@@ -134,10 +146,11 @@ import StreamingReasoningText from '@/components/chat/StreamingReasoningText.vue
 import { useI18n } from '@/composables/useI18n'
 import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
 import { useWorkspaceFileOpener } from '@/composables/useWorkspaceFileOpener'
+import { useWorkspaceResourceUrls } from '@/composables/useWorkspaceResourceUrls'
 import type { ChatMessagePart, TranscriptAttachmentView } from '@/types/protocol'
 import type { WorkspaceRequestContext } from '@/api/resourceTypes'
 import { toolPresentation } from '@/utils/toolPresentation'
-import { isImageResource, workspaceResourceUrl } from '@/utils/workspaceResources'
+import { isImageResource, workspaceImageSources } from '@/utils/workspaceResources'
 
 const props = defineProps<{
   part: ChatMessagePart
@@ -151,6 +164,16 @@ const { t } = useI18n()
 const { openWorkspaceFile } = useWorkspaceFileOpener()
 const rootRef = ref<HTMLElement | null>(null)
 const { renderMarkdown } = useMarkdownRenderer(rootRef)
+const workspaceContext = computed(() => props.workspaceContext)
+const protectedResourceSources = computed(() => {
+  if (props.part.type === 'text' || props.part.type === 'reasoning') {
+    return workspaceImageSources(props.part.text)
+  }
+  if (props.part.type === 'attachment') return props.part.attachment.path ? [props.part.attachment.path] : []
+  if (props.part.type === 'artifact') return props.part.path ? [props.part.path] : []
+  return []
+})
+const protectedResources = useWorkspaceResourceUrls(protectedResourceSources, workspaceContext)
 
 const isStreaming = computed(() => props.streaming || props.part.status === 'streaming')
 const renderedText = computed(() => (
@@ -197,6 +220,12 @@ const artifactMeta = computed(() => {
     typeof props.part.sizeBytes === 'number' ? formatFileSize(props.part.sizeBytes) : null,
   ].filter(Boolean).join(' · ')
 })
+const delegatedDeliveryLabel = computed(() => {
+  if (props.part.type !== 'delegated_delivery') return ''
+  if (props.part.terminalStatus === 'result') return t('backgroundTask.delivery.completed')
+  if (props.part.terminalStatus === 'failed') return t('backgroundTask.delivery.failed')
+  return t('backgroundTask.delivery.cancelled')
+})
 const toolName = computed(() => {
   if (props.part.type !== 'tool_call' && props.part.type !== 'tool_result') return ''
   const rawName = String(props.part.toolName || '').trim()
@@ -205,6 +234,13 @@ const toolName = computed(() => {
   const presentation = toolPresentation(rawName, argumentsValue)
   return presentation.labelKey ? t(presentation.labelKey as any) : rawName
 })
+
+function reopenDelegatedTask() {
+  if (props.part.type !== 'delegated_delivery') return
+  window.dispatchEvent(new CustomEvent('combo:reopen-background-task', {
+    detail: { task_id: props.part.taskId },
+  }))
+}
 const toolKindLabel = computed(() => (
   props.part.type === 'tool_result' ? t('tool.result') : t('tool.call')
 ))
@@ -255,7 +291,7 @@ async function openAttachment(): Promise<void> {
 }
 
 function resolveMessageImageUrl(source: string): string | null {
-  return workspaceResourceUrl(source, props.workspaceContext)
+  return protectedResources.resolve(source)
 }
 
 function preventUnavailableArtifact(event: MouseEvent) {
@@ -298,6 +334,15 @@ function escapeRegExp(value: string): string {
 </script>
 
 <style scoped>
+.delegated-delivery-capsule { width: fit-content; max-width: 100%; display: flex; align-items: center; gap: 8px; padding: 7px 10px; color: var(--app-text); background: var(--app-surface); border: 1px solid var(--app-border); border-radius: var(--app-radius-pill); cursor: pointer; transition: border-color .18s ease, transform .18s ease; }
+.delegated-delivery-capsule:hover { transform: translateY(-1px); border-color: var(--app-text); }
+.delegated-delivery-capsule strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.delegated-delivery-capsule > span:not(.delegated-delivery-dot):not(.delegated-delivery-chevron) { color: var(--app-text-muted); font-size: 11px; }
+.delegated-delivery-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--app-text); }
+.delegated-delivery-dot.status-result { background: var(--app-success); }
+.delegated-delivery-dot.status-failed { background: var(--app-error); }
+.delegated-delivery-chevron { color: var(--app-text-muted); }
+
 .message-part + .message-part {
   margin-top: var(--app-space-sm);
 }

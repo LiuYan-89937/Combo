@@ -415,6 +415,10 @@ export const useRuntimeStore = defineStore('runtime', {
         applyRuntimeActivityEvent(this, event)
       }
 
+      else if (type === 'delegated_task_terminal') {
+        this._handleDelegatedTaskTerminal(event)
+      }
+
       // Message parts
       else if (type === 'message_started') {
         applyMessageStarted(this, event)
@@ -525,6 +529,38 @@ export const useRuntimeStore = defineStore('runtime', {
         context_window_tokens: optionalPositiveInteger(options.context_window_tokens),
         context_window_tokens_source: String(options.context_window_tokens_source || 'unset'),
       }
+    },
+
+    _handleDelegatedTaskTerminal(event: FactoryFrontendEvent) {
+      const taskId = String(event.payload?.task_id || '').trim()
+      const terminalStatus = String(event.payload?.terminal_status || '').trim()
+      if (!taskId || !['result', 'failed', 'cancelled'].includes(terminalStatus)) return
+      const existing = this.transcript.find(message => String(message.metadata?.task_id || '') === taskId)
+      if (existing) return
+      const taskName = String(event.payload?.task_name || '').trim()
+      this.transcript.push({
+        id: `delegated-delivery:${taskId}`,
+        role: 'system',
+        content: '',
+        timestamp: event.timestamp,
+        status: 'completed',
+        parts: [{
+          id: `delegated-delivery:${taskId}:part`,
+          type: 'delegated_delivery',
+          taskId,
+          taskName,
+          terminalStatus: terminalStatus as 'result' | 'failed' | 'cancelled',
+          status: 'completed',
+          createdAt: event.timestamp,
+          updatedAt: event.timestamp,
+        }],
+        metadata: {
+          delegated_delivery: true,
+          task_id: taskId,
+          task_name: taskName,
+          terminal_status: terminalStatus,
+        },
+      })
     },
 
     _restoreActiveRequestsFromRuntimeSnapshot(event: FactoryFrontendEvent) {
@@ -1044,7 +1080,7 @@ export const useRuntimeStore = defineStore('runtime', {
         mode: event.mode || existing?.mode || null,
         runId: event.run_id || event.payload?.run_id || existing?.runId || null,
         conversationScope,
-        background: source !== 'user',
+        background: source === 'scheduler',
         source,
         startedAt: existing?.startedAt || event.timestamp,
         completedAt: status === 'running' ? existing?.completedAt || null : event.timestamp,
@@ -1265,6 +1301,7 @@ export const useRuntimeStore = defineStore('runtime', {
         source: 'model_pool.selection',
         modelRole: 'main',
         nodeId: current?.nodeId ?? null,
+        compressionStatus: current?.compressionStatus ?? null,
         updatedAt: new Date().toISOString(),
         payload: {
           ...(current?.payload || {}),
@@ -1710,7 +1747,7 @@ function activeRequestViewFromPayload(value: unknown): ActiveRequestView | null 
     mode: normalizeFactoryMode(payload.mode),
     runId: payload.runId || payload.run_id || null,
     conversationScope: payload.conversationScope || payload.conversation_scope || null,
-    background: Boolean(payload.background || requestId.startsWith('scheduler-')),
+    background: source === 'scheduler',
     source,
     startedAt: String(payload.startedAt || payload.started_at || new Date().toISOString()),
     completedAt: payload.completedAt || payload.completed_at || null,

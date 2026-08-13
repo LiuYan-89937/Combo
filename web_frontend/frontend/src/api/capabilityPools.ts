@@ -1,4 +1,4 @@
-import { requestFormJson, requestFormProgress, requestJson, type OperationProgress, withQuery } from './http'
+import { requestFormJson, requestFormProgress, requestJson, requestJsonProgress, type OperationProgress, withQuery } from './http'
 import type { McpServerConfig } from './resourceTypes'
 
 export type CapabilityKind = 'skill' | 'tool' | 'mcp_server' | 'mcp_tool'
@@ -42,6 +42,27 @@ export interface McpProbeResult {
   content_digest: string
   tool_count: number
   tools: string[]
+  protocol_version: string
+  server_name: string
+  server_version: string
+  capabilities: string[]
+  resource_count: number
+  resources: string[]
+  resource_template_count: number
+  prompt_count: number
+  prompts: string[]
+}
+
+export interface McpResourceReadResult {
+  server_id: string
+  uri: string
+  result: Record<string, unknown>
+}
+
+export interface McpPromptGetResult {
+  server_id: string
+  name: string
+  result: Record<string, unknown>
 }
 
 export interface ToolRuntimePolicyInput {
@@ -175,16 +196,41 @@ export const capabilityPoolsApi = {
     method: 'POST',
     body: JSON.stringify({ capability_id: capabilityId }),
   }),
-  addMcp: (server: McpServerConfig, expectedRegistryDigest: string) =>
-    requestJson<CapabilityPoolSnapshot>('/api/runtime/capabilities/mcp', {
+  readMcpResource: (
+    capabilityId: string,
+    reference: { uri: string } | { uri_template: string; arguments: Record<string, string> },
+  ) => requestJson<McpResourceReadResult>(
+    '/api/runtime/capabilities/mcp/resource',
+    { method: 'POST', body: JSON.stringify({ capability_id: capabilityId, ...reference }) },
+  ),
+  getMcpPrompt: (capabilityId: string, name: string, arguments_: Record<string, string>) =>
+    requestJson<McpPromptGetResult>('/api/runtime/capabilities/mcp/prompt', {
+      method: 'POST',
+      body: JSON.stringify({ capability_id: capabilityId, name, arguments: arguments_ }),
+    }),
+  addMcp: (
+    server: McpServerConfig,
+    expectedRegistryDigest: string,
+    onProgress: (progress: OperationProgress) => void,
+    signal?: AbortSignal,
+  ) =>
+    requestJsonProgress<CapabilityPoolSnapshot>('/api/runtime/capabilities/mcp', {
       method: 'POST',
       body: JSON.stringify(mcpWritePayload(server, expectedRegistryDigest)),
-    }),
-  updateMcp: (serverId: string, server: McpServerConfig, expectedRegistryDigest: string) =>
-    requestJson<CapabilityPoolSnapshot>(`/api/runtime/capabilities/mcp/${encodeURIComponent(serverId)}`, {
+      signal,
+    }, onProgress),
+  updateMcp: (
+    serverId: string,
+    server: McpServerConfig,
+    expectedRegistryDigest: string,
+    onProgress: (progress: OperationProgress) => void,
+    signal?: AbortSignal,
+  ) =>
+    requestJsonProgress<CapabilityPoolSnapshot>(`/api/runtime/capabilities/mcp/${encodeURIComponent(serverId)}`, {
       method: 'PUT',
       body: JSON.stringify(mcpWritePayload({ ...server, server_id: serverId }, expectedRegistryDigest)),
-    }),
+      signal,
+    }, onProgress),
   deleteMcp: (serverId: string, expectedRegistryDigest: string) =>
     requestJson<CapabilityPoolSnapshot>(withQuery(
       `/api/runtime/capabilities/mcp/${encodeURIComponent(serverId)}`,

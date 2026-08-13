@@ -1480,6 +1480,23 @@ def _insert_send_message_intake(conn: Any, envelope: CommandEnvelope) -> None:
     )
     insert_turn(conn, turn)
     insert_message(conn, message)
+    if payload.visibility == "public":
+        prior_public_user_messages = int(
+            conn.execute(
+                """
+                select count(*) from conversation_messages
+                where session_id = ? and role = 'user'
+                  and json_extract(payload_json, '$.visibility') = 'public'
+                  and message_id <> ?
+                """,
+                (envelope.session_id, payload.message_id),
+            ).fetchone()[0]
+        )
+        if prior_public_user_messages == 0:
+            conn.execute(
+                "update conversations set title = ? where session_id = ?",
+                (_conversation_title(payload.content), envelope.session_id),
+            )
     insert_outbox(
         conn,
         OutboxRecord(
@@ -1500,6 +1517,10 @@ def _insert_send_message_intake(conn: Any, envelope: CommandEnvelope) -> None:
         ),
     )
     advance_conversation_revision(conn, envelope.session_id, updated_at=now)
+
+
+def _conversation_title(content: str) -> str:
+    return " ".join(_required_text(content, "content").split())
 
 
 def _required_text(value: Any, field_name: str) -> str:

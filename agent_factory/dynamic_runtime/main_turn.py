@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Awaitable, Protocol
 from uuid import uuid4
 
 from agent_factory.dynamic_runtime.dispatcher import CommandOutcome
@@ -16,53 +15,10 @@ from agent_factory.dynamic_runtime.runtime_start import RuntimeStartStore
 from agent_factory.runtime_protocol import (
     CommandEnvelope,
     CommandReceipt,
-    RouteDecision,
     RuntimeInstance,
     RuntimeRequest,
     SendMessagePayload,
 )
-
-
-class RouteAnalyzer(Protocol):
-    def analyze(
-        self,
-        *,
-        envelope: CommandEnvelope,
-        payload: SendMessagePayload,
-        policy: ResolvedRuntimePolicy,
-    ) -> Awaitable[RouteDecision]:
-        ...
-
-
-class ExecutionRouter:
-    """Honor explicit routing while retaining one semantic route analysis."""
-
-    def __init__(self, analyzer: RouteAnalyzer) -> None:
-        self._analyzer = analyzer
-
-    async def route(
-        self,
-        *,
-        envelope: CommandEnvelope,
-        payload: SendMessagePayload,
-        policy: ResolvedRuntimePolicy,
-    ) -> RouteDecision:
-        analyzed = await self._analyzer.analyze(
-            envelope=envelope,
-            payload=payload,
-            policy=policy,
-        )
-        preference = policy.snapshot.execution_preference
-        if preference == "auto":
-            if analyzed.decision_source != "auto":
-                raise ValueError("automatic route analyzer must return decision_source='auto'")
-            return analyzed
-        return analyzed.model_copy(
-            update={
-                "strategy": preference,
-                "decision_source": "user",
-            }
-        )
 
 
 class MainTurnCommandHandler:
@@ -75,7 +31,6 @@ class MainTurnCommandHandler:
         runtime_instances: RuntimeInstanceStore,
         runtime_policies: UserRuntimePolicyStore,
         model_resolver: RuntimeModelResolver,
-        execution_router: ExecutionRouter,
         capability_resolver: MainTurnCapabilityResolverProtocol,
         runtime_starts: RuntimeStartStore,
         runtime_service: DynamicRuntimeService,
@@ -85,7 +40,6 @@ class MainTurnCommandHandler:
         self._runtime_instances = runtime_instances
         self._runtime_policies = runtime_policies
         self._model_resolver = model_resolver
-        self._execution_router = execution_router
         self._capability_resolver = capability_resolver
         self._runtime_starts = runtime_starts
         self._runtime_service = runtime_service
@@ -153,28 +107,13 @@ class MainTurnCommandHandler:
                 rejection_code="runtime_policy_resolution_failed",
             )
         try:
-            route = await self._execution_router.route(
-                envelope=envelope,
-                payload=payload,
-                policy=resolved_policy,
-            )
-        except asyncio.CancelledError:
-            self._conversations.cancel_pre_runtime_turn(source_command_id=envelope.command_id)
-            raise
-        except Exception:
-            self._conversations.fail_pre_runtime_turn(source_command_id=envelope.command_id)
-            return CommandOutcome(
-                status="rejected",
-                rejection_code="execution_route_failed",
-            )
-        try:
             if payload.scheduler_run_id is not None:
                 resolver = self._capability_resolver
                 if not isinstance(resolver, MainTurnCapabilityResolver):
                     raise RuntimeError("scheduled agent capability resolver is unavailable")
                 capability_snapshot = resolver.resolve_requirements(
                     principal_id=envelope.principal_id,
-                    requirements=tuple(route.capability_requirements),
+                    requirements=(),
                     policy=resolved_policy,
                     workspace_id=conversation.workspace_id,
                     include_system_capabilities=True,
@@ -183,7 +122,6 @@ class MainTurnCommandHandler:
             else:
                 capability_snapshot = await self._capability_resolver.resolve(
                     envelope=envelope,
-                    route=route,
                     policy=resolved_policy,
                     workspace_id=conversation.workspace_id,
                 )
@@ -207,8 +145,7 @@ class MainTurnCommandHandler:
             turn_id=turn.turn_id,
             workspace_id=conversation.workspace_id,
             runtime_role="main",
-            strategy=route.strategy,
-            route_decision=route,
+            strategy=resolved_policy.snapshot.execution_preference,
             policy_snapshot=resolved_policy.snapshot,
             capability_snapshot_id=capability_snapshot.snapshot_id,
             approval_mode=resolved_policy.snapshot.approval_mode,

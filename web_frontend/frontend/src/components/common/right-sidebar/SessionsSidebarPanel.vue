@@ -3,11 +3,13 @@
     v-if="agentSessionContextActive && workspacePackageId"
     :package-id="workspacePackageId"
     @request-new-session="forwardNewAgentSessionRequest"
+    @interaction-lock="emit('interactionLock', $event)"
   />
   <SessionSidebar
     v-else
     :title="t('sessions.main')"
     @request-new-agent-session="forwardNewAgentSessionRequest"
+    @interaction-lock="emit('interactionLock', $event)"
   />
 </template>
 
@@ -22,6 +24,7 @@ const resourceContext = useResourceContext()
 const { t } = useI18n()
 const emit = defineEmits<{
   requestNewAgentSession: [packageId: string, initialWorkspaceId: string | null]
+  interactionLock: [locked: boolean]
 }>()
 const agentSessionContextActive = computed(() => resourceContext.isAgentSessionContext.value)
 const workspacePackageId = computed(() => resourceContext.packageIdForApi.value)

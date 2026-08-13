@@ -187,7 +187,20 @@ class DynamicRuntimeService:
         raw_runtime = values.get("runtime") if isinstance(values, dict) else None
         if not isinstance(raw_runtime, dict):
             return None
-        return _context_window_from_token_budget(RuntimeState.model_validate(raw_runtime))
+        context_window = _latest_context_window(RuntimeState.model_validate(raw_runtime))
+        if context_window is None:
+            return None
+        limits = self._model_resolver.context_limits_for_snapshot(
+            instance.request.policy_snapshot.model
+        )
+        return {
+            **limits,
+            **{
+                key: value
+                for key, value in context_window.items()
+                if value is not None
+            },
+        }
 
     def _run(
         self,
@@ -685,7 +698,7 @@ def _delegated_delivery_error(
     rendered = json.dumps(final_content, ensure_ascii=False) if not isinstance(final_content, str) else final_content
     if "DSML" in rendered and "tool_calls" in rendered:
         return "Temporary agent returned serialized tool markup instead of a native tool call."
-    required_tools = tuple(instance.request.route_decision.capability_requirements)
+    required_tools = tuple(instance.request.capability_requirements)
     if required_tools and not tool_calls:
         return "Temporary agent completed without executing any of its required tools."
     unresolved = tuple(
@@ -760,10 +773,16 @@ def _tool_call_records(
                     raise RuntimeError(f"tool result has no projected tool call: {part.tool_call_id}")
                 record["status"] = part.status
                 observed = event_times.get(part.tool_call_id, {})
-                record["updated_at"] = observed.get("completed_at") or message.created_at
+                started_at = part.started_at or observed.get("started_at")
+                completed_at = part.completed_at or observed.get("completed_at") or message.created_at
+                if started_at:
+                    record["created_at"] = started_at
+                record["updated_at"] = completed_at
                 if part.status == "completed":
                     record["result"] = dict(part.output or {})
                 else:
+                    if part.output:
+                        record["result"] = dict(part.output)
                     record["error_code"] = part.error_code
     return tuple(ToolCallRecord.model_validate(record) for record in records.values())
 
@@ -926,19 +945,52 @@ def _event_payload(
 
 def _latest_context_window(state: RuntimeState) -> dict[str, Any] | None:
     persisted = _context_window_from_token_budget(state)
+    observed = _latest_observed_context_window(state)
     if persisted is not None:
-        return persisted
+        return {
+            **(observed or {}),
+            **{
+                key: value
+                for key, value in persisted.items()
+                if value is not None
+            },
+            "compression_status": _latest_compression_status(state),
+        }
+    if observed is not None:
+        return {
+            **observed,
+            "compression_status": _latest_compression_status(state),
+        }
+    return None
+
+
+def _latest_observed_context_window(state: RuntimeState) -> dict[str, Any] | None:
+    merged: dict[str, Any] = {}
     for raw_event in reversed(state.observability.events):
         if not isinstance(raw_event, dict) or raw_event.get("event_type") != "context_window_updated":
             continue
         payload = raw_event.get("payload")
         if not isinstance(payload, dict):
             continue
-        return {
-            key: _json_safe(value)
-            for key, value in payload.items()
-            if key != "event_type"
-        }
+        for key, value in payload.items():
+            if key == "event_type" or value is None or key in merged:
+                continue
+            merged[key] = _json_safe(value)
+    return merged or None
+
+
+def _latest_compression_status(state: RuntimeState) -> str | None:
+    statuses = {
+        "context_compression_started": "running",
+        "context_compression_completed": "completed",
+        "context_compression_failed": "failed",
+    }
+    for raw_event in reversed(state.observability.events):
+        if not isinstance(raw_event, dict):
+            continue
+        event_type = str(raw_event.get("event_type") or "")
+        if event_type in statuses:
+            return statuses[event_type]
     return None
 
 

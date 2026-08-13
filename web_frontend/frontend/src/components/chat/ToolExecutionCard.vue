@@ -121,6 +121,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import ResourceIcon from '@/components/common/ResourceIcon.vue'
 import ToolIcon from '@/components/common/ToolIcon.vue'
 import { useI18n } from '@/composables/useI18n'
+import { useWorkspaceResourceUrls } from '@/composables/useWorkspaceResourceUrls'
 import { isImageResource, workspaceResourceUrl } from '@/utils/workspaceResources'
 import { toolPresentation } from '@/utils/toolPresentation'
 import type {
@@ -195,8 +196,6 @@ onBeforeUnmount(() => {
 })
 
 const durationMs = computed(() => {
-  const direct = resultRecord.value?.duration_ms
-  if (typeof direct === 'number' && Number.isFinite(direct)) return direct
   const startedAt = Date.parse(String(
     props.part.startedAt || (timingActive.value ? '' : props.part.createdAt) || '',
   ))
@@ -266,6 +265,12 @@ const workspaceEntries = computed<Array<Record<string, any>>>(() => {
       : []
   return values.filter(item => item && typeof item === 'object' && item.path).slice(0, 30)
 })
+const workspaceContext = computed(() => props.workspaceContext)
+const protectedResourceSources = computed(() => props.part.artifacts
+  .filter(artifact => isImageArtifact(artifact))
+  .map(artifact => String(artifact.path || '').trim())
+  .filter(Boolean))
+const protectedResources = useWorkspaceResourceUrls(protectedResourceSources, workspaceContext)
 const shellOutput = computed(() => {
   if (presentation.value.category !== 'process') return ''
   const stdout = String(resultRecord.value?.stdout || '').trim()
@@ -289,7 +294,7 @@ function handleShellOutputScroll() {
 }
 
 function artifactUrl(artifact: ArtifactMessagePart): string {
-  return artifact.path ? workspaceResourceUrl(artifact.path, props.workspaceContext) || '' : ''
+  return artifact.path ? protectedResources.resolve(artifact.path) || '' : ''
 }
 
 function isImageArtifact(artifact: ArtifactMessagePart): boolean {

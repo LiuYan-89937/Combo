@@ -68,7 +68,11 @@ const TOOL_PRESENTATIONS: Record<string, Pick<ToolPresentation, 'category' | 'la
 }
 
 export function conversationVisibleParts(parts: ChatMessagePart[]): ChatMessagePart[] {
-  return mergeToolMessageParts(parts)
+  const merged = mergeToolMessageParts(parts)
+  return [
+    ...merged.filter(part => part.type === 'reasoning'),
+    ...merged.filter(part => part.type !== 'reasoning'),
+  ]
 }
 
 export function toolPresentation(

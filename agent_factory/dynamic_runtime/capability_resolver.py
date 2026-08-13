@@ -21,7 +21,6 @@ from agent_factory.runtime_protocol import (
     CapabilityToolAliasBinding,
     CommandEnvelope,
     DependencyEnvironmentRef,
-    RouteDecision,
 )
 
 
@@ -126,7 +125,6 @@ class MainTurnCapabilityResolverProtocol(Protocol):
         self,
         *,
         envelope: CommandEnvelope,
-        route: RouteDecision,
         policy: ResolvedRuntimePolicy,
         workspace_id: str,
     ) -> CapabilitySnapshot:
@@ -162,11 +160,9 @@ class MainTurnCapabilityResolver:
         self,
         *,
         envelope: CommandEnvelope,
-        route: RouteDecision,
         policy: ResolvedRuntimePolicy,
         workspace_id: str,
     ) -> CapabilitySnapshot:
-        del route
         return self.resolve_requirements(
             principal_id=envelope.principal_id,
             requirements=(),

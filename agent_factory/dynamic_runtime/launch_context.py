@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import json
 from pathlib import Path
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -188,22 +189,18 @@ class ComposedRuntimeLaunchContextResolver(RuntimeLaunchContextResolver):
             base_prompt = self._delegations.for_runtime(instance.runtime_instance_id).envelope.system_prompt
             if base_prompt is None:
                 raise RuntimeError("temporary runtime task has no delegated system prompt")
-            delegation_notifications = ""
         else:
             base_prompt = self._prompt_provider.load()
             notification_event_ids = _notification_event_ids(messages, turn_id=request.turn_id)
-            delegation_notifications = render_delegation_notifications(
-                self._delegations.claim_completion_notifications(
-                    instance,
-                    event_ids=notification_event_ids,
-                )
+            self._delegations.claim_completion_notifications(
+                instance,
+                event_ids=notification_event_ids,
             )
         capability_instructions = self._capability_instructions.render(capability_snapshot)
         system_prompt = _render_system_prompt(
             base=base_prompt,
             clock=clock,
             capability_instructions=capability_instructions,
-            delegation_notifications=delegation_notifications,
             force_collaboration=request.runtime_role == "main" and request.force_collaboration,
             scheduled_run=request.scheduler_run_id is not None,
         )
@@ -259,7 +256,6 @@ def _render_system_prompt(
     base: str,
     clock: ClockSnapshot,
     capability_instructions: str,
-    delegation_notifications: str,
     force_collaboration: bool = False,
     scheduled_run: bool = False,
 ) -> str:
@@ -276,9 +272,6 @@ def _render_system_prompt(
     instructions = str(capability_instructions or "").strip()
     if instructions:
         sections.append(instructions)
-    notifications = str(delegation_notifications or "").strip()
-    if notifications:
-        sections.append(notifications)
     if force_collaboration:
         sections.append(
             "Collaboration mode is explicitly enabled for this turn. Decompose the user task into useful "
@@ -295,41 +288,47 @@ def _render_system_prompt(
     return "\n\n".join(sections)
 
 
-def render_delegation_notifications(events: tuple[Any, ...]) -> str:
-    if not events:
-        return ""
-    entries = []
-    for index, event in enumerate(events, start=1):
-        payload = event.payload if isinstance(event.payload, dict) else {}
-        task_name = str(payload.get("agent_name") or f"Delegated task {index}").strip()
-        objective = str(payload.get("objective") or "").strip()
-        error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
-        details = error.get("details") if isinstance(error.get("details"), dict) else {}
-        reason = str(
-            details.get("reason")
-            or details.get("message")
-            or error.get("message")
-            or ""
-        ).strip()
-        suffix = f" Reason: {reason}." if reason else ""
-        if event.event_type == "cancelled" and payload.get("cancel_source") == "user":
-            entries.append(
-                f"- The user cancelled child Agent '{task_name}' while it was working on: {objective}. "
-                "Summarize the authoritative progress and evidence already available, state what remains incomplete, "
-                f"and report the cancellation to the user without restarting the task.{suffix}"
-            )
-        else:
-            entries.append(
-                f"- Child Agent '{task_name}' finished with status {event.event_type}. "
-                f"Objective: {objective}.{suffix}"
-            )
-    return (
-        "Delegated task completion notifications received since the previous main runtime. "
-        "Treat these as authoritative child results, inspect details with delegation_status without supplying "
-        "an internal identifier when needed, "
-        "and continue or report the parent task accordingly:\n"
-        + "\n".join(entries)
+def render_delegation_notification_message(event: Any) -> str:
+    """Render one durable child terminal event as an internal user-channel message."""
+    payload = event.payload if isinstance(event.payload, dict) else {}
+    task_name = str(payload.get("agent_name") or "Delegated task").strip()
+    objective = str(payload.get("objective") or "").strip()
+    error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
+    details = error.get("details") if isinstance(error.get("details"), dict) else {}
+    reason = str(
+        details.get("reason")
+        or details.get("message")
+        or error.get("message")
+        or ""
+    ).strip()
+    result = payload.get("result")
+    result_text = (
+        json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+        if isinstance(result, (dict, list))
+        else str(result or "").strip()
     )
+    lines = [
+        "Internal child Agent terminal notification.",
+        f"Agent: {task_name}",
+        f"Objective: {objective}",
+        f"Status: {event.event_type}",
+    ]
+    if result_text:
+        lines.append(f"Result: {result_text}")
+    if reason:
+        lines.append(f"Reason: {reason}")
+    if event.event_type == "cancelled" and payload.get("cancel_source") == "user":
+        lines.append(
+            "This child task was explicitly cancelled by the user; it was not a runtime failure. "
+            "Report available progress and incomplete items, "
+            "and do not restart, retry, or delegate a replacement task unless the user asks."
+        )
+    else:
+        lines.append(
+            "Process this exactly like a user-channel update: report or continue from this terminal result "
+            "without inventing missing evidence."
+        )
+    return "\n".join(lines)
 
 
 def _parse_utc_instant(value: str) -> datetime:

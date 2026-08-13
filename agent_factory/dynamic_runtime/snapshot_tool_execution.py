@@ -370,7 +370,8 @@ def _compiler(
 ) -> ToolCompiler:
     compiler_resources = dict(resources)
     if output.store is not None:
-        if TOOL_OUTPUT_STORE_RESOURCE in compiler_resources:
+        existing_store = compiler_resources.get(TOOL_OUTPUT_STORE_RESOURCE)
+        if existing_store is not None and existing_store is not output.store:
             raise ValueError("tool resources conflict with the output store resource")
         compiler_resources[TOOL_OUTPUT_STORE_RESOURCE] = output.store
     return ToolCompiler(
@@ -384,6 +385,7 @@ def _compiler(
         output_policy=ToolOutputPolicy(max_model_chars=runtime_policy.output_max_model_chars),
         compression_model_resolver=output.compression_model_resolver,
         approval_trust_store=approval.trust,
+        timeout_seconds=runtime_policy.timeout_seconds,
     )
 
 

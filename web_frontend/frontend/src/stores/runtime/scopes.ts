@@ -49,7 +49,14 @@ export function scopeFromEventPayload(event: FactoryFrontendEvent): string | nul
       ? event.payload.session
       : {}
     const packageId = String(event.payload?.package_id || agentSession.package_id || '').trim()
-    const sessionId = String(event.payload?.session_id || agentSession.session_id || loadedSession.session_id || '').trim()
+    const sessionId = String(
+      event.payload?.session_id
+      || event.payload?.agent_session_id
+      || event.session_id
+      || agentSession.session_id
+      || loadedSession.session_id
+      || '',
+    ).trim()
     if (packageId) {
       return agentPackageConversationScope(packageId, sessionId || null)
     }

@@ -28,7 +28,7 @@ export function repairAiMarkdown(content: string): string {
 function normalizeLineStart(line: string): string {
   return line
     .replace(/^( {0,3}#{1,6})(?=[^\s#])/, '$1 ')
-    .replace(/^(\s{0,3})([-*+])(?=\S)/, '$1$2 ')
+    .replace(/^(\s{0,3})([-*+])(?=[^\s*+-])/, '$1$2 ')
     .replace(/^(\s{0,3}\d{1,2}[.)])(?=\S)/, '$1 ')
 }
 

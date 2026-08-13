@@ -58,7 +58,7 @@ def _input_schema() -> dict:
                     "schedule_type": {"type": "string", "enum": ["cron", "interval", "date"], "description": "cron、固定间隔或单次日期触发。"},
                     "schedule_expr": {"type": "string", "minLength": 1, "description": "与 schedule_type 对应的 cron、间隔或日期表达式。"},
                     "timezone": {"type": "string", "minLength": 1, "description": "解释计划时间使用的 IANA 时区。"},
-                    "strategy": {"type": "string", "enum": ["auto", "react", "plan_and_execute"], "default": "auto", "description": "触发任务使用的执行图策略。"},
+                    "strategy": {"type": "string", "enum": ["react", "plan_and_execute"], "default": "react", "description": "触发任务使用的执行图策略。"},
                     "approval_policy": {"type": "string", "enum": ["ask", "auto", "always_approval"], "default": "ask", "description": "无人值守执行时采用的工具审批策略。"},
                 },
                 "required": ["action", "task_content", "schedule_type", "schedule_expr", "timezone"],

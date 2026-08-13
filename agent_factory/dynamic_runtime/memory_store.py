@@ -177,6 +177,9 @@ class ScopedMemoryStore:
                 update={
                     "revision": current.revision + 1,
                     "status": "deleted",
+                    "source_session_id": None,
+                    "source_turn_id": None,
+                    "created_by_runtime_instance_id": None,
                     "created_at": _now_text(),
                 }
             )

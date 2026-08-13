@@ -15,7 +15,6 @@ from agent_factory.dynamic_runtime.model_service import ResolvedRuntimePolicy, R
 from agent_factory.runtime_protocol import (
     DelegationGrant,
     ExecutionStrategy,
-    RouteDecision,
     RuntimeInstance,
     RuntimeRequest,
     TaskEnvelope,
@@ -151,13 +150,6 @@ class BoundDelegationRuntime:
                 "catalog again and retry with exact returned names. Do not provide IDs, revisions, digests, "
                 "or evidence. If no optional capability is required, retry with an empty capability list."
             ) from exc
-        route = RouteDecision(
-            strategy=request.strategy,
-            decision_source="user",
-            intent="task",
-            reason="temporary task delegated by the main runtime",
-            capability_requirements=request.capability_names,
-        )
         child_request = RuntimeRequest(
             request_id=uuid4().hex,
             principal_id=parent.request.principal_id,
@@ -165,8 +157,8 @@ class BoundDelegationRuntime:
             turn_id=parent.request.turn_id,
             workspace_id=parent.request.workspace_id,
             runtime_role="temporary",
-            strategy=route.strategy,
-            route_decision=route,
+            strategy=request.strategy,
+            capability_requirements=request.capability_names,
             policy_snapshot=child_policy,
             capability_snapshot_id=child_snapshot.snapshot_id,
             approval_mode=parent.request.approval_mode,

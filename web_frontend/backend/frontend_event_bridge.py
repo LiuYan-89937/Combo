@@ -199,8 +199,14 @@ def project_delegated_task_record(record: OutboxRecord) -> dict[str, Any]:
         or task.get("session_id")
         or ""
     ).strip() or None
+    event_kind = str(record.event_kind or "")
+    terminal_status = {
+        "delegated_task_result": "result",
+        "delegated_task_failed": "failed",
+        "delegated_task_cancelled": "cancelled",
+    }.get(event_kind)
     return _frontend_event(
-        event_type="background_task_updated",
+        event_type="delegated_task_terminal" if terminal_status else "background_task_updated",
         request_id=None,
         runtime_instance_id=str(
             payload.get("child_runtime_instance_id")
@@ -214,6 +220,11 @@ def project_delegated_task_record(record: OutboxRecord) -> dict[str, Any]:
             "task_id": payload.get("task_id") or task.get("task_id") or record.aggregate_id,
             "session_id": session_id,
             "event_kind": record.event_kind,
+            **({
+                "terminal_status": terminal_status,
+                "task_name": event_payload.get("agent_name") or payload.get("agent_name"),
+                "cancel_source": event_payload.get("cancel_source"),
+            } if terminal_status else {}),
         },
         event_id=record.event_id,
     )

@@ -179,8 +179,8 @@ def _tool_parts(*, turn_id: str, updated_at: str, activity: dict[str, Any]) -> l
             "arguments": payload.get("arguments") or payload.get("args") or {},
             "liveOutput": payload.get("output"),
             "status": _tool_part_status(status),
-            "createdAt": activity.get("createdAt") or updated_at,
-            "startedAt": activity.get("startedAt") or activity.get("started_at"),
+            "createdAt": activity.get("startedAt") or activity.get("started_at") or activity.get("createdAt") or updated_at,
+            "startedAt": activity.get("startedAt") or activity.get("started_at") or activity.get("createdAt"),
             "updatedAt": activity.get("timestamp") or updated_at,
         }
     ]
@@ -195,8 +195,8 @@ def _tool_parts(*, turn_id: str, updated_at: str, activity: dict[str, Any]) -> l
                 "output": output,
                 "error": payload.get("error"),
                 "status": "failed" if status == "failed" else "completed",
-                "createdAt": activity.get("createdAt") or updated_at,
-                "startedAt": activity.get("startedAt") or activity.get("started_at"),
+                "createdAt": activity.get("startedAt") or activity.get("started_at") or activity.get("createdAt") or updated_at,
+                "startedAt": activity.get("startedAt") or activity.get("started_at") or activity.get("createdAt"),
                 "updatedAt": activity.get("timestamp") or updated_at,
             }
         )

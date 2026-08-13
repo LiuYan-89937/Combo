@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from agent_factory.exception_details import exception_leaf_messages, exception_summary
 from agent_factory.tooling.execution_context import (
     RuntimeToolExecutionCancelled,
+    RuntimeToolExecutionTimedOut,
     current_tool_approval_override,
     current_tool_call,
     current_tool_event_sink,
@@ -91,6 +92,7 @@ class ToolExecutionGateway:
     output_store: ToolOutputStore | None = None
     approval_trust_store: ToolApprovalTrustResolver | None = None
     compression_model_resolver: Callable[[], Any] | None = None
+    timeout_seconds: float = 300.0
 
     def execute(
         self,
@@ -162,7 +164,8 @@ class ToolExecutionGateway:
         self._emit_execution_started(arguments=arguments, risk=risk, tool_call_id=tool_call_id)
         try:
             output = execute_with_runtime_cancellation(
-                lambda: self.entrypoint(arguments=arguments, resources=tool_resources)
+                lambda: self.entrypoint(arguments=arguments, resources=tool_resources),
+                timeout_seconds=self.timeout_seconds,
             )
         except RuntimeToolExecutionCancelled as exc:
             return self._observation(
@@ -171,6 +174,15 @@ class ToolExecutionGateway:
                 tool_call_id=tool_call_id,
                 arguments=arguments,
                 retryable=False,
+                errors=[str(exc)],
+            )
+        except RuntimeToolExecutionTimedOut as exc:
+            return self._observation(
+                "timed_out",
+                str(exc),
+                tool_call_id=tool_call_id,
+                arguments=arguments,
+                retryable=True,
                 errors=[str(exc)],
             )
         except Exception as exc:

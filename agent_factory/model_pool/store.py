@@ -26,10 +26,22 @@ class ModelPoolRevisionConflict(ModelPoolStoreError):
 
 
 SQLITE_BUSY_TIMEOUT_MS = 10000
+MODEL_POOL_SCHEMA_MIGRATIONS = (
+    "2026-08-13.remove-model-capability-async-job",
+    "2026-08-13.consolidate-provider-protocols",
+)
 INFRASTRUCTURE_MODEL_ROLE_KINDS = {
     "task": "chat",
     "embedding": "embedding",
+    "image_generation": "image_generation",
 }
+MODEL_ROLE_BINDING_ROLES = (
+    "main",
+    "task",
+    "compression",
+    "embedding",
+    "image_generation",
+)
 
 
 class ModelPoolStore:
@@ -427,13 +439,18 @@ class ModelPoolStore:
 
         return self.role_binding("task")
 
+    def image_generation_binding(self) -> str | None:
+        """Return the image model exposed to the main Agent through generate_image."""
+
+        return self.role_binding("image_generation")
+
     def infrastructure_bindings(self) -> dict[str, str | None]:
         """Return infrastructure model bindings as one coherent configuration."""
 
         try:
             with self._connect() as conn:
                 rows = conn.execute(
-                    "select role, profile_id from model_role_bindings where role in (?, ?)",
+                    f"select role, profile_id from model_role_bindings where role in ({','.join('?' for _ in INFRASTRUCTURE_MODEL_ROLE_KINDS)})",
                     tuple(INFRASTRUCTURE_MODEL_ROLE_KINDS),
                 ).fetchall()
         except sqlite3.OperationalError as exc:
@@ -640,16 +657,96 @@ class ModelPoolStore:
                   deleted_at text not null
                 );
 
-                create table if not exists model_role_bindings (
-                  role text primary key check (role in ('main', 'task', 'compression', 'embedding')),
-                  profile_id text not null,
-                  updated_at text not null
+                create table if not exists model_pool_schema_migrations (
+                  migration_id text primary key,
+                  applied_at text not null
                 );
-                create index if not exists idx_model_role_bindings_profile on model_role_bindings(profile_id);
                 """
             )
             self._migrate_role_binding_schema(conn)
             self._backfill_current_revisions(conn)
+            self._apply_schema_migrations(conn)
+
+    @staticmethod
+    def _apply_schema_migrations(conn: sqlite3.Connection) -> None:
+        applied = {
+            str(row["migration_id"])
+            for row in conn.execute("select migration_id from model_pool_schema_migrations")
+        }
+        for migration_id in MODEL_POOL_SCHEMA_MIGRATIONS:
+            if migration_id in applied:
+                continue
+            if migration_id == "2026-08-13.remove-model-capability-async-job":
+                ModelPoolStore._remove_retired_async_job_capability(conn)
+            elif migration_id == "2026-08-13.consolidate-provider-protocols":
+                ModelPoolStore._consolidate_provider_protocols(conn)
+            else:
+                raise RuntimeError(f"unknown model pool schema migration: {migration_id}")
+            conn.execute(
+                "insert into model_pool_schema_migrations(migration_id, applied_at) values (?, ?)",
+                (migration_id, utc_now_text()),
+            )
+
+    @staticmethod
+    def _remove_retired_async_job_capability(conn: sqlite3.Connection) -> None:
+        for table in ("model_pool_profiles", "model_profile_revisions"):
+            conn.execute(
+                f"""
+                update {table}
+                   set payload_json = json_remove(payload_json, '$.capabilities.async_job')
+                 where json_type(payload_json, '$.capabilities.async_job') is not null
+                """
+            )
+
+    @staticmethod
+    def _consolidate_provider_protocols(conn: sqlite3.Connection) -> None:
+        credential_provider_expression = """
+            case
+              when lower(json_extract(payload_json, '$.base_url')) like '%dashscope.aliyuncs.com%'
+                then 'dashscope'
+              else case lower(json_extract(payload_json, '$.provider'))
+              when 'anthropic' then 'anthropic'
+              when 'claude' then 'anthropic'
+              when 'qwen' then 'dashscope'
+              when 'dashscope' then 'dashscope'
+              when 'dashscope_wanx' then 'dashscope'
+              when 'wanx' then 'dashscope'
+              when 'aliyun_wanx' then 'dashscope'
+              else 'openai'
+            end
+            end
+        """
+        for table in ("model_credentials", "model_credential_revisions"):
+            conn.execute(
+                f"update {table} set payload_json = json_set(payload_json, '$.provider', {credential_provider_expression})"
+            )
+        conn.execute(
+            "update model_credentials set provider = json_extract(payload_json, '$.provider')"
+        )
+        for table in ("model_pool_profiles", "model_profile_revisions"):
+            conn.execute(
+                f"""
+                update {table}
+                   set payload_json = json_set(
+                     payload_json,
+                     '$.provider',
+                     coalesce(
+                       (select provider from model_credentials
+                         where model_credentials.credential_id = {table}.credential_id),
+                       case lower(json_extract(payload_json, '$.provider'))
+                         when 'anthropic' then 'anthropic'
+                         when 'claude' then 'anthropic'
+                         when 'qwen' then 'dashscope'
+                         when 'dashscope' then 'dashscope'
+                         else 'openai'
+                       end
+                     )
+                   )
+                """
+            )
+        conn.execute(
+            "update model_pool_profiles set provider = json_extract(payload_json, '$.provider')"
+        )
 
     @staticmethod
     def _migrate_role_binding_schema(conn: sqlite3.Connection) -> None:
@@ -657,12 +754,28 @@ class ModelPoolStore:
             "select sql from sqlite_master where type = 'table' and name = 'model_role_bindings'"
         ).fetchone()
         schema_sql = str(row["sql"] or "") if row else ""
-        if "'embedding'" in schema_sql.lower():
+        expected_role_literals = tuple(f"'{role}'" for role in MODEL_ROLE_BINDING_ROLES)
+        if row is not None and all(role in schema_sql for role in expected_role_literals):
+            return
+        allowed_roles = ", ".join(expected_role_literals)
+        if row is None:
+            conn.execute(
+                f"""
+                create table model_role_bindings (
+                  role text primary key check (role in ({allowed_roles})),
+                  profile_id text not null,
+                  updated_at text not null
+                )
+                """
+            )
+            conn.execute(
+                "create index idx_model_role_bindings_profile on model_role_bindings(profile_id)"
+            )
             return
         conn.executescript(
-            """
+            f"""
             create table model_role_bindings_v2 (
-              role text primary key check (role in ('main', 'task', 'compression', 'embedding')),
+              role text primary key check (role in ({allowed_roles})),
               profile_id text not null,
               updated_at text not null
             );

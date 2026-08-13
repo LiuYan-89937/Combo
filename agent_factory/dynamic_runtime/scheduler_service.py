@@ -216,7 +216,7 @@ class SchedulerService:
             payload=SendMessagePayload(
                 message_id=uuid4().hex,
                 content=_required(job, "task_content"),
-                execution_preference=str(job.get("strategy") or "auto"),
+                execution_preference=str(job.get("strategy") or "react"),
                 approval_mode=str(job.get("approval_policy") or "ask"),
                 visibility="internal",
                 scheduler_run_id=run_id,

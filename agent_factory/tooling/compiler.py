@@ -38,6 +38,7 @@ class ToolCompiler:
         output_policy: ToolOutputPolicy,
         compression_model_resolver: Callable[[], Any] | None = None,
         approval_trust_store: ToolApprovalTrustResolver | None = None,
+        timeout_seconds: float,
     ) -> None:
         if max_revisions < 1:
             raise ValueError("max_revisions must be positive")
@@ -49,6 +50,7 @@ class ToolCompiler:
         self.output_policy = output_policy
         self.compression_model_resolver = compression_model_resolver
         self.approval_trust_store = approval_trust_store
+        self.timeout_seconds = timeout_seconds
 
     def compile_resolved(
         self,
@@ -81,6 +83,7 @@ class ToolCompiler:
             output_policy=self.output_policy,
             approval_trust_store=self.approval_trust_store,
             compression_model_resolver=self.compression_model_resolver,
+            timeout_seconds=self.timeout_seconds,
         )
 
         def invoke_tool(**kwargs: Any) -> dict[str, Any]:

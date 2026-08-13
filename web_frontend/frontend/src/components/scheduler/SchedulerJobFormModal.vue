@@ -93,7 +93,6 @@ const workspaceOptions = computed(() => workspaces.value.map(workspace => ({
   value: workspace.workspace_id,
 })))
 const strategyOptions = computed(() => [
-  { label: t('scheduler.strategyAuto'), value: 'auto' },
   { label: t('scheduler.strategyFast'), value: 'react' },
   { label: t('scheduler.strategyPlan'), value: 'plan_and_execute' },
 ])
@@ -131,7 +130,7 @@ function emptyForm() {
     task_content: '',
     interpreter: 'shell' as 'shell' | 'python',
     script: '',
-    strategy: 'auto' as ExecutionPreference,
+    strategy: 'react' as ExecutionPreference,
     approval_policy: 'ask' as ApprovalMode,
     schedule_type: 'cron' as 'cron' | 'interval' | 'date',
     schedule_expr: '0 9 * * *',

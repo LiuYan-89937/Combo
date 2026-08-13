@@ -17,6 +17,7 @@ ToolObservationStatus = Literal[
     "invalid_arguments",
     "invalid_output",
     "execution_failed",
+    "timed_out",
     "completed",
 ]
 ToolExecutionStatus = Literal["completed", "failed"]

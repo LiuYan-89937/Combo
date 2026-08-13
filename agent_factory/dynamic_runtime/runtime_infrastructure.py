@@ -13,6 +13,8 @@ from agent_factory.dynamic_runtime.capability_definitions import (
     ToolDefinition,
 )
 from agent_factory.dynamic_runtime.mcp_runtime import MCPRuntimePool
+from agent_factory.dynamic_runtime.mcp_content_runtime import MCPBinaryContentMaterializer, MCPContentRuntime
+from agent_factory.dynamic_runtime.image_generation_runtime import ImageGenerationRuntime
 from agent_factory.dynamic_runtime.capability_catalog_runtime import CapabilityCatalogRuntime
 from agent_factory.dynamic_runtime.control_plane_store import GlobalKnowledgeStore, WorkspaceSchedulerStore
 from agent_factory.dynamic_runtime.memory_store import ScopedMemoryStore
@@ -244,8 +246,9 @@ class ToolEntrypointResolver(SnapshotToolEntrypointResolver):
 class RevisionBoundMCPEntrypointResolver(SnapshotMCPEntrypointResolver):
     """Bind every projected MCP tool to its frozen server revision."""
 
-    def __init__(self, runtime: MCPRuntimePool) -> None:
+    def __init__(self, runtime: MCPRuntimePool, conversations: ConversationStore) -> None:
         self._runtime = runtime
+        self._conversations = conversations
 
     def acquire(
         self,
@@ -268,15 +271,43 @@ class RevisionBoundMCPEntrypointResolver(SnapshotMCPEntrypointResolver):
         if server.runtime_definition_schema != "mcp_server_definition.v1":
             raise RuntimeError("MCP server projection uses an unsupported definition schema")
         MCPServerDefinition.model_validate(server.runtime_definition)
+        workspace = self._conversations.require_workspace(runtime_instance.request.workspace_id)
+        if (
+            workspace.principal_id != runtime_instance.request.principal_id
+            or workspace.kind != "managed"
+            or workspace.managed_path is None
+            or workspace.status != "active"
+        ):
+            raise PermissionError("runtime workspace is unavailable for MCP tool content")
+        materializer = MCPBinaryContentMaterializer(Path(workspace.managed_path))
 
         def invoke(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
             if resources:
                 raise RuntimeError("MCP entrypoint received unexpected runtime resources")
-            return self._runtime.call_tool(
+            envelope = self._runtime.call_tool(
                 server.content_digest,
                 definition.upstream_tool_name,
                 arguments,
             )
+            output = envelope.get("output")
+            result = output.get("result") if isinstance(output, dict) else None
+            if not isinstance(result, dict):
+                return envelope
+            materialized = materializer.materialize_tool_result(
+                server_id=definition.server_capability_id,
+                tool_name=definition.upstream_tool_name,
+                result=result,
+            )
+            output["result"] = materialized.result
+            if materialized.assets:
+                output["assets"] = materialized.assets
+                image = next(
+                    (asset for asset in materialized.assets if str(asset.get("mime_type") or "").startswith("image/")),
+                    None,
+                )
+                if image is not None:
+                    output["model_image"] = {"path": image["path"], "mime_type": image["mime_type"]}
+            return envelope
 
         return ToolEntrypointLease(
             entrypoint=invoke,
@@ -338,6 +369,10 @@ class SharedToolOutputResolver(SnapshotToolOutputResolver):
     def __init__(self, root: str | Path) -> None:
         self._store = ToolOutputStore(root)
 
+    @property
+    def store(self) -> ToolOutputStore:
+        return self._store
+
     def acquire(
         self,
         *,
@@ -384,6 +419,7 @@ def runtime_resource_factory(
     *,
     browser_runtime: BrowserRuntime,
     capability_catalog: CapabilityCatalogRuntime,
+    mcp_content_runtime: MCPContentRuntime,
     memory_store: ScopedMemoryStore,
     delegations: DelegationStore,
     delegation_runtime: DelegationRuntimeCoordinator,
@@ -394,6 +430,7 @@ def runtime_resource_factory(
     runtime_instances,
     process_resources: RuntimeProcessResourcePool,
     filesystem_resources: RuntimeFilesystemResourcePool,
+    tool_output_store: ToolOutputStore,
 ) -> RuntimeResourceFactory:
     if resource_name not in {
         "filesystem",
@@ -407,10 +444,15 @@ def runtime_resource_factory(
         "scheduler_runtime",
         "skillhub_runtime",
         "skill_runtime",
+        "mcp_content_runtime",
+        "image_generation_runtime",
+        "tool_output_store",
     }:
         raise ValueError(f"unsupported runtime resource: {resource_name}")
 
     def project(instance: RuntimeInstance) -> ProjectedRuntimeResource:
+        if resource_name == "tool_output_store":
+            return ProjectedRuntimeResource(value=tool_output_store)
         if resource_name == "browser_runtime":
             return ProjectedRuntimeResource(
                 value=browser_runtime,
@@ -447,6 +489,14 @@ def runtime_resource_factory(
             raise PermissionError("runtime workspace belongs to another principal")
         if workspace.kind != "managed" or workspace.managed_path is None or workspace.status != "active":
             raise RuntimeError("runtime workspace is not an active managed workspace")
+        if resource_name == "mcp_content_runtime":
+            return ProjectedRuntimeResource(
+                value=mcp_content_runtime.for_workspace(Path(workspace.managed_path))
+            )
+        if resource_name == "image_generation_runtime":
+            if instance.request.runtime_role != "main":
+                raise PermissionError("image generation runtime is available only to the main runtime")
+            return ProjectedRuntimeResource(value=ImageGenerationRuntime(Path(workspace.managed_path)))
         if resource_name == "process_runtime":
             if instance.request.runtime_role == "temporary":
                 allowed = _delegated_write_paths(

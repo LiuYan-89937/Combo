@@ -11,15 +11,12 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, m
 from agent_factory.runtime_protocol.errors import RuntimeErrorEnvelope
 
 
-ExecutionPreference = Literal["auto", "react", "plan_and_execute"]
+ExecutionPreference = Literal["react", "plan_and_execute"]
 ExecutionStrategy = Literal["react", "plan_and_execute"]
-RouteDecisionSource = Literal["auto", "user"]
 PolicyValueSource = Literal["user_policy", "command"]
-RouteIntent = Literal["task", "question", "control", "approval", "continuation"]
 ApprovalMode = Literal["ask", "auto", "always_approval"]
 RuntimeRole = Literal["main", "temporary"]
 ModelOperationKind = Literal[
-    "execution_routing",
     "main_turn",
     "temporary_turn",
     "context_compression",
@@ -61,7 +58,7 @@ class UserRuntimePolicy(ProtocolModel):
     principal_id: str
     policy_id: str
     revision: int = Field(default=1, ge=1)
-    execution_preference: ExecutionPreference = "auto"
+    execution_preference: ExecutionPreference = "react"
     approval_mode: ApprovalMode = "ask"
     model_profile_id: str | None = None
     reasoning_intensity: int | None = Field(default=None, ge=0)
@@ -125,8 +122,8 @@ class RuntimePolicySnapshot(FrozenProtocolModel):
     model: ModelSelectionSnapshot
     reasoning_intensity: int | None = Field(default=None, ge=0)
     request_timeout_seconds: int = Field(ge=1)
-    browser_operation_timeout_ms: int = Field(ge=1_000)
-    browser_navigation_timeout_ms: int = Field(ge=1_000)
+    browser_operation_timeout_ms: int = Field(default=30_000, ge=1_000)
+    browser_navigation_timeout_ms: int = Field(default=45_000, ge=1_000)
     max_model_attempts: int = Field(ge=1)
     max_parallel_temporary_agents: int = Field(ge=1)
     memory_auto_write_enabled: bool
@@ -143,25 +140,6 @@ class RuntimePolicySnapshot(FrozenProtocolModel):
     @classmethod
     def _required_policy_text(cls, value: str, info: Any) -> str:
         return _required_text(value, info.field_name)
-
-
-class RouteDecision(FrozenProtocolModel):
-    strategy: ExecutionStrategy
-    decision_source: RouteDecisionSource
-    intent: RouteIntent
-    reason: str
-    capability_requirements: tuple[str, ...] = ()
-    needs_clarification: bool = False
-
-    @field_validator("reason")
-    @classmethod
-    def _reason_is_present(cls, value: str) -> str:
-        return _required_text(value, "reason")
-
-    @field_validator("capability_requirements")
-    @classmethod
-    def _normalize_requirements(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        return _unique_text_tuple(value)
 
 
 class CapabilityRevisionRef(FrozenProtocolModel):
@@ -451,7 +429,7 @@ class RuntimeRequest(FrozenProtocolModel):
     workspace_id: str
     runtime_role: RuntimeRole
     strategy: ExecutionStrategy
-    route_decision: RouteDecision
+    capability_requirements: tuple[str, ...] = ()
     policy_snapshot: RuntimePolicySnapshot
     capability_snapshot_id: str
     approval_mode: ApprovalMode
@@ -480,6 +458,11 @@ class RuntimeRequest(FrozenProtocolModel):
     def _optional_parent_runtime(cls, value: str | None) -> str | None:
         return _optional_text(value)
 
+    @field_validator("capability_requirements")
+    @classmethod
+    def _normalize_capability_requirements(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return _unique_text_tuple(value)
+
     @model_validator(mode="after")
     def _role_matches_parent(self) -> "RuntimeRequest":
         if self.runtime_role == "main" and self.parent_runtime_instance_id is not None:
@@ -497,8 +480,6 @@ class RuntimeRequest(FrozenProtocolModel):
             raise ValueError("temporary runtime requires task and delegation grant identities")
         if self.approval_mode != self.policy_snapshot.approval_mode:
             raise ValueError("request approval_mode must match policy snapshot")
-        if self.strategy != self.route_decision.strategy:
-            raise ValueError("request strategy must match route decision")
         if self.principal_id != self.policy_snapshot.principal_id:
             raise ValueError("request principal_id must match policy snapshot")
         expected_operation = "main_turn" if self.runtime_role == "main" else "temporary_turn"

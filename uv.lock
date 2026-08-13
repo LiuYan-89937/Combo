@@ -466,6 +466,92 @@ wheels = [
 ]
 
 [[package]]
+name = "combo"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "apscheduler" },
+    { name = "beautifulsoup4" },
+    { name = "cryptography" },
+    { name = "ebooklib" },
+    { name = "httpx", extra = ["socks"] },
+    { name = "jsonschema" },
+    { name = "langchain" },
+    { name = "langchain-anthropic" },
+    { name = "langchain-community" },
+    { name = "langchain-core" },
+    { name = "langchain-openai" },
+    { name = "langchain-text-splitters" },
+    { name = "langgraph" },
+    { name = "langgraph-checkpoint" },
+    { name = "langgraph-checkpoint-postgres" },
+    { name = "langgraph-checkpoint-redis" },
+    { name = "langgraph-checkpoint-sqlite" },
+    { name = "langgraph-store-mongodb" },
+    { name = "mammoth" },
+    { name = "markdownify" },
+    { name = "mcp" },
+    { name = "odfpy" },
+    { name = "olefile" },
+    { name = "openpyxl" },
+    { name = "packaging" },
+    { name = "playwright" },
+    { name = "pydantic" },
+    { name = "pypdf" },
+    { name = "python-pptx" },
+    { name = "ruamel-yaml" },
+    { name = "striprtf" },
+    { name = "uritemplate" },
+    { name = "xlrd" },
+]
+
+[package.optional-dependencies]
+web = [
+    { name = "fastapi" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "apscheduler", specifier = ">=3.11,<4" },
+    { name = "beautifulsoup4", specifier = ">=4.12" },
+    { name = "cryptography", specifier = ">=42" },
+    { name = "ebooklib", specifier = ">=0.19" },
+    { name = "fastapi", marker = "extra == 'web'", specifier = ">=0.115" },
+    { name = "httpx", extras = ["socks"], specifier = ">=0.27" },
+    { name = "jsonschema", specifier = ">=4.23" },
+    { name = "langchain", specifier = ">=1.2,<2" },
+    { name = "langchain-anthropic", specifier = ">=1.1,<2" },
+    { name = "langchain-community", specifier = ">=0.4,<1" },
+    { name = "langchain-core", specifier = ">=1.3,<2" },
+    { name = "langchain-openai", specifier = ">=1.1,<2" },
+    { name = "langchain-text-splitters", specifier = ">=1.0,<2" },
+    { name = "langgraph", specifier = "==1.2.10" },
+    { name = "langgraph-checkpoint", specifier = ">=4.1,<5" },
+    { name = "langgraph-checkpoint-postgres", specifier = ">=3.1,<4" },
+    { name = "langgraph-checkpoint-redis", specifier = ">=0.5,<1" },
+    { name = "langgraph-checkpoint-sqlite", specifier = ">=3.1,<4" },
+    { name = "langgraph-store-mongodb", specifier = ">=0.3,<1" },
+    { name = "mammoth", specifier = ">=1.9,<2" },
+    { name = "markdownify", specifier = ">=1.2,<2" },
+    { name = "mcp", specifier = ">=1.0" },
+    { name = "odfpy", specifier = ">=1.4,<2" },
+    { name = "olefile", specifier = ">=0.47,<1" },
+    { name = "openpyxl", specifier = ">=3.1,<4" },
+    { name = "packaging", specifier = ">=24" },
+    { name = "playwright", specifier = ">=1.54,<2" },
+    { name = "pydantic", specifier = ">=2.8" },
+    { name = "pypdf", specifier = ">=4.0" },
+    { name = "python-pptx", specifier = ">=1.0,<2" },
+    { name = "ruamel-yaml", specifier = ">=0.18" },
+    { name = "striprtf", specifier = ">=0.0.29,<1" },
+    { name = "uritemplate", specifier = ">=4.1,<5" },
+    { name = "uvicorn", extras = ["standard"], marker = "extra == 'web'", specifier = ">=0.30" },
+    { name = "xlrd", specifier = ">=2.0,<3" },
+]
+provides-extras = ["dev", "web"]
+
+[[package]]
 name = "cryptography"
 version = "49.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -578,90 +664,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/d3/38/af70d7ab1ae9d4da4
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c1/8b/5fe2cc11fee489817272089c4203e679c63b570a5aaeb18d852ae3cbba6a/et_xmlfile-2.0.0-py3-none-any.whl", hash = "sha256:7a91720bc756843502c3b7504c77b8fe44217c85c537d85037f0f536151b2caa", size = 18059, upload-time = "2024-10-25T17:25:39.051Z" },
 ]
-
-[[package]]
-name = "combo"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "apscheduler" },
-    { name = "beautifulsoup4" },
-    { name = "cryptography" },
-    { name = "ebooklib" },
-    { name = "httpx", extra = ["socks"] },
-    { name = "jsonschema" },
-    { name = "langchain" },
-    { name = "langchain-anthropic" },
-    { name = "langchain-community" },
-    { name = "langchain-core" },
-    { name = "langchain-openai" },
-    { name = "langchain-text-splitters" },
-    { name = "langgraph" },
-    { name = "langgraph-checkpoint" },
-    { name = "langgraph-checkpoint-postgres" },
-    { name = "langgraph-checkpoint-redis" },
-    { name = "langgraph-checkpoint-sqlite" },
-    { name = "langgraph-store-mongodb" },
-    { name = "mammoth" },
-    { name = "markdownify" },
-    { name = "mcp" },
-    { name = "odfpy" },
-    { name = "olefile" },
-    { name = "openpyxl" },
-    { name = "packaging" },
-    { name = "playwright" },
-    { name = "pydantic" },
-    { name = "pypdf" },
-    { name = "python-pptx" },
-    { name = "ruamel-yaml" },
-    { name = "striprtf" },
-    { name = "xlrd" },
-]
-
-[package.optional-dependencies]
-web = [
-    { name = "fastapi" },
-    { name = "uvicorn", extra = ["standard"] },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "apscheduler", specifier = ">=3.11,<4" },
-    { name = "beautifulsoup4", specifier = ">=4.12" },
-    { name = "cryptography", specifier = ">=42" },
-    { name = "ebooklib", specifier = ">=0.19" },
-    { name = "fastapi", marker = "extra == 'web'", specifier = ">=0.115" },
-    { name = "httpx", extras = ["socks"], specifier = ">=0.27" },
-    { name = "jsonschema", specifier = ">=4.23" },
-    { name = "langchain", specifier = ">=1.2,<2" },
-    { name = "langchain-anthropic", specifier = ">=1.1,<2" },
-    { name = "langchain-community", specifier = ">=0.4,<1" },
-    { name = "langchain-core", specifier = ">=1.3,<2" },
-    { name = "langchain-openai", specifier = ">=1.1,<2" },
-    { name = "langchain-text-splitters", specifier = ">=1.0,<2" },
-    { name = "langgraph", specifier = "==1.2.10" },
-    { name = "langgraph-checkpoint", specifier = ">=4.1,<5" },
-    { name = "langgraph-checkpoint-postgres", specifier = ">=3.1,<4" },
-    { name = "langgraph-checkpoint-redis", specifier = ">=0.5,<1" },
-    { name = "langgraph-checkpoint-sqlite", specifier = ">=3.1,<4" },
-    { name = "langgraph-store-mongodb", specifier = ">=0.3,<1" },
-    { name = "mammoth", specifier = ">=1.9,<2" },
-    { name = "markdownify", specifier = ">=1.2,<2" },
-    { name = "mcp", specifier = ">=1.0" },
-    { name = "odfpy", specifier = ">=1.4,<2" },
-    { name = "olefile", specifier = ">=0.47,<1" },
-    { name = "openpyxl", specifier = ">=3.1,<4" },
-    { name = "packaging", specifier = ">=24" },
-    { name = "playwright", specifier = ">=1.54,<2" },
-    { name = "pydantic", specifier = ">=2.8" },
-    { name = "pypdf", specifier = ">=4.0" },
-    { name = "python-pptx", specifier = ">=1.0,<2" },
-    { name = "ruamel-yaml", specifier = ">=0.18" },
-    { name = "striprtf", specifier = ">=0.0.29,<1" },
-    { name = "uvicorn", extras = ["standard"], marker = "extra == 'web'", specifier = ">=0.30" },
-    { name = "xlrd", specifier = ">=2.0,<3" },
-]
-provides-extras = ["dev", "web"]
 
 [[package]]
 name = "fastapi"
@@ -3194,6 +3196,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/81/5b/879b2f932adfa7a053c360d50bc896c977fa6426109185f7c12ebdd0cb9d/tzlocal-5.4.4.tar.gz", hash = "sha256:8dbb8660838688a7b6ba4fed31d18dedf842afb4d47ca050d6d891c2c15f3be4", size = 31170, upload-time = "2026-06-29T08:03:40.026Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9e/a4/017a7a6cbe387d961a688ec31364ae60a5c4e22c96ae9921b79a947c855d/tzlocal-5.4.4-py3-none-any.whl", hash = "sha256:aae09f0126a8a86fa736be266eb4a471380d26a0de3bc14844e7821fee3e2a15", size = 18115, upload-time = "2026-06-29T08:03:38.666Z" },
+]
+
+[[package]]
+name = "uritemplate"
+version = "4.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/98/60/f174043244c5306c9988380d2cb10009f91563fc4b31293d27e17201af56/uritemplate-4.2.0.tar.gz", hash = "sha256:480c2ed180878955863323eea31b0ede668795de182617fef9c6ca09e6ec9d0e", size = 33267, upload-time = "2025-06-02T15:12:06.318Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a9/99/3ae339466c9183ea5b8ae87b34c0b897eda475d2aec2307cae60e5cd4f29/uritemplate-4.2.0-py3-none-any.whl", hash = "sha256:962201ba1c4edcab02e60f9a0d3821e82dfc5d2d6662a21abd533879bdb8a686", size = 11488, upload-time = "2025-06-02T15:12:03.405Z" },
 ]
 
 [[package]]

@@ -106,11 +106,7 @@ from agent_factory.dynamic_runtime.launch_context import (
     WorkspaceLaunchProjection,
     WorkspaceLaunchResolver,
 )
-from agent_factory.dynamic_runtime.main_turn import (
-    ExecutionRouter,
-    MainTurnCommandHandler,
-    RouteAnalyzer,
-)
+from agent_factory.dynamic_runtime.main_turn import MainTurnCommandHandler
 from agent_factory.dynamic_runtime.model_service import (
     ResolvedRuntimeChatModel,
     ResolvedRuntimePolicy,
@@ -138,7 +134,6 @@ from agent_factory.dynamic_runtime.repositories import (
 )
 from agent_factory.dynamic_runtime.recovery import RuntimeRecoveryReport, RuntimeRecoveryService
 from agent_factory.dynamic_runtime.resume import ResumeInterruptCommandHandler
-from agent_factory.dynamic_runtime.route_analyzer import StructuredRouteAnalyzer
 from agent_factory.dynamic_runtime.services import DynamicRuntimeServiceSet, DynamicRuntimeServicesFactory
 from agent_factory.dynamic_runtime.runtime_service import (
     DynamicRuntimeService,
@@ -243,7 +238,6 @@ __all__ = [
     "DynamicRuntimeSupervisor",
     "DynamicRuntimeSupervisorConfig",
     "remove_sqlite_database_files",
-    "ExecutionRouter",
     "ExplicitMCPToolCapabilityRuntimeAdapter",
     "ExplicitToolCapabilityRuntimeAdapter",
     "FileSystemPromptProvider",
@@ -297,7 +291,6 @@ __all__ = [
     "RuntimeRunControlRegistry",
     "RuntimeScopedToolRegistry",
     "ResumeInterruptCommandHandler",
-    "RouteAnalyzer",
     "RuntimeClock",
     "SnapshotCapabilityInstructionRenderer",
     "SnapshotMCPEntrypointResolver",
@@ -308,7 +301,6 @@ __all__ = [
     "SnapshotToolRegistryError",
     "SnapshotToolRegistryFactory",
     "SnapshotToolRegistryLease",
-    "StructuredRouteAnalyzer",
     "SkillCapabilityAdapter",
     "SkillContentRef",
     "SkillDefinition",

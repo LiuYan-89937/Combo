@@ -30,6 +30,9 @@ RuntimeResourceName = Literal[
     "scheduler_runtime",
     "skillhub_runtime",
     "skill_runtime",
+    "mcp_content_runtime",
+    "image_generation_runtime",
+    "tool_output_store",
 ]
 
 

@@ -15,6 +15,7 @@ from threading import RLock
 from typing import Any, Callable
 from uuid import uuid4
 from ruamel.yaml import YAML
+import uritemplate
 
 from agent_factory import __version__
 from agent_factory.context_system.runtime import default_context_runtime
@@ -30,7 +31,6 @@ from agent_factory.dynamic_runtime import (
     DynamicRuntimeServicesFactory,
     DynamicRuntimeSupervisor,
     DynamicRuntimeSupervisorConfig,
-    ExecutionRouter,
     ExplicitMCPToolCapabilityRuntimeAdapter,
     ExplicitToolCapabilityRuntimeAdapter,
     FileSystemPromptProvider,
@@ -42,7 +42,6 @@ from agent_factory.dynamic_runtime import (
     RuntimeEventStreamConfig,
     SnapshotCapabilityInstructionRenderer,
     SnapshotToolRegistryFactory,
-    StructuredRouteAnalyzer,
     ToolProjectionMaterializer,
     remove_sqlite_database_files,
 )
@@ -75,6 +74,7 @@ from agent_factory.dynamic_runtime.tool_package_source import (
     ToolSourceRoot,
 )
 from agent_factory.dynamic_runtime.tool_package_runtime import ToolPackageRuntime
+from agent_factory.dynamic_runtime.mcp_content_runtime import MCPContentRuntime
 from agent_factory.environment_system import DependencyPoolService
 from agent_factory.dynamic_runtime.application import DynamicRuntimeStores
 from agent_factory.dynamic_runtime.runtime_infrastructure import (
@@ -128,7 +128,6 @@ class RuntimeBackendConfig:
     tool_output_root: Path
     workspace_root: Path
     main_prompt_path: Path
-    router_prompt_path: Path
     build_revision: str
     capability_publisher_principal_id: str
     builtin_capability_source_prefix: str
@@ -175,7 +174,6 @@ class RuntimeBackendConfig:
             tool_output_root=factory_artifact_path("tool_outputs"),
             workspace_root=factory_artifact_path("workspaces"),
             main_prompt_path=prompts / "main_agent.md",
-            router_prompt_path=prompts / "execution_router.md",
             build_revision=__version__,
             capability_publisher_principal_id=f"application-build:{__version__}",
             builtin_capability_source_prefix="builtin-tool://",
@@ -250,6 +248,7 @@ class RuntimeBackend:
             transaction_ttl_seconds=config.workspace_transaction_ttl_seconds,
         )
         self.mcp_runtime = MCPRuntimePool()
+        self.mcp_runtime.on_catalog_changed(self._mcp_catalog_changed)
         self.skillhub_runtime = SkillHubService(
             skills_dir=config.skill_source_roots[0].path,
         )
@@ -272,9 +271,6 @@ class RuntimeBackend:
             self.mcp_runtime.close()
             raise
         dispatcher = self.application.main_command_dispatcher(
-            execution_router=ExecutionRouter(
-                StructuredRouteAnalyzer.from_file(config.router_prompt_path)
-            ),
             delegated_model_selector=self.delegated_model_selector,
         )
         self.conversation_lifecycle = ConversationLifecycleService(
@@ -407,7 +403,7 @@ class RuntimeBackend:
                     "status": "running",
                     "mode": "agent_package",
                     "run_id": receipt.runtime_instance_id,
-                    "background": request_source != "user",
+                    "background": request_source == "scheduler",
                     "source": request_source,
                     "started_at": str(row["received_at"]),
                     "completed_at": None,
@@ -509,6 +505,7 @@ class RuntimeBackend:
             str(server.get("server_id")): server
             for server in registry["servers"]
         }
+        mcp_catalogs = self.mcp_runtime.catalogs()
         for capability in capabilities:
             if capability["kind"] != "mcp_server":
                 continue
@@ -518,6 +515,54 @@ class RuntimeBackend:
                 capability["details"] = {
                     **dict(capability["details"]),
                     "registry_config": registry_config,
+                }
+            catalog = mcp_catalogs.get(server_id)
+            if catalog is not None:
+                capability["details"] = {
+                    **dict(capability["details"]),
+                    "connection_status": "connected",
+                    "protocol_version": catalog.protocol_version,
+                    "server_name": catalog.server_name,
+                    "server_version": catalog.server_version,
+                    "server_capabilities": list(catalog.capabilities),
+                    "tool_count": len(catalog.tools),
+                    "resource_count": len(catalog.resources),
+                    "resource_template_count": len(catalog.resource_templates),
+                    "prompt_count": len(catalog.prompts),
+                    "resources": [
+                        {
+                            "name": str(getattr(item, "name", "")),
+                            "description": str(getattr(item, "description", "") or ""),
+                            "uri": str(getattr(item, "uri", "")),
+                            "mime_type": str(getattr(item, "mimeType", "") or ""),
+                        }
+                        for item in catalog.resources
+                    ],
+                    "resource_templates": [
+                        {
+                            "name": str(getattr(item, "name", "")),
+                            "description": str(getattr(item, "description", "") or ""),
+                            "uri_template": str(getattr(item, "uriTemplate", "")),
+                            "mime_type": str(getattr(item, "mimeType", "") or ""),
+                        }
+                        for item in catalog.resource_templates
+                    ],
+                    "prompts": [
+                        {
+                            "name": str(getattr(item, "name", "")),
+                            "description": str(getattr(item, "description", "") or ""),
+                            "arguments": [
+                                {
+                                    "name": str(getattr(argument, "name", "")),
+                                    "description": str(getattr(argument, "description", "") or ""),
+                                    "required": bool(getattr(argument, "required", False)),
+                                }
+                                for argument in (getattr(item, "arguments", ()) or ())
+                            ],
+                        }
+                        for item in catalog.prompts
+                    ],
+                    "logs": list(self.mcp_runtime.logs(server_id)),
                 }
         return {
             "counts": counts,
@@ -593,6 +638,12 @@ class RuntimeBackend:
             self.application.stores.capabilities.active_capabilities()
         )
 
+    def refresh_model_bound_capabilities(self) -> None:
+        self._synchronize_builtin_tool_capabilities(
+            self.application.stores,
+            _capability_adapters(),
+        )
+
     def _refresh_capability_search_if_ready(self) -> None:
         application = getattr(self, "application", None)
         if application is not None:
@@ -611,15 +662,54 @@ class RuntimeBackend:
             raise LookupError(f"active MCP server capability not found: {capability_id}")
         revision = matches[0].revision
         try:
-            tools = self.mcp_runtime.discover_tools(revision.content_digest)
+            catalog = self.mcp_runtime.discover(revision.content_digest)
         except BaseException as exc:
             self.logger.warning("MCP probe failed for %s: %s", capability_id, exc)
             raise
         return {
             "capability_id": capability_id,
             "content_digest": revision.content_digest,
-            "tool_count": len(tools),
-            "tools": [str(tool.name) for tool in tools],
+            "protocol_version": catalog.protocol_version,
+            "server_name": catalog.server_name,
+            "server_version": catalog.server_version,
+            "capabilities": list(catalog.capabilities),
+            "tool_count": len(catalog.tools),
+            "tools": [str(tool.name) for tool in catalog.tools],
+            "resource_count": len(catalog.resources),
+            "resources": [str(resource.name) for resource in catalog.resources],
+            "resource_template_count": len(catalog.resource_templates),
+            "prompt_count": len(catalog.prompts),
+            "prompts": [str(prompt.name) for prompt in catalog.prompts],
+        }
+
+    def read_mcp_resource(
+        self,
+        capability_id: str,
+        uri: str | None,
+        uri_template: str | None,
+        arguments: dict[str, str],
+    ) -> dict[str, object]:
+        server_id = str(capability_id).removeprefix("mcp-server://")
+        digest = self.mcp_runtime.server_digest(server_id)
+        resolved_uri = str(uri) if uri is not None else uritemplate.expand(str(uri_template), arguments)
+        return {
+            "server_id": server_id,
+            "uri": resolved_uri,
+            "result": self.mcp_runtime.read_resource(digest, resolved_uri),
+        }
+
+    def get_mcp_prompt(
+        self,
+        capability_id: str,
+        name: str,
+        arguments: dict[str, str],
+    ) -> dict[str, object]:
+        server_id = str(capability_id).removeprefix("mcp-server://")
+        digest = self.mcp_runtime.server_digest(server_id)
+        return {
+            "server_id": server_id,
+            "name": str(name),
+            "result": self.mcp_runtime.get_prompt(digest, str(name), arguments),
         }
 
     def skillhub_status(self) -> dict[str, Any]:
@@ -640,6 +730,7 @@ class RuntimeBackend:
         server: dict[str, Any],
         *,
         expected_registry_digest: str,
+        on_progress: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> dict[str, object]:
         with self._mcp_registry_lock:
             path = self.config.mcp_server_registry_path
@@ -656,7 +747,9 @@ class RuntimeBackend:
                 self._synchronize_mcp_capabilities(
                     self.application.stores,
                     _capability_adapters(),
+                    on_progress=on_progress,
                 )
+                _report_tool_preparation(on_progress, "published", {"server_id": server_id})
             except BaseException:
                 _write_mcp_registry(path, current)
                 try:
@@ -675,6 +768,7 @@ class RuntimeBackend:
         server: dict[str, Any],
         *,
         expected_registry_digest: str,
+        on_progress: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> dict[str, object]:
         with self._mcp_registry_lock:
             path = self.config.mcp_server_registry_path
@@ -721,7 +815,12 @@ class RuntimeBackend:
             replacement = {**current, "servers": servers}
             _write_mcp_registry(path, replacement)
             try:
-                self._synchronize_mcp_capabilities(self.application.stores, _capability_adapters())
+                self._synchronize_mcp_capabilities(
+                    self.application.stores,
+                    _capability_adapters(),
+                    on_progress=on_progress,
+                )
+                _report_tool_preparation(on_progress, "published", {"server_id": normalized_id})
             except BaseException:
                 _write_mcp_registry(path, current)
                 self._synchronize_mcp_capabilities(self.application.stores, _capability_adapters())
@@ -1547,6 +1646,7 @@ class RuntimeBackend:
                         name,
                         browser_runtime=self.browser_runtime,
                         capability_catalog=capability_catalog,
+                        mcp_content_runtime=MCPContentRuntime(self.mcp_runtime),
                         memory_store=stores.memories,
                         delegations=stores.delegations,
                         delegation_runtime=delegation_runtime,
@@ -1557,6 +1657,7 @@ class RuntimeBackend:
                         runtime_instances=stores.runtime_instances,
                         process_resources=self.process_resources,
                         filesystem_resources=self.filesystem_resources,
+                        tool_output_store=outputs.store,
                     )
                     for name in (
                         "filesystem",
@@ -1570,6 +1671,9 @@ class RuntimeBackend:
                         "scheduler_runtime",
                         "skillhub_runtime",
                         "skill_runtime",
+                        "mcp_content_runtime",
+                        "image_generation_runtime",
+                        "tool_output_store",
                     )
                 },
             )
@@ -1589,7 +1693,7 @@ class RuntimeBackend:
                 maximum_argument_revisions=config.maximum_argument_revisions,
             )
             mcp_adapter = ExplicitMCPToolCapabilityRuntimeAdapter(
-                entrypoints=RevisionBoundMCPEntrypointResolver(self.mcp_runtime),
+                entrypoints=RevisionBoundMCPEntrypointResolver(self.mcp_runtime, stores.conversations),
                 outputs=outputs,
                 approvals=approvals,
                 maximum_argument_revisions=config.maximum_argument_revisions,
@@ -1706,6 +1810,7 @@ class RuntimeBackend:
             publisher_principal_id=config.capability_publisher_principal_id,
             source_prefix=config.builtin_capability_source_prefix,
             overrides_path=config.builtin_tool_overrides_path,
+            image_generation_enabled=ModelPoolStore().image_generation_binding() is not None,
         )
         CapabilityBootstrapPublisher(
             config=CapabilityBootstrapConfig(
@@ -1787,7 +1892,13 @@ class RuntimeBackend:
         )
         self._refresh_capability_search_if_ready()
 
-    def _synchronize_mcp_capabilities(self, stores, adapters) -> None:
+    def _synchronize_mcp_capabilities(
+        self,
+        stores,
+        adapters,
+        *,
+        on_progress: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> None:
         config = self.config
         mcp_source = MCPConfigCapabilitySource(
             config=MCPConfigSourceConfig(
@@ -1803,6 +1914,7 @@ class RuntimeBackend:
                 server_id,
                 error,
             ),
+            report_progress=on_progress,
         )
         drafts = mcp_source.drafts()
         CapabilityBootstrapPublisher(
@@ -1817,7 +1929,22 @@ class RuntimeBackend:
             drafts,
             deactivate_removed_sources=mcp_source.discovery_complete,
         )
+        if mcp_source.discovery_complete:
+            self.mcp_runtime.retain(set(mcp_source.active_server_digests))
         self._refresh_capability_search_if_ready()
+
+    def _mcp_catalog_changed(self, server_content_digest: str, catalog_kind: str) -> None:
+        if not hasattr(self, "application"):
+            return
+        try:
+            self._synchronize_mcp_capabilities(self.application.stores, _capability_adapters())
+            self.logger.info(
+                "MCP %s catalog changed for %s; capability pool refreshed",
+                catalog_kind,
+                server_content_digest,
+            )
+        except BaseException as exc:
+            self._report_failure("mcp_catalog_refresh", exc)
 
     def _report_failure(self, component: str, error: BaseException) -> None:
         self.logger.error(

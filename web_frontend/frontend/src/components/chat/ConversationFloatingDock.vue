@@ -39,7 +39,10 @@
           </button>
         </template>
         <div class="dock-panel session-panel-shell">
-          <SessionsSidebarPanel @request-new-agent-session="forwardNewAgentSessionRequest" />
+          <SessionsSidebarPanel
+            @request-new-agent-session="forwardNewAgentSessionRequest"
+            @interaction-lock="setSessionsInteractionLock"
+          />
         </div>
       </n-popover>
 
@@ -145,6 +148,7 @@ const layerRef = ref<HTMLElement | null>(null)
 const itemElements = new Map<FloatingItemId, HTMLElement>()
 const dragging = ref<DragState | null>(null)
 const suppressNextClick = ref(false)
+const sessionsInteractionLocked = ref(false)
 const positions = ref<Record<FloatingItemId, DockPosition>>(loadPositions())
 const floatingItems: Array<{ id: FloatingItemId }> = [
   { id: 'sessions' },
@@ -211,7 +215,13 @@ function panelPlacement(id: FloatingItemId) {
 
 function setPanelVisibility(panel: ConversationDockPanel, visible: boolean) {
   if (suppressNextClick.value) return
+  if (panel === 'sessions' && sessionsInteractionLocked.value && !visible) return
   uiStore.setConversationDockPanel(visible ? panel : null)
+}
+
+function setSessionsInteractionLock(locked: boolean) {
+  sessionsInteractionLocked.value = locked
+  if (locked) uiStore.setConversationDockPanel('sessions')
 }
 
 function forwardNewAgentSessionRequest(packageId: string, initialWorkspaceId: string | null) {

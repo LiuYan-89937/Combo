@@ -156,11 +156,13 @@ def _model_pool_settings(
             raise ValueError(f"embedding model credential is disabled: {credential.credential_id}")
         if not credential.api_key:
             raise ValueError(f"embedding model credential has no API key: {credential.credential_id}")
+        from agent_factory.model_pool.resolver import resolve_protocol_base_url
+
         return EmbeddingModelSettings(
             provider=profile.provider,
             model=profile.model_name,
             api_key=credential.api_key,
-            base_url=credential.base_url,
+            base_url=resolve_protocol_base_url(profile.provider, credential.base_url, kind="embedding"),
             dims=profile.embedding_dimensions,
             batch_size=profile.embedding_batch_size or DEFAULT_EMBEDDING_BATCH_SIZE,
             timeout_seconds=profile.limits.timeout_seconds,

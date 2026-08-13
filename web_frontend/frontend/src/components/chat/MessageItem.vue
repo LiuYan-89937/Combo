@@ -20,6 +20,17 @@
       </div>
     </template>
 
+    <template v-else-if="delegatedDelivery">
+      <div class="delegated-delivery-message">
+        <MessagePartRenderer
+          v-for="part in visibleParts"
+          :key="part.id"
+          :part="part"
+          :workspace-context="workspaceContext"
+        />
+      </div>
+    </template>
+
     <template v-else>
     <div class="message-avatar">
       <n-avatar :size="36" :style="avatarStyle">
@@ -146,6 +157,10 @@ const avatarText = computed(() => {
 })
 
 const visibleParts = computed(() => conversationVisibleParts(props.message.parts))
+const delegatedDelivery = computed(() => (
+  Boolean(props.message.metadata?.delegated_delivery)
+  && visibleParts.value.some(part => part.type === 'delegated_delivery')
+))
 const isGroupUserMessage = computed(() => (
   props.message.role === 'user' && Boolean(props.message.metadata?.agent_group_message)
 ))
@@ -222,6 +237,9 @@ function groupAgentAvatarStyle(metadata: Record<string, unknown>): CSSProperties
   border-radius: var(--app-radius-lg);
   transition: background-color var(--app-transition-base), transform var(--app-transition-spring), box-shadow var(--app-transition-base);
 }
+
+.message-item:has(.delegated-delivery-message) { padding-block: var(--app-space-xs); }
+.delegated-delivery-message { min-width: 0; }
 
 .message-item.role-assistant {
   background: var(--app-surface-elevated);

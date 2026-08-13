@@ -8,7 +8,6 @@ from pydantic import Field, JsonValue, field_validator, model_validator
 from agent_factory.runtime_protocol.contracts import (
     CapabilitySelection,
     FrozenProtocolModel,
-    RouteDecision,
     RuntimeInstanceStatus,
     RuntimeRole,
     TaskRevisionAction,
@@ -71,11 +70,6 @@ class RuntimeWaitingPayload(FrozenProtocolModel):
         if self.kind != expected:
             raise ValueError("runtime waiting event kind does not match status")
         return self
-
-
-class RouteDecidedPayload(FrozenProtocolModel):
-    kind: Literal["route_decided"] = "route_decided"
-    decision: RouteDecision
 
 
 class CapabilityResolutionStartedPayload(FrozenProtocolModel):
@@ -295,7 +289,6 @@ RuntimeEventPayload = Annotated[
         RuntimeLifecyclePayload,
         RuntimeCompletedPayload,
         RuntimeWaitingPayload,
-        RouteDecidedPayload,
         CapabilityResolutionStartedPayload,
         CapabilitySelectionPayload,
         CapabilitySnapshotCreatedPayload,

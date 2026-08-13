@@ -10,7 +10,7 @@ export const DEFAULT_BROWSER_NAVIGATION_TIMEOUT_MS = 45_000
 export const DEFAULT_RUNTIME_MAX_RETRIES = 5
 export const DEFAULT_MAX_PARALLEL_SUB_AGENTS = 5
 export const DEFAULT_APPROVAL_MODE: ApprovalMode = 'ask'
-export const DEFAULT_EXECUTION_PREFERENCE: ExecutionPreference = 'auto'
+export const DEFAULT_EXECUTION_PREFERENCE: ExecutionPreference = 'react'
 export const DEFAULT_MEMORY_WRITE_INTERVAL_TURNS = 3
 export const DEFAULT_MEMORY_MAX_INJECTED_ITEMS = 8
 export const DEFAULT_MEMORY_MAX_INJECTED_TOKENS = 1200
@@ -263,9 +263,7 @@ function readStoredApprovalMode(): ApprovalMode {
 }
 function readStoredExecutionPreference(): ExecutionPreference {
   const value = readStoredText(STORAGE_KEYS.executionPreference)
-  return value === 'react' || value === 'plan_and_execute' || value === 'auto'
-    ? value
-    : DEFAULT_EXECUTION_PREFERENCE
+  return value === 'plan_and_execute' ? value : DEFAULT_EXECUTION_PREFERENCE
 }
 function readStoredBoolean(key: string): boolean {
   return readStoredText(key) === 'true'

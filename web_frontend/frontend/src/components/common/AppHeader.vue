@@ -65,7 +65,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watchEffect } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { NButton, NIcon } from 'naive-ui'
 import { AppsOutline, Settings } from '@/components/icons'
 import ComboLogo from '@/components/brand/ComboLogo.vue'
@@ -75,6 +75,7 @@ import { useAgentStore } from '@/stores/agent'
 import { useUiStore } from '@/stores/ui'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useCommand } from '@/composables/useCommand'
+import { useAgentSessionNavigation } from '@/composables/agent/useAgentSessionNavigation'
 import CapabilityLibraryModal from '@/components/common/CapabilityLibraryModal.vue'
 import {
   closeDesktopWindow,
@@ -85,12 +86,12 @@ import {
 } from '@/api/desktopWindow'
 
 const route = useRoute()
-const router = useRouter()
 const { t } = useI18n()
 const uiStore = useUiStore()
 const runtimeStore = useRuntimeStore()
 const agentStore = useAgentStore()
 const commands = useCommand()
+const { openAgentSessions } = useAgentSessionNavigation()
 const isWindowsDesktop = ref(false)
 const capabilityLibraryOpen = ref(false)
 const isChatRoute = computed(() => route.name === 'ChatNew' || route.name === 'ChatSession')
@@ -107,7 +108,7 @@ const connectionStatusText = computed(() => ({
 })[runtimeStore.connectionStatus])
 
 function openChat() {
-  void router.push({ name: 'ChatNew' })
+  void openAgentSessions()
 }
 
 onMounted(async () => {

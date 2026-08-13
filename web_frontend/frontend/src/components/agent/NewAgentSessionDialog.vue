@@ -200,6 +200,14 @@ watch(
 async function refreshWorkspaces() {
   try {
     workspaces.value = (await workspaceApi.projects()).workspaces
+    const selectableIds = new Set(
+      workspaces.value
+        .filter(workspace => workspace.mode === 'project')
+        .map(workspace => workspace.workspace_id),
+    )
+    if (!selectedWorkspaceId.value || !selectableIds.has(selectedWorkspaceId.value)) {
+      selectedWorkspaceId.value = null
+    }
   } catch (error) {
     showError(error)
   }

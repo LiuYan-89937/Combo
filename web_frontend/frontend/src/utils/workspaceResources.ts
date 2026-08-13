@@ -62,7 +62,7 @@ export function workspaceResourceUrl(
 ): string | null {
   const normalized = String(source || '').trim()
   if (!normalized) return null
-  if (isRemoteImage(normalized)) return normalized
+  if (isRemoteResource(normalized)) return normalized
 
   const reference = workspaceFileReference(normalized, defaultScope)
   if (!reference || !context) return null
@@ -77,6 +77,11 @@ function hasUriScheme(source: string): boolean {
   return /^[a-z][a-z\d+.-]*:/i.test(source)
 }
 
-function isRemoteImage(source: string): boolean {
+export function isRemoteResource(source: string): boolean {
   return /^https?:\/\//i.test(source) || source.startsWith('//')
+}
+
+export function workspaceImageSources(text: string): string[] {
+  const matches = String(text || '').match(/(?:[\w.-]+\/)*[\w.-]+\.(?:avif|bmp|gif|jpe?g|png|svg|webp)(?:\?[^\s`)'"<>]*)?/gi) || []
+  return Array.from(new Set(matches.map(value => value.trim()).filter(Boolean)))
 }

@@ -16,6 +16,8 @@ import type { MarkdownRenderOptions, MarkdownRenderResult } from './types'
 import 'highlight.js/styles/github-dark.css'
 import 'katex/dist/katex.min.css'
 
+const SAFE_MARKDOWN_URI = /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|matrix|blob):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i
+
 const processor = unified()
   .use(remarkParse)
   .use(remarkGfm)
@@ -66,5 +68,6 @@ function sanitizeMarkdownHtml(html: string): string {
   return DOMPurify.sanitize(html, {
     USE_PROFILES: { html: true, svg: true, mathMl: true },
     ADD_ATTR: ['target', 'rel', 'class'],
+    ALLOWED_URI_REGEXP: SAFE_MARKDOWN_URI,
   })
 }

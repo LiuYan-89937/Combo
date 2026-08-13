@@ -27,6 +27,15 @@ export function contextWindowView(event: FactoryFrontendEvent): ContextWindowVie
     source: optionalString(payload.source),
     modelRole: optionalString(payload.model_role),
     nodeId: optionalString(payload.node_id || event.node_id),
+    compressionStatus: optionalString(payload.compression_status || (
+      event.event_type === 'context_compression_started'
+        ? 'running'
+        : event.event_type === 'context_compression_completed'
+          ? 'completed'
+          : event.event_type === 'context_compression_failed'
+            ? 'failed'
+            : null
+    )),
     updatedAt: event.timestamp,
     payload,
   }

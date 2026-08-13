@@ -3,8 +3,17 @@
     v-model:show="show"
     preset="card"
     :title="modalTitle"
-    style="width: min(760px, calc(100vw - 32px))"
+    :mask-closable="!busy"
+    :closable="!busy"
+    style="width: min(900px, calc(100vw - 32px))"
   >
+    <div class="install-steps" aria-label="MCP connection workflow">
+      <div v-for="step in workflowSteps" :key="step.key" :class="step.state">
+        <i>{{ step.state === 'done' ? '✓' : step.number }}</i>
+        <span><strong>{{ step.label }}</strong><small>{{ step.description }}</small></span>
+      </div>
+    </div>
+
     <div v-if="!item" class="mode-switch">
       <n-radio-group v-model:value="mode" size="small" class="soft-segmented-control">
         <n-radio-button value="import">{{ t('extensions.mcpImportMode') }}</n-radio-button>
@@ -114,11 +123,24 @@
       </n-form>
     </n-spin>
 
-    <n-alert
-      v-if="installResult"
-      :type="installResultType"
-      :title="installResult.message || t('extensions.connectionFailed')"
-    >
+    <section v-if="installResult" class="install-console" :class="String(installResult.status || '')">
+      <header>
+        <div>
+          <span class="console-kicker">MCP CONNECTION</span>
+          <strong>{{ installResultTitle }}</strong>
+        </div>
+        <n-tag size="small" :type="installResultType" :bordered="false">{{ installStatusLabel }}</n-tag>
+      </header>
+      <div v-if="installLogs.length" class="install-timeline">
+        <div v-for="(entry, index) in installLogs" :key="`${entry.stage}-${index}`" class="install-event">
+          <i />
+          <div>
+            <strong>{{ stageLabel(entry.stage) }}</strong>
+            <span>{{ stageDetail(entry) }}</span>
+          </div>
+        </div>
+      </div>
+      <p v-if="installResult.error" class="install-error">{{ installResult.error }}</p>
       <div v-for="test in installResult.tests || []" :key="test.server_id" class="test-row">
         <div class="test-heading">
           <strong>{{ test.server_id }}</strong>
@@ -132,7 +154,7 @@
         </div>
         <McpTestResultDetails :result="test" />
       </div>
-    </n-alert>
+    </section>
 
     <template #footer>
       <n-space justify="space-between">
@@ -243,6 +265,38 @@ const installResultType = computed(() => {
   if (props.installResult?.status === 'running') return 'info'
   if (props.installResult?.status === 'cancelled') return 'warning'
   return 'error'
+})
+const installLogs = computed<Array<{ stage: string; detail: Record<string, unknown> }>>(() => (
+  Array.isArray(props.installResult?.logs) ? props.installResult.logs : []
+))
+const installResultTitle = computed(() => {
+  if (props.installResult?.status === 'ok') return t('extensions.mcpPublishSucceeded')
+  if (props.installResult?.status === 'cancelled') return t('extensions.mcpInstallCancelled')
+  if (props.installResult?.status === 'failed') return t('extensions.connectionFailed')
+  return stageLabel(String(props.installResult?.stage || 'validating'))
+})
+const installStatusLabel = computed(() => {
+  if (props.installResult?.status === 'ok') return t('extensions.mcpInstallSucceeded')
+  if (props.installResult?.status === 'cancelled') return t('extensions.mcpInstallCancelled')
+  if (props.installResult?.status === 'failed') return t('extensions.connectionFailed')
+  return t('extensions.mcpInstallRunning')
+})
+const workflowSteps = computed(() => {
+  const order = ['configure', 'connect', 'discover', 'publish']
+  const current = workflowIndex(String(props.installResult?.stage || 'configure'))
+  const labels = [
+    [t('extensions.mcpStepConfigure'), t('extensions.mcpStepConfigureHint')],
+    [t('extensions.mcpStepConnect'), t('extensions.mcpStepConnectHint')],
+    [t('extensions.mcpStepDiscover'), t('extensions.mcpStepDiscoverHint')],
+    [t('extensions.mcpStepPublish'), t('extensions.mcpStepPublishHint')],
+  ]
+  return order.map((key, index) => ({
+    key,
+    number: index + 1,
+    label: labels[index][0],
+    description: labels[index][1],
+    state: props.installResult?.status === 'ok' || index < current ? 'done' : index === current ? 'active' : 'pending',
+  }))
 })
 const formData = ref(emptyForm())
 
@@ -440,9 +494,11 @@ function bindingRecordInput(text: string, original: unknown): Record<string, any
     const target = (separator < 0 ? line : line.slice(0, separator)).trim()
     const value = (separator < 0 ? target : line.slice(separator + 1)).trim()
     const existing = previous[target]
-    const literal = existing && typeof existing === 'object' && !Array.isArray(existing)
-      && (existing as Record<string, unknown>).source === 'literal'
-    return [target, literal ? { source: 'literal', value } : { source: 'process_environment', name: value }]
+    const processEnvironment = existing && typeof existing === 'object' && !Array.isArray(existing)
+      && (existing as Record<string, unknown>).source === 'process_environment'
+    return [target, processEnvironment
+      ? { source: 'process_environment', name: value }
+      : { source: 'literal', value }]
   }))
 }
 
@@ -451,6 +507,45 @@ function testStatusLabel(status: unknown): string {
   if (status === 'running') return t('extensions.mcpInstallRunning')
   if (status === 'cancelled') return t('extensions.mcpInstallCancelled')
   return t('extensions.connectionFailed')
+}
+
+function workflowIndex(stage: string): number {
+  if (stage === 'published') return 3
+  if (stage === 'catalog_discovered' || stage === 'tools_discovered' || stage === 'capabilities_prepared') return 2
+  if (stage === 'connecting' || stage === 'initialized') return 1
+  return 0
+}
+
+function stageLabel(stage: string): string {
+  const labels: Record<string, string> = {
+    validating: t('extensions.mcpStageValidating'),
+    connecting: t('extensions.mcpStageConnecting'),
+    initialized: t('extensions.mcpStageInitialized'),
+    tools_discovered: t('extensions.mcpStageToolsDiscovered'),
+    catalog_discovered: t('extensions.mcpStageCatalogDiscovered'),
+    capabilities_prepared: t('extensions.mcpStageCapabilitiesPrepared'),
+    published: t('extensions.mcpStagePublished'),
+  }
+  return labels[stage] || stage
+}
+
+function stageDetail(entry: { stage: string; detail: Record<string, unknown> }): string {
+  const detail = entry.detail || {}
+  if (entry.stage === 'connecting') return String(detail.transport || '')
+  if (entry.stage === 'initialized') {
+    const server = [detail.server_name, detail.server_version].filter(Boolean).join(' ')
+    const protocol = detail.protocol_version ? `MCP ${detail.protocol_version}` : ''
+    const capabilities = Array.isArray(detail.capabilities) ? detail.capabilities.join(' · ') : ''
+    return [server, protocol, capabilities].filter(Boolean).join(' · ')
+  }
+  if (entry.stage === 'catalog_discovered' || entry.stage === 'tools_discovered' || entry.stage === 'capabilities_prepared') {
+    return t('extensions.mcpDiscoveredCatalogCounts', {
+      tools: Number(detail.tool_count || 0),
+      resources: Number(detail.resource_count || 0),
+      prompts: Number(detail.prompt_count || 0),
+    })
+  }
+  return String(detail.server_id || '')
 }
 </script>
 
@@ -468,4 +563,9 @@ function testStatusLabel(status: unknown): string {
 .section-copy { margin-bottom: 12px; }
 .section-copy span,.switch-row small { color: var(--app-text-muted); font-size: 10px; }
 .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.install-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 20px; overflow: hidden; border: 1px solid var(--app-border); border-radius: 13px; }
+.install-steps > div { display: flex; min-width: 0; align-items: center; gap: 9px; padding: 11px 12px; border-right: 1px solid var(--app-border); }
+.install-steps > div:last-child { border-right: 0; }.install-steps i { display: grid; flex: none; width: 22px; height: 22px; place-items: center; border: 1px solid var(--app-border); border-radius: 50%; font-size: 9px; font-style: normal; }.install-steps span { display: grid; min-width: 0; gap: 1px; }.install-steps strong { font-size: 10px; }.install-steps small { overflow: hidden; color: var(--app-text-muted); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }.install-steps .active { background: color-mix(in srgb, var(--app-text) 5%, transparent); }.install-steps .active i,.install-steps .done i { color: var(--app-surface); border-color: var(--app-text); background: var(--app-text); }.install-steps .pending { opacity: .48; }
+.install-console { display: grid; gap: 13px; margin-top: 18px; padding: 15px; border: 1px solid var(--app-border); border-radius: 13px; background: var(--app-surface); }.install-console header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }.install-console header > div { display: grid; gap: 2px; }.console-kicker { color: var(--app-text-muted); font-size: 8px; font-weight: 800; letter-spacing: .14em; }.install-console header strong { font-size: 12px; }.install-timeline { display: grid; max-height: 230px; overflow-y: auto; }.install-event { position: relative; display: grid; grid-template-columns: 12px minmax(0, 1fr); gap: 9px; min-height: 42px; }.install-event::before { position: absolute; top: 14px; bottom: 0; left: 4px; width: 1px; content: ''; background: var(--app-border); }.install-event:last-child::before { display: none; }.install-event > i { z-index: 1; width: 9px; height: 9px; margin-top: 3px; border: 2px solid var(--app-surface); border-radius: 50%; background: var(--app-text); }.install-event > div { display: grid; align-content: start; gap: 3px; padding-bottom: 11px; }.install-event strong { font-size: 10px; }.install-event span { color: var(--app-text-muted); font-family: var(--app-font-mono); font-size: 9px; overflow-wrap: anywhere; }.install-error { margin: 0; padding: 10px; color: var(--app-error); border: 1px solid color-mix(in srgb, var(--app-error) 30%, transparent); border-radius: 9px; font-family: var(--app-font-mono); font-size: 10px; white-space: pre-wrap; }
+@media (max-width: 680px) { .install-steps { grid-template-columns: 1fr 1fr; }.install-steps > div:nth-child(2) { border-right: 0; }.install-steps > div:nth-child(-n + 2) { border-bottom: 1px solid var(--app-border); } }
 </style>

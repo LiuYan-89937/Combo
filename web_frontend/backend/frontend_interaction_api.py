@@ -364,8 +364,8 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
         approval_mode = payload.approval_mode or (current.approval_mode if current else "ask")
         if approval_mode not in {"auto", "ask", "always_approval"}:
             raise HTTPException(status_code=422, detail="unsupported approval_mode")
-        execution_preference = payload.execution_preference or (current.execution_preference if current else "auto")
-        if execution_preference not in {"auto", "react", "plan_and_execute"}:
+        execution_preference = payload.execution_preference or (current.execution_preference if current else "react")
+        if execution_preference not in {"react", "plan_and_execute"}:
             raise HTTPException(status_code=422, detail="unsupported execution_preference")
         now = utc_now_text()
         policy = UserRuntimePolicy(
@@ -1215,13 +1215,13 @@ def _synchronize_policy(
         raise HTTPException(status_code=422, detail="unsupported approval_mode")
     now = utc_now_text()
     requested_execution_preference = str(command_payload.get("execution_preference") or "").strip()
-    if requested_execution_preference and requested_execution_preference not in {"auto", "react", "plan_and_execute"}:
+    if requested_execution_preference and requested_execution_preference not in {"react", "plan_and_execute"}:
         raise HTTPException(status_code=422, detail="unsupported execution_preference")
     policy = UserRuntimePolicy(
         principal_id=principal_id,
         policy_id=current.policy_id if current is not None else uuid4().hex,
         revision=current.revision + 1 if current is not None else 1,
-        execution_preference=(requested_execution_preference or (current.execution_preference if current is not None else "auto")),
+        execution_preference=(requested_execution_preference or (current.execution_preference if current is not None else "react")),
         approval_mode=(
             requested_approval_mode
             or (current.approval_mode if current is not None else "ask")
@@ -1393,22 +1393,25 @@ def _interrupt_id(
 
 def _session_views(backend: Any, principal_id: str) -> list[dict[str, Any]]:
     summaries = backend.application.stores.conversations.list_for_principal(principal_id)
-    return [
-        {
+    views = []
+    for item in summaries:
+        if item.status != "active":
+            continue
+        first_user_input = _first_user_text(backend, item.session_id)
+        display_title = first_user_input if item.title in {"新对话", "新会话"} and first_user_input else item.title
+        views.append({
             "session_id": item.session_id,
             "workspace_id": item.workspace_id,
             "package_id": SYSTEM_CHAT_PACKAGE_ID,
             "session_kind": "agent_package",
             "visible_in_agent_session_list": True,
-            "display_title": item.title,
-            "first_user_input": _first_user_text(backend, item.session_id),
+            "display_title": display_title,
+            "first_user_input": first_user_input,
             "turn_count": _turn_count(backend, item.session_id),
             "created_at": item.created_at,
             "updated_at": item.updated_at,
-        }
-        for item in summaries
-        if item.status == "active"
-    ]
+        })
+    return views
 
 
 def _session_snapshot(backend: Any, principal_id: str, session_id: str) -> dict[str, Any]:
@@ -1461,6 +1464,7 @@ def _session_snapshot(backend: Any, principal_id: str, session_id: str) -> dict[
             for message in grouped.get(turn.turn_id, [])
             if (
                 view := _message_view(
+                    backend,
                     message,
                     projected_tool_call_ids=projected_tool_call_ids,
                     request_id=frontend_request_id,
@@ -1565,6 +1569,7 @@ def _session_current_plan(backend: Any, session_id: str) -> dict[str, Any] | Non
 
 
 def _message_view(
+    backend: Any,
     message: Any,
     *,
     projected_tool_call_ids: set[str],
@@ -1572,7 +1577,7 @@ def _message_view(
     turn_status: str,
 ) -> dict[str, Any] | None:
     if message.visibility == "internal":
-        return None
+        return _delegated_delivery_message_view(backend, message, request_id=request_id)
     parts = []
     for part in message.parts:
         value = part.model_dump(mode="json")
@@ -1604,6 +1609,51 @@ def _message_view(
     }
 
 
+def _delegated_delivery_message_view(
+    backend: Any,
+    message: Any,
+    *,
+    request_id: str | None,
+) -> dict[str, Any] | None:
+    event_ids = tuple(str(item or "").strip() for item in message.notification_event_ids)
+    if len(event_ids) != 1 or not event_ids[0]:
+        return None
+    with backend.application.database.connection(query_only=True) as connection:
+        row = connection.execute(
+            "select payload_json from delegated_task_events where event_id = ?",
+            (event_ids[0],),
+        ).fetchone()
+    if row is None:
+        return None
+    from agent_factory.runtime_protocol import DelegatedTaskEvent
+    event = DelegatedTaskEvent.model_validate_json(str(row["payload_json"]))
+    if event.event_type not in {"result", "failed", "cancelled"}:
+        return None
+    payload = event.payload if isinstance(event.payload, dict) else {}
+    task_name = str(payload.get("agent_name") or "").strip()
+    return {
+        "id": message.message_id,
+        "role": "system",
+        "parts": [{
+            "id": f"{message.message_id}:delivery",
+            "type": "delegated_delivery",
+            "taskId": event.task_id,
+            "taskName": task_name,
+            "terminalStatus": event.event_type,
+        }],
+        "timestamp": message.created_at,
+        "status": "completed",
+        "metadata": {
+            "request_id": request_id,
+            "visibility": message.visibility,
+            "delegated_delivery": True,
+            "task_id": event.task_id,
+            "task_name": task_name,
+            "terminal_status": event.event_type,
+        },
+    }
+
+
 def _turn_dispatch_state(turn_status: str) -> str:
     return {
         "queued": "queued",
@@ -1623,6 +1673,14 @@ def _frontend_message_part(
     kind: str,
     value: dict[str, Any],
 ) -> dict[str, Any]:
+    if kind == "text":
+        return {
+            "id": part_id,
+            "type": "text",
+            "format": "markdown",
+            "text": value.get("text") or "",
+            "status": "completed",
+        }
     if kind == "tool_call":
         return {
             "id": part_id,
@@ -1641,6 +1699,8 @@ def _frontend_message_part(
             "output": value.get("output"),
             "error": value.get("error_code"),
             "status": "failed" if value.get("error_code") else value.get("status") or "completed",
+            "startedAt": value.get("started_at"),
+            "updatedAt": value.get("completed_at"),
         }
     return {"id": part_id, "type": kind, **value}
 
@@ -1734,7 +1794,7 @@ def _policy_or_none(backend: Any, principal_id: str) -> UserRuntimePolicy | None
 def _runtime_preferences_view(policy: UserRuntimePolicy | None) -> dict[str, Any]:
     return {
         "revision": policy.revision if policy else 0,
-        "execution_preference": policy.execution_preference if policy else "auto",
+        "execution_preference": policy.execution_preference if policy else "react",
         "model_profile_id": policy.model_profile_id if policy else None,
         "reasoning_intensity": policy.reasoning_intensity if policy else None,
         "approval_mode": policy.approval_mode if policy else "ask",

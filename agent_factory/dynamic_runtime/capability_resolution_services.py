@@ -332,6 +332,13 @@ def _version_satisfies(resolved_version: str, constraint: str) -> tuple[bool, st
     normalized = str(constraint or "").strip()
     if normalized == "*":
         return True, "dependency accepts every published version"
+    if normalized.startswith("==="):
+        expected = normalized[3:]
+        if not expected:
+            return False, "arbitrary exact dependency version must not be empty"
+        if str(resolved_version or "").strip() == expected:
+            return True, "arbitrary exact dependency version is satisfied"
+        return False, "published capability version differs from the required exact version"
     try:
         specifier = SpecifierSet(normalized)
         version = Version(str(resolved_version or "").strip())

@@ -353,7 +353,6 @@ export const useAgentStore = defineStore('agent', () => {
     sessions
       .filter((session) => (
         session.package_id
-        && session.package_id !== SYSTEM_CHAT_PACKAGE_ID
         && session.session_id
         && isStandaloneAgentSession(session)
       ))
@@ -371,7 +370,9 @@ export const useAgentStore = defineStore('agent', () => {
 
   function filterRecentSessionsByPackages(): void {
     const packageIds = new Set(agentPackages.value.map((pkg) => pkg.package_id))
-    recentAgentSessions.value = recentAgentSessions.value.filter((session) => packageIds.has(session.package_id))
+    recentAgentSessions.value = recentAgentSessions.value.filter((session) => (
+      session.package_id === SYSTEM_CHAT_PACKAGE_ID || packageIds.has(session.package_id)
+    ))
   }
 
   function preferredRecentSession(): AgentRecentSessionView | null {

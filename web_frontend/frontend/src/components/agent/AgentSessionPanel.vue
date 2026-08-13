@@ -115,6 +115,7 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{
   requestNewSession: [packageId: string, initialWorkspaceId: string | null]
+  interactionLock: [locked: boolean]
 }>()
 
 const agentStore = useAgentStore()
@@ -157,14 +158,14 @@ function enterExistingSession(sessionId: string) {
 
 function confirmDeleteSession(session: { session_id: string; display_title: string | null; first_user_input: string | null }) {
   const title = session.display_title || session.first_user_input || t('sessions.newSession')
+  emit('interactionLock', true)
   dialog.warning({
     title: t('agentSessions.deleteTitle'),
     content: t('agentSessions.deleteContent', { title }),
     positiveText: t('common.delete'),
     negativeText: t('common.cancel'),
-    onPositiveClick: () => {
-      void commands.deleteAgentPackageSession(props.packageId, session.session_id)
-    },
+    onPositiveClick: () => commands.deleteAgentPackageSession(props.packageId, session.session_id),
+    onAfterLeave: () => emit('interactionLock', false),
   })
 }
 

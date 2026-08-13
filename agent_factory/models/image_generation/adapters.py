@@ -106,7 +106,7 @@ class DashScopeWanxImageAdapter:
             ),
         }
         response = _client(self.settings).post(
-            _endpoint(self.settings.base_url, "/api/v1/services/aigc/multimodal-generation/generation"),
+            _endpoint(self.settings.base_url, "/services/aigc/multimodal-generation/generation"),
             headers=_json_headers(self.settings.api_key),
             json=payload,
         )
@@ -117,7 +117,7 @@ class DashScopeWanxImageAdapter:
         return _parse_nested_image_sources(body)
 
     def _poll(self, task_id: str) -> dict[str, Any]:
-        poll_path = f"/api/v1/tasks/{task_id}"
+        poll_path = f"/tasks/{task_id}"
         deadline = time.monotonic() + _timeout(self.settings)
         last_body: dict[str, Any] = {}
         while time.monotonic() < deadline:
@@ -190,12 +190,10 @@ class VolcengineSeedreamImageAdapter:
 
 def adapter_for_image_provider(settings: ImageGenerationSettings) -> ImageGenerationAdapter:
     provider = settings.provider.strip().lower()
-    if provider == "openai_image":
+    if provider == "openai":
         return OpenAIImageAdapter(settings)
-    if provider in {"qwen", "dashscope_wanx"}:
+    if provider == "dashscope":
         return DashScopeWanxImageAdapter(settings)
-    if provider == "volcengine_seedream":
-        return VolcengineSeedreamImageAdapter(settings)
     raise ImageGenerationAdapterError(f"unsupported image generation provider: {settings.provider}")
 
 

@@ -411,11 +411,6 @@ LEGACY_PATTERNS = {
         r"def _resource_summary\(",
         re.IGNORECASE,
     ),
-    "orchestration_model_bypass": re.compile(
-        r"StructuredRouteAnalyzer|with_structured_output\(RouteDecision\)|"
-        r"structured\.ainvoke\(",
-        re.IGNORECASE,
-    ),
     "detached_graph_checkpoint_lifecycle": re.compile(
         r"_run_graph_with_control|graph_detached|daemon\s*=\s*True|"
         r"graph_app\.get_state\(config\)",
@@ -1677,16 +1672,6 @@ LEGACY_COMPONENTS = (
             "agent_factory/tooling/resource_context.py",
             "agent_factory/tooling/gateway.py",
             "agent_factory/runtime_protocol/observations.py",
-        ],
-    },
-    {
-        "component": "router_model_execution_ownership",
-        "classification": "route_execution_analysis_through_model_execution_coordinator",
-        "execution_unit": 7,
-        "paths": [
-            "agent_factory/dynamic_runtime/route_analyzer.py",
-            "agent_factory/dynamic_runtime/main_turn.py",
-            "agent_factory/runtime_kernel/model_operations/service.py",
         ],
     },
     {

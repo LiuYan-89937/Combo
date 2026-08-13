@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import re
+from pathlib import Path
 from time import perf_counter
 from typing import Any, Callable
 
@@ -16,10 +18,15 @@ from agent_factory.model_pool import (
     ModelPoolSelector,
     ModelPoolStore,
     ModelUsageStore,
+    ModelToolBinding,
     ModelSelectionRequest,
     list_model_pool_provider_profiles,
 )
 from agent_factory.model_pool.resolver import resolve_chat_model_profile
+from agent_factory.model_pool.resolver import resolve_image_generation_model_profile
+from agent_factory.models.image_generation import ImageGenerationRequest
+from agent_factory.artifact_system import ArtifactStore
+from tempfile import TemporaryDirectory
 from agent_factory.model_pool.schema import (
     DEFAULT_MODEL_COMPRESSION_TRIGGER_TOKENS,
     DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS,
@@ -33,6 +40,7 @@ def create_model_pool_router(
     *,
     usage_store: ModelUsageStore,
     on_embedding_configuration_changed: Callable[[], None] | None = None,
+    on_image_generation_configuration_changed: Callable[[], None] | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/model-pool")
 
@@ -40,6 +48,10 @@ def create_model_pool_router(
         reset_embedding_model()
         if on_embedding_configuration_changed is not None:
             on_embedding_configuration_changed()
+
+    def image_generation_configuration_changed() -> None:
+        if on_image_generation_configuration_changed is not None:
+            on_image_generation_configuration_changed()
 
     @router.get("/providers")
     def list_providers():
@@ -56,6 +68,7 @@ def create_model_pool_router(
         try:
             credential = store.create_credential(_credential_from_payload(payload, store=store))
             embedding_configuration_changed()
+            image_generation_configuration_changed()
         except Exception as exc:
             raise _http_error(exc) from exc
         return {"credential": credential.to_public().model_dump(mode="json")}
@@ -66,6 +79,7 @@ def create_model_pool_router(
         try:
             credential = store.patch_credential(credential_id, payload)
             embedding_configuration_changed()
+            image_generation_configuration_changed()
         except Exception as exc:
             raise _http_error(exc) from exc
         return {"credential": credential.to_public().model_dump(mode="json")}
@@ -77,6 +91,7 @@ def create_model_pool_router(
             deleted = store.delete_credential(credential_id)
             if deleted:
                 embedding_configuration_changed()
+                image_generation_configuration_changed()
             return {"deleted": deleted}
         except Exception as exc:
             raise _http_error(exc) from exc
@@ -118,6 +133,7 @@ def create_model_pool_router(
         try:
             saved = ModelPoolStore().save_infrastructure_bindings(bindings)
             embedding_configuration_changed()
+            image_generation_configuration_changed()
         except Exception as exc:
             raise _http_error(exc) from exc
         return {"bindings": saved}
@@ -125,8 +141,18 @@ def create_model_pool_router(
     @router.get("/usage")
     async def usage_summary(group_by: str = "model", days: int = 14):
         value = group_by.strip().lower()
-        if value not in {"model", "provider", "runtime_role", "strategy", "workspace", "session"}:
+        if value not in {"model", "credential"}:
             raise HTTPException(status_code=400, detail="unsupported usage group_by")
+        if value == "credential":
+            store = ModelPoolStore()
+            profiles = store.list_profiles()
+            credentials = {item.credential_id: item for item in store.list_credentials()}
+            return usage_store.summary(
+                group_by="credential",
+                days=days,
+                model_profile_groups={item.profile_id: item.credential_id for item in profiles},
+                group_labels={key: item.display_name for key, item in credentials.items()},
+            )
         return usage_store.summary(group_by=value, days=days)
 
     @router.post("/profiles")
@@ -136,6 +162,7 @@ def create_model_pool_router(
             profile = store.create_profile(_profile_from_payload(payload, store=store))
             credential = store.get_credential(profile.credential_id)
             embedding_configuration_changed()
+            image_generation_configuration_changed()
         except Exception as exc:
             raise _http_error(exc) from exc
         return {"profile": profile.to_public(credential).model_dump(mode="json")}
@@ -147,6 +174,7 @@ def create_model_pool_router(
             profile = store.patch_profile(profile_id, payload)
             credential = store.get_credential(profile.credential_id)
             embedding_configuration_changed()
+            image_generation_configuration_changed()
         except Exception as exc:
             raise _http_error(exc) from exc
         return {"profile": profile.to_public(credential).model_dump(mode="json")}
@@ -157,6 +185,7 @@ def create_model_pool_router(
             deleted = ModelPoolStore().delete_profile(profile_id)
             if deleted:
                 embedding_configuration_changed()
+                image_generation_configuration_changed()
             return {"deleted": deleted}
         except Exception as exc:
             raise _http_error(exc) from exc
@@ -171,7 +200,7 @@ def create_model_pool_router(
             elif profile.kind == "embedding":
                 result = await asyncio.to_thread(_ping_embedding_profile, profile_id, store)
             else:
-                raise ValueError("connection testing does not support image generation profiles")
+                result = await asyncio.to_thread(_ping_image_profile, profile_id, store)
         except Exception as exc:
             raise HTTPException(status_code=502, detail=_probe_error_detail(exc)) from exc
         return result
@@ -183,6 +212,7 @@ def create_model_pool_router(
         deleted = {profile_id: store.delete_profile(profile_id) for profile_id in ids}
         if any(deleted.values()):
             embedding_configuration_changed()
+            image_generation_configuration_changed()
         return {"deleted": deleted}
 
     @router.post("/select")
@@ -268,6 +298,38 @@ def _ping_embedding_profile(profile_id: str, store: ModelPoolStore) -> dict[str,
         "latency_ms": latency_ms,
         "dimensions": actual_dims,
     }
+
+
+def _ping_image_profile(profile_id: str, store: ModelPoolStore) -> dict[str, Any]:
+    with TemporaryDirectory(prefix="combo-image-model-test-") as temporary:
+        resolved = resolve_image_generation_model_profile(
+            ModelToolBinding(
+                profile_id=profile_id,
+                capability="image_output",
+                selection_source="manual",
+                reason="Explicit image model connection test",
+            ),
+            artifact_store=ArtifactStore(root=temporary, allowed_kinds=("artifact",)),
+            store=store,
+        )
+        started_at = perf_counter()
+        assets = resolved.service.generate(ImageGenerationRequest(
+            operation="text_to_image",
+            prompt="A minimal black circle centered on a clean white background.",
+            count=1,
+        ))
+        latency_ms = round((perf_counter() - started_at) * 1000)
+        if len(assets) != 1:
+            raise ValueError("image model connection test did not return exactly one image")
+        asset = assets[0]
+        image_path = Path(temporary) / asset.relative_path
+        return {
+            "status": "ok",
+            "profile_id": profile_id,
+            "latency_ms": latency_ms,
+            "image_base64": base64.b64encode(image_path.read_bytes()).decode("ascii"),
+            "mime_type": asset.mime_type,
+        }
 
 
 def _response_text(response: Any) -> str:

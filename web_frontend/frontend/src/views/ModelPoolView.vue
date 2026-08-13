@@ -58,7 +58,6 @@
                   <n-space>
                     <n-switch :value="profile.enabled" @update:value="(value) => setProfileEnabled(profile, value)" />
                     <n-button
-                      v-if="profile.kind !== 'image_generation'"
                       size="small"
                       :loading="testingProfileId === profile.profile_id"
                       @click="pingProfile(profile)"
@@ -101,6 +100,10 @@
               </n-form-item>
               <n-form-item :label="t('modelPool.embeddingModel')">
                 <n-select v-model:value="embeddingBinding" clearable :options="bindingOptions('embedding')" />
+              </n-form-item>
+              <n-form-item :label="t('modelPool.defaultImageGenerationModel')">
+                <n-select v-model:value="imageGenerationBinding" clearable :options="bindingOptions('image_generation')" />
+                <template #feedback>{{ t('modelPool.defaultImageGenerationModelHint') }}</template>
               </n-form-item>
             </div>
           </div>
@@ -165,8 +168,7 @@
             <n-space align="center" wrap>
               <n-radio-group v-model:value="usageGroupBy" class="soft-segmented-control" @update:value="loadUsage">
                 <n-radio-button value="model">{{ t('modelPool.usageByModel') }}</n-radio-button>
-                <n-radio-button value="provider">{{ t('modelPool.usageByProvider') }}</n-radio-button>
-                <n-radio-button value="agent">{{ t('modelPool.usageByAgent') }}</n-radio-button>
+                <n-radio-button value="credential">{{ t('modelPool.usageByCredential') }}</n-radio-button>
               </n-radio-group>
               <n-radio-group v-model:value="usageChartType" class="soft-segmented-control">
                 <n-radio-button value="line">{{ t('modelPool.usageLineChart') }}</n-radio-button>
@@ -301,12 +303,12 @@
         </n-form-item>
         <n-form-item v-else-if="profileForm.kind === 'image_generation'" :label="t('modelPool.imageCapabilities')">
           <n-space vertical>
-            <n-checkbox v-model:checked="profileForm.text_to_image">{{ t('modelPool.textToImage') }}</n-checkbox>
-            <n-checkbox v-model:checked="profileForm.image_to_image">{{ t('modelPool.imageToImage') }}</n-checkbox>
-            <n-checkbox v-model:checked="profileForm.image_edit">{{ t('modelPool.imageEdit') }}</n-checkbox>
-            <n-checkbox v-model:checked="profileForm.multi_image_reference">{{ t('modelPool.multiImageReference') }}</n-checkbox>
-            <n-checkbox v-model:checked="profileForm.batch_generation">{{ t('modelPool.batchGeneration') }}</n-checkbox>
-            <n-checkbox v-model:checked="profileForm.async_job">{{ t('modelPool.asyncJob') }}</n-checkbox>
+            <n-checkbox v-model:checked="profileForm.text_to_image" :disabled="!providerImageCapability('text_to_image')">{{ t('modelPool.textToImage') }}</n-checkbox>
+            <n-checkbox v-model:checked="profileForm.image_to_image" :disabled="!providerImageCapability('image_to_image')">{{ t('modelPool.imageToImage') }}</n-checkbox>
+            <n-checkbox v-model:checked="profileForm.image_edit" :disabled="!providerImageCapability('image_edit')">{{ t('modelPool.imageEdit') }}</n-checkbox>
+            <n-checkbox v-model:checked="profileForm.multi_image_reference" :disabled="!providerImageCapability('multi_image_reference')">{{ t('modelPool.multiImageReference') }}</n-checkbox>
+            <n-checkbox v-model:checked="profileForm.batch_generation" :disabled="!providerImageCapability('batch_generation')">{{ t('modelPool.batchGeneration') }}</n-checkbox>
+            <n-text depth="3">{{ t('modelPool.imageCapabilitiesDeclarationHint') }}</n-text>
           </n-space>
         </n-form-item>
         <div v-if="profileForm.kind === 'chat'" class="form-grid">
@@ -378,6 +380,18 @@
           <n-button type="primary" :loading="saving" @click="saveProfile">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
+    </n-modal>
+    <n-modal
+      :show="Boolean(imageTestPreview)"
+      preset="card"
+      :title="t('modelPool.imageTestPreview')"
+      :style="{ width: 'min(640px, calc(100vw - 40px))' }"
+      @update:show="value => { if (!value) imageTestPreview = null }"
+    >
+      <div v-if="imageTestPreview" class="image-test-preview">
+        <img :src="imageTestPreview.url" :alt="imageTestPreview.model" />
+        <n-text depth="3">{{ imageTestPreview.model }}</n-text>
+      </div>
     </n-modal>
   </div>
 </template>
@@ -453,12 +467,14 @@ const embeddingSetupRequested = computed(() => route.query.setup === 'embedding'
 const saving = ref(false)
 const savingBindings = ref(false)
 const testingProfileId = ref<string | null>(null)
+const imageTestPreview = ref<{ url: string; model: string } | null>(null)
 const providers = ref<ModelProviderProfile[]>([])
 const credentials = ref<ModelPoolCredential[]>([])
 const profiles = ref<ModelPoolProfile[]>([])
 const modelDefaults = ref<ModelPoolDefaults | null>(null)
 const taskModelBinding = ref<string | null>(null)
 const embeddingBinding = ref<string | null>(null)
+const imageGenerationBinding = ref<string | null>(null)
 const usageLoading = ref(false)
 const usageGroupBy = ref<ModelUsageGroupBy>('model')
 const usageChartType = ref<'line' | 'bar'>('line')
@@ -497,7 +513,6 @@ const profileForm = reactive({
   image_edit: false,
   multi_image_reference: false,
   batch_generation: true,
-  async_job: false,
   max_input_tokens: null as number | null,
   compression_trigger_tokens: null as number | null,
   max_output_tokens: null as number | null,
@@ -671,6 +686,7 @@ async function refresh(): Promise<void> {
     modelDefaults.value = defaultsData.defaults
     taskModelBinding.value = defaultsData.bindings.task || null
     embeddingBinding.value = defaultsData.bindings.embedding || null
+    imageGenerationBinding.value = defaultsData.bindings.image_generation || null
     usageSummary.value = usageData
   } catch (error) {
     message.error(error instanceof Error ? error.message : t('common.requestFailed'))
@@ -696,9 +712,11 @@ async function saveInfrastructureBindings(): Promise<void> {
     const response = await modelPoolApi.saveInfrastructureBindings({
       task: taskModelBinding.value,
       embedding: embeddingBinding.value,
+      image_generation: imageGenerationBinding.value,
     })
     taskModelBinding.value = response.bindings.task || null
     embeddingBinding.value = response.bindings.embedding || null
+    imageGenerationBinding.value = response.bindings.image_generation || null
     message.success(t('modelPool.bindingsSaved'))
   } catch (error) {
     message.error(error instanceof Error ? error.message : t('common.requestFailed'))
@@ -765,7 +783,6 @@ function openProfile(item?: ModelPoolProfile): void {
   profileForm.image_edit = item?.capabilities.image_edit ?? false
   profileForm.multi_image_reference = item?.capabilities.multi_image_reference ?? false
   profileForm.batch_generation = item?.capabilities.batch_generation ?? true
-  profileForm.async_job = item?.capabilities.async_job ?? false
   profileForm.max_input_tokens = item?.limits.max_input_tokens ?? modelDefaults.value?.context_window_tokens ?? null
   profileForm.compression_trigger_tokens = item?.limits.compression_trigger_tokens
     ?? modelDefaults.value?.compression_trigger_tokens
@@ -830,7 +847,6 @@ async function saveProfile(): Promise<void> {
         image_edit: isImageModel && profileForm.image_edit,
         multi_image_reference: isImageModel && profileForm.multi_image_reference,
         batch_generation: isImageModel && profileForm.batch_generation,
-        async_job: isImageModel && profileForm.async_job,
       },
       limits: {
         max_input_tokens: isImageModel || isEmbeddingModel ? null : profileForm.max_input_tokens,
@@ -887,9 +903,17 @@ async function pingProfile(profile: ModelPoolProfile): Promise<void> {
   testingProfileId.value = profile.profile_id
   try {
     const result = await modelPoolApi.pingProfile(profile.profile_id)
+    if (profile.kind === 'image_generation' && result.image_base64 && result.mime_type) {
+      imageTestPreview.value = {
+        url: `data:${result.mime_type};base64,${result.image_base64}`,
+        model: profile.display_name,
+      }
+    }
     message.success(profile.kind === 'embedding'
       ? t('modelPool.embeddingConnectionSucceeded', { latency: result.latency_ms, dimensions: result.dimensions || '-' })
-      : t('modelPool.connectionSucceeded', { latency: result.latency_ms }))
+      : profile.kind === 'image_generation'
+        ? t('modelPool.imageConnectionSucceeded', { latency: result.latency_ms })
+        : t('modelPool.connectionSucceeded', { latency: result.latency_ms }))
   } catch (error) {
     message.error(error instanceof Error ? error.message : t('common.requestFailed'))
   } finally {
@@ -934,11 +958,17 @@ function providerSupportsKind(providerId: string, kind: 'chat' | 'embedding' | '
   })
 }
 
+function providerImageCapability(name: string): boolean {
+  const credential = credentials.value.find(item => item.credential_id === profileForm.credential_id)
+  const provider = providers.value.find(item => item.provider_id === credential?.provider && item.kind === 'image_generation')
+  return provider?.capabilities?.[name] === true
+}
+
 function firstCredentialForKind(kind: 'chat' | 'embedding' | 'image_generation'): ModelPoolCredential | undefined {
   return credentials.value.find((item) => providerSupportsKind(item.provider, kind))
 }
 
-function bindingOptions(kind: 'chat' | 'embedding'): Array<{ label: string; value: string }> {
+function bindingOptions(kind: 'chat' | 'embedding' | 'image_generation'): Array<{ label: string; value: string }> {
   return profiles.value
     .filter((item) => item.kind === kind && item.enabled && item.credential?.enabled !== false && item.credential?.has_api_key)
     .map((item) => ({ label: `${item.display_name} · ${item.model_name}`, value: item.profile_id }))
@@ -967,7 +997,6 @@ function capabilityTags(profile: ModelPoolProfile): string[] {
     if (profile.capabilities.image_to_image) tags.push(t('modelPool.imageToImage'))
     if (profile.capabilities.image_edit) tags.push(t('modelPool.imageEdit'))
     if (profile.capabilities.multi_image_reference) tags.push(t('modelPool.multiImageReference'))
-    if (profile.capabilities.async_job) tags.push(t('modelPool.asyncJob'))
     return tags
   }
   if (profile.capabilities.tool_calling) tags.push(t('modelPool.toolsTag'))
@@ -1139,6 +1168,7 @@ function formatCost(value: number | null | undefined): string {
 .manager-empty {
   padding: 48px 0;
 }
+.image-test-preview { display: grid; gap: 10px; justify-items: center; }.image-test-preview img { display: block; max-width: 100%; max-height: 520px; object-fit: contain; }
 
 @media (max-width: 720px) {
   .context-bar,

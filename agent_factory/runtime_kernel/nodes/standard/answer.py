@@ -65,7 +65,7 @@ class CognitiveAnswerNode:
             return {
                 "messages": [
                     _ai_message_with_origin(
-                        "",
+                        result.assistant_draft or "",
                         tool_calls,
                         context,
                         reasoning_content=reasoning_content,

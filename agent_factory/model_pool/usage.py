@@ -10,6 +10,7 @@ from agent_factory.runtime_protocol import RuntimeModelUsage
 
 ModelUsageGroupBy = Literal[
     "model",
+    "credential",
     "provider",
     "runtime_role",
     "strategy",
@@ -34,6 +35,8 @@ class ModelUsageStore:
         group_by: ModelUsageGroupBy = "model",
         days: int = 14,
         limit: int = 12,
+        model_profile_groups: dict[str, str] | None = None,
+        group_labels: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         safe_days = min(max(int(days), 1), 365)
         safe_limit = min(max(int(limit), 1), 24)
@@ -49,7 +52,12 @@ class ModelUsageStore:
             ).fetchall()
         records = [dict(row) for row in rows]
         groups = sorted(
-            _group_records(records, group_by=group_by),
+            _group_records(
+                records,
+                group_by=group_by,
+                model_profile_groups=model_profile_groups,
+                group_labels=group_labels,
+            ),
             key=lambda item: int(item["totals"]["total_tokens"]),
             reverse=True,
         )
@@ -60,7 +68,13 @@ class ModelUsageStore:
             "until": datetime.now(UTC).date().isoformat(),
             "totals": _totals(records),
             "groups": groups,
-            "series": _series(records, group_by=group_by, visible_keys=visible_keys),
+            "series": _series(
+                records,
+                group_by=group_by,
+                visible_keys=visible_keys,
+                model_profile_groups=model_profile_groups,
+                group_labels=group_labels,
+            ),
         }
 
 
@@ -90,15 +104,21 @@ def insert_runtime_model_usage(conn: sqlite3.Connection, usage: RuntimeModelUsag
     )
 
 
-def _group_records(records: list[dict[str, Any]], *, group_by: ModelUsageGroupBy) -> list[dict[str, Any]]:
+def _group_records(
+    records: list[dict[str, Any]],
+    *,
+    group_by: ModelUsageGroupBy,
+    model_profile_groups: dict[str, str] | None,
+    group_labels: dict[str, str] | None,
+) -> list[dict[str, Any]]:
     buckets: dict[str, dict[str, Any]] = {}
     for record in records:
-        key = _group_key(record, group_by)
+        key = _group_key(record, group_by, model_profile_groups=model_profile_groups)
         group = buckets.setdefault(
             key,
             {
                 "key": key,
-                "label": key,
+                "label": (group_labels or {}).get(key, key),
                 "provider": str(record.get("provider") or ""),
                 "model_name": str(record.get("model_name") or ""),
                 "model_profile_id": str(record.get("model_profile_id") or ""),
@@ -118,10 +138,12 @@ def _series(
     *,
     group_by: ModelUsageGroupBy,
     visible_keys: set[str],
+    model_profile_groups: dict[str, str] | None,
+    group_labels: dict[str, str] | None,
 ) -> list[dict[str, Any]]:
     buckets: dict[str, dict[str, dict[str, Any]]] = {}
     for record in records:
-        key = _group_key(record, group_by)
+        key = _group_key(record, group_by, model_profile_groups=model_profile_groups)
         day = str(record.get("created_at") or "")[:10]
         if key not in visible_keys or not day:
             continue
@@ -130,7 +152,7 @@ def _series(
     return [
         {
             "key": key,
-            "label": key,
+            "label": (group_labels or {}).get(key, key),
             "points": [
                 {"bucket": day, **totals}
                 for day, totals in sorted(points.items())
@@ -140,7 +162,15 @@ def _series(
     ]
 
 
-def _group_key(record: dict[str, Any], group_by: ModelUsageGroupBy) -> str:
+def _group_key(
+    record: dict[str, Any],
+    group_by: ModelUsageGroupBy,
+    *,
+    model_profile_groups: dict[str, str] | None,
+) -> str:
+    if group_by == "credential":
+        profile_id = str(record.get("model_profile_id") or "").strip()
+        return (model_profile_groups or {}).get(profile_id, "unknown")
     field = {
         "provider": "provider",
         "runtime_role": "runtime_role",

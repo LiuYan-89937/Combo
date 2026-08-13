@@ -17,10 +17,11 @@
     </header>
 
     <n-alert v-if="loadError" type="error" closable class="page-alert" @close="loadError = ''">{{ loadError }}</n-alert>
-    <n-alert v-if="probeResult" type="success" closable class="page-alert" @close="probeResult = null">
-      {{ t('capabilityPools.probeSucceeded', { count: probeResult.tool_count }) }} ·
-      {{ probeResult.tools.join('、') || t('capabilityPools.noDiscoveredTools') }}
-    </n-alert>
+    <div v-if="activePool === 'mcp' && probeResult" class="mcp-probe-notice">
+      <span>✓</span>
+      <strong>{{ probeSummary }}</strong>
+      <button type="button" aria-label="关闭" @click="clearProbeNotice">×</button>
+    </div>
 
     <section class="pool-surface">
       <div class="pool-heading">
@@ -175,6 +176,74 @@
         <template #footer>
           <n-space justify="end"><n-button @click="showToolEditor = false">取消</n-button><n-button type="primary" :loading="savingTool" @click="saveTool">保存并发布</n-button></n-space>
         </template>
+      </n-drawer-content>
+    </n-drawer>
+
+    <n-drawer v-model:show="showMcpDetails" :width="620" placement="right">
+      <n-drawer-content title="MCP 服务" closable>
+        <template v-if="selectedMcpDetails">
+          <div class="mcp-detail-hero">
+            <div><span class="type-pill">MCP</span><h2>{{ itemName(selectedMcpDetails) }}</h2></div>
+            <span class="status" :class="{ muted: selectedMcpDetails.details.connection_status !== 'connected' }"><i />{{ selectedMcpDetails.details.connection_status === 'connected' ? '已连接' : '未连接' }}</span>
+            <p>{{ itemDescription(selectedMcpDetails) }}</p>
+          </div>
+          <section class="mcp-connection-facts">
+            <div><small>协议</small><strong>{{ selectedMcpDetails.details.protocol_version || '—' }}</strong></div>
+            <div><small>传输</small><strong>{{ transportLabel(selectedMcpDetails) }}</strong></div>
+            <div><small>服务端</small><strong>{{ selectedMcpDetails.details.server_name || '—' }}</strong></div>
+            <div><small>版本</small><strong>{{ selectedMcpDetails.details.server_version || '—' }}</strong></div>
+          </section>
+          <n-tabs type="line" animated class="mcp-detail-tabs">
+            <n-tab-pane v-if="selectedMcpToolCount > 0" name="tools" :tab="`工具 ${selectedMcpToolCount}`">
+              <div class="mcp-catalog-list">
+                <article v-for="tool in mcpToolsFor(selectedMcpDetails.capability_id)" :key="tool.capability_id"><strong>{{ capabilityName(tool) }}</strong><p>{{ itemDescription(tool) }}</p></article>
+                <n-empty v-if="!mcpToolsFor(selectedMcpDetails.capability_id).length" description="该服务没有暴露工具" />
+              </div>
+            </n-tab-pane>
+            <n-tab-pane v-if="selectedMcpResourceCount > 0" name="resources" :tab="`资源 ${selectedMcpResourceCount}`">
+              <div class="mcp-catalog-list">
+                <article v-for="resource in selectedMcpResources" :key="String(resource.uri)" class="mcp-resource-row"><strong>{{ resource.name || resource.uri }}</strong><p>{{ resource.description || resource.uri }}</p><code>{{ resource.uri }}</code><n-button size="tiny" secondary :loading="readingMcpResourceUri === String(resource.uri)" @click="readMcpResource(resource)">预览</n-button></article>
+                <article v-for="resource in selectedMcpResourceTemplates" :key="String(resource.uri_template)" class="mcp-catalog-configurable">
+                  <strong>{{ resource.name || resource.uri_template }}</strong><p>{{ resource.description || '参数化资源模板' }}</p><code>{{ resource.uri_template }}</code>
+                  <div v-if="resourceTemplateVariables(resource).length" class="mcp-argument-grid">
+                    <n-input v-for="name in resourceTemplateVariables(resource)" :key="name" v-model:value="mcpResourceTemplateArguments[resourceArgumentKey(resource, name)]" size="small" :placeholder="name" />
+                  </div>
+                  <n-button size="tiny" secondary :loading="readingMcpResourceUri === String(resource.uri_template)" :disabled="!resourceTemplateReady(resource)" @click="readMcpResourceTemplate(resource)">预览</n-button>
+                </article>
+                <n-empty v-if="!selectedMcpResources.length && !selectedMcpResourceTemplates.length" description="该服务没有暴露资源" />
+              </div>
+              <section v-if="mcpResourcePreview" class="mcp-resource-preview">
+                <img v-if="mcpResourcePreview.kind === 'image'" :src="mcpResourcePreview.content" :alt="mcpResourcePreview.name" />
+                <pre v-else-if="mcpResourcePreview.kind === 'text'">{{ mcpResourcePreview.content }}</pre>
+                <div v-else><strong>{{ mcpResourcePreview.name }}</strong><p>该资源是二进制内容，当前类型不支持内嵌预览。</p></div>
+              </section>
+            </n-tab-pane>
+            <n-tab-pane v-if="selectedMcpPromptCount > 0" name="prompts" :tab="`Prompts ${selectedMcpPromptCount}`">
+              <div class="mcp-catalog-list">
+                <article v-for="prompt in selectedMcpPrompts" :key="String(prompt.name)" class="mcp-catalog-configurable">
+                  <strong>{{ prompt.name }}</strong><p>{{ prompt.description || '模型可按需加载这个 Prompt' }}</p>
+                  <div v-if="promptArguments(prompt).length" class="mcp-argument-grid">
+                    <n-input v-for="argument in promptArguments(prompt)" :key="String(argument.name)" v-model:value="mcpPromptArguments[promptArgumentKey(prompt, argument)]" size="small" :placeholder="`${argument.name}${argument.required ? ' *' : ''}`" />
+                  </div>
+                  <n-button size="tiny" secondary :loading="readingMcpPromptName === String(prompt.name)" :disabled="!promptReady(prompt)" @click="readMcpPrompt(prompt)">预览</n-button>
+                </article>
+                <n-empty v-if="!selectedMcpPrompts.length" description="该服务没有暴露 Prompt" />
+              </div>
+              <section v-if="mcpPromptPreview" class="mcp-resource-preview mcp-prompt-preview">
+                <strong>{{ mcpPromptPreview.name }}</strong>
+                <article v-for="(part, index) in mcpPromptPreview.parts" :key="index">
+                  <small>{{ part.role }}</small>
+                  <img v-if="part.kind === 'image'" :src="part.content" :alt="mcpPromptPreview.name" />
+                  <pre v-else>{{ part.content }}</pre>
+                </article>
+              </section>
+            </n-tab-pane>
+            <n-tab-pane name="logs" tab="日志">
+              <div class="mcp-log-list"><p v-for="(entry, index) in selectedMcpLogs" :key="index"><span>{{ entry.level }}</span><code>{{ formatMcpLog(entry) }}</code></p><n-empty v-if="!selectedMcpLogs.length" description="服务暂未发送协议日志" /></div>
+            </n-tab-pane>
+          </n-tabs>
+        </template>
+        <template #footer><n-space justify="end"><n-button v-if="selectedMcpDetails" @click="editItem(selectedMcpDetails)">编辑连接</n-button><n-button type="primary" :loading="probingId === selectedMcpDetails?.capability_id" @click="selectedMcpDetails && probeMcp(selectedMcpDetails)">重新发现</n-button></n-space></template>
       </n-drawer-content>
     </n-drawer>
 
@@ -372,12 +441,21 @@
       </div>
     </n-modal>
 
-    <McpConfigModal v-model:show="showMcpModal" :item="editingMcpItem" :edit-config="editingMcpConfig" :busy="savingMcp" @submit="saveMcpServers" />
+    <McpConfigModal
+      v-model:show="showMcpModal"
+      :item="editingMcpItem"
+      :edit-config="editingMcpConfig"
+      :busy="savingMcp"
+      :stopping="stoppingMcp"
+      :install-result="mcpInstallSession"
+      @submit="saveMcpServers"
+      @cancel-install="cancelMcpInstall"
+    />
   </main>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import {
   NAlert, NButton, NDrawer, NDrawerContent, NDynamicTags, NEmpty, NForm, NFormItem, NIcon,
   NInput, NInputGroup, NInputNumber, NModal, NRadio, NRadioGroup, NSelect, NSpace, NSpin, NSwitch,
@@ -418,10 +496,16 @@ const query = ref('')
 const activePool = computed(() => props.pool)
 const probingId = ref('')
 const probeResult = ref<McpProbeResult | null>(null)
+let probeNoticeTimer: ReturnType<typeof setTimeout> | null = null
 const deletingId = ref('')
 const showMcpModal = ref(false)
 const savingMcp = ref(false)
+const stoppingMcp = ref(false)
+const mcpInstallController = ref<AbortController | null>(null)
+const mcpInstallSession = ref<Record<string, unknown> | null>(null)
 const editingMcp = ref<CapabilityPoolItem | null>(null)
+const showMcpDetails = ref(false)
+const selectedMcpDetails = ref<CapabilityPoolItem | null>(null)
 const showToolEditor = ref(false)
 const savingTool = ref(false)
 const editingTool = ref<CapabilityPoolItem | null>(null)
@@ -488,6 +572,32 @@ const headings: Record<PoolName, { kicker: string; title: string; listTitle: str
 const activeHeading = computed(() => headings[activePool.value])
 const editingMcpConfig = computed(() => editingMcp.value?.details.registry_config as Record<string, unknown> | undefined || null)
 const editingMcpItem = computed<ExtensionItemView | null>(() => editingMcp.value ? ({ name: editingMcp.value.display_name, kind: 'mcp', enabled: true, payload: { ...(editingMcpConfig.value || {}), server_id: serverId(editingMcp.value), display_name: editingMcp.value.display_name, description: editingMcp.value.description } }) : null)
+const selectedMcpResources = computed<Array<Record<string, unknown>>>(() => Array.isArray(selectedMcpDetails.value?.details.resources) ? selectedMcpDetails.value!.details.resources as Array<Record<string, unknown>> : [])
+const selectedMcpResourceTemplates = computed<Array<Record<string, unknown>>>(() => Array.isArray(selectedMcpDetails.value?.details.resource_templates) ? selectedMcpDetails.value!.details.resource_templates as Array<Record<string, unknown>> : [])
+const selectedMcpPrompts = computed<Array<Record<string, unknown>>>(() => Array.isArray(selectedMcpDetails.value?.details.prompts) ? selectedMcpDetails.value!.details.prompts as Array<Record<string, unknown>> : [])
+const selectedMcpLogs = computed<Array<Record<string, unknown>>>(() => Array.isArray(selectedMcpDetails.value?.details.logs) ? selectedMcpDetails.value!.details.logs as Array<Record<string, unknown>> : [])
+const readingMcpResourceUri = ref('')
+const mcpResourcePreview = ref<{ kind: 'image' | 'text' | 'binary'; name: string; content: string } | null>(null)
+const mcpResourceTemplateArguments = reactive<Record<string, string>>({})
+const readingMcpPromptName = ref('')
+const mcpPromptArguments = reactive<Record<string, string>>({})
+const mcpPromptPreview = ref<{ name: string; parts: Array<{ role: string; kind: 'image' | 'text'; content: string }> } | null>(null)
+const selectedMcpToolCount = computed(() => Number(selectedMcpDetails.value?.details.tool_count ?? (selectedMcpDetails.value ? mcpToolCount(selectedMcpDetails.value.capability_id) : 0)))
+const selectedMcpResourceCount = computed(() => selectedMcpResources.value.length + selectedMcpResourceTemplates.value.length)
+const selectedMcpPromptCount = computed(() => selectedMcpPrompts.value.length)
+const probeSummary = computed(() => {
+  if (!probeResult.value) return ''
+  const result = probeResult.value
+  const facts = [
+    result.protocol_version ? `MCP ${result.protocol_version}` : '',
+    result.tool_count > 0 ? `${result.tool_count} 个工具` : '',
+    result.resource_count + result.resource_template_count > 0
+      ? `${result.resource_count + result.resource_template_count} 个资源`
+      : '',
+    result.prompt_count > 0 ? `${result.prompt_count} 个 Prompt` : '',
+  ].filter(Boolean)
+  return [result.server_name || 'MCP', ...facts].join(' · ')
+})
 const selectedResource = computed<SkillEditorResource | null>(() => skillDocument.value?.resources.find(item => item.path === selectedResourcePath.value) || null)
 const selectedToolFile = computed<SkillEditorResource | null>(() => toolPackageDocument.value?.files.find(item => item.path === selectedToolFilePath.value) || null)
 const approvalOptions = [
@@ -523,7 +633,17 @@ function itemEnabled(item: PoolItem) { return item.health === 'healthy' || item.
 function itemType(item: PoolItem) { return ({ mcp_server: 'MCP', mcp_tool: 'MCP TOOL', tool: 'TOOL', skill: 'SKILL' } as const)[item.kind] }
 function itemSource(item: PoolItem) { if (item.kind === 'mcp_tool') return '来自 MCP'; if (item.kind === 'tool') return item.trust_level === 'local_user' ? '本地 ToolPackage' : '内置运行时'; if (item.kind === 'skill') return item.trust_level === 'local_user' ? '本地 Skill' : item.trust_level; return transportLabel(item) }
 function itemFacts(item: PoolItem) {
-  if (item.kind === 'mcp_server') return [`${mcpToolCount(item.capability_id)} 个工具`, `${item.details.max_parallel_requests || 1} 并发`]
+  if (item.kind === 'mcp_server') {
+    const toolCount = Number(item.details.tool_count ?? mcpToolCount(item.capability_id))
+    const resourceCount = Number(item.details.resource_count || 0) + Number(item.details.resource_template_count || 0)
+    const promptCount = Number(item.details.prompt_count || 0)
+    return [
+      toolCount > 0 ? `${toolCount} 个工具` : '',
+      resourceCount > 0 ? `${resourceCount} 个资源` : '',
+      promptCount > 0 ? `${promptCount} 个 Prompt` : '',
+      String(item.details.protocol_version || transportLabel(item)),
+    ].filter(Boolean)
+  }
   if (item.kind === 'skill') return [`${item.details.content_count || 1} 个文件`, formatBytes(Number(item.details.total_size_bytes || 0))]
   return [item.details.system_available ? '主 Agent' : '按需装配', riskLabel(item.details.risk_level), item.details.allow_parallel_calls ? `${item.details.max_parallel_calls || 1} 并发` : '串行', outputLabel(item)]
 }
@@ -536,13 +656,123 @@ function capabilityName(item: CapabilityPoolItem) {
 }
 function serverId(item: CapabilityPoolItem) { return item.capability_id.replace(/^mcp-server:\/\//, '') }
 function mcpToolCount(id: string) { return tools.value.filter(item => item.kind === 'mcp_tool' && item.details.server_capability_id === id).length }
+function mcpToolsFor(id: string) { return tools.value.filter(item => item.kind === 'mcp_tool' && item.details.server_capability_id === id) }
 function transportLabel(item: CapabilityPoolItem) { return ({ stdio: '本地进程', streamable_http: 'Streamable HTTP', sse: 'SSE' } as Record<string, string>)[String(item.details.transport)] || 'MCP' }
 function riskLabel(value: unknown) { return ({ low: '低风险', medium: '中风险', high: '高风险' } as Record<string, string>)[String(value)] || '风险未标注' }
 function outputLabel(item: CapabilityPoolItem) { return item.details.output_projection === 'passthrough' ? '原样输出' : `压缩至 ${Number(item.details.output_max_model_chars || 50000).toLocaleString()} 字符` }
 function formatBytes(value: number) { if (value < 1024) return `${value} B`; if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`; return `${(value / 1024 / 1024).toFixed(1)} MB` }
+function formatMcpLog(entry: Record<string, unknown>) { return typeof entry.data === 'string' ? entry.data : JSON.stringify(entry.data) }
+async function readMcpResource(resource: Record<string, unknown>) {
+  if (!selectedMcpDetails.value) return
+  const uri = String(resource.uri || '')
+  if (!uri || readingMcpResourceUri.value) return
+  readingMcpResourceUri.value = uri
+  mcpResourcePreview.value = null
+  try {
+    const response = await capabilityPoolsApi.readMcpResource(selectedMcpDetails.value.capability_id, { uri })
+    mcpResourcePreview.value = mcpResourcePreviewFrom(response.result, String(resource.name || uri))
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : String(error))
+  } finally {
+    readingMcpResourceUri.value = ''
+  }
+}
+function resourceTemplateVariables(resource: Record<string, unknown>) {
+  const names = new Set<string>()
+  for (const expression of String(resource.uri_template || '').matchAll(/\{([^}]+)\}/g)) {
+    for (const variable of expression[1].replace(/^[+#./;?&]/, '').split(',')) {
+      const name = variable.replace(/[:*].*$/, '').trim()
+      if (name) names.add(name)
+    }
+  }
+  return [...names]
+}
+function resourceArgumentKey(resource: Record<string, unknown>, name: string) { return `${String(resource.uri_template)}\0${name}` }
+function resourceTemplateReady(resource: Record<string, unknown>) { return resourceTemplateVariables(resource).every(name => Boolean(mcpResourceTemplateArguments[resourceArgumentKey(resource, name)]?.trim())) }
+async function readMcpResourceTemplate(resource: Record<string, unknown>) {
+  if (!selectedMcpDetails.value) return
+  const uriTemplate = String(resource.uri_template || '')
+  if (!uriTemplate || readingMcpResourceUri.value || !resourceTemplateReady(resource)) return
+  const arguments_: Record<string, string> = {}
+  for (const name of resourceTemplateVariables(resource)) arguments_[name] = mcpResourceTemplateArguments[resourceArgumentKey(resource, name)]
+  readingMcpResourceUri.value = uriTemplate
+  mcpResourcePreview.value = null
+  try {
+    const response = await capabilityPoolsApi.readMcpResource(selectedMcpDetails.value.capability_id, { uri_template: uriTemplate, arguments: arguments_ })
+    mcpResourcePreview.value = mcpResourcePreviewFrom(response.result, String(resource.name || response.uri))
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : String(error))
+  } finally {
+    readingMcpResourceUri.value = ''
+  }
+}
+function promptArguments(prompt: Record<string, unknown>) { return Array.isArray(prompt.arguments) ? prompt.arguments as Array<Record<string, unknown>> : [] }
+function promptArgumentKey(prompt: Record<string, unknown>, argument: Record<string, unknown>) { return `${String(prompt.name)}\0${String(argument.name)}` }
+function promptReady(prompt: Record<string, unknown>) { return promptArguments(prompt).filter(argument => argument.required).every(argument => Boolean(mcpPromptArguments[promptArgumentKey(prompt, argument)]?.trim())) }
+async function readMcpPrompt(prompt: Record<string, unknown>) {
+  if (!selectedMcpDetails.value) return
+  const name = String(prompt.name || '')
+  if (!name || readingMcpPromptName.value || !promptReady(prompt)) return
+  const arguments_: Record<string, string> = {}
+  for (const argument of promptArguments(prompt)) {
+    const value = mcpPromptArguments[promptArgumentKey(prompt, argument)]?.trim()
+    if (value) arguments_[String(argument.name)] = value
+  }
+  readingMcpPromptName.value = name
+  mcpPromptPreview.value = null
+  try {
+    const response = await capabilityPoolsApi.getMcpPrompt(selectedMcpDetails.value.capability_id, name, arguments_)
+    mcpPromptPreview.value = mcpPromptPreviewFrom(response.result, name)
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : String(error))
+  } finally {
+    readingMcpPromptName.value = ''
+  }
+}
+function mcpResourcePreviewFrom(result: Record<string, unknown>, name: string) {
+  const contents = Array.isArray(result.contents) ? result.contents : []
+  const content = contents.find(item => item && typeof item === 'object') as Record<string, unknown> | undefined
+  if (!content) return { kind: 'binary' as const, name, content: '' }
+  const mimeType = String(content.mimeType || content.mime_type || '')
+  const textContent = typeof content.text === 'string' ? content.text : ''
+  const blob = typeof content.blob === 'string' ? content.blob : ''
+  if (mimeType.startsWith('image/') && blob) {
+    return { kind: 'image' as const, name, content: `data:${mimeType};base64,${blob}` }
+  }
+  if (textContent) return { kind: 'text' as const, name, content: textContent }
+  return { kind: 'binary' as const, name, content: '' }
+}
+function mcpPromptPreviewFrom(result: Record<string, unknown>, name: string) {
+  const parts: Array<{ role: string; kind: 'image' | 'text'; content: string }> = []
+  for (const messageItem of Array.isArray(result.messages) ? result.messages : []) {
+    if (!messageItem || typeof messageItem !== 'object') continue
+    const messageRecord = messageItem as Record<string, unknown>
+    const role = String(messageRecord.role || 'message')
+    const contentItems = Array.isArray(messageRecord.content) ? messageRecord.content : [messageRecord.content]
+    for (const contentItem of contentItems) {
+      if (!contentItem || typeof contentItem !== 'object') continue
+      const content = contentItem as Record<string, unknown>
+      if (typeof content.text === 'string') parts.push({ role, kind: 'text', content: content.text })
+      else if (typeof content.data === 'string' && String(content.mimeType || content.mime_type).startsWith('image/')) parts.push({ role, kind: 'image', content: `data:${String(content.mimeType || content.mime_type)};base64,${content.data}` })
+      else parts.push({ role, kind: 'text', content: JSON.stringify(content, null, 2) })
+    }
+  }
+  if (!parts.length) parts.push({ role: 'result', kind: 'text', content: JSON.stringify(result, null, 2) })
+  return { name, parts }
+}
 
 async function loadAll() { loading.value = true; loadError.value = ''; try { snapshot.value = await capabilityPoolsApi.snapshot() } catch (error) { loadError.value = error instanceof Error ? error.message : String(error) } finally { loading.value = false } }
-async function probeMcp(item: CapabilityPoolItem) { probingId.value = item.capability_id; probeResult.value = null; try { probeResult.value = await capabilityPoolsApi.probeMcp(item.capability_id) } catch (error) { message.error(error instanceof Error ? error.message : String(error)) } finally { probingId.value = '' } }
+function clearProbeNotice() {
+  probeResult.value = null
+  if (probeNoticeTimer) clearTimeout(probeNoticeTimer)
+  probeNoticeTimer = null
+}
+function showProbeNotice(result: McpProbeResult) {
+  clearProbeNotice()
+  probeResult.value = result
+  probeNoticeTimer = setTimeout(clearProbeNotice, 5000)
+}
+async function probeMcp(item: CapabilityPoolItem) { probingId.value = item.capability_id; clearProbeNotice(); try { showProbeNotice(await capabilityPoolsApi.probeMcp(item.capability_id)) } catch (error) { message.error(error instanceof Error ? error.message : String(error)) } finally { probingId.value = '' } }
 async function deleteItem(item: PoolItem) {
   if (!snapshot.value || deletingId.value || !canDeleteItem(item)) return
   deletingId.value = item.capability_id
@@ -561,7 +791,7 @@ async function deleteItem(item: PoolItem) {
     deletingId.value = ''
   }
 }
-function openAddMcp() { editingMcp.value = null; showMcpModal.value = true }
+function openAddMcp() { editingMcp.value = null; mcpInstallSession.value = null; showMcpModal.value = true }
 async function openSkillHub() { showSkillHub.value = true; try { skillHubResult.value = await capabilityPoolsApi.skillHubStatus() } catch (error) { message.error(error instanceof Error ? error.message : String(error)) } }
 async function searchSkillHub() { const query = skillHubQuery.value.trim(); if (!query || searchingSkillHub.value) return; searchingSkillHub.value = true; try { skillHubResult.value = await capabilityPoolsApi.searchSkillHub(query) } catch (error) { message.error(error instanceof Error ? error.message : String(error)) } finally { searchingSkillHub.value = false } }
 async function installSkillHub(skill: string) { if (!skill || installingSkill.value) return; installingSkill.value = skill; try { const result = await capabilityPoolsApi.installSkillHub(skill); snapshot.value = result.capability_pool; skillHubResult.value = result.skillhub; message.success(`Skill 已安装并发布：${skill}`) } catch (error) { message.error(error instanceof Error ? error.message : String(error)) } finally { installingSkill.value = '' } }
@@ -679,8 +909,8 @@ function selectedFolder(event: Event): { rootName: string; files: Array<{ file: 
   })
   return rootName ? { rootName, files } : null
 }
-function openItem(item: PoolItem) { editItem(item) }
-function editItem(item: PoolItem) { if (item.kind === 'mcp_server') { editingMcp.value = item; showMcpModal.value = true; return } if (item.kind === 'skill') { void openSkillEditor(item); return } openToolEditor(item) }
+function openItem(item: PoolItem) { if (item.kind === 'mcp_server') { selectedMcpDetails.value = item; showMcpDetails.value = true; return } editItem(item) }
+function editItem(item: PoolItem) { if (item.kind === 'mcp_server') { editingMcp.value = item; mcpInstallSession.value = null; showMcpModal.value = true; return } if (item.kind === 'skill') { void openSkillEditor(item); return } openToolEditor(item) }
 function openToolEditor(item: CapabilityPoolItem) { editingTool.value = item; Object.assign(toolForm, { display_name: item.display_name, description: item.description, approval: item.details.approval || 'inherit', risk_level: item.details.risk_level || 'low', allow_parallel_calls: item.details.allow_parallel_calls !== false, max_parallel_calls: Number(item.details.max_parallel_calls || 1), timeout_seconds: Number(item.details.timeout_seconds || 300), output_projection: item.details.output_projection || 'compress', output_max_model_chars: Number(item.details.output_max_model_chars || 50000), retain_raw_output: item.details.retain_raw_output !== false }); showToolEditor.value = true }
 function normalizeParallel(value: boolean) { if (!value) toolForm.max_parallel_calls = 1 }
 async function saveTool() { if (!editingTool.value) return; savingTool.value = true; try { snapshot.value = await capabilityPoolsApi.updateTool(editingTool.value, { display_name: toolForm.display_name.trim(), description: toolForm.description.trim(), runtime_policy: { approval: toolForm.approval, risk_level: toolForm.risk_level, allow_parallel_calls: toolForm.allow_parallel_calls, max_parallel_calls: toolForm.allow_parallel_calls ? toolForm.max_parallel_calls : 1, timeout_seconds: toolForm.timeout_seconds, output_projection: toolForm.output_projection, output_max_model_chars: toolForm.output_max_model_chars, retain_raw_output: toolForm.retain_raw_output } }); showToolEditor.value = false; message.success('工具配置已发布') } catch (error) { message.error(error instanceof Error ? error.message : String(error)) } finally { savingTool.value = false } }
@@ -717,9 +947,70 @@ async function saveToolPackageContent() {
 }
 async function openSkillEditor(item: CapabilityPoolItem) { showSkillEditor.value = true; loadingSkill.value = true; skillDocument.value = null; skillTab.value = 'metadata'; try { const document = await capabilityPoolsApi.skillEditor(item.capability_id); skillDocument.value = document; skillForm.metadata = structuredClone(document.metadata); skillForm.instructions = document.instructions; for (const key of Object.keys(skillResources)) delete skillResources[key]; document.resources.filter(resource => resource.editable).forEach(resource => { skillResources[resource.path] = resource.content || '' }); selectedResourcePath.value = document.resources[0]?.path || '' } catch (error) { showSkillEditor.value = false; message.error(error instanceof Error ? error.message : String(error)) } finally { loadingSkill.value = false } }
 async function saveSkillContent() { if (!skillDocument.value) return; savingSkill.value = true; try { snapshot.value = await capabilityPoolsApi.updateSkillContent(skillDocument.value, { metadata: skillForm.metadata, instructions: skillForm.instructions, resources: { ...skillResources } }); showSkillEditor.value = false; message.success('Skill 已校验并发布') } catch (error) { message.error(error instanceof Error ? error.message : String(error)) } finally { savingSkill.value = false } }
-async function saveMcpServers(servers: McpServerConfig[]) { if (!snapshot.value) return; savingMcp.value = true; try { let current = snapshot.value; if (editingMcp.value) { if (servers.length !== 1) throw new Error('编辑 MCP 时只能提交一个服务'); current = await capabilityPoolsApi.updateMcp(serverId(editingMcp.value), servers[0], current.mcp_registry_digest) } else { for (const server of servers) current = await capabilityPoolsApi.addMcp(server, current.mcp_registry_digest) } snapshot.value = current; showMcpModal.value = false; editingMcp.value = null; message.success('MCP 已保存') } catch (error) { message.error(error instanceof Error ? error.message : String(error)) } finally { savingMcp.value = false } }
+async function saveMcpServers(servers: McpServerConfig[]) {
+  if (!snapshot.value) return
+  const controller = new AbortController()
+  mcpInstallController.value = controller
+  savingMcp.value = true
+  stoppingMcp.value = false
+  mcpInstallSession.value = { status: 'running', stage: 'validating', logs: [], servers: [] }
+  try {
+    let current = snapshot.value
+    if (editingMcp.value) {
+      if (servers.length !== 1) throw new Error('编辑 MCP 时只能提交一个服务')
+      current = await capabilityPoolsApi.updateMcp(
+        serverId(editingMcp.value),
+        servers[0],
+        current.mcp_registry_digest,
+        progress => appendMcpProgress(progress.stage, progress.detail),
+        controller.signal,
+      )
+    } else {
+      for (const server of servers) {
+        current = await capabilityPoolsApi.addMcp(
+          server,
+          current.mcp_registry_digest,
+          progress => appendMcpProgress(progress.stage, progress.detail),
+          controller.signal,
+        )
+      }
+    }
+    snapshot.value = current
+    mcpInstallSession.value = { ...(mcpInstallSession.value || {}), status: 'ok', stage: 'published' }
+    editingMcp.value = null
+    message.success('MCP 已校验并发布')
+  } catch (error) {
+    const cancelled = controller.signal.aborted
+    mcpInstallSession.value = {
+      ...(mcpInstallSession.value || {}),
+      status: cancelled ? 'cancelled' : 'failed',
+      error: cancelled ? '' : error instanceof Error ? error.message : String(error),
+    }
+  } finally {
+    savingMcp.value = false
+    stoppingMcp.value = false
+    mcpInstallController.value = null
+  }
+}
 
+function appendMcpProgress(stage: string, detail: Record<string, unknown>) {
+  const current = mcpInstallSession.value || { status: 'running', logs: [], servers: [] }
+  const logs = Array.isArray(current.logs) ? [...current.logs] : []
+  logs.push({ stage, detail, at: new Date().toISOString() })
+  mcpInstallSession.value = { ...current, status: 'running', stage, logs }
+}
+
+function cancelMcpInstall() {
+  if (!mcpInstallController.value || stoppingMcp.value) return
+  stoppingMcp.value = true
+  mcpInstallController.value.abort('user_cancelled')
+}
+
+watch(activePool, pool => {
+  if (pool !== 'mcp') clearProbeNotice()
+})
 onMounted(loadAll)
+onBeforeUnmount(clearProbeNotice)
 </script>
 
 <style scoped>
@@ -728,7 +1019,7 @@ onMounted(loadAll)
 .library-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 32px; max-width: 1540px; margin: 0 auto 28px; }
 .title-block { max-width: 760px; }.eyebrow,.pool-kicker { display: block; margin-bottom: 9px; color: var(--app-text-muted); font-size: 10px; font-weight: 800; letter-spacing: .16em; }.title-block h1 { margin: 0; font-size: clamp(32px, 4vw, 48px); line-height: 1; letter-spacing: -.045em; }.title-block p,.pool-heading p { margin: 13px 0 0; color: var(--app-text-secondary); font-size: 13px; line-height: 1.6; }.header-tools { display: flex; align-items: center; gap: 8px; }.search-input { width: min(360px, 34vw); }
 .pool-switcher { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; max-width: 1540px; margin: 0 auto 16px; }.pool-switch { display: grid; grid-template-columns: 1fr auto; gap: 5px 14px; min-width: 0; padding: 16px 18px; color: inherit; text-align: left; border: 1px solid var(--app-border); border-radius: 14px; background: var(--app-surface); cursor: pointer; transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease; }.pool-switch:hover { transform: translateY(-1px); border-color: var(--app-border-focus); }.pool-switch.active { border-color: color-mix(in srgb, var(--app-text) 38%, var(--app-border)); box-shadow: inset 0 -2px 0 var(--app-text); }.switch-label { font-size: 12px; font-weight: 750; }.pool-switch strong { grid-row: span 2; align-self: center; font-size: 26px; letter-spacing: -.04em; }.pool-switch small { overflow: hidden; color: var(--app-text-muted); text-overflow: ellipsis; white-space: nowrap; }
-.page-alert { max-width: 1540px; margin: 12px auto; }.pool-surface { max-width: 1540px; margin: 0 auto; padding: 24px; border: 1px solid var(--app-border); border-radius: 20px; background: var(--app-surface); }.pool-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; padding: 2px 2px 22px; border-bottom: 1px solid var(--app-border); }.pool-heading h2 { margin: 0; font-size: 22px; letter-spacing: -.02em; }
+.page-alert { max-width: 1540px; margin: 12px auto; }.mcp-probe-notice { display: grid; grid-template-columns: 24px minmax(0, 1fr) 24px; max-width: 1540px; align-items: center; gap: 10px; box-sizing: border-box; margin: 12px auto; padding: 11px 13px; color: #fff; border: 1px solid #000; border-radius: 10px; background: #000; }.mcp-probe-notice > span { display: grid; width: 19px; height: 19px; place-items: center; color: #000; border-radius: 50%; background: #fff; font-size: 10px; }.mcp-probe-notice strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }.mcp-probe-notice button { padding: 0; color: #fff; border: 0; background: transparent; font-size: 20px; line-height: 1; cursor: pointer; }.pool-surface { max-width: 1540px; margin: 0 auto; padding: 24px; border: 1px solid var(--app-border); border-radius: 20px; background: var(--app-surface); }.pool-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; padding: 2px 2px 22px; border-bottom: 1px solid var(--app-border); }.pool-heading h2 { margin: 0; font-size: 22px; letter-spacing: -.02em; }
 .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; padding-top: 18px; }.pool-card { display: flex; min-height: 214px; flex-direction: column; padding: 17px 18px 14px; border: 1px solid var(--app-border); border-radius: 15px; background: var(--app-surface); cursor: pointer; transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease; }.pool-card:hover,.pool-card:focus-visible { transform: translateY(-3px); border-color: var(--app-border-focus); box-shadow: 0 14px 30px color-mix(in srgb, var(--app-text) 7%, transparent); outline: none; }.card-header,.card-footer,.card-statuses,.status,.card-buttons,.skill-editor-header,.skill-editor-header > div,.section-row,.switch-line,.card-title-line { display: flex; align-items: center; }.card-header,.card-footer,.section-row,.switch-line { justify-content: space-between; }.card-statuses { gap: 10px; }.type-pill { display: inline-flex; width: fit-content; padding: 4px 7px; border-radius: 6px; background: var(--app-text); color: var(--app-surface); font-size: 9px; font-weight: 800; letter-spacing: .08em; }.status { gap: 6px; color: var(--app-text-muted); font-size: 10px; }.status i { width: 6px; height: 6px; border-radius: 50%; background: var(--app-success); }.status.indexed i { background: var(--app-text); box-shadow: none; }.status.muted i { background: var(--app-text-muted); }.card-body { flex: 1; padding: 22px 0 14px; }.card-title-line { min-width: 0; gap: 9px; }.card-tool-icon { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; width: 30px; height: 30px; border: 1px solid var(--app-border); border-radius: 9px; background: color-mix(in srgb, var(--app-text) 4%, transparent); color: var(--app-text); }.card-body h3 { margin: 0; overflow: hidden; font-size: 16px; letter-spacing: -.01em; text-overflow: ellipsis; white-space: nowrap; }.card-body p { display: -webkit-box; margin: 8px 0 0; overflow: hidden; color: var(--app-text-secondary); font-size: 12px; line-height: 1.6; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }.card-facts { display: flex; min-height: 24px; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }.card-facts span { padding: 3px 7px; border-radius: 6px; background: color-mix(in srgb, var(--app-text) 5%, transparent); color: var(--app-text-muted); font-size: 9px; }.card-footer { min-height: 30px; padding-top: 11px; border-top: 1px solid var(--app-border); color: var(--app-text-muted); font-size: 10px; }.card-buttons { gap: 1px; }.empty-state { padding: 90px 0; }
 .editor-intro { padding: 2px 0 22px; border-bottom: 1px solid var(--app-border); }.editor-intro p { margin: 12px 0 0; color: var(--app-text-secondary); font-size: 12px; }.editor-form { display: grid; gap: 14px; padding-top: 18px; }.form-section { padding: 17px; border: 1px solid var(--app-border); border-radius: 13px; }.form-section.two-column { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }.section-title { display: grid; gap: 3px; margin-bottom: 15px; }.section-title.full { grid-column: 1 / -1; }.section-title strong,.switch-line strong { font-size: 13px; }.section-title span,.switch-line small { color: var(--app-text-muted); font-size: 10px; line-height: 1.5; }.section-row .section-title { margin-bottom: 10px; }.switch-line > span { display: grid; gap: 3px; }
 .editor-intro .n-button { margin-top: 14px; }.package-summary { display: flex; flex-wrap: wrap; gap: 8px; padding: 14px 0 0; }.package-summary span { padding: 5px 8px; border: 1px solid var(--app-border); border-radius: 7px; color: var(--app-text-secondary); font-size: 10px; }
@@ -736,6 +1027,10 @@ onMounted(loadAll)
 .creator-progress { margin-top: 16px; }
 .skill-editor :deep(.n-card__content) { padding-top: 4px; }.skill-editor-header { justify-content: space-between; gap: 20px; min-width: 0; padding: 0 0 16px; border-bottom: 1px solid var(--app-border); }.skill-editor-header > div { gap: 10px; }.skill-editor-header > span { overflow: hidden; color: var(--app-text-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }.skill-pane { padding-top: 18px; }.narrow-pane { width: min(650px, 100%); }.pane-note { display: grid; gap: 3px; margin-bottom: 10px; }.pane-note span { color: var(--app-text-muted); font-size: 10px; }.code-editor :deep(textarea) { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; line-height: 1.65; }.resource-editor { display: grid; grid-template-columns: 260px minmax(0, 1fr); min-height: 470px; margin-top: 18px; overflow: hidden; border: 1px solid var(--app-border); border-radius: 12px; }.resource-editor aside { padding: 8px; overflow-y: auto; border-right: 1px solid var(--app-border); background: var(--app-surface-subtle, color-mix(in srgb, var(--app-text) 3%, transparent)); }.resource-editor aside button { display: grid; width: 100%; gap: 3px; padding: 10px; color: inherit; text-align: left; border: 0; border-radius: 8px; background: transparent; cursor: pointer; }.resource-editor aside button:hover,.resource-editor aside button.active { background: var(--app-surface); }.resource-editor aside span { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }.resource-editor aside small { color: var(--app-text-muted); font-size: 9px; }.resource-content { min-width: 0; padding: 15px; }.resource-empty { align-self: center; }
 .skillhub-panel { display: grid; gap: 18px; }.skillhub-status { display: flex; align-items: center; gap: 11px; padding: 14px; border: 1px solid var(--app-border); border-radius: 12px; }.skillhub-status > span { width: 8px; height: 8px; border-radius: 50%; background: var(--app-text-muted); }.skillhub-status > span.ready { background: var(--app-success); }.skillhub-status div { display: grid; gap: 3px; }.skillhub-status small { color: var(--app-text-muted); font-size: 10px; }.skillhub-results { display: grid; gap: 8px; max-height: 440px; overflow-y: auto; }.skillhub-results article { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px 14px; padding: 14px; border: 1px solid var(--app-border); border-radius: 11px; }.skillhub-results article > div { display: flex; align-items: baseline; gap: 8px; }.skillhub-results article small { color: var(--app-text-muted); font-size: 9px; }.skillhub-results article p { grid-column: 1; margin: 0; color: var(--app-text-secondary); font-size: 11px; line-height: 1.6; }.skillhub-results article .n-button { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
+.mcp-detail-hero { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 18px; padding-bottom: 18px; border-bottom: 1px solid var(--app-border); }.mcp-detail-hero > div { display: flex; min-width: 0; align-items: center; gap: 10px; }.mcp-detail-hero h2 { margin: 0; overflow: hidden; font-size: 20px; text-overflow: ellipsis; white-space: nowrap; }.mcp-detail-hero p { grid-column: 1 / -1; margin: 0; color: var(--app-text-secondary); font-size: 12px; line-height: 1.6; }.mcp-connection-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; margin-top: 18px; overflow: hidden; border: 1px solid var(--app-border); border-radius: 12px; background: var(--app-border); }.mcp-connection-facts > div { display: grid; gap: 4px; padding: 13px; background: var(--app-surface); }.mcp-connection-facts small { color: var(--app-text-muted); font-size: 9px; }.mcp-connection-facts strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }.mcp-detail-tabs { margin-top: 18px; }.mcp-catalog-list { display: grid; gap: 8px; padding-top: 8px; }.mcp-catalog-list article { display: grid; gap: 5px; padding: 13px; border: 1px solid var(--app-border); border-radius: 11px; }.mcp-catalog-list strong { font-size: 12px; }.mcp-catalog-list p { margin: 0; color: var(--app-text-secondary); font-size: 10px; line-height: 1.55; }.mcp-catalog-list code { overflow-wrap: anywhere; color: var(--app-text-muted); font-size: 9px; }
+.mcp-log-list { display: grid; gap: 6px; padding-top: 8px; }.mcp-log-list > p { display: grid; grid-template-columns: 62px minmax(0, 1fr); gap: 10px; margin: 0; padding: 9px 11px; border: 1px solid var(--app-border); border-radius: 9px; }.mcp-log-list span { color: var(--app-text-muted); font-size: 9px; text-transform: uppercase; }.mcp-log-list code { overflow-wrap: anywhere; font-size: 9px; }
+.mcp-resource-row { grid-template-columns: minmax(0, 1fr) auto; }.mcp-resource-row > p,.mcp-resource-row > code { grid-column: 1; }.mcp-resource-row > .n-button { grid-column: 2; grid-row: 1 / span 3; align-self: center; }.mcp-resource-preview { margin-top: 12px; padding: 12px; overflow: auto; border: 1px solid var(--app-border); border-radius: 11px; }.mcp-resource-preview img { display: block; max-width: 100%; max-height: 460px; margin: auto; object-fit: contain; }.mcp-resource-preview pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
+.mcp-catalog-configurable { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 6px 12px; }.mcp-catalog-configurable > strong,.mcp-catalog-configurable > p,.mcp-catalog-configurable > code,.mcp-catalog-configurable > .mcp-argument-grid { grid-column: 1; }.mcp-catalog-configurable > .n-button { grid-column: 2; grid-row: 1 / span 4; align-self: center; }.mcp-argument-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-top: 4px; }.mcp-prompt-preview > strong { display: block; margin-bottom: 10px; }.mcp-prompt-preview article + article { margin-top: 12px; }.mcp-prompt-preview small { display: block; margin-bottom: 5px; color: var(--app-text-secondary); font-weight: 700; text-transform: uppercase; }
 @media (max-width: 920px) { .library-header { align-items: flex-start; flex-direction: column; }.header-tools,.search-input { width: 100%; }.pool-switcher { grid-template-columns: repeat(2, 1fr); }.resource-editor { grid-template-columns: 210px minmax(0, 1fr); }.creator-layout { grid-template-columns: 1fr; }.source-pane { position: static; }.parameter-fields { grid-template-columns: minmax(0, 1fr) 140px 82px; } }
 @media (max-width: 620px) { .library-page { padding: 20px 14px; }.pool-switcher { grid-template-columns: 1fr 1fr; }.pool-switch { padding: 13px; }.pool-switch small { display: none; }.pool-surface { padding: 15px; }.pool-heading { align-items: flex-start; flex-direction: column; }.card-grid { grid-template-columns: 1fr; }.resource-editor { grid-template-columns: 1fr; }.resource-editor aside { max-height: 160px; border-right: 0; border-bottom: 1px solid var(--app-border); }.form-section.two-column,.parameter-fields { grid-template-columns: 1fr; }.parameter-description { grid-column: auto; } }
 </style>

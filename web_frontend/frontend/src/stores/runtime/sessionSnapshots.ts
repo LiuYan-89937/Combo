@@ -296,6 +296,7 @@ function contextWindowFromSession(session: any): ContextWindowView | null {
     source: optionalString(payload.source),
     modelRole: optionalString(payload.model_role),
     nodeId: optionalString(payload.node_id),
+    compressionStatus: optionalString(payload.compression_status),
     updatedAt: String(payload.updated_at || session.updated_at || new Date().toISOString()),
     payload,
   }

@@ -53,6 +53,23 @@ class CapabilityPoolManager(Protocol):
     def probe_mcp_server(self, capability_id: str) -> dict[str, object]:
         ...
 
+    def read_mcp_resource(
+        self,
+        capability_id: str,
+        uri: str | None,
+        uri_template: str | None,
+        arguments: dict[str, str],
+    ) -> dict[str, object]:
+        ...
+
+    def get_mcp_prompt(
+        self,
+        capability_id: str,
+        name: str,
+        arguments: dict[str, str],
+    ) -> dict[str, object]:
+        ...
+
     def skillhub_status(self) -> dict[str, Any]:
         ...
 
@@ -87,6 +104,17 @@ class CapabilityPoolManager(Protocol):
         server: dict[str, Any],
         *,
         expected_registry_digest: str,
+        on_progress: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> dict[str, object]:
+        ...
+
+    def replace_mcp_server(
+        self,
+        server_id: str,
+        server: dict[str, Any],
+        *,
+        expected_registry_digest: str,
+        on_progress: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> dict[str, object]:
         ...
 
@@ -235,7 +263,7 @@ class RuntimePolicyWriteRequest(BaseModel):
     @field_validator("execution_preference")
     @classmethod
     def _execution_preference_is_supported(cls, value: str) -> str:
-        if value not in {"auto", "react", "plan_and_execute"}:
+        if value not in {"react", "plan_and_execute"}:
             raise ValueError("unsupported execution_preference")
         return value
 
@@ -279,6 +307,53 @@ class MCPServerProbeRequest(BaseModel):
         if not text:
             raise ValueError("capability_id must not be empty")
         return text
+
+
+class MCPResourceReadRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    capability_id: str
+    uri: str | None = None
+    uri_template: str | None = None
+    arguments: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("capability_id")
+    @classmethod
+    def _required_text(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("MCP resource capability_id must not be empty")
+        return text
+
+    @model_validator(mode="after")
+    def _resource_reference_is_unambiguous(self) -> "MCPResourceReadRequest":
+        self.uri = str(self.uri or "").strip() or None
+        self.uri_template = str(self.uri_template or "").strip() or None
+        if (self.uri is None) == (self.uri_template is None):
+            raise ValueError("provide exactly one of MCP resource uri or uri_template")
+        self.arguments = {str(name): str(argument) for name, argument in self.arguments.items()}
+        return self
+
+
+class MCPPromptGetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    capability_id: str
+    name: str
+    arguments: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("capability_id", "name")
+    @classmethod
+    def _required_text(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("MCP prompt capability_id and name must not be empty")
+        return text
+
+    @field_validator("arguments")
+    @classmethod
+    def _arguments_are_strings(cls, value: dict[str, str]) -> dict[str, str]:
+        return {str(name): str(argument) for name, argument in value.items()}
 
 
 class MCPBindingReference(BaseModel):
@@ -738,47 +813,78 @@ def create_dynamic_runtime_router(
         except Exception as exc:
             raise HTTPException(status_code=502, detail="mcp_probe_failed") from exc
 
-    @router.post("/capabilities/mcp", status_code=201)
-    async def add_mcp_server(
+    @router.post("/capabilities/mcp/resource")
+    async def read_mcp_resource(
         request: Request,
-        payload: MCPServerCreateRequest,
+        payload: MCPResourceReadRequest,
     ) -> dict[str, object]:
         principal_resolver.resolve(request)
         try:
             return await asyncio.to_thread(
-                capability_pools.add_mcp_server,
-                payload.registry_document(),
-                expected_registry_digest=payload.expected_registry_digest,
+                capability_pools.read_mcp_resource,
+                payload.capability_id,
+                payload.uri,
+                payload.uri_template,
+                payload.arguments,
             )
-        except RuntimeError as exc:
-            if str(exc) == "mcp_registry_revision_conflict":
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
-            raise HTTPException(status_code=502, detail="mcp_discovery_failed") from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="mcp_resource_read_failed") from exc
+
+    @router.post("/capabilities/mcp/prompt")
+    async def get_mcp_prompt(
+        request: Request,
+        payload: MCPPromptGetRequest,
+    ) -> dict[str, object]:
+        principal_resolver.resolve(request)
+        try:
+            return await asyncio.to_thread(
+                capability_pools.get_mcp_prompt,
+                payload.capability_id,
+                payload.name,
+                payload.arguments,
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="mcp_prompt_get_failed") from exc
+
+    @router.post("/capabilities/mcp", status_code=201)
+    async def add_mcp_server(
+        request: Request,
+        payload: MCPServerCreateRequest,
+    ) -> StreamingResponse:
+        principal_resolver.resolve(request)
+        normalized_payload = payload.registry_document()
+
+        def run_add(report: Callable[[str, dict[str, Any]], None]) -> dict[str, object]:
+            return capability_pools.add_mcp_server(
+                normalized_payload,
+                expected_registry_digest=payload.expected_registry_digest,
+                on_progress=report,
+            )
+
+        return _tool_preparation_response(run_add)
 
     @router.put("/capabilities/mcp/{server_id}")
     async def update_mcp_server(
         server_id: str,
         request: Request,
         payload: MCPServerCreateRequest,
-    ) -> dict[str, object]:
+    ) -> StreamingResponse:
         principal_resolver.resolve(request)
-        try:
-            return await asyncio.to_thread(
-                capability_pools.replace_mcp_server,
+        normalized_payload = payload.registry_document()
+
+        def run_replace(report: Callable[[str, dict[str, Any]], None]) -> dict[str, object]:
+            return capability_pools.replace_mcp_server(
                 server_id,
-                payload.registry_document(),
+                normalized_payload,
                 expected_registry_digest=payload.expected_registry_digest,
+                on_progress=report,
             )
-        except LookupError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            if str(exc) == "mcp_registry_revision_conflict":
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
-            raise HTTPException(status_code=502, detail="mcp_discovery_failed") from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        return _tool_preparation_response(run_replace)
 
     @router.delete("/capabilities/mcp/{server_id}")
     async def delete_mcp_server(

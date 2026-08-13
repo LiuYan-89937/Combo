@@ -161,77 +161,32 @@ HUNYUAN_CAPABILITIES = ModelProviderCapabilities(
 )
 
 PROVIDER_PROFILES: dict[str, ProviderProfile] = {
-    "openai_chat": ProviderProfile(
-        provider_id="openai_chat",
-        display_name="OpenAI Chat Completions",
-        adapter_id="openai_chat",
-        capabilities=OPENAI_CHAT_CAPABILITIES,
-        aliases=("openai", "openai-compatible-openai"),
-    ),
-    "openai_compatible_chat": ProviderProfile(
-        provider_id="openai_compatible_chat",
-        display_name="Generic OpenAI-compatible Chat Completions",
+    "openai": ProviderProfile(
+        provider_id="openai",
+        display_name="OpenAI 兼容协议",
         adapter_id="openai_compatible_chat",
         capabilities=GENERIC_OPENAI_COMPATIBLE_CHAT_CAPABILITIES,
-        aliases=("openai_compatible", "generic_openai_chat", "generic"),
+        aliases=(
+            "openai_chat", "openai_compatible_chat", "openai_compatible", "generic_openai_chat",
+            "generic", "deepseek", "deepseek_chat", "zhipu", "zai", "bigmodel", "glm",
+            "kimi", "moonshot", "minimax", "mini_max", "mimo", "xiaomi_mimo", "xiaomi",
+            "hunyuan", "tencent_hunyuan", "tencent", "openai_image", "volcengine_seedream",
+        ),
+    ),
+    "dashscope": ProviderProfile(
+        provider_id="dashscope",
+        display_name="阿里云 DashScope",
+        adapter_id="qwen",
+        capabilities=QWEN_CAPABILITIES,
+        aliases=("qwen", "aliyun_bailian", "bailian", "tongyi", "dashscope_wanx", "wanx", "aliyun_wanx"),
     ),
     "anthropic": ProviderProfile(
         provider_id="anthropic",
-        display_name="Anthropic Claude Messages",
+        display_name="Anthropic Messages",
         adapter_id="anthropic",
         capabilities=ANTHROPIC_CAPABILITIES,
         aliases=("claude",),
         notes=("Uses Anthropic native Messages API through langchain-anthropic.",),
-    ),
-    "deepseek": ProviderProfile(
-        provider_id="deepseek",
-        display_name="DeepSeek",
-        adapter_id="deepseek",
-        capabilities=DEEPSEEK_CAPABILITIES,
-        aliases=("deepseek_chat",),
-        notes=("Reasoning models may not support tool calling in the same request.",),
-    ),
-    "qwen": ProviderProfile(
-        provider_id="qwen",
-        display_name="Qwen / Alibaba Bailian DashScope",
-        adapter_id="qwen",
-        capabilities=QWEN_CAPABILITIES,
-        aliases=("dashscope", "aliyun_bailian", "bailian", "tongyi"),
-    ),
-    "zhipu": ProviderProfile(
-        provider_id="zhipu",
-        display_name="Zhipu / Z.ai GLM",
-        adapter_id="zhipu",
-        capabilities=ZHIPU_CAPABILITIES,
-        aliases=("zai", "bigmodel", "glm"),
-    ),
-    "kimi": ProviderProfile(
-        provider_id="kimi",
-        display_name="Kimi / Moonshot",
-        adapter_id="kimi",
-        capabilities=KIMI_CAPABILITIES,
-        aliases=("moonshot",),
-    ),
-    "minimax": ProviderProfile(
-        provider_id="minimax",
-        display_name="MiniMax",
-        adapter_id="minimax",
-        capabilities=MINIMAX_CAPABILITIES,
-        aliases=("mini_max",),
-    ),
-    "mimo": ProviderProfile(
-        provider_id="mimo",
-        display_name="Xiaomi MiMo",
-        adapter_id="mimo",
-        capabilities=MIMO_CAPABILITIES,
-        aliases=("xiaomi_mimo", "xiaomi"),
-    ),
-    "hunyuan": ProviderProfile(
-        provider_id="hunyuan",
-        display_name="Tencent Hunyuan",
-        adapter_id="hunyuan",
-        capabilities=HUNYUAN_CAPABILITIES,
-        aliases=("tencent_hunyuan", "tencent"),
     ),
 }
 
@@ -243,7 +198,7 @@ _PROFILE_ALIASES: dict[str, str] = {
 
 
 def resolve_provider_profile(provider: str | None) -> ProviderProfile:
-    key = (provider or "openai_compatible_chat").strip().lower()
+    key = (provider or "openai").strip().lower()
     provider_id = _PROFILE_ALIASES.get(key)
     if provider_id is None:
         supported = ", ".join(sorted(PROVIDER_PROFILES))

@@ -45,6 +45,7 @@ export interface BackgroundTask {
     source?: string | null
     model_role?: string | null
     node_id?: string | null
+    compression_status?: string | null
   } | null
   result_summary: string
   result?: Record<string, unknown> | null

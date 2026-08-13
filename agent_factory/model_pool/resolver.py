@@ -20,6 +20,19 @@ from agent_factory.models import ChatModelSettings, resolve_provider_profile
 from agent_factory.models.chat_model import create_chat_model_from_settings
 
 
+def resolve_protocol_base_url(provider: str, base_url: str, *, kind: str) -> str:
+    normalized_provider = str(provider or "").strip().lower()
+    normalized_url = str(base_url or "").strip().rstrip("/")
+    if normalized_provider != "dashscope":
+        return normalized_url
+    origin = normalized_url.split("/api/v1", 1)[0].split("/compatible-mode/v1", 1)[0].rstrip("/")
+    if kind in {"chat", "embedding"}:
+        return f"{origin}/compatible-mode/v1"
+    if kind == "image_generation":
+        return f"{origin}/api/v1"
+    raise ValueError(f"unsupported DashScope model kind: {kind}")
+
+
 @dataclass(frozen=True, slots=True)
 class ResolvedChatModelProfile:
     profile_id: str
@@ -61,7 +74,7 @@ def resolve_chat_model_profile(
         profile=provider_profile,
         model=profile.model_name,
         api_key=credential.api_key,
-        base_url=credential.base_url,
+        base_url=resolve_protocol_base_url(profile.provider, credential.base_url, kind="chat"),
         profile_id=profile.profile_id,
         source="model_pool",
         temperature=(
@@ -158,7 +171,7 @@ def resolve_image_generation_model_profile(
         provider=profile.provider,
         model=profile.model_name,
         api_key=credential.api_key,
-        base_url=credential.base_url,
+        base_url=resolve_protocol_base_url(profile.provider, credential.base_url, kind="image_generation"),
         profile_id=profile.profile_id,
         source="model_pool",
         timeout_seconds=profile.limits.timeout_seconds,

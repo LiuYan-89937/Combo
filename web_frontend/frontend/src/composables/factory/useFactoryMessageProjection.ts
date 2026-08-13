@@ -214,7 +214,7 @@ function messagePartsKey(message: TranscriptItem): string {
 
 function partHasDisplayContent(part: ChatMessagePart): boolean {
   if (part.type === 'text' || part.type === 'reasoning') return part.text.trim().length > 0
-  return ['tool_call', 'tool_result', 'attachment', 'artifact', 'error', 'status'].includes(part.type)
+  return ['tool_call', 'tool_result', 'attachment', 'artifact', 'error', 'status', 'delegated_delivery'].includes(part.type)
 }
 
 function isToolActivityRunning(tool: ToolActivity): boolean {

@@ -1,10 +1,10 @@
 import { backendUrl } from './backendUrl'
 import { runtimeClientInstanceId, runtimePrincipalId } from './runtimeIdentity'
 
-export const RUNTIME_PROTOCOL_VERSION = 'dynamic_runtime.v11'
-export const RUNTIME_SCHEMA_VERSION = 'dynamic_runtime_schema.v11'
+export const RUNTIME_PROTOCOL_VERSION = 'dynamic_runtime.v13'
+export const RUNTIME_SCHEMA_VERSION = 'dynamic_runtime_schema.v12'
 
-export type ExecutionPreference = 'auto' | 'react' | 'plan_and_execute'
+export type ExecutionPreference = 'react' | 'plan_and_execute'
 export type ApprovalMode = 'ask' | 'auto' | 'always_approval'
 
 export interface RuntimeDescriptor {

@@ -67,13 +67,7 @@ def commit_delegated_task_transition(
     payload["agent_name"] = task.agent_name
     payload["objective"] = task.objective
     if event_type == "cancelled":
-        error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
-        details = error.get("details") if isinstance(error.get("details"), dict) else {}
-        payload["cancel_source"] = (
-            "user"
-            if str(details.get("reason") or "") == "user_cancelled"
-            else "runtime"
-        )
+        payload["cancel_source"] = "user" if instance.cancel_reason == "user_cancelled" else "runtime"
     payload["session_id"] = request.session_id
     attempt_id = str(instance.attempt_id or instance.cancel_command_id or "").strip()
     if not attempt_id:

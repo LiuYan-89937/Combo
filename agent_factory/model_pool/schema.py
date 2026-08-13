@@ -53,7 +53,6 @@ class ModelPoolCapabilities(BaseModel):
     image_edit: bool = False
     multi_image_reference: bool = False
     batch_generation: bool = False
-    async_job: bool = False
 
     @field_validator("input_modalities", "output_modalities", "structured_output_methods", "reasoning_efforts")
     @classmethod
@@ -513,7 +512,6 @@ def provider_default_capabilities(provider: str, *, kind: ModelPoolProfileKind =
             image_edit=capabilities.get("image_edit", False),
             multi_image_reference=capabilities.get("multi_image_reference", False),
             batch_generation=capabilities.get("batch_generation", False),
-            async_job=capabilities.get("async_job", False),
         )
     profile = resolve_provider_profile(provider)
     capabilities = profile.capabilities

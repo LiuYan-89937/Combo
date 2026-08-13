@@ -305,7 +305,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onMounted } from 'vue'
+import { ref, computed, watch, nextTick, onBeforeUnmount, onMounted } from 'vue'
 import { RouterLink, type RouteLocationRaw } from 'vue-router'
 import { NInput, NButton, NIcon, NText, NPopover, NRadioButton, NRadioGroup, NSelect, useMessage } from 'naive-ui'
 import { ArrowForward, AttachOutline, CaretDown, Close, CodeSlash, Stop } from '@/components/icons'
@@ -319,6 +319,11 @@ import { MAX_RUNTIME_ATTACHMENTS, extensionFromMimeType, pastedImageFiles, runti
 import type { ContextReferenceInput, QueuedMessageView, RuntimeAttachmentInput } from '@/types/protocol'
 import { useContextReferenceStore } from '@/stores/contextReferences'
 import type { ApprovalMode, ExecutionPreference } from '@/api/dynamicRuntime'
+import {
+  clearConversationDraft,
+  loadConversationDraft,
+  saveConversationDraft,
+} from '@/utils/conversationDrafts'
 
 const { t } = useI18n()
 const messageApi = useMessage()
@@ -352,6 +357,7 @@ const props = withDefaults(
     approvalControlEnabled?: boolean
     approvalMode?: ApprovalMode
     referenceScope?: string
+    draftScope?: string
     disabledHint?: string
     disabledHintRoute?: RouteLocationRaw
   }>(),
@@ -371,11 +377,12 @@ const props = withDefaults(
     reasoningControlEnabled: false,
     reasoningIntensity: null,
     executionControlEnabled: false,
-    executionPreference: 'auto',
+    executionPreference: 'react',
     forceCollaboration: false,
     approvalControlEnabled: false,
     approvalMode: 'ask',
     referenceScope: 'global',
+    draftScope: '',
     disabledHint: '',
   }
 )
@@ -399,6 +406,9 @@ const inputText = ref('')
 const attachments = ref<RuntimeAttachmentInput[]>([])
 const approvalPopoverVisible = ref(false)
 const normalizedReferenceScope = computed(() => String(props.referenceScope || '').trim() || 'global')
+const normalizedDraftScope = computed(() => (
+  String(props.draftScope || '').trim() || normalizedReferenceScope.value
+))
 const contextReferences = computed(() => referenceStore.references(normalizedReferenceScope.value))
 const placeholder = computed(() => props.placeholder || t('chat.inputPlaceholder'))
 const reasoningOptions = computed(() => [
@@ -458,6 +468,7 @@ function handleKeyDown(e: KeyboardEvent) {
 
 function handleTextUpdate(value: string) {
   inputText.value = value
+  saveConversationDraft(normalizedDraftScope.value, value)
   emit('input', value)
 }
 
@@ -487,6 +498,7 @@ function handleSend() {
 
   // 清空输入
   inputText.value = ''
+  clearConversationDraft(normalizedDraftScope.value)
   attachments.value = []
   referenceStore.clear(normalizedReferenceScope.value)
 }
@@ -523,7 +535,7 @@ function handleApprovalSelect(value: string | number) {
 function togglePlanMode() {
   emit(
     'update:executionPreference',
-    props.executionPreference === 'plan_and_execute' ? 'auto' : 'plan_and_execute',
+    props.executionPreference === 'plan_and_execute' ? 'react' : 'plan_and_execute',
   )
 }
 
@@ -637,12 +649,14 @@ function focus() {
 
 function clearTrailingAtMention() {
   inputText.value = inputText.value.replace(/@[^\s@]*$/, '')
+  saveConversationDraft(normalizedDraftScope.value, inputText.value)
   emit('input', inputText.value)
   focus()
 }
 
 function restoreDraft(message: string, draftAttachments: RuntimeAttachmentInput[]) {
   inputText.value = message
+  saveConversationDraft(normalizedDraftScope.value, message)
   attachments.value = []
   referenceStore.clear(normalizedReferenceScope.value)
   draftAttachments.forEach(attachment => {
@@ -669,6 +683,16 @@ watch(
 )
 
 watch(
+  normalizedDraftScope,
+  (scope, previousScope) => {
+    if (previousScope) saveConversationDraft(previousScope, inputText.value)
+    inputText.value = loadConversationDraft(scope)
+    emit('input', inputText.value)
+  },
+  { immediate: true },
+)
+
+watch(
   () => props.attachmentsEnabled,
   (enabled) => {
     if (!enabled) {
@@ -679,6 +703,10 @@ watch(
 
 onMounted(() => {
   void loadFileCapabilities()
+})
+
+onBeforeUnmount(() => {
+  saveConversationDraft(normalizedDraftScope.value, inputText.value)
 })
 
 // 暴露方法

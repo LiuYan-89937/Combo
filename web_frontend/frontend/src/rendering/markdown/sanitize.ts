@@ -54,5 +54,10 @@ export function markdownSanitizeSchema() {
     'mtd',
     'annotation',
   ]))
+  schema.protocols = {
+    ...(schema.protocols || {}),
+    href: Array.from(new Set([...(schema.protocols?.href || []), 'blob'])),
+    src: Array.from(new Set([...(schema.protocols?.src || []), 'blob'])),
+  }
   return schema
 }

@@ -7,7 +7,7 @@ from uuid import uuid5, NAMESPACE_URL
 
 from agent_factory.dynamic_runtime.application import DynamicRuntimeApplication
 from agent_factory.dynamic_runtime.dispatcher import CommandDispatcher
-from agent_factory.dynamic_runtime.launch_context import render_delegation_notifications
+from agent_factory.dynamic_runtime.launch_context import render_delegation_notification_message
 from agent_factory.dynamic_runtime.outbox_publisher import OutboxPublisher
 from agent_factory.runtime_protocol import CommandEnvelope, CommandReceipt, SendMessagePayload
 from agent_factory.runtime_protocol.versioning import RUNTIME_PROTOCOL_VERSION
@@ -208,7 +208,7 @@ class DynamicRuntimeSupervisor:
             session_id=session_id,
             payload=SendMessagePayload(
                 message_id=message_id,
-                content="Process the delegated task completion notification supplied by the runtime context.",
+                content=render_delegation_notification_message(event),
                 visibility="internal",
                 notification_event_ids=(event_id,),
             ),

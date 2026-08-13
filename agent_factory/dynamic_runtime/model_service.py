@@ -117,6 +117,23 @@ class RuntimeModelResolver:
             input_modalities=tuple(profile.capabilities.input_modalities),
         )
 
+    def context_limits_for_snapshot(
+        self,
+        snapshot: ModelSelectionSnapshot,
+    ) -> dict[str, int | None]:
+        profile = self._store.require_profile_revision(
+            snapshot.profile_id,
+            snapshot.profile_revision,
+        )
+        if profile.kind != "chat":
+            raise RuntimeModelResolutionError(
+                f"runtime context limits require a chat model profile: {profile.profile_id}"
+            )
+        return {
+            "context_window_tokens": profile.limits.max_input_tokens,
+            "compression_threshold_tokens": profile.limits.compression_trigger_tokens,
+        }
+
     def resolve_policy(
         self,
         policy: UserRuntimePolicy,

@@ -1,4 +1,4 @@
-import type { McpServerConfig } from '@/api/resourceTypes'
+import type { McpBindingReference, McpServerConfig } from '@/api/resourceTypes'
 
 type JsonObject = Record<string, unknown>
 
@@ -130,9 +130,21 @@ function normalizeArgs(value: unknown): string | string[] {
   return text
 }
 
-function stringRecord(value: unknown): Record<string, string> | undefined {
+function stringRecord(value: unknown): Record<string, McpBindingReference> | undefined {
   if (!isObject(value)) return undefined
-  const entries = Object.entries(value).map(([key, item]) => [key, String(item)] as const)
+  const entries: Array<[string, McpBindingReference]> = []
+  Object.entries(value).forEach(([key, item]) => {
+    if (isObject(item) && item.source === 'process_environment' && item.name) {
+      entries.push([key, { source: 'process_environment', name: String(item.name) }])
+      return
+    }
+    if (isObject(item) && item.source === 'literal' && item.value != null) {
+      entries.push([key, { source: 'literal', value: String(item.value) }])
+      return
+    }
+    if (item == null || typeof item === 'object') return
+    entries.push([key, { source: 'literal', value: String(item) }])
+  })
   return entries.length > 0 ? Object.fromEntries(entries) : undefined
 }
 

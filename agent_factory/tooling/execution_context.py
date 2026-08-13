@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar, copy_context
 from dataclasses import dataclass
 import threading
+import time
 from typing import Any, Callable, Iterator
 
 
@@ -37,9 +38,17 @@ _RUNTIME_RUN_CONTROL: ContextVar[Any | None] = ContextVar(
     "agentfactory_runtime_run_control",
     default=None,
 )
+_TOOL_CANCELLATION_SCOPE: ContextVar["ToolCancellationScope | None"] = ContextVar(
+    "agentfactory_tool_cancellation_scope",
+    default=None,
+)
 
 
 class RuntimeToolExecutionCancelled(RuntimeError):
+    pass
+
+
+class RuntimeToolExecutionTimedOut(TimeoutError):
     pass
 
 
@@ -54,6 +63,44 @@ class RuntimeModelGenerationInterrupted(RuntimeError):
         super().__init__(message)
         self.partial_text = str(partial_text or "")
         self.reasoning_content = str(reasoning_content or "")
+
+
+class ToolCancellationScope:
+    """Own cancellation hooks for one tool invocation, including timeout cleanup."""
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._callbacks: dict[int, Callable[[], None]] = {}
+        self._next_id = 0
+        self._cancelled = False
+
+    def register(self, callback: Callable[[], None]) -> Callable[[], None]:
+        with self._lock:
+            self._next_id += 1
+            registration_id = self._next_id
+            cancel_now = self._cancelled
+            if not cancel_now:
+                self._callbacks[registration_id] = callback
+        if cancel_now:
+            callback()
+
+        def unregister() -> None:
+            with self._lock:
+                self._callbacks.pop(registration_id, None)
+
+        return unregister
+
+    def cancel(self) -> None:
+        with self._lock:
+            if self._cancelled:
+                return
+            self._cancelled = True
+            callbacks = tuple(self._callbacks.values())
+        for callback in callbacks:
+            try:
+                callback()
+            except Exception:
+                continue
 
 
 @contextmanager
@@ -209,16 +256,23 @@ def execute_runtime_model_invocation(operation: Callable[[], Any], *, revision: 
 
 
 def register_runtime_tool_cancellation(callback: Callable[[], None]) -> Callable[[], None]:
+    local_scope = _TOOL_CANCELLATION_SCOPE.get()
+    unregister_local = local_scope.register(callback) if local_scope is not None else lambda: None
     control = current_runtime_run_control()
     register = getattr(control, "register_tool_cancellation", None)
     if callable(register):
-        return register(callback)
+        unregister_runtime = register(callback)
+        return lambda: (unregister_runtime(), unregister_local())
     if control is not None and bool(getattr(control, "drain_requested", False)):
         callback()
-    return lambda: None
+    return unregister_local
 
 
-def execute_with_runtime_cancellation(operation: Callable[[], Any]) -> Any:
+def execute_with_runtime_cancellation(
+    operation: Callable[[], Any],
+    *,
+    timeout_seconds: float,
+) -> Any:
     """Run a synchronous tool operation behind the shared run cancellation boundary.
 
     Python cannot safely terminate an arbitrary worker thread. On cancellation the
@@ -226,16 +280,19 @@ def execute_with_runtime_cancellation(operation: Callable[[], Any]) -> Any:
     as MCP and shell also register their own hook to terminate external I/O.
     """
 
+    if timeout_seconds <= 0:
+        raise ValueError("tool timeout_seconds must be positive")
     control = current_runtime_run_control()
-    if control is None:
-        return operation()
-    if bool(getattr(control, "drain_requested", False)):
+    if control is not None and bool(getattr(control, "drain_requested", False)):
         raise RuntimeToolExecutionCancelled(_runtime_cancel_reason(control))
 
     completed = threading.Event()
     cancelled = threading.Event()
     outcome: dict[str, Any] = {}
+    cancellation_scope = ToolCancellationScope()
+    scope_token = _TOOL_CANCELLATION_SCOPE.set(cancellation_scope)
     context = copy_context()
+    _TOOL_CANCELLATION_SCOPE.reset(scope_token)
 
     def run() -> None:
         try:
@@ -248,11 +305,20 @@ def execute_with_runtime_cancellation(operation: Callable[[], Any]) -> Any:
     unregister = register_runtime_tool_cancellation(cancelled.set)
     worker = threading.Thread(target=run, name="agentfactory-tool-call", daemon=True)
     worker.start()
+    deadline = time.monotonic() + timeout_seconds
     try:
         while not completed.is_set():
-            if cancelled.wait(timeout=0.05) or bool(getattr(control, "drain_requested", False)):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                cancellation_scope.cancel()
+                raise RuntimeToolExecutionTimedOut(
+                    f"Tool execution timed out after {timeout_seconds:g} seconds."
+                )
+            if cancelled.wait(timeout=min(0.05, remaining)) or bool(
+                control is not None and getattr(control, "drain_requested", False)
+            ):
                 raise RuntimeToolExecutionCancelled(_runtime_cancel_reason(control))
-        if cancelled.is_set() or bool(getattr(control, "drain_requested", False)):
+        if cancelled.is_set() or bool(control is not None and getattr(control, "drain_requested", False)):
             raise RuntimeToolExecutionCancelled(_runtime_cancel_reason(control))
         error = outcome.get("error")
         if error is not None:

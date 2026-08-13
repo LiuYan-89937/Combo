@@ -4,6 +4,7 @@ import json
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import nullcontext
 from copy import deepcopy
+from datetime import datetime, timezone
 from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
@@ -209,6 +210,7 @@ class AgentFactoryToolNode:
                 "status": "proposed",
             }
         )
+        started_at = datetime.now(timezone.utc).isoformat()
         with tool_call_context(
             tool_id=tool_id,
             tool_call_id=tool_call_id,
@@ -217,6 +219,7 @@ class AgentFactoryToolNode:
             event_sink=self._emit,
         ):
             result = execute(request)
+        completed_at = datetime.now(timezone.utc).isoformat()
         if isinstance(result, ToolMessage):
             normalized = _normalize_tool_message(
                 result,
@@ -248,6 +251,7 @@ class AgentFactoryToolNode:
                 tool_call_id=tool_call_id,
                 payload=normalized,
                 status="success" if event_type in {"tool_completed", "tool_contract_invalid"} else "error",
+                timing={"started_at": started_at, "completed_at": completed_at},
             )
         self._emit(
             {
@@ -755,7 +759,14 @@ def _tool_event_type(payload: dict[str, Any]) -> str:
     return "tool_failed"
 
 
-def _tool_message(*, tool_id: str, tool_call_id: str, payload: dict[str, Any], status: str = "success") -> ToolMessage:
+def _tool_message(
+    *,
+    tool_id: str,
+    tool_call_id: str,
+    payload: dict[str, Any],
+    status: str = "success",
+    timing: dict[str, str] | None = None,
+) -> ToolMessage:
     public_payload, image = _tool_observation_image(payload)
     additional_kwargs: dict[str, Any] = {}
     if image is not None:
@@ -764,6 +775,8 @@ def _tool_message(*, tool_id: str, tool_call_id: str, payload: dict[str, Any], s
             "path": image_path,
             "mime_type": mime_type,
         }
+    if timing:
+        additional_kwargs["agent_factory_tool_timing"] = dict(timing)
     return ToolMessage(
         content=json.dumps(public_payload, ensure_ascii=False, sort_keys=True),
         name=tool_id,

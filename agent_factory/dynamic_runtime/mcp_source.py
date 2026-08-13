@@ -44,19 +44,27 @@ class MCPConfigCapabilitySource:
         runtime: MCPRuntimePool,
         environment_resolver: Callable[[str], str | None],
         report_unavailable: Callable[[str, BaseException], None],
+        report_progress: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> None:
         self._config = config
         self._runtime = runtime
         self._environment_resolver = environment_resolver
         self._report_unavailable = report_unavailable
+        self._report_progress = report_progress
         self._discovery_complete = True
+        self._active_server_digests: set[str] = set()
 
     @property
     def discovery_complete(self) -> bool:
         return self._discovery_complete
 
+    @property
+    def active_server_digests(self) -> frozenset[str]:
+        return frozenset(self._active_server_digests)
+
     def drafts(self) -> tuple[CapabilityDraft, ...]:
         self._discovery_complete = True
+        self._active_server_digests = set()
         document = json.loads(self._config.path.read_text(encoding="utf-8"))
         if document.get("version") != "mcp_servers.v0" or not isinstance(document.get("servers"), list):
             raise ValueError("MCP server registry must use mcp_servers.v0")
@@ -66,10 +74,15 @@ class MCPConfigCapabilitySource:
                 continue
             newly_registered_digest: str | None = None
             try:
+                server_id = str(raw.get("server_id") or "").strip() or "<invalid>"
+                self._progress("validating", server_id, {})
                 server_draft, binding = self._server_draft(raw)
                 if self._runtime.register(server_draft.content_digest, binding):
                     newly_registered_digest = server_draft.content_digest
-                tools = self._runtime.discover_tools(server_draft.content_digest)
+                catalog = self._runtime.discover(
+                    server_draft.content_digest,
+                    on_progress=lambda stage, detail: self._progress(stage, server_id, detail),
+                )
             except Exception as exc:
                 if newly_registered_digest is not None:
                     self._runtime.unregister(newly_registered_digest)
@@ -80,8 +93,19 @@ class MCPConfigCapabilitySource:
                 self._discovery_complete = False
                 continue
             drafts.append(server_draft)
-            drafts.extend(self._tool_drafts(raw, server_draft, tools))
+            self._active_server_digests.add(server_draft.content_digest)
+            drafts.extend(self._tool_drafts(raw, server_draft, catalog.tools))
+            self._progress("capabilities_prepared", server_id, {
+                "tool_count": len(catalog.tools),
+                "resource_count": len(catalog.resources),
+                "resource_template_count": len(catalog.resource_templates),
+                "prompt_count": len(catalog.prompts),
+            })
         return tuple(drafts)
+
+    def _progress(self, stage: str, server_id: str, detail: dict[str, Any]) -> None:
+        if self._report_progress is not None:
+            self._report_progress(stage, {"server_id": server_id, **detail})
 
     def _server_draft(self, raw: dict[str, Any]) -> tuple[CapabilityDraft, MCPServerRuntimeBinding]:
         server_id = str(raw.get("server_id") or "").strip()
@@ -135,6 +159,7 @@ class MCPConfigCapabilitySource:
             updated_by_principal_id=self._config.publisher_principal_id,
         )
         binding = MCPServerRuntimeBinding(
+            server_id=server_id,
             transport=definition.transport,
             executable=definition.executable,
             arguments=definition.arguments,
@@ -230,7 +255,7 @@ class MCPConfigCapabilitySource:
                             CapabilityDependencyRef(
                                 capability_id=server.capability_id,
                                 kind="mcp_server",
-                                version_constraint=f"={server.resolved_version}",
+                                version_constraint=f"==={server.resolved_version}",
                             ),
                         ),
                     ),

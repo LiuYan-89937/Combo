@@ -92,6 +92,7 @@
           :disabled="store.saving"
           :is-running="false"
           :reference-scope="referenceScope"
+          :draft-scope="referenceScope"
           @send="sendMessage"
           @cancel="cancelActiveRuns"
           @input="handleComposerInput"

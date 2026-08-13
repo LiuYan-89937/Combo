@@ -18,7 +18,9 @@ from agent_factory.tooling.builtins.capability.specs import get_capability_tool_
 from agent_factory.tooling.builtins.delegation.specs import get_delegation_tool_specs
 from agent_factory.tooling.builtins.filesystem.specs import get_filesystem_tool_specs
 from agent_factory.tooling.builtins.knowledge.specs import get_knowledge_tool_specs
+from agent_factory.tooling.builtins.image_generation.specs import get_image_generation_tool_specs
 from agent_factory.tooling.builtins.memory.specs import get_memory_tool_specs
+from agent_factory.tooling.builtins.mcp_content.specs import get_mcp_content_tool_specs
 from agent_factory.tooling.builtins.process.specs import get_process_tool_specs
 from agent_factory.tooling.builtins.scheduler.specs import get_scheduler_tool_specs
 from agent_factory.tooling.builtins.skillhub.specs import get_skillhub_tool_specs
@@ -34,6 +36,7 @@ class BuiltinToolSourceConfig:
     publisher_principal_id: str
     source_prefix: str
     overrides_path: Path
+    image_generation_enabled: bool = False
 
     def __post_init__(self) -> None:
         if not self.build_revision.strip():
@@ -60,11 +63,13 @@ class BuiltinToolCapabilitySource:
             *get_capability_tool_specs(),
             *get_delegation_tool_specs(),
             *get_memory_tool_specs(),
+            *get_mcp_content_tool_specs(),
             *get_knowledge_tool_specs(),
             *get_scheduler_tool_specs(),
             *get_skillhub_tool_specs(),
             *get_skill_tool_specs(),
             *get_browser_tool_specs(),
+            *(get_image_generation_tool_specs() if self._config.image_generation_enabled else ()),
         )
         aliases = tuple(spec.id for spec in specs)
         if len(aliases) != len(set(aliases)):
@@ -243,8 +248,6 @@ class BuiltinToolCapabilitySource:
     def _runtime_resources(spec: ToolSpec) -> tuple[str, ...]:
         names: list[str] = []
         for local_name, resource_name in spec.resources.items():
-            if resource_name == TOOL_OUTPUT_STORE_RESOURCE:
-                continue
             if local_name != resource_name:
                 raise ValueError(
                     f"builtin runtime resource aliases must be identical: {spec.id}:{local_name}"

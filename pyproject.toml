@@ -29,6 +29,7 @@ dependencies = [
     "jsonschema>=4.23",
     "mcp>=1.0",
     "packaging>=24",
+    "uritemplate>=4.1,<5",
     "pydantic>=2.8",
     "playwright>=1.54,<2",
     "pypdf>=4.0",

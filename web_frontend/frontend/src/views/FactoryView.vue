@@ -69,6 +69,7 @@
           approval-control-enabled
           :approval-mode="approvalMode"
           :reference-scope="referenceScope"
+          :draft-scope="referenceScope"
           @update:selected-model-profile-id="setSelectedMainModelProfileId"
           @update:reasoning-intensity="setReasoningIntensity"
           @update:execution-preference="setExecutionPreference"

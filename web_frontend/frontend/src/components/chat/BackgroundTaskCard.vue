@@ -1,7 +1,7 @@
 <template>
   <article ref="rootRef" class="background-task-card" :class="`task-state-${view.status}`">
     <header class="task-header">
-      <span class="task-mark" aria-hidden="true">
+      <span v-if="!compactHeader" class="task-mark" aria-hidden="true">
         <SubAgentMascot
           :status="view.status"
           :task-id="view.id"
@@ -9,7 +9,7 @@
           :size="42"
         />
       </span>
-      <span class="task-heading">
+      <span v-if="!compactHeader" class="task-heading">
         <strong>{{ view.title }}</strong>
         <small>{{ view.objective }}</small>
         <small v-if="task.model?.model_name" class="task-model">模型 · {{ task.model.model_name }}</small>
@@ -34,7 +34,7 @@
         :loading="deleting"
         @click="deleteTask"
       >
-        {{ t('backgroundTask.delete') }}
+        {{ props.controller ? t('backgroundTask.delete') : t('backgroundTask.dismiss') }}
       </n-button>
     </header>
 
@@ -171,11 +171,13 @@ import { backgroundTasksApi } from '@/api/backgroundTasks'
 import SubAgentMascot from '@/components/brand/SubAgentMascot.vue'
 import ToolExecutionCard from '@/components/chat/ToolExecutionCard.vue'
 import type { ChatMessagePartStatus, ToolExecutionMessagePart } from '@/types/protocol'
+import { backgroundTaskActivityText } from '@/utils/backgroundTaskActivity'
 
 const props = defineProps<{
   task: BackgroundTask
   fallbackTitle?: string
   controller?: BackgroundTaskController
+  compactHeader?: boolean
 }>()
 const emit = defineEmits<{ updated: [task: BackgroundTask]; deleted: [taskId: string] }>()
 const { t } = useI18n()
@@ -276,7 +278,9 @@ async function deleteTask() {
   deleting.value = true
   actionError.value = ''
   try {
-    const deleted = await taskController().delete(task.value)
+    const deleted = props.controller
+      ? await taskController().delete(task.value)
+      : true
     if (deleted) emit('deleted', task.value.task_id)
   } catch (error) {
     actionError.value = error instanceof Error ? error.message : String(error)
@@ -332,7 +336,8 @@ function buildView(current: BackgroundTask, timeline: BackgroundTaskEvent[], fal
     const title = titleKey === 'backgroundTask.activity.current'
       ? ''
       : localize(titleKey) || String(event.payload.title || '').trim()
-    const summary = localize(event.payload.summary_key) || String(event.payload.summary || '').trim()
+    const summary = localize(event.payload.summary_key)
+      || backgroundTaskActivityText(event.payload.summary, t)
     if (!phaseId || !summary) continue
     const occurredAt = String(event.payload.occurred_at || event.created_at)
     const details = recordValue(event.payload.details)
@@ -349,7 +354,7 @@ function buildView(current: BackgroundTask, timeline: BackgroundTaskEvent[], fal
     })
   }
   const reports = Array.from(reportsByPhase.values())
-    .sort((left, right) => Date.parse(left.occurredAt) - Date.parse(right.occurredAt))
+    .sort((left, right) => Date.parse(right.occurredAt) - Date.parse(left.occurredAt))
     .map(report => ({ ...report, toolExecution: toolExecutionFromReport(report)[0] || null }))
   return {
     id: current.task_id,
@@ -357,7 +362,7 @@ function buildView(current: BackgroundTask, timeline: BackgroundTaskEvent[], fal
     objective: current.task_text,
     status: current.status,
     reports,
-    latestSummary: reports.at(-1)?.summary || '',
+    latestSummary: reports.at(0)?.summary || '',
     artifacts: artifactViews(current),
     delivery: current.result_summary || '',
     error: String(
@@ -447,10 +452,11 @@ function formatTime(value: unknown): string {
 </script>
 
 <style scoped>
-.background-task-card { display: grid; gap: 16px; padding: 18px; color: var(--app-text); background: var(--app-surface); }
+.background-task-card { display: grid; gap: 13px; padding: 16px; color: var(--app-text); background: var(--app-surface); }
 .task-header { display: flex; align-items: center; gap: 11px; }
+.task-header:has(.task-status-label:first-child) { min-height: 28px; padding-right: 28px; }
 .task-mark { width: 46px; height: 46px; display: grid; overflow: hidden; place-items: center; border: 1px solid var(--app-border); border-radius: 13px; background: var(--app-surface-muted); }
-.task-heading { min-width: 0; flex: 1; display: grid; gap: 2px; }
+.task-heading { min-width: 0; flex: 1; display: grid; gap: 2px; padding-right: 22px; }
 .task-status-label { flex: 0 0 auto; padding: 4px 8px; border: 1px solid var(--app-border); border-radius: 999px; color: var(--app-text-secondary); font-size: 10px; }
 .task-delete { flex: 0 0 auto; }
 .task-heading strong { overflow-wrap: anywhere; font-size: 14px; }

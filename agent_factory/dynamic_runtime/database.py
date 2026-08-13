@@ -9,7 +9,7 @@ import sqlite3
 from agent_factory.sqlite_runtime import DEFAULT_SQLITE_BUSY_TIMEOUT_MS, connect_sqlite
 
 
-DYNAMIC_RUNTIME_DATABASE_SCHEMA = "dynamic_runtime_database.v22"
+DYNAMIC_RUNTIME_DATABASE_SCHEMA = "dynamic_runtime_database.v23"
 DYNAMIC_RUNTIME_SCHEMA_EPOCH = 2
 
 
@@ -1225,6 +1225,39 @@ def _default_migrations() -> tuple[MigrationStep, ...]:
                       and json_extract(tool.payload_json, '$.result.action') = 'create'
                       and json_extract(tool.payload_json, '$.result.job.job_id') = scheduler_jobs.job_id
                   )
+                """,
+            ),
+        ),
+        MigrationStep(
+            version=23,
+            name="explicit_execution_modes",
+            statements=(
+                """
+                update user_runtime_policies
+                set payload_json = json_set(payload_json, '$.execution_preference', 'react')
+                where json_extract(payload_json, '$.execution_preference') = 'auto'
+                """,
+                """
+                update scheduler_jobs
+                set payload_json = json_set(payload_json, '$.strategy', 'react')
+                where json_extract(payload_json, '$.strategy') = 'auto'
+                """,
+                """
+                update command_inbox
+                set envelope_json = json_set(envelope_json, '$.payload.execution_preference', 'react')
+                where json_extract(envelope_json, '$.payload.execution_preference') = 'auto'
+                """,
+                """
+                update runtime_instances
+                set payload_json = json_set(
+                  json_remove(payload_json, '$.request.route_decision'),
+                  '$.request.capability_requirements',
+                  coalesce(
+                    json_extract(payload_json, '$.request.route_decision.capability_requirements'),
+                    json('[]')
+                  )
+                )
+                where json_type(payload_json, '$.request.route_decision') is not null
                 """,
             ),
         ),

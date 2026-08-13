@@ -53,7 +53,6 @@ from agent_factory.dynamic_runtime.model_service import RuntimeModelResolver
 from agent_factory.dynamic_runtime.memory_store import ScopedMemoryStore
 from agent_factory.dynamic_runtime.memory_search import HybridMemorySearchIndex
 from agent_factory.dynamic_runtime.main_turn import (
-    ExecutionRouter,
     MainTurnCommandHandler,
 )
 from agent_factory.dynamic_runtime.policy_repositories import UserRuntimePolicyStore
@@ -297,7 +296,6 @@ class DynamicRuntimeApplication:
     def main_command_dispatcher(
         self,
         *,
-        execution_router: ExecutionRouter,
         delegated_model_selector: object | None = None,
     ) -> CommandDispatcher:
         handlers: dict[str, CommandHandler] = {
@@ -310,7 +308,6 @@ class DynamicRuntimeApplication:
                 runtime_instances=self.stores.runtime_instances,
                 runtime_policies=self.stores.runtime_policies,
                 model_resolver=self.model_resolver,
-                execution_router=execution_router,
                 capability_resolver=self.capability_resolver,
                 runtime_starts=self.stores.runtime_starts,
                 runtime_service=self.runtime_service,

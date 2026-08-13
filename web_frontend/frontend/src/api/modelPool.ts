@@ -1,6 +1,6 @@
 import { requestJson, withQuery } from './http'
 
-export type ModelUsageGroupBy = 'model' | 'provider' | 'agent'
+export type ModelUsageGroupBy = 'model' | 'credential'
 export interface ModelPoolDefaults {
   context_window_tokens: number
   compression_trigger_tokens: number
@@ -67,7 +67,6 @@ export interface ModelPoolProfile {
     image_edit?: boolean
     multi_image_reference?: boolean
     batch_generation?: boolean
-    async_job?: boolean
   }
   settings: {
     temperature?: number | null
@@ -196,6 +195,7 @@ export interface ModelUsageSummary {
 export interface InfrastructureModelBindings {
   task: string | null
   embedding: string | null
+  image_generation: string | null
 }
 
 export const modelPoolApi = {
@@ -245,7 +245,7 @@ export const modelPoolApi = {
       method: 'DELETE',
     }),
   pingProfile: (profileId: string) =>
-    requestJson<{ status: 'ok'; profile_id: string; latency_ms: number; response_preview?: string; dimensions?: number }>(
+    requestJson<{ status: 'ok'; profile_id: string; latency_ms: number; response_preview?: string; dimensions?: number; image_base64?: string; mime_type?: string }>(
       `/api/model-pool/profiles/${encodeURIComponent(profileId)}/ping`,
       { method: 'POST' },
     ),

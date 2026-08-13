@@ -135,6 +135,13 @@ export interface StatusMessagePart extends BaseChatMessagePart {
   message: string
 }
 
+export interface DelegatedDeliveryMessagePart extends BaseChatMessagePart {
+  type: 'delegated_delivery'
+  taskId: string
+  taskName: string
+  terminalStatus: 'result' | 'failed' | 'cancelled'
+}
+
 export type ChatMessagePart =
   | TextMessagePart
   | ReasoningMessagePart
@@ -145,6 +152,7 @@ export type ChatMessagePart =
   | AttachmentMessagePart
   | ErrorMessagePart
   | StatusMessagePart
+  | DelegatedDeliveryMessagePart
 
 // ========== 命令类型 ==========
 
@@ -542,6 +550,7 @@ export interface ContextWindowView {
   source: string | null
   modelRole: string | null
   nodeId: string | null
+  compressionStatus: string | null
   updatedAt: string
   payload: Record<string, any>
 }

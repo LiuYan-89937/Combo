@@ -34,6 +34,19 @@ class TextPart(FrozenProtocolModel):
         return text
 
 
+class ReasoningPart(FrozenProtocolModel):
+    kind: Literal["reasoning"] = "reasoning"
+    text: str
+
+    @field_validator("text")
+    @classmethod
+    def _text_is_present(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("reasoning part must not be empty")
+        return text
+
+
 class AttachmentPart(FrozenProtocolModel):
     kind: Literal["attachment"] = "attachment"
     attachment: AttachmentRevisionRef
@@ -77,6 +90,8 @@ class ToolResultPart(FrozenProtocolModel):
     status: Literal["completed", "failed", "cancelled", "rejected", "timed_out"]
     output: dict[str, JsonValue] | None = None
     error_code: str | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
 
     @field_validator("tool_call_id")
     @classmethod
@@ -86,7 +101,7 @@ class ToolResultPart(FrozenProtocolModel):
             raise ValueError("tool_call_id must not be empty")
         return text
 
-    @field_validator("error_code")
+    @field_validator("error_code", "started_at", "completed_at")
     @classmethod
     def _optional_error_code(cls, value: str | None) -> str | None:
         text = str(value or "").strip()
@@ -118,7 +133,7 @@ class DiagnosticPart(FrozenProtocolModel):
 
 
 ConversationPart = Annotated[
-    Union[TextPart, AttachmentPart, ArtifactPart, ToolCallPart, ToolResultPart, DiagnosticPart],
+    Union[TextPart, ReasoningPart, AttachmentPart, ArtifactPart, ToolCallPart, ToolResultPart, DiagnosticPart],
     Field(discriminator="kind"),
 ]
 

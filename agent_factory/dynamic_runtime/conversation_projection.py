@@ -10,6 +10,7 @@ from agent_factory.runtime_protocol import (
     CapabilitySnapshot,
     ConversationMessage,
     DiagnosticPart,
+    ReasoningPart,
     TextPart,
     ToolCallPart,
     ToolResultPart,
@@ -96,6 +97,9 @@ def graph_messages_to_conversation(
             content = _message_text(message)
             if content:
                 parts.append(TextPart(text=content))
+            reasoning_content = _message_reasoning(message)
+            if reasoning_content:
+                parts.append(ReasoningPart(text=reasoning_content))
             for call in list(message.tool_calls or []):
                 alias = str(call.get("name") or "").strip()
                 tool_call_id = str(call.get("id") or "").strip()
@@ -198,6 +202,8 @@ def _text_content(message: ConversationMessage) -> str:
             chunks.append(f"[artifact:{part.artifact_id}@{part.revision}]")
         elif isinstance(part, DiagnosticPart):
             chunks.append(f"[diagnostic:{part.user_message_key}]")
+        # ReasoningPart is intentionally persisted for UI recovery but never
+        # projected back into the provider conversation.
     return "\n".join(chunks)
 
 
@@ -236,12 +242,47 @@ def _tool_result_part(message: ToolMessage) -> ToolResultPart:
             tool_call_id=message.tool_call_id,
             status="completed",
             output=_json_object(output if output is not None else payload),
+            **_tool_message_timing(message),
         )
     return ToolResultPart(
         tool_call_id=message.tool_call_id,
         status=status,
+        output=_failed_tool_output(payload),
         error_code=str(payload.get("error_code") or raw_status or "tool_failed"),
+        **_tool_message_timing(message),
     )
+
+
+def _message_reasoning(message: BaseMessage) -> str:
+    return str(getattr(message, "additional_kwargs", {}).get("reasoning_content") or "").strip()
+
+
+def _tool_message_timing(message: ToolMessage) -> dict[str, str]:
+    timing = getattr(message, "additional_kwargs", {}).get("agent_factory_tool_timing")
+    if not isinstance(timing, dict):
+        return {}
+    result: dict[str, str] = {}
+    for target, source in (("started_at", "started_at"), ("completed_at", "completed_at")):
+        value = str(timing.get(source) or "").strip()
+        if value:
+            result[target] = value
+    return result
+
+
+def _failed_tool_output(payload: dict[str, Any]) -> dict[str, Any] | None:
+    details: dict[str, Any] = {}
+    message = str(payload.get("message") or "").strip()
+    if message:
+        details["message"] = message
+    errors = payload.get("errors")
+    if isinstance(errors, list):
+        safe_errors = [str(item).strip() for item in errors if str(item).strip()]
+        if safe_errors:
+            details["errors"] = safe_errors
+    output = payload.get("output")
+    if isinstance(output, dict) and output:
+        details["output"] = _json_object(output)
+    return details or None
 
 
 def _json_object(value: Any) -> dict[str, Any]:

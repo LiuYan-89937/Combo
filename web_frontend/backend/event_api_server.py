@@ -130,6 +130,7 @@ def create_app(config: RuntimeBackendConfig | None = None) -> FastAPI:
     application.include_router(create_model_pool_router(
         usage_store=backend.application.stores.model_usage,
         on_embedding_configuration_changed=backend.refresh_capability_search_embeddings,
+        on_image_generation_configuration_changed=backend.refresh_model_bound_capabilities,
     ))
     application.include_router(create_frontend_interaction_router(backend))
     application.include_router(create_attachment_router())

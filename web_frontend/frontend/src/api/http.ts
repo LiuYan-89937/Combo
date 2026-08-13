@@ -148,16 +148,40 @@ export async function requestFormProgress<T>(
   formData: FormData,
   onProgress: (progress: OperationProgress) => void,
 ): Promise<T> {
-  const response = await fetch(await backendUrl(url), {
+  return requestProgress<T>(url, {
     method: 'POST',
+    body: formData,
+  }, onProgress)
+}
+
+export async function requestJsonProgress<T>(
+  url: string,
+  init: RequestInit,
+  onProgress: (progress: OperationProgress) => void,
+): Promise<T> {
+  return requestProgress<T>(url, init, onProgress)
+}
+
+async function requestProgress<T>(
+  url: string,
+  init: RequestInit,
+  onProgress: (progress: OperationProgress) => void,
+): Promise<T> {
+  const response = await fetch(await backendUrl(url), {
+    ...init,
     headers: {
+      ...(init.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
       'X-AgentFactory-Principal': runtimePrincipalId(),
       'X-AgentFactory-Client': runtimeClientInstanceId(),
       'X-AgentFactory-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
+      ...(init.headers || {}),
     },
-    body: formData,
   })
   if (!response.ok) throw await apiErrorFromResponse(response)
+  const contentType = String(response.headers.get('content-type') || '').toLocaleLowerCase()
+  if (contentType.includes('application/json')) {
+    return response.json() as Promise<T>
+  }
   if (!response.body) throw new Error('Progress response body is unavailable')
 
   const reader = response.body.getReader()

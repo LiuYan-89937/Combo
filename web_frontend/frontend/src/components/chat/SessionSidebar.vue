@@ -60,9 +60,6 @@
               </template>
             </n-button>
             <div class="session-meta">
-              <n-tag size="tiny">
-                {{ modeLabel(sessionMode(session)) }}
-              </n-tag>
               <n-tag
                 v-if="sessionWorkspaceLabel(session)"
                 size="tiny"
@@ -131,6 +128,7 @@ const props = withDefaults(
 )
 const emit = defineEmits<{
   requestNewAgentSession: [packageId: string, initialWorkspaceId: string | null]
+  interactionLock: [locked: boolean]
 }>()
 
 const runtimeStore = useRuntimeStore()
@@ -174,14 +172,14 @@ function handleSelectSession(session: AgentSessionView) {
 }
 
 function confirmDeleteSession(session: AgentSessionView) {
+  emit('interactionLock', true)
   dialog.warning({
     title: t('sessions.deleteTitle'),
     content: t('sessions.deleteContent', { title: sessionTitle(session) }),
     positiveText: t('common.delete'),
     negativeText: t('common.cancel'),
-    onPositiveClick: () => {
-      void commands.deleteAgentPackageSession(session.package_id, session.session_id)
-    },
+    onPositiveClick: () => commands.deleteAgentPackageSession(session.package_id, session.session_id),
+    onAfterLeave: () => emit('interactionLock', false),
   })
 }
 
@@ -221,17 +219,6 @@ function sessionWorkspacePath(session: AgentSessionView): string {
 
 function isActiveSession(session: AgentSessionView): boolean {
   return session.session_id === agentStore.selectedSessionId
-}
-
-function sessionMode(_session: AgentSessionView): string {
-  return 'agent_package'
-}
-
-function modeLabel(mode: string): string {
-  const labels: Record<string, string> = {
-    agent_package: t('sessions.modeAgent'),
-  }
-  return labels[mode] || mode
 }
 
 function formatTime(timestamp: string): string {
