@@ -79,11 +79,25 @@
         <div class="dock-panel"><ConversationMemoryPanel /></div>
       </n-popover>
 
-      <PlanCapsule v-else :side="position(item.id).side" />
+      <PlanCapsule
+        v-else-if="sessionId"
+        :key="`plan:${sessionId}`"
+        :side="position(item.id).side"
+      />
     </div>
 
-    <BackgroundTaskStack :session-id="sessionId" compact />
-    <SchedulerRunCapsules />
+    <BackgroundTaskStack
+      v-if="sessionId"
+      :key="`tasks:${sessionId}`"
+      :session-id="sessionId"
+      compact
+    />
+    <SchedulerRunCapsules
+      v-if="sessionId && workspaceId"
+      :key="`scheduler:${sessionId}`"
+      :session-id="sessionId"
+      :workspace-id="workspaceId"
+    />
 
   </div>
 </template>
@@ -117,7 +131,10 @@ interface DragState {
   originClientY: number
   moved: boolean
 }
-defineProps<{ sessionId?: string | null }>()
+defineProps<{
+  sessionId?: string | null
+  workspaceId?: string | null
+}>()
 const emit = defineEmits<{
   requestNewAgentSession: [packageId: string, initialWorkspaceId: string | null]
 }>()

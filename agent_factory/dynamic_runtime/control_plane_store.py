@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from hashlib import sha256
 import json
+from collections.abc import Callable
 from typing import Any
 from uuid import uuid4
 
@@ -179,6 +180,10 @@ def _knowledge_snippet(content: str, *, match_position: int, maximum_chars: int 
 class WorkspaceSchedulerStore:
     def __init__(self, database: DynamicRuntimeDatabase) -> None:
         self._database = database
+        self._change_listener: Callable[[], None] | None = None
+
+    def bind_change_listener(self, listener: Callable[[], None] | None) -> None:
+        self._change_listener = listener
 
     def jobs(self, workspace_ids: tuple[str, ...]) -> list[dict[str, Any]]:
         if not workspace_ids:
@@ -186,11 +191,19 @@ class WorkspaceSchedulerStore:
         placeholders = ",".join("?" for _ in workspace_ids)
         with self._database.connection(query_only=True) as connection:
             rows = connection.execute(
-                f"select payload_json, status, next_fire_at, last_fire_at from scheduler_jobs where workspace_id in ({placeholders}) and status != 'deleted' order by updated_at desc",
+                f"""
+                select job.payload_json, job.status, job.next_fire_at, job.last_fire_at,
+                       workspace.principal_id
+                from scheduler_jobs as job
+                join workspaces as workspace on workspace.workspace_id = job.workspace_id
+                where job.workspace_id in ({placeholders}) and job.status != 'deleted'
+                order by job.updated_at desc
+                """,
                 workspace_ids,
             ).fetchall()
         return [{
             **json.loads(str(row["payload_json"])),
+            "principal_id": str(row["principal_id"]),
             "status": str(row["status"]),
             "next_fire_at": row["next_fire_at"],
             "last_fire_at": row["last_fire_at"],
@@ -201,23 +214,34 @@ class WorkspaceSchedulerStore:
         now = utc_now_text()
         enabled = bool(payload.get("enabled", True))
         status = "enabled" if enabled else "paused"
-        job = {**payload, "enabled": enabled, "job_id": job_id, "created_at": now, "updated_at": now}
+        job_payload = {key: value for key, value in payload.items() if key != "principal_id"}
+        job = {**job_payload, "enabled": enabled, "job_id": job_id, "created_at": now, "updated_at": now}
         with self._database.transaction() as connection:
             connection.execute(
                 "insert into scheduler_jobs(job_id, workspace_id, revision, status, payload_json, created_at, updated_at, next_fire_at, last_fire_at) values (?, ?, 1, ?, ?, ?, ?, null, null)",
                 (job_id, str(payload["workspace_id"]), status, json.dumps(job, ensure_ascii=False, sort_keys=True), now, now),
             )
+        self._notify_changed()
         return {**job, "status": status, "next_fire_at": None, "last_fire_at": None}
 
     def require_job(self, job_id: str) -> dict[str, Any]:
         with self._database.connection(query_only=True) as connection:
             row = connection.execute(
-                "select payload_json, status from scheduler_jobs where job_id = ? and status != 'deleted'",
+                """
+                select job.payload_json, job.status, workspace.principal_id
+                from scheduler_jobs as job
+                join workspaces as workspace on workspace.workspace_id = job.workspace_id
+                where job.job_id = ? and job.status != 'deleted'
+                """,
                 (job_id,),
             ).fetchone()
         if row is None:
             raise LookupError(f"scheduler job not found: {job_id}")
-        return {**json.loads(str(row["payload_json"])), "status": str(row["status"])}
+        return {
+            **json.loads(str(row["payload_json"])),
+            "principal_id": str(row["principal_id"]),
+            "status": str(row["status"]),
+        }
 
     def create_run(self, *, job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         run_id = uuid4().hex
@@ -252,11 +276,19 @@ class WorkspaceSchedulerStore:
     def enabled_jobs(self) -> list[dict[str, Any]]:
         with self._database.connection(query_only=True) as connection:
             rows = connection.execute(
-                "select payload_json, status, next_fire_at, last_fire_at from scheduler_jobs where status = 'enabled' order by created_at"
+                """
+                select job.payload_json, job.status, job.next_fire_at, job.last_fire_at,
+                       workspace.principal_id
+                from scheduler_jobs as job
+                join workspaces as workspace on workspace.workspace_id = job.workspace_id
+                where job.status = 'enabled'
+                order by job.created_at
+                """
             ).fetchall()
         return [
             {
                 **json.loads(str(row["payload_json"])),
+                "principal_id": str(row["principal_id"]),
                 "status": str(row["status"]),
                 "next_fire_at": row["next_fire_at"],
                 "last_fire_at": row["last_fire_at"],
@@ -406,11 +438,27 @@ class WorkspaceSchedulerStore:
             rows = connection.execute(query, parameters).fetchall()
         return [{**json.loads(str(row["payload_json"])), "status": str(row["status"])} for row in rows]
 
-    def runs_for_principal(self, principal_id: str, *, job_id: str | None, limit: int) -> list[dict[str, Any]]:
-        owned_job_ids = {
-            str(job["job_id"])
-            for job in self.jobs_for_principal(principal_id)
-        }
+    def runs_for_principal(
+        self,
+        principal_id: str,
+        *,
+        job_id: str | None,
+        workspace_id: str | None = None,
+        source_session_id: str | None = None,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        owned_jobs = self.jobs_for_principal(principal_id)
+        if workspace_id is not None:
+            owned_jobs = [
+                job for job in owned_jobs
+                if str(job.get("workspace_id") or "") == workspace_id
+            ]
+        if source_session_id is not None:
+            owned_jobs = [
+                job for job in owned_jobs
+                if str(job.get("source_session_id") or "") == source_session_id
+            ]
+        owned_job_ids = {str(job["job_id"]) for job in owned_jobs}
         if job_id is not None and job_id not in owned_job_ids:
             return []
         runs = self.runs(job_id=job_id, limit=limit)
@@ -420,14 +468,20 @@ class WorkspaceSchedulerStore:
         with self._database.connection(query_only=True) as connection:
             rows = connection.execute(
                 """
-                select payload_json, status from scheduler_jobs
-                where status != 'deleted' and json_extract(payload_json, '$.principal_id') = ?
-                order by created_at
+                select job.payload_json, job.status, workspace.principal_id
+                from scheduler_jobs as job
+                join workspaces as workspace on workspace.workspace_id = job.workspace_id
+                where job.status != 'deleted' and workspace.principal_id = ?
+                order by job.created_at
                 """,
                 (principal_id,),
             ).fetchall()
         return [
-            {**json.loads(str(row["payload_json"])), "status": str(row["status"])}
+            {
+                **json.loads(str(row["payload_json"])),
+                "principal_id": str(row["principal_id"]),
+                "status": str(row["status"]),
+            }
             for row in rows
         ]
 
@@ -466,3 +520,9 @@ class WorkspaceSchedulerStore:
             )
             if cursor.rowcount != 1:
                 raise LookupError(f"scheduler job not found: {job_id}")
+        self._notify_changed()
+
+    def _notify_changed(self) -> None:
+        listener = self._change_listener
+        if listener is not None:
+            listener()

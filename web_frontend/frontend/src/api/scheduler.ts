@@ -23,8 +23,14 @@ export const schedulerApi = {
     requestEvent(withQuery(`/api/scheduler/jobs/${encodeURIComponent(jobId)}`, { package_id: packageId }), {
       method: 'DELETE',
     }),
-  runs: (jobId?: string, limit = 20, packageId?: string) =>
-    requestEvent(withQuery('/api/scheduler/runs', { job_id: jobId, limit, package_id: packageId })),
+  runs: (jobId?: string, limit = 20, packageId?: string, workspaceId?: string, sourceSessionId?: string) =>
+    requestEvent(withQuery('/api/scheduler/runs', {
+      job_id: jobId,
+      limit,
+      package_id: packageId,
+      workspace_id: workspaceId,
+      source_session_id: sourceSessionId,
+    })),
   runNow: (jobId: string, packageId?: string) =>
     requestJson<CommandResponse>(`/api/scheduler/jobs/${encodeURIComponent(jobId)}/run`, {
       method: 'POST',

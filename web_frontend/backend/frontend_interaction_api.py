@@ -61,6 +61,8 @@ class RuntimePreferencesWrite(BaseModel):
     reasoning_intensity: int | None = None
     approval_mode: str | None = None
     request_timeout_seconds: int | None = None
+    browser_operation_timeout_ms: int | None = Field(default=None, ge=1_000, le=600_000)
+    browser_navigation_timeout_ms: int | None = Field(default=None, ge=1_000, le=600_000)
     max_retries: int | None = None
     max_parallel_sub_agents: int | None = None
     memory_auto_write_enabled: bool | None = None
@@ -174,7 +176,7 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
         elif command_type == "cancel_runtime_request":
             source = dict(command.get("payload") or {})
             reason = str(source.get("reason") or "user_cancelled")
-            current = _active_runtime_or_none(backend, principal_id, command)
+            current = _runtime_cancel_target_or_none(backend, principal_id, command)
             if current is not None:
                 session_id = current.request.session_id
                 payload = {
@@ -375,6 +377,8 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
             model_profile_id=payload.model_profile_id if "model_profile_id" in payload.model_fields_set else current.model_profile_id if current else None,
             reasoning_intensity=payload.reasoning_intensity if "reasoning_intensity" in payload.model_fields_set else current.reasoning_intensity if current else None,
             request_timeout_seconds=payload.request_timeout_seconds if payload.request_timeout_seconds is not None else current.request_timeout_seconds if current else 300,
+            browser_operation_timeout_ms=payload.browser_operation_timeout_ms if payload.browser_operation_timeout_ms is not None else current.browser_operation_timeout_ms if current else 30_000,
+            browser_navigation_timeout_ms=payload.browser_navigation_timeout_ms if payload.browser_navigation_timeout_ms is not None else current.browser_navigation_timeout_ms if current else 45_000,
             max_model_attempts=(payload.max_retries + 1) if payload.max_retries is not None else current.max_model_attempts if current else 6,
             max_parallel_temporary_agents=payload.max_parallel_sub_agents if payload.max_parallel_sub_agents is not None else current.max_parallel_temporary_agents if current else 5,
             memory_auto_write_enabled=payload.memory_auto_write_enabled if payload.memory_auto_write_enabled is not None else current.memory_auto_write_enabled if current else True,
@@ -1017,11 +1021,9 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
             raise HTTPException(status_code=422, detail="scheduler target must be an agent or script task")
         created = backend.application.stores.scheduler.create_job({
             **job,
-            "principal_id": principal_id,
             "workspace_id": workspace_id,
             "timezone": str(job.get("timezone") or request.headers.get("X-AgentFactory-Timezone") or "UTC"),
         })
-        backend.scheduler_service.synchronize()
         return {"event": _event("scheduler_job_created", {"job": created})}
 
     @router.post("/api/scheduler/jobs/{job_id}/pause")
@@ -1029,7 +1031,6 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
         principal_id = _principal(request)
         _owned_scheduler_job(backend, principal_id, job_id)
         backend.application.stores.scheduler.set_status(job_id, "paused")
-        backend.scheduler_service.synchronize()
         return await scheduler_jobs(request)
 
     @router.post("/api/scheduler/jobs/{job_id}/resume")
@@ -1037,7 +1038,6 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
         principal_id = _principal(request)
         _owned_scheduler_job(backend, principal_id, job_id)
         backend.application.stores.scheduler.set_status(job_id, "enabled")
-        backend.scheduler_service.synchronize()
         return await scheduler_jobs(request)
 
     @router.delete("/api/scheduler/jobs/{job_id}")
@@ -1045,15 +1045,28 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
         principal_id = _principal(request)
         _owned_scheduler_job(backend, principal_id, job_id)
         backend.application.stores.scheduler.set_status(job_id, "deleted")
-        backend.scheduler_service.synchronize()
         return {"event": _event("scheduler_job_deleted", {"job_id": job_id})}
 
     @router.get("/api/scheduler/runs")
-    async def scheduler_runs(request: Request, job_id: str | None = None, limit: int = 20) -> dict[str, Any]:
+    async def scheduler_runs(
+        request: Request,
+        job_id: str | None = None,
+        workspace_id: str | None = None,
+        source_session_id: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
         principal_id = _principal(request)
         return {"event": _event("scheduler_runs_listed", {
-            "runs": backend.application.stores.scheduler.runs_for_principal(principal_id, job_id=job_id, limit=limit),
+            "runs": backend.application.stores.scheduler.runs_for_principal(
+                principal_id,
+                job_id=job_id,
+                workspace_id=workspace_id,
+                source_session_id=source_session_id,
+                limit=limit,
+            ),
             "job_id": job_id,
+            "workspace_id": workspace_id,
+            "source_session_id": source_session_id,
             "limit": limit,
         })}
 
@@ -1220,6 +1233,8 @@ def _synchronize_policy(
             else current.reasoning_intensity if current is not None else None
         ),
         request_timeout_seconds=int(runtime_request.get("timeout_seconds") or (current.request_timeout_seconds if current else 300)),
+        browser_operation_timeout_ms=current.browser_operation_timeout_ms if current else 30_000,
+        browser_navigation_timeout_ms=current.browser_navigation_timeout_ms if current else 45_000,
         max_model_attempts=(
             int(runtime_request["max_retries"]) + 1
             if runtime_request.get("max_retries") is not None
@@ -1261,6 +1276,44 @@ def _active_runtime_or_none(backend: Any, principal_id: str, command: dict[str, 
                 select json_extract(receipt_json, '$.runtime_instance_id') from command_inbox where command_id = ?
               ))
               and status in ('running','waiting_approval','waiting_external')
+            order by updated_at desc limit 1
+            """,
+            (
+                principal_id,
+                session_id,
+                session_id,
+                runtime_instance_id,
+                runtime_instance_id,
+                target_request_id,
+                target_request_id,
+            ),
+        ).fetchone()
+    if row is None:
+        return None
+    from agent_factory.runtime_protocol import RuntimeInstance
+    return RuntimeInstance.model_validate_json(str(row["payload_json"]))
+
+
+def _runtime_cancel_target_or_none(backend: Any, principal_id: str, command: dict[str, Any]):
+    current = _active_runtime_or_none(backend, principal_id, command)
+    if current is not None:
+        return current
+    session_id = str(command.get("session_id") or "").strip()
+    payload = dict(command.get("payload") or {})
+    runtime_instance_id = str(payload.get("runtime_instance_id") or "").strip()
+    target_request_id = str(payload.get("target_request_id") or "").strip()
+    if not runtime_instance_id and not target_request_id:
+        return None
+    with backend.application.database.connection(query_only=True) as connection:
+        row = connection.execute(
+            """
+            select payload_json from runtime_instances
+            where json_extract(payload_json, '$.request.principal_id') = ?
+              and (? = '' or json_extract(payload_json, '$.request.session_id') = ?)
+              and (? = '' or runtime_instance_id = ?)
+              and (? = '' or runtime_instance_id in (
+                select json_extract(receipt_json, '$.runtime_instance_id') from command_inbox where command_id = ?
+              ))
             order by updated_at desc limit 1
             """,
             (
@@ -1437,6 +1490,7 @@ def _session_snapshot(backend: Any, principal_id: str, session_id: str) -> dict[
         )
     workspace = backend.application.stores.conversations.require_workspace(identity.workspace_id)
     current_plan = _session_current_plan(backend, session_id)
+    context_window = _session_context_window(backend, session_id)
     return {
         "session_id": session_id,
         "package_id": SYSTEM_CHAT_PACKAGE_ID,
@@ -1451,9 +1505,31 @@ def _session_snapshot(backend: Any, principal_id: str, session_id: str) -> dict[
         "turns": turns,
         "process_events": _process_events(backend, session_id),
         "current_plan": current_plan,
+        "context_window": context_window,
         "created_at": turns[0]["created_at"] if turns else utc_now_text(),
         "updated_at": turns[-1]["updated_at"] if turns else utc_now_text(),
     }
+
+
+def _session_context_window(backend: Any, session_id: str) -> dict[str, Any] | None:
+    with backend.application.database.connection(query_only=True) as connection:
+        row = connection.execute(
+            """
+            select payload_json, created_at from runtime_events
+            where session_id = ?
+              and event_kind = 'runtime_completed'
+              and json_type(payload_json, '$.payload.context_window') = 'object'
+            order by session_sequence desc limit 1
+            """,
+            (session_id,),
+        ).fetchone()
+    if row is not None:
+        event = json.loads(str(row["payload_json"]))
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        context_window = payload.get("context_window")
+        if isinstance(context_window, dict):
+            return {**context_window, "updated_at": str(row["created_at"])}
+    return None
 
 
 def _session_current_plan(backend: Any, session_id: str) -> dict[str, Any] | None:
@@ -1663,6 +1739,8 @@ def _runtime_preferences_view(policy: UserRuntimePolicy | None) -> dict[str, Any
         "reasoning_intensity": policy.reasoning_intensity if policy else None,
         "approval_mode": policy.approval_mode if policy else "ask",
         "request_timeout_seconds": policy.request_timeout_seconds if policy else 300,
+        "browser_operation_timeout_ms": policy.browser_operation_timeout_ms if policy else 30_000,
+        "browser_navigation_timeout_ms": policy.browser_navigation_timeout_ms if policy else 45_000,
         "max_retries": max(0, policy.max_model_attempts - 1) if policy else 5,
         "max_parallel_sub_agents": policy.max_parallel_temporary_agents if policy else 5,
         "memory_auto_write_enabled": policy.memory_auto_write_enabled if policy else True,
@@ -1752,6 +1830,12 @@ def _delegated_task_row_view(backend: Any, row: Any) -> dict[str, Any]:
         for event in events
         if event.event_type == "artifact"
     ]
+    try:
+        context_window = backend.application.runtime_service.current_context_window(
+            child_runtime.runtime_instance_id
+        )
+    except (LookupError, RuntimeError, ValueError):
+        context_window = None
     return {
         "task_id": task.task_id,
         "session_id": str(row["session_id"]),
@@ -1777,6 +1861,7 @@ def _delegated_task_row_view(backend: Any, row: Any) -> dict[str, Any]:
         "depends_on": [],
         "input_artifacts": list(task.input_artifacts),
         "artifact_refs": artifacts,
+        "context_window": context_window,
         "result_summary": _task_result_summary(result),
         "result": {"value": result} if result is not None else None,
         "error": _delegated_error_view(error),

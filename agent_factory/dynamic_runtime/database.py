@@ -9,7 +9,7 @@ import sqlite3
 from agent_factory.sqlite_runtime import DEFAULT_SQLITE_BUSY_TIMEOUT_MS, connect_sqlite
 
 
-DYNAMIC_RUNTIME_DATABASE_SCHEMA = "dynamic_runtime_database.v21"
+DYNAMIC_RUNTIME_DATABASE_SCHEMA = "dynamic_runtime_database.v22"
 DYNAMIC_RUNTIME_SCHEMA_EPOCH = 2
 
 
@@ -1195,6 +1195,37 @@ def _default_migrations() -> tuple[MigrationStep, ...]:
                 )
                 """,
                 "create index idx_scheduler_run_events_created on scheduler_run_events(run_id, created_at)",
+            ),
+        ),
+        MigrationStep(
+            version=22,
+            name="scheduler_source_conversation",
+            statements=(
+                """
+                update scheduler_jobs
+                set payload_json = json_set(
+                  payload_json,
+                  '$.source_session_id',
+                  (
+                    select turn.session_id
+                    from tool_calls as tool
+                    join conversation_turns as turn on turn.turn_id = tool.turn_id
+                    where json_extract(tool.payload_json, '$.model_alias') = 'scheduler'
+                      and json_extract(tool.payload_json, '$.result.action') = 'create'
+                      and json_extract(tool.payload_json, '$.result.job.job_id') = scheduler_jobs.job_id
+                    order by tool.updated_at desc
+                    limit 1
+                  )
+                )
+                where json_extract(payload_json, '$.source_session_id') is null
+                  and exists (
+                    select 1
+                    from tool_calls as tool
+                    where json_extract(tool.payload_json, '$.model_alias') = 'scheduler'
+                      and json_extract(tool.payload_json, '$.result.action') = 'create'
+                      and json_extract(tool.payload_json, '$.result.job.job_id') = scheduler_jobs.job_id
+                  )
+                """,
             ),
         ),
     )

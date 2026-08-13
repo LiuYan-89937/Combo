@@ -8,7 +8,6 @@ from agent_factory.runtime_kernel.state import RuntimeState
 PLAN_EXECUTE_PLANNER_NODE_ID = "planner"
 PLAN_EXECUTE_EXECUTOR_NODE_ID = "executor"
 PLAN_EXECUTE_CASUAL_NODE_ID = "casual_react"
-PLAN_EXECUTE_FINAL_NODE_ID = "final_answer"
 PLAN_EXECUTE_PLANNER_INSPECTION_TOOL_IDS = frozenset(
     {
         "delegation_status",
@@ -23,7 +22,6 @@ PLAN_EXECUTE_NODE_IDS = frozenset(
         PLAN_EXECUTE_PLANNER_NODE_ID,
         PLAN_EXECUTE_EXECUTOR_NODE_ID,
         PLAN_EXECUTE_CASUAL_NODE_ID,
-        PLAN_EXECUTE_FINAL_NODE_ID,
     }
 )
 
@@ -40,8 +38,6 @@ def plan_and_execute_model_tool_ids(
         return [RUNTIME_PLAN_TOOL_ID, *frozen_tool_ids]
     if node_id == PLAN_EXECUTE_CASUAL_NODE_ID:
         return frozen_tool_ids
-    if node_id == PLAN_EXECUTE_FINAL_NODE_ID:
-        return frozen_tool_ids
     return []
 
 
@@ -55,7 +51,6 @@ def plan_and_execute_delegated_tool_ids(
     if origin_node_id in {
         PLAN_EXECUTE_EXECUTOR_NODE_ID,
         PLAN_EXECUTE_CASUAL_NODE_ID,
-        PLAN_EXECUTE_FINAL_NODE_ID,
     }:
         return available_tool_ids(state)
     return []

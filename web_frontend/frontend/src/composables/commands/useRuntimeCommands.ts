@@ -114,6 +114,7 @@ export function useRuntimeCommands() {
   const cancelRequest = (
     reason = 'user_cancelled',
     targetRequestId: string | null = null,
+    runtimeInstanceId: string | null = null,
   ) => {
     const activeRequest = targetRequestId ? runtimeStore.activeRequests[targetRequestId] : null
     const mode = activeRequest?.mode || runtimeStore.currentMode
@@ -129,6 +130,7 @@ export function useRuntimeCommands() {
       sessionId,
       mode,
       packageId,
+      runtimeInstanceId,
     })
     transport.sendRuntimeCommand(command)
     return command

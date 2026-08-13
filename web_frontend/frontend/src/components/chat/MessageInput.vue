@@ -212,9 +212,18 @@
           </n-button>
         </ControlHint>
 
-        <n-popover v-if="approvalControlEnabled" trigger="click" placement="top-start">
+        <n-popover
+          v-if="approvalControlEnabled"
+          :show="approvalPopoverVisible"
+          trigger="click"
+          placement="top-start"
+          @update:show="approvalPopoverVisible = $event"
+        >
           <template #trigger>
-            <ControlHint :label="`${t('chat.approvalLabel')}：${approvalLabel}`">
+            <ControlHint
+              :label="`${t('chat.approvalLabel')}：${approvalLabel}`"
+              :disabled="approvalPopoverVisible"
+            >
                 <n-button
                   text
                   class="reasoning-button permission-mode-button"
@@ -388,6 +397,7 @@ const inputRef = ref()
 const attachmentFileInputRef = ref<HTMLInputElement | null>(null)
 const inputText = ref('')
 const attachments = ref<RuntimeAttachmentInput[]>([])
+const approvalPopoverVisible = ref(false)
 const normalizedReferenceScope = computed(() => String(props.referenceScope || '').trim() || 'global')
 const contextReferences = computed(() => referenceStore.references(normalizedReferenceScope.value))
 const placeholder = computed(() => props.placeholder || t('chat.inputPlaceholder'))
@@ -506,6 +516,7 @@ function handleApprovalSelect(value: string | number) {
   const normalized = String(value)
   if (normalized === 'auto' || normalized === 'ask' || normalized === 'always_approval') {
     emit('update:approvalMode', normalized)
+    approvalPopoverVisible.value = false
   }
 }
 

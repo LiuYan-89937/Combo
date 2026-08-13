@@ -66,6 +66,8 @@ class UserRuntimePolicy(ProtocolModel):
     model_profile_id: str | None = None
     reasoning_intensity: int | None = Field(default=None, ge=0)
     request_timeout_seconds: int = Field(default=300, ge=1)
+    browser_operation_timeout_ms: int = Field(default=30_000, ge=1_000)
+    browser_navigation_timeout_ms: int = Field(default=45_000, ge=1_000)
     max_model_attempts: int = Field(default=1, ge=1)
     max_parallel_temporary_agents: int = Field(default=5, ge=1)
     memory_auto_write_enabled: bool = True
@@ -123,6 +125,8 @@ class RuntimePolicySnapshot(FrozenProtocolModel):
     model: ModelSelectionSnapshot
     reasoning_intensity: int | None = Field(default=None, ge=0)
     request_timeout_seconds: int = Field(ge=1)
+    browser_operation_timeout_ms: int = Field(ge=1_000)
+    browser_navigation_timeout_ms: int = Field(ge=1_000)
     max_model_attempts: int = Field(ge=1)
     max_parallel_temporary_agents: int = Field(ge=1)
     memory_auto_write_enabled: bool
@@ -518,6 +522,8 @@ class RuntimeExecutionIdentity(FrozenProtocolModel):
     scheduler_run_id: str | None = None
     task_revision: int = Field(ge=1)
     generation: int = Field(ge=1)
+    browser_operation_timeout_ms: int = Field(ge=1_000)
+    browser_navigation_timeout_ms: int = Field(ge=1_000)
     memory_agent_write_enabled: bool = True
     memory_policy: dict[str, JsonValue] = Field(default_factory=dict)
 

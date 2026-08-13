@@ -42,26 +42,19 @@
             </span>
             <span class="task-capsule-summary">{{ taskActivitySummary(task) }}</span>
           </span>
+          <ContextUsageRing :value="taskContextWindow(task)" :size="30" />
           <span class="task-capsule-chevron" aria-hidden="true">⌄</span>
           </button>
         </template>
 
-        <section class="task-popover">
-          <header class="task-popover-header">
-            <div>
-              <strong>{{ taskAgentName(task) }}</strong>
-              <small v-if="taskModelName(task)">{{ taskModelName(task) }}</small>
-            </div>
-            <button type="button" :aria-label="t('common.close')" @click="expandedTaskId = null">×</button>
-          </header>
-          <div class="task-detail">
-            <BackgroundTaskCard
-              :task="task"
-              @updated="reconcileOne"
-              @deleted="removeTask"
-            />
-          </div>
-        </section>
+        <BackgroundTaskPopover
+          :task="task"
+          :title="taskAgentName(task)"
+          :subtitle="taskModelName(task)"
+          @close="expandedTaskId = null"
+          @updated="reconcileOne"
+          @deleted="removeTask"
+        />
       </n-popover>
     </div>
   </div>
@@ -73,8 +66,10 @@ import type { ComponentPublicInstance, CSSProperties } from 'vue'
 import { NPopover } from 'naive-ui'
 import { backgroundTasksApi, type BackgroundTask } from '@/api/backgroundTasks'
 import { useI18n } from '@/composables/useI18n'
-import BackgroundTaskCard from './BackgroundTaskCard.vue'
+import BackgroundTaskPopover from './BackgroundTaskPopover.vue'
 import SubAgentMascot from '@/components/brand/SubAgentMascot.vue'
+import ContextUsageRing from './ContextUsageRing.vue'
+import type { ContextWindowView } from '@/types/protocol'
 
 const props = withDefaults(defineProps<{
   sessionId?: string | null
@@ -278,6 +273,26 @@ function taskModelName(task: BackgroundTask): string {
   return String(task.model?.model_name || '').trim()
 }
 
+function taskContextWindow(task: BackgroundTask): ContextWindowView | null {
+  const value = task.context_window
+  if (!value || typeof value !== 'object') return null
+  return {
+    tokenCount: finiteNumber(value.token_count),
+    contextWindowTokens: finiteNumber(value.context_window_tokens),
+    compressionThresholdTokens: finiteNumber(value.compression_threshold_tokens),
+    tokenCountMethod: String(value.token_count_method || '') || null,
+    source: String(value.source || '') || null,
+    modelRole: String(value.model_role || '') || null,
+    nodeId: String(value.node_id || '') || null,
+    updatedAt: task.activity_updated_at || task.updated_at,
+    payload: value,
+  }
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
 function taskActivitySummary(task: BackgroundTask): string {
   if (task.pending_interaction?.kind === 'tool_approval') {
     return task.pending_interaction.message || t('backgroundTask.pendingApproval')
@@ -455,25 +470,16 @@ function formatDuration(startValue: string, endValue: string | null): string {
 .task-capsule-anchor.side-left { left: 12px; right: auto; }
 .task-capsule-anchor.side-right { right: 12px; left: auto; }
 .task-capsule-anchor.is-dragging { z-index: 4; cursor: grabbing; }
-.task-capsule { width: min(340px, calc(100vw - 48px)); height: 58px; display: flex; align-items: center; gap: 8px; padding: 5px 12px 5px 7px; overflow: hidden; color: var(--app-text); background: var(--app-surface); border: 1px solid var(--app-border); border-radius: var(--app-radius-pill); box-shadow: 0 7px 20px color-mix(in srgb, var(--app-text) 8%, transparent); cursor: pointer; transition: border-color .18s ease; }
+.task-capsule { width: min(340px, calc(100vw - 48px)); min-height: 58px; display: flex; align-items: center; gap: 8px; padding: 7px 12px 7px 7px; color: var(--app-text); background: var(--app-surface); border: 1px solid var(--app-border); border-radius: var(--app-radius-pill); box-shadow: 0 7px 20px color-mix(in srgb, var(--app-text) 8%, transparent); cursor: pointer; transition: border-color .18s ease; }
 .task-capsule:hover { border-color: var(--app-border-hover); }
 .task-capsule.requires-action { border-color: var(--app-text); }
 .task-capsule-mascot { width: 40px; height: 40px; flex: 0 0 auto; display: grid; place-items: center; }
 .task-capsule-copy { min-width: 0; flex: 1; display: grid; gap: 3px; text-align: left; }
 .task-capsule-meta { min-width: 0; display: flex; align-items: baseline; gap: 6px; color: var(--app-text-muted); }
-.task-capsule-meta strong, .task-capsule-meta small, .task-capsule-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.task-capsule-meta strong { color: var(--app-text); font-size: 12px; font-weight: 620; }
+.task-capsule-meta strong, .task-capsule-meta small { white-space: nowrap; }
+.task-capsule-meta strong { min-width: 0; color: var(--app-text); font-size: 12px; font-weight: 620; overflow-wrap: anywhere; white-space: normal; }
 .task-capsule-meta small { font-size: 9px; }
 .task-capsule-model { max-width: 120px; }
-.task-capsule-summary { color: var(--app-text-secondary); font-size: 10px; line-height: 1.35; }
+.task-capsule-summary { color: var(--app-text-secondary); font-size: 10px; line-height: 1.35; overflow-wrap: anywhere; white-space: normal; }
 .task-capsule-chevron { flex: 0 0 auto; color: var(--app-text-muted); font-size: 11px; }
-.task-popover { width: min(480px, calc(100vw - 32px)); max-height: min(72vh, 680px); overflow: hidden; display: grid; grid-template-rows: auto minmax(0, 1fr); color: var(--app-text); background: var(--app-surface); border: 1px solid var(--app-border); border-radius: var(--app-radius-lg); box-shadow: 0 28px 80px color-mix(in srgb, var(--app-text) 18%, transparent); animation: task-popover-in .24s cubic-bezier(.16, 1, .3, 1) both; }
-.task-popover-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--app-divider); }
-.task-popover-header > div { display: flex; align-items: baseline; gap: 8px; }
-.task-popover-header strong { font-size: 13px; }
-.task-popover-header small { color: var(--app-text-muted); font-size: 11px; }
-.task-popover-header button { width: 28px; height: 28px; border: 0; border-radius: 50%; color: var(--app-text); background: transparent; font-size: 18px; cursor: pointer; }
-.task-popover-header button:hover { background: var(--app-surface-hover); }
-.task-detail { overflow-y: auto; }
-@keyframes task-popover-in { from { opacity: 0; transform: translateY(-7px) scale(.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
 </style>

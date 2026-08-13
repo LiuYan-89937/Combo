@@ -5,6 +5,8 @@ import { runtimePreferencesApi, type RuntimePreferences, type RuntimePreferences
 import type { ApprovalMode, ExecutionPreference } from '@/api/dynamicRuntime'
 
 export const DEFAULT_RUNTIME_REQUEST_TIMEOUT_SECONDS = 300
+export const DEFAULT_BROWSER_OPERATION_TIMEOUT_MS = 30_000
+export const DEFAULT_BROWSER_NAVIGATION_TIMEOUT_MS = 45_000
 export const DEFAULT_RUNTIME_MAX_RETRIES = 5
 export const DEFAULT_MAX_PARALLEL_SUB_AGENTS = 5
 export const DEFAULT_APPROVAL_MODE: ApprovalMode = 'ask'
@@ -31,6 +33,8 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
   const mainModelProfileId = ref(readStoredText(STORAGE_KEYS.mainModelProfileId))
   const reasoningIntensity = ref<number | null>(readStoredReasoningIntensity())
   const requestTimeoutSeconds = ref(readStoredInteger(STORAGE_KEYS.requestTimeoutSeconds, DEFAULT_RUNTIME_REQUEST_TIMEOUT_SECONDS, 0))
+  const browserOperationTimeoutMs = ref(DEFAULT_BROWSER_OPERATION_TIMEOUT_MS)
+  const browserNavigationTimeoutMs = ref(DEFAULT_BROWSER_NAVIGATION_TIMEOUT_MS)
   const maxRetries = ref(readStoredInteger(STORAGE_KEYS.maxRetries, DEFAULT_RUNTIME_MAX_RETRIES, 0))
   const maxParallelSubAgents = ref(readStoredInteger(STORAGE_KEYS.maxParallelSubAgents, DEFAULT_MAX_PARALLEL_SUB_AGENTS, 1))
   const approvalMode = ref<ApprovalMode>(readStoredApprovalMode())
@@ -65,6 +69,16 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     requestTimeoutSeconds.value = Math.max(0, Math.round(value))
     writeStoredValue(STORAGE_KEYS.requestTimeoutSeconds, String(requestTimeoutSeconds.value))
     enqueue({ request_timeout_seconds: requestTimeoutSeconds.value })
+  }
+
+  function setBrowserOperationTimeoutMs(value: number): void {
+    browserOperationTimeoutMs.value = Math.max(1_000, Math.round(value))
+    enqueue({ browser_operation_timeout_ms: browserOperationTimeoutMs.value })
+  }
+
+  function setBrowserNavigationTimeoutMs(value: number): void {
+    browserNavigationTimeoutMs.value = Math.max(1_000, Math.round(value))
+    enqueue({ browser_navigation_timeout_ms: browserNavigationTimeoutMs.value })
   }
 
   function setMaxRetries(value: number): void {
@@ -167,6 +181,8 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     approvalMode.value = value.approval_mode
     executionPreference.value = value.execution_preference
     requestTimeoutSeconds.value = value.request_timeout_seconds
+    browserOperationTimeoutMs.value = value.browser_operation_timeout_ms
+    browserNavigationTimeoutMs.value = value.browser_navigation_timeout_ms
     maxRetries.value = value.max_retries
     maxParallelSubAgents.value = value.max_parallel_sub_agents
     memoryAutoWriteEnabled.value = value.memory_auto_write_enabled
@@ -189,6 +205,8 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     mainModelProfileId,
     reasoningIntensity,
     requestTimeoutSeconds,
+    browserOperationTimeoutMs,
+    browserNavigationTimeoutMs,
     maxRetries,
     maxParallelSubAgents,
     approvalMode,
@@ -204,6 +222,8 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     setMainModelProfileId,
     setReasoningIntensity,
     setRequestTimeoutSeconds,
+    setBrowserOperationTimeoutMs,
+    setBrowserNavigationTimeoutMs,
     setMaxRetries,
     setMaxParallelSubAgents,
     setApprovalMode,

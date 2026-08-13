@@ -205,6 +205,21 @@ class BrowserRuntime:
     def view_id(self, *, session_key: str) -> str:
         return self._call(self._view_id(session_key))
 
+    def configure_session_timeouts(
+        self,
+        *,
+        session_key: str,
+        operation_timeout_ms: int,
+        navigation_timeout_ms: int,
+    ) -> None:
+        self._call(
+            self._configure_session_timeouts(
+                session_key=session_key,
+                operation_timeout_ms=operation_timeout_ms,
+                navigation_timeout_ms=navigation_timeout_ms,
+            )
+        )
+
     def subscribe_view(
         self,
         *,
@@ -328,6 +343,17 @@ class BrowserRuntime:
 
     async def _view_id(self, session_key: str) -> str:
         return (await self._session(session_key)).view_id
+
+    async def _configure_session_timeouts(
+        self,
+        *,
+        session_key: str,
+        operation_timeout_ms: int,
+        navigation_timeout_ms: int,
+    ) -> None:
+        session = await self._session(session_key)
+        session.context.set_default_timeout(operation_timeout_ms)
+        session.context.set_default_navigation_timeout(navigation_timeout_ms)
 
     async def _subscribe_view(
         self,

@@ -177,6 +177,18 @@ class DynamicRuntimeService:
             return None
         return state.plan.model_dump(mode="json")
 
+    def current_context_window(self, runtime_instance_id: str) -> dict[str, Any] | None:
+        instance = self._runtime_instances.get(runtime_instance_id)
+        graph = self._service_set.graph_for(instance.request.strategy)
+        checkpoint = graph.graph_app.get_state(
+            {"configurable": {"thread_id": instance.runtime_instance_id}}
+        )
+        values = getattr(checkpoint, "values", None) or {}
+        raw_runtime = values.get("runtime") if isinstance(values, dict) else None
+        if not isinstance(raw_runtime, dict):
+            return None
+        return _context_window_from_token_budget(RuntimeState.model_validate(raw_runtime))
+
     def _run(
         self,
         *,
@@ -913,6 +925,9 @@ def _event_payload(
 
 
 def _latest_context_window(state: RuntimeState) -> dict[str, Any] | None:
+    persisted = _context_window_from_token_budget(state)
+    if persisted is not None:
+        return persisted
     for raw_event in reversed(state.observability.events):
         if not isinstance(raw_event, dict) or raw_event.get("event_type") != "context_window_updated":
             continue
@@ -923,6 +938,39 @@ def _latest_context_window(state: RuntimeState) -> dict[str, Any] | None:
             key: _json_safe(value)
             for key, value in payload.items()
             if key != "event_type"
+        }
+    return None
+
+
+def _context_window_from_token_budget(state: RuntimeState) -> dict[str, Any] | None:
+    token_budget = dict(getattr(state.context, "token_budget", {}) or {})
+    token_count = token_budget.get("token_count")
+    if token_count is None:
+        token_count = (
+            token_budget.get("effective_context_tokens")
+            or token_budget.get("last_provider_context_tokens_after_call")
+        )
+    if token_count is not None:
+        return {
+            "token_count": _json_safe(token_count),
+            "context_window_tokens": _json_safe(token_budget.get("context_window_tokens")),
+            "compression_threshold_tokens": _json_safe(token_budget.get("compression_threshold_tokens")),
+            "token_count_method": _json_safe(
+                token_budget.get("token_count_method")
+                or token_budget.get("last_provider_token_count_method")
+            ),
+            "source": _json_safe(
+                token_budget.get("source")
+                or token_budget.get("effective_context_source")
+            ),
+            "model_role": _json_safe(
+                token_budget.get("model_role")
+                or token_budget.get("last_provider_model_role")
+            ),
+            "node_id": _json_safe(
+                token_budget.get("node_id")
+                or token_budget.get("last_provider_node_id")
+            ),
         }
     return None
 

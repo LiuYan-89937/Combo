@@ -28,6 +28,8 @@ def runtime_execution_identity(instance: RuntimeInstance) -> RuntimeExecutionIde
         scheduler_run_id=request.scheduler_run_id,
         task_revision=request.task_revision,
         generation=instance.generation,
+        browser_operation_timeout_ms=request.policy_snapshot.browser_operation_timeout_ms,
+        browser_navigation_timeout_ms=request.policy_snapshot.browser_navigation_timeout_ms,
         memory_agent_write_enabled=request.policy_snapshot.memory_agent_write_enabled,
         memory_policy={
             "max_items": request.policy_snapshot.memory_max_injected_items,

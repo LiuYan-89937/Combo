@@ -863,18 +863,25 @@ def _emit_provider_usage_context_window(
             state=state,
             model_role=model_role,
         )
+    payload = context_window_payload(
+        node_id=node_id,
+        token_count=token_count,
+        token_count_method="provider_usage",
+        compression_threshold_tokens=limits.compression_trigger_tokens,
+        context_window_tokens=limits.context_window_tokens,
+        model_role=model_role,
+        source="model_operation.provider_usage",
+    )
+    context = getattr(state, "context", None)
+    if context is not None and hasattr(context, "token_budget"):
+        context.token_budget = {
+            **dict(getattr(context, "token_budget", {}) or {}),
+            **payload,
+        }
     emit_context_event(
         services=services,
         state=state,
         event_type="context_window_updated",
         node_id=node_id,
-        payload=context_window_payload(
-            node_id=node_id,
-            token_count=token_count,
-            token_count_method="provider_usage",
-            compression_threshold_tokens=limits.compression_trigger_tokens,
-            context_window_tokens=limits.context_window_tokens,
-            model_role=model_role,
-            source="model_operation.provider_usage",
-        ),
+        payload=payload,
     )

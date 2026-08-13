@@ -1,14 +1,17 @@
 <template>
   <span class="control-hint">
     <slot />
-    <span class="control-hint-content" role="tooltip">{{ label }}</span>
+    <span v-if="!disabled" class="control-hint-content" role="tooltip">{{ label }}</span>
   </span>
 </template>
 
 <script setup lang="ts">
-defineProps<{
+withDefaults(defineProps<{
   label: string
-}>()
+  disabled?: boolean
+}>(), {
+  disabled: false,
+})
 </script>
 
 <style scoped>
@@ -53,7 +56,7 @@ defineProps<{
 }
 
 .control-hint:hover .control-hint-content,
-.control-hint:focus-within .control-hint-content {
+.control-hint:has(:focus-visible) .control-hint-content {
   opacity: 1;
   transform: translate(-50%, 0);
 }

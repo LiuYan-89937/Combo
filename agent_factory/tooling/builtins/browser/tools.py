@@ -27,6 +27,12 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(runtime, BrowserRuntime):
         raise RuntimeError("browser runtime resource is not configured")
     session_key = _session_key(resources)
+    identity = _runtime_identity(resources)
+    runtime.configure_session_timeouts(
+        session_key=session_key,
+        operation_timeout_ms=identity.browser_operation_timeout_ms,
+        navigation_timeout_ms=identity.browser_navigation_timeout_ms,
+    )
     page_id = _optional_text(arguments.get("page_id"))
 
     if tool_id == "browser_open":
@@ -150,9 +156,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
 
 
 def _session_key(resources: dict[str, Any]) -> str:
-    identity = resources.get("runtime_identity")
-    if not isinstance(identity, RuntimeExecutionIdentity):
-        raise RuntimeError("browser tools require an owned runtime attempt identity")
+    identity = _runtime_identity(resources)
     return browser_session_key(
         generation=identity.generation,
         principal_id=identity.principal_id,
@@ -160,6 +164,13 @@ def _session_key(resources: dict[str, Any]) -> str:
         runtime_role=identity.runtime_role,
         task_id=identity.task_id,
     )
+
+
+def _runtime_identity(resources: dict[str, Any]) -> RuntimeExecutionIdentity:
+    identity = resources.get("runtime_identity")
+    if not isinstance(identity, RuntimeExecutionIdentity):
+        raise RuntimeError("browser tools require an owned runtime attempt identity")
+    return identity
 
 
 def _target(arguments: dict[str, Any]) -> dict[str, Any]:

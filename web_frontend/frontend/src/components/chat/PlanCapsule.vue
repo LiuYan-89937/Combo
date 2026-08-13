@@ -103,8 +103,13 @@ function stepStatus(status: PlanStepStatus): string {
 
 function cancelPlan() {
   const requestId = plan.value?.request_id || null
-  if (!requestId) return
-  commands.cancelRequest('user_cancelled_plan', requestId)
+  const runtimeInstanceId = plan.value?.runtime_instance_id || null
+  const request = requestId ? runtimeStore.activeRequests[requestId] : null
+  if (!request || request.status !== 'running') {
+    runtimeStore.dismissCurrentPlan(requestId)
+    return
+  }
+  commands.cancelRequest('user_cancelled_plan', requestId, runtimeInstanceId)
 }
 
 function deletePlanCapsule() {

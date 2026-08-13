@@ -283,6 +283,7 @@ export interface CancelRuntimeRequestOptions {
   sessionId?: string | null
   mode?: FactoryMode | null
   packageId?: string | null
+  runtimeInstanceId?: string | null
 }
 
 export interface SteerRuntimeRequestOptions {
@@ -313,6 +314,7 @@ export function cancelRuntimeRequestCommand(options: CancelRuntimeRequestOptions
       reason: options.reason || 'user_cancelled',
       ...(options.targetRequestId ? { target_request_id: options.targetRequestId } : {}),
       ...(options.packageId ? { package_id: options.packageId } : {}),
+      ...(options.runtimeInstanceId ? { runtime_instance_id: options.runtimeInstanceId } : {}),
     },
   })
 }

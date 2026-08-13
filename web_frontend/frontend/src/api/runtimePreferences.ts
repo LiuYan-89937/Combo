@@ -8,6 +8,8 @@ export interface RuntimePreferences {
   reasoning_intensity: number | null
   approval_mode: ApprovalMode
   request_timeout_seconds: number
+  browser_operation_timeout_ms: number
+  browser_navigation_timeout_ms: number
   max_retries: number
   max_parallel_sub_agents: number
   memory_auto_write_enabled: boolean
@@ -25,6 +27,8 @@ export type RuntimePreferencesPatch = Partial<Pick<
   | 'reasoning_intensity'
   | 'approval_mode'
   | 'request_timeout_seconds'
+  | 'browser_operation_timeout_ms'
+  | 'browser_navigation_timeout_ms'
   | 'max_retries'
   | 'max_parallel_sub_agents'
   | 'memory_auto_write_enabled'

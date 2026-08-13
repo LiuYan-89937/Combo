@@ -267,7 +267,7 @@ def _prepare_context(
         resources=services.runtime_context_resources.current(),
         enable_dynamic_evidence=(
             state.run.strategy != "plan_and_execute"
-            or context.node_id in {"executor", "final_answer"}
+            or context.node_id == "executor"
         ),
     )
     context.graph_messages = list(result.messages)

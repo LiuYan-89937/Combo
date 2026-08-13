@@ -38,6 +38,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
             "action": action,
             "job": store.create_job({
                 "workspace_id": identity.workspace_id,
+                "source_session_id": identity.session_id,
                 "task_content": _required_text(arguments, "task_content"),
                 "schedule_type": _required_text(arguments, "schedule_type"),
                 "schedule_expr": _required_text(arguments, "schedule_expr"),

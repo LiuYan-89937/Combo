@@ -42,8 +42,11 @@ class SchedulerService:
         self._notify_commands = notify_commands
         self._scheduler = AsyncIOScheduler()
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._event_loop: asyncio.AbstractEventLoop | None = None
+        self._store.bind_change_listener(self._schedule_synchronize)
 
     def start(self) -> None:
+        self._event_loop = asyncio.get_running_loop()
         self._scheduler.start()
         self.synchronize()
         for run in self._store.active_runs():
@@ -54,6 +57,8 @@ class SchedulerService:
             )
 
     async def stop(self) -> None:
+        self._store.bind_change_listener(None)
+        self._event_loop = None
         tasks = tuple(self._tasks.values())
         for task in tasks:
             task.cancel()
@@ -62,6 +67,12 @@ class SchedulerService:
         self._tasks.clear()
         if self._scheduler.running:
             self._scheduler.shutdown(wait=False)
+
+    def _schedule_synchronize(self) -> None:
+        event_loop = self._event_loop
+        if event_loop is None or event_loop.is_closed():
+            return
+        event_loop.call_soon_threadsafe(self.synchronize)
 
     def synchronize(self) -> None:
         configured_ids: set[str] = set()

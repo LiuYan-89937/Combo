@@ -376,7 +376,7 @@ function valueString(value: unknown): string {
 }
 
 .tool-main {
-  gap: 10px;
+  gap: 12px;
 }
 
 .tool-side {
@@ -388,20 +388,35 @@ function valueString(value: unknown): string {
   display: grid;
   width: 30px;
   height: 30px;
+  flex: 0 0 30px;
   place-items: center;
-  border-radius: var(--app-radius-md);
-  background: color-mix(in srgb, var(--app-info) 12%, var(--app-surface));
-  color: var(--app-info);
+  background: transparent;
+  color: var(--app-text);
 }
 
 .tool-state-completed .tool-icon-shell {
-  background: color-mix(in srgb, var(--app-success) 12%, var(--app-surface));
-  color: var(--app-success);
+  background: transparent;
+  color: var(--app-text);
 }
 
 .tool-state-failed .tool-icon-shell {
-  background: color-mix(in srgb, var(--app-error) 12%, var(--app-surface));
+  background: transparent;
   color: var(--app-error);
+}
+
+.tool-icon-shell :deep(.n-icon) {
+  display: flex;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  align-items: center;
+  justify-content: center;
+}
+
+.tool-icon-shell :deep(svg) {
+  display: block;
+  width: 20px;
+  height: 20px;
 }
 
 .tool-copy {

@@ -158,6 +158,46 @@
 
             <div class="field-block">
               <div class="field-block-head">
+                <label class="field-label">{{ t('settings.browserOperationTimeout') }}</label>
+              </div>
+              <n-input-number
+                v-model:value="browserOperationTimeoutMs"
+                class="field-input"
+                :min="1000"
+                :max="600000"
+                :step="1000"
+                :precision="0"
+                :show-button="true"
+              >
+                <template #suffix>{{ t('settings.milliseconds') }}</template>
+              </n-input-number>
+              <p class="field-hint">{{ t('settings.browserOperationTimeoutHint') }}</p>
+            </div>
+
+            <div class="field-divider" aria-hidden="true"></div>
+
+            <div class="field-block">
+              <div class="field-block-head">
+                <label class="field-label">{{ t('settings.browserNavigationTimeout') }}</label>
+              </div>
+              <n-input-number
+                v-model:value="browserNavigationTimeoutMs"
+                class="field-input"
+                :min="1000"
+                :max="600000"
+                :step="1000"
+                :precision="0"
+                :show-button="true"
+              >
+                <template #suffix>{{ t('settings.milliseconds') }}</template>
+              </n-input-number>
+              <p class="field-hint">{{ t('settings.browserNavigationTimeoutHint') }}</p>
+            </div>
+
+            <div class="field-divider" aria-hidden="true"></div>
+
+            <div class="field-block">
+              <div class="field-block-head">
                 <label class="field-label">{{ t('settings.requestTimeout') }}</label>
               </div>
               <n-input-number
@@ -397,6 +437,20 @@ const requestTimeoutSeconds = computed({
   get: () => runtimePreferences.requestTimeoutSeconds,
   set: (value: number | null) => {
     if (value !== null) runtimePreferences.setRequestTimeoutSeconds(value)
+  },
+})
+
+const browserOperationTimeoutMs = computed({
+  get: () => runtimePreferences.browserOperationTimeoutMs,
+  set: (value: number | null) => {
+    if (value !== null) runtimePreferences.setBrowserOperationTimeoutMs(value)
+  },
+})
+
+const browserNavigationTimeoutMs = computed({
+  get: () => runtimePreferences.browserNavigationTimeoutMs,
+  set: (value: number | null) => {
+    if (value !== null) runtimePreferences.setBrowserNavigationTimeoutMs(value)
   },
 })
 

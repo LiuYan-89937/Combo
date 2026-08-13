@@ -51,16 +51,24 @@
       </span>
     </section>
 
-    <details v-if="view.reports.length" class="task-section task-trace" open>
+    <details v-if="view.reports.length" class="task-section task-trace">
       <summary>{{ t('backgroundTask.activity') }}</summary>
-      <ToolExecutionChain v-if="view.toolExecutions.length" :executions="view.toolExecutions" />
-      <div v-if="view.progressReports.length" class="progress-report-list">
-        <div v-for="report in view.progressReports" :key="report.phaseId" class="progress-report-item">
+      <div class="activity-chain">
+        <div
+          v-for="report in view.reports"
+          :key="report.phaseId"
+          class="activity-chain-item"
+          :class="`activity-${report.category}`"
+        >
           <span class="progress-report-rail" aria-hidden="true">
             <span class="status-dot" :class="`dot-${normalizeStatus(report.status)}`" />
           </span>
-          <span>
-            <strong>{{ report.title }}</strong>
+          <ToolExecutionCard
+            v-if="report.toolExecution"
+            :part="report.toolExecution"
+          />
+          <span v-else class="activity-copy">
+            <strong v-if="report.title">{{ report.title }}</strong>
             <small>{{ report.summary }}</small>
           </span>
           <time>{{ formatTime(report.occurredAt) }}</time>
@@ -133,22 +141,42 @@
   </article>
 </template>
 
+<script lang="ts">
+import type {
+  BackgroundTask,
+  BackgroundTaskEvent,
+  InteractionAction,
+} from '@/api/backgroundTasks'
+
+export interface BackgroundTaskController {
+  events: (taskId: string, after: number) => Promise<{ events: BackgroundTaskEvent[] }>
+  project?: (task: BackgroundTask, events: BackgroundTaskEvent[]) => BackgroundTask
+  cancel: (task: BackgroundTask) => Promise<BackgroundTask>
+  delete: (task: BackgroundTask) => Promise<boolean>
+  resolveInteraction: (
+    task: BackgroundTask,
+    interactionId: string,
+    action: InteractionAction,
+    payload: Record<string, unknown>,
+  ) => Promise<BackgroundTask>
+}
+</script>
+
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NButton, NInput } from 'naive-ui'
 import { useI18n } from '@/composables/useI18n'
 import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
-import {
-  backgroundTasksApi,
-  type BackgroundTask,
-  type BackgroundTaskEvent,
-  type InteractionAction,
-} from '@/api/backgroundTasks'
+import { backgroundTasksApi } from '@/api/backgroundTasks'
 import SubAgentMascot from '@/components/brand/SubAgentMascot.vue'
-import ToolExecutionChain from '@/components/chat/ToolExecutionChain.vue'
+import ToolExecutionCard from '@/components/chat/ToolExecutionCard.vue'
 import type { ChatMessagePartStatus, ToolExecutionMessagePart } from '@/types/protocol'
 
-const props = defineProps<{ task: BackgroundTask; fallbackTitle?: string }>()
+const props = defineProps<{
+  task: BackgroundTask
+  fallbackTitle?: string
+  controller?: BackgroundTaskController
+}>()
 const emit = defineEmits<{ updated: [task: BackgroundTask]; deleted: [taskId: string] }>()
 const { t } = useI18n()
 const rootRef = ref<HTMLElement | null>(null)
@@ -163,17 +191,18 @@ const task = ref<BackgroundTask>(props.task)
 const events = ref<BackgroundTaskEvent[]>([])
 let pollTimer: ReturnType<typeof setTimeout> | null = null
 
-const interaction = computed(() => task.value.pending_interaction || null)
-const view = computed(() => buildView(task.value, events.value, props.fallbackTitle || t('backgroundTask.title')))
+const projectedTask = computed(() => taskController().project?.(task.value, events.value) || task.value)
+const interaction = computed(() => projectedTask.value.pending_interaction || null)
+const view = computed(() => buildView(projectedTask.value, events.value, props.fallbackTitle || t('backgroundTask.title')))
 const terminal = computed(() => ['succeeded', 'failed', 'cancelled'].includes(view.value.status))
 const statusLabel = computed(() => t(`backgroundTask.status.${view.value.status}` as any))
 const currentTitle = computed(() => localize(interaction.value?.title) || statusLabel.value)
 const currentDescription = computed(() => (
   interaction.value?.message
-  || (task.value.status === 'failed' ? task.value.error?.message : '')
-  || task.value.activity_summary
+  || (projectedTask.value.status === 'failed' ? projectedTask.value.error?.message : '')
+  || projectedTask.value.activity_summary
   || view.value.latestSummary
-  || t(`backgroundTask.description.${task.value.status}` as any)
+  || t(`backgroundTask.description.${projectedTask.value.status}` as any)
 ))
 const renderedDelivery = computed(() => renderMarkdown(view.value.delivery, {
   surface: 'chat_message',
@@ -194,7 +223,7 @@ watch(() => props.task.task_id, () => {
 async function loadEvents() {
   if (!task.value.task_id) return
   try {
-    const eventResponse = await backgroundTasksApi.events(task.value.task_id, events.value.at(-1)?.seq || 0)
+    const eventResponse = await taskController().events(task.value.task_id, events.value.at(-1)?.seq || 0)
     const known = new Set(events.value.map(item => item.seq))
     for (const event of eventResponse.events) {
       if (!known.has(event.seq)) events.value.push(event)
@@ -225,12 +254,12 @@ async function resolveInteraction(action: InteractionAction, payload: Record<str
   submitting.value = true
   actionError.value = ''
   try {
-    task.value = (await backgroundTasksApi.resolveInteraction(
-      task.value.task_id,
+    task.value = await taskController().resolveInteraction(
+      task.value,
       pending.interaction_id,
       action,
       payload,
-    )).task
+    )
     answerText.value = ''
     selectedOption.value = ''
     emit('updated', task.value)
@@ -247,8 +276,8 @@ async function deleteTask() {
   deleting.value = true
   actionError.value = ''
   try {
-    const response = await backgroundTasksApi.delete(task.value.task_id)
-    if (response.deleted) emit('deleted', task.value.task_id)
+    const deleted = await taskController().delete(task.value)
+    if (deleted) emit('deleted', task.value.task_id)
   } catch (error) {
     actionError.value = error instanceof Error ? error.message : String(error)
   } finally {
@@ -261,7 +290,7 @@ async function cancelTask() {
   cancelling.value = true
   actionError.value = ''
   try {
-    task.value = (await backgroundTasksApi.cancel(task.value.task_id, 'user_cancelled')).task
+    task.value = await taskController().cancel(task.value)
     emit('updated', task.value)
     schedulePoll()
   } catch (error) {
@@ -281,36 +310,54 @@ function stopPolling() {
   pollTimer = null
 }
 
+function taskController(): BackgroundTaskController {
+  return props.controller || defaultController
+}
+
+const defaultController: BackgroundTaskController = {
+  events: (taskId, after) => backgroundTasksApi.events(taskId, after),
+  cancel: async current => (await backgroundTasksApi.cancel(current.task_id, 'user_cancelled')).task,
+  delete: async current => (await backgroundTasksApi.delete(current.task_id)).deleted,
+  resolveInteraction: async (current, interactionId, action, payload) => (
+    await backgroundTasksApi.resolveInteraction(current.task_id, interactionId, action, payload)
+  ).task,
+}
+
 function buildView(current: BackgroundTask, timeline: BackgroundTaskEvent[], fallbackTitle: string) {
   const reportsByPhase = new Map<string, ActivityReport>()
   for (const event of timeline) {
     if (event.event_type !== 'background_task_activity') continue
     const phaseId = String(event.payload.phase_id || '').trim()
-    const title = localize(event.payload.title_key) || String(event.payload.title || '').trim()
+    const titleKey = String(event.payload.title_key || '').trim()
+    const title = titleKey === 'backgroundTask.activity.current'
+      ? ''
+      : localize(titleKey) || String(event.payload.title || '').trim()
     const summary = localize(event.payload.summary_key) || String(event.payload.summary || '').trim()
-    if (!phaseId || !title || !summary) continue
+    if (!phaseId || !summary) continue
+    const occurredAt = String(event.payload.occurred_at || event.created_at)
+    const details = recordValue(event.payload.details)
+    const previous = reportsByPhase.get(phaseId)
     reportsByPhase.set(phaseId, {
       phaseId,
       title,
       summary,
       status: String(event.payload.status || 'completed'),
-      occurredAt: String(event.payload.occurred_at || event.created_at),
+      occurredAt,
+      startedAt: previous?.startedAt || String(details?.started_at || details?.created_at || occurredAt),
       category: String(event.payload.category || 'activity'),
-      details: recordValue(event.payload.details),
+      details,
     })
   }
-  const reports = Array.from(reportsByPhase.values()).sort((left, right) => (
-    Date.parse(right.occurredAt) - Date.parse(left.occurredAt)
-  ))
+  const reports = Array.from(reportsByPhase.values())
+    .sort((left, right) => Date.parse(left.occurredAt) - Date.parse(right.occurredAt))
+    .map(report => ({ ...report, toolExecution: toolExecutionFromReport(report)[0] || null }))
   return {
     id: current.task_id,
     title: current.agent_name || fallbackTitle,
     objective: current.task_text,
     status: current.status,
     reports,
-    toolExecutions: reports.flatMap(toolExecutionFromReport),
-    progressReports: reports.filter(report => report.category !== 'tool'),
-    latestSummary: reports[0]?.summary || '',
+    latestSummary: reports.at(-1)?.summary || '',
     artifacts: artifactViews(current),
     delivery: current.result_summary || '',
     error: String(
@@ -328,8 +375,10 @@ interface ActivityReport {
   summary: string
   status: string
   occurredAt: string
+  startedAt: string
   category: string
   details: Record<string, unknown> | null
+  toolExecution?: ToolExecutionMessagePart | null
 }
 
 function toolExecutionFromReport(report: ActivityReport): ToolExecutionMessagePart[] {
@@ -350,7 +399,7 @@ function toolExecutionFromReport(report: ActivityReport): ToolExecutionMessagePa
     artifacts: [],
     status: toolMessageStatus(report.status),
     createdAt: String(details.created_at || report.occurredAt),
-    startedAt: String(details.created_at || report.occurredAt),
+    startedAt: report.startedAt,
     updatedAt: String(details.updated_at || report.occurredAt),
   }]
 }
@@ -404,9 +453,9 @@ function formatTime(value: unknown): string {
 .task-heading { min-width: 0; flex: 1; display: grid; gap: 2px; }
 .task-status-label { flex: 0 0 auto; padding: 4px 8px; border: 1px solid var(--app-border); border-radius: 999px; color: var(--app-text-secondary); font-size: 10px; }
 .task-delete { flex: 0 0 auto; }
-.task-heading strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
-.task-heading small { display: -webkit-box; overflow: hidden; color: var(--app-text-muted); font-size: 11px; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-.task-heading .task-model { width: fit-content; max-width: 100%; padding: 1px 6px; border-radius: 999px; background: var(--app-surface-muted); color: var(--app-text-secondary); font-size: 10px; -webkit-line-clamp: 1; }
+.task-heading strong { overflow-wrap: anywhere; font-size: 14px; }
+.task-heading small { color: var(--app-text-muted); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; white-space: normal; }
+.task-heading .task-model { width: fit-content; max-width: 100%; padding: 1px 6px; border-radius: 999px; background: var(--app-surface-muted); color: var(--app-text-secondary); font-size: 10px; }
 .task-section small, .task-current small { color: var(--app-text-muted); font-size: 12px; line-height: 1.5; }
 .task-current { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; padding: 12px; border: 1px solid var(--app-border); border-radius: 13px; }
 .task-current > span:last-child { display: grid; gap: 3px; }
@@ -420,14 +469,17 @@ function formatTime(value: unknown): string {
 .task-trace > summary::before { content: '⌄'; color: var(--app-text-muted); transition: transform .18s ease; }
 .task-trace:not([open]) > summary::before { transform: rotate(-90deg); }
 .task-trace[open] > summary { margin-bottom: 9px; }
-.progress-report-list { display: grid; gap: 9px; }
-.progress-report-item { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 0; align-items: stretch; }
+.activity-chain { display: grid; }
+.activity-chain-item { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 0; align-items: stretch; min-width: 0; }
+.activity-chain-item :deep(.tool-execution-card) { min-width: 0; margin: 0 0 8px; border: 0; border-radius: var(--app-radius-sm); background: transparent; box-shadow: none; }
+.activity-chain-item :deep(.tool-summary) { min-height: 40px; padding: 5px 7px; }
+.activity-chain-item :deep(.tool-body) { margin: 0 7px 8px; border: 1px solid var(--app-divider); border-radius: var(--app-radius-sm); }
 .progress-report-rail { position: relative; display: flex; justify-content: center; }
 .progress-report-rail::after { content: ''; position: absolute; top: 18px; bottom: -14px; width: 1px; background: var(--app-border-hover); }
-.progress-report-item:last-child .progress-report-rail::after { display: none; }
+.activity-chain-item:last-child .progress-report-rail::after { display: none; }
 .progress-report-rail .status-dot { position: relative; z-index: 1; margin-top: 5px; border: 2px solid var(--app-surface); box-shadow: 0 0 0 1px var(--app-border-hover); }
-.progress-report-item > span:nth-child(2) { display: grid; gap: 2px; }
-.progress-report-item time { color: var(--app-text-muted); font-size: 10px; }
+.activity-copy { display: grid; gap: 2px; padding-bottom: 10px; }
+.activity-chain-item time { padding-top: 2px; color: var(--app-text-muted); font-size: 10px; }
 .task-interaction { display: grid; gap: 12px; }
 .task-interaction :deep(.tool-approval-panel), .task-interaction :deep(.resource-request-panel) { padding: 14px; box-shadow: none; }
 .interaction-copy { display: grid; gap: 5px; }

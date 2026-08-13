@@ -85,6 +85,7 @@
     </div>
     <ConversationFloatingDock
       :session-id="backgroundTaskSessionId"
+      :workspace-id="runtimeStore.activeWorkspaceId"
       @request-new-agent-session="requestNewAgentSession"
     />
     <NewAgentSessionDialog

@@ -9,7 +9,6 @@ from agent_factory.runtime_kernel.errors import RuntimeKernelError
 from agent_factory.runtime_kernel.plan_execute_tools import (
     PLAN_EXECUTE_CASUAL_NODE_ID,
     PLAN_EXECUTE_EXECUTOR_NODE_ID,
-    PLAN_EXECUTE_FINAL_NODE_ID,
     PLAN_EXECUTE_PLANNER_NODE_ID,
     available_tool_ids,
     plan_and_execute_delegated_tool_ids,
@@ -311,8 +310,6 @@ def _caller_route_decision(state: RuntimeState, origin_node_id: str, route_decis
         return "tool.return.planner"
     if origin_node_id == PLAN_EXECUTE_EXECUTOR_NODE_ID:
         return "tool.return.executor"
-    if origin_node_id == PLAN_EXECUTE_FINAL_NODE_ID:
-        return "tool.return.final_answer"
     if origin_node_id == PLAN_EXECUTE_CASUAL_NODE_ID:
         return route_decision
     return route_decision

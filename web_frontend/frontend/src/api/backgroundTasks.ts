@@ -37,6 +37,15 @@ export interface BackgroundTask {
   depends_on: string[]
   input_artifacts: Array<Record<string, unknown>>
   artifact_refs: Array<Record<string, unknown>>
+  context_window?: {
+    token_count?: number | null
+    context_window_tokens?: number | null
+    compression_threshold_tokens?: number | null
+    token_count_method?: string | null
+    source?: string | null
+    model_role?: string | null
+    node_id?: string | null
+  } | null
   result_summary: string
   result?: Record<string, unknown> | null
   error?: { code?: string; message?: string; details?: Record<string, unknown> } | null

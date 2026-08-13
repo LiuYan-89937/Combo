@@ -193,7 +193,7 @@ async function openNotificationTarget(target: TaskNotificationTarget): Promise<v
     await focusPromise
     return
   }
-  if (target.mode === 'agent_package' && target.packageId && target.sessionId) {
+  if (target.mode === 'agent_package' && target.sessionId) {
     await router.push({
       name: 'ChatSession',
       params: { sessionId: target.sessionId },

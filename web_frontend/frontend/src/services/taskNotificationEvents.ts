@@ -1,6 +1,7 @@
 import { isSchedulerRequest } from '@/stores/runtime/eventUtils'
 import { scopeFromEventPayload } from '@/stores/runtime/scopes'
 import { schedulerRunNoticeView } from '@/stores/runtime/viewMappers'
+import { useRuntimeStore } from '@/stores/runtime'
 import type { FactoryFrontendEvent } from '@/types/protocol'
 import {
   publishTaskNotification,
@@ -8,7 +9,9 @@ import {
   type TaskTerminalNotification,
 } from './taskNotifications'
 
-export type TaskNotificationEventContext = Record<string, never>
+export interface TaskNotificationEventContext {
+  conversationTitle: string | null
+}
 const TERMINAL_SCHEDULER_EVENTS = new Set([
   'scheduler_run_completed',
   'scheduler_run_failed',
@@ -17,9 +20,16 @@ const TERMINAL_SCHEDULER_EVENTS = new Set([
 ])
 
 export function captureTaskNotificationEventContext(
-  _event: FactoryFrontendEvent,
+  event: FactoryFrontendEvent,
 ): TaskNotificationEventContext {
-  return {}
+  const runtimeStore = useRuntimeStore()
+  const sessionId = conversationSessionId(event)
+  const session = [...runtimeStore.sessions, ...runtimeStore.agentSessions].find((item: any) => (
+    String(item?.session_id || '').trim() === sessionId
+  )) as any
+  return {
+    conversationTitle: text(session?.title || session?.name),
+  }
 }
 
 export function publishTaskNotificationsForEvent(
@@ -31,11 +41,14 @@ export function publishTaskNotificationsForEvent(
     if (notification) publishTaskNotification(notification)
     return
   }
-  const notification = conversationNotification(event)
+  const notification = conversationNotification(event, _context)
   if (notification) publishTaskNotification(notification)
 }
 
-function conversationNotification(event: FactoryFrontendEvent): TaskTerminalNotification | null {
+function conversationNotification(
+  event: FactoryFrontendEvent,
+  context: TaskNotificationEventContext,
+): TaskTerminalNotification | null {
   const status = runTerminalStatus(event)
   if (!status || isSchedulerRequest(event.request_id)) return null
   const finishStatus = text(event.payload?.finish_status || event.payload?.status)
@@ -48,7 +61,13 @@ function conversationNotification(event: FactoryFrontendEvent): TaskTerminalNoti
     key: `conversation:${event.request_id || event.event_id}:${status}`,
     category: 'conversation',
     status,
-    subject: text(event.payload?.package_name || event.payload?.agent_session?.package_name),
+    subject: text(
+      event.payload?.source_task_name
+      || event.payload?.agent_name
+      || event.payload?.agent_session?.title
+      || event.payload?.session_title
+      || context.conversationTitle,
+    ),
     body: eventSummary(event),
     target: {
       kind: 'conversation',
@@ -100,6 +119,7 @@ function conversationSessionId(event: FactoryFrontendEvent): string | null {
 }
 
 function eventSummary(event: FactoryFrontendEvent): string | null {
+  if (event.event_type === 'run_cancelled') return null
   return text(
     event.payload?.output_summary
     || event.payload?.result_summary

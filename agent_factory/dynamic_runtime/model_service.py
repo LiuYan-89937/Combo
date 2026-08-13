@@ -143,6 +143,8 @@ class RuntimeModelResolver:
             model=resolved.snapshot,
             reasoning_intensity=policy.reasoning_intensity,
             request_timeout_seconds=policy.request_timeout_seconds,
+            browser_operation_timeout_ms=policy.browser_operation_timeout_ms,
+            browser_navigation_timeout_ms=policy.browser_navigation_timeout_ms,
             max_model_attempts=policy.max_model_attempts,
             max_parallel_temporary_agents=policy.max_parallel_temporary_agents,
             memory_auto_write_enabled=policy.memory_auto_write_enabled,

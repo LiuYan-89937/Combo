@@ -219,6 +219,8 @@ class RuntimePolicyWriteRequest(BaseModel):
     model_profile_id: str
     reasoning_intensity: int | None = Field(default=None, ge=0)
     request_timeout_seconds: int = Field(ge=1)
+    browser_operation_timeout_ms: int = Field(default=30_000, ge=1_000, le=600_000)
+    browser_navigation_timeout_ms: int = Field(default=45_000, ge=1_000, le=600_000)
     max_model_attempts: int = Field(ge=1)
     max_parallel_temporary_agents: int = Field(ge=1)
     memory_auto_write_enabled: bool = True
@@ -1048,6 +1050,8 @@ def create_dynamic_runtime_router(
             model_profile_id=payload.model_profile_id,
             reasoning_intensity=payload.reasoning_intensity,
             request_timeout_seconds=payload.request_timeout_seconds,
+            browser_operation_timeout_ms=payload.browser_operation_timeout_ms,
+            browser_navigation_timeout_ms=payload.browser_navigation_timeout_ms,
             max_model_attempts=payload.max_model_attempts,
             max_parallel_temporary_agents=payload.max_parallel_temporary_agents,
             memory_auto_write_enabled=payload.memory_auto_write_enabled,
