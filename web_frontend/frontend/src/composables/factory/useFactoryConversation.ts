@@ -32,6 +32,7 @@ export function useFactoryConversation() {
     reasoningIntensity,
     approvalMode,
     executionPreference,
+    forceCollaboration,
   } = storeToRefs(runtimePreferences)
 
   const isAgentChatActive = computed(() => Boolean(agentStore.activeChatPackageId))
@@ -114,6 +115,7 @@ export function useFactoryConversation() {
         max_parallel_sub_agents: runtimePreferences.maxParallelSubAgents,
         approval_mode: approvalMode.value,
       },
+      forceCollaboration: forceCollaboration.value,
     }
   }
 
@@ -127,6 +129,10 @@ export function useFactoryConversation() {
 
   function setExecutionPreference(value: import('@/api/dynamicRuntime').ExecutionPreference) {
     runtimePreferences.setExecutionPreference(value)
+  }
+
+  function setForceCollaboration(value: boolean) {
+    runtimePreferences.setForceCollaboration(value)
   }
 
   function sendMessage(
@@ -222,6 +228,7 @@ export function useFactoryConversation() {
     reasoningIntensity,
     approvalMode,
     executionPreference,
+    forceCollaboration,
     selectedMainModelProfileId,
     sendMessage,
     steerQueuedRequest,
@@ -230,6 +237,7 @@ export function useFactoryConversation() {
     setReasoningIntensity,
     setApprovalMode,
     setExecutionPreference,
+    setForceCollaboration,
   }
 }
 

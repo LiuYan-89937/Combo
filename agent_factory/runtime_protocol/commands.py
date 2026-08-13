@@ -35,6 +35,7 @@ class SendMessagePayload(FrozenProtocolModel):
     attachments: tuple[AttachmentRevisionRef, ...] = ()
     execution_preference: ExecutionPreference | None = None
     approval_mode: ApprovalMode | None = None
+    force_collaboration: bool = False
     visibility: Literal["public", "internal"] = "public"
     notification_event_ids: tuple[str, ...] = ()
 

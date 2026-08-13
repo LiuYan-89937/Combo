@@ -21,6 +21,7 @@ const STORAGE_KEYS = {
   maxParallelSubAgents: 'fast-agent-factory.maxParallelSubAgents',
   approvalMode: 'fast-agent-factory.approvalMode',
   executionPreference: 'fast-agent-factory.executionPreference',
+  forceCollaboration: 'combo.forceCollaboration',
 } as const
 
 export const useRuntimePreferencesStore = defineStore('runtimePreferences', () => {
@@ -31,6 +32,7 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
   const maxParallelSubAgents = ref(readStoredInteger(STORAGE_KEYS.maxParallelSubAgents, DEFAULT_MAX_PARALLEL_SUB_AGENTS, 1))
   const approvalMode = ref<ApprovalMode>(readStoredApprovalMode())
   const executionPreference = ref<ExecutionPreference>(readStoredExecutionPreference())
+  const forceCollaboration = ref(readStoredBoolean(STORAGE_KEYS.forceCollaboration))
   const memoryAutoWriteEnabled = ref(true)
   const memoryWriteIntervalTurns = ref(DEFAULT_MEMORY_WRITE_INTERVAL_TURNS)
   const memoryAgentWriteEnabled = ref(true)
@@ -83,6 +85,12 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     executionPreference.value = value
     writeStoredValue(STORAGE_KEYS.executionPreference, value)
     enqueue({ execution_preference: value })
+  }
+
+  function setForceCollaboration(value: boolean): void {
+    forceCollaboration.value = value
+    if (value) writeStoredValue(STORAGE_KEYS.forceCollaboration, 'true')
+    else removeStoredValue(STORAGE_KEYS.forceCollaboration)
   }
 
   function setMemoryAutoWriteEnabled(value: boolean): void {
@@ -176,6 +184,7 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     maxParallelSubAgents,
     approvalMode,
     executionPreference,
+    forceCollaboration,
     memoryAutoWriteEnabled,
     memoryWriteIntervalTurns,
     memoryAgentWriteEnabled,
@@ -189,6 +198,7 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     setMaxParallelSubAgents,
     setApprovalMode,
     setExecutionPreference,
+    setForceCollaboration,
     setMemoryAutoWriteEnabled,
     setMemoryWriteIntervalTurns,
     setMemoryAgentWriteEnabled,
@@ -221,6 +231,9 @@ function readStoredExecutionPreference(): ExecutionPreference {
   return value === 'react' || value === 'plan_and_execute' || value === 'auto'
     ? value
     : DEFAULT_EXECUTION_PREFERENCE
+}
+function readStoredBoolean(key: string): boolean {
+  return readStoredText(key) === 'true'
 }
 function writeNullableNumber(key: string, value: number | null): void {
   if (value === null) removeStoredValue(key)

@@ -146,6 +146,7 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
                     "attachments": _attachment_references(principal_id, payload.get("attachments")),
                     "execution_preference": turn_policy.execution_preference,
                     "approval_mode": turn_policy.approval_mode,
+                    "force_collaboration": bool(payload.get("force_collaboration", False)),
                 },
             )
         elif command_type == "steer_runtime_request":

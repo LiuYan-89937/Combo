@@ -203,6 +203,7 @@ class ComposedRuntimeLaunchContextResolver(RuntimeLaunchContextResolver):
             clock=clock,
             capability_instructions=capability_instructions,
             delegation_notifications=delegation_notifications,
+            force_collaboration=request.runtime_role == "main" and request.force_collaboration,
         )
         return RuntimeLaunchContext(
             system_prompt=system_prompt,
@@ -257,6 +258,7 @@ def _render_system_prompt(
     clock: ClockSnapshot,
     capability_instructions: str,
     delegation_notifications: str,
+    force_collaboration: bool = False,
 ) -> str:
     sections = [
         base.strip(),
@@ -273,6 +275,13 @@ def _render_system_prompt(
     notifications = str(delegation_notifications or "").strip()
     if notifications:
         sections.append(notifications)
+    if force_collaboration:
+        sections.append(
+            "Collaboration mode is explicitly enabled for this turn. Decompose the user task into useful "
+            "independent workstreams and delegate at least one substantive workstream to a child Agent before "
+            "finishing the turn. Do not delegate ceremonial, empty, or duplicate work. If the request lacks "
+            "enough information to define a substantive child objective, ask the necessary clarification instead."
+        )
     return "\n\n".join(sections)
 
 

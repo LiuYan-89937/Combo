@@ -191,9 +191,25 @@
               <ComboPngIcon
                 name="plan"
                 :size="42"
-                tone="black"
               />
             </n-button>
+        </ControlHint>
+
+        <ControlHint
+          v-if="executionControlEnabled"
+          :label="forceCollaboration ? t('chat.collaborationModeOn') : t('chat.collaborationMode')"
+        >
+          <n-button
+            text
+            class="reasoning-button collaboration-mode-button"
+            :class="{ active: forceCollaboration }"
+            :disabled="disabled"
+            :aria-pressed="forceCollaboration"
+            :aria-label="t('chat.collaborationMode')"
+            @click="emit('update:forceCollaboration', !forceCollaboration)"
+          >
+            <CollaborationModeIcon />
+          </n-button>
         </ControlHint>
 
         <n-popover v-if="approvalControlEnabled" trigger="click" placement="top-start">
@@ -264,7 +280,7 @@
                 @click="handlePrimaryAction"
               >
                 <n-icon v-if="primaryAction === 'cancel'" :size="19"><Stop /></n-icon>
-                <ComboPngIcon v-else name="send" :size="40" :tone="canSend ? 'white' : 'auto'" />
+                <ComboPngIcon v-else name="send" :size="40" />
               </n-button>
           </ControlHint>
           <span v-if="queuedCount > 0" class="queued-count" aria-hidden="true">
@@ -285,6 +301,7 @@ import { RouterLink, type RouteLocationRaw } from 'vue-router'
 import { NInput, NButton, NIcon, NText, NPopover, NRadioButton, NRadioGroup, NSelect, useMessage } from 'naive-ui'
 import { ArrowForward, AttachOutline, CaretDown, Close, CodeSlash, Stop } from '@/components/icons'
 import ComboPngIcon from '@/components/icons/ComboPngIcon.vue'
+import CollaborationModeIcon from '@/components/icons/CollaborationModeIcon.vue'
 import ControlHint from '@/components/common/ControlHint.vue'
 import ResourceIcon from '@/components/common/ResourceIcon.vue'
 import { useI18n } from '@/composables/useI18n'
@@ -321,6 +338,7 @@ const props = withDefaults(
     reasoningIntensity?: number | null
     executionControlEnabled?: boolean
     executionPreference?: ExecutionPreference
+    forceCollaboration?: boolean
     approvalControlEnabled?: boolean
     approvalMode?: ApprovalMode
     referenceScope?: string
@@ -343,6 +361,7 @@ const props = withDefaults(
     reasoningIntensity: null,
     executionControlEnabled: false,
     executionPreference: 'auto',
+    forceCollaboration: false,
     approvalControlEnabled: false,
     approvalMode: 'ask',
     referenceScope: 'global',
@@ -359,6 +378,7 @@ const emit = defineEmits<{
   'update:selectedModelProfileId': [value: string]
   'update:reasoningIntensity': [value: number | null]
   'update:executionPreference': [value: ExecutionPreference]
+  'update:forceCollaboration': [value: boolean]
   'update:approvalMode': [value: ApprovalMode]
 }>()
 
@@ -948,7 +968,8 @@ defineExpose({
 }
 
 .compact-icon-action,
-.plan-mode-button {
+.plan-mode-button,
+.collaboration-mode-button {
   width: 48px;
   min-width: 48px;
   height: 48px;
@@ -987,7 +1008,8 @@ defineExpose({
   text-overflow: ellipsis;
 }
 
-.plan-mode-button.active {
+.plan-mode-button.active,
+.collaboration-mode-button.active {
   color: var(--app-surface);
   border-radius: 8px;
   background: var(--app-text);
@@ -995,8 +1017,8 @@ defineExpose({
 }
 
 .reasoning-button :deep(.combo-png-icon) {
-  opacity: .72;
-  transition: filter var(--app-transition-fast), opacity var(--app-transition-fast), transform var(--app-transition-fast);
+  opacity: 1;
+  transition: opacity var(--app-transition-fast), transform var(--app-transition-fast);
 }
 
 .reasoning-button :deep(.n-button__icon),
@@ -1012,15 +1034,27 @@ defineExpose({
   transform: translateY(-1px);
 }
 
-.plan-mode-button.active :deep(.combo-png-icon) {
-  filter: invert(1);
+.plan-mode-button.active :deep(.combo-png-icon),
+.collaboration-mode-button.active :deep(.combo-png-icon) {
   opacity: 1;
   animation: combo-plan-activate .3s cubic-bezier(.16, 1, .3, 1);
 }
 
-:global(:root[data-theme='dark']) .plan-mode-button.active :deep(.combo-png-icon) {
-  filter: none;
+.collaboration-mode-button:hover :deep(.collaboration-mode-icon),
+.collaboration-mode-button:focus-visible :deep(.collaboration-mode-icon) {
+  transform: translateY(-1px) rotate(-2deg);
 }
+
+.collaboration-mode-button.active :deep(.collaboration-mode-icon) {
+  animation: combo-collaboration-activate .38s cubic-bezier(.2, 1.42, .34, 1);
+}
+
+@keyframes combo-collaboration-activate {
+  0% { transform: translateY(2px) scale(.88); }
+  55% { transform: translateY(-2px) scale(1.06) rotate(-2deg); }
+  100% { transform: none; }
+}
+
 
 .plan-mode-button.active:hover {
   color: var(--app-surface);
@@ -1094,6 +1128,14 @@ defineExpose({
   padding: 0;
 }
 
+.send-button:not(:disabled):not(.is-cancel) {
+  color: var(--app-surface);
+}
+
+.send-button:disabled {
+  color: var(--app-text);
+}
+
 .send-button :deep(.n-button__content),
 .send-button :deep(.n-button__icon) {
   display: grid;
@@ -1107,7 +1149,7 @@ defineExpose({
 }
 
 .send-button:disabled :deep(.combo-png-icon) {
-  opacity: .5;
+  opacity: 1;
 }
 
 .send-button:not(:disabled):hover :deep(.combo-png-icon) {

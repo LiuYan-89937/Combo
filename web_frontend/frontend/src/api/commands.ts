@@ -99,6 +99,7 @@ export interface RuntimeMainModelOptions {
   requestTimeoutSeconds?: number | null
   maxRetries?: number | null
   userConfig?: Record<string, unknown> | null
+  forceCollaboration?: boolean
 }
 
 export function sendMessageCommand(options: SendMessageOptions): FactoryFrontendCommand {
@@ -189,6 +190,7 @@ export function runtimeExecutionConfig(
   baseUserConfig?: unknown,
 ): {
   execution_preference?: ExecutionPreference
+  force_collaboration?: boolean
   runtime_request?: Record<string, unknown>
   user_config?: Record<string, unknown>
 } | null {
@@ -197,6 +199,7 @@ export function runtimeExecutionConfig(
   const reasoningIntensity = runtimeOptions?.reasoningIntensity
   const requestTimeoutSeconds = runtimeOptions?.requestTimeoutSeconds
   const maxRetries = runtimeOptions?.maxRetries
+  const forceCollaboration = runtimeOptions?.forceCollaboration === true
   const payloadUserConfig = baseUserConfig && typeof baseUserConfig === 'object'
     ? baseUserConfig as Record<string, unknown>
     : null
@@ -208,9 +211,10 @@ export function runtimeExecutionConfig(
     || typeof maxRetries === 'number'
   )
   const hasUserConfig = Boolean(profileId || reasoningIntensity != null || extraUserConfig || payloadUserConfig)
-  if (!hasRuntimeRequest && !hasUserConfig && !executionPreference) return null
+  if (!hasRuntimeRequest && !hasUserConfig && !executionPreference && !forceCollaboration) return null
   return {
     ...(executionPreference ? { execution_preference: executionPreference } : {}),
+    ...(forceCollaboration ? { force_collaboration: true } : {}),
     ...(hasRuntimeRequest
       ? {
           runtime_request: {

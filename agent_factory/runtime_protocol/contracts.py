@@ -451,6 +451,7 @@ class RuntimeRequest(FrozenProtocolModel):
     policy_snapshot: RuntimePolicySnapshot
     capability_snapshot_id: str
     approval_mode: ApprovalMode
+    force_collaboration: bool = False
     task_revision: int = Field(ge=1)
     parent_runtime_instance_id: str | None = None
     task_id: str | None = None
@@ -483,6 +484,8 @@ class RuntimeRequest(FrozenProtocolModel):
         delegation_fields = (self.task_id, self.delegation_grant_id)
         if self.runtime_role == "main" and any(item is not None for item in delegation_fields):
             raise ValueError("main runtime cannot carry delegated task identity")
+        if self.runtime_role == "temporary" and self.force_collaboration:
+            raise ValueError("temporary runtime cannot force child collaboration")
         if self.runtime_role == "temporary" and any(item is None for item in delegation_fields):
             raise ValueError("temporary runtime requires task and delegation grant identities")
         if self.approval_mode != self.policy_snapshot.approval_mode:

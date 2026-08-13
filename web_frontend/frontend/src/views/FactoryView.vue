@@ -76,12 +76,14 @@
           :reasoning-intensity="reasoningIntensity"
           execution-control-enabled
           :execution-preference="executionPreference"
+          :force-collaboration="forceCollaboration"
           approval-control-enabled
           :approval-mode="approvalMode"
           :reference-scope="referenceScope"
           @update:selected-model-profile-id="setSelectedMainModelProfileId"
           @update:reasoning-intensity="setReasoningIntensity"
           @update:execution-preference="setExecutionPreference"
+          @update:force-collaboration="setForceCollaboration"
           @update:approval-mode="setApprovalMode"
           @send="handleSend"
           @cancel="handleCancel"
@@ -178,11 +180,13 @@ const {
   runtimeMainModelOptions,
   reasoningIntensity,
   executionPreference,
+  forceCollaboration,
   approvalMode,
   selectedMainModelProfileId,
   setSelectedMainModelProfileId,
   setReasoningIntensity,
   setExecutionPreference,
+  setForceCollaboration,
   setApprovalMode,
   cancelRequest,
   sendMessage,

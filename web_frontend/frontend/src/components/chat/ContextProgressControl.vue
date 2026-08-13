@@ -166,7 +166,7 @@ function optionalNumber(value: unknown): number | null {
   background: var(--app-surface);
   content: '';
 }
-.context-progress-ring :deep(.combo-png-icon) { position: relative; z-index: 1; opacity: .28; }
+.context-progress-ring :deep(.combo-png-icon) { position: relative; z-index: 1; opacity: 1; }
 .ring-threshold {
   position: absolute;
   z-index: 2;

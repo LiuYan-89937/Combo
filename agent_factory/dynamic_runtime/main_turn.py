@@ -177,6 +177,7 @@ class MainTurnCommandHandler:
             policy_snapshot=resolved_policy.snapshot,
             capability_snapshot_id=capability_snapshot.snapshot_id,
             approval_mode=resolved_policy.snapshot.approval_mode,
+            force_collaboration=payload.force_collaboration,
             task_revision=turn.task_revision,
             created_at=now,
         )

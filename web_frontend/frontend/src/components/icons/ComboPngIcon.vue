@@ -1,14 +1,13 @@
 <template>
-  <img
+  <span
     class="combo-png-icon"
     :class="`is-${tone}`"
-    :src="tone === 'white'
-      ? `/brand/combo/ui-icons/white/${name}.png`
-      : `/brand/combo/ui-icons/${name}.png`"
-    alt=""
-    :width="size"
-    :height="size"
-    draggable="false"
+    :style="{
+      width: `${size}px`,
+      height: `${size}px`,
+      '--combo-icon-mask': `url(/brand/combo/ui-icons/mask/${name}.png)`,
+    }"
+    aria-hidden="true"
   />
 </template>
 
@@ -16,6 +15,7 @@
 export type ComboPngIconName =
   | 'plan'
   | 'permission'
+  | 'collaboration'
   | 'send'
   | 'context'
   | 'finish-flag'
@@ -37,13 +37,13 @@ withDefaults(defineProps<{
 .combo-png-icon {
   display: block;
   flex: none;
-  object-fit: contain;
-  object-position: center;
+  background: currentColor;
+  mask: var(--combo-icon-mask) center / contain no-repeat;
+  -webkit-mask: var(--combo-icon-mask) center / contain no-repeat;
   user-select: none;
 }
 
-:root[data-theme='dark'] .combo-png-icon.is-auto {
-  filter: invert(1);
-}
+.combo-png-icon.is-black { color: #000; }
+.combo-png-icon.is-white { color: #fff; }
 
 </style>
