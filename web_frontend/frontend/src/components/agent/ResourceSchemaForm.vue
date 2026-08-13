@@ -223,7 +223,7 @@ function fieldInvalid(field: ResourceSchemaField): boolean {
 }
 
 .required-mark {
-  color: var(--n-color-error, #d03050);
+  color: var(--app-error);
 }
 
 .resource-field-description,
@@ -233,7 +233,7 @@ function fieldInvalid(field: ResourceSchemaField): boolean {
 }
 
 .resource-field-error {
-  color: var(--n-color-error, #d03050);
+  color: var(--app-error);
   font-size: var(--app-font-xs);
 }
 

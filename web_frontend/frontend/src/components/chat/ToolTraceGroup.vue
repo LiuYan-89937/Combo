@@ -6,34 +6,26 @@
         <strong>{{ t('roles.assistant') }}</strong>
         <span>{{ formattedTime }}</span>
       </div>
-      <div class="trace-caption">
-        <strong>{{ traceTitle }}</strong>
-        <span>{{ t('tool.traceCount', { count: executions.length }) }}</span>
-      </div>
-      <div class="tool-trace" :class="`trace-state-${groupState}`">
-        <div
-          v-for="(execution, index) in executions"
-          :key="execution.id"
-          class="trace-node"
-          :class="`node-state-${executionState(execution)}`"
-        >
-          <span class="node-rail" aria-hidden="true">
-            <span class="node-dot"></span>
-            <span v-if="index < executions.length - 1" class="node-line"></span>
+      <details class="trace-group" open>
+        <summary class="trace-caption">
+          <span class="trace-caption-copy">
+            <strong>{{ traceTitle }}</strong>
+            <span>{{ t('tool.traceCount', { count: executions.length }) }}</span>
           </span>
-          <ToolExecutionCard
-            :part="execution"
-            :workspace-context="workspaceContext"
-          />
-        </div>
-      </div>
+          <span class="trace-chevron" aria-hidden="true">⌄</span>
+        </summary>
+        <ToolExecutionChain
+          :executions="executions"
+          :workspace-context="workspaceContext"
+        />
+      </details>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import ToolExecutionCard from '@/components/chat/ToolExecutionCard.vue'
+import ToolExecutionChain from '@/components/chat/ToolExecutionChain.vue'
 import { useI18n } from '@/composables/useI18n'
 import type { TranscriptItem, ToolExecutionMessagePart } from '@/types/protocol'
 import type { WorkspaceRequestContext } from '@/api/resourceTypes'
@@ -65,13 +57,6 @@ const formattedTime = computed(() => new Date(props.messages[0]?.timestamp || Da
   minute: '2-digit',
 }))
 
-function executionState(execution: ToolExecutionMessagePart): string {
-  if (execution.status === 'awaiting_approval') return 'approval'
-  if (execution.error || execution.status === 'failed') return 'failed'
-  if (execution.status === 'cancelled' || execution.status === 'stopped') return 'cancelled'
-  if (['requested', 'running', 'streaming'].includes(String(execution.status || ''))) return 'running'
-  return 'completed'
-}
 </script>
 
 <style scoped>
@@ -114,76 +99,35 @@ function executionState(execution: ToolExecutionMessagePart): string {
 
 .trace-caption {
   display: flex;
-  align-items: baseline;
-  gap: 7px;
+  align-items: center;
+  justify-content: space-between;
   margin-bottom: 5px;
+  padding: 3px 0;
   color: var(--app-text-muted);
   font-size: 11px;
+  cursor: pointer;
+  list-style: none;
 }
 
-.trace-caption strong {
+.trace-caption::-webkit-details-marker { display: none; }
+
+.trace-caption-copy {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.trace-caption-copy strong {
   color: var(--app-text-secondary);
   font-size: 12px;
 }
 
-.tool-trace {
-  display: grid;
+.trace-chevron {
+  transition: transform 160ms ease;
 }
 
-.trace-node {
-  position: relative;
-  display: grid;
-  grid-template-columns: 22px minmax(0, 1fr);
-  min-width: 0;
+.trace-group[open] .trace-chevron {
+  transform: rotate(180deg);
 }
 
-.node-rail {
-  position: relative;
-  display: flex;
-  justify-content: center;
-}
-
-.node-dot {
-  position: relative;
-  z-index: 1;
-  width: 9px;
-  height: 9px;
-  margin-top: 16px;
-  border: 2px solid var(--app-surface);
-  border-radius: 50%;
-  background: var(--app-success);
-  box-shadow: 0 0 0 1px var(--app-border-hover);
-}
-
-.node-line {
-  position: absolute;
-  top: 24px;
-  bottom: -16px;
-  width: 1px;
-  background: var(--app-border-hover);
-}
-
-.node-state-running .node-dot { background: var(--app-info); animation: app-pulse-soft 1.4s ease-in-out infinite; }
-.node-state-approval .node-dot { background: var(--app-warning); }
-.node-state-failed .node-dot { background: var(--app-error); }
-.node-state-cancelled .node-dot { background: var(--app-text-muted); }
-
-.trace-node :deep(.tool-execution-card) {
-  margin-bottom: 5px;
-  border: 0;
-  border-radius: var(--app-radius-sm);
-  background: transparent;
-  box-shadow: none;
-}
-
-.trace-node :deep(.tool-summary) {
-  min-height: 40px;
-  padding: 5px 7px;
-}
-
-.trace-node :deep(.tool-body) {
-  margin: 0 7px 8px;
-  border: 1px solid var(--app-divider);
-  border-radius: var(--app-radius-sm);
-}
 </style>

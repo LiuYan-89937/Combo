@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
+from uuid import uuid5, NAMESPACE_URL
 
 from agent_factory.dynamic_runtime.application import DynamicRuntimeApplication
 from agent_factory.dynamic_runtime.dispatcher import CommandDispatcher
 from agent_factory.dynamic_runtime.launch_context import render_delegation_notifications
 from agent_factory.dynamic_runtime.outbox_publisher import OutboxPublisher
-from agent_factory.dynamic_runtime.run_control import RuntimeInputInjection
+from agent_factory.runtime_protocol import CommandEnvelope, CommandReceipt, SendMessagePayload
+from agent_factory.runtime_protocol.versioning import RUNTIME_PROTOCOL_VERSION
 
 
 FailureReporter = Callable[[str, BaseException], None]
@@ -92,6 +94,7 @@ class DynamicRuntimeSupervisor:
         self.notify_commands()
         self.notify_outbox()
         self.notify_temporary_tasks()
+        self._enqueue_pending_completion_turns()
 
     async def stop(self) -> None:
         tasks = tuple(self._tasks)
@@ -128,6 +131,7 @@ class DynamicRuntimeSupervisor:
                 self._report_failure(component, exc)
                 processed = False
             if processed:
+                self._enqueue_pending_completion_turns()
                 self.notify_outbox()
                 continue
             await self._wait_for(
@@ -160,7 +164,7 @@ class DynamicRuntimeSupervisor:
                     await self._wait_for(self._temporary_wakeup)
                     continue
                 result = await asyncio.to_thread(self._application.runtime_service.execute_delegated, claim)
-                self._notify_active_main(result.runtime_instance)
+                self._enqueue_completion_turns(result.runtime_instance)
                 self.notify_outbox()
             except BaseException as exc:
                 if isinstance(exc, asyncio.CancelledError):
@@ -168,33 +172,60 @@ class DynamicRuntimeSupervisor:
                 self._report_failure(component, exc)
                 await self._wait_for(self._temporary_wakeup)
 
-    def _notify_active_main(self, child_instance: object) -> None:
+    def _enqueue_completion_turns(self, child_instance: object) -> None:
         request = getattr(child_instance, "request", None)
         session_id = str(getattr(request, "session_id", "") or "").strip()
         principal_id = str(getattr(request, "principal_id", "") or "").strip()
         if not session_id or not principal_id:
             return
-        try:
-            active = self._application.stores.runtime_instances.active_main_for_session(
-                session_id=session_id,
+        events = self._application.stores.delegations.pending_completion_notifications(
+            principal_id=principal_id,
+            session_id=session_id,
+        )
+        for event in events:
+            self._enqueue_completion_turn(session_id=session_id, event=event)
+        if events:
+            self.notify_commands()
+
+    def _enqueue_pending_completion_turns(self) -> None:
+        for session_id, event in self._application.stores.delegations.pending_completion_notification_entries():
+            self._enqueue_completion_turn(session_id=session_id, event=event)
+        self.notify_commands()
+
+    def _enqueue_completion_turn(self, *, session_id: str, event: object) -> None:
+        event_id = str(getattr(event, "event_id", "") or "").strip()
+        principal_id = str(getattr(event, "principal_id", "") or "").strip()
+        created_at = str(getattr(event, "created_at", "") or "").strip()
+        if not event_id or not principal_id or not created_at:
+            raise ValueError("delegation completion notification identity is incomplete")
+        command_id = uuid5(NAMESPACE_URL, f"combo:delegation-completion:{event_id}").hex
+        message_id = uuid5(NAMESPACE_URL, f"combo:delegation-completion-message:{event_id}").hex
+        envelope = CommandEnvelope(
+            protocol_version=RUNTIME_PROTOCOL_VERSION,
+            command_id=command_id,
+            client_instance_id="dynamic-runtime-supervisor",
+            principal_id=principal_id,
+            session_id=session_id,
+            payload=SendMessagePayload(
+                message_id=message_id,
+                content="Process the delegated task completion notification supplied by the runtime context.",
+                visibility="internal",
+                notification_event_ids=(event_id,),
+            ),
+            submitted_at=created_at,
+        )
+        self._application.stores.commands.accept(
+            envelope,
+            CommandReceipt(
+                command_id=command_id,
+                client_instance_id=envelope.client_instance_id,
                 principal_id=principal_id,
-            )
-        except LookupError:
-            return
-        events = self._application.stores.delegations.claim_completion_notifications(active)
-        if not events:
-            return
-        injection = RuntimeInputInjection(
-            injection_id="delegation-notification:" + ":".join(event.event_id for event in events),
-            role="system",
-            content=render_delegation_notifications(events),
+                session_id=session_id,
+                status="received",
+                received_at=created_at,
+                updated_at=created_at,
+            ),
         )
-        accepted = self._application.stores.run_controls.submit_input(
-            runtime_instance_id=active.runtime_instance_id,
-            injection=injection,
-        )
-        if not accepted:
-            self._application.stores.delegations.release_completion_notifications(active, events)
 
     async def _generation_loop(self) -> None:
         while not self._stop.is_set():

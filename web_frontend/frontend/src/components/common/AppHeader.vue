@@ -187,7 +187,6 @@ watchEffect(() => {
   align-items: center;
   gap: 16px;
   padding: 0 16px;
-  border-bottom: 1px solid var(--app-divider);
   background: color-mix(in srgb, var(--app-surface) 96%, transparent);
   backdrop-filter: blur(18px) saturate(150%);
 }
@@ -212,7 +211,7 @@ button.conversation-title:hover { background: var(--app-surface-muted); }
 .window-controls { align-self: stretch; display: flex; margin-left: 4px; }
 .window-control { width: 46px; border: 0; background: transparent; color: var(--app-text); cursor: default; }
 .window-control:hover { background: var(--app-surface-muted); }
-.window-control.window-close:hover { background: #c42b1c; color: white; }
+.window-control.window-close:hover { background: var(--app-text); color: var(--app-surface); }
 .window-minimize-icon, .window-maximize-icon, .window-close-icon { position: relative; display: block; width: 10px; height: 10px; margin: auto; }
 .window-minimize-icon::before { position: absolute; inset: 5px 0 auto; height: 1px; background: currentColor; content: ''; }
 .window-maximize-icon { border: 1px solid currentColor; }

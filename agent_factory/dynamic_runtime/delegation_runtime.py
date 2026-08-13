@@ -10,6 +10,7 @@ from uuid import uuid4
 from agent_factory.dynamic_runtime.capability_resolver import MainTurnCapabilityResolver
 from agent_factory.dynamic_runtime.delegation_policy import MAIN_RUNTIME_ONLY_CAPABILITY_IDS
 from agent_factory.dynamic_runtime.delegation_store import DelegationStore
+from agent_factory.dynamic_runtime.delegated_model_selector import DelegatedTaskModelSelector
 from agent_factory.dynamic_runtime.model_service import ResolvedRuntimePolicy, RuntimeModelResolver
 from agent_factory.runtime_protocol import (
     DelegationGrant,
@@ -39,6 +40,7 @@ SHARED_WORKSPACE_WRITE_SCOPE = "."
 class _BoundServices:
     delegations: DelegationStore
     model_resolver: RuntimeModelResolver
+    model_selector: DelegatedTaskModelSelector
     capability_resolver: MainTurnCapabilityResolver
     generation: int
 
@@ -55,12 +57,14 @@ class DelegationRuntimeCoordinator:
         *,
         delegations: DelegationStore,
         model_resolver: RuntimeModelResolver,
+        model_selector: DelegatedTaskModelSelector,
         capability_resolver: MainTurnCapabilityResolver,
         generation: int,
     ) -> None:
         services = _BoundServices(
             delegations=delegations,
             model_resolver=model_resolver,
+            model_selector=model_selector,
             capability_resolver=capability_resolver,
             generation=generation,
         )
@@ -96,11 +100,24 @@ class BoundDelegationRuntime:
         child_runtime_id = uuid4().hex
         parent_policy = parent.request.policy_snapshot
         parent_model = parent_policy.model
+        selected_model = self.services.model_selector.select(
+            task_description=_delegated_task_description(request),
+            strategy=request.strategy,
+            fallback_profile_id=parent_model.profile_id,
+        )
         child_model = self.services.model_resolver.resolve_chat_model(
             operation="temporary_turn",
-            profile_id=parent_model.profile_id,
-            expected_profile_revision=parent_model.profile_revision,
-            expected_credential_revision=parent_model.credential_revision,
+            profile_id=selected_model.profile_id,
+            expected_profile_revision=(
+                parent_model.profile_revision
+                if selected_model.source == "inherited"
+                else None
+            ),
+            expected_credential_revision=(
+                parent_model.credential_revision
+                if selected_model.source == "inherited"
+                else None
+            ),
             reasoning_intensity=parent_policy.reasoning_intensity,
         )
         child_policy = parent_policy.model_copy(
@@ -187,6 +204,9 @@ class BoundDelegationRuntime:
             workspace_id=parent.request.workspace_id,
             allowed_write_roots=(SHARED_WORKSPACE_WRITE_SCOPE,),
             capability_requirements=request.capability_names,
+            selected_model_profile_id=child_model.snapshot.profile_id,
+            model_selection_source=selected_model.source,
+            model_selection_reason=selected_model.reason,
             approval_mode=parent.request.approval_mode,
             created_at=now,
         )
@@ -224,6 +244,13 @@ class BoundDelegationRuntime:
             "objective": request.objective,
             "strategy": request.strategy,
             "capabilities": list(request.capability_names),
+            "model": {
+                "profile_id": child_model.snapshot.profile_id,
+                "provider": child_model.snapshot.provider,
+                "model_name": child_model.snapshot.model_name,
+                "selection_source": selected_model.source,
+                "reason": selected_model.reason,
+            },
             "message": (
                 "Temporary agent task accepted and its task capsule is available. "
                 "Do not poll it; completion and interaction updates are delivered asynchronously."
@@ -256,6 +283,20 @@ class BoundDelegationRuntime:
                 for record in records
             ]
         }
+
+
+def _delegated_task_description(request: DelegationRequest) -> str:
+    return "\n".join(
+        part
+        for part in (
+            request.agent_name,
+            request.objective,
+            request.system_prompt,
+            " ".join(request.capability_names),
+            " ".join(request.acceptance_criteria),
+        )
+        if part
+    )
 
 
 def _child_system_prompt(system_prompt: str) -> str:

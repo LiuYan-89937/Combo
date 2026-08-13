@@ -13,6 +13,12 @@ const FOREGROUND_RUN_COMMANDS = new Set<FactoryFrontendCommand['type']>([
   'send_agent_package_message',
 ])
 
+const SESSION_ESTABLISHING_COMMANDS = new Set<FactoryFrontendCommand['type']>([
+  'send_message',
+  'run_agent_package',
+  'send_agent_package_message',
+])
+
 let cancellationBarrier: Promise<void> = Promise.resolve()
 
 export function useCommandTransport() {
@@ -43,7 +49,7 @@ export function useCommandTransport() {
     void request.then((response) => {
       const sessionId = String(response.receipt?.session_id || '').trim()
       const packageId = String(command.payload?.package_id || '').trim()
-      if (sessionId && packageId && FOREGROUND_RUN_COMMANDS.has(command.type)) {
+      if (sessionId && packageId && SESSION_ESTABLISHING_COMMANDS.has(command.type)) {
         runtimeStore.acceptAgentPackageSession(packageId, sessionId)
         agentStore.enterAgentChat(packageId, sessionId)
       }

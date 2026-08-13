@@ -220,7 +220,14 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
                     "kind": "resume_interrupt",
                     "runtime_instance_id": current.runtime_instance_id,
                     "request_id": current.request.request_id,
-                    "interrupt_id": _interrupt_id(backend, current.runtime_instance_id),
+                    "interrupt_id": _interrupt_id(
+                        backend,
+                        current.runtime_instance_id,
+                        requested_interrupt_id=_required_text(
+                            source.get("interrupt_id"),
+                            "interrupt_id",
+                        ),
+                    ),
                     "decision": decision,
                     **({"response": response} if decision in {"answer", "revise"} else {}),
                 },
@@ -1273,14 +1280,29 @@ def _active_pre_runtime_command(backend: Any, principal_id: str, command: dict[s
     return CommandReceipt.model_validate_json(str(row["receipt_json"]))
 
 
-def _interrupt_id(backend: Any, runtime_instance_id: str) -> str:
+def _interrupt_id(
+    backend: Any,
+    runtime_instance_id: str,
+    *,
+    requested_interrupt_id: str,
+) -> str:
     interrupts = backend.application.runtime_service.pending_interrupts(runtime_instance_id)
     if not interrupts:
         raise HTTPException(status_code=409, detail="runtime interrupt payload is unavailable")
-    interrupt_id = str(interrupts[0].get("interrupt_id") or interrupts[0].get("id") or "").strip()
-    if not interrupt_id:
+    available_ids = {
+        interrupt_id
+        for item in interrupts
+        if (
+            interrupt_id := str(
+                item.get("interrupt_id") or item.get("id") or ""
+            ).strip()
+        )
+    }
+    if not available_ids:
         raise HTTPException(status_code=409, detail="runtime interrupt identity is unavailable")
-    return interrupt_id
+    if requested_interrupt_id not in available_ids:
+        raise HTTPException(status_code=409, detail="runtime interrupt identity no longer matches")
+    return requested_interrupt_id
 
 
 def _session_views(backend: Any, principal_id: str) -> list[dict[str, Any]]:
@@ -1322,6 +1344,7 @@ def _session_snapshot(backend: Any, principal_id: str, session_id: str) -> dict[
             from tool_calls as tool
             join conversation_turns as turn on turn.turn_id = tool.turn_id
             where turn.session_id = ?
+              and tool.runtime_instance_id = turn.active_runtime_instance_id
             order by tool.created_at, tool.rowid
             """,
             (session_id,),
@@ -1455,6 +1478,7 @@ def _message_view(
         "metadata": {
             "request_id": request_id,
             "dispatch_state": _turn_dispatch_state(turn_status),
+            "visibility": message.visibility,
         },
     }
 
@@ -1634,7 +1658,8 @@ def _delegated_task_rows(
             select task.payload_json as task_json, task.status, task.created_at,
                    task.updated_at, task.terminal_at,
                    task.child_runtime_instance_id,
-                   runtime.session_id, runtime.request_id
+                   runtime.session_id, runtime.request_id,
+                   runtime.payload_json as runtime_json
             from delegated_task_revisions as task
             join runtime_instances as runtime
               on runtime.runtime_instance_id = task.child_runtime_instance_id
@@ -1649,9 +1674,11 @@ def _delegated_task_rows(
 
 
 def _delegated_task_row_view(backend: Any, row: Any) -> dict[str, Any]:
-    from agent_factory.runtime_protocol import DelegatedTaskEvent, TaskEnvelope
+    from agent_factory.runtime_protocol import DelegatedTaskEvent, RuntimeInstance, TaskEnvelope
 
     task = TaskEnvelope.model_validate_json(str(row["task_json"]))
+    child_runtime = RuntimeInstance.model_validate_json(str(row["runtime_json"]))
+    selected_model = child_runtime.request.policy_snapshot.model
     with backend.application.database.connection(query_only=True) as connection:
         event_rows = connection.execute(
             """
@@ -1682,6 +1709,13 @@ def _delegated_task_row_view(backend: Any, row: Any) -> dict[str, Any]:
         "request_id": str(row["request_id"]),
         "child_runtime_instance_id": str(row["child_runtime_instance_id"]),
         "agent_name": task.agent_name,
+        "model": {
+            "profile_id": selected_model.profile_id,
+            "provider": selected_model.provider,
+            "model_name": selected_model.model_name,
+            "selection_source": task.model_selection_source,
+            "selection_reason": task.model_selection_reason,
+        },
         "task_text": task.objective,
         "activity_summary": current_activity.get("summary") or task.objective,
         "activity_updated_at": current_activity.get("created_at") or str(row["updated_at"]),

@@ -35,6 +35,8 @@ class SendMessagePayload(FrozenProtocolModel):
     attachments: tuple[AttachmentRevisionRef, ...] = ()
     execution_preference: ExecutionPreference | None = None
     approval_mode: ApprovalMode | None = None
+    visibility: Literal["public", "internal"] = "public"
+    notification_event_ids: tuple[str, ...] = ()
 
     @field_validator("message_id", "content")
     @classmethod
@@ -44,6 +46,20 @@ class SendMessagePayload(FrozenProtocolModel):
             field_name = getattr(info, "field_name", "value")
             raise ValueError(f"{field_name} must not be empty")
         return text
+
+    @field_validator("notification_event_ids")
+    @classmethod
+    def _notification_event_ids_are_stable(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        normalized = tuple(dict.fromkeys(str(item or "").strip() for item in value))
+        if any(not item for item in normalized):
+            raise ValueError("notification_event_ids must not contain empty values")
+        return normalized
+
+    @model_validator(mode="after")
+    def _internal_notification_identity_is_consistent(self) -> "SendMessagePayload":
+        if self.notification_event_ids and self.visibility != "internal":
+            raise ValueError("notification_event_ids require internal message visibility")
+        return self
 
 
 class SetExecutionPreferencePayload(FrozenProtocolModel):

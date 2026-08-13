@@ -46,20 +46,21 @@
               <div class="session-title">
                 {{ sessionTitle(session) }}
               </div>
-              <n-button
-                size="tiny"
-                quaternary
-                circle
-                :aria-label="t('sessions.delete')"
-                @click.stop="confirmDeleteSession(session)"
-              >
-                <template #icon>
-                  <n-icon><TrashOutline /></n-icon>
-                </template>
-              </n-button>
             </div>
+            <n-button
+              class="session-delete"
+              size="tiny"
+              quaternary
+              circle
+              :aria-label="t('sessions.delete')"
+              @click.stop="confirmDeleteSession(session)"
+            >
+              <template #icon>
+                <n-icon><TrashOutline /></n-icon>
+              </template>
+            </n-button>
             <div class="session-meta">
-              <n-tag size="tiny" :type="modeTagType(sessionMode(session))">
+              <n-tag size="tiny">
                 {{ modeLabel(sessionMode(session)) }}
               </n-tag>
               <n-tag
@@ -233,13 +234,6 @@ function modeLabel(mode: string): string {
   return labels[mode] || mode
 }
 
-function modeTagType(mode: string): 'default' | 'success' | 'info' | 'warning' {
-  const types: Record<string, any> = {
-    agent_package: 'success',
-  }
-  return types[mode] || 'default'
-}
-
 function formatTime(timestamp: string): string {
   const date = new Date(timestamp)
   const now = new Date()
@@ -300,10 +294,11 @@ function refreshSessions() {
 }
 
 .session-item {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: var(--app-space-xs);
-  padding: var(--app-space-xs) 0;
+  padding: var(--app-space-xs) 36px var(--app-space-xs) 0;
   width: 100%;
   min-width: 0;
 }
@@ -355,6 +350,13 @@ function refreshSessions() {
 
 .session-title-row :deep(.n-button) {
   flex: 0 0 auto;
+}
+
+.session-delete {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
 }
 
 .session-meta {

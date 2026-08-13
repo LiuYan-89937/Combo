@@ -5,6 +5,7 @@
       character="companion"
       action="jumping"
       :size="size"
+      :tint="agentColor"
       :loop="false"
       @complete="celebrating = false"
     />
@@ -13,6 +14,7 @@
       character="companion"
       :action="animation.action"
       :size="size"
+      :tint="agentColor"
       :paused="animation.paused || awaitingInput"
       :phase-offset="phaseOffset"
     />
@@ -51,6 +53,7 @@ const animation = computed<{ action: ComboCharacterAction; paused: boolean }>(()
 })
 
 const phaseOffset = computed(() => stablePhase(props.taskId))
+const agentColor = computed(() => stableAgentColor(props.taskId))
 
 watch(
   () => props.status,
@@ -66,6 +69,11 @@ function stablePhase(value: string): number {
   let hash = 0
   for (const character of value) hash = (hash * 31 + character.charCodeAt(0)) >>> 0
   return hash
+}
+
+function stableAgentColor(value: string): string {
+  const hue = stablePhase(value || 'sub-agent') % 360
+  return `hsl(${hue} 72% 48%)`
 }
 </script>
 

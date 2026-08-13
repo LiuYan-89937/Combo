@@ -121,6 +121,18 @@ class ModelPoolSelector:
             return [f"kind:{requirement.kind}"]
         return _missing_capabilities(requirement, profile)
 
+    def matching_profiles(
+        self,
+        requirement: ModelSelectionRequirement,
+    ) -> list[ModelPoolProfile]:
+        return [
+            candidate.profile
+            for candidate in self._rank_candidates(
+                requirement,
+                [profile for profile in self.store.list_profiles() if profile.enabled],
+            )
+        ]
+
     def _rank_candidates(
         self,
         requirement: ModelSelectionRequirement,

@@ -28,6 +28,7 @@
         <span class="task-stack-copy">
           <span class="task-stack-meta">
             <strong>{{ primaryAgentName }}</strong>
+            <small v-if="primaryModelName" class="task-stack-model">{{ primaryModelName }}</small>
             <small>{{ elapsedLabel }}</small>
           </span>
           <span class="task-stack-summary-text">{{ currentActivitySummary }}</span>
@@ -119,6 +120,9 @@ const capsuleStatus = computed(() => {
 const primaryAgentName = computed(() => String(
   primaryTask.value?.agent_name || t('backgroundTask.memberFallback'),
 ))
+const primaryModelName = computed(() => String(
+  primaryTask.value?.model?.model_name || '',
+).trim())
 const currentActivitySummary = computed(() => {
   const task = primaryTask.value
   if (!task) return t('backgroundTask.stackTitle')
@@ -284,6 +288,7 @@ function formatDuration(startValue: string, endValue: string | null): string {
 .task-stack-meta strong, .task-stack-meta small, .task-stack-summary-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-stack-meta strong { color: var(--app-text); font-size: 12px; font-weight: 620; }
 .task-stack-meta small { font-size: 10px; }
+.task-stack-model { max-width: 132px; padding: 1px 5px; border-radius: 999px; background: var(--app-surface-muted); color: var(--app-text-secondary); }
 .task-stack-summary-text { padding-top: 6px; border-top: 1px solid var(--app-divider); color: var(--app-text-secondary); font-size: 11px; line-height: 1.35; }
 .task-stack-count { flex: 0 0 auto; display: grid; min-width: 25px; height: 25px; place-items: center; border: 1px solid var(--app-border); border-radius: 999px; color: var(--app-text-secondary); font-size: 10px; }
 .task-stack-chevron { color: var(--app-text-muted); font-size: 11px; }

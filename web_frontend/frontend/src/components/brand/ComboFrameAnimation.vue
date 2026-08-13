@@ -5,10 +5,14 @@
     :style="{
       '--combo-frame-width': `${size}px`,
       '--combo-frame-ratio': `${animation.width} / ${animation.height}`,
+      '--combo-frame-source': `url(${frameSource})`,
+      '--combo-frame-tint': tint,
     }"
+    :class="{ 'is-tinted': Boolean(tint) }"
     aria-hidden="true"
   >
-    <img :src="frameSource" alt="" draggable="false" />
+    <span v-if="tint" class="tinted-frame" />
+    <img v-else :src="frameSource" alt="" draggable="false" />
   </span>
 </template>
 
@@ -29,12 +33,14 @@ const props = withDefaults(defineProps<{
   fps?: number
   phaseOffset?: number
   loop?: boolean
+  tint?: string
 }>(), {
   size: 144,
   paused: false,
   fps: 0,
   phaseOffset: 0,
   loop: true,
+  tint: '',
 })
 
 const emit = defineEmits<{ complete: [] }>()
@@ -122,6 +128,15 @@ function handlePageVisibility() {
   height: 100%;
   object-fit: contain;
   user-select: none;
+}
+
+.tinted-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--combo-frame-tint);
+  mask: var(--combo-frame-source) center / contain no-repeat;
+  -webkit-mask: var(--combo-frame-source) center / contain no-repeat;
 }
 
 :root[data-theme='dark'] .combo-frame-animation img {

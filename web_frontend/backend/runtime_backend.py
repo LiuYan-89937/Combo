@@ -59,6 +59,7 @@ from agent_factory.dynamic_runtime.capability_definitions import (
     ToolDefinition,
 )
 from agent_factory.dynamic_runtime.capability_catalog_runtime import CapabilityCatalogRuntime
+from agent_factory.dynamic_runtime.delegated_model_selector import DelegatedTaskModelSelector
 from agent_factory.dynamic_runtime.delegation_runtime import DelegationRuntimeCoordinator
 from agent_factory.dynamic_runtime.capability_blob_store import CapabilityBlobStore
 from agent_factory.dynamic_runtime.skill_source import (
@@ -1423,6 +1424,7 @@ class RuntimeBackend:
             self._synchronize_skill_capabilities(stores, adapters)
             self._synchronize_mcp_capabilities(stores, adapters)
 
+        model_pool_store = ModelPoolStore()
         application = DynamicRuntimeApplication.open(
             config=DynamicRuntimeApplicationConfig(
                 database_path=config.database_path,
@@ -1444,7 +1446,7 @@ class RuntimeBackend:
                 ),
             ),
             services_factory=services,
-            model_pool_store=ModelPoolStore(),
+            model_pool_store=model_pool_store,
             launch_context_resolver=launch_context,
             capability_bootstrap=bootstrap_capabilities,
             main_agent_capability_ids=lambda: self.main_agent_capability_profiles.read().capability_ids,
@@ -1454,6 +1456,7 @@ class RuntimeBackend:
         delegation_runtime.bind(
             delegations=application.stores.delegations,
             model_resolver=application.model_resolver,
+            model_selector=DelegatedTaskModelSelector(model_pool_store),
             capability_resolver=application.capability_resolver,
             generation=application.generation.generation,
         )

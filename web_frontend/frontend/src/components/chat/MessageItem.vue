@@ -203,20 +203,12 @@ function formatTime(timestamp: string): string {
 }
 
 function groupAgentAvatarStyle(metadata: Record<string, unknown>): CSSProperties {
-  const seed = String(metadata.package_id || metadata.display_name || 'agent')
-  const hues = [8, 28, 48, 84, 142, 174, 202, 226, 278, 326]
-  const hue = hues[stableColorIndex(seed, hues.length)]
+  void metadata
   return {
-    background: `hsl(${hue} 58% 42%)`,
-    color: '#ffffff',
-    border: '1px solid transparent',
+    background: 'var(--app-text)',
+    color: 'var(--app-surface)',
+    border: '1px solid var(--app-text)',
   }
-}
-
-function stableColorIndex(value: string, size: number): number {
-  let hash = 0
-  for (const character of value) hash = (hash * 31 + character.codePointAt(0)!) >>> 0
-  return hash % size
 }
 
 </script>

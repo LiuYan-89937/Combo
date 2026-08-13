@@ -158,7 +158,11 @@ const statusLabel = computed(() => {
   if (state.value === 'cancelled') return t('tool.status.cancelled')
   if (state.value === 'failed') return t('tool.status.failed')
   if (state.value === 'approval') return t('tool.status.waitingApproval')
-  if (state.value === 'running') return t('tool.status.started')
+  if (state.value === 'running') {
+    return presentation.value.activeLabelKey
+      ? t(presentation.value.activeLabelKey as any)
+      : t('tool.status.started')
+  }
   if (resultRecord.value?.status === 'preview_ready') return t('tool.transaction.previewReady')
   if (resultRecord.value?.status === 'committed') return t('tool.transaction.committed')
   return t('tool.status.completed')

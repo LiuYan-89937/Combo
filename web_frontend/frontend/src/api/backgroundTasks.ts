@@ -20,6 +20,13 @@ export interface BackgroundTask {
   request_id: string
   child_runtime_instance_id: string
   agent_name?: string | null
+  model?: {
+    profile_id: string
+    provider: string
+    model_name: string
+    selection_source?: string | null
+    selection_reason?: string | null
+  } | null
   task_text: string
   activity_summary: string
   activity_updated_at: string

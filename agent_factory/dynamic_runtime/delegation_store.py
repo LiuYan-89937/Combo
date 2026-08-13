@@ -426,22 +426,38 @@ class DelegationStore:
     def claim_completion_notifications(
         self,
         instance: RuntimeInstance,
+        *,
+        event_ids: tuple[str, ...] | None = None,
     ) -> tuple[DelegatedTaskEvent, ...]:
         if instance.request.runtime_role != "main":
             return ()
         now = utc_now_text()
+        normalized_event_ids = tuple(
+            dict.fromkeys(str(item or "").strip() for item in (event_ids or ()))
+        )
+        if any(not item for item in normalized_event_ids):
+            raise ValueError("notification event IDs must not contain empty values")
+        parameters: list[Any] = [
+            instance.request.principal_id,
+            instance.request.session_id,
+        ]
+        event_filter = ""
+        if event_ids is not None:
+            if not normalized_event_ids:
+                return ()
+            placeholders = ", ".join("?" for _ in normalized_event_ids)
+            event_filter = f" and event_id in ({placeholders})"
+            parameters.extend(normalized_event_ids)
         with self._database.transaction() as conn:
             rows = conn.execute(
-                """
+                f"""
                 select event_id, payload_json from delegated_task_notifications
                 where principal_id = ? and session_id = ?
                   and delivered_runtime_instance_id is null
+                  {event_filter}
                 order by created_at, event_id
                 """,
-                (
-                    instance.request.principal_id,
-                    instance.request.session_id,
-                ),
+                tuple(parameters),
             ).fetchall()
             claimed_rows = []
             for row in rows:
@@ -458,6 +474,51 @@ class DelegationStore:
         return tuple(
             DelegatedTaskEvent.model_validate_json(str(row["payload_json"]))
             for row in claimed_rows
+        )
+
+    def pending_completion_notifications(
+        self,
+        *,
+        principal_id: str | None = None,
+        session_id: str | None = None,
+    ) -> tuple[DelegatedTaskEvent, ...]:
+        filters = ["delivered_runtime_instance_id is null"]
+        parameters: list[Any] = []
+        if principal_id is not None:
+            filters.append("principal_id = ?")
+            parameters.append(str(principal_id or "").strip())
+        if session_id is not None:
+            filters.append("session_id = ?")
+            parameters.append(str(session_id or "").strip())
+        with self._database.connection(query_only=True) as conn:
+            rows = conn.execute(
+                "select payload_json from delegated_task_notifications where "
+                + " and ".join(filters)
+                + " order by created_at, event_id",
+                tuple(parameters),
+            ).fetchall()
+        return tuple(
+            DelegatedTaskEvent.model_validate_json(str(row["payload_json"]))
+            for row in rows
+        )
+
+    def pending_completion_notification_entries(
+        self,
+    ) -> tuple[tuple[str, DelegatedTaskEvent], ...]:
+        with self._database.connection(query_only=True) as conn:
+            rows = conn.execute(
+                """
+                select session_id, payload_json from delegated_task_notifications
+                where delivered_runtime_instance_id is null
+                order by created_at, event_id
+                """
+            ).fetchall()
+        return tuple(
+            (
+                str(row["session_id"]),
+                DelegatedTaskEvent.model_validate_json(str(row["payload_json"])),
+            )
+            for row in rows
         )
 
     def release_completion_notifications(

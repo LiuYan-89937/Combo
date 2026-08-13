@@ -83,57 +83,57 @@ export const lightPalette: AppPalette = {
   // 基础背景（纯净白）
   surface: '#ffffff',
   surfaceElevated: '#ffffff',
-  surfaceMuted: '#fafafa',
-  surfacePressed: '#f5f5f5',
-  surfaceActiveHover: '#e5e5e5',
-  surfaceHover: '#fafafa',
+  surfaceMuted: '#ffffff',
+  surfacePressed: '#ffffff',
+  surfaceActiveHover: '#ffffff',
+  surfaceHover: '#ffffff',
 
   // 操作控件（保持白底和轻边框，避免禁用态形成灰色块）
   controlSurface: '#ffffff',
-  controlSurfaceHover: '#f7f7f8',
-  controlSurfacePressed: '#efeff1',
+  controlSurfaceHover: '#ffffff',
+  controlSurfacePressed: '#ffffff',
   controlDisabledSurface: '#ffffff',
-  controlDisabledBorder: 'rgba(0, 0, 0, 0.07)',
-  controlDisabledText: '#8f8f96',
+  controlDisabledBorder: 'rgba(0, 0, 0, 0.08)',
+  controlDisabledText: 'rgba(0, 0, 0, 0.32)',
 
   // 玻璃效果
   glassBackground: 'rgba(255, 255, 255, 0.72)',
   glassBackgroundLight: 'rgba(255, 255, 255, 0.88)',
-  glassBorder: 'rgba(0, 0, 0, 0.04)',
-  glassBorderLight: 'rgba(0, 0, 0, 0.06)',
+  glassBorder: 'rgba(0, 0, 0, 0.06)',
+  glassBorderLight: 'rgba(0, 0, 0, 0.1)',
 
   // 边框和分隔（极淡）
-  border: 'rgba(0, 0, 0, 0.06)',
-  borderHover: 'rgba(0, 0, 0, 0.12)',
-  borderFocus: 'rgba(0, 0, 0, 0.8)',
-  divider: 'rgba(0, 0, 0, 0.04)',
+  border: 'rgba(0, 0, 0, 0.08)',
+  borderHover: 'rgba(0, 0, 0, 0.18)',
+  borderFocus: '#000000',
+  divider: 'rgba(0, 0, 0, 0.06)',
 
   // 文本（黑白灰）
-  text: '#171717',
+  text: '#000000',
   textStrong: '#000000',
-  textSecondary: '#737373',
-  textMuted: '#a3a3a3',
-  textPlaceholder: '#d4d4d4',
-  textDisabled: '#e5e5e5',
+  textSecondary: 'rgba(0, 0, 0, 0.62)',
+  textMuted: 'rgba(0, 0, 0, 0.44)',
+  textPlaceholder: 'rgba(0, 0, 0, 0.3)',
+  textDisabled: 'rgba(0, 0, 0, 0.24)',
   textInverse: '#ffffff',
 
   // 主色（纯黑）
   primary: '#000000',
-  primaryHover: '#262626',
+  primaryHover: '#000000',
   primaryPressed: '#000000',
-  primarySuppl: '#404040',
+  primarySuppl: '#000000',
 
   success: '#000000',
-  successHover: '#262626',
+  successHover: '#000000',
   successPressed: '#000000',
   info: '#000000',
-  infoHover: '#262626',
+  infoHover: '#000000',
   infoPressed: '#000000',
-  warning: '#737373',
-  warningHover: '#525252',
-  warningPressed: '#404040',
+  warning: '#000000',
+  warningHover: '#000000',
+  warningPressed: '#000000',
   error: '#000000',
-  errorHover: '#262626',
+  errorHover: '#000000',
   errorPressed: '#000000',
 
   // 特殊用途
@@ -147,66 +147,66 @@ export const lightPalette: AppPalette = {
   shadowLg: '0 8px 24px rgba(0, 0, 0, 0.12), 0 4px 8px rgba(0, 0, 0, 0.06)',
 
   // 代码/终端
-  codeBackground: '#fafafa',
-  codeBorder: 'rgba(0, 0, 0, 0.06)',
+  codeBackground: '#ffffff',
+  codeBorder: 'rgba(0, 0, 0, 0.08)',
 }
 
 export const darkPalette: AppPalette = {
   // 基础背景（纯黑）
   surface: '#000000',
-  surfaceElevated: '#0a0a0a',
-  surfaceMuted: '#171717',
-  surfacePressed: '#262626',
-  surfaceActiveHover: '#404040',
-  surfaceHover: '#0a0a0a',
+  surfaceElevated: '#000000',
+  surfaceMuted: '#000000',
+  surfacePressed: '#000000',
+  surfaceActiveHover: '#000000',
+  surfaceHover: '#000000',
 
   // 操作控件（暗色主题使用干净的分层底色，不用大块中灰）
-  controlSurface: '#0a0a0a',
-  controlSurfaceHover: '#141416',
-  controlSurfacePressed: '#1c1c1f',
-  controlDisabledSurface: '#0a0a0a',
-  controlDisabledBorder: 'rgba(255, 255, 255, 0.09)',
-  controlDisabledText: '#73737a',
+  controlSurface: '#000000',
+  controlSurfaceHover: '#000000',
+  controlSurfacePressed: '#000000',
+  controlDisabledSurface: '#000000',
+  controlDisabledBorder: 'rgba(255, 255, 255, 0.12)',
+  controlDisabledText: 'rgba(255, 255, 255, 0.34)',
 
   // 玻璃效果
-  glassBackground: 'rgba(10, 10, 10, 0.78)',
-  glassBackgroundLight: 'rgba(23, 23, 23, 0.88)',
+  glassBackground: 'rgba(0, 0, 0, 0.78)',
+  glassBackgroundLight: 'rgba(0, 0, 0, 0.88)',
   glassBorder: 'rgba(255, 255, 255, 0.1)',
-  glassBorderLight: 'rgba(255, 255, 255, 0.15)',
+  glassBorderLight: 'rgba(255, 255, 255, 0.16)',
 
   // 边框和分隔
-  border: 'rgba(255, 255, 255, 0.08)',
-  borderHover: 'rgba(255, 255, 255, 0.15)',
-  borderFocus: 'rgba(255, 255, 255, 0.8)',
-  divider: 'rgba(255, 255, 255, 0.06)',
+  border: 'rgba(255, 255, 255, 0.12)',
+  borderHover: 'rgba(255, 255, 255, 0.24)',
+  borderFocus: '#ffffff',
+  divider: 'rgba(255, 255, 255, 0.1)',
 
   // 文本（黑白灰）
-  text: '#fafafa',
+  text: '#ffffff',
   textStrong: '#ffffff',
-  textSecondary: '#a3a3a3',
-  textMuted: '#737373',
-  textPlaceholder: '#525252',
-  textDisabled: '#404040',
+  textSecondary: 'rgba(255, 255, 255, 0.68)',
+  textMuted: 'rgba(255, 255, 255, 0.48)',
+  textPlaceholder: 'rgba(255, 255, 255, 0.34)',
+  textDisabled: 'rgba(255, 255, 255, 0.26)',
   textInverse: '#000000',
 
   // 主色（纯白）
   primary: '#ffffff',
-  primaryHover: '#fafafa',
-  primaryPressed: '#e5e5e5',
-  primarySuppl: '#d4d4d4',
+  primaryHover: '#ffffff',
+  primaryPressed: '#ffffff',
+  primarySuppl: '#ffffff',
 
   success: '#ffffff',
-  successHover: '#fafafa',
-  successPressed: '#e5e5e5',
+  successHover: '#ffffff',
+  successPressed: '#ffffff',
   info: '#ffffff',
-  infoHover: '#fafafa',
-  infoPressed: '#e5e5e5',
-  warning: '#a3a3a3',
-  warningHover: '#d4d4d4',
-  warningPressed: '#737373',
+  infoHover: '#ffffff',
+  infoPressed: '#ffffff',
+  warning: '#ffffff',
+  warningHover: '#ffffff',
+  warningPressed: '#ffffff',
   error: '#ffffff',
-  errorHover: '#fafafa',
-  errorPressed: '#e5e5e5',
+  errorHover: '#ffffff',
+  errorPressed: '#ffffff',
 
   // 特殊用途
   focusShadow: 'rgba(255, 255, 255, 0.2)',
@@ -219,8 +219,8 @@ export const darkPalette: AppPalette = {
   shadowLg: '0 8px 24px rgba(0, 0, 0, 0.8), 0 4px 8px rgba(0, 0, 0, 0.6)',
 
   // 代码/终端
-  codeBackground: '#0a0a0a',
-  codeBorder: 'rgba(255, 255, 255, 0.08)',
+  codeBackground: '#000000',
+  codeBorder: 'rgba(255, 255, 255, 0.12)',
 }
 
 /**

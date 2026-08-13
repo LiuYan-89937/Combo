@@ -190,8 +190,12 @@ class ComposedRuntimeLaunchContextResolver(RuntimeLaunchContextResolver):
             delegation_notifications = ""
         else:
             base_prompt = self._prompt_provider.load()
+            notification_event_ids = _notification_event_ids(messages, turn_id=request.turn_id)
             delegation_notifications = render_delegation_notifications(
-                self._delegations.claim_completion_notifications(instance)
+                self._delegations.claim_completion_notifications(
+                    instance,
+                    event_ids=notification_event_ids,
+                )
             )
         capability_instructions = self._capability_instructions.render(capability_snapshot)
         system_prompt = _render_system_prompt(
@@ -234,6 +238,19 @@ def _turn_attachment_refs(
     return tuple(references)
 
 
+def _notification_event_ids(
+    messages: list[ConversationMessage],
+    *,
+    turn_id: str,
+) -> tuple[str, ...]:
+    return tuple(
+        event_id
+        for message in messages
+        if message.turn_id == turn_id and message.role == "user" and message.status == "committed"
+        for event_id in message.notification_event_ids
+    )
+
+
 def _render_system_prompt(
     *,
     base: str,
@@ -263,14 +280,14 @@ def render_delegation_notifications(events: tuple[Any, ...]) -> str:
     if not events:
         return ""
     entries = []
-    for event in events:
+    for index, event in enumerate(events, start=1):
         payload = event.payload if isinstance(event.payload, dict) else {}
         error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
         details = error.get("details") if isinstance(error.get("details"), dict) else {}
         reason = str(details.get("message") or error.get("message") or "").strip()
         suffix = f" Reason: {reason}" if reason else ""
         entries.append(
-            f"- Delegated task {event.task_id} finished with status {event.event_type}.{suffix}"
+            f"- Delegated task {index} finished with status {event.event_type}.{suffix}"
         )
     return (
         "Delegated task completion notifications received since the previous main runtime. "

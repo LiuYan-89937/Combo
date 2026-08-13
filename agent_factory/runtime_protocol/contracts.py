@@ -649,6 +649,9 @@ class TaskEnvelope(FrozenProtocolModel):
     workspace_id: str
     allowed_write_roots: tuple[str, ...] = ()
     capability_requirements: tuple[str, ...] = ()
+    selected_model_profile_id: str | None = None
+    model_selection_source: str | None = None
+    model_selection_reason: str | None = None
     approval_mode: ApprovalMode
     created_at: str = Field(default_factory=utc_now_text)
 
@@ -665,7 +668,13 @@ class TaskEnvelope(FrozenProtocolModel):
     def _required_envelope_text(cls, value: str, info: Any) -> str:
         return _required_text(value, info.field_name)
 
-    @field_validator("agent_name", "system_prompt")
+    @field_validator(
+        "agent_name",
+        "system_prompt",
+        "selected_model_profile_id",
+        "model_selection_source",
+        "model_selection_reason",
+    )
     @classmethod
     def _optional_envelope_text(cls, value: str | None) -> str | None:
         return _optional_text(value)

@@ -20,7 +20,8 @@ def get_delegation_tool_specs() -> list[ToolSpec]:
                 "even when capability search returns no optional match; in that case pass an empty capabilities "
                 "array and the child receives its stable built-in runtime tools. When search does return useful "
                 "Tool, MCP, or Skill matches, pass only their exact public names. Runtime policy "
-                "supplies the shared workspace scope, model, approvals, and internal identities. Once accepted, "
+                "supplies the shared workspace scope, selects and freezes a suitable enabled model-pool profile, "
+                "and owns approvals and internal identities. Once accepted, "
                 "do not immediately inspect status, sleep, wait, or poll; task events report subsequent changes."
             ),
             entrypoint="agent_factory.tooling.builtins.delegation.tool:run",

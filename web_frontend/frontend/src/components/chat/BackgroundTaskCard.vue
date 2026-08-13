@@ -1,5 +1,5 @@
 <template>
-  <article class="background-task-card" :class="`task-state-${view.status}`">
+  <article ref="rootRef" class="background-task-card" :class="`task-state-${view.status}`">
     <header class="task-header">
       <span class="task-mark" aria-hidden="true">
         <SubAgentMascot
@@ -12,6 +12,7 @@
       <span class="task-heading">
         <strong>{{ view.title }}</strong>
         <small>{{ view.objective }}</small>
+        <small v-if="task.model?.model_name" class="task-model">模型 · {{ task.model.model_name }}</small>
       </span>
       <span class="task-status-label">{{ statusLabel }}</span>
       <n-button
@@ -41,14 +42,20 @@
       <span class="status-dot" :class="`dot-${normalizeStatus(view.status)}`" />
       <span>
         <strong>{{ currentTitle }}</strong>
-        <small>{{ currentDescription }}</small>
+        <small v-if="currentDescription && !view.delivery">{{ currentDescription }}</small>
+        <div
+          v-if="view.delivery"
+          class="task-delivery markdown-content"
+          v-html="renderedDelivery"
+        ></div>
       </span>
     </section>
 
     <section v-if="view.reports.length" class="task-section">
       <h4>{{ t('backgroundTask.activity') }}</h4>
-      <div class="progress-report-list">
-        <div v-for="report in view.reports" :key="report.phaseId" class="progress-report-item">
+      <ToolExecutionChain v-if="view.toolExecutions.length" :executions="view.toolExecutions" />
+      <div v-if="view.progressReports.length" class="progress-report-list">
+        <div v-for="report in view.progressReports" :key="report.phaseId" class="progress-report-item">
           <span class="status-dot" :class="`dot-${normalizeStatus(report.status)}`" />
           <span>
             <strong>{{ report.title }}</strong>
@@ -116,11 +123,6 @@
       </div>
     </section>
 
-    <section v-if="view.delivery" class="task-section task-delivery">
-      <h4>{{ t('backgroundTask.deliveryResult') }}</h4>
-      <p>{{ view.delivery }}</p>
-    </section>
-
     <p v-if="actionError" class="task-notice task-notice-error">{{ actionError }}</p>
     <section v-if="view.error" class="task-notice task-notice-error">
       <strong>{{ t('common.error') }}</strong>
@@ -133,6 +135,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NButton, NInput } from 'naive-ui'
 import { useI18n } from '@/composables/useI18n'
+import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
 import {
   backgroundTasksApi,
   type BackgroundTask,
@@ -140,10 +143,14 @@ import {
   type InteractionAction,
 } from '@/api/backgroundTasks'
 import SubAgentMascot from '@/components/brand/SubAgentMascot.vue'
+import ToolExecutionChain from '@/components/chat/ToolExecutionChain.vue'
+import type { ChatMessagePartStatus, ToolExecutionMessagePart } from '@/types/protocol'
 
 const props = defineProps<{ task: BackgroundTask; fallbackTitle?: string }>()
 const emit = defineEmits<{ updated: [task: BackgroundTask]; deleted: [taskId: string] }>()
 const { t } = useI18n()
+const rootRef = ref<HTMLElement | null>(null)
+const { renderMarkdown } = useMarkdownRenderer(rootRef)
 const submitting = ref(false)
 const deleting = ref(false)
 const cancelling = ref(false)
@@ -166,6 +173,9 @@ const currentDescription = computed(() => (
   || view.value.latestSummary
   || t(`backgroundTask.description.${task.value.status}` as any)
 ))
+const renderedDelivery = computed(() => renderMarkdown(view.value.delivery, {
+  surface: 'chat_message',
+}))
 const allowFreeText = computed(() => interaction.value?.payload.allow_free_text !== false)
 const canSubmitAnswer = computed(() => Boolean(answerText.value.trim() || selectedOption.value))
 
@@ -270,7 +280,7 @@ function stopPolling() {
 }
 
 function buildView(current: BackgroundTask, timeline: BackgroundTaskEvent[], fallbackTitle: string) {
-  const reportsByPhase = new Map<string, { phaseId: string; title: string; summary: string; status: string; occurredAt: string }>()
+  const reportsByPhase = new Map<string, ActivityReport>()
   for (const event of timeline) {
     if (event.event_type !== 'background_task_activity') continue
     const phaseId = String(event.payload.phase_id || '').trim()
@@ -283,16 +293,22 @@ function buildView(current: BackgroundTask, timeline: BackgroundTaskEvent[], fal
       summary,
       status: String(event.payload.status || 'completed'),
       occurredAt: String(event.payload.occurred_at || event.created_at),
+      category: String(event.payload.category || 'activity'),
+      details: recordValue(event.payload.details),
     })
   }
-  const reports = Array.from(reportsByPhase.values())
+  const reports = Array.from(reportsByPhase.values()).sort((left, right) => (
+    Date.parse(right.occurredAt) - Date.parse(left.occurredAt)
+  ))
   return {
     id: current.task_id,
     title: current.agent_name || fallbackTitle,
     objective: current.task_text,
     status: current.status,
     reports,
-    latestSummary: reports.at(-1)?.summary || '',
+    toolExecutions: reports.flatMap(toolExecutionFromReport),
+    progressReports: reports.filter(report => report.category !== 'tool'),
+    latestSummary: reports[0]?.summary || '',
     artifacts: artifactViews(current),
     delivery: current.result_summary || '',
     error: String(
@@ -302,6 +318,54 @@ function buildView(current: BackgroundTask, timeline: BackgroundTaskEvent[], fal
       || '',
     ),
   }
+}
+
+interface ActivityReport {
+  phaseId: string
+  title: string
+  summary: string
+  status: string
+  occurredAt: string
+  category: string
+  details: Record<string, unknown> | null
+}
+
+function toolExecutionFromReport(report: ActivityReport): ToolExecutionMessagePart[] {
+  if (report.category !== 'tool' || !report.details) return []
+  const details = report.details
+  const toolName = String(details.model_alias || report.title || '').trim()
+  if (!toolName) return []
+  const errorCode = String(details.error_code || '').trim()
+  return [{
+    id: report.phaseId,
+    type: 'tool_execution',
+    toolName,
+    callId: String(details.tool_call_id || '').trim() || null,
+    arguments: details.arguments ?? {},
+    output: details.result ?? null,
+    error: errorCode || undefined,
+    approvalState: report.status === 'approval' ? 'pending' : undefined,
+    artifacts: [],
+    status: toolMessageStatus(report.status),
+    createdAt: String(details.created_at || report.occurredAt),
+    startedAt: String(details.created_at || report.occurredAt),
+    updatedAt: String(details.updated_at || report.occurredAt),
+  }]
+}
+
+function toolMessageStatus(status: string): ChatMessagePartStatus {
+  if (status === 'waiting_approval') return 'awaiting_approval'
+  if (status === 'proposed') return 'requested'
+  if (status === 'running') return 'running'
+  if (status === 'failed' || status === 'rejected' || status === 'timed_out') return 'failed'
+  if (status === 'cancelled') return 'cancelled'
+  return 'completed'
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
 }
 
 function artifactViews(current: BackgroundTask): Array<{ key: string; name: string }> {
@@ -340,6 +404,7 @@ function formatTime(value: unknown): string {
 .task-delete { flex: 0 0 auto; }
 .task-heading strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
 .task-heading small { display: -webkit-box; overflow: hidden; color: var(--app-text-muted); font-size: 11px; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.task-heading .task-model { width: fit-content; max-width: 100%; padding: 1px 6px; border-radius: 999px; background: var(--app-surface-muted); color: var(--app-text-secondary); font-size: 10px; -webkit-line-clamp: 1; }
 .task-section small, .task-current small { color: var(--app-text-muted); font-size: 12px; line-height: 1.5; }
 .task-current { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; padding: 12px; border: 1px solid var(--app-border); border-radius: 13px; }
 .task-current > span:last-child { display: grid; gap: 3px; }
@@ -364,7 +429,7 @@ function formatTime(value: unknown): string {
 .interaction-actions { display: flex; justify-content: flex-end; }
 .artifact-list { display: flex; flex-wrap: wrap; gap: 6px; }
 .artifact-list span { padding: 5px 8px; border: 1px solid var(--app-border); border-radius: 8px; font-size: 11px; }
-.task-delivery p { margin: 0; padding: 10px; border-radius: 10px; background: var(--app-surface-muted); font-size: 12px; line-height: 1.6; white-space: pre-wrap; }
+.task-delivery { min-width: 0; margin-top: 5px; color: var(--app-text-secondary); font-size: 12px; line-height: 1.6; }
 .task-notice { display: grid; gap: 4px; margin: 0; padding: 10px; border-radius: 10px; font-size: 12px; }
 .task-notice-error { color: var(--app-error); background: color-mix(in srgb, var(--app-error) 8%, transparent); }
 </style>

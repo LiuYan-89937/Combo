@@ -242,10 +242,8 @@ function getSourceIcon(source: KnowledgeSourceView) {
   return DocumentText
 }
 
-function getSourceColor(source: KnowledgeSourceView): string {
-  const colors = ['#18a058', '#2080f0', '#f0a020']
-  const kind = source.payload?.kind || ''
-  return colors[kind.length % colors.length]
+function getSourceColor(_source: KnowledgeSourceView): string {
+  return 'var(--app-text)'
 }
 
 function getStatusType(status: string): 'default' | 'success' | 'warning' | 'error' | 'info' {

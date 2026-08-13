@@ -1467,6 +1467,8 @@ def _insert_send_message_intake(conn: Any, envelope: CommandEnvelope) -> None:
         ),
         created_at=envelope.submitted_at,
         committed_at=now,
+        visibility=payload.visibility,
+        notification_event_ids=payload.notification_event_ids,
     )
     insert_turn(conn, turn)
     insert_message(conn, message)

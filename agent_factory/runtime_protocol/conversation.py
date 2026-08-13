@@ -135,6 +135,8 @@ class ConversationMessage(ProtocolModel):
     source_task_revision: int | None = Field(default=None, ge=1)
     created_at: str = Field(default_factory=utc_now_text)
     committed_at: str | None = None
+    visibility: Literal["public", "internal"] = "public"
+    notification_event_ids: tuple[str, ...] = ()
 
     @field_validator("message_id", "session_id", "turn_id")
     @classmethod
@@ -150,6 +152,14 @@ class ConversationMessage(ProtocolModel):
     def _optional_message_text(cls, value: str | None) -> str | None:
         text = str(value or "").strip()
         return text or None
+
+    @field_validator("notification_event_ids")
+    @classmethod
+    def _notification_event_ids_are_stable(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        normalized = tuple(dict.fromkeys(str(item or "").strip() for item in value))
+        if any(not item for item in normalized):
+            raise ValueError("notification_event_ids must not contain empty values")
+        return normalized
 
     @model_validator(mode="after")
     def _message_is_consistent(self) -> "ConversationMessage":
@@ -167,6 +177,8 @@ class ConversationMessage(ProtocolModel):
             raise ValueError("user message cannot be attributed to a runtime instance")
         if self.role != "user" and any(item is None for item in source_fields):
             raise ValueError("assistant and tool messages require complete runtime attribution")
+        if self.notification_event_ids and (self.role != "user" or self.visibility != "internal"):
+            raise ValueError("notification_event_ids require an internal user message")
         return self
 
 

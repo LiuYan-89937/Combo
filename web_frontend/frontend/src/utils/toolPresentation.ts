@@ -22,6 +22,7 @@ export interface ToolPresentation {
   icon: ToolIconName
   summary: string
   summaryKey?: string
+  activeLabelKey?: string
 }
 
 export type ToolIconName =
@@ -31,7 +32,7 @@ export type ToolIconName =
   | 'timer' | 'extract' | 'camera' | 'download' | 'upload' | 'tabs' | 'close'
   | 'generic'
 
-const TOOL_PRESENTATIONS: Record<string, Pick<ToolPresentation, 'category' | 'labelKey' | 'icon'>> = {
+const TOOL_PRESENTATIONS: Record<string, Pick<ToolPresentation, 'category' | 'labelKey' | 'icon' | 'activeLabelKey'>> = {
   read: { category: 'read', labelKey: 'tool.names.read', icon: 'document' },
   write: { category: 'write', labelKey: 'tool.names.write', icon: 'edit' },
   edit: { category: 'write', labelKey: 'tool.names.edit', icon: 'edit' },
@@ -42,7 +43,7 @@ const TOOL_PRESENTATIONS: Record<string, Pick<ToolPresentation, 'category' | 'la
   shell_status: { category: 'process', labelKey: 'tool.names.shellStatus', icon: 'task' },
   shell_stop: { category: 'process', labelKey: 'tool.names.shellStop', icon: 'close' },
   capability: { category: 'extension', labelKey: 'tool.names.capability', icon: 'catalog' },
-  delegate: { category: 'agent', labelKey: 'tool.names.delegate', icon: 'agent' },
+  delegate: { category: 'agent', labelKey: 'tool.names.delegate', icon: 'agent', activeLabelKey: 'tool.status.selectingModel' },
   delegation_status: { category: 'agent', labelKey: 'tool.names.delegationStatus', icon: 'task' },
   memory: { category: 'knowledge', labelKey: 'tool.names.memory', icon: 'memory' },
   knowledge: { category: 'knowledge', labelKey: 'tool.names.knowledge', icon: 'folder' },

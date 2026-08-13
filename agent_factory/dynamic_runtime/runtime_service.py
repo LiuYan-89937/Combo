@@ -329,6 +329,7 @@ class DynamicRuntimeService:
                 projected_for_records,
                 instance=claimed_instance,
                 waiting_status=status,
+                observations=state.observability.events,
             )
             delivery_error = _delegated_delivery_error(
                 instance=claimed_instance,
@@ -401,6 +402,7 @@ class DynamicRuntimeService:
                             projected_for_records,
                             instance=claimed_instance,
                             waiting_status=status,
+                            observations=state.observability.events,
                         ),
                     ),
                     messages=projected_messages,
@@ -408,6 +410,7 @@ class DynamicRuntimeService:
                         projected_for_records,
                         instance=claimed_instance,
                         waiting_status=status,
+                        observations=state.observability.events,
                     ),
                     model_usage=_model_usage_records(claimed_instance, state.observability.events),
                     error=error,
@@ -713,14 +716,17 @@ def _tool_call_records(
     *,
     instance: RuntimeInstance,
     waiting_status: RuntimeExecutionStatus,
+    observations: list[dict[str, Any]],
 ) -> tuple[ToolCallRecord, ...]:
     if instance.attempt_id is None:
         raise RuntimeError("claimed runtime instance has no attempt identity")
     records: dict[str, dict[str, Any]] = {}
+    event_times = _tool_event_times(observations)
     for message in messages:
         for part in message.parts:
             if isinstance(part, ToolCallPart):
                 initial_status = "waiting_approval" if waiting_status == "waiting_approval" else "proposed"
+                observed = event_times.get(part.tool_call_id, {})
                 records[part.tool_call_id] = {
                     "tool_call_id": part.tool_call_id,
                     "runtime_instance_id": instance.runtime_instance_id,
@@ -732,20 +738,42 @@ def _tool_call_records(
                     "model_alias": part.model_alias,
                     "arguments": dict(part.arguments),
                     "status": initial_status,
-                    "created_at": message.created_at,
-                    "updated_at": message.created_at,
+                    "created_at": observed.get("started_at") or message.created_at,
+                    "updated_at": observed.get("started_at") or message.created_at,
                 }
             elif isinstance(part, ToolResultPart):
                 record = records.get(part.tool_call_id)
                 if record is None:
                     raise RuntimeError(f"tool result has no projected tool call: {part.tool_call_id}")
                 record["status"] = part.status
-                record["updated_at"] = message.created_at
+                observed = event_times.get(part.tool_call_id, {})
+                record["updated_at"] = observed.get("completed_at") or message.created_at
                 if part.status == "completed":
                     record["result"] = dict(part.output or {})
                 else:
                     record["error_code"] = part.error_code
     return tuple(ToolCallRecord.model_validate(record) for record in records.values())
+
+
+def _tool_event_times(observations: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
+    event_times: dict[str, dict[str, str]] = {}
+    for observation in observations:
+        event_type = str(observation.get("event_type") or "")
+        if event_type not in {"tool_proposed", "tool_started", "tool_completed", "tool_failed"}:
+            continue
+        payload = observation.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        tool_call_id = str(payload.get("tool_call_id") or "").strip()
+        created_at = str(observation.get("created_at") or "").strip()
+        if not tool_call_id or not created_at:
+            continue
+        times = event_times.setdefault(tool_call_id, {})
+        if event_type in {"tool_proposed", "tool_started"}:
+            times.setdefault("started_at", created_at)
+        else:
+            times["completed_at"] = created_at
+    return event_times
 
 
 def _model_usage_records(
