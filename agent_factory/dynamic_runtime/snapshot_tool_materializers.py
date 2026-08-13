@@ -70,6 +70,7 @@ class ToolProjectionMaterializer:
         if projection.kind != self.kind or projection.runtime_definition_schema != "tool_definition.v2":
             raise ValueError("tool materializer received a non-tool projection")
         definition = ToolDefinition.model_validate(projection.runtime_definition)
+        definition = _runtime_visible_tool_definition(definition, runtime_instance)
         _require_single_alias(projection, definition.model_alias)
         runtime = self._adapter.materialize(
             definition=definition,
@@ -132,3 +133,37 @@ class MCPToolProjectionMaterializer:
 def _require_single_alias(projection: CapabilityProjectionSnapshot, expected_alias: str) -> None:
     if projection.model_tool_ids != (expected_alias,):
         raise ValueError("tool projection alias differs from its immutable runtime definition")
+
+
+def _runtime_visible_tool_definition(
+    definition: ToolDefinition,
+    runtime_instance: RuntimeInstance,
+) -> ToolDefinition:
+    if definition.model_alias != "memory" or runtime_instance.request.policy_snapshot.memory_agent_write_enabled:
+        return definition
+    schema = dict(definition.input_schema)
+    branches = schema.get("oneOf")
+    if not isinstance(branches, list):
+        raise ValueError("memory tool input schema must declare oneOf actions")
+    visible = [branch for branch in branches if _schema_action(branch) != "write"]
+    if len(visible) == len(branches):
+        raise ValueError("memory tool input schema does not expose a write action")
+    return definition.model_copy(
+        update={
+            "model_description": (
+                "Search or list the current principal's user/workspace memories, or delete an existing memory. "
+                "Proactive memory writes are disabled for this runtime turn."
+            ),
+            "input_schema": {**schema, "oneOf": visible},
+        }
+    )
+
+
+def _schema_action(value: object) -> str:
+    if not isinstance(value, dict):
+        return ""
+    properties = value.get("properties")
+    if not isinstance(properties, dict):
+        return ""
+    action = properties.get("action")
+    return str(action.get("const") or "") if isinstance(action, dict) else ""

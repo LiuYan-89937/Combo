@@ -32,6 +32,12 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
             "risk_level": "high",
             "reasons": ["temporary runtimes cannot mutate long-term memory"],
         }
+    if action == "write" and isinstance(identity, dict) and not identity.get("memory_agent_write_enabled", True):
+        return {
+            "action": "deny",
+            "risk_level": "medium",
+            "reasons": ["proactive memory writes are disabled in runtime preferences"],
+        }
     if action == "write":
         return {
             "action": "ask",
@@ -91,6 +97,8 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         }
     elif action == "write":
         _require_main(identity)
+        if not identity.memory_agent_write_enabled:
+            raise PermissionError("proactive memory writes are disabled in runtime preferences")
         scope = _memory_scope(arguments.get("scope"))
         revision = store.write(
             principal_id=identity.principal_id,

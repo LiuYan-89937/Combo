@@ -9,6 +9,7 @@ from uuid import uuid4
 from agent_factory.tooling.builtins.browser.runtime import (
     BROWSER_RUNTIME_RESOURCE,
     BrowserRuntime,
+    browser_session_key,
 )
 from agent_factory.tooling.builtins.filesystem.common import (
     filesystem_allowed_roots,
@@ -152,7 +153,13 @@ def _session_key(resources: dict[str, Any]) -> str:
     identity = resources.get("runtime_identity")
     if not isinstance(identity, RuntimeExecutionIdentity):
         raise RuntimeError("browser tools require an owned runtime attempt identity")
-    return f"{identity.generation}:{identity.runtime_instance_id}:{identity.attempt_id}"
+    return browser_session_key(
+        generation=identity.generation,
+        principal_id=identity.principal_id,
+        session_id=identity.session_id,
+        runtime_role=identity.runtime_role,
+        task_id=identity.task_id,
+    )
 
 
 def _target(arguments: dict[str, Any]) -> dict[str, Any]:

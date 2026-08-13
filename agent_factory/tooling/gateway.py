@@ -551,7 +551,10 @@ def _is_approved(decision: Any) -> bool:
     if isinstance(decision, str):
         return decision.strip().lower() in {"-y", "y", "yes", "true", "approve", "approved"}
     if isinstance(decision, dict):
-        value = decision.get("approved", decision.get("approve", decision.get("choice")))
+        value = decision.get(
+            "approved",
+            decision.get("approve", decision.get("action", decision.get("choice"))),
+        )
         return _is_approved(value)
     return False
 

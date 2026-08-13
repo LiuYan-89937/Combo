@@ -327,26 +327,24 @@ def _message_events_from_model_event(
             )
         )
         return events
-    if event_type in {"model_reasoning_delta", "model_stream_delta"}:
-        part_type = "reasoning" if event_type == "model_reasoning_delta" else "text"
+    if event_type == "model_reasoning_delta":
         delta = str(event_payload.get("delta") or "")
-        if not delta:
-            return []
-        events.append(
-            _frontend_event(
-                event_type="message_part_delta",
-                payload={
-                    **source,
-                    **_message_part_identity(stream_id, part_type),
-                    "part_status": "streaming",
-                    "format": "markdown",
-                    "delta": delta,
-                    "content_mode": "delta",
-                },
-                event_id=f"{event_id}:message-{part_type}-delta",
-                **common,
+        if delta:
+            events.append(
+                _frontend_event(
+                    event_type="message_part_delta",
+                    payload={
+                        **source,
+                        **_message_part_identity(stream_id, "reasoning"),
+                        "part_status": "streaming",
+                        "format": "markdown",
+                        "delta": delta,
+                        "content_mode": "delta",
+                    },
+                    event_id=f"{event_id}:message-reasoning-delta",
+                    **common,
+                )
             )
-        )
         return events
     if event_type == "model_reasoning_completed":
         content = str(
@@ -370,10 +368,16 @@ def _message_events_from_model_event(
                 )
             )
         return events
+    if event_type == "model_stream_delta":
+        return events
     if event_type != "model_message_completed":
         return []
     reasoning_content = str(event_payload.get("reasoning_content") or "")
-    content = str(event_payload.get("content") or "")
+    content = (
+        ""
+        if event_payload.get("presentation") == "activity"
+        else str(event_payload.get("content") or "")
+    )
     if reasoning_content:
         events.append(
             _frontend_event(

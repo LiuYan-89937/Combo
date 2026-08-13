@@ -2,20 +2,111 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from hashlib import sha256
+from io import StringIO
 import json
 import mimetypes
+import os
 from pathlib import Path
 import re
+import tempfile
 from typing import Any
+import unicodedata
 
 from ruamel.yaml import YAML
 
 from agent_factory.dynamic_runtime.capability_blob_store import CapabilityBlobStore
-from agent_factory.dynamic_runtime.capability_definitions import SkillContentRef, SkillDefinition
+from agent_factory.dynamic_runtime.capability_definitions import (
+    SKILL_NAME_PATTERN,
+    SkillContentRef,
+    SkillDefinition,
+)
 from agent_factory.runtime_protocol import CapabilityContent, CapabilityDraft, CapabilityTrustLevel
 
 
-_SKILL_NAME = re.compile(r"^[a-z][a-z0-9-]{1,127}$")
+def normalize_staged_skill_package(directory: str | Path) -> Path:
+    """Give a staged third-party Skill one portable protocol identity.
+
+    The original front-matter name remains the default display name. Only the
+    directory and manifest identity used by the runtime are normalized.
+    """
+    source = Path(directory).expanduser().resolve()
+    manifest = source / "SKILL.md"
+    if not source.is_dir() or not manifest.is_file():
+        raise ValueError("Skill package must contain SKILL.md at its root")
+    metadata, instructions = _parse_skill_manifest(manifest.read_bytes())
+    original_name = str(metadata.get("name") or source.name).strip()
+    identity = _portable_skill_identity(original_name)
+    normalized_metadata = dict(metadata)
+    normalized_metadata["name"] = identity
+    if not str(normalized_metadata.get("display_name") or "").strip():
+        normalized_metadata["display_name"] = original_name
+    _write_skill_manifest(
+        manifest,
+        metadata=normalized_metadata,
+        instructions=instructions,
+    )
+    target = source.parent / identity
+    if target == source:
+        return source
+    if target.exists():
+        if not os.path.samefile(source, target):
+            raise FileExistsError(f"normalized Skill package already exists: {target}")
+        descriptor, intermediate_name = tempfile.mkstemp(prefix=".skill-identity-", dir=source.parent)
+        os.close(descriptor)
+        intermediate = Path(intermediate_name)
+        intermediate.unlink()
+        os.replace(source, intermediate)
+        try:
+            os.replace(intermediate, target)
+        except BaseException:
+            os.replace(intermediate, source)
+            raise
+        return target
+    os.replace(source, target)
+    return target
+
+
+def _portable_skill_identity(value: str) -> str:
+    original = str(value or "").strip()
+    if not original:
+        raise ValueError("Skill name must not be empty")
+    decomposed = unicodedata.normalize("NFKD", original)
+    ascii_value = decomposed.encode("ascii", "ignore").decode("ascii")
+    separated = re.sub(r"([a-z0-9])([A-Z])", r"\1-\2", ascii_value)
+    normalized = re.sub(r"[^A-Za-z0-9]+", "-", separated).strip("-").lower()
+    if not normalized:
+        normalized = f"skill-{sha256(original.encode('utf-8')).hexdigest()[:12]}"
+    if normalized[0].isdigit():
+        normalized = f"skill-{normalized}"
+    if len(normalized) < 2:
+        normalized = f"skill-{normalized}"
+    normalized = normalized[:128].rstrip("-")
+    if not SKILL_NAME_PATTERN.fullmatch(normalized):
+        raise ValueError(f"Skill name cannot be normalized to lowercase kebab-case: {original}")
+    return normalized
+
+
+def _write_skill_manifest(
+    path: Path,
+    *,
+    metadata: dict[str, Any],
+    instructions: str,
+) -> None:
+    yaml = YAML()
+    yaml.default_flow_style = False
+    yaml.allow_unicode = True
+    stream = StringIO()
+    yaml.dump(metadata, stream)
+    descriptor, temporary_name = tempfile.mkstemp(prefix="skill-manifest-", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            output.write(f"---\n{stream.getvalue()}---\n\n{instructions.strip()}\n")
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,7 +117,7 @@ class SkillSourceRoot:
 
     def __post_init__(self) -> None:
         root_id = str(self.root_id or "").strip()
-        if not _SKILL_NAME.fullmatch(root_id):
+        if not SKILL_NAME_PATTERN.fullmatch(root_id):
             raise ValueError("skill source root_id must use lowercase kebab-case")
         object.__setattr__(self, "root_id", root_id)
         object.__setattr__(self, "path", Path(self.path).expanduser().resolve())
@@ -94,7 +185,7 @@ class FileSystemSkillCapabilitySource:
         metadata, instructions = _parse_skill_manifest(raw_manifest)
         name = str(metadata.get("name") or "").strip()
         description = str(metadata.get("description") or "").strip()
-        if not _SKILL_NAME.fullmatch(name):
+        if not SKILL_NAME_PATTERN.fullmatch(name):
             raise ValueError(f"skill name must use lowercase kebab-case: {manifest}")
         if directory.name != name:
             raise ValueError(f"skill directory and manifest name differ: {directory.name} != {name}")
@@ -133,6 +224,9 @@ class FileSystemSkillCapabilitySource:
                 )
             )
         definition = SkillDefinition(
+            name=name,
+            display_name=str(metadata.get("display_name") or name).strip(),
+            description=description,
             instructions=instruction_ref,
             contents=tuple(contents),
         )
@@ -152,7 +246,7 @@ class FileSystemSkillCapabilitySource:
                 display_name=str(metadata.get("display_name") or name).strip(),
                 description=description,
                 keywords=keywords,
-                definition_schema="skill_definition.v2",
+                definition_schema="skill_definition.v3",
                 definition=definition.model_dump(mode="json"),
             ),
             updated_by_principal_id=self._config.publisher_principal_id,

@@ -71,7 +71,7 @@ class ContextSystemRuntime:
                 retrieval_report=retrieval_report,
                 injection_report=injection_report,
             )
-        policy = self.config.default_policy
+        policy = _effective_context_policy(self.config.default_policy, resources)
         active_limits = self.model_context_limits(
             services=services,
             state=state,
@@ -392,13 +392,7 @@ def _reusable_turn_evidence_frame(*, state: Any, node_id: str) -> LLMContextFram
         return None
     if evidence.get("current_user_input") != getattr(getattr(state, "conversation", None), "current_user_input", None):
         return None
-    entries = evidence.get("entries")
-    if not isinstance(entries, dict):
-        return None
-    entry = entries.get(node_id)
-    if not isinstance(entry, dict):
-        return None
-    frame = entry.get("frame")
+    frame = evidence.get("frame")
     if not isinstance(frame, dict):
         return None
     return LLMContextFrame.model_validate(frame)
@@ -409,16 +403,12 @@ def _state_with_turn_evidence(*, state: Any, node_id: str, frame: LLMContextFram
     frame_payload = frame.model_dump(mode="json")
     model_context = dict(updated.context.model_context)
     evidence = dict(model_context.get("runtime_turn_evidence") or {})
-    entries = dict(evidence.get("entries") or {})
-    entries[node_id] = {
-        "node_id": node_id,
-        "frame": frame_payload,
-    }
     evidence = {
         "version": "runtime_turn_evidence.v0",
         "run_id": updated.run.run_id,
         "current_user_input": updated.conversation.current_user_input,
-        "entries": entries,
+        "source_node_id": str(evidence.get("source_node_id") or node_id),
+        "frame": frame_payload,
     }
     updated.context.model_context = {
         **model_context,
@@ -427,6 +417,23 @@ def _state_with_turn_evidence(*, state: Any, node_id: str, frame: LLMContextFram
         "runtime_turn_evidence": evidence,
     }
     return updated
+
+
+def _effective_context_policy(
+    default: ContextPolicy,
+    resources: Mapping[str, Any] | None,
+) -> ContextPolicy:
+    identity = (resources or {}).get("runtime_identity")
+    snapshot = getattr(identity, "memory_policy", None)
+    if not isinstance(snapshot, dict):
+        return default
+    memory = default.cross_session_memory.model_copy(
+        update={
+            "max_items": int(snapshot["max_items"]),
+            "max_tokens": int(snapshot["max_tokens"]),
+        }
+    )
+    return default.model_copy(update={"cross_session_memory": memory})
 
 def _effective_context_token_count(
     *,

@@ -14,6 +14,7 @@ from threading import RLock
 from typing import Any
 
 from agent_factory.tooling.skillhub.search_query import normalize_skillhub_search_query
+from agent_factory.dynamic_runtime.skill_source import normalize_staged_skill_package
 
 
 SKILLHUB_COMMAND = "skillhub"
@@ -95,7 +96,7 @@ class SkillHubService:
             )
             if result.returncode != 0:
                 raise RuntimeError(result.output or f"SkillHub install failed: {requested}")
-            source = _installed_skill_root(staging)
+            source = normalize_staged_skill_package(_installed_skill_root(staging))
             target = self.skills_dir / source.name
             backup = self.skills_dir.parent / f".{source.name}.skillhub-backup"
             if backup.exists():

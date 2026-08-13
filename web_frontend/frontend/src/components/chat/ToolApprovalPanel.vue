@@ -112,6 +112,7 @@ import ComboMascot from '@/components/brand/ComboMascot.vue'
 import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
 import { useRuntimeStore } from '@/stores/runtime'
+import { toolPresentation } from '@/utils/toolPresentation'
 
 type ApprovalRequest = Record<string, any>
 
@@ -138,7 +139,10 @@ function requestKey(request: ApprovalRequest, index: number): string {
 }
 
 function toolName(request: ApprovalRequest): string {
-  return String(request.tool_name || request.tool_id || request.name || t('tool.call'))
+  const rawName = String(request.model_alias || request.tool_name || request.tool_id || request.name || '').trim()
+  if (!rawName) return t('tool.call')
+  const presentation = toolPresentation(rawName, requestArguments(request))
+  return presentation.labelKey ? t(presentation.labelKey as any) : rawName
 }
 
 function toolSummary(request: ApprovalRequest): string {

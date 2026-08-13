@@ -27,6 +27,11 @@ def runtime_execution_identity(instance: RuntimeInstance) -> RuntimeExecutionIde
         delegation_grant_id=request.delegation_grant_id,
         task_revision=request.task_revision,
         generation=instance.generation,
+        memory_agent_write_enabled=request.policy_snapshot.memory_agent_write_enabled,
+        memory_policy={
+            "max_items": request.policy_snapshot.memory_max_injected_items,
+            "max_tokens": request.policy_snapshot.memory_max_injected_tokens,
+        },
     )
 
 

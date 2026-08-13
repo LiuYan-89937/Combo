@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import isfinite
-from typing import Protocol
+from typing import Callable, Protocol
 
 from agent_factory.dynamic_runtime.capability_adapters import (
     CapabilityAdapterRegistry,
@@ -146,7 +146,7 @@ class MainTurnCapabilityResolver:
         health: CapabilityHealthResolver,
         dependency_environments: DependencyEnvironmentResolver,
         adapters: CapabilityAdapterRegistry,
-        main_agent_capability_ids: tuple[str, ...] = (),
+        main_agent_capability_ids: Callable[[], tuple[str, ...]],
     ) -> None:
         self._store = store
         self._search_index = search_index
@@ -155,7 +155,7 @@ class MainTurnCapabilityResolver:
         self._health = health
         self._dependency_environments = dependency_environments
         self._adapters = adapters
-        self._main_agent_capability_ids = tuple(dict.fromkeys(main_agent_capability_ids))
+        self._main_agent_capability_ids = main_agent_capability_ids
         self._adapters.require_complete()
 
     async def resolve(
@@ -172,7 +172,7 @@ class MainTurnCapabilityResolver:
             requirements=(),
             policy=policy,
             workspace_id=workspace_id,
-            required_capability_ids=self._main_agent_capability_ids,
+            required_capability_ids=tuple(dict.fromkeys(self._main_agent_capability_ids())),
         )
 
     def resolve_requirements(

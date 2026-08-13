@@ -192,6 +192,18 @@ class AttachmentUploadStore:
             if modified_at < threshold:
                 shutil.rmtree(entry, ignore_errors=True)
 
+    def delete(self, attachment_id: str) -> tuple[int, int]:
+        normalized = str(attachment_id or "").strip().lower()
+        if not _UPLOAD_ID_PATTERN.fullmatch(normalized):
+            return 0, 0
+        entry = (self.root / normalized).resolve()
+        if entry.parent != self.root or not entry.is_dir():
+            return 0, 0
+        files = tuple(item for item in entry.rglob("*") if item.is_file())
+        byte_count = sum(item.stat().st_size for item in files)
+        shutil.rmtree(entry)
+        return byte_count, len(files)
+
     def _resolve_attachment_item(self, item: Any) -> Any:
         if not isinstance(item, dict):
             return item

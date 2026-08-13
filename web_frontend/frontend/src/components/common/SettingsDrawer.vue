@@ -48,6 +48,60 @@
         <section class="settings-group">
           <header class="group-header">
             <div class="group-icon" aria-hidden="true">
+              <n-icon size="18"><ServerOutline /></n-icon>
+            </div>
+            <div class="group-title-block">
+              <div class="group-title">{{ t('settings.groupMemory') }}</div>
+              <div class="group-desc">{{ t('settings.groupMemoryDesc') }}</div>
+            </div>
+          </header>
+
+          <div class="group-body">
+            <div class="field-row">
+              <div class="field-copy">
+                <label class="field-label">{{ t('settings.memoryAutoWrite') }}</label>
+                <p class="field-hint">{{ t('settings.memoryAutoWriteHint') }}</p>
+              </div>
+              <n-switch v-model:value="memoryAutoWriteEnabled" />
+            </div>
+
+            <template v-if="memoryAutoWriteEnabled">
+              <div class="field-divider" aria-hidden="true"></div>
+              <div class="field-block">
+                <label class="field-label">{{ t('settings.memoryWriteInterval') }}</label>
+                <n-input-number v-model:value="memoryWriteIntervalTurns" class="field-input" :min="1" :max="1000" :precision="0">
+                  <template #suffix>{{ t('settings.turns') }}</template>
+                </n-input-number>
+              </div>
+            </template>
+
+            <div class="field-divider" aria-hidden="true"></div>
+            <div class="field-row">
+              <div class="field-copy">
+                <label class="field-label">{{ t('settings.memoryAgentWrite') }}</label>
+                <p class="field-hint">{{ t('settings.memoryAgentWriteHint') }}</p>
+              </div>
+              <n-switch v-model:value="memoryAgentWriteEnabled" />
+            </div>
+
+            <div class="field-divider" aria-hidden="true"></div>
+            <div class="field-block">
+              <label class="field-label">{{ t('settings.memoryMaxItems') }}</label>
+              <n-input-number v-model:value="memoryMaxInjectedItems" class="field-input" :min="1" :max="64" :precision="0" />
+            </div>
+
+            <div class="field-divider" aria-hidden="true"></div>
+            <div class="field-block">
+              <label class="field-label">{{ t('settings.memoryMaxTokens') }}</label>
+              <n-input-number v-model:value="memoryMaxInjectedTokens" class="field-input" :min="100" :max="32000" :step="100" :precision="0" />
+              <p class="field-hint">{{ t('settings.memoryInjectionAlwaysOnHint') }}</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-group">
+          <header class="group-header">
+            <div class="group-icon" aria-hidden="true">
               <n-icon size="18"><Time /></n-icon>
             </div>
             <div class="group-title-block">
@@ -249,7 +303,7 @@ import {
   NSwitch,
   useDialog,
 } from 'naive-ui'
-import { ColorPalette, NotificationsOutline, Refresh, Time, TrashOutline } from '@/components/icons'
+import { ColorPalette, NotificationsOutline, Refresh, ServerOutline, Time, TrashOutline } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import { useUiStore } from '@/stores/ui'
 import { useRuntimePreferencesStore } from '@/stores/runtimePreferences'
@@ -333,6 +387,27 @@ const maxParallelSubAgents = computed({
   set: (value: number | null) => {
     if (value !== null) runtimePreferences.setMaxParallelSubAgents(value)
   },
+})
+
+const memoryAutoWriteEnabled = computed({
+  get: () => runtimePreferences.memoryAutoWriteEnabled,
+  set: (value: boolean) => runtimePreferences.setMemoryAutoWriteEnabled(value),
+})
+const memoryWriteIntervalTurns = computed({
+  get: () => runtimePreferences.memoryWriteIntervalTurns,
+  set: (value: number | null) => { if (value !== null) runtimePreferences.setMemoryWriteIntervalTurns(value) },
+})
+const memoryAgentWriteEnabled = computed({
+  get: () => runtimePreferences.memoryAgentWriteEnabled,
+  set: (value: boolean) => runtimePreferences.setMemoryAgentWriteEnabled(value),
+})
+const memoryMaxInjectedItems = computed({
+  get: () => runtimePreferences.memoryMaxInjectedItems,
+  set: (value: number | null) => { if (value !== null) runtimePreferences.setMemoryMaxInjectedItems(value) },
+})
+const memoryMaxInjectedTokens = computed({
+  get: () => runtimePreferences.memoryMaxInjectedTokens,
+  set: (value: number | null) => { if (value !== null) runtimePreferences.setMemoryMaxInjectedTokens(value) },
 })
 
 const themeOptions = computed<Array<{ label: string; value: ThemeMode }>>(() => [

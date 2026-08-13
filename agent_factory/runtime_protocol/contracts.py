@@ -68,6 +68,11 @@ class UserRuntimePolicy(ProtocolModel):
     request_timeout_seconds: int = Field(default=300, ge=1)
     max_model_attempts: int = Field(default=1, ge=1)
     max_parallel_temporary_agents: int = Field(default=5, ge=1)
+    memory_auto_write_enabled: bool = True
+    memory_write_interval_turns: int = Field(default=3, ge=1, le=1000)
+    memory_agent_write_enabled: bool = True
+    memory_max_injected_items: int = Field(default=8, ge=1, le=64)
+    memory_max_injected_tokens: int = Field(default=1200, ge=100, le=32000)
     max_temporary_delegation_depth: int = Field(default=0, ge=0)
     delegation_grant_ttl_seconds: int = Field(default=900, ge=1)
     timezone: str
@@ -120,6 +125,11 @@ class RuntimePolicySnapshot(FrozenProtocolModel):
     request_timeout_seconds: int = Field(ge=1)
     max_model_attempts: int = Field(ge=1)
     max_parallel_temporary_agents: int = Field(ge=1)
+    memory_auto_write_enabled: bool
+    memory_write_interval_turns: int = Field(ge=1, le=1000)
+    memory_agent_write_enabled: bool
+    memory_max_injected_items: int = Field(ge=1, le=64)
+    memory_max_injected_tokens: int = Field(ge=100, le=32000)
     max_temporary_delegation_depth: int = Field(ge=0)
     delegation_grant_ttl_seconds: int = Field(ge=1)
     timezone: str
@@ -501,6 +511,8 @@ class RuntimeExecutionIdentity(FrozenProtocolModel):
     delegation_grant_id: str | None = None
     task_revision: int = Field(ge=1)
     generation: int = Field(ge=1)
+    memory_agent_write_enabled: bool = True
+    memory_policy: dict[str, JsonValue] = Field(default_factory=dict)
 
     @field_validator(
         "principal_id",

@@ -745,18 +745,8 @@ def _turn_evidence_frame(*, model_context: dict[str, Any], node_id: str | None) 
     evidence = model_context.get("runtime_turn_evidence")
     if not isinstance(evidence, dict):
         return None
-    entries = evidence.get("entries")
-    if not isinstance(entries, dict):
-        return None
-    candidates = [str(node_id or ""), "_default"]
-    for key in candidates:
-        entry = entries.get(key)
-        if not isinstance(entry, dict):
-            continue
-        frame = entry.get("frame")
-        if isinstance(frame, dict):
-            return frame
-    return None
+    frame = evidence.get("frame")
+    return frame if isinstance(frame, dict) else None
 
 
 def _matching_node_frame(value: Any, *, node_id: str | None) -> dict[str, Any] | None:

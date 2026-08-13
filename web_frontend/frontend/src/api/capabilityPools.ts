@@ -35,8 +35,6 @@ export interface MainAgentCapabilityProfile {
   version: 'main_agent_capability_profile.v1'
   revision: number
   capability_ids: string[]
-  active_capability_ids: string[]
-  restart_required: boolean
 }
 
 export interface McpProbeResult {

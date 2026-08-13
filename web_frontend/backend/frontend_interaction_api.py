@@ -63,6 +63,11 @@ class RuntimePreferencesWrite(BaseModel):
     request_timeout_seconds: int | None = None
     max_retries: int | None = None
     max_parallel_sub_agents: int | None = None
+    memory_auto_write_enabled: bool | None = None
+    memory_write_interval_turns: int | None = Field(default=None, ge=1, le=1000)
+    memory_agent_write_enabled: bool | None = None
+    memory_max_injected_items: int | None = Field(default=None, ge=1, le=64)
+    memory_max_injected_tokens: int | None = Field(default=None, ge=100, le=32000)
 
 
 class MemoryDeleteRequest(BaseModel):
@@ -286,19 +291,21 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
         _require_system_package(package_id)
         principal_id = _principal(request)
         try:
-            backend.application.stores.conversations.archive_for_principal(
+            result = await backend.conversation_lifecycle.delete_one(
                 session_id=session_id,
                 principal_id=principal_id,
             )
         except LookupError as exc:
             raise HTTPException(status_code=404, detail="conversation not found") from exc
+        except TimeoutError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {
             "event": _event(
                 "agent_package_session_deleted",
                 {
                     "package_id": SYSTEM_CHAT_PACKAGE_ID,
                     "session_id": session_id,
-                    "deleted_session_ids": [session_id],
+                    "deleted_session_ids": list(result.session_ids),
                     "sessions": _session_views(backend, principal_id),
                 },
                 session_id=session_id,
@@ -362,6 +369,11 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
             request_timeout_seconds=payload.request_timeout_seconds if payload.request_timeout_seconds is not None else current.request_timeout_seconds if current else 300,
             max_model_attempts=(payload.max_retries + 1) if payload.max_retries is not None else current.max_model_attempts if current else 6,
             max_parallel_temporary_agents=payload.max_parallel_sub_agents if payload.max_parallel_sub_agents is not None else current.max_parallel_temporary_agents if current else 5,
+            memory_auto_write_enabled=payload.memory_auto_write_enabled if payload.memory_auto_write_enabled is not None else current.memory_auto_write_enabled if current else True,
+            memory_write_interval_turns=payload.memory_write_interval_turns if payload.memory_write_interval_turns is not None else current.memory_write_interval_turns if current else 3,
+            memory_agent_write_enabled=payload.memory_agent_write_enabled if payload.memory_agent_write_enabled is not None else current.memory_agent_write_enabled if current else True,
+            memory_max_injected_items=payload.memory_max_injected_items if payload.memory_max_injected_items is not None else current.memory_max_injected_items if current else 8,
+            memory_max_injected_tokens=payload.memory_max_injected_tokens if payload.memory_max_injected_tokens is not None else current.memory_max_injected_tokens if current else 1200,
             max_temporary_delegation_depth=current.max_temporary_delegation_depth if current else 0,
             delegation_grant_ttl_seconds=current.delegation_grant_ttl_seconds if current else 900,
             timezone=timezone,
@@ -538,13 +550,18 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
         if payload.get("confirmed") is not True:
             raise HTTPException(status_code=422, detail="conversation clear requires confirmation")
         before = await conversation_storage(request)
-        backend.application.stores.conversations.archive_all_for_principal(principal_id)
+        try:
+            result = await backend.conversation_lifecycle.delete_all(principal_id=principal_id)
+        except TimeoutError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         after = await conversation_storage(request)
         return {
             "cleared": True,
             "before": before,
             "after": after,
-            "released_bytes": max(0, before["bytes_used"] - after["bytes_used"]),
+            "released_bytes": result.released_bytes,
+            "deleted_file_count": result.deleted_file_count,
+            "deleted_session_ids": list(result.session_ids),
         }
 
     @router.get("/api/workspace/projects")
@@ -1169,6 +1186,11 @@ def _synchronize_policy(
             else current.max_model_attempts if current else 2
         ),
         max_parallel_temporary_agents=int(config.get("max_parallel_sub_agents") or (current.max_parallel_temporary_agents if current else 4)),
+        memory_auto_write_enabled=current.memory_auto_write_enabled if current else True,
+        memory_write_interval_turns=current.memory_write_interval_turns if current else 3,
+        memory_agent_write_enabled=current.memory_agent_write_enabled if current else True,
+        memory_max_injected_items=current.memory_max_injected_items if current else 8,
+        memory_max_injected_tokens=current.memory_max_injected_tokens if current else 1200,
         max_temporary_delegation_depth=current.max_temporary_delegation_depth if current else 0,
         delegation_grant_ttl_seconds=current.delegation_grant_ttl_seconds if current else 900,
         timezone=timezone,
@@ -1358,6 +1380,7 @@ def _session_snapshot(backend: Any, principal_id: str, session_id: str) -> dict[
             }
         )
     workspace = backend.application.stores.conversations.require_workspace(identity.workspace_id)
+    current_plan = _session_current_plan(backend, session_id)
     return {
         "session_id": session_id,
         "package_id": SYSTEM_CHAT_PACKAGE_ID,
@@ -1371,9 +1394,33 @@ def _session_snapshot(backend: Any, principal_id: str, session_id: str) -> dict[
         },
         "turns": turns,
         "process_events": _process_events(backend, session_id),
+        "current_plan": current_plan,
         "created_at": turns[0]["created_at"] if turns else utc_now_text(),
         "updated_at": turns[-1]["updated_at"] if turns else utc_now_text(),
     }
+
+
+def _session_current_plan(backend: Any, session_id: str) -> dict[str, Any] | None:
+    with backend.application.database.connection(query_only=True) as connection:
+        row = connection.execute(
+            """
+            select runtime_instance_id, payload_json from runtime_instances
+            where session_id = ?
+              and json_extract(payload_json, '$.request.runtime_role') = 'main'
+            order by created_at desc, rowid desc limit 1
+            """,
+            (session_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    from agent_factory.runtime_protocol import RuntimeInstance
+    instance = RuntimeInstance.model_validate_json(str(row["payload_json"]))
+    if instance.request.strategy != "plan_and_execute":
+        return None
+    try:
+        return backend.application.runtime_service.current_plan(str(row["runtime_instance_id"]))
+    except (LookupError, RuntimeError, ValueError):
+        return None
 
 
 def _message_view(
@@ -1543,6 +1590,11 @@ def _runtime_preferences_view(policy: UserRuntimePolicy | None) -> dict[str, Any
         "request_timeout_seconds": policy.request_timeout_seconds if policy else 300,
         "max_retries": max(0, policy.max_model_attempts - 1) if policy else 5,
         "max_parallel_sub_agents": policy.max_parallel_temporary_agents if policy else 5,
+        "memory_auto_write_enabled": policy.memory_auto_write_enabled if policy else True,
+        "memory_write_interval_turns": policy.memory_write_interval_turns if policy else 3,
+        "memory_agent_write_enabled": policy.memory_agent_write_enabled if policy else True,
+        "memory_max_injected_items": policy.memory_max_injected_items if policy else 8,
+        "memory_max_injected_tokens": policy.memory_max_injected_tokens if policy else 1200,
         "updated_at": policy.updated_at if policy else None,
     }
 

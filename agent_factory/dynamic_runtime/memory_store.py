@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import re
 from uuid import uuid4
 
 from agent_factory.dynamic_runtime.database import DynamicRuntimeDatabase
 from agent_factory.runtime_protocol import MemoryKind, MemoryRevision, MemoryScope
+from agent_factory.dynamic_runtime.memory_search import HybridMemorySearchIndex
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,8 +17,13 @@ class MemorySearchResult:
 class ScopedMemoryStore:
     """Authoritative user/workspace memory revision store."""
 
-    def __init__(self, database: DynamicRuntimeDatabase) -> None:
+    def __init__(self, database: DynamicRuntimeDatabase, search_index: HybridMemorySearchIndex | None = None) -> None:
         self._database = database
+        self._search_index = search_index
+
+    def close(self) -> None:
+        if self._search_index is not None:
+            self._search_index.close()
 
     def write(
         self,
@@ -239,33 +244,17 @@ class ScopedMemoryStore:
         query: str,
         limit: int,
     ) -> tuple[MemorySearchResult, ...]:
-        terms = tuple(dict.fromkeys(_terms(query)))
-        if not terms or limit < 1:
-            return ()
-        results: list[MemorySearchResult] = []
-        seen_digests: set[str] = set()
-        for revision in self.list_active(
-            principal_id=principal_id,
-            workspace_id=workspace_id,
-            scope=None,
-            limit=max(limit * 8, 64),
-        ):
-            content = revision.content.casefold()
-            matched = sum(1 for term in terms if term in content)
-            if not matched or revision.content_digest in seen_digests:
-                continue
-            seen_digests.add(revision.content_digest)
-            scope_bonus = 0.1 if revision.scope == "workspace" else 0.0
-            score = min(1.0, matched / len(terms) * 0.9 + scope_bonus)
-            results.append(MemorySearchResult(revision=revision, score=score))
-        results.sort(
-            key=lambda item: (
-                -item.score,
-                0 if item.revision.scope == "workspace" else 1,
-                item.revision.memory_id,
+        if self._search_index is None:
+            raise RuntimeError("memory search index is not configured")
+        return tuple(
+            MemorySearchResult(revision=item.revision, score=item.score)
+            for item in self._search_index.search(
+                principal_id=principal_id,
+                workspace_id=workspace_id,
+                query=query,
+                limit=limit,
             )
         )
-        return tuple(results[:limit])
 
     @staticmethod
     def _insert_revision(conn, revision: MemoryRevision) -> None:
@@ -316,10 +305,6 @@ class ScopedMemoryStore:
             raise PermissionError("memory source identity does not match runtime ownership")
         if revision.scope == "workspace" and str(row["workspace_id"]) != revision.workspace_id:
             raise PermissionError("workspace memory differs from runtime workspace")
-
-
-def _terms(value: str) -> list[str]:
-    return [item for item in re.findall(r"[\w\-]{2,}", str(value or "").casefold()) if item]
 
 
 def _now_text() -> str:

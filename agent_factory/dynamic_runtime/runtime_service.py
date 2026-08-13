@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from contextvars import copy_context
 from collections.abc import Callable
+from datetime import datetime, timezone
 import json
 import logging
 import threading
@@ -159,6 +160,23 @@ class DynamicRuntimeService:
         )
         return tuple(_interrupt_payloads(raw={}, checkpoint=checkpoint))
 
+    def current_plan(self, runtime_instance_id: str) -> dict[str, Any] | None:
+        instance = self._runtime_instances.get(runtime_instance_id)
+        if instance.request.strategy != "plan_and_execute":
+            return None
+        graph = self._service_set.graph_for(instance.request.strategy)
+        checkpoint = graph.graph_app.get_state(
+            {"configurable": {"thread_id": instance.runtime_instance_id}}
+        )
+        values = getattr(checkpoint, "values", None) or {}
+        raw_runtime = values.get("runtime") if isinstance(values, dict) else None
+        if not isinstance(raw_runtime, dict):
+            return None
+        state = RuntimeState.model_validate(raw_runtime)
+        if state.plan.status == "empty":
+            return None
+        return state.plan.model_dump(mode="json")
+
     def _run(
         self,
         *,
@@ -242,7 +260,15 @@ class DynamicRuntimeService:
                     "runtime": runtime_checkpoint_payload(state, mode="json"),
                 }
             else:
-                graph_input = Command(resume=_graph_resume_values(resume_payload))
+                checkpoint_values = getattr(graph.graph_app.get_state(config), "values", None) or {}
+                resumed_state = RuntimeState.model_validate(checkpoint_values.get("runtime") or {})
+                resumed_state.execution.last_activity_at = datetime.now(timezone.utc).isoformat()
+                graph_input = Command(
+                    update={
+                        "runtime": runtime_checkpoint_payload(resumed_state, mode="json"),
+                    },
+                    resume=_graph_resume_values(resume_payload),
+                )
             fallback_raw = (
                 graph_input
                 if isinstance(graph_input, dict)
@@ -472,6 +498,7 @@ def _initial_state(
         execution=ExecutionState(
             max_retries=instance.request.policy_snapshot.max_model_attempts - 1,
             timeout_seconds=instance.request.policy_snapshot.request_timeout_seconds,
+            last_activity_at=datetime.now(timezone.utc).isoformat(),
         ),
     )
     return bind_capability_snapshot(

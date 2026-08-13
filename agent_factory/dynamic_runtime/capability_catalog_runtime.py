@@ -7,7 +7,7 @@ import json
 from agent_factory.dynamic_runtime.capability_resolution_store import CapabilityResolutionReceiptStore
 from agent_factory.dynamic_runtime.capability_resolver import CapabilitySearchIndex
 from agent_factory.dynamic_runtime.capability_store import ActiveCapability, CapabilityStore
-from agent_factory.dynamic_runtime.capability_definitions import ToolDefinition
+from agent_factory.dynamic_runtime.delegation_policy import capability_is_delegatable
 from agent_factory.runtime_protocol import CapabilityTrustLevel
 
 
@@ -147,10 +147,7 @@ def _normalize(value: str) -> str:
 
 
 def _delegatable(item: ActiveCapability) -> bool:
-    if item.revision.kind != "tool":
-        return True
-    definition = ToolDefinition.model_validate(item.revision.content.definition)
-    return not definition.system_available
+    return capability_is_delegatable(item.revision.capability_id)
 
 
 def _required_text(value: str, field_name: str) -> str:

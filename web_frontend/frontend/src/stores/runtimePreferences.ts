@@ -9,6 +9,9 @@ export const DEFAULT_RUNTIME_MAX_RETRIES = 5
 export const DEFAULT_MAX_PARALLEL_SUB_AGENTS = 5
 export const DEFAULT_APPROVAL_MODE: ApprovalMode = 'ask'
 export const DEFAULT_EXECUTION_PREFERENCE: ExecutionPreference = 'auto'
+export const DEFAULT_MEMORY_WRITE_INTERVAL_TURNS = 3
+export const DEFAULT_MEMORY_MAX_INJECTED_ITEMS = 8
+export const DEFAULT_MEMORY_MAX_INJECTED_TOKENS = 1200
 
 const STORAGE_KEYS = {
   mainModelProfileId: 'fast-agent-factory.runtimeMainModelProfileId',
@@ -28,6 +31,11 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
   const maxParallelSubAgents = ref(readStoredInteger(STORAGE_KEYS.maxParallelSubAgents, DEFAULT_MAX_PARALLEL_SUB_AGENTS, 1))
   const approvalMode = ref<ApprovalMode>(readStoredApprovalMode())
   const executionPreference = ref<ExecutionPreference>(readStoredExecutionPreference())
+  const memoryAutoWriteEnabled = ref(true)
+  const memoryWriteIntervalTurns = ref(DEFAULT_MEMORY_WRITE_INTERVAL_TURNS)
+  const memoryAgentWriteEnabled = ref(true)
+  const memoryMaxInjectedItems = ref(DEFAULT_MEMORY_MAX_INJECTED_ITEMS)
+  const memoryMaxInjectedTokens = ref(DEFAULT_MEMORY_MAX_INJECTED_TOKENS)
   const maxParallelSubAgentsSaveFailed = ref(false)
   const revision = ref(0)
   let pendingPatch: RuntimePreferencesPatch = {}
@@ -77,6 +85,31 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     enqueue({ execution_preference: value })
   }
 
+  function setMemoryAutoWriteEnabled(value: boolean): void {
+    memoryAutoWriteEnabled.value = value
+    enqueue({ memory_auto_write_enabled: value })
+  }
+
+  function setMemoryWriteIntervalTurns(value: number): void {
+    memoryWriteIntervalTurns.value = Math.max(1, Math.round(value))
+    enqueue({ memory_write_interval_turns: memoryWriteIntervalTurns.value })
+  }
+
+  function setMemoryAgentWriteEnabled(value: boolean): void {
+    memoryAgentWriteEnabled.value = value
+    enqueue({ memory_agent_write_enabled: value })
+  }
+
+  function setMemoryMaxInjectedItems(value: number): void {
+    memoryMaxInjectedItems.value = Math.max(1, Math.round(value))
+    enqueue({ memory_max_injected_items: memoryMaxInjectedItems.value })
+  }
+
+  function setMemoryMaxInjectedTokens(value: number): void {
+    memoryMaxInjectedTokens.value = Math.max(100, Math.round(value))
+    enqueue({ memory_max_injected_tokens: memoryMaxInjectedTokens.value })
+  }
+
   async function refreshRuntimePreferences(): Promise<void> {
     apply(await runtimePreferencesApi.get())
     maxParallelSubAgentsSaveFailed.value = false
@@ -119,6 +152,11 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     requestTimeoutSeconds.value = value.request_timeout_seconds
     maxRetries.value = value.max_retries
     maxParallelSubAgents.value = value.max_parallel_sub_agents
+    memoryAutoWriteEnabled.value = value.memory_auto_write_enabled
+    memoryWriteIntervalTurns.value = value.memory_write_interval_turns
+    memoryAgentWriteEnabled.value = value.memory_agent_write_enabled
+    memoryMaxInjectedItems.value = value.memory_max_injected_items
+    memoryMaxInjectedTokens.value = value.memory_max_injected_tokens
     writeOrRemove(STORAGE_KEYS.mainModelProfileId, mainModelProfileId.value)
     writeNullableNumber(STORAGE_KEYS.reasoningIntensity, reasoningIntensity.value)
     writeStoredValue(STORAGE_KEYS.approvalMode, approvalMode.value)
@@ -138,6 +176,11 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     maxParallelSubAgents,
     approvalMode,
     executionPreference,
+    memoryAutoWriteEnabled,
+    memoryWriteIntervalTurns,
+    memoryAgentWriteEnabled,
+    memoryMaxInjectedItems,
+    memoryMaxInjectedTokens,
     maxParallelSubAgentsSaveFailed,
     setMainModelProfileId,
     setReasoningIntensity,
@@ -146,6 +189,11 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     setMaxParallelSubAgents,
     setApprovalMode,
     setExecutionPreference,
+    setMemoryAutoWriteEnabled,
+    setMemoryWriteIntervalTurns,
+    setMemoryAgentWriteEnabled,
+    setMemoryMaxInjectedItems,
+    setMemoryMaxInjectedTokens,
     refreshMaxParallelSubAgents: refreshRuntimePreferences,
     refreshRuntimePreferences,
   }

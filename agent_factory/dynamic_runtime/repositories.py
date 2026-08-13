@@ -348,45 +348,6 @@ class ConversationStore:
             for row in rows
         ]
 
-    def archive_for_principal(self, *, session_id: str, principal_id: str) -> ConversationIdentity:
-        identity = self.require_identity(session_id)
-        owner = _required_text(principal_id, "principal_id")
-        if identity.principal_id != owner or identity.status != "active":
-            raise LookupError(f"active conversation not found: {session_id}")
-        now = utc_now_text()
-        with self._database.transaction() as conn:
-            cursor = conn.execute(
-                """
-                update conversations
-                set status = 'archived', revision = revision + 1, updated_at = ?
-                where session_id = ? and principal_id = ? and status = 'active'
-                """,
-                (now, session_id, owner),
-            )
-            if cursor.rowcount != 1:
-                raise LookupError(f"active conversation not found: {session_id}")
-        return self.require_identity(session_id)
-
-    def archive_all_for_principal(self, principal_id: str) -> tuple[str, ...]:
-        owner = _required_text(principal_id, "principal_id")
-        active_ids = tuple(
-            item.session_id
-            for item in self.list_for_principal(owner)
-            if item.status == "active"
-        )
-        if not active_ids:
-            return ()
-        with self._database.transaction() as conn:
-            conn.execute(
-                """
-                update conversations
-                set status = 'archived', revision = revision + 1, updated_at = ?
-                where principal_id = ? and status = 'active'
-                """,
-                (utc_now_text(), owner),
-            )
-        return active_ids
-
     def require_workspace(self, workspace_id: str) -> WorkspaceIdentity:
         value = _required_text(workspace_id, "workspace_id")
         with self._database.connection(query_only=True) as conn:

@@ -7,11 +7,11 @@
     <summary class="tool-summary">
       <span class="tool-main">
         <span class="tool-icon-shell" :class="`tool-category-${presentation.category}`">
-          <n-icon size="18"><component :is="categoryIcon" /></n-icon>
+          <ToolIcon :name="presentation.icon" />
         </span>
         <span class="tool-copy">
           <strong>{{ displayName }}</strong>
-          <span v-if="presentation.summary" class="tool-summary-text">{{ presentation.summary }}</span>
+          <span v-if="summaryText" class="tool-summary-text">{{ summaryText }}</span>
         </span>
       </span>
       <span class="tool-side">
@@ -118,18 +118,8 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { NIcon } from 'naive-ui'
-import {
-  Bot,
-  Calendar,
-  Document,
-  Edit,
-  Folder,
-  Search,
-  Terminal,
-  ToolBox,
-} from '@vicons/carbon'
 import ResourceIcon from '@/components/common/ResourceIcon.vue'
+import ToolIcon from '@/components/common/ToolIcon.vue'
 import { useI18n } from '@/composables/useI18n'
 import { isImageResource, workspaceResourceUrl } from '@/utils/workspaceResources'
 import { toolPresentation } from '@/utils/toolPresentation'
@@ -151,6 +141,11 @@ const presentation = computed(() => toolPresentation(props.part.toolName, props.
 const displayName = computed(() => (
   presentation.value.labelKey ? t(presentation.value.labelKey as any) : props.part.toolName
 ))
+const summaryText = computed(() => (
+  presentation.value.summaryKey
+    ? t(presentation.value.summaryKey as any)
+    : presentation.value.summary
+))
 const state = computed(() => {
   if (props.part.status === 'cancelled') return 'cancelled'
   if (props.part.error || props.part.status === 'failed') return 'failed'
@@ -168,17 +163,6 @@ const statusLabel = computed(() => {
   if (resultRecord.value?.status === 'committed') return t('tool.transaction.committed')
   return t('tool.status.completed')
 })
-const categoryIcon = computed(() => ({
-  read: Document,
-  write: Edit,
-  search: Search,
-  process: Terminal,
-  knowledge: Folder,
-  scheduler: Calendar,
-  agent: Bot,
-  extension: ToolBox,
-  generic: ToolBox,
-}[presentation.value.category]))
 const formattedArguments = computed(() => valueString(props.part.arguments))
 const formattedOutput = computed(() => valueString(props.part.error || props.part.output))
 const hasArguments = computed(() => hasValue(props.part.arguments))

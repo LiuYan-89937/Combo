@@ -78,12 +78,15 @@ def create_browser_view_router(logger: logging.Logger, runtime: BrowserRuntime) 
                 if event.get("type") != "frame":
                     await websocket.send_json(event)
                     continue
-                encoded = str(event.pop("data", "") or "")
-                try:
-                    frame_bytes = base64.b64decode(encoded, validate=True)
-                except (ValueError, binascii.Error):
-                    logger.warning("Browser view emitted an invalid frame for %s/%s", view_id, page_id)
-                    continue
+                raw_frame = event.pop("data", b"")
+                if isinstance(raw_frame, bytes):
+                    frame_bytes = raw_frame
+                else:
+                    try:
+                        frame_bytes = base64.b64decode(str(raw_frame or ""), validate=True)
+                    except (ValueError, binascii.Error):
+                        logger.warning("Browser view emitted an invalid frame for %s/%s", view_id, page_id)
+                        continue
                 await websocket.send_json({**event, "type": "frame_metadata"})
                 await websocket.send_bytes(frame_bytes)
 

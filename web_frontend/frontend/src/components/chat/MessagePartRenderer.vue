@@ -134,6 +134,7 @@ import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
 import { useWorkspaceFileOpener } from '@/composables/useWorkspaceFileOpener'
 import type { ChatMessagePart, TranscriptAttachmentView } from '@/types/protocol'
 import type { WorkspaceRequestContext } from '@/api/resourceTypes'
+import { toolPresentation } from '@/utils/toolPresentation'
 import { isImageResource, workspaceResourceUrl } from '@/utils/workspaceResources'
 
 const props = defineProps<{
@@ -194,11 +195,14 @@ const artifactMeta = computed(() => {
     typeof props.part.sizeBytes === 'number' ? formatFileSize(props.part.sizeBytes) : null,
   ].filter(Boolean).join(' · ')
 })
-const toolName = computed(() => (
-  props.part.type === 'tool_call' || props.part.type === 'tool_result'
-    ? props.part.toolName || 'tool'
-    : ''
-))
+const toolName = computed(() => {
+  if (props.part.type !== 'tool_call' && props.part.type !== 'tool_result') return ''
+  const rawName = String(props.part.toolName || '').trim()
+  if (!rawName) return t('tool.call')
+  const argumentsValue = props.part.type === 'tool_call' ? props.part.arguments : {}
+  const presentation = toolPresentation(rawName, argumentsValue)
+  return presentation.labelKey ? t(presentation.labelKey as any) : rawName
+})
 const toolKindLabel = computed(() => (
   props.part.type === 'tool_result' ? t('tool.result') : t('tool.call')
 ))

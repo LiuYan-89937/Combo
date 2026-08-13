@@ -4,19 +4,17 @@
     preset="card"
     class="capability-library-modal"
     :bordered="false"
-    :title="t('capabilityLibrary.title')"
     @update:show="emit('update:show', $event)"
   >
-    <div class="library-lead">
-      <p class="library-intro">{{ t('capabilityLibrary.description') }}</p>
-    </div>
-
     <section class="library-section">
-      <div class="section-heading">
-        <span>{{ t('capabilityLibrary.resources') }}</span>
-        <small>{{ t('capabilityLibrary.resourcesHint') }}</small>
-      </div>
       <div class="library-grid resource-grid">
+        <button class="library-entry compact" type="button" @click="openRoute('MainAgentCapabilities')">
+          <n-icon size="20"><PersonCircleOutline /></n-icon>
+          <span>
+            <strong>{{ t('settings.mainAgentCapabilities') }}</strong>
+            <small>{{ t('capabilityLibrary.mainAgentCapabilitiesHint') }}</small>
+          </span>
+        </button>
         <button class="library-entry compact" type="button" @click="openCapabilityPool('mcp')">
           <n-icon size="20"><ExtensionPuzzleOutline /></n-icon>
           <span><strong>MCP</strong><small>{{ t('capabilityPools.mcpHint') }}</small></span>
@@ -55,6 +53,7 @@ import {
   SparklesOutline,
   TimeOutline,
   LayersOutline,
+  PersonCircleOutline,
 } from '@/components/icons'
 import { useRouter } from 'vue-router'
 import { useI18n } from '@/composables/useI18n'
@@ -64,7 +63,7 @@ const emit = defineEmits<{ 'update:show': [value: boolean] }>()
 const router = useRouter()
 const { t } = useI18n()
 
-function openRoute(name: 'Knowledge' | 'Scheduler' | 'ModelPool') {
+function openRoute(name: 'Knowledge' | 'Scheduler' | 'ModelPool' | 'MainAgentCapabilities') {
   emit('update:show', false)
   void router.push({ name })
 }
@@ -87,12 +86,7 @@ function openCapabilityPool(pool: 'mcp' | 'tools' | 'skills') {
 </style>
 
 <style scoped>
-.library-lead { display: flex; align-items: center; gap: 16px; margin: -10px 0 22px; padding: 8px 14px 8px 8px; border-radius: 16px; background: var(--app-surface-muted); }
-.library-intro { margin: 0; color: var(--app-text-secondary); font-size: 13px; line-height: 1.6; }
 .library-section + .library-section { margin-top: 26px; }
-.section-heading { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
-.section-heading span { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-.section-heading small { color: var(--app-text-muted); font-size: 11px; }
 .library-grid { display: grid; gap: 10px; }
 .resource-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .library-entry {

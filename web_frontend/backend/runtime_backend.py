@@ -65,6 +65,7 @@ from agent_factory.dynamic_runtime.skill_source import (
     FileSystemSkillCapabilitySource,
     FileSystemSkillSourceConfig,
     SkillSourceRoot,
+    normalize_staged_skill_package,
 )
 from agent_factory.dynamic_runtime.tool_package_source import (
     FileSystemToolCapabilitySource,
@@ -107,6 +108,8 @@ from agent_factory.dynamic_runtime.mcp_source import MCPConfigCapabilitySource, 
 from agent_factory.dynamic_runtime.main_agent_profile import MainAgentCapabilityProfileStore
 from web_frontend.backend.frontend_event_bridge import FrontendEventBridge, RuntimeEventFanout
 from web_frontend.backend.attachment_upload_store import StagedAttachmentLaunchResolver
+from web_frontend.backend.attachment_upload_store import attachment_upload_store
+from web_frontend.backend.conversation_lifecycle import ConversationLifecycleService
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,6 +154,8 @@ class RuntimeBackendConfig:
     outbox_max_attempts: int = 8
     outbox_retry_delay_seconds: float = 1.0
     maximum_argument_revisions: int = 3
+    conversation_delete_quiesce_timeout_seconds: float = 30.0
+    conversation_delete_poll_seconds: float = 0.05
 
     @classmethod
     def local(cls) -> "RuntimeBackendConfig":
@@ -202,6 +207,13 @@ class RuntimeBackendConfig:
             browser_runtime=_browser_runtime_config(),
             process_environment=_process_environment(),
             allowed_frontend_origins=_allowed_frontend_origins(),
+            conversation_delete_quiesce_timeout_seconds=float(
+                _environment_int(
+                    "AGENTFACTORY_CONVERSATION_DELETE_QUIESCE_TIMEOUT_SECONDS",
+                    30,
+                    minimum=1,
+                )
+            ),
         )
 
 
@@ -213,7 +225,7 @@ class RuntimeBackend:
         self.main_agent_capability_profiles = MainAgentCapabilityProfileStore(
             config.main_agent_capability_profile_path
         )
-        self.active_main_agent_capability_profile = self.main_agent_capability_profiles.ensure()
+        self.main_agent_capability_profiles.ensure()
         self.frontend_events = FrontendEventBridge(
             queue_capacity=config.subscriber_queue_capacity,
         )
@@ -251,6 +263,17 @@ class RuntimeBackend:
             execution_router=ExecutionRouter(
                 StructuredRouteAnalyzer.from_file(config.router_prompt_path)
             )
+        )
+        self.conversation_lifecycle = ConversationLifecycleService(
+            database=self.application.database,
+            run_controls=self.application.stores.run_controls,
+            command_executions=self.application.command_executions,
+            checkpointer=self.application.service_set.services.checkpointer,
+            tool_output_root=config.tool_output_root,
+            managed_workspace_root=config.workspace_root,
+            attachment_uploads=attachment_upload_store(),
+            quiesce_timeout_seconds=config.conversation_delete_quiesce_timeout_seconds,
+            quiesce_poll_seconds=config.conversation_delete_poll_seconds,
         )
         publisher = OutboxPublisher(
             store=self.application.stores.outbox,
@@ -495,13 +518,10 @@ class RuntimeBackend:
             )
 
     def _main_agent_capability_profile_view(self, saved) -> dict[str, object]:
-        active_ids = self.active_main_agent_capability_profile.capability_ids
         return {
             "version": "main_agent_capability_profile.v1",
             "revision": saved.revision,
             "capability_ids": list(saved.capability_ids),
-            "active_capability_ids": list(active_ids),
-            "restart_required": saved.capability_ids != active_ids,
         }
 
     def refresh_capability_search_embeddings(self) -> None:
@@ -681,6 +701,7 @@ class RuntimeBackend:
         backup = source_root.path / f".{identity[1]}.backup-{uuid4().hex}"
         try:
             shutil.copytree(source, staged, symlinks=False)
+            staged = normalize_staged_skill_package(staged)
             validation_source = self._skill_capability_source((SkillSourceRoot(
                 root_id=source_root.root_id,
                 path=staging_root,
@@ -716,6 +737,7 @@ class RuntimeBackend:
         staged = staging_root / source.name
         try:
             shutil.copytree(source, staged, symlinks=False)
+            staged = normalize_staged_skill_package(staged)
             validation_source = self._skill_capability_source((SkillSourceRoot(
                 root_id=source_root.root_id,
                 path=staging_root,
@@ -1329,6 +1351,8 @@ class RuntimeBackend:
                         knowledge_store=stores.knowledge,
                         scheduler_store=stores.scheduler,
                         skillhub_runtime=self.skillhub_runtime,
+                        capability_blobs=capability_blobs,
+                        runtime_instances=stores.runtime_instances,
                         process_resources=self.process_resources,
                         filesystem_resources=self.filesystem_resources,
                     )
@@ -1343,6 +1367,7 @@ class RuntimeBackend:
                         "knowledge_runtime",
                         "scheduler_runtime",
                         "skillhub_runtime",
+                        "skill_runtime",
                     )
                 },
             )
@@ -1387,7 +1412,7 @@ class RuntimeBackend:
                 clock=PolicyRuntimeClock(),
                 workspaces=ConversationWorkspaceLaunchResolver(stores.conversations),
                 attachments=StagedAttachmentLaunchResolver(),
-                capability_instructions=SnapshotCapabilityInstructionRenderer(capability_blobs),
+                capability_instructions=SnapshotCapabilityInstructionRenderer(),
                 delegations=stores.delegations,
             )
 
@@ -1417,12 +1442,12 @@ class RuntimeBackend:
                     host_python_abi=str(sys.implementation.cache_tag or "") or None,
                     allowed_trust_levels=("builtin", "local_user", "verified_external"),
                 ),
-                main_agent_capability_ids=self.active_main_agent_capability_profile.capability_ids,
             ),
             services_factory=services,
             model_pool_store=ModelPoolStore(),
             launch_context_resolver=launch_context,
             capability_bootstrap=bootstrap_capabilities,
+            main_agent_capability_ids=lambda: self.main_agent_capability_profiles.read().capability_ids,
             observation_sink=self._publish_runtime_observation,
             migration_registry=migration_registry,
         )

@@ -22,6 +22,7 @@ from agent_factory.tooling.builtins.memory.specs import get_memory_tool_specs
 from agent_factory.tooling.builtins.process.specs import get_process_tool_specs
 from agent_factory.tooling.builtins.scheduler.specs import get_scheduler_tool_specs
 from agent_factory.tooling.builtins.skillhub.specs import get_skillhub_tool_specs
+from agent_factory.tooling.builtins.skill.specs import get_skill_tool_specs
 from agent_factory.tooling.builtins.tool_output.specs import get_tool_output_tool_specs
 from agent_factory.tooling.output_store import TOOL_OUTPUT_STORE_RESOURCE
 from agent_factory.tooling.spec import ToolSpec
@@ -62,6 +63,7 @@ class BuiltinToolCapabilitySource:
             *get_knowledge_tool_specs(),
             *get_scheduler_tool_specs(),
             *get_skillhub_tool_specs(),
+            *get_skill_tool_specs(),
             *get_browser_tool_specs(),
         )
         aliases = tuple(spec.id for spec in specs)

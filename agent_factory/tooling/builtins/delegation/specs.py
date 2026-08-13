@@ -16,9 +16,10 @@ def get_delegation_tool_specs() -> list[ToolSpec]:
             id="delegate",
             description=(
                 "Start one non-blocking temporary agent task. Give the child a concise user-facing role name, "
-                "then describe its role and objective, "
-                "select its execution graph, and pass only public Tool, MCP, or Skill names returned by a "
-                "preceding capability search. Runtime policy "
+                "then describe its role and objective and select its execution graph. Delegate independent work "
+                "even when capability search returns no optional match; in that case pass an empty capabilities "
+                "array and the child receives its stable built-in runtime tools. When search does return useful "
+                "Tool, MCP, or Skill matches, pass only their exact public names. Runtime policy "
                 "supplies the shared workspace scope, model, approvals, and internal identities. Once accepted, "
                 "do not immediately inspect status, sleep, wait, or poll; task events report subsequent changes."
             ),
@@ -53,9 +54,12 @@ def get_delegation_tool_specs() -> list[ToolSpec]:
                                 "Never provide IDs, revisions, digests, evidence, or generated handles."
                             ),
                         },
-                        "minItems": 1,
                         "uniqueItems": True,
-                        "description": "从 capability 搜索结果中选择并交给临时 Agent 的公开能力名称。",
+                        "default": [],
+                        "description": (
+                            "Optional public capability names selected from capability search. Use an empty array "
+                            "when no optional match is needed; stable built-in tools remain available."
+                        ),
                     },
                     "acceptance_criteria": {
                         "type": "array",

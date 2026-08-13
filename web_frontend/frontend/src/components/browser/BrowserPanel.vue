@@ -110,6 +110,7 @@ const title = ref('')
 const agentOperation = ref('')
 const browserTargets = ref<BrowserTarget[]>([])
 const closingPageIds = ref(new Set<string>())
+const closedPageIds = ref(new Set<string>())
 const activePageId = ref('')
 const panelRef = ref<HTMLElement | null>(null)
 const canvasRef = ref<HTMLCanvasElement | null>(null)
@@ -181,7 +182,7 @@ watch(latestBrowserActivity, (activity) => {
   const output = browserOutput(activity.payload)
   const action = String(output?.browser_view_action || '').trim()
   const closedPageId = String(output?.closed_page_id || '').trim()
-  if (closedPageId) removeTarget(closedPageId)
+  if (closedPageId) markTargetClosed(closedPageId)
   if (action === 'close') {
     browserTargets.value = []
     activePageId.value = ''
@@ -198,7 +199,7 @@ watch(latestBrowserActivity, (activity) => {
   }
   const viewId = String(output?.browser_view_id || '').trim()
   const pageId = String(output?.page_id || '').trim()
-  if (!viewId || !pageId) return
+  if (!viewId || !pageId || closedPageIds.value.has(pageId)) return
   const target = {
     viewId,
     pageId,
@@ -210,15 +211,16 @@ watch(latestBrowserActivity, (activity) => {
   visible.value = true
   minimized.value = false
   void nextTick(clampPanelPosition)
-}, { deep: true })
+}, { deep: true, immediate: true })
 
 watch(activeBrowserScope, (scope, previousScope) => {
-  if (!scope || !previousScope || scope === previousScope) return
+  if (!scope || scope === previousScope) return
   browserTargets.value = []
   activePageId.value = ''
   panelPosition.value = null
+  closedPageIds.value = new Set()
   closePanel()
-})
+}, { immediate: true })
 
 watch(minimized, () => {
   void nextTick(clampPanelPosition)
@@ -265,6 +267,7 @@ async function connect(target: BrowserTarget) {
   })
   nextSocket.addEventListener('message', (event) => {
     if (socket !== nextSocket) return
+    connectionStatus.value = 'connected'
     if (event.data instanceof Blob) {
       const metadata = pendingFrameMetadata || {}
       pendingFrameMetadata = null
@@ -277,7 +280,7 @@ async function connect(target: BrowserTarget) {
       return
     }
     if (payload.type === 'closed') {
-      removeTarget(target.pageId)
+      markTargetClosed(target.pageId)
       if (!browserTargets.value.length) closePanel()
       return
     }
@@ -314,6 +317,7 @@ async function renderFrame(frame: Blob, payload: Record<string, any>) {
   canvas.width = image.naturalWidth
   canvas.height = image.naturalHeight
   canvas.getContext('2d')?.drawImage(image, 0, 0)
+  connectionStatus.value = 'connected'
 }
 
 function send(payload: Record<string, any>) {
@@ -381,7 +385,13 @@ function mouseButton(button: number): 'left' | 'middle' | 'right' {
 }
 
 function browserOutput(payload: Record<string, any>): Record<string, any> | null {
-  const candidates = [payload.output, payload.result?.output, payload.observation?.output]
+  const candidates = [
+    payload.output,
+    payload.result?.output,
+    payload.result,
+    payload.observation?.output,
+    payload.observation,
+  ]
   return candidates.find((value) => value && typeof value === 'object') || null
 }
 
@@ -391,6 +401,7 @@ function toolArguments(payload: Record<string, any>): Record<string, any> {
 }
 
 function upsertTarget(target: BrowserTarget, moveToFront = true) {
+  if (closedPageIds.value.has(target.pageId)) return
   const remaining = browserTargets.value.filter((item) => item.pageId !== target.pageId)
   const previous = browserTargets.value.find((item) => item.pageId === target.pageId)
   const merged = { ...previous, ...target }
@@ -414,7 +425,7 @@ function synchronizeTargets(viewId: string, tabs: Array<Record<string, any>>) {
   browserTargets.value = tabs
     .map((tab) => {
       const pageId = String(tab.page_id || '').trim()
-      if (!pageId) return null
+      if (!pageId || closedPageIds.value.has(pageId)) return null
       return {
         viewId,
         pageId,
@@ -436,6 +447,12 @@ function removeTarget(pageId: string) {
   }
 }
 
+function markTargetClosed(pageId: string) {
+  if (!pageId) return
+  closedPageIds.value = new Set([...closedPageIds.value, pageId])
+  removeTarget(pageId)
+}
+
 function activateTarget(target: BrowserTarget) {
   if (suppressCapsuleClick) return
   upsertTarget(target)
@@ -453,7 +470,7 @@ async function closeTarget(target: BrowserTarget) {
     ), { method: 'DELETE' })
     const result = await response.json().catch(() => ({}))
     if (!response.ok) throw new Error(String(result.detail || `HTTP ${response.status}`))
-    removeTarget(target.pageId)
+    markTargetClosed(target.pageId)
     const nextPageId = String(result.page_id || '').trim()
     if (nextPageId && browserTargets.value.some((item) => item.pageId === nextPageId)) {
       activePageId.value = nextPageId
@@ -574,11 +591,10 @@ onMounted(() => {
 .browser-panel { position: fixed; z-index: 35; width: clamp(360px, 30vw, 460px); min-width: 0; display: flex; flex-direction: column; overflow: visible; transition: width .26s cubic-bezier(.16, 1, .3, 1); }
 .browser-panel.minimized { width: min(340px, calc(100vw - 20px)); }
 .browser-panel.dragging { transition: none; user-select: none; }
-.page-capsule-stack { display: flex; max-height: 176px; flex-direction: column; align-items: flex-end; padding: 8px 8px 2px; overflow-y: auto; scrollbar-width: none; }
+.page-capsule-stack { display: flex; max-height: 176px; flex-direction: column; align-items: flex-end; gap: 5px; padding: 8px 8px 2px; overflow-y: auto; scrollbar-width: none; }
 .page-capsule-stack::-webkit-scrollbar { display: none; }
-.page-capsule { width: min(100%, 360px); min-height: 46px; display: flex; align-items: center; border: 1px solid var(--app-divider); border-radius: 999px; background: color-mix(in srgb, var(--app-surface-elevated) 94%, transparent); box-shadow: 0 8px 24px rgba(0, 0, 0, .10); backdrop-filter: blur(18px); transition: width .2s ease, transform .2s ease, box-shadow .2s ease; }
-.page-capsule + .page-capsule { margin-top: -10px; }
-.page-capsule.active { width: 100%; box-shadow: 0 12px 30px rgba(0, 0, 0, .14); cursor: grab; touch-action: none; user-select: none; }
+.page-capsule { width: min(100%, 360px); min-height: 46px; display: flex; align-items: center; border: 1px solid var(--app-divider); border-radius: 999px; background: color-mix(in srgb, var(--app-surface-elevated) 94%, transparent); backdrop-filter: blur(18px); transition: width .2s ease, transform .2s ease, border-color .2s ease; }
+.page-capsule.active { width: 100%; border-color: var(--app-border-focus); cursor: grab; touch-action: none; user-select: none; }
 .browser-panel.dragging .page-capsule.active { cursor: grabbing; }
 .capsule-select { min-width: 0; flex: 1; display: flex; align-items: center; gap: 9px; padding: 9px 8px 9px 13px; text-align: left; }
 .capsule-copy { min-width: 0; display: grid; gap: 1px; }

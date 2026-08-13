@@ -26,13 +26,15 @@
     <div class="header-right">
       <n-button
         secondary
+        circle
         size="small"
         class="library-trigger"
         data-onboarding="capability-library"
+        :title="t('header.manageRuntimeResources')"
+        :aria-label="t('header.manageRuntimeResources')"
         @click="capabilityLibraryOpen = true"
       >
         <template #icon><n-icon><AppsOutline /></n-icon></template>
-        {{ t('capabilityLibrary.title') }}
       </n-button>
       <n-button
         text
@@ -205,7 +207,7 @@ watchEffect(() => {
 .conversation-title { max-width: 420px; overflow: hidden; color: var(--app-text); font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 button.conversation-title { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border: 0; border-radius: 999px; background: transparent; cursor: pointer; }
 button.conversation-title:hover { background: var(--app-surface-muted); }
-.library-trigger { border-radius: 999px; padding-inline: 13px; }
+.library-trigger { border-radius: 999px; padding: 0; }
 .header-icon-btn { width: 32px; height: 32px; border-radius: 50%; }
 .window-controls { align-self: stretch; display: flex; margin-left: 4px; }
 .window-control { width: 46px; border: 0; background: transparent; color: var(--app-text); cursor: default; }

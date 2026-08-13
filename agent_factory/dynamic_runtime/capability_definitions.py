@@ -12,6 +12,7 @@ from agent_factory.runtime_protocol.contracts import FrozenProtocolModel
 
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 MODEL_ALIAS_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+SKILL_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9-]{1,127}$")
 
 CapabilityPlatform = Literal["any", "macos-arm64", "windows-x86_64", "linux-x86_64"]
 ToolApprovalAction = Literal["inherit", "allow", "ask", "deny"]
@@ -28,6 +29,7 @@ RuntimeResourceName = Literal[
     "knowledge_runtime",
     "scheduler_runtime",
     "skillhub_runtime",
+    "skill_runtime",
 ]
 
 
@@ -59,9 +61,24 @@ class SkillContentRef(FrozenProtocolModel):
 
 
 class SkillDefinition(FrozenProtocolModel):
-    schema_version: Literal["skill_definition.v2"] = "skill_definition.v2"
+    schema_version: Literal["skill_definition.v3"] = "skill_definition.v3"
+    name: str
+    display_name: str
+    description: str
     instructions: SkillContentRef
     contents: tuple[SkillContentRef, ...] = ()
+
+    @field_validator("name", "display_name", "description")
+    @classmethod
+    def _required_catalog_text(cls, value: str, info: object) -> str:
+        return _required_text(value, getattr(info, "field_name", "value"))
+
+    @field_validator("name")
+    @classmethod
+    def _name_is_kebab_case(cls, value: str) -> str:
+        if not SKILL_NAME_PATTERN.fullmatch(value):
+            raise ValueError("skill name must use lowercase kebab-case")
+        return value
 
     @model_validator(mode="after")
     def _content_paths_are_unique(self) -> "SkillDefinition":

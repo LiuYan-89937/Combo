@@ -97,8 +97,8 @@ class TypedCapabilityAdapter(Generic[DefinitionT]):
 class SkillCapabilityAdapter(TypedCapabilityAdapter[SkillDefinition]):
     kind = "skill"
     adapter_id = "dynamic_runtime.skill"
-    adapter_revision = "2"
-    definition_schema = "skill_definition.v2"
+    adapter_revision = "3"
+    definition_schema = "skill_definition.v3"
     definition_model = SkillDefinition
 
     def _project_definition(
@@ -111,6 +111,11 @@ class SkillCapabilityAdapter(TypedCapabilityAdapter[SkillDefinition]):
             revision,
             schema=self.definition_schema,
             definition=skill,
+            prompt_fragments=(
+                f"Skill {skill.name}: {skill.display_name} — {skill.description}. "
+                f"When relevant, call the skill tool with action=load and name={skill.name!r}; "
+                "the Skill body is not present in this prompt.",
+            ),
         )
 
 

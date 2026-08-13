@@ -155,6 +155,7 @@ def make_fixed_runner(
                 updated.observability.events = [*updated.observability.events, *emitted_events]
             updated.execution.turn_count += 1
             apply_node_metrics(updated, perf_counter() - started)
+            _mark_activity(updated)
             _resolve_after_node(
                 state=updated,
                 node_id=node_id,
@@ -241,9 +242,6 @@ def _resolve_after_node(
     success_nodes: frozenset[str],
     next_node: NextNodeResolver,
 ) -> None:
-    if _timed_out(state) and state.execution.route_decision != "model.requests_tool":
-        _finish(state, status="failed", error="Execution timed out.")
-        return
     if state.policy.interrupted or state.execution.interrupted:
         state.execution.interrupted = True
         state.execution.finished = True
@@ -299,12 +297,18 @@ def _timed_out(state: RuntimeState) -> bool:
     if state.execution.timeout_seconds <= 0:
         return False
     try:
-        started_at = datetime.fromisoformat(state.run.started_at)
+        activity_at = datetime.fromisoformat(
+            state.execution.last_activity_at or state.run.started_at
+        )
     except ValueError:
         return False
-    if started_at.tzinfo is None:
-        started_at = started_at.replace(tzinfo=timezone.utc)
-    return (datetime.now(timezone.utc) - started_at).total_seconds() > state.execution.timeout_seconds
+    if activity_at.tzinfo is None:
+        activity_at = activity_at.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - activity_at).total_seconds() > state.execution.timeout_seconds
+
+
+def _mark_activity(state: RuntimeState) -> None:
+    state.execution.last_activity_at = datetime.now(timezone.utc).isoformat()
 
 
 def _must_close_tool_protocol(implementation: NodeImplementation, raw_state: dict[str, Any]) -> bool:

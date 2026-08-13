@@ -197,6 +197,11 @@ class RuntimePolicyWriteRequest(BaseModel):
     request_timeout_seconds: int = Field(ge=1)
     max_model_attempts: int = Field(ge=1)
     max_parallel_temporary_agents: int = Field(ge=1)
+    memory_auto_write_enabled: bool = True
+    memory_write_interval_turns: int = Field(default=3, ge=1, le=1000)
+    memory_agent_write_enabled: bool = True
+    memory_max_injected_items: int = Field(default=8, ge=1, le=64)
+    memory_max_injected_tokens: int = Field(default=1200, ge=100, le=32000)
     max_temporary_delegation_depth: int = Field(ge=0)
     delegation_grant_ttl_seconds: int = Field(ge=1)
     timezone: str
@@ -955,6 +960,11 @@ def create_dynamic_runtime_router(
             request_timeout_seconds=payload.request_timeout_seconds,
             max_model_attempts=payload.max_model_attempts,
             max_parallel_temporary_agents=payload.max_parallel_temporary_agents,
+            memory_auto_write_enabled=payload.memory_auto_write_enabled,
+            memory_write_interval_turns=payload.memory_write_interval_turns,
+            memory_agent_write_enabled=payload.memory_agent_write_enabled,
+            memory_max_injected_items=payload.memory_max_injected_items,
+            memory_max_injected_tokens=payload.memory_max_injected_tokens,
             max_temporary_delegation_depth=payload.max_temporary_delegation_depth,
             delegation_grant_ttl_seconds=payload.delegation_grant_ttl_seconds,
             timezone=payload.timezone,

@@ -253,16 +253,18 @@
       <div class="right-actions">
         <slot name="before-send"></slot>
         <span class="send-control" :class="{ 'has-queued': queuedCount > 0 }">
-          <ControlHint :label="isRunning ? t('chat.queueSend') : t('common.send')">
+          <ControlHint :label="primaryActionLabel">
               <n-button
-                type="primary"
+                :type="primaryAction === 'cancel' ? 'error' : 'primary'"
                 circle
                 class="send-button"
-                :disabled="!canSend"
-                :aria-label="isRunning ? t('chat.queueSend') : t('common.send')"
-                @click="handleSend"
+                :class="{ 'is-cancel': primaryAction === 'cancel' }"
+                :disabled="!canUsePrimaryAction"
+                :aria-label="primaryActionLabel"
+                @click="handlePrimaryAction"
               >
-                <ComboPngIcon name="send" :size="40" :tone="canSend ? 'white' : 'auto'" />
+                <n-icon v-if="primaryAction === 'cancel'" :size="19"><Stop /></n-icon>
+                <ComboPngIcon v-else name="send" :size="40" :tone="canSend ? 'white' : 'auto'" />
               </n-button>
           </ControlHint>
           <span v-if="queuedCount > 0" class="queued-count" aria-hidden="true">
@@ -270,18 +272,6 @@
           </span>
         </span>
 
-        <n-button
-          v-if="isRunning"
-          type="error"
-          class="cancel-button"
-          :aria-label="t('common.cancel')"
-          @click="handleCancel"
-        >
-          {{ t('common.cancel') }}
-          <template #icon>
-            <n-icon><Stop /></n-icon>
-          </template>
-        </n-button>
       </div>
     </div>
 
@@ -410,11 +400,22 @@ const approvalLabel = computed(() => (
 const maxAttachments = MAX_RUNTIME_ATTACHMENTS
 const remainingAttachmentSlots = computed(() => Math.max(0, maxAttachments - attachments.value.length - contextReferences.value.length))
 
-const canSend = computed(() => {
+const hasDraft = computed(() => {
   const hasText = inputText.value.trim().length > 0
   const hasAttachments = props.attachmentsEnabled && attachments.value.length > 0
-  return (hasText || hasAttachments) && !props.disabled
+  return hasText || hasAttachments || contextReferences.value.length > 0
 })
+const canSend = computed(() => hasDraft.value && !props.disabled)
+const primaryAction = computed<'send' | 'cancel'>(() => (
+  props.isRunning && !hasDraft.value ? 'cancel' : 'send'
+))
+const primaryActionLabel = computed(() => {
+  if (primaryAction.value === 'cancel') return t('common.stop')
+  return props.isRunning ? t('chat.queueSend') : t('common.send')
+})
+const canUsePrimaryAction = computed(() => (
+  primaryAction.value === 'cancel' || canSend.value
+))
 
 function handleKeyDown(e: KeyboardEvent) {
   if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return
@@ -455,6 +456,14 @@ function handleSend() {
   inputText.value = ''
   attachments.value = []
   referenceStore.clear(normalizedReferenceScope.value)
+}
+
+function handlePrimaryAction() {
+  if (primaryAction.value === 'cancel') {
+    handleCancel()
+    return
+  }
+  handleSend()
 }
 
 function handleCancel() {
@@ -1073,8 +1082,7 @@ defineExpose({
   justify-content: center;
 }
 
-.send-button,
-.cancel-button {
+.send-button {
   min-width: 0;
   transition: transform var(--app-transition-fast);
 }
@@ -1110,8 +1118,8 @@ defineExpose({
   transform: translate(3px, -2px) scale(.9);
 }
 
-.cancel-button {
-  border-radius: var(--app-radius-md);
+.send-button.is-cancel :deep(.n-icon) {
+  color: var(--app-surface);
 }
 
 .queued-count {
@@ -1133,13 +1141,8 @@ defineExpose({
   opacity: 0.78;
 }
 
-.send-button:not(:disabled):active,
-.cancel-button:not(:disabled):active {
+.send-button:not(:disabled):active {
   transform: scale(0.96);
-}
-
-.cancel-button {
-  animation: app-pop-in 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 @keyframes combo-plan-activate {

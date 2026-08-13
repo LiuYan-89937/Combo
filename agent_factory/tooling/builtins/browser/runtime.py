@@ -20,6 +20,18 @@ BROWSER_RUNTIME_RESOURCE = "browser_runtime"
 LOGGER = logging.getLogger(__name__)
 
 
+def browser_session_key(
+    *,
+    generation: int,
+    principal_id: str,
+    session_id: str,
+    runtime_role: str,
+    task_id: str | None,
+) -> str:
+    owner = task_id if runtime_role == "temporary" and task_id else "main"
+    return f"{generation}:{principal_id}:{session_id}:{runtime_role}:{owner}"
+
+
 @dataclass(frozen=True, slots=True)
 class BrowserRuntimeConfig:
     headless: bool = True
@@ -369,6 +381,19 @@ class BrowserRuntime:
         stream["subscribers"][subscription_id] = callback
         self._view_subscriptions[subscription_id] = key
         session.last_used_at = time.monotonic()
+        callback(
+            {
+                "type": "frame",
+                "data": await page.screenshot(type="jpeg", quality=82),
+                "metadata": {
+                    "deviceWidth": self.config.viewport_width,
+                    "deviceHeight": self.config.viewport_height,
+                },
+                "page_id": page_id,
+                "url": page.url,
+                "title": await page.title(),
+            }
+        )
         return subscription_id
 
     async def _unsubscribe_view(self, subscription_id: str) -> None:

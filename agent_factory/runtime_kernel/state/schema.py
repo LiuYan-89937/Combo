@@ -147,6 +147,7 @@ class ExecutionState(BaseModel):
     max_retries: int = 5
     max_subgraph_depth: int = 4
     timeout_seconds: int = 0
+    last_activity_at: str | None = None
     interrupted: bool = False
     interrupt_payload: dict[str, Any] = Field(default_factory=dict)
     resume_payload: dict[str, Any] = Field(default_factory=dict)

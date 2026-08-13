@@ -15,6 +15,7 @@
       :class="[
         `floating-${item.id}`,
         `side-${position(item.id).side}`,
+        { 'is-hidden': item.id === 'plan' && !runtimeStore.currentPlan },
         { 'is-dragging': draggingId === item.id },
       ]"
       :data-onboarding="item.id === 'sessions' ? 'activity-dock' : undefined"
@@ -79,12 +80,13 @@
       </n-popover>
 
       <BackgroundTaskStack
-        v-else
+        v-else-if="item.id === 'tasks'"
         :ref="setTaskStackRef"
         :session-id="sessionId"
         compact
         :side="position(item.id).side"
       />
+      <PlanCapsule v-else :side="position(item.id).side" />
     </div>
 
   </div>
@@ -97,12 +99,14 @@ import { NIcon, NPopover } from 'naive-ui'
 import { ChatbubblesOutline, FolderOpenOutline, SparklesOutline } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import { useUiStore, type ConversationDockPanel } from '@/stores/ui'
+import { useRuntimeStore } from '@/stores/runtime'
 import SessionsSidebarPanel from '@/components/common/right-sidebar/SessionsSidebarPanel.vue'
 import WorkspaceSidebarPanel from '@/components/common/right-sidebar/WorkspaceSidebarPanel.vue'
 import ConversationMemoryPanel from './ConversationMemoryPanel.vue'
 import BackgroundTaskStack from './BackgroundTaskStack.vue'
+import PlanCapsule from './PlanCapsule.vue'
 
-type FloatingItemId = 'sessions' | 'workspace' | 'memory' | 'tasks'
+type FloatingItemId = 'sessions' | 'workspace' | 'memory' | 'tasks' | 'plan'
 type DockSide = 'left' | 'right'
 interface DockPosition { side: DockSide; y: number }
 interface DragState {
@@ -124,6 +128,7 @@ const emit = defineEmits<{
 }>()
 const { t } = useI18n()
 const uiStore = useUiStore()
+const runtimeStore = useRuntimeStore()
 const layerRef = ref<HTMLElement | null>(null)
 const taskStackRef = ref<TaskStackInstance | null>(null)
 const itemElements = new Map<FloatingItemId, HTMLElement>()
@@ -136,6 +141,7 @@ const floatingItems: Array<{ id: FloatingItemId }> = [
   { id: 'workspace' },
   { id: 'memory' },
   { id: 'tasks' },
+  { id: 'plan' },
 ]
 const draggingId = computed(() => dragging.value?.id || null)
 const previewSide = computed<DockSide>(() => {
@@ -151,6 +157,7 @@ function defaultPositions(): Record<FloatingItemId, DockPosition> {
     workspace: { side: 'left', y: 0.38 },
     memory: { side: 'left', y: 0.47 },
     tasks: { side: 'right', y: 0.7 },
+    plan: { side: 'right', y: 0.52 },
   }
 }
 
@@ -370,6 +377,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .floating-dock-layer { position: absolute; z-index: 20; inset: 0; overflow: hidden; pointer-events: none; }
 .floating-dock-item { position: absolute; z-index: 2; pointer-events: auto; touch-action: none; user-select: none; will-change: transform, top, left; }
+.floating-dock-item.is-hidden { display:none; }
 .floating-dock-item.side-left { left: 12px; right: auto; }
 .floating-dock-item.side-right { right: 12px; left: auto; }
 .floating-dock-item.is-dragging { z-index: 30; filter: drop-shadow(0 18px 28px color-mix(in srgb, var(--app-text) 20%, transparent)); cursor: grabbing; }

@@ -181,6 +181,12 @@ class ModelInvocationOperations:
         text = strip_internal_snapshot_blocks(content_to_text(getattr(response, "content", response))).strip()
         reasoning_content = reasoning_content_from_message(response)
         tool_calls = tool_calls_from_response(response)
+        _emit_model_message_completed(
+            emit_event,
+            stream_id=stream_id,
+            response=response,
+            tool_call_count=len(tool_calls),
+        )
         usage_metadata = getattr(response, "usage_metadata", None) or {}
         _record_provider_token_budget(
             state=state,
@@ -457,9 +463,7 @@ def _invoke_tool_bound_chat(
     messages = system_messages_first(messages)
     stream = getattr(model, "stream", None)
     if not callable(stream):
-        response = model.invoke(messages)
-        _emit_model_message_completed(emit_event, stream_id=stream_id, response=response)
-        return response
+        return model.invoke(messages)
     chunks: list[Any] = []
     reasoning_parts: list[str] = []
     try:
@@ -491,17 +495,12 @@ def _invoke_tool_bound_chat(
     except (AttributeError, NotImplementedError):
         if chunks:
             raise
-        response = model.invoke(messages)
-        _emit_model_message_completed(emit_event, stream_id=stream_id, response=response)
-        return response
+        return model.invoke(messages)
     if not chunks:
-        response = model.invoke(messages)
-        _emit_model_message_completed(emit_event, stream_id=stream_id, response=response)
-        return response
+        return model.invoke(messages)
     response = _merge_stream_chunks(chunks)
     if reasoning_parts and not reasoning_content_from_message(response):
         _attach_reasoning_content(response, "".join(reasoning_parts))
-    _emit_model_message_completed(emit_event, stream_id=stream_id, response=response)
     return response
 
 
@@ -526,7 +525,13 @@ def _attach_reasoning_content(response: Any, reasoning_content: str) -> None:
         return
 
 
-def _emit_model_message_completed(emit_event, *, stream_id: str, response: Any) -> None:
+def _emit_model_message_completed(
+    emit_event,
+    *,
+    stream_id: str,
+    response: Any,
+    tool_call_count: int,
+) -> None:
     content = strip_internal_snapshot_blocks(content_to_text(getattr(response, "content", response))).strip()
     reasoning_content = reasoning_content_from_message(response)
     if reasoning_content:
@@ -548,6 +553,9 @@ def _emit_model_message_completed(emit_event, *, stream_id: str, response: Any) 
             "content": content,
             "content_mode": "snapshot",
             "completion_reason": "model_completed",
+            "tool_call_count": tool_call_count,
+            "presentation": "activity" if tool_call_count else "answer",
+            "discard": bool(tool_call_count),
             **({"reasoning_content": reasoning_content} if reasoning_content else {}),
         },
     )

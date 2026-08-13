@@ -17,8 +17,6 @@ from agent_factory.runtime_protocol import (
     ConversationMessage,
     RuntimeInstance,
 )
-from agent_factory.dynamic_runtime.capability_blob_store import CapabilityBlobStore
-from agent_factory.dynamic_runtime.capability_definitions import SkillDefinition
 from agent_factory.dynamic_runtime.delegation_store import DelegationStore
 
 
@@ -113,40 +111,20 @@ class CapabilityInstructionRenderer(Protocol):
 
 
 class SnapshotCapabilityInstructionRenderer:
-    """Lazy-load selected Skill instructions and render frozen prompt fragments."""
-
-    def __init__(self, blobs: CapabilityBlobStore) -> None:
-        self._blobs = blobs
+    """Render only the frozen short catalog; Skill bodies are tool-loaded."""
 
     def render(self, snapshot: CapabilitySnapshot) -> str:
-        sections: list[str] = []
+        entries: list[str] = []
         for projection in snapshot.projections:
             fragments = [
                 fragment.strip()
                 for fragment in projection.model_prompt_fragments
                 if fragment.strip()
             ]
-            if projection.kind == "skill":
-                if projection.runtime_definition_schema != "skill_definition.v2":
-                    raise RuntimeError("selected Skill projection uses an unsupported definition schema")
-                skill = SkillDefinition.model_validate(projection.runtime_definition)
-                instructions = self._blobs.read_text(skill.instructions).strip()
-                if not instructions:
-                    raise RuntimeError("selected Skill instruction blob is empty")
-                fragments.append(instructions)
-            if not fragments:
-                continue
-            sections.append(
-                "\n\n".join(
-                    (
-                        f"Capability {projection.capability_id}@{projection.revision}",
-                        *fragments,
-                    )
-                )
-            )
-        if not sections:
+            entries.extend(f"- {fragment}" for fragment in fragments)
+        if not entries:
             return ""
-        return "Enabled capability instructions:\n\n" + "\n\n".join(sections)
+        return "Selected capability catalog (bodies are not injected):\n" + "\n".join(entries)
 
 
 class FileSystemPromptProvider:
@@ -215,11 +193,7 @@ class ComposedRuntimeLaunchContextResolver(RuntimeLaunchContextResolver):
             delegation_notifications = render_delegation_notifications(
                 self._delegations.claim_completion_notifications(instance)
             )
-        capability_instructions = (
-            self._capability_instructions.render(capability_snapshot)
-            if request.runtime_role == "temporary"
-            else ""
-        )
+        capability_instructions = self._capability_instructions.render(capability_snapshot)
         system_prompt = _render_system_prompt(
             base=base_prompt,
             clock=clock,

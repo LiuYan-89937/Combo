@@ -41,7 +41,6 @@
                   action="error"
                   :size="132"
                 />
-                <p>{{ startupMessage }}</p>
                 <n-text v-if="startupStore.error" type="error" class="startup-error">
                   {{ startupStore.error }}
                 </n-text>
@@ -92,12 +91,6 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => createThemeOverrides
 const startupTitle = computed(() => (
   startupStore.status === 'failed' ? t('startup.failed') : t('startup.title')
 ))
-const startupMessage = computed(() => {
-  if (startupStore.status === 'succeeded') return t('startup.succeeded')
-  if (startupStore.status === 'failed') return t('startup.failed')
-  return t('startup.initializing')
-})
-
 // 主题变化时同步注入 CSS 变量到 :root，并给 <html> 打上主题标记
 watchEffect(() => {
   applyPaletteToRoot(palette.value)
@@ -126,11 +119,6 @@ watchEffect(() => {
   gap: 16px;
   padding: 12px 0 4px;
   text-align: center;
-}
-
-.startup-dialog-content p {
-  margin: 0;
-  color: var(--app-text-secondary);
 }
 
 .startup-error {

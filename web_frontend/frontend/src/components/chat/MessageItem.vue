@@ -1,9 +1,26 @@
 <template>
   <div
     class="message-item"
-    :class="[`role-${message.role}`, { streaming }]"
+    :class="[`role-${message.role}`, { streaming, thinking }]"
     :data-reference-label="`${roleLabel} · ${formatTime(message.timestamp)}`"
   >
+    <template v-if="thinking">
+      <div
+        class="thinking-content"
+        role="status"
+        aria-live="polite"
+        :aria-label="message.content || t('roles.assistantThinking')"
+      >
+        <ComboFrameAnimation
+          character="lead"
+          action="running"
+          :size="22"
+        />
+        <span class="thinking-label">{{ message.content || t('roles.assistantThinking') }}</span>
+      </div>
+    </template>
+
+    <template v-else>
     <div class="message-avatar">
       <n-avatar :size="36" :style="avatarStyle">
         {{ avatarText }}
@@ -38,49 +55,26 @@
       </div>
 
       <div class="message-body">
-        <div
-          v-if="thinking"
-          class="thinking-content"
-          role="status"
-          aria-live="polite"
-          :aria-label="message.content || t('roles.assistantThinking')"
-        >
-          <ComboFrameAnimation
-            character="lead"
-            action="running"
-            :size="38"
-          />
-          <span class="thinking-label">{{ message.content || t('roles.assistantThinking') }}</span>
-          <ComboFrameAnimation
-            character="companion"
-            action="running"
-            :size="28"
-            :phase-offset="2"
-          />
-        </div>
-        <template v-else>
-          <MessagePartRenderer
-            v-for="part in visibleParts"
-            :key="part.id"
-            :part="part"
-            :streaming="streaming"
-            :highlight-mentions="isGroupUserMessage"
-            :mention-names="mentionNames"
-            :workspace-context="workspaceContext"
-          />
-        </template>
+        <MessagePartRenderer
+          v-for="part in visibleParts"
+          :key="part.id"
+          :part="part"
+          :streaming="streaming"
+          :highlight-mentions="isGroupUserMessage"
+          :mention-names="mentionNames"
+          :workspace-context="workspaceContext"
+        />
 
-        <span
+        <ComboFrameAnimation
           v-if="streaming && !thinking"
-          class="streaming-ink-dots"
-          aria-hidden="true"
-        >
-          <span></span>
-          <span></span>
-          <span></span>
-        </span>
+          class="streaming-running-note"
+          character="lead"
+          action="running"
+          :size="25"
+        />
       </div>
     </div>
+    </template>
 
   </div>
 </template>
@@ -260,6 +254,25 @@ function stableColorIndex(value: string, size: number): number {
   animation: app-pulse-soft 2.4s ease-in-out infinite;
 }
 
+.message-item.thinking {
+  width: fit-content;
+  max-width: 100%;
+  padding: 2px var(--app-space-md);
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.message-item.thinking::before {
+  display: none;
+}
+
+.message-item.thinking:hover {
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+}
+
 .message-item.role-user {
   background-color: transparent;
 }
@@ -306,58 +319,32 @@ function stableColorIndex(value: string, size: number): number {
   line-height: var(--app-leading-relaxed);
 }
 
-.streaming-ink-dots {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 18px;
-  margin-left: 6px;
+.streaming-running-note {
+  display: inline-grid;
+  margin-left: 5px;
   vertical-align: text-bottom;
-}
-
-.streaming-ink-dots > span {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--app-text);
-  opacity: 0.34;
-  transform: scale(0.78);
-  animation: streaming-ink-breathe 1.2s ease-in-out infinite;
-}
-
-.streaming-ink-dots > span:nth-child(2) { animation-delay: 0.16s; }
-.streaming-ink-dots > span:nth-child(3) { animation-delay: 0.32s; }
-
-@keyframes streaming-ink-breathe {
-  0%, 65%, 100% { opacity: 0.34; transform: scale(0.78); }
-  32% { opacity: 0.9; transform: scale(1.16); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .streaming-ink-dots > span {
-    animation: none;
-    opacity: 0.58;
-    transform: none;
-  }
 }
 
 .thinking-content {
   width: fit-content;
-  min-height: 46px;
+  min-height: 24px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  padding: 3px 12px 3px 6px;
-  border: 1px solid var(--app-border);
-  border-radius: 999px;
-  background: var(--app-surface-muted);
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
 .thinking-label {
-  color: var(--app-text-secondary);
-  font-size: 13px;
-  line-height: 20px;
+  overflow: hidden;
+  max-width: min(72vw, 720px);
+  color: var(--app-text-tertiary);
+  font-size: 12px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 </style>

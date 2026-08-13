@@ -16,6 +16,7 @@ from agent_factory.dynamic_runtime.mcp_runtime import MCPRuntimePool
 from agent_factory.dynamic_runtime.capability_catalog_runtime import CapabilityCatalogRuntime
 from agent_factory.dynamic_runtime.control_plane_store import GlobalKnowledgeStore, WorkspaceSchedulerStore
 from agent_factory.dynamic_runtime.memory_store import ScopedMemoryStore
+from agent_factory.dynamic_runtime.skill_runtime import SnapshotSkillRuntime
 from agent_factory.dynamic_runtime.delegation_store import DelegationStore
 from agent_factory.dynamic_runtime.delegation_runtime import DelegationRuntimeCoordinator
 from agent_factory.dynamic_runtime.runtime_identity import runtime_execution_identity
@@ -389,6 +390,8 @@ def runtime_resource_factory(
     knowledge_store: GlobalKnowledgeStore,
     scheduler_store: WorkspaceSchedulerStore,
     skillhub_runtime: SkillHubService,
+    capability_blobs: CapabilityBlobStore,
+    runtime_instances,
     process_resources: RuntimeProcessResourcePool,
     filesystem_resources: RuntimeFilesystemResourcePool,
 ) -> RuntimeResourceFactory:
@@ -403,19 +406,15 @@ def runtime_resource_factory(
         "knowledge_runtime",
         "scheduler_runtime",
         "skillhub_runtime",
+        "skill_runtime",
     }:
         raise ValueError(f"unsupported runtime resource: {resource_name}")
 
     def project(instance: RuntimeInstance) -> ProjectedRuntimeResource:
         if resource_name == "browser_runtime":
-            session_key = _browser_session_key(instance)
             return ProjectedRuntimeResource(
                 value=browser_runtime,
-                release_callback=lambda: browser_runtime.close(
-                    session_key=session_key,
-                    page_id=None,
-                    close_context=True,
-                ),
+                release_callback=release_borrowed_runtime_resource,
             )
         if resource_name == "capability_catalog":
             return ProjectedRuntimeResource(value=capability_catalog)
@@ -425,6 +424,13 @@ def runtime_resource_factory(
             return ProjectedRuntimeResource(value=runtime_execution_identity(instance))
         if resource_name == "delegation_runtime":
             return ProjectedRuntimeResource(value=delegation_runtime.for_parent(instance))
+        if resource_name == "skill_runtime":
+            return ProjectedRuntimeResource(
+                value=SnapshotSkillRuntime(
+                    snapshot=runtime_instances.capability_snapshot(instance.capability_snapshot_id),
+                    blobs=capability_blobs,
+                )
+            )
         if resource_name in {"knowledge_runtime", "scheduler_runtime", "skillhub_runtime"}:
             if instance.request.runtime_role != "main":
                 raise PermissionError(f"{resource_name} is available only to the main runtime")
@@ -464,13 +470,6 @@ def runtime_resource_factory(
         return filesystem_resources.acquire(instance, root=Path(workspace.managed_path))
 
     return project
-
-
-def _browser_session_key(instance: RuntimeInstance) -> str:
-    if instance.attempt_id is None:
-        raise RuntimeError("browser runtime requires a claimed attempt")
-    return f"{instance.generation}:{instance.runtime_instance_id}:{instance.attempt_id}"
-
 
 def _delegated_write_paths(*, root: Path, values: tuple[str, ...]) -> tuple[Path, ...]:
     workspace_root = root.expanduser().resolve()

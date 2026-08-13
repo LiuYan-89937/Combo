@@ -9,7 +9,7 @@ import sqlite3
 from agent_factory.sqlite_runtime import DEFAULT_SQLITE_BUSY_TIMEOUT_MS, connect_sqlite
 
 
-DYNAMIC_RUNTIME_DATABASE_SCHEMA = "dynamic_runtime_database.v18"
+DYNAMIC_RUNTIME_DATABASE_SCHEMA = "dynamic_runtime_database.v20"
 DYNAMIC_RUNTIME_SCHEMA_EPOCH = 2
 
 
@@ -1050,6 +1050,111 @@ def _default_migrations() -> tuple[MigrationStep, ...]:
                 """,
             ),
         ),
+        MigrationStep(
+            version=19,
+            name="detachable_memory_provenance",
+            statements=(
+                """
+                create table memory_revisions_v19 (
+                  memory_id text not null,
+                  revision integer not null check (revision >= 1),
+                  principal_id text not null references principals(principal_id),
+                  scope text not null check (scope in ('user','workspace')),
+                  workspace_id text references workspaces(workspace_id),
+                  kind text not null check (kind in ('constraint','preference','decision','fact','artifact')),
+                  status text not null check (status in ('active','deleted')),
+                  content_digest text not null,
+                  payload_json text not null,
+                  source_session_id text references conversations(session_id),
+                  source_turn_id text references conversation_turns(turn_id),
+                  created_by_runtime_instance_id text references runtime_instances(runtime_instance_id),
+                  created_at text not null,
+                  primary key(memory_id, revision),
+                  check ((scope = 'user' and workspace_id is null)
+                    or (scope = 'workspace' and workspace_id is not null))
+                )
+                """,
+                """
+                insert into memory_revisions_v19
+                select * from memory_revisions
+                """,
+                """
+                create table memory_heads_v19 (
+                  memory_id text primary key,
+                  revision integer not null check (revision >= 1),
+                  principal_id text not null references principals(principal_id),
+                  scope text not null check (scope in ('user','workspace')),
+                  workspace_id text references workspaces(workspace_id),
+                  status text not null check (status in ('active','deleted')),
+                  content_digest text not null,
+                  updated_at text not null,
+                  foreign key(memory_id, revision) references memory_revisions_v19(memory_id, revision),
+                  check ((scope = 'user' and workspace_id is null)
+                    or (scope = 'workspace' and workspace_id is not null))
+                )
+                """,
+                "insert into memory_heads_v19 select * from memory_heads",
+                "drop table memory_heads",
+                "drop table memory_revisions",
+                "alter table memory_revisions_v19 rename to memory_revisions",
+                "alter table memory_heads_v19 rename to memory_heads",
+                "create index idx_memory_revisions_owner on memory_revisions(principal_id, scope, workspace_id, created_at)",
+                "create index idx_memory_revisions_digest on memory_revisions(principal_id, scope, workspace_id, content_digest)",
+                "create index idx_memory_heads_owner on memory_heads(principal_id, scope, workspace_id, status, updated_at)",
+            ),
+        ),
+        MigrationStep(
+            version=20,
+            name="hybrid_memory_search",
+            statements=(
+                """
+                create table memory_search_generations (
+                  generation_id text primary key,
+                  dataset_digest text not null,
+                  search_mode text not null check (search_mode in ('lexical', 'hybrid')),
+                  embedding_fingerprint text,
+                  embedding_profile_id text,
+                  embedding_dimensions integer check (embedding_dimensions is null or embedding_dimensions >= 1),
+                  status text not null check (status in ('building', 'active', 'retired', 'failed')),
+                  diagnostic text,
+                  created_at text not null,
+                  activated_at text,
+                  unique(dataset_digest, search_mode, embedding_fingerprint)
+                )
+                """,
+                "create index idx_memory_search_generation_status on memory_search_generations(status, created_at)",
+                """
+                create table memory_search_documents (
+                  generation_id text not null references memory_search_generations(generation_id) on delete cascade,
+                  memory_id text not null,
+                  memory_revision integer not null,
+                  principal_id text not null,
+                  scope text not null,
+                  workspace_id text,
+                  content_digest text not null,
+                  searchable_text text not null,
+                  embedding_json text,
+                  primary key(generation_id, memory_id)
+                )
+                """,
+                "create index idx_memory_search_document_owner on memory_search_documents(principal_id, workspace_id, generation_id)",
+                """
+                create table memory_search_active_generation (
+                  singleton integer primary key check (singleton = 1),
+                  generation_id text not null references memory_search_generations(generation_id),
+                  changed_at text not null
+                )
+                """,
+                """
+                create virtual table memory_search_fts using fts5(
+                  generation_id unindexed,
+                  memory_id unindexed,
+                  searchable_text,
+                  tokenize='unicode61 remove_diacritics 2'
+                )
+                """,
+            ),
+        ),
     )
 
 
@@ -1122,6 +1227,17 @@ def _schema_allowlist() -> set[tuple[str, str]]:
         ("index", "idx_memory_revisions_digest"),
         ("table", "memory_heads"),
         ("index", "idx_memory_heads_owner"),
+        ("table", "memory_search_generations"),
+        ("index", "idx_memory_search_generation_status"),
+        ("table", "memory_search_documents"),
+        ("index", "idx_memory_search_document_owner"),
+        ("table", "memory_search_active_generation"),
+        ("table", "memory_search_fts"),
+        ("table", "memory_search_fts_data"),
+        ("table", "memory_search_fts_idx"),
+        ("table", "memory_search_fts_content"),
+        ("table", "memory_search_fts_docsize"),
+        ("table", "memory_search_fts_config"),
         ("table", "delegation_grants"),
         ("index", "idx_delegation_grants_parent"),
         ("index", "idx_delegation_grants_principal"),

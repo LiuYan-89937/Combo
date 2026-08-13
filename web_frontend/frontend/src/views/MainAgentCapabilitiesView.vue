@@ -14,9 +14,6 @@
       </div>
     </header>
 
-    <n-alert v-if="restartRequired" type="warning" class="profile-alert" :show-icon="true">
-      {{ t('mainAgentProfile.restartRequired') }}
-    </n-alert>
     <n-alert v-if="errorText" type="error" closable class="profile-alert" @close="errorText = ''">
       {{ errorText }}
     </n-alert>
@@ -29,9 +26,8 @@
 
     <section class="profile-summary">
       <div><strong>{{ selectedCount }}</strong><span>{{ t('mainAgentProfile.selected') }}</span></div>
-      <div><strong>{{ activeCount }}</strong><span>{{ t('mainAgentProfile.active') }}</span></div>
       <div><strong>{{ poolItems.length }}</strong><span>{{ t('mainAgentProfile.available') }}</span></div>
-      <p>{{ t('mainAgentProfile.mcpHint') }}</p>
+      <p>{{ t('mainAgentProfile.nextTurnHint') }}</p>
     </section>
 
     <section class="profile-surface">
@@ -64,7 +60,6 @@
             <div class="capability-title">
               <strong>{{ item.display_name }}</strong>
               <span>{{ kindLabel(item.kind) }}</span>
-              <small v-if="activeIds.has(item.capability_id)">{{ t('mainAgentProfile.active') }}</small>
             </div>
             <p>{{ item.description || t('mainAgentProfile.noDescription') }}</p>
             <div class="capability-meta">
@@ -125,10 +120,7 @@ const poolItems = ref<CapabilityPoolItem[]>([])
 const allPoolItems = ref<CapabilityPoolItem[]>([])
 const selectedIds = ref(new Set<string>())
 
-const activeIds = computed(() => new Set(profile.value?.active_capability_ids || []))
 const selectedCount = computed(() => selectedIds.value.size)
-const activeCount = computed(() => activeIds.value.size)
-const restartRequired = computed(() => profile.value?.restart_required || false)
 const dirty = computed(() => {
   const saved = new Set(profile.value?.capability_ids || [])
   return saved.size !== selectedIds.value.size
@@ -240,7 +232,7 @@ function mcpToolCount(serverCapabilityId: string): number {
 .header-actions { display: flex; flex: 0 0 auto; gap: 9px; }
 .profile-alert { margin-bottom: 16px; border-radius: 14px; }
 .missing-capability-alert { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.profile-summary { display: grid; grid-template-columns: repeat(3, 110px) minmax(280px, 1fr); align-items: center; gap: 10px; margin-bottom: 18px; padding: 16px; border: 1px solid var(--app-border); border-radius: 18px; background: var(--app-surface-muted); }
+.profile-summary { display: grid; grid-template-columns: repeat(2, 110px) minmax(280px, 1fr); align-items: center; gap: 10px; margin-bottom: 18px; padding: 16px; border: 1px solid var(--app-border); border-radius: 18px; background: var(--app-surface-muted); }
 .profile-summary div { display: grid; gap: 2px; }
 .profile-summary strong { font-size: 22px; }
 .profile-summary span, .profile-summary p { color: var(--app-text-muted); font-size: 11px; }

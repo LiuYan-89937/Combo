@@ -51,6 +51,7 @@ from agent_factory.dynamic_runtime.lifecycle_repositories import (
 )
 from agent_factory.dynamic_runtime.model_service import RuntimeModelResolver
 from agent_factory.dynamic_runtime.memory_store import ScopedMemoryStore
+from agent_factory.dynamic_runtime.memory_search import HybridMemorySearchIndex
 from agent_factory.dynamic_runtime.main_turn import (
     ExecutionRouter,
     MainTurnCommandHandler,
@@ -89,7 +90,6 @@ class DynamicRuntimeApplicationConfig:
     build_revision: str
     generation_lease_seconds: int
     capability_resolution: CapabilityResolutionConfig
-    main_agent_capability_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         path = Path(self.database_path).expanduser().resolve()
@@ -100,11 +100,6 @@ class DynamicRuntimeApplicationConfig:
             raise ValueError("generation_lease_seconds must be positive")
         object.__setattr__(self, "database_path", path)
         object.__setattr__(self, "build_revision", revision)
-        object.__setattr__(
-            self,
-            "main_agent_capability_ids",
-            tuple(dict.fromkeys(str(value).strip() for value in self.main_agent_capability_ids if str(value).strip())),
-        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,6 +168,7 @@ class DynamicRuntimeApplication:
         model_pool_store: ModelPoolStore,
         launch_context_resolver: RuntimeLaunchContextResolver | Callable[[DynamicRuntimeStores], RuntimeLaunchContextResolver],
         capability_bootstrap: Callable[[DynamicRuntimeStores, CapabilityAdapterRegistry], None],
+        main_agent_capability_ids: Callable[[], tuple[str, ...]],
         observation_sink: RuntimeObservationSink | None = None,
         migration_registry: DynamicRuntimeMigrationRegistry | None = None,
     ) -> "DynamicRuntimeApplication":
@@ -180,14 +176,19 @@ class DynamicRuntimeApplication:
         migrations = migration_registry or DynamicRuntimeMigrationRegistry()
         migrations.migrate(database)
         migrations.verify(database)
-        stores = _stores(database)
+        embedding_runtime = _embedding_runtime_resolver(model_pool_store)
+        memory_search = HybridMemorySearchIndex(
+            database=database,
+            embedding_runtime=embedding_runtime,
+        )
+        stores = _stores(database, memory_search=memory_search)
         generation = _starting_generation(config, stores.generations.next_generation_number())
         stores.generations.acquire(generation)
         try:
             capability_search = HybridCapabilitySearchIndex(
                 database=database,
                 config=config.capability_resolution.search,
-                embedding_runtime=_embedding_runtime_resolver(model_pool_store),
+                embedding_runtime=embedding_runtime,
             )
             configured_services = services_factory(stores, capability_search) if callable(services_factory) else services_factory
             service_set = configured_services.build()
@@ -214,7 +215,7 @@ class DynamicRuntimeApplication:
                     stores.capability_resolution_receipts,
                 ),
                 adapters=adapters,
-                main_agent_capability_ids=config.main_agent_capability_ids,
+                main_agent_capability_ids=main_agent_capability_ids,
             )
             runtime_service = DynamicRuntimeService(
                 service_set=service_set,
@@ -244,6 +245,7 @@ class DynamicRuntimeApplication:
         except Exception:
             if "capability_search" in locals():
                 capability_search.close()
+            memory_search.close()
             crashed_at = _utc_now_text()
             crashed = generation.model_copy(
                 update={
@@ -335,6 +337,7 @@ class DynamicRuntimeApplication:
         current = self.generation
         if current.status in {"closed", "crashed"}:
             self.capability_search.close()
+            self.stores.memories.close()
             return
         now = _utc_now_text()
         if current.status == "active":
@@ -351,9 +354,14 @@ class DynamicRuntimeApplication:
         self.stores.generations.replace(closed, expected_status=current.status)
         self.generation = closed
         self.capability_search.close()
+        self.stores.memories.close()
 
 
-def _stores(database: DynamicRuntimeDatabase) -> DynamicRuntimeStores:
+def _stores(
+    database: DynamicRuntimeDatabase,
+    *,
+    memory_search: HybridMemorySearchIndex,
+) -> DynamicRuntimeStores:
     return DynamicRuntimeStores(
         capabilities=CapabilityStore(database),
         capability_approval_grants=CapabilityApprovalGrantStore(database),
@@ -364,7 +372,7 @@ def _stores(database: DynamicRuntimeDatabase) -> DynamicRuntimeStores:
         runtime_events=RuntimeEventStore(database),
         tool_calls=ToolCallStore(database),
         model_usage=ModelUsageStore(database),
-        memories=ScopedMemoryStore(database),
+        memories=ScopedMemoryStore(database, search_index=memory_search),
         delegations=DelegationStore(database),
         outbox=OutboxStore(database),
         execution_commits=RuntimeExecutionCommitStore(database),

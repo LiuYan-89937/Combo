@@ -154,6 +154,13 @@ def _emit_plan_activity(
         current_state.plan.model_dump(mode="json") == previous_state.plan.model_dump(mode="json")
     ):
         return
+    context.emit_event(
+        {
+            "event_type": "plan_updated",
+            **current_state.plan.model_dump(mode="json"),
+            "source_node_id": context.node_id,
+        }
+    )
     current_step = next(
         (
             step

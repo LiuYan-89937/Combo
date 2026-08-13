@@ -8,6 +8,7 @@ import { conversationVisibleParts } from '@/utils/toolPresentation'
 
 export type FactoryTimelineItem =
   | { kind: 'message'; id: string; timestamp: string; order: number; message: TranscriptItem; thinking: boolean }
+  | { kind: 'tool_trace'; id: string; timestamp: string; order: number; messages: TranscriptItem[] }
 
 export function useFactoryMessageProjection() {
   const runtimeStore = useRuntimeStore()
@@ -26,10 +27,27 @@ export function useFactoryMessageProjection() {
   const timelineItems = computed<FactoryTimelineItem[]>(() => {
     const items: FactoryTimelineItem[] = []
     const projectedAssistantRequests = new Set<string>()
+    let pendingToolTrace: Extract<FactoryTimelineItem, { kind: 'tool_trace' }> | null = null
     runtimeStore.transcript.forEach((message, index) => {
       if (message.metadata?.dispatch_state === 'queued') return
       if (conversationVisibleParts(message.parts).length === 0) return
       const requestId = String(message.metadata?.request_id || '').trim()
+      if (isToolTraceMessage(message)) {
+        if (pendingToolTrace) {
+          pendingToolTrace.messages.push(message)
+        } else {
+          pendingToolTrace = {
+            kind: 'tool_trace',
+            id: `tool-trace-${message.id}`,
+            timestamp: message.timestamp,
+            order: index,
+            messages: [message],
+          }
+          items.push(pendingToolTrace)
+        }
+        return
+      }
+      pendingToolTrace = null
       const isPrimaryAssistant = Boolean(
         requestId
         && message.role === 'assistant'
@@ -65,7 +83,12 @@ export function useFactoryMessageProjection() {
     if (!activeTurn?.userMessage) return []
     if (!requestOwnsActivePresentation(activeTurn.requestId)) return []
     if (activeTurn.assistantMessages.some(messageHasDisplayParts)) return []
-    const displayStatus = activeRuntimeDisplayStatus(runtimeStore.runtimeActivity, runtimeStore.contextActivity, t)
+    const displayStatus = activeRuntimeDisplayStatus(
+      runtimeStore.runtimeActivity,
+      runtimeStore.contextActivity,
+      activeStreams.value,
+      t,
+    )
     const statusText = displayStatus.text
     return [
       {
@@ -142,6 +165,7 @@ export function useFactoryMessageProjection() {
 function activeRuntimeDisplayStatus(
   runtimeActivity: ReturnType<typeof useRuntimeStore>['runtimeActivity'],
   contextActivity: ReturnType<typeof useRuntimeStore>['contextActivity'],
+  activeStreams: ReturnType<typeof useRuntimeStore>['visibleModelStreams'],
   t: ReturnType<typeof useI18n>['t'],
 ): { text: string; role: 'assistant' | 'system' } {
   if (
@@ -154,6 +178,13 @@ function activeRuntimeDisplayStatus(
   if (runtimeActivity.status === 'active' && activitySummary) {
     return { text: activitySummary, role: 'assistant' }
   }
+  const provisionalModelText = [...activeStreams]
+    .reverse()
+    .map(stream => String(stream.content || '').replace(/\s+/g, ' ').trim())
+    .find(Boolean)
+  if (provisionalModelText) {
+    return { text: provisionalModelText, role: 'assistant' }
+  }
   return { text: t('roles.assistantThinking'), role: 'assistant' }
 }
 
@@ -163,6 +194,13 @@ function assistantProjectionId(requestId: string): string {
 
 function messageHasDisplayParts(message: TranscriptItem): boolean {
   return conversationVisibleParts(message.parts).some(partHasDisplayContent)
+}
+
+function isToolTraceMessage(message: TranscriptItem): boolean {
+  const parts = conversationVisibleParts(message.parts)
+  return message.role === 'assistant'
+    && parts.length > 0
+    && parts.every(part => part.type === 'tool_execution')
 }
 
 function messagePartsKey(message: TranscriptItem): string {

@@ -123,12 +123,10 @@ export function useShowcaseDirector(options: ShowcaseDirectorOptions) {
     await wait(1000)
     appendMessage(message('assistant', [
       textPart('我已拆分任务：调研员核对实时资料，行程编排师处理路线与节奏，文档交付员负责最终手册。'),
-      toolPart('agent_team', 'running', {
-        tasks: [
-          { assignee_package_id: 'destination_researcher', task_text: '核对实时资料' },
-          { assignee_package_id: 'itinerary_designer', task_text: '编排行程路线' },
-          { assignee_package_id: 'document_assistant', task_text: '生成最终手册' },
-        ],
+      toolPart('delegate', 'running', {
+        agent_name: '旅行资料调研员',
+        objective: '并行核对东京亲子旅行的实时资料与开放时间。',
+        capabilities: [],
       }, null),
     ], { display_name: '主 Agent' }))
     runtimeStore.runStatus = 'waiting_for_workers'

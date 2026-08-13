@@ -8,6 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 from agent_factory.dynamic_runtime.capability_resolver import MainTurnCapabilityResolver
+from agent_factory.dynamic_runtime.delegation_policy import MAIN_RUNTIME_ONLY_CAPABILITY_IDS
 from agent_factory.dynamic_runtime.delegation_store import DelegationStore
 from agent_factory.dynamic_runtime.model_service import ResolvedRuntimePolicy, RuntimeModelResolver
 from agent_factory.runtime_protocol import (
@@ -18,9 +19,6 @@ from agent_factory.runtime_protocol import (
     RuntimeRequest,
     TaskEnvelope,
 )
-from agent_factory.tooling.builtins.delegation.specs import DELEGATION_CAPABILITY_IDS
-
-
 logger = logging.getLogger(__name__)
 
 
@@ -122,8 +120,8 @@ class BoundDelegationRuntime:
                 requirements=request.capability_names,
                 policy=resolved_policy,
                 workspace_id=parent.request.workspace_id,
-                include_system_capabilities=False,
-                excluded_capability_ids=DELEGATION_CAPABILITY_IDS,
+                include_system_capabilities=True,
+                excluded_capability_ids=MAIN_RUNTIME_ONLY_CAPABILITY_IDS,
             )
         except Exception as exc:
             logger.exception(
@@ -134,7 +132,7 @@ class BoundDelegationRuntime:
             raise RuntimeError(
                 "Child capability assembly failed for the selected public names. Search the capability "
                 "catalog again and retry with exact returned names. Do not provide IDs, revisions, digests, "
-                "evidence, or an empty capability list."
+                "or evidence. If no optional capability is required, retry with an empty capability list."
             ) from exc
         route = RouteDecision(
             strategy=request.strategy,
@@ -267,8 +265,9 @@ def _child_system_prompt(system_prompt: str) -> str:
         "Use only the tools presented "
         "to the current graph node; tool availability can differ between planning, execution, and finalization. "
         "Before a tool call, put one concise user-facing sentence in the assistant content describing what you "
-        "are doing now. Keep it factual, action-oriented, and free of private reasoning; this sentence is used "
-        "as the live task activity summary."
+        "are about to do. Keep it factual, action-oriented, and free of private reasoning. Use prospective or "
+        "in-progress wording and never claim completion before the authoritative tool result; this sentence is "
+        "used as the live task activity summary."
     )
 
 

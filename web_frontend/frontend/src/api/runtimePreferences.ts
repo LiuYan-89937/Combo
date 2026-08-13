@@ -10,6 +10,11 @@ export interface RuntimePreferences {
   request_timeout_seconds: number
   max_retries: number
   max_parallel_sub_agents: number
+  memory_auto_write_enabled: boolean
+  memory_write_interval_turns: number
+  memory_agent_write_enabled: boolean
+  memory_max_injected_items: number
+  memory_max_injected_tokens: number
   updated_at: string | null
 }
 
@@ -22,6 +27,11 @@ export type RuntimePreferencesPatch = Partial<Pick<
   | 'request_timeout_seconds'
   | 'max_retries'
   | 'max_parallel_sub_agents'
+  | 'memory_auto_write_enabled'
+  | 'memory_write_interval_turns'
+  | 'memory_agent_write_enabled'
+  | 'memory_max_injected_items'
+  | 'memory_max_injected_tokens'
 >>
 
 export const runtimePreferencesApi = {
