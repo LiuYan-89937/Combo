@@ -3,6 +3,10 @@
     :show="show"
     preset="card"
     class="new-agent-session-modal"
+    :class="{
+      'git-import-mode': gitImportStep,
+      'editor-modal-shell': gitImportStep,
+    }"
     :closable="false"
     :mask-closable="false"
     :close-on-esc="false"
@@ -371,6 +375,15 @@ function showError(error: unknown) {
   width: min(820px, calc(100vw - 32px));
 }
 
+:global(.new-agent-session-modal.git-import-mode) {
+  --editor-modal-width: 1120px;
+  height: min(780px, calc(100vh - 48px));
+}
+
+:global(.new-agent-session-modal.git-import-mode > .n-card__footer) {
+  display: none;
+}
+
 .new-session-options {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -436,6 +449,12 @@ button.new-session-option:hover {
 }
 
 @media (max-width: 680px) {
+  :global(.new-agent-session-modal.git-import-mode) {
+    width: calc(100vw - 24px);
+    height: calc(100vh - 24px);
+    max-height: calc(100vh - 24px);
+  }
+
   .new-session-options {
     grid-template-columns: 1fr;
   }
