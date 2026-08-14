@@ -1,6 +1,6 @@
 <template>
   <section class="task-popover">
-    <button class="task-popover-close" type="button" :aria-label="t('common.close')" @click="emit('close')">×</button>
+    <button class="task-popover-close" type="button" :aria-label="t('backgroundTask.closeCapsule')" @click="emit('dismiss')">×</button>
     <div class="task-detail">
       <BackgroundTaskCard
         :task="task"
@@ -27,7 +27,7 @@ defineProps<{
   controller?: BackgroundTaskController
 }>()
 const emit = defineEmits<{
-  close: []
+  dismiss: []
   updated: [task: BackgroundTask]
   deleted: [taskId: string]
 }>()

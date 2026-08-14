@@ -17,7 +17,7 @@
           <span class="trace-chevron" aria-hidden="true">⌄</span>
         </summary>
         <ToolExecutionChain
-          :executions="executions"
+          :executions="props.executions"
           :workspace-context="workspaceContext"
         />
       </details>
@@ -30,34 +30,30 @@ import { computed } from 'vue'
 import ToolExecutionChain from '@/components/chat/ToolExecutionChain.vue'
 import ComboFrameAnimation from '@/components/brand/ComboFrameAnimation.vue'
 import { useI18n } from '@/composables/useI18n'
-import type { TranscriptItem, ToolExecutionMessagePart } from '@/types/protocol'
+import type { ToolExecutionMessagePart } from '@/types/protocol'
 import type { WorkspaceRequestContext } from '@/api/resourceTypes'
-import { conversationVisibleParts } from '@/utils/toolPresentation'
 
 const props = withDefaults(defineProps<{
-  messages: TranscriptItem[]
+  executions: ToolExecutionMessagePart[]
+  timestamp?: string
   workspaceContext?: WorkspaceRequestContext | null
   embedded?: boolean
 }>(), {
+  timestamp: '',
   workspaceContext: null,
   embedded: false,
 })
 
 const { locale, t } = useI18n()
-const executions = computed<ToolExecutionMessagePart[]>(() => props.messages.flatMap(message => (
-  conversationVisibleParts(message.parts).filter(
-    (part): part is ToolExecutionMessagePart => part.type === 'tool_execution',
-  )
-)))
 const groupState = computed(() => {
-  if (executions.value.some(item => item.status === 'awaiting_approval')) return 'approval'
-  if (executions.value.some(item => item.error || item.status === 'failed')) return 'failed'
-  if (executions.value.some(item => item.status === 'cancelled' || item.status === 'stopped')) return 'cancelled'
-  if (executions.value.some(item => ['requested', 'running', 'streaming'].includes(String(item.status || '')))) return 'running'
+  if (props.executions.some(item => item.status === 'awaiting_approval')) return 'approval'
+  if (props.executions.some(item => item.error || item.status === 'failed')) return 'failed'
+  if (props.executions.some(item => item.status === 'cancelled' || item.status === 'stopped')) return 'cancelled'
+  if (props.executions.some(item => ['requested', 'running', 'streaming'].includes(String(item.status || '')))) return 'running'
   return 'completed'
 })
 const traceTitle = computed(() => t(`tool.trace.${groupState.value}` as any))
-const formattedTime = computed(() => new Date(props.messages[0]?.timestamp || Date.now()).toLocaleTimeString(locale.value, {
+const formattedTime = computed(() => new Date(props.timestamp || Date.now()).toLocaleTimeString(locale.value, {
   hour: '2-digit',
   minute: '2-digit',
 }))

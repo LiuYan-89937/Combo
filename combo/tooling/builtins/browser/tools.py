@@ -158,7 +158,6 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
 def _session_key(resources: dict[str, Any]) -> str:
     identity = _runtime_identity(resources)
     return browser_session_key(
-        generation=identity.generation,
         principal_id=identity.principal_id,
         session_id=identity.session_id,
         runtime_role=identity.runtime_role,

@@ -440,7 +440,7 @@ class ModelPoolStore:
         return self.role_binding("task")
 
     def image_generation_binding(self) -> str | None:
-        """Return the image model exposed to the main Agent through generate_image."""
+        """Return the image model exposed to runtimes through generate_image."""
 
         return self.role_binding("image_generation")
 

@@ -62,7 +62,7 @@
               :task="task"
               :title="taskAgentName(task)"
               :subtitle="taskModelName(task)"
-              @close="expandedTaskId = null"
+              @dismiss="removeTask(task.task_id)"
               @updated="reconcileOne"
               @deleted="removeTask"
             />

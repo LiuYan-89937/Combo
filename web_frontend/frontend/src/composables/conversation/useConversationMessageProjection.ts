@@ -1,7 +1,7 @@
 import { computed } from 'vue'
 import { useI18n } from '@/composables/useI18n'
 import { useRuntimeStore } from '@/stores/runtime'
-import type { ChatMessagePart, ToolActivity, TranscriptItem } from '@/types/protocol'
+import type { ToolActivity, TranscriptItem } from '@/types/protocol'
 import { isToolActivityActive, isToolActivityPendingApproval } from '@/utils/toolActivityState'
 import { textPart } from '@/stores/runtime/messageParts'
 import { conversationVisibleParts } from '@/utils/toolPresentation'
@@ -64,15 +64,20 @@ export function useConversationMessageProjection() {
     })
     thinkingMessages.value.forEach((message, index) => {
       const requestId = String(message.metadata?.request_id || '').trim()
-      items.push({
+      const activityItem: ConversationTimelineItem = {
         kind: 'message',
-        id: requestId ? assistantProjectionId(requestId) : message.id,
+        id: requestId ? runtimeActivityProjectionId(requestId) : message.id,
         timestamp: message.timestamp,
         order: runtimeStore.transcript.length + index,
         message,
         messages: [message],
         thinking: true,
-      })
+      }
+      const assistantIndex = requestId
+        ? items.findIndex(item => item.id === assistantProjectionId(requestId))
+        : -1
+      if (assistantIndex >= 0) items.splice(assistantIndex, 0, activityItem)
+      else items.push(activityItem)
     })
     return items
   })
@@ -81,11 +86,9 @@ export function useConversationMessageProjection() {
     const activeTurn = runtimeStore.activeTurn
     if (!activeTurn?.userMessage) return []
     if (!requestOwnsActivePresentation(activeTurn.requestId)) return []
-    if (activeTurn.assistantMessages.some(messageHasDisplayParts)) return []
     const displayStatus = activeRuntimeDisplayStatus(
       runtimeStore.runtimeActivity,
       runtimeStore.contextActivity,
-      activeStreams.value,
       t,
     )
     const statusText = displayStatus.text
@@ -164,7 +167,6 @@ export function useConversationMessageProjection() {
 function activeRuntimeDisplayStatus(
   runtimeActivity: ReturnType<typeof useRuntimeStore>['runtimeActivity'],
   contextActivity: ReturnType<typeof useRuntimeStore>['contextActivity'],
-  activeStreams: ReturnType<typeof useRuntimeStore>['visibleModelStreams'],
   t: ReturnType<typeof useI18n>['t'],
 ): { text: string; role: 'assistant' | 'system' } {
   if (
@@ -177,13 +179,6 @@ function activeRuntimeDisplayStatus(
   if (runtimeActivity.status === 'active' && activitySummary) {
     return { text: activitySummary, role: 'assistant' }
   }
-  const provisionalModelText = [...activeStreams]
-    .reverse()
-    .map(stream => String(stream.content || '').replace(/\s+/g, ' ').trim())
-    .find(Boolean)
-  if (provisionalModelText) {
-    return { text: provisionalModelText, role: 'assistant' }
-  }
   return { text: t('roles.assistantThinking'), role: 'assistant' }
 }
 
@@ -191,8 +186,8 @@ function assistantProjectionId(requestId: string): string {
   return `assistant-turn-${requestId}`
 }
 
-function messageHasDisplayParts(message: TranscriptItem): boolean {
-  return conversationVisibleParts(message.parts).some(partHasDisplayContent)
+function runtimeActivityProjectionId(requestId: string): string {
+  return `runtime-activity-${requestId}`
 }
 
 function assistantMessagesBelongTogether(activeRequestId: string, nextRequestId: string): boolean {
@@ -207,11 +202,6 @@ function messagePartsKey(message: TranscriptItem): string {
     }
     return `${part.id}:${part.type}:${part.status || ''}`
   }).join(',')
-}
-
-function partHasDisplayContent(part: ChatMessagePart): boolean {
-  if (part.type === 'text' || part.type === 'reasoning') return part.text.trim().length > 0
-  return ['tool_call', 'tool_result', 'attachment', 'artifact', 'error', 'status', 'delegated_delivery'].includes(part.type)
 }
 
 function isToolActivityRunning(tool: ToolActivity): boolean {

@@ -73,7 +73,8 @@
           <ToolTraceGroup
             v-if="block.kind === 'tools'"
             embedded
-            :messages="block.messages"
+            :executions="block.executions"
+            :timestamp="block.timestamp"
             :workspace-context="workspaceContext"
           />
           <template v-else>
@@ -118,8 +119,8 @@ import ComboFrameAnimation from '@/components/brand/ComboFrameAnimation.vue'
 import ToolTraceGroup from './ToolTraceGroup.vue'
 import GitChangeCapsule from './GitChangeCapsule.vue'
 import type { GitTurnChanges } from '@/api/git'
-import type { ChatMessagePart, TranscriptItem } from '@/types/protocol'
-import { conversationVisibleParts, mergeToolMessageParts } from '@/utils/toolPresentation'
+import type { ChatMessagePart, ToolExecutionMessagePart, TranscriptItem } from '@/types/protocol'
+import { conversationVisibleMessageParts, conversationVisibleParts } from '@/utils/toolPresentation'
 import type { WorkspaceRequestContext } from '@/api/resourceTypes'
 
 const props = withDefaults(
@@ -159,45 +160,41 @@ const roleLabel = computed(() => {
 const visibleParts = computed(() => conversationVisibleParts(props.message.parts))
 type MessageDisplayBlock =
   | { kind: 'parts'; id: string; parts: ChatMessagePart[] }
-  | { kind: 'tools'; id: string; messages: TranscriptItem[] }
+  | { kind: 'tools'; id: string; executions: ToolExecutionMessagePart[]; timestamp: string }
 
 const displayBlocks = computed<MessageDisplayBlock[]>(() => {
   const blocks: MessageDisplayBlock[] = []
   const sequence = props.messages.length ? props.messages : [props.message]
-  sequence.forEach((message) => {
-    let currentKind: 'parts' | 'tools' | null = null
-    let currentParts: ChatMessagePart[] = []
-    const flush = () => {
-      if (!currentKind || currentParts.length === 0) return
-      if (currentKind === 'parts') {
-        blocks.push({
-          kind: 'parts',
-          id: `parts-${message.id}-${currentParts[0].id}`,
-          parts: currentParts,
-        })
-      } else {
-        const toolMessage: TranscriptItem = { ...message, parts: currentParts }
-        const previous = blocks[blocks.length - 1]
-        if (previous?.kind === 'tools') {
-          previous.messages.push(toolMessage)
-        } else {
-          blocks.push({
-            kind: 'tools',
-            id: `tools-${message.id}-${currentParts[0].id}`,
-            messages: [toolMessage],
-          })
-        }
-      }
-      currentParts = []
+  let currentKind: 'parts' | 'tools' | null = null
+  let currentParts: ChatMessagePart[] = []
+  const flush = () => {
+    if (!currentKind || currentParts.length === 0) return
+    if (currentKind === 'parts') {
+      blocks.push({
+        kind: 'parts',
+        id: `parts-${currentParts[0].id}`,
+        parts: currentParts,
+      })
+    } else {
+      const executions = currentParts.filter(
+        (part): part is ToolExecutionMessagePart => part.type === 'tool_execution',
+      )
+      blocks.push({
+        kind: 'tools',
+        id: `tools-${executions[0].id}`,
+        executions,
+        timestamp: executions[0].createdAt || props.message.timestamp,
+      })
     }
-    mergeToolMessageParts(message.parts).forEach((part) => {
-      const nextKind = part.type === 'tool_execution' ? 'tools' : 'parts'
-      if (currentKind && currentKind !== nextKind) flush()
-      currentKind = nextKind
-      currentParts.push(part)
-    })
-    flush()
+    currentParts = []
+  }
+  conversationVisibleMessageParts(sequence).forEach((part) => {
+    const nextKind = part.type === 'tool_execution' ? 'tools' : 'parts'
+    if (currentKind && currentKind !== nextKind) flush()
+    currentKind = nextKind
+    currentParts.push(part)
   })
+  flush()
   return blocks
 })
 const delegatedDelivery = computed(() => (

@@ -485,8 +485,6 @@ def runtime_resource_factory(
                 value=mcp_content_runtime.for_workspace(workspace_root)
             )
         if resource_name == "image_generation_runtime":
-            if instance.request.runtime_role != "main":
-                raise PermissionError("image generation runtime is available only to the main runtime")
             return ProjectedRuntimeResource(value=ImageGenerationRuntime(workspace_root))
         if resource_name == "process_runtime":
             if instance.request.runtime_role == "temporary":

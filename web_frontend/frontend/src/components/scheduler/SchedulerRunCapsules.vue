@@ -40,7 +40,7 @@
           :title="capsuleTitle(run)"
           :fallback-title="capsuleTitle(run)"
           :controller="schedulerTaskController"
-          @close="expandedRunId = null"
+          @dismiss="dismissRun(run.run_id)"
           @updated="reconcileRun"
           @deleted="dismissRun"
         />

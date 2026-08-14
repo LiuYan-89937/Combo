@@ -22,14 +22,13 @@ LOGGER = logging.getLogger(__name__)
 
 def browser_session_key(
     *,
-    generation: int,
     principal_id: str,
     session_id: str,
     runtime_role: str,
     task_id: str | None,
 ) -> str:
     owner = task_id if runtime_role == "temporary" and task_id else "main"
-    return f"{generation}:{principal_id}:{session_id}:{runtime_role}:{owner}"
+    return f"{principal_id}:{session_id}:{runtime_role}:{owner}"
 
 
 @dataclass(frozen=True, slots=True)

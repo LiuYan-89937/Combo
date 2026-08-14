@@ -68,10 +68,21 @@ const TOOL_PRESENTATIONS: Record<string, Pick<ToolPresentation, 'category' | 'la
 }
 
 export function conversationVisibleParts(parts: ChatMessagePart[]): ChatMessagePart[] {
-  const merged = mergeToolMessageParts(parts)
+  return mergeToolMessageParts(conversationOrderedParts(parts))
+}
+
+export function conversationVisibleMessageParts(
+  messages: ReadonlyArray<{ parts: ChatMessagePart[] }>,
+): ChatMessagePart[] {
+  return mergeToolMessageParts(
+    messages.flatMap(message => conversationOrderedParts(message.parts)),
+  )
+}
+
+function conversationOrderedParts(parts: ChatMessagePart[]): ChatMessagePart[] {
   return [
-    ...merged.filter(part => part.type === 'reasoning'),
-    ...merged.filter(part => part.type !== 'reasoning'),
+    ...parts.filter(part => part.type === 'reasoning'),
+    ...parts.filter(part => part.type !== 'reasoning'),
   ]
 }
 

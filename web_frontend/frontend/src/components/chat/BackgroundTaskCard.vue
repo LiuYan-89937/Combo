@@ -27,14 +27,14 @@
         {{ t('common.cancel') }}
       </n-button>
       <n-button
-        v-if="terminal"
+        v-if="terminal && props.controller"
         class="task-delete"
         size="tiny"
         quaternary
         :loading="deleting"
         @click="deleteTask"
       >
-        {{ props.controller ? t('backgroundTask.delete') : t('backgroundTask.dismiss') }}
+        {{ t('backgroundTask.delete') }}
       </n-button>
     </header>
 
