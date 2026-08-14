@@ -196,10 +196,11 @@ def github_device_start(request: Request) -> dict[str, Any]:
 
 @app.post("/api/v1/auth/github/device/poll")
 def github_device_poll(request: Request, payload: DevicePollRequest) -> dict[str, Any]:
-    user, token = services(request).auth.poll_github_device_login(payload.device_code)
+    user, token, provider_token = services(request).auth.poll_github_device_login(payload.device_code)
     return {
         "status": "authorized",
         "access_token": token,
+        "github_access_token": provider_token,
         "token_type": "Bearer",
         "user": public_user_view(user),
     }
@@ -212,13 +213,14 @@ def github_desktop_start(request: Request) -> dict[str, Any]:
 
 @app.post("/api/v1/auth/github/desktop/poll")
 def github_desktop_poll(request: Request, payload: DesktopAuthRequest) -> dict[str, Any]:
-    user, token = services(request).auth.poll_github_desktop_login(
+    user, token, provider_token = services(request).auth.poll_github_desktop_login(
         flow_id=payload.flow_id,
         poll_secret=payload.poll_secret,
     )
     return {
         "status": "authorized",
         "access_token": token,
+        "github_access_token": provider_token,
         "token_type": "Bearer",
         "user": public_user_view(user),
     }

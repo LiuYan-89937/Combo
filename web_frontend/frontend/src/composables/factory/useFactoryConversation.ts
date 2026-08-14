@@ -10,6 +10,8 @@ import { useAgentStore } from '@/stores/agent'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useUiStore } from '@/stores/ui'
 import { useRuntimePreferencesStore } from '@/stores/runtimePreferences'
+import { useGitChangesStore } from '@/stores/gitChanges'
+import { workspaceApi } from '@/api/workspace'
 import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
 import type { RuntimeAttachmentInput, TranscriptAttachmentView } from '@/types/protocol'
@@ -20,6 +22,7 @@ export function useFactoryConversation() {
   const agentStore = useAgentStore()
   const uiStore = useUiStore()
   const runtimePreferences = useRuntimePreferencesStore()
+  const gitChanges = useGitChangesStore()
   const commands = useCommand()
   const { t } = useI18n()
   const chatModelProfiles = ref<ModelPoolProfile[]>([])
@@ -162,6 +165,19 @@ export function useFactoryConversation() {
         undefined,
         agentSessionId ? null : newSessionWorkspaceId,
         runtimeStore.hasActiveRun && runningMessageMode.value === 'steer',
+        async (runtimeCommand) => {
+          const targetWorkspaceId = agentSessionId
+            ? runtimeStore.activeWorkspaceId
+            : newSessionWorkspaceId
+          const gitWorkspaceId = String(targetWorkspaceId || '').trim()
+          if (!gitWorkspaceId) return
+          const response = await workspaceApi.projects()
+          const workspace = response.workspaces.find(item => item.workspace_id === gitWorkspaceId)
+          const requestId = String(runtimeCommand.request_id || '').trim()
+          if (workspace?.workdir_root && requestId) {
+            await gitChanges.beginTurn(workspace.workdir_root, requestId)
+          }
+        },
       )
       runtimeStore.addUserMessage(message, command.request_id, {
         mode: 'agent_package',

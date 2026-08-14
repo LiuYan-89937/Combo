@@ -96,6 +96,11 @@
           action="running"
           :size="25"
         />
+
+        <GitChangeCapsule
+          v-if="message.role === 'assistant' && gitChanges?.files.length"
+          :changes="gitChanges"
+        />
       </div>
     </div>
     </template>
@@ -111,6 +116,8 @@ import { useI18n } from '@/composables/useI18n'
 import MessagePartRenderer from './MessagePartRenderer.vue'
 import ComboFrameAnimation from '@/components/brand/ComboFrameAnimation.vue'
 import ToolTraceGroup from './ToolTraceGroup.vue'
+import GitChangeCapsule from './GitChangeCapsule.vue'
+import type { GitTurnChanges } from '@/api/git'
 import type { ChatMessagePart, TranscriptItem } from '@/types/protocol'
 import { conversationVisibleParts, mergeToolMessageParts } from '@/utils/toolPresentation'
 import type { WorkspaceRequestContext } from '@/api/resourceTypes'
@@ -123,6 +130,7 @@ const props = withDefaults(
     quoteable?: boolean
     workspaceContext?: WorkspaceRequestContext | null
     messages?: TranscriptItem[]
+    gitChanges?: GitTurnChanges | null
   }>(),
   {
     streaming: false,
@@ -130,6 +138,7 @@ const props = withDefaults(
     quoteable: false,
     workspaceContext: null,
     messages: () => [],
+    gitChanges: null,
   }
 )
 

@@ -22,7 +22,13 @@
       </div>
     </template>
 
-    <div v-if="directoryStep" class="directory-picker">
+    <GitWorkspaceImport
+      v-if="gitImportStep"
+      @back="gitImportStep = false"
+      @cloned="registerClonedWorkspace"
+    />
+
+    <div v-else-if="directoryStep" class="directory-picker">
       <div class="directory-picker-toolbar">
         <n-button
           quaternary
@@ -92,10 +98,17 @@
           </n-button>
         </div>
       </section>
+
+      <button type="button" class="new-session-option github-workspace-option" @click="gitImportStep = true">
+        <img src="/brand/combo/ui-icons/empty-workspace.png" alt="" />
+        <strong>{{ t('gitImport.optionTitle') }}</strong>
+        <span>{{ t('gitImport.optionDescription') }}</span>
+      </button>
     </div>
 
     <template #footer>
-      <div v-if="directoryStep" class="new-session-footer">
+      <div v-if="gitImportStep" />
+      <div v-else-if="directoryStep" class="new-session-footer">
         <n-button :disabled="linkedWorkspaceBusy" @click="leaveDirectoryStep">
           {{ t('common.cancel') }}
         </n-button>
@@ -141,6 +154,7 @@ import {
   type WorkspaceProjectView,
 } from '@/api/workspace'
 import { useI18n } from '@/composables/useI18n'
+import GitWorkspaceImport from '@/components/workspace/GitWorkspaceImport.vue'
 
 const props = defineProps<{
   show: boolean
@@ -159,6 +173,7 @@ const selectingLinkedWorkspace = ref(false)
 const creatingLinkedWorkspace = ref(false)
 const creatingIsolatedWorkspace = ref(false)
 const directoryStep = ref(false)
+const gitImportStep = ref(false)
 const directoryLoading = ref(false)
 const directoryRoots = ref<WorkspaceDirectoryView[]>([])
 const directories = ref<WorkspaceDirectoryView[]>([])
@@ -172,7 +187,11 @@ const dialogClosable = computed(() => (
   !linkedWorkspaceBusy.value && !creatingIsolatedWorkspace.value && !directoryLoading.value
 ))
 const dialogTitle = computed(() => (
-  directoryStep.value ? t('workspace.selectServerDirectory') : t('sessions.createTitle')
+  gitImportStep.value
+    ? t('gitImport.title')
+    : directoryStep.value
+      ? t('workspace.selectServerDirectory')
+      : t('sessions.createTitle')
 ))
 const visibleDirectories = computed(() => (
   currentPath.value ? directories.value : directoryRoots.value
@@ -189,6 +208,7 @@ watch(
   show => {
     if (!show) {
       directoryStep.value = false
+      gitImportStep.value = false
       return
     }
     selectedWorkspaceId.value = props.initialWorkspaceId || null
@@ -323,6 +343,24 @@ async function registerLinkedWorkspace(sourcePath: string) {
   }
 }
 
+async function registerClonedWorkspace(sourcePath: string, title: string) {
+  creatingLinkedWorkspace.value = true
+  try {
+    const response = await workspaceApi.createProject({
+      title,
+      mode: 'project',
+      root_kind: 'linked',
+      workdir_root: sourcePath,
+      owner_package_id: props.packageId,
+    })
+    selectWorkspace(response.workspace.workspace_id)
+  } catch (error) {
+    showError(error)
+  } finally {
+    creatingLinkedWorkspace.value = false
+  }
+}
+
 function showError(error: unknown) {
   message.error(error instanceof Error ? error.message : String(error))
 }
@@ -377,6 +415,9 @@ button.new-session-option:hover {
   color: var(--app-text-muted);
   font-size: var(--app-font-sm);
 }
+
+.github-workspace-option { grid-column: 1 / -1; grid-template-columns: auto minmax(0, 1fr); align-items: center; }
+.github-workspace-option img { grid-row: 1 / 3; width: 62px; height: 62px; object-fit: contain; filter: var(--app-brand-mark-filter); }
 
 .shared-workspace-option {
   gap: var(--app-space-md);

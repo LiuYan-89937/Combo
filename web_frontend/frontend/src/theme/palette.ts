@@ -68,6 +68,8 @@ export interface AppPalette {
   focusShadow: string
   transparent: string
   overlay: string
+  brandMarkFilter: string
+  brandMarkOnInverseFilter: string
 
   // 阴影
   shadowSm: string
@@ -140,6 +142,8 @@ export const lightPalette: AppPalette = {
   focusShadow: 'rgba(0, 0, 0, 0.1)',
   transparent: 'transparent',
   overlay: 'rgba(0, 0, 0, 0.3)',
+  brandMarkFilter: 'none',
+  brandMarkOnInverseFilter: 'invert(1)',
 
   // 阴影（柔和）
   shadowSm: '0 2px 8px rgba(0, 0, 0, 0.04)',
@@ -212,6 +216,8 @@ export const darkPalette: AppPalette = {
   focusShadow: 'rgba(255, 255, 255, 0.2)',
   transparent: 'transparent',
   overlay: 'rgba(0, 0, 0, 0.6)',
+  brandMarkFilter: 'invert(1)',
+  brandMarkOnInverseFilter: 'none',
 
   // 阴影（暗色下更深）
   shadowSm: '0 2px 8px rgba(0, 0, 0, 0.6)',

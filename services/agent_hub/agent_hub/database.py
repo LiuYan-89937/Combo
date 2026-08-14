@@ -9,7 +9,7 @@ from typing import Iterator
 from agent_hub.config import Settings
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 SQLITE_BUSY_TIMEOUT_MS = 10_000
 
 
@@ -57,6 +57,7 @@ class Database:
                   user_id text references users(user_id) on delete cascade,
                   expires_at text not null,
                   authorized_at text,
+                  provider_token_ciphertext text,
                   created_at text not null
                 );
 
@@ -170,6 +171,12 @@ class Database:
                 connection,
                 table="oauth_states",
                 column="desktop_flow_id",
+                declaration="text",
+            )
+            _add_column_if_missing(
+                connection,
+                table="desktop_auth_flows",
+                column="provider_token_ciphertext",
                 declaration="text",
             )
             _add_column_if_missing(

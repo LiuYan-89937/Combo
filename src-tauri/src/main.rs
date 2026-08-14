@@ -2,10 +2,19 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod desktop_file_actions;
+mod git_repository;
+mod github_account;
 mod python_sidecar;
 mod user_environment;
 
 use desktop_file_actions::{reveal_in_file_manager, save_file_as, select_directory};
+use git_repository::{
+    git_begin_turn_snapshot, git_repository_diff, git_repository_status,
+    git_clone_repository, git_revert_turn, git_turn_changes,
+};
+use github_account::{
+    github_account, github_list_repositories, github_logout, github_store_account,
+};
 use python_sidecar::PythonSidecar;
 use std::sync::Mutex;
 use tauri::Manager;
@@ -136,6 +145,16 @@ fn main() {
             reveal_in_file_manager,
             save_file_as,
             select_directory,
+            git_repository_status,
+            git_begin_turn_snapshot,
+            git_turn_changes,
+            git_repository_diff,
+            git_revert_turn,
+            git_clone_repository,
+            github_store_account,
+            github_account,
+            github_list_repositories,
+            github_logout,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

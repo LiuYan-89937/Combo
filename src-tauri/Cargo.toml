@@ -23,9 +23,18 @@ tauri-plugin-notification = "2.3.3"
 tauri-plugin-process = "2.3"
 tauri-plugin-updater = "2.10"
 wait-timeout = "0.2"
+git2 = { version = "0.20", default-features = false, features = ["https", "ssh"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3.6", default-features = false, features = ["apple-native"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_System_Threading"] }
+keyring = { version = "3.6", default-features = false, features = ["windows-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3.6", default-features = false, features = ["sync-secret-service", "crypto-rust"] }
 
 [features]
 # This feature is used for production builds or when a dev server is not specified, DO NOT REMOVE!!

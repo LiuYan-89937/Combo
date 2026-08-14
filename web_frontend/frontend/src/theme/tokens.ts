@@ -128,15 +128,3 @@ export const designTokens: DesignTokens = {
   contentMaxWidth: '1440px',
   chatMaxWidth: '960px',
 }
-
-/**
- * 将 tokens 转为 CSS 变量文本片段
- */
-export function tokensToCssVars(tokens: DesignTokens): string {
-  const vars: string[] = []
-  for (const [key, value] of Object.entries(tokens)) {
-    const varName = key.replace(/([A-Z])/g, '-$1').toLowerCase()
-    vars.push(`  --app-${varName}: ${value};`)
-  }
-  return vars.join('\n')
-}

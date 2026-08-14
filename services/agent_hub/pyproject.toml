@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Combo website authentication and application release service"
 requires-python = ">=3.10"
 dependencies = [
+    "cryptography>=45,<51",
     "fastapi>=0.115,<1",
     "httpx>=0.27,<1",
     "jsonschema>=4.23,<5",

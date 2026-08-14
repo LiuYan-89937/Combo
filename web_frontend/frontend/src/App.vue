@@ -93,10 +93,7 @@ const startupTitle = computed(() => (
 ))
 // 主题变化时同步注入 CSS 变量到 :root，并给 <html> 打上主题标记
 watchEffect(() => {
-  applyPaletteToRoot(palette.value)
-  if (typeof document !== 'undefined') {
-    document.documentElement.dataset.theme = isDark.value ? 'dark' : 'light'
-  }
+  applyPaletteToRoot(palette.value, isDark.value ? 'dark' : 'light')
 })
 
 watchEffect(() => {

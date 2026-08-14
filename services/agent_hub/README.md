@@ -20,7 +20,7 @@ Authorization callback URL:
 https://liuyanai.top/api/v1/auth/github/callback
 ```
 
-OAuth Client Secret 只允许保存在服务器 `/etc/fastagenthub.env`。审核控制台使用 HttpOnly Cookie；桌面端通过一次性登录票据兑换独立 Bearer 会话。客户端不接收 OAuth Client Secret、GitHub Access Token 或管理员令牌。
+OAuth Client Secret 只允许保存在服务器 `/etc/fastagenthub.env`。审核控制台使用 HttpOnly Cookie；桌面端通过一次性登录票据兑换独立 Bearer 会话和 GitHub 用户令牌。GitHub 用户令牌只在登录票据有效期内以加密信封短暂保存，领取后原子删除，随后由桌面端写入系统钥匙串；令牌不写入 Web 存储或日志。客户端不接收 OAuth Client Secret 或管理员令牌。
 
 管理员入口：
 

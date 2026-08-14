@@ -112,6 +112,7 @@ export function useAgentPackageCommands() {
     displayUserInput?: string | null,
     workspaceId?: string | null,
     steerActiveRuntime = false,
+    beforeDispatch?: (command: ReturnType<typeof commands.sendAgentPackageMessageCommand>) => Promise<void>,
   ) => {
     const command = commands.sendAgentPackageMessageCommand(
       packageId,
@@ -122,7 +123,7 @@ export function useAgentPackageCommands() {
       displayUserInput,
       workspaceId,
     )
-    const accepted = transport.sendRuntimeCommand(command)
+    const accepted = Promise.resolve(beforeDispatch?.(command)).then(() => transport.sendRuntimeCommand(command))
     if (steerActiveRuntime) {
       void accepted.then((response) => transport.sendRuntimeCommand(
         commands.steerRuntimeRequestCommand({

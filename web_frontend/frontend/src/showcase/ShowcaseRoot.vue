@@ -43,9 +43,7 @@ const director = useShowcaseDirector()
 document.documentElement.lang = uiStore.locale
 
 watchEffect(() => {
-  applyPaletteToRoot(palette.value)
-  document.documentElement.dataset.theme = isDark.value ? 'dark' : 'light'
-  document.documentElement.style.colorScheme = isDark.value ? 'dark' : 'light'
+  applyPaletteToRoot(palette.value, isDark.value ? 'dark' : 'light')
 })
 
 onMounted(() => director.start())

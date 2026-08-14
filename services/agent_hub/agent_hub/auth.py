@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
+from base64 import urlsafe_b64encode
 import hmac
 import secrets
 from typing import Any
@@ -10,6 +11,7 @@ from urllib.parse import urlencode, urlparse
 from uuid import uuid4
 
 import httpx
+from cryptography.fernet import Fernet, InvalidToken
 
 from agent_hub.config import Settings
 from agent_hub.database import Database, utc_now
@@ -47,6 +49,9 @@ class AuthService:
     def __init__(self, settings: Settings, database: Database) -> None:
         self.settings = settings
         self.database = database
+        self._provider_token_cipher = Fernet(
+            urlsafe_b64encode(sha256(settings.github_client_secret.encode("utf-8")).digest())
+        )
 
     def github_login_url(self, *, return_to: str | None = None) -> tuple[str, str]:
         if not self.settings.github_oauth_configured:
@@ -89,8 +94,8 @@ class AuthService:
                 """
                 insert into desktop_auth_flows(
                   flow_id, poll_secret_hash, status, user_id, expires_at,
-                  authorized_at, created_at
-                ) values (?, ?, 'pending', null, ?, null, ?)
+                  authorized_at, provider_token_ciphertext, created_at
+                ) values (?, ?, 'pending', null, ?, null, null, ?)
                 """,
                 (
                     flow_id,
@@ -133,20 +138,24 @@ class AuthService:
         if not code or not state:
             raise AuthenticationError("GitHub OAuth callback is missing code or state")
         oauth_state = self._consume_oauth_state(state, state_cookie=state_cookie)
-        profile = self._github_profile(code)
+        profile, provider_token = self._github_profile(code)
         user = self._upsert_github_user(profile)
         flow_kind = str(oauth_state["flow_kind"])
         if flow_kind == "desktop":
             flow_id = str(oauth_state["desktop_flow_id"] or "")
             now = utc_now()
             with self.database.connect() as connection:
+                provider_token_ciphertext = self._provider_token_cipher.encrypt(
+                    provider_token.encode("utf-8")
+                ).decode("ascii")
                 result = connection.execute(
                     """
                     update desktop_auth_flows
-                    set status = 'authorized', user_id = ?, authorized_at = ?
+                    set status = 'authorized', user_id = ?, authorized_at = ?,
+                        provider_token_ciphertext = ?
                     where flow_id = ? and status = 'pending' and expires_at > ?
                     """,
-                    (str(user["user_id"]), now, flow_id, now),
+                    (str(user["user_id"]), now, provider_token_ciphertext, flow_id, now),
                 )
             if result.rowcount != 1:
                 raise AuthenticationError("desktop login flow is invalid or expired")
@@ -169,7 +178,7 @@ class AuthService:
         *,
         flow_id: str,
         poll_secret: str,
-    ) -> tuple[dict[str, Any], str]:
+    ) -> tuple[dict[str, Any], str, str]:
         flow_id = str(flow_id or "").strip()
         poll_secret = str(poll_secret or "").strip()
         if not flow_id or not poll_secret:
@@ -197,6 +206,19 @@ class AuthService:
                     retry_after_seconds=DESKTOP_AUTH_POLL_INTERVAL_SECONDS,
                 )
             user_id = str(row["user_id"] or "")
+            provider_token_ciphertext = str(row["provider_token_ciphertext"] or "")
+            if not provider_token_ciphertext:
+                connection.rollback()
+                raise AuthenticationError("GitHub authorization token is unavailable; sign in again")
+            try:
+                provider_token = self._provider_token_cipher.decrypt(
+                    provider_token_ciphertext.encode("ascii")
+                ).decode("utf-8")
+            except (InvalidToken, UnicodeDecodeError, ValueError) as exc:
+                connection.rollback()
+                raise AuthenticationError(
+                    "GitHub authorization token could not be opened; sign in again"
+                ) from exc
             user = connection.execute(
                 "select * from users where user_id = ?",
                 (user_id,),
@@ -210,7 +232,7 @@ class AuthService:
                 (flow_id,),
             )
             connection.commit()
-        return dict(user), token
+        return dict(user), token, provider_token
 
     def cancel_github_desktop_login(self, *, flow_id: str, poll_secret: str) -> None:
         flow_id = str(flow_id or "").strip()
@@ -247,7 +269,7 @@ class AuthService:
                 headers={"Accept": "application/json"},
                 data={
                     "client_id": self.settings.github_client_id,
-                    "scope": "read:user",
+                    "scope": "read:user repo",
                 },
             )
             payload = _response_object(response, "GitHub device authorization failed")
@@ -262,7 +284,7 @@ class AuthService:
             "interval": max(5, int(payload["interval"])),
         }
 
-    def poll_github_device_login(self, device_code: str) -> tuple[dict[str, Any], str]:
+    def poll_github_device_login(self, device_code: str) -> tuple[dict[str, Any], str, str]:
         code = str(device_code or "").strip()
         if not code:
             raise AuthenticationError("GitHub device code is required")
@@ -295,7 +317,7 @@ class AuthService:
             raise AuthenticationError("GitHub did not return an access token")
         profile = self._github_profile_from_token(access_token)
         user = self._upsert_github_user(profile)
-        return user, self.create_session(str(user["user_id"]))
+        return user, self.create_session(str(user["user_id"])), access_token
 
     def authenticate(self, *, bearer_token: str | None, cookie_token: str | None) -> dict[str, Any]:
         bearer = str(bearer_token or "").strip()
@@ -380,7 +402,7 @@ class AuthService:
             {
                 "client_id": self.settings.github_client_id,
                 "redirect_uri": f"{self.settings.base_url}/api/v1/auth/github/callback",
-                "scope": "read:user",
+                "scope": "read:user repo",
                 "state": state,
             }
         )
@@ -416,7 +438,7 @@ class AuthService:
             (timestamp,),
         )
 
-    def _github_profile(self, code: str) -> dict[str, Any]:
+    def _github_profile(self, code: str) -> tuple[dict[str, Any], str]:
         with httpx.Client(timeout=20) as client:
             token_response = client.post(
                 GITHUB_TOKEN_URL,
@@ -434,7 +456,7 @@ class AuthService:
             access_token = str(token_response.json().get("access_token") or "").strip()
             if not access_token:
                 raise AuthenticationError("GitHub did not return an access token")
-        return self._github_profile_from_token(access_token)
+        return self._github_profile_from_token(access_token), access_token
 
     def _github_profile_from_token(self, access_token: str) -> dict[str, Any]:
         with httpx.Client(timeout=20) as client:

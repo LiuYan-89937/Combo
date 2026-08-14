@@ -27,6 +27,7 @@
                 :thinking="item.thinking"
                 quoteable
                 :workspace-context="messageWorkspaceContext"
+                :git-changes="gitChangesStore.changesFor(item.message.metadata?.request_id)"
                 @quote="addMessageReference"
               />
             </template>
@@ -118,6 +119,8 @@ import { useContextReferenceStore } from '@/stores/contextReferences'
 import { messageContextReference } from '@/utils/contextReferences'
 import { useResourceContext } from '@/composables/useResourceContext'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { useGitChangesStore } from '@/stores/gitChanges'
+import { workspaceApi } from '@/api/workspace'
 import { SYSTEM_CHAT_PACKAGE_ID } from '@/utils/resourceScope'
 import { agentPackageConversationScope } from '@/stores/runtime/scopes'
 import { useAgentSessionNavigation } from '@/composables/agent/useAgentSessionNavigation'
@@ -126,6 +129,7 @@ const runtimeStore = useRuntimeStore()
 const agentStore = useAgentStore()
 const commands = useCommand()
 const workspaceStore = useWorkspaceStore()
+const gitChangesStore = useGitChangesStore()
 const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
@@ -314,6 +318,25 @@ onBeforeUnmount(() => {
   followBottomFrame = null
   followBottomScheduled = false
 })
+
+watch(
+  () => runtimeStore.conversationTurns.map(turn => `${turn.requestId || ''}:${turn.status}`).join('|'),
+  () => void captureCompletedGitTurns(),
+)
+
+async function captureCompletedGitTurns() {
+  const workspaceId = runtimeStore.activeWorkspaceId
+  if (!workspaceId) return
+  const workspace = (await workspaceApi.projects()).workspaces
+    .find(item => item.workspace_id === workspaceId)
+  if (!workspace?.workdir_root) return
+  const terminal = new Set(['completed', 'stopped', 'cancelled', 'failed'])
+  runtimeStore.conversationTurns.forEach((turn) => {
+    if (turn.requestId && terminal.has(turn.status)) {
+      void gitChangesStore.captureCompletedTurn(workspace.workdir_root, turn.requestId)
+    }
+  })
+}
 
 // 监听消息变化，自动滚动
 watch(

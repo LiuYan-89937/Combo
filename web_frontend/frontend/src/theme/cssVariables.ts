@@ -4,36 +4,37 @@
  */
 
 import type { AppPalette } from './palette'
-import { designTokens, tokensToCssVars } from './tokens'
+import { designTokens } from './tokens'
 
 const CSS_VAR_STYLE_ID = 'app-palette-vars'
+type AppColorScheme = 'light' | 'dark'
 
-/**
- * 将 palette 对象转为 CSS 变量字符串
- */
-function paletteToCssVars(palette: AppPalette): string {
-  const vars: string[] = []
-  for (const [key, value] of Object.entries(palette)) {
-    // camelCase → kebab-case
-    const varName = key.replace(/([A-Z])/g, '-$1').toLowerCase()
-    vars.push(`  --app-${varName}: ${value};`)
-  }
-  return vars.join('\n')
+function toCssVariableName(key: string): string {
+  return `--app-${key.replace(/([A-Z])/g, '-$1').toLowerCase()}`
 }
 
 /**
- * 将调色板 + 设计 tokens 注入为全局 CSS 变量
- * 在 :root 上定义，所有组件都可用
+ * 将主题作为一组原子状态直接应用到根元素。
+ *
+ * 使用根元素内联变量而不是运行时重写整段 style 文本，避免复杂页面的
+ * 合成层继续显示旧主题；data-theme、color-scheme 与设计变量同步更新。
  */
-export function applyPaletteToRoot(palette: AppPalette): void {
+export function applyPaletteToRoot(palette: AppPalette, colorScheme: AppColorScheme): void {
   if (typeof document === 'undefined') return
 
-  let styleEl = document.getElementById(CSS_VAR_STYLE_ID) as HTMLStyleElement | null
-  if (!styleEl) {
-    styleEl = document.createElement('style')
-    styleEl.id = CSS_VAR_STYLE_ID
-    document.head.appendChild(styleEl)
+  const root = document.documentElement
+  const variables = {
+    ...designTokens,
+    ...palette,
   }
 
-  styleEl.textContent = `:root {\n${paletteToCssVars(palette)}\n${tokensToCssVars(designTokens)}\n}`
+  for (const [key, value] of Object.entries(variables)) {
+    root.style.setProperty(toCssVariableName(key), value)
+  }
+
+  root.dataset.theme = colorScheme
+  root.style.colorScheme = colorScheme
+
+  // 清理旧实现遗留的动态样式节点，避免同时存在两套主题来源。
+  document.getElementById(CSS_VAR_STYLE_ID)?.remove()
 }
