@@ -132,13 +132,16 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // Let the window disappear before waiting for backend shutdown.
-            if let tauri::WindowEvent::Destroyed = event {
+            // Wake the backend watchdog before the window closes, but leave
+            // process waiting to application teardown so the UI thread never
+            // blocks on runtime cleanup.
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
                 let app_handle = window.app_handle();
                 let state = app_handle.state::<AppState>();
-                if let Some(mut sidecar) = state.sidecar.lock().unwrap().take() {
-                    sidecar.shutdown();
-                };
+                let mut sidecar_state = state.sidecar.lock().unwrap();
+                if let Some(sidecar) = sidecar_state.as_mut() {
+                    sidecar.request_shutdown();
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![

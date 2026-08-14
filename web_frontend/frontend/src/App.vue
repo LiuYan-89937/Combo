@@ -12,43 +12,42 @@
             <AppContent v-if="startupStore.ready" />
             <SelectionReferenceMenu v-if="startupStore.ready" />
             <AppUpdateDialog />
+            <div
+              v-if="!startupStore.ready && startupStore.status !== 'failed'"
+              class="startup-animation"
+              role="status"
+              aria-live="polite"
+              :aria-label="t('startup.title')"
+            >
+              <ComboFrameAnimation
+                v-if="startupStore.initializing"
+                character="lead"
+                action="idle"
+                :size="132"
+              />
+              <ComboFrameAnimation
+                v-else
+                character="paired"
+                action="complete"
+                :size="132"
+                :loop="false"
+              />
+            </div>
             <n-modal
-              :show="!startupStore.ready"
+              :show="startupStore.status === 'failed'"
               :mask-closable="false"
               :close-on-esc="false"
               preset="card"
               class="startup-dialog"
               style="width: min(420px, calc(100vw - 32px)); max-width: 420px"
-              :title="startupTitle"
+              :title="t('startup.failed')"
             >
-              <div class="startup-dialog-content" role="status" aria-live="polite">
-                <ComboFrameAnimation
-                  v-if="startupStore.initializing"
-                  character="lead"
-                  action="idle"
-                  :size="132"
-                />
-                <ComboFrameAnimation
-                  v-else-if="startupStore.status === 'succeeded'"
-                  character="paired"
-                  action="complete"
-                  :size="132"
-                  :loop="false"
-                />
-                <ComboFrameAnimation
-                  v-else
-                  character="paired"
-                  action="error"
-                  :size="132"
-                />
+              <div class="startup-dialog-content" role="alert" aria-live="assertive">
+                <ComboFrameAnimation character="paired" action="error" :size="132" />
                 <n-text v-if="startupStore.error" type="error" class="startup-error">
                   {{ startupStore.error }}
                 </n-text>
-                <n-button
-                  v-if="startupStore.status === 'failed'"
-                  type="primary"
-                  @click="startupStore.retry"
-                >
+                <n-button type="primary" @click="startupStore.retry">
                   {{ t('startup.retry') }}
                 </n-button>
               </div>
@@ -88,9 +87,6 @@ const naiveTheme = computed(() => (isDark.value ? darkTheme : null))
 const naiveLocale = computed(() => (locale.value === 'zh-CN' ? zhCN : enUS))
 const naiveDateLocale = computed(() => (locale.value === 'zh-CN' ? dateZhCN : dateEnUS))
 const themeOverrides = computed<GlobalThemeOverrides>(() => createThemeOverrides(palette.value))
-const startupTitle = computed(() => (
-  startupStore.status === 'failed' ? t('startup.failed') : t('startup.title')
-))
 // 主题变化时同步注入 CSS 变量到 :root，并给 <html> 打上主题标记
 watchEffect(() => {
   applyPaletteToRoot(palette.value, isDark.value ? 'dark' : 'light')
@@ -107,6 +103,15 @@ watchEffect(() => {
 <style scoped>
 .startup-dialog {
   width: min(420px, calc(100vw - 32px));
+}
+
+.startup-animation {
+  position: fixed;
+  z-index: 4000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: var(--app-surface);
 }
 
 .startup-dialog-content {

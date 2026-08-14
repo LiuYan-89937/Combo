@@ -216,11 +216,19 @@ impl PythonSidecar {
         }
     }
 
+    /// Notify the backend that desktop shutdown has started without blocking
+    /// the window event loop. Dropping stdin wakes the backend watchdog.
+    pub fn request_shutdown(&mut self) {
+        if let Some(process) = self.process.as_mut() {
+            drop(process.stdin.take());
+        }
+    }
+
     /// Shutdown the Python backend gracefully.
     pub fn shutdown(&mut self) {
+        self.request_shutdown();
         if let Some(mut process) = self.process.take() {
             println!("Shutting down Python backend (PID: {})", process.id());
-            drop(process.stdin.take());
             match process.wait_timeout(BACKEND_SHUTDOWN_TIMEOUT) {
                 Ok(Some(status)) if !status.success() => self.record_exit_status(status),
                 Ok(Some(_)) => {}

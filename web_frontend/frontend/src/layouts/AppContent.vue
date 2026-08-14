@@ -13,7 +13,7 @@
       <!-- 主内容区 -->
       <div class="app-main">
         <main class="app-content">
-          <router-view v-slot="{ Component }">
+          <router-view v-if="navigationReady" v-slot="{ Component }">
             <transition name="fade" mode="out-in">
               <component :is="Component" />
             </transition>
@@ -50,7 +50,10 @@
 
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import { isTauri } from '@tauri-apps/api/core'
+import { useRoute } from 'vue-router'
 import { useUiStore } from '@/stores/ui'
+import { useAgentSessionNavigation } from '@/composables/agent/useAgentSessionNavigation'
 import AppHeader from '@/components/common/AppHeader.vue'
 import AppLoadingBar from '@/components/common/AppLoadingBar.vue'
 import AppNotifications from '@/components/common/AppNotifications.vue'
@@ -74,11 +77,22 @@ const props = withDefaults(defineProps<{
 })
 
 const uiStore = useUiStore()
+const route = useRoute()
+const { openMostRecentAgentSession } = useAgentSessionNavigation()
 const guideResolved = ref(hasCompletedFirstRunGuide())
 const guideOpen = ref(false)
+const navigationReady = ref(!props.runtimeServicesEnabled || !isTauri())
 
-onMounted(() => {
+onMounted(async () => {
   if (props.runtimeServicesEnabled && !guideResolved.value) guideOpen.value = true
+  if (navigationReady.value) return
+  try {
+    if (route.name === 'ChatNew' && !route.query.workspace) {
+      await openMostRecentAgentSession()
+    }
+  } finally {
+    navigationReady.value = true
+  }
 })
 
 function finishGuide() {
