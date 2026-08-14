@@ -96,14 +96,12 @@
             <div class="form-grid role-binding-grid">
               <n-form-item :label="t('modelPool.taskModel')">
                 <n-select v-model:value="taskModelBinding" clearable :options="bindingOptions('chat')" />
-                <template #feedback>{{ t('modelPool.taskModelHint') }}</template>
               </n-form-item>
               <n-form-item :label="t('modelPool.embeddingModel')">
                 <n-select v-model:value="embeddingBinding" clearable :options="bindingOptions('embedding')" />
               </n-form-item>
               <n-form-item :label="t('modelPool.defaultImageGenerationModel')">
                 <n-select v-model:value="imageGenerationBinding" clearable :options="bindingOptions('image_generation')" />
-                <template #feedback>{{ t('modelPool.defaultImageGenerationModelHint') }}</template>
               </n-form-item>
             </div>
           </div>
