@@ -92,10 +92,31 @@ struct GitHubRepositoryResponse {
     owner: GitHubOwner,
 }
 
+#[derive(Serialize)]
+struct GitHubCreateRepositoryRequest<'a> {
+    name: &'a str,
+    private: bool,
+    auto_init: bool,
+}
+
 #[derive(Deserialize)]
 struct GitHubOwner {
     login: String,
     avatar_url: String,
+}
+
+fn repository_view(value: GitHubRepositoryResponse) -> GitHubRepository {
+    GitHubRepository {
+        id: value.id,
+        name: value.name,
+        full_name: value.full_name,
+        private: value.private,
+        clone_url: value.clone_url,
+        default_branch: value.default_branch,
+        owner_login: value.owner.login,
+        owner_avatar_url: value.owner.avatar_url,
+        updated_at: value.updated_at,
+    }
 }
 
 #[tauri::command]
@@ -228,22 +249,52 @@ pub async fn github_list_repositories() -> Result<Vec<GitHubRepository>, String>
             .await
             .map_err(error_text)?;
         let page_count = page_values.len();
-        repositories.extend(page_values.into_iter().map(|value| GitHubRepository {
-            id: value.id,
-            name: value.name,
-            full_name: value.full_name,
-            private: value.private,
-            clone_url: value.clone_url,
-            default_branch: value.default_branch,
-            owner_login: value.owner.login,
-            owner_avatar_url: value.owner.avatar_url,
-            updated_at: value.updated_at,
-        }));
+        repositories.extend(page_values.into_iter().map(repository_view));
         if page_count < 100 {
             break;
         }
     }
     Ok(repositories)
+}
+
+#[tauri::command]
+pub async fn github_create_repository(
+    name: String,
+    private: bool,
+) -> Result<GitHubRepository, String> {
+    let credential = stored_credential()?;
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("GitHub repository name is required".to_string());
+    }
+    let response = reqwest::Client::new()
+        .post("https://api.github.com/user/repos")
+        .header(USER_AGENT, "Combo-Desktop")
+        .header(ACCEPT, "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
+        .header(
+            AUTHORIZATION,
+            format!("Bearer {}", credential.github_access_token),
+        )
+        .json(&GitHubCreateRepositoryRequest {
+            name,
+            private,
+            auto_init: false,
+        })
+        .send()
+        .await
+        .map_err(error_text)?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "GitHub repository creation failed: HTTP {}",
+            response.status()
+        ));
+    }
+    response
+        .json::<GitHubRepositoryResponse>()
+        .await
+        .map(repository_view)
+        .map_err(error_text)
 }
 
 #[tauri::command]

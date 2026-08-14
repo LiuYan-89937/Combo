@@ -6,6 +6,7 @@ export interface GitFileStatus {
   path: string
   change_type: GitChangeType
   staged: boolean
+  unstaged: boolean
   additions: number
   deletions: number
 }
@@ -14,9 +15,27 @@ export interface GitRepositoryStatus {
   repository_root: string
   branch: string | null
   detached: boolean
+  has_head: boolean
   ahead: number
   behind: number
+  remote_name: string | null
+  remote_url: string | null
+  has_upstream: boolean
   files: GitFileStatus[]
+}
+
+export interface GitRepositoryIdentity {
+  name: string | null
+  email: string | null
+  configured: boolean
+}
+
+export type GitRemoteOutcome = 'fetched' | 'pulled' | 'pushed' | 'up_to_date' | 'conflicts'
+
+export interface GitRemoteOperationResult {
+  outcome: GitRemoteOutcome
+  conflicting_files: string[]
+  status: GitRepositoryStatus
 }
 
 export interface GitFileChange {
@@ -59,6 +78,54 @@ export const gitApi = {
   repositoryStatus(path: string) {
     requireDesktop()
     return invoke<GitRepositoryStatus>('git_repository_status', { path })
+  },
+  initializeRepository(path: string) {
+    requireDesktop()
+    return invoke<GitRepositoryStatus>('git_initialize_repository', { path })
+  },
+  addRemote(path: string, remoteUrl: string) {
+    requireDesktop()
+    return invoke<GitRepositoryStatus>('git_add_remote', { path, remoteUrl })
+  },
+  repositoryIdentity(path: string) {
+    requireDesktop()
+    return invoke<GitRepositoryIdentity>('git_repository_identity', { path })
+  },
+  setRepositoryIdentity(path: string, name: string, email: string) {
+    requireDesktop()
+    return invoke<GitRepositoryIdentity>('git_set_repository_identity', { path, name, email })
+  },
+  stagePaths(path: string, filePaths: string[]) {
+    requireDesktop()
+    return invoke<GitRepositoryStatus>('git_stage_paths', { path, filePaths })
+  },
+  stageAll(path: string) {
+    requireDesktop()
+    return invoke<GitRepositoryStatus>('git_stage_all', { path })
+  },
+  unstagePaths(path: string, filePaths: string[]) {
+    requireDesktop()
+    return invoke<GitRepositoryStatus>('git_unstage_paths', { path, filePaths })
+  },
+  commit(path: string, message: string) {
+    requireDesktop()
+    return invoke<GitRepositoryStatus>('git_commit', { path, message })
+  },
+  fetch(path: string) {
+    requireDesktop()
+    return invoke<GitRemoteOperationResult>('git_fetch_repository', { path })
+  },
+  pull(path: string) {
+    requireDesktop()
+    return invoke<GitRemoteOperationResult>('git_pull_repository', { path })
+  },
+  push(path: string) {
+    requireDesktop()
+    return invoke<GitRemoteOperationResult>('git_push_repository', { path })
+  },
+  sync(path: string) {
+    requireDesktop()
+    return invoke<GitRemoteOperationResult>('git_sync_repository', { path })
   },
   snapshot(path: string, requestId: string, phase: 'before' | 'after') {
     requireDesktop()

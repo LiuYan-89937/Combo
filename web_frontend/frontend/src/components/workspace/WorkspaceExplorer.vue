@@ -13,7 +13,6 @@
     <div class="explorer-header">
       <div class="header-title">
         <n-text strong>{{ t('workspace.explorer') }}</n-text>
-        <n-text depth="3" class="header-subtitle">{{ effectiveScope }}</n-text>
       </div>
       <n-space :size="6">
         <n-button
@@ -552,10 +551,6 @@ function workspaceContextKey(context: WorkspaceRequestContext | string | undefin
   display: flex;
   flex-direction: column;
   gap: 2px;
-}
-
-.header-subtitle {
-  font-size: 12px;
 }
 
 .tree-scrollbar {

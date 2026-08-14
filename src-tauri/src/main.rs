@@ -9,12 +9,16 @@ mod user_environment;
 
 use desktop_file_actions::{reveal_in_file_manager, save_file_as, select_directory};
 use git_repository::{
-    git_begin_turn_snapshot, git_clone_repository, git_reapply_turn, git_repository_diff,
-    git_repository_status, git_revert_turn, git_turn_changes,
+    git_add_remote, git_begin_turn_snapshot, git_clone_repository, git_commit,
+    git_fetch_repository, git_initialize_repository, git_pull_repository, git_push_repository,
+    git_reapply_turn, git_repository_diff, git_repository_identity, git_repository_status,
+    git_revert_turn, git_set_repository_identity, git_stage_all, git_stage_paths,
+    git_sync_repository, git_turn_changes, git_unstage_paths,
 };
 use github_account::{
-    github_account, github_cancel_browser_authorization, github_list_repositories, github_logout,
-    github_poll_browser_authorization, github_start_browser_authorization,
+    github_account, github_cancel_browser_authorization, github_create_repository,
+    github_list_repositories, github_logout, github_poll_browser_authorization,
+    github_start_browser_authorization,
 };
 use python_sidecar::PythonSidecar;
 use std::sync::Mutex;
@@ -147,6 +151,18 @@ fn main() {
             save_file_as,
             select_directory,
             git_repository_status,
+            git_initialize_repository,
+            git_add_remote,
+            git_repository_identity,
+            git_set_repository_identity,
+            git_stage_paths,
+            git_stage_all,
+            git_unstage_paths,
+            git_commit,
+            git_fetch_repository,
+            git_pull_repository,
+            git_push_repository,
+            git_sync_repository,
             git_begin_turn_snapshot,
             git_turn_changes,
             git_repository_diff,
@@ -158,6 +174,7 @@ fn main() {
             github_cancel_browser_authorization,
             github_account,
             github_list_repositories,
+            github_create_repository,
             github_logout,
         ])
         .run(tauri::generate_context!())
