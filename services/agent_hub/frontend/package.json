@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc --noEmit && vite build",
+    "build": "vue-tsc --noEmit && vite build && node scripts/bundle-showcase.mjs",
     "preview": "vite preview",
     "typecheck": "vue-tsc --noEmit",
     "test": "vitest run"

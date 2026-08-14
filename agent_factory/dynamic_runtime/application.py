@@ -35,6 +35,7 @@ from agent_factory.dynamic_runtime.cancellation import (
 )
 from agent_factory.dynamic_runtime.command_control import CancelCommandRequestHandler
 from agent_factory.dynamic_runtime.control_plane_store import GlobalKnowledgeStore, WorkspaceSchedulerStore
+from agent_factory.dynamic_runtime.knowledge_search import HybridKnowledgeSearchIndex
 from agent_factory.dynamic_runtime.dispatcher import (
     CommandDispatcher,
     CommandExecutionRegistry,
@@ -180,7 +181,11 @@ class DynamicRuntimeApplication:
             database=database,
             embedding_runtime=embedding_runtime,
         )
-        stores = _stores(database, memory_search=memory_search)
+        knowledge_search = HybridKnowledgeSearchIndex(
+            database,
+            embedding_runtime=embedding_runtime,
+        )
+        stores = _stores(database, memory_search=memory_search, knowledge_search=knowledge_search)
         generation = _starting_generation(config, stores.generations.next_generation_number())
         stores.generations.acquire(generation)
         try:
@@ -196,6 +201,7 @@ class DynamicRuntimeApplication:
             adapters.require_complete()
             capability_bootstrap(stores, adapters)
             capability_search.refresh(stores.capabilities.active_capabilities())
+            stores.knowledge.refresh_index()
             resolution_config = config.capability_resolution
             capability_resolver = MainTurnCapabilityResolver(
                 store=stores.capabilities,
@@ -245,6 +251,7 @@ class DynamicRuntimeApplication:
             if "capability_search" in locals():
                 capability_search.close()
             memory_search.close()
+            knowledge_search.close()
             crashed_at = _utc_now_text()
             crashed = generation.model_copy(
                 update={
@@ -337,6 +344,7 @@ class DynamicRuntimeApplication:
         if current.status in {"closed", "crashed"}:
             self.capability_search.close()
             self.stores.memories.close()
+            self.stores.knowledge.close()
             return
         now = _utc_now_text()
         if current.status == "active":
@@ -354,12 +362,14 @@ class DynamicRuntimeApplication:
         self.generation = closed
         self.capability_search.close()
         self.stores.memories.close()
+        self.stores.knowledge.close()
 
 
 def _stores(
     database: DynamicRuntimeDatabase,
     *,
     memory_search: HybridMemorySearchIndex,
+    knowledge_search: HybridKnowledgeSearchIndex,
 ) -> DynamicRuntimeStores:
     return DynamicRuntimeStores(
         capabilities=CapabilityStore(database),
@@ -384,7 +394,7 @@ def _stores(
         revocations=RevocationStore(database),
         deliveries=DeliveryCommitStore(database),
         delete_plans=DeletePlanStore(database),
-        knowledge=GlobalKnowledgeStore(database),
+        knowledge=GlobalKnowledgeStore(database, search_index=knowledge_search),
         scheduler=WorkspaceSchedulerStore(database),
     )
 

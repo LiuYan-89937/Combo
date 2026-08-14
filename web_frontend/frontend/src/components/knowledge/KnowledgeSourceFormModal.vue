@@ -122,9 +122,6 @@
 
         <n-collapse-transition :show="formData.mount_mode === 'rag'">
           <div class="rag-options">
-            <n-form-item :label="t('knowledge.chunkingStrategy')">
-              <n-select v-model:value="chunking.splitter" :options="splitterOptions" />
-            </n-form-item>
             <div class="chunk-grid">
               <n-form-item :label="t('knowledge.chunkSize')">
                 <n-input-number v-model:value="chunking.chunkSize" :min="100" :max="8000" :step="100" />
@@ -174,8 +171,6 @@ import { requiredTextRule, validateForm } from '@/utils/formValidation'
 import type { I18nKey } from '@/i18n'
 
 type SourceKind = 'folder' | 'file' | 'url' | 'note'
-type SplitterKind = 'recursive' | 'markdown' | 'code' | 'json'
-
 const DEFAULT_SOURCE_KIND: SourceKind = 'file'
 
 interface KnowledgeSourceFormState {
@@ -239,7 +234,6 @@ const formData = ref<KnowledgeSourceFormState>({
   mount_mode: 'rag' as 'index_only' | 'rag',
 })
 const chunking = ref({
-  splitter: 'recursive' as SplitterKind,
   chunkSize: 800,
   chunkOverlap: 120,
 })
@@ -249,13 +243,6 @@ const kindOptions = computed(() => [
   { label: t('knowledge.uploadFolder'), value: 'folder' },
   { label: 'URL', value: 'url' },
   { label: t('knowledge.note'), value: 'note' },
-])
-
-const splitterOptions = computed(() => [
-  { label: t('knowledge.splitterRecursive'), value: 'recursive' },
-  { label: t('knowledge.splitterMarkdown'), value: 'markdown' },
-  { label: t('knowledge.splitterCode'), value: 'code' },
-  { label: t('knowledge.splitterJson'), value: 'json' },
 ])
 
 const usesUpload = computed(() => formData.value.kind === 'folder' || formData.value.kind === 'file')
@@ -437,13 +424,10 @@ function buildSourceInput(): KnowledgeSourceInput {
     uri: formData.value.uri.trim(),
     content: formData.value.content,
     mount_mode: formData.value.mount_mode,
-    ingestion_plan: formData.value.mount_mode === 'rag'
+    chunking: formData.value.mount_mode === 'rag'
       ? {
-          planner: 'system_default',
-          default_splitter: chunking.value.splitter,
-          default_chunk_size: chunking.value.chunkSize,
-          default_chunk_overlap: chunking.value.chunkOverlap,
-          rules: [],
+          chunk_size: chunking.value.chunkSize,
+          chunk_overlap: chunking.value.chunkOverlap,
         }
       : undefined,
   }
@@ -469,7 +453,6 @@ function resetForm() {
     mount_mode: 'rag',
   }
   chunking.value = {
-    splitter: 'recursive',
     chunkSize: 800,
     chunkOverlap: 120,
   }
@@ -689,13 +672,18 @@ function isValidUrl(value: string): boolean {
 }
 
 .knowledge-mode-card.is-active {
-  color: var(--app-surface);
+  color: var(--app-text-inverse);
   border-color: var(--app-text);
   background: var(--app-text);
 }
 
+.knowledge-mode-card.is-active strong {
+  color: var(--app-text-inverse);
+}
+
 .knowledge-mode-card.is-active small {
-  color: color-mix(in srgb, var(--app-surface) 72%, transparent);
+  color: var(--app-text-inverse);
+  opacity: .72;
 }
 
 .chunk-grid {

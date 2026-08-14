@@ -108,7 +108,7 @@ function openCapabilityPool(pool: 'mcp' | 'tools' | 'skills') {
 .library-entry:hover > .n-icon { color: var(--app-text); transform: rotate(-4deg) scale(1.06); }
 .library-entry > .n-icon { transition: color var(--app-transition-fast), transform var(--app-transition-base); }
 .library-entry:active { transform: translateY(-1px) scale(.99); }
-.library-entry.featured { background: var(--app-text); color: var(--app-surface); border-color: var(--app-text); }
+.library-entry.featured { background: var(--app-text); color: var(--app-text-inverse); border-color: var(--app-text); }
 .library-entry.compact { min-height: 76px; }
 .library-entry span { display: grid; min-width: 0; gap: 4px; }
 .library-entry strong { font-size: 13px; }

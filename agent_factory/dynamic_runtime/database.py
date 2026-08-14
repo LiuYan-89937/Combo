@@ -9,7 +9,7 @@ import sqlite3
 from agent_factory.sqlite_runtime import DEFAULT_SQLITE_BUSY_TIMEOUT_MS, connect_sqlite
 
 
-DYNAMIC_RUNTIME_DATABASE_SCHEMA = "dynamic_runtime_database.v23"
+DYNAMIC_RUNTIME_DATABASE_SCHEMA = "dynamic_runtime_database.v24"
 DYNAMIC_RUNTIME_SCHEMA_EPOCH = 2
 
 
@@ -1261,6 +1261,66 @@ def _default_migrations() -> tuple[MigrationStep, ...]:
                 """,
             ),
         ),
+        MigrationStep(
+            version=24,
+            name="hybrid_knowledge_search",
+            statements=(
+                """
+                create table knowledge_search_generations (
+                  generation_id text primary key,
+                  dataset_digest text not null,
+                  search_mode text not null check (search_mode in ('lexical','hybrid')),
+                  embedding_fingerprint text,
+                  embedding_profile_id text,
+                  embedding_dimensions integer,
+                  status text not null check (status in ('building','active','retired','failed')),
+                  diagnostic text,
+                  created_at text not null,
+                  activated_at text
+                )
+                """,
+                "create index idx_knowledge_search_generation_status on knowledge_search_generations(status, created_at)",
+                """
+                create table knowledge_search_chunks (
+                  generation_id text not null references knowledge_search_generations(generation_id) on delete cascade,
+                  chunk_id text not null,
+                  source_id text not null,
+                  document_id text not null,
+                  chunk_index integer not null,
+                  title text not null,
+                  content text not null,
+                  content_digest text not null,
+                  embedding_json text,
+                  primary key(generation_id, chunk_id)
+                )
+                """,
+                "create index idx_knowledge_search_chunk_source on knowledge_search_chunks(generation_id, source_id, document_id)",
+                """
+                create table knowledge_search_active_generation (
+                  singleton integer primary key check(singleton = 1),
+                  generation_id text not null references knowledge_search_generations(generation_id),
+                  changed_at text not null
+                )
+                """,
+                """
+                create virtual table knowledge_search_fts using fts5(
+                  generation_id unindexed,
+                  chunk_id unindexed,
+                  title,
+                  content,
+                  tokenize='unicode61'
+                )
+                """,
+                """
+                create table knowledge_search_settings (
+                  singleton integer primary key check(singleton = 1),
+                  revision integer not null,
+                  payload_json text not null,
+                  updated_at text not null
+                )
+                """,
+            ),
+        ),
     )
 
 
@@ -1359,6 +1419,18 @@ def _schema_allowlist() -> set[tuple[str, str]]:
         ("index", "idx_knowledge_sources_status"),
         ("table", "knowledge_documents"),
         ("index", "idx_knowledge_documents_source"),
+        ("table", "knowledge_search_generations"),
+        ("index", "idx_knowledge_search_generation_status"),
+        ("table", "knowledge_search_chunks"),
+        ("index", "idx_knowledge_search_chunk_source"),
+        ("table", "knowledge_search_active_generation"),
+        ("table", "knowledge_search_settings"),
+        ("table", "knowledge_search_fts"),
+        ("table", "knowledge_search_fts_data"),
+        ("table", "knowledge_search_fts_idx"),
+        ("table", "knowledge_search_fts_content"),
+        ("table", "knowledge_search_fts_docsize"),
+        ("table", "knowledge_search_fts_config"),
         ("table", "scheduler_jobs"),
         ("index", "idx_scheduler_jobs_workspace"),
         ("table", "scheduler_runs"),

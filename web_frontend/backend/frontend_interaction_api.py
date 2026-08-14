@@ -11,9 +11,10 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from agent_factory.dynamic_runtime.repositories import utc_now_text
+from agent_factory.dynamic_runtime.knowledge_search import KnowledgeRetrievalSettings
 from agent_factory.native_directory_picker import NativeDirectoryPicker, NativeDirectoryPickerUnavailableError
 from agent_factory.runtime_protocol import (
     CommandEnvelope,
@@ -76,6 +77,43 @@ class MemoryDeleteRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
     memory_id: str
     workspace_id: str | None = None
+
+
+class KnowledgeRetrievalSettingsWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(ge=0)
+    lexical_limit: int = Field(ge=1, le=200)
+    vector_limit: int = Field(ge=1, le=200)
+    result_limit: int = Field(ge=1, le=50)
+    rrf_k: int = Field(ge=1, le=1000)
+    vector_minimum_similarity: float = Field(ge=-1, le=1)
+    lexical_weight: float = Field(gt=0, le=10)
+    vector_weight: float = Field(gt=0, le=10)
+
+
+class KnowledgeChunkingWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    chunk_size: int = Field(ge=100, le=8000)
+    chunk_overlap: int = Field(ge=0, le=2000)
+
+    @model_validator(mode="after")
+    def validate_overlap(self) -> "KnowledgeChunkingWrite":
+        if self.chunk_overlap >= self.chunk_size:
+            raise ValueError("chunk_overlap must be smaller than chunk_size")
+        return self
+
+
+class KnowledgeSourceWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["folder", "file", "url", "note"]
+    display_name: str
+    uri: str
+    content: str | None = None
+    mount_mode: Literal["index_only", "rag"]
+    chunking: KnowledgeChunkingWrite | None = None
 
 
 class WorkspaceCreateRequest(BaseModel):
@@ -896,11 +934,49 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
         _principal(request)
         return {"event": _event("knowledge_sources_listed", {"sources": backend.application.stores.knowledge.sources()})}
 
+    @router.get("/api/knowledge/settings")
+    async def knowledge_retrieval_settings(request: Request) -> dict[str, Any]:
+        _principal(request)
+        return backend.application.stores.knowledge.retrieval_settings().model_dump(mode="json")
+
+    @router.patch("/api/knowledge/settings")
+    async def update_knowledge_retrieval_settings(
+        request: Request,
+        payload: KnowledgeRetrievalSettingsWrite,
+    ) -> dict[str, Any]:
+        _principal(request)
+        settings = KnowledgeRetrievalSettings.model_validate(
+            payload.model_dump(exclude={"expected_revision"})
+        )
+        try:
+            saved = backend.application.stores.knowledge.save_retrieval_settings(
+                settings,
+                expected_revision=payload.expected_revision,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail="knowledge retrieval settings revision conflict") from exc
+        return saved.model_dump(mode="json")
+
+    @router.get("/api/knowledge/search")
+    async def search_knowledge(
+        request: Request,
+        query: str,
+        source_id: str | None = None,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        _principal(request)
+        results = backend.application.stores.knowledge.search(
+            query=query,
+            source_id=source_id,
+            limit=limit,
+        )
+        return {"event": _event("knowledge_search_completed", {"query": query, "results": results})}
+
     @router.post("/api/knowledge/sources")
     async def create_knowledge_source(request: Request) -> dict[str, Any]:
         _principal(request)
         payload = await request.json()
-        source = dict(payload.get("source") or {})
+        source = _knowledge_source_payload(payload.get("source"))
         content = str(source.get("content") or "")
         documents = [{
             "title": str(source.get("display_name") or "知识文档"),
@@ -915,8 +991,8 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
         _principal(request)
         form = await request.form()
         try:
-            source = dict(json.loads(str(form.get("source") or "{}")))
-        except (TypeError, ValueError) as exc:
+            source = _knowledge_source_payload(json.loads(str(form.get("source") or "{}")))
+        except (TypeError, ValueError, ValidationError) as exc:
             raise HTTPException(status_code=422, detail="invalid knowledge source metadata") from exc
         documents: list[dict[str, str]] = []
         for upload in form.getlist("files"):
@@ -982,6 +1058,7 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
         _principal(request)
         if not any(item.get("source_id") == source_id for item in backend.application.stores.knowledge.sources()):
             raise HTTPException(status_code=404, detail="knowledge source not found")
+        backend.application.stores.knowledge.refresh_index(force=True)
         return {"event": _event("knowledge_source_reindex_requested", {"source_id": source_id, "sources": backend.application.stores.knowledge.sources()})}
 
     @router.get("/api/scheduler/options")
@@ -2342,6 +2419,14 @@ def _event(
 
 def _principal(request: Request) -> str:
     return _required_text(request.headers.get("X-AgentFactory-Principal"), "principal header")
+
+
+def _knowledge_source_payload(value: Any) -> dict[str, Any]:
+    try:
+        source = KnowledgeSourceWrite.model_validate(value)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail="invalid knowledge source metadata") from exc
+    return source.model_dump(mode="json", exclude_none=True)
 
 
 def _attachment_references(principal_id: str, value: Any) -> list[dict[str, Any]]:

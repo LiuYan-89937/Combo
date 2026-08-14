@@ -602,9 +602,14 @@ watch(() => props.show, (visible) => {
 }
 
 .task-type-option.selected {
-  color: var(--app-surface);
+  color: var(--app-text-inverse);
   border-color: var(--app-text);
   background: var(--app-text);
+}
+
+.task-type-option.selected .option-copy strong,
+.task-type-option.selected .option-copy small {
+  color: var(--app-text-inverse);
 }
 
 .option-mark {
@@ -739,9 +744,14 @@ watch(() => props.show, (visible) => {
 }
 
 .schedule-mode-grid button.selected {
-  color: var(--app-surface);
+  color: var(--app-text-inverse);
   border-color: var(--app-text);
   background: var(--app-text);
+}
+
+.schedule-mode-grid button.selected strong,
+.schedule-mode-grid button.selected small {
+  color: var(--app-text-inverse);
 }
 
 .schedule-mode-grid strong {

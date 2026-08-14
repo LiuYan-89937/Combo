@@ -49,7 +49,7 @@ def _input_schema() -> dict:
                 "properties": {
                     "action": {"const": "search", "description": "检索共享知识库中的相关文档。"},
                     "query": {"type": "string", "minLength": 1, "description": "需要从内部资料中查找的问题或主题。"},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10, "description": "最多返回的匹配文档数量。"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "可选；覆盖设置中的最终返回数量，但不会超过全局上限。"},
                 },
                 "required": ["action", "query"],
                 "additionalProperties": False,

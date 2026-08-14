@@ -1,8 +1,28 @@
 import type { KnowledgeSourceInput, WorkspaceContextInput } from './resourceTypes'
-import { requestEvent, requestFormEvent, withQuery } from './http'
+import { requestEvent, requestFormEvent, requestJson, withQuery } from './http'
 import { packageResourceContextPayload } from './resourceContext'
 
+export interface KnowledgeRetrievalSettings {
+  revision: number
+  lexical_limit: number
+  vector_limit: number
+  result_limit: number
+  rrf_k: number
+  vector_minimum_similarity: number
+  lexical_weight: number
+  vector_weight: number
+  updated_at: string | null
+}
+
 export const knowledgeApi = {
+  settings: () => requestJson<KnowledgeRetrievalSettings>('/api/knowledge/settings'),
+  updateSettings: (settings: KnowledgeRetrievalSettings) => {
+    const { revision, updated_at: _updatedAt, ...payload } = settings
+    return requestJson<KnowledgeRetrievalSettings>('/api/knowledge/settings', {
+      method: 'PATCH',
+      body: JSON.stringify({ expected_revision: revision, ...payload }),
+    })
+  },
   sources: (context?: WorkspaceContextInput) =>
     requestEvent(withQuery('/api/knowledge/sources', packageResourceContextPayload(context))),
   addSource: (

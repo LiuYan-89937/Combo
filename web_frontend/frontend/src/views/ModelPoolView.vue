@@ -488,6 +488,8 @@ import {
   type ModelUsageSummary,
 } from '@/api/modelPool'
 import { useI18n } from '@/composables/useI18n'
+import { useUiStore } from '@/stores/ui'
+import { getPalette } from '@/theme/palette'
 import {
   requiredHttpUrlRule,
   requiredTextRule,
@@ -502,6 +504,8 @@ const message = useMessage()
 const dialog = useDialog()
 const route = useRoute()
 const router = useRouter()
+const uiStore = useUiStore()
+const chartPalette = computed(() => getPalette(uiStore.actualTheme === 'dark'))
 
 const loading = ref(false)
 const activeTab = ref('profiles')
@@ -625,6 +629,7 @@ const usageColumns = computed<DataTableColumns<ModelUsageGroup>>(() => [
 const usageChartOptions = computed(() => {
   const summary = usageSummary.value
   const chartType = usageChartType.value
+  const colors = chartPalette.value
   const buckets = Array.from(
     new Set((summary?.series || []).flatMap((item) => item.points.map((point) => point.bucket))),
   ).sort()
@@ -636,6 +641,7 @@ const usageChartOptions = computed(() => {
     legend: {
       top: 0,
       type: 'scroll',
+      textStyle: { color: colors.textSecondary },
     },
     grid: {
       left: 18,
@@ -651,16 +657,20 @@ const usageChartOptions = computed(() => {
       axisLabel: {
         hideOverlap: true,
         margin: 12,
+        color: colors.textMuted,
       },
+      axisLine: { lineStyle: { color: colors.border } },
     },
     yAxis: {
       type: 'value',
       axisLabel: {
         formatter: (value: number) => formatTokens(value),
+        color: colors.textMuted,
       },
+      axisLine: { lineStyle: { color: colors.border } },
       splitLine: {
         lineStyle: {
-          color: 'rgba(0, 0, 0, 0.08)',
+          color: colors.divider,
         },
       },
     },

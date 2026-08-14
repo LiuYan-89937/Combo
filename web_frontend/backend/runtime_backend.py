@@ -639,6 +639,7 @@ class RuntimeBackend:
         self.application.capability_search.refresh(
             self.application.stores.capabilities.active_capabilities()
         )
+        self.application.stores.knowledge.refresh_index()
 
     def refresh_model_bound_capabilities(self) -> None:
         self._synchronize_builtin_tool_capabilities(

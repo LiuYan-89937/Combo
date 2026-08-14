@@ -8,6 +8,10 @@ from typing import Any
 from uuid import uuid4
 
 from agent_factory.dynamic_runtime.database import DynamicRuntimeDatabase
+from agent_factory.dynamic_runtime.knowledge_search import (
+    HybridKnowledgeSearchIndex,
+    KnowledgeRetrievalSettings,
+)
 from agent_factory.dynamic_runtime.repositories import utc_now_text
 
 
@@ -24,8 +28,31 @@ class KnowledgeDocumentRecord:
 
 
 class GlobalKnowledgeStore:
-    def __init__(self, database: DynamicRuntimeDatabase) -> None:
+    def __init__(
+        self,
+        database: DynamicRuntimeDatabase,
+        *,
+        search_index: HybridKnowledgeSearchIndex,
+    ) -> None:
         self._database = database
+        self._search_index = search_index
+
+    def close(self) -> None:
+        self._search_index.close()
+
+    def refresh_index(self, *, force: bool = False) -> None:
+        self._search_index.refresh(force=force)
+
+    def retrieval_settings(self) -> KnowledgeRetrievalSettings:
+        return self._search_index.settings()
+
+    def save_retrieval_settings(
+        self,
+        settings: KnowledgeRetrievalSettings,
+        *,
+        expected_revision: int | None,
+    ) -> KnowledgeRetrievalSettings:
+        return self._search_index.save_settings(settings, expected_revision=expected_revision)
 
     def sources(self) -> list[dict[str, Any]]:
         with self._database.connection(query_only=True) as connection:
@@ -74,6 +101,7 @@ class GlobalKnowledgeStore:
                         now,
                     ),
                 )
+        self.refresh_index()
         return source
 
     def documents(self, source_id: str) -> list[KnowledgeDocumentRecord]:
@@ -88,45 +116,14 @@ class GlobalKnowledgeStore:
             ).fetchall()
         return [self._document(row) for row in rows]
 
-    def search(self, *, query: str, limit: int = 10) -> list[dict[str, Any]]:
-        normalized_query = str(query or "").strip()
-        if not normalized_query:
-            raise ValueError("knowledge search query must not be empty")
-        bounded_limit = max(1, min(int(limit), 50))
-        with self._database.connection(query_only=True) as connection:
-            rows = connection.execute(
-                """
-                select document_id, source_id, title, mime_type, content,
-                       instr(lower(title), lower(?)) as title_match,
-                       instr(lower(content), lower(?)) as content_match
-                from knowledge_documents
-                where status = 'ready'
-                  and (instr(lower(title), lower(?)) > 0 or instr(lower(content), lower(?)) > 0)
-                order by (instr(lower(title), lower(?)) > 0) desc, updated_at desc, document_id
-                limit ?
-                """,
-                (
-                    normalized_query,
-                    normalized_query,
-                    normalized_query,
-                    normalized_query,
-                    normalized_query,
-                    bounded_limit,
-                ),
-            ).fetchall()
-        return [
-            {
-                "document_id": str(row["document_id"]),
-                "source_id": str(row["source_id"]),
-                "title": str(row["title"]),
-                "mime_type": str(row["mime_type"]),
-                "snippet": _knowledge_snippet(
-                    str(row["content"]),
-                    match_position=int(row["content_match"]),
-                ),
-            }
-            for row in rows
-        ]
+    def search(
+        self,
+        *,
+        query: str,
+        limit: int | None = None,
+        source_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return self._search_index.search(query=query, limit=limit, source_id=source_id)
 
     def require_document(self, document_id: str) -> KnowledgeDocumentRecord:
         with self._database.connection(query_only=True) as connection:
@@ -151,6 +148,7 @@ class GlobalKnowledgeStore:
                 "update knowledge_documents set status = 'deleted', revision = revision + 1, updated_at = ? where source_id = ? and status = 'ready'",
                 (now, source_id),
             )
+        self.refresh_index()
 
     @staticmethod
     def _document(row: Any) -> KnowledgeDocumentRecord:
@@ -164,17 +162,6 @@ class GlobalKnowledgeStore:
             created_at=str(row["created_at"]),
             updated_at=str(row["updated_at"]),
         )
-
-
-def _knowledge_snippet(content: str, *, match_position: int, maximum_chars: int = 800) -> str:
-    if len(content) <= maximum_chars:
-        return content
-    match_index = max(match_position - 1, 0)
-    start = max(match_index - maximum_chars // 3, 0)
-    end = min(start + maximum_chars, len(content))
-    prefix = "…" if start else ""
-    suffix = "…" if end < len(content) else ""
-    return f"{prefix}{content[start:end]}{suffix}"
 
 
 class WorkspaceSchedulerStore:

@@ -224,7 +224,7 @@ function mcpToolCount(serverCapabilityId: string): number {
 </script>
 
 <style scoped>
-.profile-page { width: min(1180px, calc(100vw - 48px)); margin: 0 auto; padding: 42px 0 72px; }
+.profile-page { width: min(1180px, calc(100vw - 48px)); min-height: 100%; margin: 0 auto; padding: 42px 0 72px; color: var(--app-text); background: var(--app-surface); }
 .profile-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 22px; }
 .eyebrow { color: var(--app-text-muted); font-size: 10px; font-weight: 750; letter-spacing: .14em; }
 .profile-header h1 { margin: 8px 0 7px; color: var(--app-text-strong); font-size: 32px; letter-spacing: -.035em; }
@@ -244,14 +244,14 @@ function mcpToolCount(serverCapabilityId: string): number {
 .capability-row { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; align-items: center; gap: 13px; padding: 14px; border: 1px solid var(--app-border); border-radius: 16px; cursor: pointer; transition: border-color .16s ease, background .16s ease, transform .18s ease; }
 .capability-row:hover { border-color: var(--app-border-hover); transform: translateY(-1px); }
 .capability-row.selected { border-color: color-mix(in srgb, var(--app-text) 34%, var(--app-border)); background: var(--app-surface-muted); }
-.capability-mark { display: grid; width: 42px; height: 42px; place-items: center; border-radius: 13px; background: var(--app-text); color: var(--app-surface); font-size: 12px; font-weight: 780; }
+.capability-mark { display: grid; width: 42px; height: 42px; place-items: center; border-radius: 13px; background: var(--app-text); color: var(--app-text-inverse); font-size: 12px; font-weight: 780; }
 .capability-copy { min-width: 0; }
 .capability-title { display: flex; align-items: center; gap: 8px; }
 .capability-title strong { overflow: hidden; color: var(--app-text-strong); text-overflow: ellipsis; white-space: nowrap; }
 .capability-title span, .capability-title small { padding: 2px 7px; border-radius: 999px; background: var(--app-surface-pressed); color: var(--app-text-muted); font-size: 9px; }
 .capability-title small { color: var(--app-text); }
 .capability-copy p { margin: 5px 0 6px; overflow: hidden; color: var(--app-text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.capability-meta { display: flex; gap: 12px; color: var(--app-text-subtle); font-size: 9px; }
+.capability-meta { display: flex; gap: 12px; color: var(--app-text-muted); font-size: 9px; }
 .loading-state, .empty-state { display: grid; min-height: 320px; place-items: center; }
 @media (max-width: 760px) { .profile-page { width: calc(100vw - 24px); padding-top: 24px; } .profile-header { align-items: stretch; flex-direction: column; } .profile-summary { grid-template-columns: repeat(3, 1fr); } .profile-summary p { grid-column: 1 / -1; justify-self: start; text-align: left; } .toolbar { grid-template-columns: 1fr; } }
 </style>

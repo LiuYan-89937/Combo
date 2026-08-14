@@ -1,8 +1,9 @@
 <template>
   <n-config-provider
+    :theme="naiveTheme"
     :theme-overrides="themeOverrides"
-    :locale="zhCN"
-    :date-locale="dateZhCN"
+    :locale="naiveLocale"
+    :date-locale="naiveDateLocale"
   >
     <n-message-provider>
       <n-notification-provider>
@@ -17,8 +18,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted } from 'vue'
-import { dateZhCN, zhCN } from 'naive-ui'
+import { computed, onBeforeUnmount, onMounted, watchEffect } from 'vue'
+import { darkTheme, dateEnUS, dateZhCN, enUS, zhCN } from 'naive-ui'
 import AppContent from '@/layouts/AppContent.vue'
 import { applyPaletteToRoot } from '@/theme/cssVariables'
 import { createThemeOverrides } from '@/theme/naiveTheme'
@@ -27,14 +28,25 @@ import { useUiStore } from '@/stores/ui'
 import { useShowcaseDirector } from './director'
 
 const uiStore = useUiStore()
-const palette = computed(() => getPalette(false))
+const requestedTheme = new URLSearchParams(window.location.search).get('theme')
+uiStore.setThemeMode(requestedTheme === 'dark' ? 'dark' : 'light')
+const isDark = computed(() => uiStore.actualTheme === 'dark')
+const palette = computed(() => getPalette(isDark.value))
+const naiveTheme = computed(() => isDark.value ? darkTheme : null)
 const themeOverrides = computed(() => createThemeOverrides(palette.value))
+const requestedLanguage = new URLSearchParams(window.location.search).get('lang')
+uiStore.setLocale(requestedLanguage === 'en' ? 'en-US' : 'zh-CN')
+const naiveLocale = computed(() => uiStore.locale === 'en-US' ? enUS : zhCN)
+const naiveDateLocale = computed(() => uiStore.locale === 'en-US' ? dateEnUS : dateZhCN)
 const director = useShowcaseDirector()
 
-uiStore.setThemeMode('light')
-applyPaletteToRoot(palette.value)
-document.documentElement.dataset.theme = 'light'
-document.documentElement.lang = 'zh-CN'
+document.documentElement.lang = uiStore.locale
+
+watchEffect(() => {
+  applyPaletteToRoot(palette.value)
+  document.documentElement.dataset.theme = isDark.value ? 'dark' : 'light'
+  document.documentElement.style.colorScheme = isDark.value ? 'dark' : 'light'
+})
 
 onMounted(() => director.start())
 onBeforeUnmount(() => director.stop())

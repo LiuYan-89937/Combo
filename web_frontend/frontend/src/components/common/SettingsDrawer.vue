@@ -27,6 +27,65 @@
           </div>
         </section>
 
+        <section class="settings-group">
+          <header class="group-header">
+            <div class="group-icon" aria-hidden="true">
+              <n-icon size="18"><ServerOutline /></n-icon>
+            </div>
+            <div class="group-title-block">
+              <div class="group-title">{{ t('settings.groupKnowledgeRetrieval') }}</div>
+              <div class="group-desc">{{ t('settings.groupKnowledgeRetrievalDesc') }}</div>
+            </div>
+          </header>
+
+          <div v-if="knowledgeSettings" class="group-body">
+            <div class="field-block">
+              <label class="field-label">{{ t('settings.knowledgeResultLimit') }}</label>
+              <n-input-number v-model:value="knowledgeSettings.result_limit" class="field-input" :min="1" :max="50" :precision="0" />
+              <p class="field-hint">{{ t('settings.knowledgeResultLimitHint') }}</p>
+            </div>
+            <div class="field-divider" aria-hidden="true"></div>
+            <div class="field-block retrieval-pair">
+              <div>
+                <label class="field-label">{{ t('settings.knowledgeLexicalLimit') }}</label>
+                <n-input-number v-model:value="knowledgeSettings.lexical_limit" class="field-input" :min="1" :max="200" :precision="0" />
+              </div>
+              <div>
+                <label class="field-label">{{ t('settings.knowledgeVectorLimit') }}</label>
+                <n-input-number v-model:value="knowledgeSettings.vector_limit" class="field-input" :min="1" :max="200" :precision="0" />
+              </div>
+            </div>
+            <div class="field-divider" aria-hidden="true"></div>
+            <div class="field-block retrieval-pair">
+              <div>
+                <label class="field-label">{{ t('settings.knowledgeRrfK') }}</label>
+                <n-input-number v-model:value="knowledgeSettings.rrf_k" class="field-input" :min="1" :max="1000" :precision="0" />
+              </div>
+              <div>
+                <label class="field-label">{{ t('settings.knowledgeVectorThreshold') }}</label>
+                <n-input-number v-model:value="knowledgeSettings.vector_minimum_similarity" class="field-input" :min="-1" :max="1" :step="0.05" :precision="2" />
+              </div>
+            </div>
+            <div class="field-divider" aria-hidden="true"></div>
+            <div class="field-block retrieval-pair">
+              <div>
+                <label class="field-label">{{ t('settings.knowledgeLexicalWeight') }}</label>
+                <n-input-number v-model:value="knowledgeSettings.lexical_weight" class="field-input" :min="0.1" :max="10" :step="0.1" :precision="1" />
+              </div>
+              <div>
+                <label class="field-label">{{ t('settings.knowledgeVectorWeight') }}</label>
+                <n-input-number v-model:value="knowledgeSettings.vector_weight" class="field-input" :min="0.1" :max="10" :step="0.1" :precision="1" />
+              </div>
+            </div>
+            <p v-if="knowledgeSettingsError" class="field-error">{{ knowledgeSettingsError }}</p>
+            <div class="settings-action-row">
+              <n-button secondary :loading="savingKnowledgeSettings" @click="saveKnowledgeRetrievalSettings">
+                {{ t('common.save') }}
+              </n-button>
+            </div>
+          </div>
+        </section>
+
         <!-- 分组：外观与语言 -->
         <section class="settings-group">
           <header class="group-header">
@@ -382,6 +441,7 @@ import { requestNativeTaskNotificationPermission } from '@/services/taskNotifica
 import { useAppUpdateStore } from '@/stores/appUpdate'
 import { storageApi, type ConversationStorageUsage } from '@/api/storage'
 import ComboLogo from '@/components/brand/ComboLogo.vue'
+import { knowledgeApi, type KnowledgeRetrievalSettings } from '@/api/knowledge'
 
 const props = defineProps<{
   show: boolean
@@ -403,15 +463,45 @@ const conversationUsage = ref<ConversationStorageUsage | null>(null)
 const loadingConversationUsage = ref(false)
 const clearingConversations = ref(false)
 const conversationStorageError = ref('')
+const knowledgeSettings = ref<KnowledgeRetrievalSettings | null>(null)
+const knowledgeSettingsError = ref('')
+const savingKnowledgeSettings = ref(false)
 
 onMounted(() => {
   void appUpdateStore.loadCurrentVersion()
   void loadConversationUsage()
+  void loadKnowledgeRetrievalSettings()
 })
 
 watch(() => props.show, visible => {
-  if (visible) void loadConversationUsage()
+  if (visible) {
+    void loadConversationUsage()
+    void loadKnowledgeRetrievalSettings()
+  }
 })
+
+async function loadKnowledgeRetrievalSettings() {
+  try {
+    knowledgeSettings.value = await knowledgeApi.settings()
+    knowledgeSettingsError.value = ''
+  } catch (error) {
+    knowledgeSettingsError.value = error instanceof Error ? error.message : String(error)
+  }
+}
+
+async function saveKnowledgeRetrievalSettings() {
+  if (!knowledgeSettings.value || savingKnowledgeSettings.value) return
+  savingKnowledgeSettings.value = true
+  try {
+    knowledgeSettings.value = await knowledgeApi.updateSettings(knowledgeSettings.value)
+    knowledgeSettingsError.value = ''
+  } catch (error) {
+    knowledgeSettingsError.value = error instanceof Error ? error.message : String(error)
+    await loadKnowledgeRetrievalSettings()
+  } finally {
+    savingKnowledgeSettings.value = false
+  }
+}
 
 const show = computed({
   get: () => props.show,
@@ -791,6 +881,23 @@ function formatBytes(value: number): string {
   margin-top: var(--app-space-xxs);
 }
 
+.retrieval-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--app-space-md);
+}
+
+.retrieval-pair > div {
+  display: grid;
+  min-width: 0;
+  gap: var(--app-space-sm);
+}
+
+.settings-action-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
 /* ========== 页脚：关于 ========== */
 .settings-footer {
   padding-top: var(--app-space-lg);
@@ -858,6 +965,9 @@ function formatBytes(value: number): string {
   }
   .group-header {
     padding: var(--app-space-sm) var(--app-space-md);
+  }
+  .retrieval-pair {
+    grid-template-columns: 1fr;
   }
 }
 

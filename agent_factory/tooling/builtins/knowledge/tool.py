@@ -41,7 +41,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
             "action": action,
             "results": store.search(
                 query=_required_text(arguments, "query"),
-                limit=int(arguments.get("limit", 10)),
+                limit=int(arguments["limit"]) if arguments.get("limit") is not None else None,
             ),
         }
     elif action == "list_documents":

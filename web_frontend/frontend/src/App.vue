@@ -458,6 +458,7 @@ html {
   flex-direction: column;
   overflow: hidden;
   border-radius: 24px !important;
+  color: var(--app-text);
   background: var(--app-surface);
 }
 
@@ -496,7 +497,7 @@ html {
 
 .editor-modal-shell small,
 .editor-modal-shell .n-text--depth-3 {
-  color: var(--app-text-muted) !important;
+  color: var(--app-text-muted);
   font-size: 11px;
   line-height: 1.5;
 }

@@ -13,6 +13,48 @@ import {
 
 const BASE_TIME = '2026-07-29T02:20:00.000Z'
 const CHAT_PACKAGE_ID = 'factory_chat'
+const showcaseCopy = {
+  'zh-CN': {
+    prompt: '请分工完成东京五日亲子旅行手册，并给出可直接执行的最终版本。',
+    delegation: '我已拆分任务：调研员核对实时资料，行程编排师处理路线与节奏，文档交付员负责最终手册。',
+    researchAgent: '旅行资料调研员',
+    researchObjective: '并行核对东京亲子旅行的实时资料与开放时间。',
+    progress: '实时资料与路线编排已经汇总，文档交付员正在生成最终 PDF。',
+    completion: '协作完成。最终版本包含每日路线、交通换乘、预算、预约清单与雨天备选。',
+    artifactName: '东京五日亲子旅行手册.pdf',
+    artifactPath: 'output/东京五日亲子旅行手册.pdf',
+    mainAgent: '主 Agent',
+    chatName: '闲聊',
+    chatDescription: '系统内置通用 Agent。',
+    plannerName: '旅行规划师',
+    plannerDescription: '检索目的地信息，规划行程并生成可交付的旅行手册。',
+    destinationResearcher: '目的地调研员',
+    itineraryDesigner: '行程编排师',
+    documentAssistant: '文档交付员',
+    sessionTitle: '东京五日亲子行程',
+    sessionInput: '规划一份东京五日亲子旅行方案',
+  },
+  'en-US': {
+    prompt: 'Delegate a five-day Tokyo family travel guide and deliver a final version we can use immediately.',
+    delegation: 'I split the work: a researcher is verifying live information, an itinerary designer is shaping the route and pace, and a document specialist owns the final guide.',
+    researchAgent: 'Travel research agent',
+    researchObjective: 'Verify live Tokyo family-travel information and opening hours in parallel.',
+    progress: 'The research and route plan are consolidated. The document specialist is generating the final PDF.',
+    completion: 'Collaboration complete. The final guide includes daily routes, transfers, budget, reservations, and rainy-day alternatives.',
+    artifactName: 'Tokyo-family-travel-guide.pdf',
+    artifactPath: 'output/Tokyo-family-travel-guide.pdf',
+    mainAgent: 'Main Agent',
+    chatName: 'Chat',
+    chatDescription: 'Built-in general-purpose Agent.',
+    plannerName: 'Travel planner',
+    plannerDescription: 'Research destinations, plan itineraries, and produce a shareable travel guide.',
+    destinationResearcher: 'Destination researcher',
+    itineraryDesigner: 'Itinerary designer',
+    documentAssistant: 'Document specialist',
+    sessionTitle: 'Five days in Tokyo with kids',
+    sessionInput: 'Plan a five-day family trip to Tokyo',
+  },
+} as const
 
 export function useShowcaseDirector() {
   const runtimeStore = useRuntimeStore()
@@ -35,11 +77,15 @@ export function useShowcaseDirector() {
   }
 
   async function play(): Promise<void> {
-    cycle += 1
-    await collaborationScene()
+    while (!stopped) {
+      cycle += 1
+      await collaborationScene()
+      await wait(4200)
+    }
   }
 
   async function collaborationScene(): Promise<void> {
+    const copy = showcaseCopy[uiStore.locale]
     await showcaseRouter.replace({
       name: 'ChatNew',
     })
@@ -50,21 +96,21 @@ export function useShowcaseDirector() {
     uiStore.setConversationDockPanel(null)
     const input = await waitForElement<HTMLTextAreaElement>('.message-input-container textarea')
     if (input) {
-      await typeText(input, '请分工完成东京五日亲子旅行手册，并给出可直接执行的最终版本。')
+      await typeText(input, copy.prompt)
       appendMessage(message('user', [
-        textPart('请分工完成东京五日亲子旅行手册，并给出可直接执行的最终版本。'),
+        textPart(copy.prompt),
       ]))
       updateInputValue(input, '')
     }
     await wait(900)
     appendMessage(message('assistant', [
-      textPart('我已拆分任务：调研员核对实时资料，行程编排师处理路线与节奏，文档交付员负责最终手册。'),
+      textPart(copy.delegation),
       toolPart('delegate', 'running', {
-        agent_name: '旅行资料调研员',
-        objective: '并行核对东京亲子旅行的实时资料与开放时间。',
+        agent_name: copy.researchAgent,
+        objective: copy.researchObjective,
         capabilities: [],
       }, null),
-    ], { display_name: '主 Agent' }))
+    ], { display_name: copy.mainAgent }))
     runtimeStore.runStatus = 'waiting_for_workers'
     await wait(1800)
 
@@ -73,58 +119,65 @@ export function useShowcaseDirector() {
       submitted_count: 3,
     })
     appendMessage(message('assistant', [
-      textPart('实时资料与路线编排已经汇总，文档交付员正在生成最终 PDF。'),
-    ], { display_name: '主 Agent' }))
+      textPart(copy.progress),
+    ], { display_name: copy.mainAgent }))
     await wait(1700)
     runtimeStore.runStatus = 'completed'
     appendMessage(message('assistant', [
-      textPart('协作完成。最终版本包含每日路线、交通换乘、预算、预约清单与雨天备选。'),
-      artifactPart('东京五日亲子旅行手册.pdf', 'output/东京五日亲子旅行手册.pdf'),
-    ], { display_name: '主 Agent' }))
+      textPart(copy.completion),
+      artifactPart(copy.artifactName, copy.artifactPath),
+    ], { display_name: copy.mainAgent }))
   }
 
   function seedAgents(): void {
+    const copy = showcaseCopy[uiStore.locale]
+    const localizedPlanner = {
+      ...agentPackage,
+      agent_name: copy.plannerName,
+      name: copy.plannerName,
+      agent_description: copy.plannerDescription,
+    }
     agentStore.setPackages([
       {
         ...agentPackage,
         package_id: CHAT_PACKAGE_ID,
         agent_id: CHAT_PACKAGE_ID,
-        agent_name: '闲聊',
-        name: '闲聊',
-        agent_description: '系统内置通用 Agent。',
+        agent_name: copy.chatName,
+        name: copy.chatName,
+        agent_description: copy.chatDescription,
       } as any,
-      agentPackage as any,
+      localizedPlanner as any,
       {
-        ...agentPackage,
+        ...localizedPlanner,
         package_id: 'destination_researcher',
         agent_id: 'destination_researcher',
-        agent_name: '目的地调研员',
-        name: '目的地调研员',
+        agent_name: copy.destinationResearcher,
+        name: copy.destinationResearcher,
       },
       {
-        ...agentPackage,
+        ...localizedPlanner,
         package_id: 'itinerary_designer',
         agent_id: 'itinerary_designer',
-        agent_name: '行程编排师',
-        name: '行程编排师',
+        agent_name: copy.itineraryDesigner,
+        name: copy.itineraryDesigner,
       },
       {
-        ...agentPackage,
+        ...localizedPlanner,
         package_id: 'document_assistant',
         agent_id: 'document_assistant',
-        agent_name: '文档交付员',
-        name: '文档交付员',
+        agent_name: copy.documentAssistant,
+        name: copy.documentAssistant,
       },
     ])
     agentStore.setRecentSessions([{
       session_id: SHOWCASE_SESSION_ID,
       package_id: SHOWCASE_PACKAGE_ID,
-      display_title: '东京五日亲子行程',
-      first_user_input: '规划一份东京五日亲子旅行方案',
+      display_title: copy.sessionTitle,
+      first_user_input: copy.sessionInput,
       turn_count: 4,
       created_at: '2026-07-29T02:00:00.000Z',
       updated_at: '2026-07-29T02:26:00.000Z',
-      agent_name: '旅行规划师',
+      agent_name: copy.plannerName,
       visible_in_agent_session_list: true,
     }])
     runtimeStore.connectionStatus = 'connected'
