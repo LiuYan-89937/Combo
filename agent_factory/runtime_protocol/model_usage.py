@@ -33,6 +33,11 @@ class RuntimeModelUsage(FrozenProtocolModel):
     reasoning_tokens: int = Field(ge=0)
     cache_read_tokens: int = Field(ge=0)
     cache_write_tokens: int = Field(ge=0)
+    usage_source: Literal[
+        "provider_usage",
+        "provider_usage_with_fallback",
+        "local_estimation",
+    ] = "provider_usage"
     created_at: str = Field(default_factory=utc_now_text)
 
     @field_validator(

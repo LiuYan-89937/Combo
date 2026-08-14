@@ -119,6 +119,7 @@ export interface SkillHubResult {
     install_name: string
     version: string
     summary: string
+    source: string
   }>
 }
 

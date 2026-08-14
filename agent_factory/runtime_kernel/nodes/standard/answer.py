@@ -115,9 +115,16 @@ class CognitiveAnswerNode:
 def _context_token_budget_patch(metadata: dict[str, Any] | None, node_id: str) -> dict[str, Any]:
     data = dict(metadata or {})
     usage_metadata = data.get("usage_metadata") if isinstance(data.get("usage_metadata"), dict) else {}
+    usage_observation = (
+        data.get("usage_observation")
+        if isinstance(data.get("usage_observation"), dict)
+        else {}
+    )
     token_budget = provider_token_budget_payload(
         usage_metadata=usage_metadata,
-        provider_input_tokens=data.get("provider_input_tokens"),
+        provider_input_tokens=usage_observation.get("input_tokens"),
+        fallback_output_tokens=usage_observation.get("output_tokens"),
+        usage_source=str(usage_observation.get("usage_source") or "local_estimation"),
         node_id=node_id,
         model_role=str(data.get("model_role") or ""),
     )

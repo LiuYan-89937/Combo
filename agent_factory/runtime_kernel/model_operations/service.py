@@ -15,16 +15,19 @@ from pydantic import BaseModel
 
 from agent_factory.context_system.events import emit_context_event
 from agent_factory.context_system.token_counter import (
-    context_token_count_after_call,
     context_window_payload,
     model_context_limits,
     provider_token_budget_payload,
     token_count_from_usage_metadata,
 )
+from agent_factory.context_system.token_estimation import (
+    estimate_messages_tokens,
+    estimate_text_tokens,
+)
 from agent_factory.models.content import content_to_text, strip_internal_snapshot_blocks
 from agent_factory.models.message_layout import system_messages_first
 from agent_factory.models.reasoning import reasoning_content_from_message
-from agent_factory.models.usage import normalize_usage_metadata
+from agent_factory.models.usage import usage_metadata_with_fallback
 from agent_factory.runtime_kernel.model_inputs import (
     build_runtime_model_input,
 )
@@ -211,17 +214,22 @@ class ModelInvocationOperations:
             tool_call_count=len(tool_calls),
         )
         usage_metadata = getattr(response, "usage_metadata", None) or {}
-        _record_provider_token_budget(
-            state=state,
-            node_id=node_id,
-            model_role=effective_model_role,
-            usage_metadata=usage_metadata,
-        )
         usage_observation = _model_usage_payload(
             node_id=node_id,
             model_metadata=metadata,
             usage_metadata=usage_metadata,
             input_diagnostics=envelope.diagnostics(),
+            fallback_input_tokens=estimate_messages_tokens(envelope.messages),
+            fallback_output_tokens=estimate_text_tokens(
+                "\n".join(part for part in (reasoning_content, text) if part)
+            ),
+        )
+        _record_model_token_budget(
+            state=state,
+            node_id=node_id,
+            model_role=effective_model_role,
+            usage_metadata=usage_metadata,
+            usage_observation=usage_observation,
         )
         _emit(
             emit_event,
@@ -234,12 +242,12 @@ class ModelInvocationOperations:
             },
         )
         _emit(emit_event, "model_usage_completed", usage_observation)
-        _emit_provider_usage_context_window(
+        _emit_model_usage_context_window(
             state=state,
             services=services,
             node_id=node_id,
-            response=response,
             model_role=effective_model_role,
+            usage_observation=usage_observation,
         )
         return ModelInvocationResult(
             ai_message=response if isinstance(response, BaseMessage) else None,
@@ -250,6 +258,7 @@ class ModelInvocationOperations:
                 **metadata,
                 "tool_count": len(tool_list),
                 "usage_metadata": usage_metadata,
+                "usage_observation": usage_observation,
                 "provider_input_tokens": token_count_from_usage_metadata(usage_metadata),
                 "reasoning_content": reasoning_content,
                 **envelope.diagnostics(),
@@ -326,17 +335,20 @@ class ModelInvocationOperations:
                 else:
                     parsed = output_model.model_validate(result)
                 usage_metadata = getattr(result, "usage_metadata", None) or {}
-                _record_provider_token_budget(
-                    state=state,
-                    node_id=node_id,
-                    model_role=effective_model_role,
-                    usage_metadata=usage_metadata,
-                )
                 usage_observation = _model_usage_payload(
                     node_id=node_id,
                     model_metadata=metadata,
                     usage_metadata=usage_metadata,
                     input_diagnostics=input_diagnostics,
+                    fallback_input_tokens=estimate_messages_tokens(request_messages),
+                    fallback_output_tokens=estimate_text_tokens(parsed.model_dump_json()),
+                )
+                _record_model_token_budget(
+                    state=state,
+                    node_id=node_id,
+                    model_role=effective_model_role,
+                    usage_metadata=usage_metadata,
+                    usage_observation=usage_observation,
                 )
                 _emit(
                     emit_event,
@@ -349,12 +361,12 @@ class ModelInvocationOperations:
                     },
                 )
                 _emit(emit_event, "model_usage_completed", usage_observation)
-                _emit_provider_usage_context_window(
+                _emit_model_usage_context_window(
                     state=state,
                     services=services,
                     node_id=node_id,
-                    response=result,
                     model_role=effective_model_role,
+                    usage_observation=usage_observation,
                 )
                 return parsed
             except RuntimeModelGenerationInterrupted:
@@ -465,12 +477,13 @@ def _emit(emit_event, event_type: str, payload: dict[str, Any]) -> None:
     emit_event({"event_type": event_type, **payload})
 
 
-def _record_provider_token_budget(
+def _record_model_token_budget(
     *,
     state: Any,
     node_id: str | None,
     model_role: str,
     usage_metadata: Any,
+    usage_observation: dict[str, Any],
 ) -> None:
     if state is None or node_id is None:
         return
@@ -481,6 +494,9 @@ def _record_provider_token_budget(
         usage_metadata=usage_metadata,
         node_id=node_id,
         model_role=model_role,
+        provider_input_tokens=usage_observation.get("input_tokens"),
+        fallback_output_tokens=usage_observation.get("output_tokens"),
+        usage_source=str(usage_observation.get("usage_source") or "local_estimation"),
     )
     if not payload:
         return
@@ -674,8 +690,14 @@ def _model_usage_payload(
     model_metadata: dict[str, Any],
     usage_metadata: dict[str, Any],
     input_diagnostics: dict[str, Any],
+    fallback_input_tokens: int,
+    fallback_output_tokens: int,
 ) -> dict[str, Any]:
-    normalized_usage = normalize_usage_metadata(usage_metadata)
+    normalized_usage, usage_source = usage_metadata_with_fallback(
+        usage_metadata,
+        fallback_input_tokens=fallback_input_tokens,
+        fallback_output_tokens=fallback_output_tokens,
+    )
     input_tokens = normalized_usage.input_tokens
     output_tokens = normalized_usage.output_tokens
     return {
@@ -692,6 +714,7 @@ def _model_usage_payload(
         "reasoning_tokens": int(normalized_usage.reasoning_tokens or 0),
         "cache_read_tokens": int(normalized_usage.cache_hit_tokens or 0),
         "cache_write_tokens": int(normalized_usage.cache_write_tokens or 0),
+        "usage_source": usage_source,
         "model_input": input_diagnostics,
     }
 
@@ -841,19 +864,17 @@ def _structured_retry_instruction(
     )
 
 
-def _emit_provider_usage_context_window(
+def _emit_model_usage_context_window(
     *,
     state: Any,
     services: Any | None,
     node_id: str | None,
-    response: Any,
     model_role: str,
+    usage_observation: dict[str, Any],
 ) -> None:
     if services is None or node_id is None:
         return
-    token_count = context_token_count_after_call(getattr(response, "usage_metadata", None))
-    if token_count is None:
-        return
+    token_count = int(usage_observation.get("total_tokens") or 0)
     limits = model_context_limits(services=services, state=state, model_role=model_role)
     context_runtime = getattr(services, "context_system", None)
     resolve_context_limits = getattr(context_runtime, "model_context_limits", None)
@@ -866,11 +887,11 @@ def _emit_provider_usage_context_window(
     payload = context_window_payload(
         node_id=node_id,
         token_count=token_count,
-        token_count_method="provider_usage",
+        token_count_method=str(usage_observation.get("usage_source") or "local_estimation"),
         compression_threshold_tokens=limits.compression_trigger_tokens,
         context_window_tokens=limits.context_window_tokens,
         model_role=model_role,
-        source="model_operation.provider_usage",
+        source=f"model_operation.{usage_observation.get('usage_source') or 'local_estimation'}",
     )
     context = getattr(state, "context", None)
     if context is not None and hasattr(context, "token_budget"):

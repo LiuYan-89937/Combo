@@ -209,6 +209,8 @@ def provider_token_budget_payload(
     node_id: str,
     model_role: str,
     provider_input_tokens: Any = None,
+    fallback_output_tokens: Any = None,
+    usage_source: str = "provider_usage",
 ) -> dict[str, Any]:
     usage = normalize_usage_metadata(usage_metadata)
     input_tokens = _token_int(provider_input_tokens)
@@ -217,18 +219,23 @@ def provider_token_budget_payload(
     if input_tokens is None:
         return {}
     output_tokens = usage.output_tokens
+    if output_tokens is None:
+        output_tokens = _token_int(fallback_output_tokens)
     total_tokens = usage.total_tokens
     context_tokens_after_call = context_token_count_after_call(usage_metadata)
     if context_tokens_after_call is None:
         context_tokens_after_call = int(input_tokens) + int(output_tokens or 0)
     return {
+        "token_count": context_tokens_after_call,
+        "token_count_method": usage_source,
+        "source": f"model_operation.{usage_source}",
         "last_provider_input_tokens": int(input_tokens),
         "last_provider_output_tokens": output_tokens,
         "last_provider_total_tokens": total_tokens,
         "last_provider_context_tokens_after_call": context_tokens_after_call,
         "effective_context_tokens": context_tokens_after_call,
-        "effective_context_source": "provider_usage",
-        "last_provider_token_count_method": "provider_usage",
+        "effective_context_source": usage_source,
+        "last_provider_token_count_method": usage_source,
         "last_provider_node_id": node_id,
         "last_provider_model_role": model_role,
         "last_provider_usage_metadata": usage_metadata if isinstance(usage_metadata, dict) else {},

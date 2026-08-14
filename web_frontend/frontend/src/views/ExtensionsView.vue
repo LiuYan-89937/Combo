@@ -417,27 +417,111 @@
       <template #footer><n-space justify="end"><n-button @click="showSkillEditor = false">取消</n-button><n-button type="primary" :loading="savingSkill" :disabled="!skillDocument" @click="saveSkillContent">保存并发布</n-button></n-space></template>
     </n-modal>
 
-    <n-modal v-model:show="showSkillHub" preset="card" :style="{ width: 'min(760px, calc(100vw - 48px))' }" title="从 SkillHub 添加" :bordered="false">
+    <n-modal v-model:show="showSkillHub" preset="card" class="skillhub-modal" :style="{ width: 'min(820px, calc(100vw - 32px))' }" :bordered="false">
       <div class="skillhub-panel">
-        <div class="skillhub-status">
-          <span :class="{ ready: skillHubResult?.cli_available }" />
+        <header class="skillhub-header">
           <div>
-            <strong>{{ skillHubResult?.cli_available ? 'SkillHub CLI 已连接' : 'SkillHub CLI 不可用' }}</strong>
-            <small>{{ skillHubResult?.cli_version || skillHubResult?.message || '正在检查本机 SkillHub CLI' }}</small>
+            <span class="pool-kicker">SKILL DISCOVERY</span>
+            <h2>从 SkillHub 添加</h2>
+            <p>搜索社区 Skill，安装后会进入当前能力池。</p>
           </div>
+          <span class="skillhub-connection" :class="{ ready: skillHubResult?.cli_available }">
+            <i />{{ skillHubResult?.cli_available ? '已连接' : '不可用' }}
+          </span>
+        </header>
+        <div class="skillhub-search" :class="{ disabled: !skillHubResult?.cli_available }">
+          <n-icon :size="20"><SearchOutline /></n-icon>
+          <input
+            v-model="skillHubQuery"
+            :disabled="!skillHubResult?.cli_available"
+            type="search"
+            autocomplete="off"
+            placeholder="搜索能力，例如 ppt design"
+            aria-label="搜索 SkillHub"
+            @keyup.enter="searchSkillHub"
+          />
+          <button
+            type="button"
+            :disabled="!skillHubQuery.trim() || !skillHubResult?.cli_available || searchingSkillHub"
+            @click="searchSkillHub"
+          >
+            {{ searchingSkillHub ? '搜索中' : '搜索' }}
+          </button>
         </div>
-        <n-input-group>
-          <n-input v-model:value="skillHubQuery" :disabled="!skillHubResult?.cli_available" placeholder="输入 1–3 个关键词，例如 ppt design" @keyup.enter="searchSkillHub" />
-          <n-button type="primary" :loading="searchingSkillHub" :disabled="!skillHubQuery.trim() || !skillHubResult?.cli_available" @click="searchSkillHub">搜索</n-button>
-        </n-input-group>
+        <p v-if="!skillHubResult?.cli_available" class="skillhub-unavailable">
+          {{ skillHubResult?.cli_version || skillHubResult?.message || '正在检查本机 SkillHub CLI' }}
+        </p>
         <div v-if="skillHubResult?.items?.length" class="skillhub-results">
-          <article v-for="item in skillHubResult.items" :key="item.install_name">
-            <div><strong>{{ item.name }}</strong><small>{{ item.version }}</small></div>
-            <p>{{ item.summary || '暂无说明' }}</p>
-            <n-button size="small" type="primary" secondary :loading="installingSkill === item.install_name" :disabled="Boolean(installingSkill)" @click="installSkillHub(item.install_name)">安装</n-button>
+          <div class="skillhub-results-head">
+            <strong>搜索结果</strong>
+            <span>{{ skillHubResult.items.length }} 项</span>
+          </div>
+          <article
+            v-for="item in skillHubResult.items"
+            :key="item.install_name"
+            tabindex="0"
+            role="button"
+            :aria-label="`预览 ${item.name}`"
+            @click="previewSkillHub(item)"
+            @keydown.enter="previewSkillHub(item)"
+          >
+            <div class="skillhub-result-mark">{{ item.name.slice(0, 1).toUpperCase() }}</div>
+            <div class="skillhub-result-copy">
+              <div>
+                <strong>{{ item.name }}</strong>
+                <small>{{ skillHubSourceLabel(item.source) }}<template v-if="item.version"> · {{ item.version }}</template></small>
+              </div>
+              <p>{{ item.summary || '暂无说明' }}</p>
+              <code>{{ item.install_name }}</code>
+            </div>
+            <div class="skillhub-result-actions">
+              <n-button text @click.stop="previewSkillHub(item)">预览</n-button>
+              <n-button round type="primary" :loading="installingSkill === item.install_name" :disabled="Boolean(installingSkill)" @click.stop="installSkillHub(item.install_name)">安装</n-button>
+            </div>
           </article>
         </div>
-        <n-empty v-else-if="skillHubResult?.action === 'search'" description="没有找到匹配的 Skill" />
+        <div v-else-if="skillHubResult?.action === 'search'" class="skillhub-empty">
+          <strong>没有找到匹配的 Skill</strong>
+          <span>换一个更短、更明确的能力关键词试试。</span>
+        </div>
+        <div v-else-if="skillHubResult?.cli_available" class="skillhub-empty initial">
+          <strong>查找可以直接加入能力池的 Skill</strong>
+          <span>使用一到三个关键词描述需要的能力。</span>
+        </div>
+      </div>
+    </n-modal>
+
+    <n-modal
+      v-model:show="showSkillHubPreview"
+      preset="card"
+      class="skillhub-preview-modal"
+      :style="{ width: 'min(620px, calc(100vw - 32px))' }"
+      :bordered="false"
+    >
+      <div v-if="selectedSkillHubItem" class="skillhub-preview">
+        <header>
+          <div class="skillhub-preview-mark">{{ selectedSkillHubItem.name.slice(0, 1).toUpperCase() }}</div>
+          <div>
+            <span>{{ skillHubSourceLabel(selectedSkillHubItem.source) }}</span>
+            <h2>{{ selectedSkillHubItem.name }}</h2>
+          </div>
+        </header>
+        <p class="skillhub-preview-summary">{{ selectedSkillHubItem.summary || '该 Skill 暂未提供说明。' }}</p>
+        <dl>
+          <div><dt>安装标识</dt><dd><code>{{ selectedSkillHubItem.install_name }}</code></dd></div>
+          <div><dt>版本</dt><dd>{{ selectedSkillHubItem.version || '由 SkillHub 提供最新版本' }}</dd></div>
+          <div><dt>来源</dt><dd>{{ skillHubSourceLabel(selectedSkillHubItem.source) }}</dd></div>
+        </dl>
+        <footer>
+          <span>安装后会直接进入 Skill 池，可继续查看并编辑完整指令与资源。</span>
+          <n-button
+            round
+            type="primary"
+            :loading="installingSkill === selectedSkillHubItem.install_name"
+            :disabled="Boolean(installingSkill)"
+            @click="installSkillHub(selectedSkillHubItem.install_name)"
+          >安装 Skill</n-button>
+        </footer>
       </div>
     </n-modal>
 
@@ -458,7 +542,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import {
   NAlert, NButton, NDrawer, NDrawerContent, NDynamicTags, NEmpty, NForm, NFormItem, NIcon,
-  NInput, NInputGroup, NInputNumber, NModal, NRadio, NRadioGroup, NSelect, NSpace, NSpin, NSwitch,
+  NInput, NInputNumber, NModal, NRadio, NRadioGroup, NSelect, NSpace, NSpin, NSwitch,
   NTabPane, NTabs, NPopconfirm, useMessage,
 } from 'naive-ui'
 import { Add, Refresh, SearchOutline } from '@/components/icons'
@@ -519,6 +603,8 @@ const skillResources = reactive<Record<string, string>>({})
 const showSkillHub = ref(false)
 const skillHubQuery = ref('')
 const skillHubResult = ref<SkillHubResult | null>(null)
+const showSkillHubPreview = ref(false)
+const selectedSkillHubItem = ref<SkillHubResult['items'][number] | null>(null)
 const searchingSkillHub = ref(false)
 const installingSkill = ref('')
 const importingSkill = ref(false)
@@ -794,6 +880,8 @@ async function deleteItem(item: PoolItem) {
 function openAddMcp() { editingMcp.value = null; mcpInstallSession.value = null; showMcpModal.value = true }
 async function openSkillHub() { showSkillHub.value = true; try { skillHubResult.value = await capabilityPoolsApi.skillHubStatus() } catch (error) { message.error(error instanceof Error ? error.message : String(error)) } }
 async function searchSkillHub() { const query = skillHubQuery.value.trim(); if (!query || searchingSkillHub.value) return; searchingSkillHub.value = true; try { skillHubResult.value = await capabilityPoolsApi.searchSkillHub(query) } catch (error) { message.error(error instanceof Error ? error.message : String(error)) } finally { searchingSkillHub.value = false } }
+function previewSkillHub(item: SkillHubResult['items'][number]) { selectedSkillHubItem.value = item; showSkillHubPreview.value = true }
+function skillHubSourceLabel(source: string) { return source.startsWith('@') ? `企业源 ${source}` : 'SkillHub 社区' }
 async function installSkillHub(skill: string) { if (!skill || installingSkill.value) return; installingSkill.value = skill; try { const result = await capabilityPoolsApi.installSkillHub(skill); snapshot.value = result.capability_pool; skillHubResult.value = result.skillhub; message.success(`Skill 已安装并发布：${skill}`) } catch (error) { message.error(error instanceof Error ? error.message : String(error)) } finally { installingSkill.value = '' } }
 async function importSkillFolder(event: Event) {
   const selection = selectedFolder(event)
@@ -1026,11 +1114,57 @@ onBeforeUnmount(clearProbeNotice)
 .creator-layout { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(0, .92fr); align-items: start; gap: 18px; max-height: 76vh; overflow: auto; }.creator-form { display: grid; min-width: 0; align-content: start; gap: 14px; }.creator-form .form-section,.source-pane { box-sizing: border-box; min-width: 0; }.parameter-card { margin-top: 10px; padding: 14px; border: 1px solid var(--app-border); border-radius: 11px; background: var(--app-surface-subtle, color-mix(in srgb, var(--app-text) 2%, transparent)); }.parameter-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 11px; }.parameter-head > span { color: var(--app-text-secondary); font-size: 11px; font-weight: 700; }.parameter-fields { display: grid; grid-template-columns: minmax(0, 1fr) 140px 82px; gap: 0 10px; }.parameter-fields :deep(.n-form-item) { min-width: 0; margin-bottom: 10px; }.parameter-description { grid-column: 1 / -1; }.required-field :deep(.n-form-item-blank) { align-items: center; }.source-pane { position: sticky; top: 0; padding: 17px; border: 1px solid var(--app-border); border-radius: 13px; }.file-button { position: relative; flex: none; padding: 6px 10px; border: 1px solid var(--app-border); border-radius: 8px; font-size: 11px; cursor: pointer; }.file-button input { position: absolute; width: 1px; height: 1px; opacity: 0; }.full { grid-column: 1 / -1; }
 .creator-progress { margin-top: 16px; }
 .skill-editor :deep(.n-card__content) { padding-top: 4px; }.skill-editor-header { justify-content: space-between; gap: 20px; min-width: 0; padding: 0 0 16px; border-bottom: 1px solid var(--app-border); }.skill-editor-header > div { gap: 10px; }.skill-editor-header > span { overflow: hidden; color: var(--app-text-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }.skill-pane { padding-top: 18px; }.narrow-pane { width: min(650px, 100%); }.pane-note { display: grid; gap: 3px; margin-bottom: 10px; }.pane-note span { color: var(--app-text-muted); font-size: 10px; }.code-editor :deep(textarea) { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; line-height: 1.65; }.resource-editor { display: grid; grid-template-columns: 260px minmax(0, 1fr); min-height: 470px; margin-top: 18px; overflow: hidden; border: 1px solid var(--app-border); border-radius: 12px; }.resource-editor aside { padding: 8px; overflow-y: auto; border-right: 1px solid var(--app-border); background: var(--app-surface-subtle, color-mix(in srgb, var(--app-text) 3%, transparent)); }.resource-editor aside button { display: grid; width: 100%; gap: 3px; padding: 10px; color: inherit; text-align: left; border: 0; border-radius: 8px; background: transparent; cursor: pointer; }.resource-editor aside button:hover,.resource-editor aside button.active { background: var(--app-surface); }.resource-editor aside span { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }.resource-editor aside small { color: var(--app-text-muted); font-size: 9px; }.resource-content { min-width: 0; padding: 15px; }.resource-empty { align-self: center; }
-.skillhub-panel { display: grid; gap: 18px; }.skillhub-status { display: flex; align-items: center; gap: 11px; padding: 14px; border: 1px solid var(--app-border); border-radius: 12px; }.skillhub-status > span { width: 8px; height: 8px; border-radius: 50%; background: var(--app-text-muted); }.skillhub-status > span.ready { background: var(--app-success); }.skillhub-status div { display: grid; gap: 3px; }.skillhub-status small { color: var(--app-text-muted); font-size: 10px; }.skillhub-results { display: grid; gap: 8px; max-height: 440px; overflow-y: auto; }.skillhub-results article { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px 14px; padding: 14px; border: 1px solid var(--app-border); border-radius: 11px; }.skillhub-results article > div { display: flex; align-items: baseline; gap: 8px; }.skillhub-results article small { color: var(--app-text-muted); font-size: 9px; }.skillhub-results article p { grid-column: 1; margin: 0; color: var(--app-text-secondary); font-size: 11px; line-height: 1.6; }.skillhub-results article .n-button { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
+.skillhub-modal :deep(.n-card-header),.skillhub-preview-modal :deep(.n-card-header) { display: none; }
+.skillhub-modal :deep(.n-card__content),.skillhub-preview-modal :deep(.n-card__content) { padding: 0; }
+.skillhub-panel { display: grid; gap: 20px; padding: 30px; }
+.skillhub-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
+.skillhub-header h2 { margin: 0; font-size: 25px; letter-spacing: -.035em; }
+.skillhub-header p { margin: 8px 0 0; color: var(--app-text); font-size: 12px; }
+.skillhub-connection { display: inline-flex; flex: none; align-items: center; gap: 7px; margin-top: 3px; padding: 6px 10px; color: var(--app-text); border: 1px solid var(--app-border); border-radius: 999px; background: var(--app-surface); font-size: 10px; }
+.skillhub-connection i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.skillhub-connection.ready { color: var(--app-surface); border-color: var(--app-text); background: var(--app-text); }
+.skillhub-search { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 58px; padding: 7px 8px 7px 18px; border: 1px solid var(--app-text); border-radius: 18px; background: var(--app-surface); }
+.skillhub-search.disabled { border-style: dashed; }
+.skillhub-search input { min-width: 0; padding: 0; color: var(--app-text); border: 0; outline: 0; background: transparent; font: inherit; font-size: 14px; }
+.skillhub-search input::placeholder { color: var(--app-text); }
+.skillhub-search button { min-width: 78px; height: 42px; padding: 0 18px; color: var(--app-surface); border: 1px solid var(--app-text); border-radius: 13px; background: var(--app-text); font-size: 12px; font-weight: 750; cursor: pointer; }
+.skillhub-search button:disabled { color: var(--app-text); background: var(--app-surface); cursor: default; }
+.skillhub-unavailable { margin: -8px 2px 0; color: var(--app-text); font-size: 10px; }
+.skillhub-results { display: grid; gap: 10px; max-height: 470px; padding-right: 3px; overflow-y: auto; }
+.skillhub-results-head { display: flex; align-items: center; justify-content: space-between; padding: 0 2px 4px; }
+.skillhub-results-head strong,.skillhub-results-head span { color: var(--app-text); font-size: 11px; }
+.skillhub-results article { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 16px; border: 1px solid var(--app-border); border-radius: 16px; background: var(--app-surface); cursor: pointer; transition: border-color .16s ease, transform .16s ease; }
+.skillhub-results article:hover,.skillhub-results article:focus-visible { border-color: var(--app-text); outline: none; transform: translateY(-1px); }
+.skillhub-result-mark,.skillhub-preview-mark { display: grid; place-items: center; color: var(--app-surface); background: var(--app-text); font-weight: 800; }
+.skillhub-result-mark { width: 42px; height: 42px; border-radius: 13px; font-size: 15px; }
+.skillhub-result-copy { display: grid; min-width: 0; gap: 5px; }
+.skillhub-result-copy > div { display: flex; min-width: 0; align-items: baseline; gap: 8px; }
+.skillhub-result-copy strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.skillhub-result-copy small,.skillhub-result-copy p,.skillhub-result-copy code { color: var(--app-text); }
+.skillhub-result-copy small { flex: none; font-size: 9px; }
+.skillhub-result-copy p { display: -webkit-box; margin: 0; overflow: hidden; font-size: 11px; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.skillhub-result-copy code { overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.skillhub-result-actions { display: flex; align-items: center; gap: 8px; }
+.skillhub-empty { display: grid; min-height: 180px; place-content: center; gap: 6px; color: var(--app-text); text-align: center; border: 1px dashed var(--app-border); border-radius: 16px; }
+.skillhub-empty.initial { min-height: 150px; }
+.skillhub-empty strong { color: var(--app-text); font-size: 12px; }
+.skillhub-empty span { color: var(--app-text); font-size: 10px; }
+.skillhub-preview { display: grid; gap: 24px; padding: 30px; color: var(--app-text); }
+.skillhub-preview > header { display: flex; align-items: center; gap: 14px; }
+.skillhub-preview-mark { width: 52px; height: 52px; border-radius: 16px; font-size: 18px; }
+.skillhub-preview header span { font-size: 10px; font-weight: 750; letter-spacing: .08em; }
+.skillhub-preview h2 { margin: 3px 0 0; font-size: 24px; letter-spacing: -.03em; }
+.skillhub-preview-summary { margin: 0; font-size: 14px; line-height: 1.75; white-space: pre-wrap; }
+.skillhub-preview dl { display: grid; border-top: 1px solid var(--app-border); }
+.skillhub-preview dl > div { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 18px; padding: 13px 0; border-bottom: 1px solid var(--app-border); }
+.skillhub-preview dt { font-size: 10px; font-weight: 750; }
+.skillhub-preview dd { min-width: 0; margin: 0; font-size: 11px; overflow-wrap: anywhere; }
+.skillhub-preview footer { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.skillhub-preview footer > span { max-width: 390px; font-size: 10px; line-height: 1.6; }
 .mcp-detail-hero { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 18px; padding-bottom: 18px; border-bottom: 1px solid var(--app-border); }.mcp-detail-hero > div { display: flex; min-width: 0; align-items: center; gap: 10px; }.mcp-detail-hero h2 { margin: 0; overflow: hidden; font-size: 20px; text-overflow: ellipsis; white-space: nowrap; }.mcp-detail-hero p { grid-column: 1 / -1; margin: 0; color: var(--app-text-secondary); font-size: 12px; line-height: 1.6; }.mcp-connection-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; margin-top: 18px; overflow: hidden; border: 1px solid var(--app-border); border-radius: 12px; background: var(--app-border); }.mcp-connection-facts > div { display: grid; gap: 4px; padding: 13px; background: var(--app-surface); }.mcp-connection-facts small { color: var(--app-text-muted); font-size: 9px; }.mcp-connection-facts strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }.mcp-detail-tabs { margin-top: 18px; }.mcp-catalog-list { display: grid; gap: 8px; padding-top: 8px; }.mcp-catalog-list article { display: grid; gap: 5px; padding: 13px; border: 1px solid var(--app-border); border-radius: 11px; }.mcp-catalog-list strong { font-size: 12px; }.mcp-catalog-list p { margin: 0; color: var(--app-text-secondary); font-size: 10px; line-height: 1.55; }.mcp-catalog-list code { overflow-wrap: anywhere; color: var(--app-text-muted); font-size: 9px; }
 .mcp-log-list { display: grid; gap: 6px; padding-top: 8px; }.mcp-log-list > p { display: grid; grid-template-columns: 62px minmax(0, 1fr); gap: 10px; margin: 0; padding: 9px 11px; border: 1px solid var(--app-border); border-radius: 9px; }.mcp-log-list span { color: var(--app-text-muted); font-size: 9px; text-transform: uppercase; }.mcp-log-list code { overflow-wrap: anywhere; font-size: 9px; }
 .mcp-resource-row { grid-template-columns: minmax(0, 1fr) auto; }.mcp-resource-row > p,.mcp-resource-row > code { grid-column: 1; }.mcp-resource-row > .n-button { grid-column: 2; grid-row: 1 / span 3; align-self: center; }.mcp-resource-preview { margin-top: 12px; padding: 12px; overflow: auto; border: 1px solid var(--app-border); border-radius: 11px; }.mcp-resource-preview img { display: block; max-width: 100%; max-height: 460px; margin: auto; object-fit: contain; }.mcp-resource-preview pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
 .mcp-catalog-configurable { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 6px 12px; }.mcp-catalog-configurable > strong,.mcp-catalog-configurable > p,.mcp-catalog-configurable > code,.mcp-catalog-configurable > .mcp-argument-grid { grid-column: 1; }.mcp-catalog-configurable > .n-button { grid-column: 2; grid-row: 1 / span 4; align-self: center; }.mcp-argument-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-top: 4px; }.mcp-prompt-preview > strong { display: block; margin-bottom: 10px; }.mcp-prompt-preview article + article { margin-top: 12px; }.mcp-prompt-preview small { display: block; margin-bottom: 5px; color: var(--app-text-secondary); font-weight: 700; text-transform: uppercase; }
 @media (max-width: 920px) { .library-header { align-items: flex-start; flex-direction: column; }.header-tools,.search-input { width: 100%; }.pool-switcher { grid-template-columns: repeat(2, 1fr); }.resource-editor { grid-template-columns: 210px minmax(0, 1fr); }.creator-layout { grid-template-columns: 1fr; }.source-pane { position: static; }.parameter-fields { grid-template-columns: minmax(0, 1fr) 140px 82px; } }
-@media (max-width: 620px) { .library-page { padding: 20px 14px; }.pool-switcher { grid-template-columns: 1fr 1fr; }.pool-switch { padding: 13px; }.pool-switch small { display: none; }.pool-surface { padding: 15px; }.pool-heading { align-items: flex-start; flex-direction: column; }.card-grid { grid-template-columns: 1fr; }.resource-editor { grid-template-columns: 1fr; }.resource-editor aside { max-height: 160px; border-right: 0; border-bottom: 1px solid var(--app-border); }.form-section.two-column,.parameter-fields { grid-template-columns: 1fr; }.parameter-description { grid-column: auto; } }
+@media (max-width: 620px) { .library-page { padding: 20px 14px; }.pool-switcher { grid-template-columns: 1fr 1fr; }.pool-switch { padding: 13px; }.pool-switch small { display: none; }.pool-surface { padding: 15px; }.pool-heading { align-items: flex-start; flex-direction: column; }.card-grid { grid-template-columns: 1fr; }.resource-editor { grid-template-columns: 1fr; }.resource-editor aside { max-height: 160px; border-right: 0; border-bottom: 1px solid var(--app-border); }.form-section.two-column,.parameter-fields { grid-template-columns: 1fr; }.parameter-description { grid-column: auto; }.skillhub-panel,.skillhub-preview { padding: 22px 18px; }.skillhub-header { gap: 12px; }.skillhub-search { min-height: 52px; padding-left: 14px; }.skillhub-search button { min-width: 64px; height: 38px; padding: 0 13px; }.skillhub-results article { grid-template-columns: 38px minmax(0, 1fr); }.skillhub-result-mark { width: 38px; height: 38px; }.skillhub-result-actions { grid-column: 2; justify-self: start; }.skillhub-preview footer { align-items: flex-start; flex-direction: column; }.skillhub-preview dl > div { grid-template-columns: 86px minmax(0, 1fr); } }
 </style>

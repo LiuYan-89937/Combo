@@ -67,6 +67,49 @@ def normalize_usage_metadata(usage: Any) -> NormalizedModelUsage:
     )
 
 
+def usage_metadata_with_fallback(
+    usage: Any,
+    *,
+    fallback_input_tokens: int,
+    fallback_output_tokens: int,
+) -> tuple[NormalizedModelUsage, str]:
+    """Prefer provider usage field-by-field and estimate only absent values."""
+
+    normalized = normalize_usage_metadata(usage)
+    provider_fields = (
+        normalized.input_tokens,
+        normalized.output_tokens,
+        normalized.total_tokens,
+    )
+    input_tokens = normalized.input_tokens
+    output_tokens = normalized.output_tokens
+    if input_tokens is None:
+        input_tokens = max(int(fallback_input_tokens), 0)
+    if output_tokens is None:
+        output_tokens = max(int(fallback_output_tokens), 0)
+    total_tokens = normalized.total_tokens
+    if total_tokens is None:
+        total_tokens = input_tokens + output_tokens
+    if all(value is None for value in provider_fields):
+        source = "local_estimation"
+    elif any(value is None for value in provider_fields):
+        source = "provider_usage_with_fallback"
+    else:
+        source = "provider_usage"
+    return (
+        NormalizedModelUsage(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+            reasoning_tokens=normalized.reasoning_tokens,
+            cache_hit_tokens=normalized.cache_hit_tokens,
+            cache_miss_tokens=normalized.cache_miss_tokens,
+            cache_write_tokens=normalized.cache_write_tokens,
+        ),
+        source,
+    )
+
+
 def _first_int(payload: dict[str, Any], *keys: str) -> int | None:
     for key in keys:
         value = payload.get(key)

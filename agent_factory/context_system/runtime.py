@@ -21,7 +21,6 @@ from agent_factory.context_system.schema import (
 from agent_factory.context_system.sources import ContextSource, ContextSourceRuntime, default_context_sources
 from agent_factory.context_system.token_counter import (
     ModelContextLimits,
-    TokenCountResult,
     count_messages_tokens,
     context_window_payload,
     context_limits_with_overrides,
@@ -83,25 +82,23 @@ class ContextSystemRuntime:
         working_messages = list(messages)
         working_state = state
         measured_count = count_messages_tokens(working_messages, services=services)
-        effective_count = _effective_context_token_count(
-            state=working_state,
-            measured_count=measured_count,
-        )
-        emit_context_event(
-            services=services,
-            state=working_state,
-            event_type="context_window_updated",
-            node_id=node_id,
-            payload=context_window_payload(
+        effective_count = measured_count
+        if not _has_completed_model_usage(working_state):
+            emit_context_event(
+                services=services,
+                state=working_state,
+                event_type="context_window_updated",
                 node_id=node_id,
-                token_count=effective_count.token_count,
-                token_count_method=effective_count.method,
-                compression_threshold_tokens=active_limits.compression_trigger_tokens,
-                context_window_tokens=active_limits.context_window_tokens,
-                model_role="main",
-                source="context_system.pre_model",
-            ),
-        )
+                payload=context_window_payload(
+                    node_id=node_id,
+                    token_count=effective_count.token_count,
+                    token_count_method=effective_count.method,
+                    compression_threshold_tokens=active_limits.compression_trigger_tokens,
+                    context_window_tokens=active_limits.context_window_tokens,
+                    model_role="main",
+                    source="context_system.pre_model",
+                ),
+            )
         compression_messages, compression_report = maybe_compress_messages(
             messages=working_messages,
             policy=compression_policy,
@@ -435,28 +432,10 @@ def _effective_context_policy(
     )
     return default.model_copy(update={"cross_session_memory": memory})
 
-def _effective_context_token_count(
-    *,
-    state: Any,
-    measured_count: TokenCountResult,
-) -> TokenCountResult:
+def _has_completed_model_usage(state: Any) -> bool:
     budget = dict(getattr(getattr(state, "context", None), "token_budget", {}) or {})
-    value = (
-        budget.get("effective_context_tokens")
-        or budget.get("last_provider_context_tokens_after_call")
-        or budget.get("last_provider_total_tokens")
-        or budget.get("last_provider_input_tokens")
-    )
-    if not isinstance(value, int) and not isinstance(value, float):
-        return measured_count
-    token_count = int(value)
-    if token_count <= 0:
-        return measured_count
-    return TokenCountResult(
-        token_count=token_count,
-        method=str(budget.get("effective_context_source") or "previous_provider_usage_after_call"),
-        model_role=str(budget.get("last_provider_model_role") or measured_count.model_role or "main"),
-    )
+    source = str(budget.get("source") or budget.get("effective_context_source") or "")
+    return source.startswith("model_operation.provider_usage")
 
 
 def _state_with_compressed_token_budget(

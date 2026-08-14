@@ -30,6 +30,7 @@ class OpenAIChatCompletionsAdapter:
             "api_key": settings.api_key,
             "base_url": settings.base_url,
             "streaming": True,
+            "stream_usage": True,
         }
         if settings.temperature is not None:
             kwargs["temperature"] = settings.temperature

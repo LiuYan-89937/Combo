@@ -323,6 +323,10 @@ class DynamicRuntimeService:
             if not isinstance(authoritative, dict):
                 raise RuntimeError("fixed runtime graph returned an invalid checkpoint projection")
             state = RuntimeState.model_validate(authoritative.get("runtime") or {})
+            state.observability.events = _drain_runtime_observations(
+                self._service_set.services.observability_manager,
+                state=state,
+            )
             if run_control.drain_requested:
                 state.execution.interrupted = True
                 state.execution.finished = True
@@ -808,6 +812,17 @@ def _tool_event_times(observations: list[dict[str, Any]]) -> dict[str, dict[str,
     return event_times
 
 
+def _drain_runtime_observations(manager: Any, *, state: RuntimeState) -> list[dict[str, Any]]:
+    drain = getattr(manager, "drain_durable_events", None)
+    if not callable(drain):
+        raise RuntimeError("runtime observability manager cannot drain execution observations")
+    events = drain(
+        trace_id=state.observability.trace_id,
+        run_id=state.run.run_id,
+    )
+    return [event.model_dump(mode="json") for event in events]
+
+
 def _model_usage_records(
     instance: RuntimeInstance,
     observations: list[dict[str, Any]],
@@ -866,6 +881,7 @@ def _model_usage_records(
                 reasoning_tokens=int(payload.get("reasoning_tokens") or 0),
                 cache_read_tokens=int(payload.get("cache_read_tokens") or 0),
                 cache_write_tokens=int(payload.get("cache_write_tokens") or 0),
+                usage_source=str(payload.get("usage_source") or "provider_usage"),
                 created_at=str(observation.get("created_at") or ""),
             )
         )

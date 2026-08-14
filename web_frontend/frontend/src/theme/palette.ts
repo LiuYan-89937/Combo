@@ -94,7 +94,7 @@ export const lightPalette: AppPalette = {
   controlSurfacePressed: '#ffffff',
   controlDisabledSurface: '#ffffff',
   controlDisabledBorder: 'rgba(0, 0, 0, 0.08)',
-  controlDisabledText: 'rgba(0, 0, 0, 0.32)',
+  controlDisabledText: '#000000',
 
   // 玻璃效果
   glassBackground: 'rgba(255, 255, 255, 0.72)',
@@ -111,10 +111,10 @@ export const lightPalette: AppPalette = {
   // 文本（黑白灰）
   text: '#000000',
   textStrong: '#000000',
-  textSecondary: 'rgba(0, 0, 0, 0.62)',
-  textMuted: 'rgba(0, 0, 0, 0.44)',
-  textPlaceholder: 'rgba(0, 0, 0, 0.3)',
-  textDisabled: 'rgba(0, 0, 0, 0.24)',
+  textSecondary: '#000000',
+  textMuted: '#000000',
+  textPlaceholder: '#000000',
+  textDisabled: '#000000',
   textInverse: '#ffffff',
 
   // 主色（纯黑）
@@ -166,7 +166,7 @@ export const darkPalette: AppPalette = {
   controlSurfacePressed: '#000000',
   controlDisabledSurface: '#000000',
   controlDisabledBorder: 'rgba(255, 255, 255, 0.12)',
-  controlDisabledText: 'rgba(255, 255, 255, 0.34)',
+  controlDisabledText: '#ffffff',
 
   // 玻璃效果
   glassBackground: 'rgba(0, 0, 0, 0.78)',
@@ -183,10 +183,10 @@ export const darkPalette: AppPalette = {
   // 文本（黑白灰）
   text: '#ffffff',
   textStrong: '#ffffff',
-  textSecondary: 'rgba(255, 255, 255, 0.68)',
-  textMuted: 'rgba(255, 255, 255, 0.48)',
-  textPlaceholder: 'rgba(255, 255, 255, 0.34)',
-  textDisabled: 'rgba(255, 255, 255, 0.26)',
+  textSecondary: '#ffffff',
+  textMuted: '#ffffff',
+  textPlaceholder: '#ffffff',
+  textDisabled: '#ffffff',
   textInverse: '#000000',
 
   // 主色（纯白）

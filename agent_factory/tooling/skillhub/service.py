@@ -65,12 +65,12 @@ class SkillHubService:
         cli_path = self._require_cli()
         result = _run_skillhub_command(
             cli_path,
-            ["search", normalized_query],
+            ["search", normalized_query, "--json"],
             timeout_seconds=timeout_seconds,
         )
         if result.returncode != 0:
             raise RuntimeError(result.output or "SkillHub search failed")
-        items = _search_items(result.output)
+        items = _search_items(result.stdout)
         return {
             **self.status(),
             "action": "search",
@@ -299,17 +299,22 @@ def _search_items(output: str) -> list[dict[str, Any]]:
         payload = json.loads(output)
     except json.JSONDecodeError:
         payload = None
-    raw_items = payload.get("items") if isinstance(payload, dict) else payload
+    raw_items = (
+        payload.get("results", payload.get("items"))
+        if isinstance(payload, dict)
+        else payload
+    )
     if isinstance(raw_items, list):
         return [
             {
-                "name": str(item.get("name") or item.get("skill") or item.get("slug") or ""),
-                "install_name": str(item.get("name") or item.get("skill") or item.get("slug") or ""),
+                "name": str(item.get("name") or item.get("displayName") or item.get("slug") or item.get("skill") or ""),
+                "install_name": str(item.get("slug") or item.get("skill") or item.get("name") or ""),
                 "version": str(item.get("version") or ""),
                 "summary": str(item.get("summary") or item.get("description") or ""),
+                "source": str(item.get("source") or "community"),
             }
             for item in raw_items
-            if isinstance(item, dict) and str(item.get("name") or item.get("skill") or item.get("slug") or "").strip()
+            if isinstance(item, dict) and str(item.get("slug") or item.get("skill") or item.get("name") or "").strip()
         ][:10]
     items: list[dict[str, Any]] = []
     for line in output.splitlines():
@@ -322,6 +327,7 @@ def _search_items(output: str) -> list[dict[str, Any]]:
             "install_name": token,
             "version": "",
             "summary": text[len(token):].strip(" :-"),
+            "source": "community",
         })
         if len(items) == 10:
             break
