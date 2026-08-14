@@ -48,17 +48,7 @@ const executions = computed<ToolExecutionMessagePart[]>(() => props.messages.fla
   conversationVisibleParts(message.parts).filter(
     (part): part is ToolExecutionMessagePart => part.type === 'tool_execution',
   )
-)).map((part, sourceIndex) => ({ part, sourceIndex })).sort((left, right) => {
-  const leftCompleted = Date.parse(String(left.part.completedAt || ''))
-  const rightCompleted = Date.parse(String(right.part.completedAt || ''))
-  const leftHasCompleted = Number.isFinite(leftCompleted)
-  const rightHasCompleted = Number.isFinite(rightCompleted)
-  if (leftHasCompleted && rightHasCompleted && leftCompleted !== rightCompleted) {
-    return leftCompleted - rightCompleted
-  }
-  if (leftHasCompleted !== rightHasCompleted) return leftHasCompleted ? -1 : 1
-  return left.sourceIndex - right.sourceIndex
-}).map(item => item.part))
+)))
 const groupState = computed(() => {
   if (executions.value.some(item => item.status === 'awaiting_approval')) return 'approval'
   if (executions.value.some(item => item.error || item.status === 'failed')) return 'failed'
@@ -119,11 +109,12 @@ const formattedTime = computed(() => new Date(props.messages[0]?.timestamp || Da
 }
 
 .trace-caption {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  display: flex;
+  width: fit-content;
   align-items: center;
+  gap: 7px;
   margin-bottom: 5px;
-  padding: 3px 0;
+  padding: 3px 7px 3px 29px;
   color: var(--app-text-muted);
   font-size: 11px;
   cursor: pointer;
@@ -133,7 +124,6 @@ const formattedTime = computed(() => new Date(props.messages[0]?.timestamp || Da
 .trace-caption::-webkit-details-marker { display: none; }
 
 .trace-caption-copy {
-  grid-column: 2;
   display: flex;
   align-items: baseline;
   gap: 7px;
@@ -145,8 +135,7 @@ const formattedTime = computed(() => new Date(props.messages[0]?.timestamp || Da
 }
 
 .trace-chevron {
-  grid-column: 3;
-  justify-self: end;
+  flex: 0 0 auto;
   transition: transform 160ms ease;
 }
 

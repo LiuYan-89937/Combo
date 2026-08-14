@@ -1536,10 +1536,11 @@ def _session_snapshot(backend: Any, principal_id: str, session_id: str) -> dict[
             _tool_activity_view(backend, record)
             for record in tool_calls_by_turn.get(turn.turn_id, [])
         ]
-        projected_tool_call_ids = {
-            str(activity.get("toolCallId") or "").strip()
-            for activity in tool_activities
-            if str(activity.get("toolCallId") or "").strip()
+        persisted_tool_call_ids = {
+            tool_call_id
+            for message in grouped.get(turn.turn_id, [])
+            for part in message.parts
+            if (tool_call_id := str(getattr(part, "tool_call_id", "") or "").strip())
         }
         message_views = [
             view
@@ -1548,7 +1549,6 @@ def _session_snapshot(backend: Any, principal_id: str, session_id: str) -> dict[
                 view := _message_view(
                     backend,
                     message,
-                    projected_tool_call_ids=projected_tool_call_ids,
                     request_id=frontend_request_id,
                     turn_status=turn.status,
                 )
@@ -1559,7 +1559,11 @@ def _session_snapshot(backend: Any, principal_id: str, session_id: str) -> dict[
                 index=turn.turn_id,
                 created_at=turn.created_at,
                 updated_at=turn.updated_at,
-                tool_activities=tool_activities,
+                tool_activities=[
+                    activity
+                    for activity in tool_activities
+                    if str(activity.get("toolCallId") or "").strip() not in persisted_tool_call_ids
+                ],
             )
         )
         message_views.sort(key=lambda item: str(item.get("timestamp") or ""))
@@ -1649,7 +1653,6 @@ def _message_view(
     backend: Any,
     message: Any,
     *,
-    projected_tool_call_ids: set[str],
     request_id: str | None,
     turn_status: str,
 ) -> dict[str, Any] | None:
@@ -1659,9 +1662,6 @@ def _message_view(
     for part in message.parts:
         value = part.model_dump(mode="json")
         kind = str(value.pop("kind", ""))
-        call_id = str(value.get("tool_call_id") or "").strip()
-        if kind in {"tool_call", "tool_result"} and call_id in projected_tool_call_ids:
-            continue
         parts.append(
             _frontend_message_part(
                 part_id=f"{message.message_id}:{len(parts)}",
