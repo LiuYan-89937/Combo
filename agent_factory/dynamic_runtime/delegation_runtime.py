@@ -292,16 +292,7 @@ def _delegated_task_description(request: DelegationRequest) -> str:
 
 
 def _child_system_prompt(system_prompt: str) -> str:
-    return (
-        f"{system_prompt.strip()}\n\n"
-        "Work non-blockingly in the shared workspace. Only claim effects backed by native tool results. "
-        "Use only the tools presented "
-        "to the current graph node; tool availability can differ between planning, execution, and finalization. "
-        "Before a tool call, put one concise user-facing sentence in the assistant content describing what you "
-        "are about to do. Keep it factual, action-oriented, and free of private reasoning. Use prospective or "
-        "in-progress wording and never claim completion before the authoritative tool result; this sentence is "
-        "used as the live task activity summary."
-    )
+    return system_prompt.strip()
 
 
 def _public_task_event(event: Any) -> dict[str, Any]:

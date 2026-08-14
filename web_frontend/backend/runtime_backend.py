@@ -128,6 +128,7 @@ class RuntimeBackendConfig:
     tool_output_root: Path
     workspace_root: Path
     main_prompt_path: Path
+    child_prompt_path: Path
     build_revision: str
     capability_publisher_principal_id: str
     builtin_capability_source_prefix: str
@@ -174,6 +175,7 @@ class RuntimeBackendConfig:
             tool_output_root=factory_artifact_path("tool_outputs"),
             workspace_root=factory_artifact_path("workspaces"),
             main_prompt_path=prompts / "main_agent.md",
+            child_prompt_path=prompts / "child_agent.md",
             build_revision=__version__,
             capability_publisher_principal_id=f"application-build:{__version__}",
             builtin_capability_source_prefix="builtin-tool://",
@@ -1715,6 +1717,7 @@ class RuntimeBackend:
         def launch_context(stores: DynamicRuntimeStores) -> ComposedRuntimeLaunchContextResolver:
             return ComposedRuntimeLaunchContextResolver(
                 prompt_provider=FileSystemPromptProvider(config.main_prompt_path),
+                child_prompt_provider=FileSystemPromptProvider(config.child_prompt_path),
                 clock=PolicyRuntimeClock(),
                 workspaces=ConversationWorkspaceLaunchResolver(stores.conversations),
                 attachments=StagedAttachmentLaunchResolver(),

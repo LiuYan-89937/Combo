@@ -162,6 +162,9 @@ class RuntimeConfigState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     system_prompt: str = ""
+    temporal_context: str = ""
+    capability_instructions: str = ""
+    turn_directives: list[str] = Field(default_factory=list)
     attachments: list[dict[str, Any]] = Field(default_factory=list)
     workspace_root_alias: str = "/workdir"
     allow_external_paths: bool = False

@@ -145,6 +145,7 @@ class ComposedRuntimeLaunchContextResolver(RuntimeLaunchContextResolver):
         self,
         *,
         prompt_provider: FileSystemPromptProvider,
+        child_prompt_provider: FileSystemPromptProvider,
         clock: RuntimeClock,
         workspaces: WorkspaceLaunchResolver,
         attachments: AttachmentLaunchResolver,
@@ -152,6 +153,7 @@ class ComposedRuntimeLaunchContextResolver(RuntimeLaunchContextResolver):
         delegations: DelegationStore,
     ) -> None:
         self._prompt_provider = prompt_provider
+        self._child_prompt_provider = child_prompt_provider
         self._clock = clock
         self._workspaces = workspaces
         self._attachments = attachments
@@ -186,26 +188,31 @@ class ComposedRuntimeLaunchContextResolver(RuntimeLaunchContextResolver):
             for reference in attachment_refs
         )
         if request.runtime_role == "temporary":
-            base_prompt = self._delegations.for_runtime(instance.runtime_instance_id).envelope.system_prompt
-            if base_prompt is None:
+            delegated_prompt = self._delegations.for_runtime(instance.runtime_instance_id).envelope.system_prompt
+            if delegated_prompt is None:
                 raise RuntimeError("temporary runtime task has no delegated system prompt")
+            base_prompt = self._child_prompt_provider.load()
+            delegated_directives = (delegated_prompt,)
         else:
             base_prompt = self._prompt_provider.load()
+            delegated_directives = ()
             notification_event_ids = _notification_event_ids(messages, turn_id=request.turn_id)
             self._delegations.claim_completion_notifications(
                 instance,
                 event_ids=notification_event_ids,
             )
         capability_instructions = self._capability_instructions.render(capability_snapshot)
-        system_prompt = _render_system_prompt(
-            base=base_prompt,
-            clock=clock,
-            capability_instructions=capability_instructions,
+        system_prompt = _render_system_prompt(base=base_prompt)
+        turn_directives = _turn_directives(
+            delegated=delegated_directives,
             force_collaboration=request.runtime_role == "main" and request.force_collaboration,
             scheduled_run=request.scheduler_run_id is not None,
         )
         return RuntimeLaunchContext(
             system_prompt=system_prompt,
+            temporal_context=_temporal_context(clock),
+            capability_instructions=capability_instructions,
+            turn_directives=turn_directives,
             workspace_root_alias=workspace.root_alias,
             allow_external_paths=workspace.allow_external_paths,
             workspace_mounts=workspace.mounts,
@@ -254,24 +261,27 @@ def _notification_event_ids(
 def _render_system_prompt(
     *,
     base: str,
-    clock: ClockSnapshot,
-    capability_instructions: str,
+) -> str:
+    return "\n\n".join((base.strip(), EVIDENCE_FIRST_POLICY))
+
+
+def _temporal_context(clock: ClockSnapshot) -> str:
+    return (
+        "Runtime calendar context:\n"
+        f"- Current date: {clock.local_date}\n"
+        f"- Timezone: {clock.timezone}\n"
+        "Resolve relative calendar dates against this frozen turn date. Retrieve an authoritative time source "
+        "when the exact current time materially affects the task."
+    )
+
+
+def _turn_directives(
+    *,
+    delegated: tuple[str, ...] = (),
     force_collaboration: bool = False,
     scheduled_run: bool = False,
-) -> str:
-    sections = [
-        base.strip(),
-        EVIDENCE_FIRST_POLICY,
-        (
-            "Runtime time context:\n"
-            f"- Current date: {clock.local_date}\n"
-            f"- Current local datetime: {clock.local_datetime}\n"
-            f"- Timezone: {clock.timezone}"
-        ),
-    ]
-    instructions = str(capability_instructions or "").strip()
-    if instructions:
-        sections.append(instructions)
+) -> tuple[str, ...]:
+    sections = [item.strip() for item in delegated if item.strip()]
     if force_collaboration:
         sections.append(
             "Collaboration mode is explicitly enabled for this turn. Decompose the user task into useful "
@@ -285,7 +295,7 @@ def _render_system_prompt(
             "workspace, do not delegate to child Agents, and finish with a self-contained delivery that reports "
             "verified results, produced files, and any unresolved blockers."
         )
-    return "\n\n".join(sections)
+    return tuple(sections)
 
 
 def render_delegation_notification_message(event: Any) -> str:

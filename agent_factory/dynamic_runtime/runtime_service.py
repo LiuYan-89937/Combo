@@ -65,12 +65,15 @@ class RuntimeLaunchContext(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     system_prompt: str
+    temporal_context: str
+    capability_instructions: str = ""
+    turn_directives: tuple[str, ...] = ()
     workspace_root_alias: str = "/workdir"
     allow_external_paths: bool = False
     workspace_mounts: tuple[dict[str, Any], ...] = ()
     attachments: tuple[dict[str, Any], ...] = ()
 
-    @field_validator("system_prompt", "workspace_root_alias")
+    @field_validator("system_prompt", "temporal_context", "workspace_root_alias")
     @classmethod
     def _required_text(cls, value: str) -> str:
         text = str(value or "").strip()
@@ -519,6 +522,9 @@ def _initial_state(
         ),
         runtime_config=RuntimeConfigState(
             system_prompt=launch_context.system_prompt,
+            temporal_context=launch_context.temporal_context,
+            capability_instructions=launch_context.capability_instructions,
+            turn_directives=list(launch_context.turn_directives),
             attachments=[dict(item) for item in launch_context.attachments],
             workspace_root_alias=launch_context.workspace_root_alias,
             allow_external_paths=launch_context.allow_external_paths,

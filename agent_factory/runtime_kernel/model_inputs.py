@@ -9,7 +9,6 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langchain_core.tools import BaseTool
 
 from agent_factory.models.message_layout import system_messages_first
-from agent_factory.models.temporal_context import current_date_system_context
 from agent_factory.runtime_attachments import (
     AttachmentImportError,
     format_attachments_for_model,
@@ -52,9 +51,11 @@ PLAN_EXECUTE_PROJECTED_HISTORY_NODES = frozenset(
 class ModelInputEnvelope:
     messages: list[Any]
     stable_prefix_digest: str
+    runtime_context_digest: str
     dynamic_evidence_digest: str
     tool_surface_digest: str
     stable_system_chars: int
+    runtime_context_chars: int
     dynamic_evidence_chars: int
     history_message_count: int
     tool_count: int
@@ -64,9 +65,11 @@ class ModelInputEnvelope:
     def diagnostics(self) -> dict[str, Any]:
         return {
             "stable_prefix_digest": self.stable_prefix_digest,
+            "runtime_context_digest": self.runtime_context_digest,
             "dynamic_evidence_digest": self.dynamic_evidence_digest,
             "tool_surface_digest": self.tool_surface_digest,
             "stable_system_chars": self.stable_system_chars,
+            "runtime_context_chars": self.runtime_context_chars,
             "dynamic_evidence_chars": self.dynamic_evidence_chars,
             "history_message_count": self.history_message_count,
             "tool_count": self.tool_count,
@@ -97,13 +100,13 @@ def build_runtime_model_input(
         node_id=node_id,
         include_extracted_text_for_images=not image_input_enabled,
     )
-    system_messages: list[Any] = [
-        SystemMessage(content=stable_system),
-        SystemMessage(
-            content=current_date_system_context(),
-            additional_kwargs={"kind": "runtime_temporal_context"},
-        ),
-    ]
+    runtime_context_sections = _runtime_context_sections(state)
+    runtime_context_text = "\n\n".join(content for _kind, content in runtime_context_sections)
+    system_messages: list[Any] = [SystemMessage(content=stable_system)]
+    system_messages.extend(
+        SystemMessage(content=content, additional_kwargs={"kind": kind})
+        for kind, content in runtime_context_sections
+    )
     if dynamic_evidence:
         system_messages.append(
             SystemMessage(
@@ -119,9 +122,11 @@ def build_runtime_model_input(
     return ModelInputEnvelope(
         messages=request_messages,
         stable_prefix_digest=_digest_text(stable_system),
+        runtime_context_digest=_digest_text(runtime_context_text),
         dynamic_evidence_digest=_digest_text(dynamic_evidence),
         tool_surface_digest=_tool_surface_digest(tools),
         stable_system_chars=len(stable_system),
+        runtime_context_chars=len(runtime_context_text),
         dynamic_evidence_chars=len(dynamic_evidence),
         history_message_count=len(history_messages),
         tool_count=len(tools),
@@ -138,10 +143,31 @@ def _stable_system_prompt(*, system_prompt: str, state: Any, node_id: str | None
     if node_id == PLAN_EXECUTE_EXECUTOR_NODE_ID:
         parts.append(_executor_tool_policy(state))
     parts.append(RUNTIME_REACT_PROTOCOL)
+    return "\n\n".join(parts)
+
+
+def _runtime_context_sections(state: Any) -> list[tuple[str, str]]:
+    runtime_config = getattr(state, "runtime_config", None)
+    sections: list[tuple[str, str]] = []
+    capability_instructions = str(
+        getattr(runtime_config, "capability_instructions", "") or ""
+    ).strip()
+    if capability_instructions:
+        sections.append(("runtime_capability_catalog", capability_instructions))
     mount_guidance = _workspace_mount_guidance(state)
     if mount_guidance:
-        parts.append(mount_guidance)
-    return "\n\n".join(parts)
+        sections.append(("runtime_workspace_context", mount_guidance))
+    temporal_context = str(getattr(runtime_config, "temporal_context", "") or "").strip()
+    if temporal_context:
+        sections.append(("runtime_temporal_context", temporal_context))
+    directives = getattr(runtime_config, "turn_directives", None)
+    if isinstance(directives, list):
+        sections.extend(
+            ("runtime_turn_directive", str(item).strip())
+            for item in directives
+            if str(item).strip()
+        )
+    return sections
 
 
 def _executor_tool_policy(state: Any) -> str:

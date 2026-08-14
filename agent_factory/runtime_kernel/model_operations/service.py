@@ -164,8 +164,11 @@ class ModelInvocationOperations:
         model, metadata = self._resolve_model(model_role, state=state)
         effective_model_role = str(metadata.get("model_role") or model_role or self.model_role)
         image_input_enabled = bool(metadata.get("multimodal"))
-        tool_list = contextualize_tool_descriptions(
-            tools_visible_to_model(tools or [], image_input_enabled=image_input_enabled)
+        tool_list = sorted(
+            contextualize_tool_descriptions(
+                tools_visible_to_model(tools or [], image_input_enabled=image_input_enabled)
+            ),
+            key=lambda tool: str(getattr(tool, "name", "") or ""),
         )
         envelope = build_runtime_model_input(
             state=state,
