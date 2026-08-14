@@ -22,7 +22,7 @@ require_command() {
 
 [[ "$(uname -s)" == "Darwin" ]] || fail "This script must run on macOS."
 
-for command_name in python3 npm cargo file codesign hdiutil shasum; do
+for command_name in python3 npm cargo file codesign hdiutil otool shasum; do
     require_command "${command_name}"
 done
 
@@ -93,6 +93,21 @@ echo "Building macOS application..."
 
 APP_PATH="${TAURI_DIR}/target/release/bundle/macos/${PRODUCT_NAME}.app"
 [[ -d "${APP_PATH}" ]] || fail "Application bundle not found: ${APP_PATH}"
+
+APP_EXECUTABLE_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "${APP_PATH}/Contents/Info.plist")"
+APP_EXECUTABLE="${APP_PATH}/Contents/MacOS/${APP_EXECUTABLE_NAME}"
+[[ -x "${APP_EXECUTABLE}" ]] || fail "Application executable not found: ${APP_EXECUTABLE}"
+
+INVALID_DYNAMIC_LIBRARIES="$(
+    otool -L "${APP_EXECUTABLE}" \
+        | tail -n +2 \
+        | awk '{ print $1 }' \
+        | grep -Ev '^(/System/Library/|/usr/lib/|@executable_path/|@loader_path/|@rpath/)' \
+        || true
+)"
+if [[ -n "${INVALID_DYNAMIC_LIBRARIES}" ]]; then
+    fail "Application links to non-system libraries outside its bundle:${INVALID_DYNAMIC_LIBRARIES//$'\n'/$'\n  '}"
+fi
 
 echo "Verifying application signature..."
 codesign --verify --deep --strict "${APP_PATH}"
