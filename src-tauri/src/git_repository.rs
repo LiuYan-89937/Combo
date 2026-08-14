@@ -62,8 +62,8 @@ pub struct GitFileDiff {
 }
 
 #[derive(Serialize)]
-pub struct GitRevertResult {
-    reverted: bool,
+pub struct GitTurnApplyResult {
+    applied: bool,
     affected_files: Vec<String>,
     conflicting_files: Vec<String>,
 }
@@ -247,12 +247,30 @@ pub fn git_repository_diff(
 }
 
 #[tauri::command]
-pub fn git_revert_turn(path: String, request_id: String) -> Result<GitRevertResult, String> {
+pub fn git_revert_turn(path: String, request_id: String) -> Result<GitTurnApplyResult, String> {
     let repo = discover_repository(&path)?;
-    let root = repository_root(&repo)?.to_path_buf();
     let request_key = reference_key(&request_id)?;
-    let before = snapshot_tree(&repo, &snapshot_reference(&request_key, "before"))?;
-    let after = snapshot_tree(&repo, &snapshot_reference(&request_key, "after"))?;
+    apply_turn_snapshot(&repo, &request_key, "after", "before")
+}
+
+#[tauri::command]
+pub fn git_reapply_turn(path: String, request_id: String) -> Result<GitTurnApplyResult, String> {
+    let repo = discover_repository(&path)?;
+    let request_key = reference_key(&request_id)?;
+    apply_turn_snapshot(&repo, &request_key, "before", "after")
+}
+
+fn apply_turn_snapshot(
+    repo: &Repository,
+    request_key: &str,
+    expected_phase: &str,
+    target_phase: &str,
+) -> Result<GitTurnApplyResult, String> {
+    let root = repository_root(repo)?.to_path_buf();
+    let before = snapshot_tree(repo, &snapshot_reference(request_key, "before"))?;
+    let after = snapshot_tree(repo, &snapshot_reference(request_key, "after"))?;
+    let expected = snapshot_tree(repo, &snapshot_reference(request_key, expected_phase))?;
+    let target = snapshot_tree(repo, &snapshot_reference(request_key, target_phase))?;
     let diff = repo
         .diff_tree_to_tree(Some(&before), Some(&after), None)
         .map_err(error_text)?;
@@ -265,20 +283,17 @@ pub fn git_revert_turn(path: String, request_id: String) -> Result<GitRevertResu
             if restore_targets.contains_key(&relative) {
                 continue;
             }
-            let expected = tree_file_bytes(&repo, &after, &relative)?;
+            let expected_content = tree_file_bytes(repo, &expected, &relative)?;
             let current = filesystem_bytes(&root.join(&relative))?;
-            if current != expected {
+            if current != expected_content {
                 conflicts.push(relative.to_string_lossy().replace('\\', "/"));
             }
-            restore_targets.insert(
-                relative.clone(),
-                tree_file_bytes(&repo, &before, &relative)?,
-            );
+            restore_targets.insert(relative.clone(), tree_file_bytes(repo, &target, &relative)?);
         }
     }
     if !conflicts.is_empty() {
-        return Ok(GitRevertResult {
-            reverted: false,
+        return Ok(GitTurnApplyResult {
+            applied: false,
             affected_files: Vec::new(),
             conflicting_files: conflicts,
         });
@@ -298,8 +313,8 @@ pub fn git_revert_turn(path: String, request_id: String) -> Result<GitRevertResu
         }
         affected.push(relative.to_string_lossy().replace('\\', "/"));
     }
-    Ok(GitRevertResult {
-        reverted: true,
+    Ok(GitTurnApplyResult {
+        applied: true,
         affected_files: affected,
         conflicting_files: Vec::new(),
     })

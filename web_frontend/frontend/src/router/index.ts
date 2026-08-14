@@ -75,6 +75,11 @@ export const routes: RouteRecordRaw[] = [
     name: 'MascotPreview',
     component: () => import('@/views/MascotPreviewView.vue'),
   },
+  {
+    path: '/diff-preview',
+    name: 'DiffPreview',
+    component: () => import('@/views/DiffPreviewView.vue'),
+  },
 ]
 
 const router = createRouter({

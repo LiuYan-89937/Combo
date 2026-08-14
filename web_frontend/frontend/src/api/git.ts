@@ -45,8 +45,8 @@ export interface GitFileDiff {
   truncated: boolean
 }
 
-export interface GitRevertResult {
-  reverted: boolean
+export interface GitTurnApplyResult {
+  applied: boolean
   affected_files: string[]
   conflicting_files: string[]
 }
@@ -74,6 +74,10 @@ export const gitApi = {
   },
   revertTurn(path: string, requestId: string) {
     requireDesktop()
-    return invoke<GitRevertResult>('git_revert_turn', { path, requestId })
+    return invoke<GitTurnApplyResult>('git_revert_turn', { path, requestId })
+  },
+  reapplyTurn(path: string, requestId: string) {
+    requireDesktop()
+    return invoke<GitTurnApplyResult>('git_reapply_turn', { path, requestId })
   },
 }

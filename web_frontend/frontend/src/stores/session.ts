@@ -53,6 +53,14 @@ export const useSessionStore = defineStore('session', () => {
     if (index !== -1) {
       sessions.value.splice(index, 1)
     }
+    if (currentSessionId.value === sessionId) {
+      currentSessionId.value = null
+    }
+  }
+
+  function clearSessions(): void {
+    sessions.value = []
+    currentSessionId.value = null
   }
 
   return {
@@ -62,5 +70,6 @@ export const useSessionStore = defineStore('session', () => {
     setCurrentSession,
     addSession,
     removeSession,
+    clearSessions,
   }
 })

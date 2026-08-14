@@ -49,7 +49,7 @@ class AuthService:
     def __init__(self, settings: Settings, database: Database) -> None:
         self.settings = settings
         self.database = database
-        self._provider_token_cipher = Fernet(
+        self._credential_cipher = Fernet(
             urlsafe_b64encode(sha256(settings.github_client_secret.encode("utf-8")).digest())
         )
 
@@ -58,6 +58,8 @@ class AuthService:
             raise AuthenticationError("GitHub OAuth is not configured")
         normalized_return_to = _safe_return_to(return_to)
         state = secrets.token_urlsafe(32)
+        code_verifier, code_challenge = _new_pkce_parameters()
+        encrypted_verifier = self._encrypt_credential(code_verifier)
         now = datetime.now(timezone.utc)
         expires = now + timedelta(seconds=self.settings.oauth_state_ttl_seconds)
         with self.database.connect() as connection:
@@ -66,18 +68,20 @@ class AuthService:
             connection.execute(
                 """
                 insert into oauth_states(
-                  state_hash, flow_kind, desktop_flow_id, return_to, expires_at, created_at
-                ) values (?, 'browser', null, ?, ?, ?)
+                  state_hash, flow_kind, desktop_flow_id, return_to,
+                  pkce_verifier_ciphertext, expires_at, created_at
+                ) values (?, 'browser', null, ?, ?, ?, ?)
                 """,
                 (
                     _token_hash(state),
                     normalized_return_to,
+                    encrypted_verifier,
                     expires.isoformat(),
                     now.isoformat(),
                 ),
             )
             connection.commit()
-        return self._github_authorization_url(state), state
+        return self._github_authorization_url(state, code_challenge), state
 
     def start_github_desktop_login(self) -> dict[str, Any]:
         if not self.settings.github_oauth_configured:
@@ -85,6 +89,8 @@ class AuthService:
         flow_id = uuid4().hex
         poll_secret = secrets.token_urlsafe(32)
         state = secrets.token_urlsafe(32)
+        code_verifier, code_challenge = _new_pkce_parameters()
+        encrypted_verifier = self._encrypt_credential(code_verifier)
         now = datetime.now(timezone.utc)
         expires = now + timedelta(seconds=self.settings.oauth_state_ttl_seconds)
         with self.database.connect() as connection:
@@ -107,12 +113,14 @@ class AuthService:
             connection.execute(
                 """
                 insert into oauth_states(
-                  state_hash, flow_kind, desktop_flow_id, return_to, expires_at, created_at
-                ) values (?, 'desktop', ?, null, ?, ?)
+                  state_hash, flow_kind, desktop_flow_id, return_to,
+                  pkce_verifier_ciphertext, expires_at, created_at
+                ) values (?, 'desktop', ?, null, ?, ?, ?)
                 """,
                 (
                     _token_hash(state),
                     flow_id,
+                    encrypted_verifier,
                     expires.isoformat(),
                     now.isoformat(),
                 ),
@@ -121,7 +129,7 @@ class AuthService:
         return {
             "flow_id": flow_id,
             "poll_secret": poll_secret,
-            "authorization_url": self._github_authorization_url(state),
+            "authorization_url": self._github_authorization_url(state, code_challenge),
             "expires_in": self.settings.oauth_state_ttl_seconds,
             "interval": DESKTOP_AUTH_POLL_INTERVAL_SECONDS,
         }
@@ -138,16 +146,18 @@ class AuthService:
         if not code or not state:
             raise AuthenticationError("GitHub OAuth callback is missing code or state")
         oauth_state = self._consume_oauth_state(state, state_cookie=state_cookie)
-        profile, provider_token = self._github_profile(code)
+        code_verifier = self._decrypt_credential(
+            str(oauth_state.get("pkce_verifier_ciphertext") or ""),
+            context="GitHub OAuth verifier",
+        )
+        profile, provider_token = self._github_profile(code, code_verifier)
         user = self._upsert_github_user(profile)
         flow_kind = str(oauth_state["flow_kind"])
         if flow_kind == "desktop":
             flow_id = str(oauth_state["desktop_flow_id"] or "")
             now = utc_now()
             with self.database.connect() as connection:
-                provider_token_ciphertext = self._provider_token_cipher.encrypt(
-                    provider_token.encode("utf-8")
-                ).decode("ascii")
+                provider_token_ciphertext = self._encrypt_credential(provider_token)
                 result = connection.execute(
                     """
                     update desktop_auth_flows
@@ -210,15 +220,10 @@ class AuthService:
             if not provider_token_ciphertext:
                 connection.rollback()
                 raise AuthenticationError("GitHub authorization token is unavailable; sign in again")
-            try:
-                provider_token = self._provider_token_cipher.decrypt(
-                    provider_token_ciphertext.encode("ascii")
-                ).decode("utf-8")
-            except (InvalidToken, UnicodeDecodeError, ValueError) as exc:
-                connection.rollback()
-                raise AuthenticationError(
-                    "GitHub authorization token could not be opened; sign in again"
-                ) from exc
+            provider_token = self._decrypt_credential(
+                provider_token_ciphertext,
+                context="GitHub authorization token",
+            )
             user = connection.execute(
                 "select * from users where user_id = ?",
                 (user_id,),
@@ -374,7 +379,8 @@ class AuthService:
             connection.execute("begin immediate")
             row = connection.execute(
                 """
-                select state_hash, flow_kind, desktop_flow_id, return_to
+                select state_hash, flow_kind, desktop_flow_id, return_to,
+                       pkce_verifier_ciphertext
                 from oauth_states
                 where state_hash = ? and expires_at > ?
                 """,
@@ -397,13 +403,15 @@ class AuthService:
             connection.commit()
         return dict(row)
 
-    def _github_authorization_url(self, state: str) -> str:
+    def _github_authorization_url(self, state: str, code_challenge: str) -> str:
         query = urlencode(
             {
                 "client_id": self.settings.github_client_id,
                 "redirect_uri": f"{self.settings.base_url}/api/v1/auth/github/callback",
                 "scope": "read:user repo",
                 "state": state,
+                "code_challenge": code_challenge,
+                "code_challenge_method": "S256",
             }
         )
         return f"{GITHUB_AUTHORIZE_URL}?{query}"
@@ -438,7 +446,7 @@ class AuthService:
             (timestamp,),
         )
 
-    def _github_profile(self, code: str) -> tuple[dict[str, Any], str]:
+    def _github_profile(self, code: str, code_verifier: str) -> tuple[dict[str, Any], str]:
         with httpx.Client(timeout=20) as client:
             token_response = client.post(
                 GITHUB_TOKEN_URL,
@@ -447,6 +455,7 @@ class AuthService:
                     "client_id": self.settings.github_client_id,
                     "client_secret": self.settings.github_client_secret,
                     "code": code,
+                    "code_verifier": code_verifier,
                     "redirect_uri": (
                         f"{self.settings.base_url}/api/v1/auth/github/callback"
                     ),
@@ -457,6 +466,17 @@ class AuthService:
             if not access_token:
                 raise AuthenticationError("GitHub did not return an access token")
         return self._github_profile_from_token(access_token), access_token
+
+    def _encrypt_credential(self, value: str) -> str:
+        return self._credential_cipher.encrypt(value.encode("utf-8")).decode("ascii")
+
+    def _decrypt_credential(self, value: str, *, context: str) -> str:
+        if not value:
+            raise AuthenticationError(f"{context} is unavailable; sign in again")
+        try:
+            return self._credential_cipher.decrypt(value.encode("ascii")).decode("utf-8")
+        except (InvalidToken, UnicodeDecodeError, ValueError) as exc:
+            raise AuthenticationError(f"{context} could not be opened; sign in again") from exc
 
     def _github_profile_from_token(self, access_token: str) -> dict[str, Any]:
         with httpx.Client(timeout=20) as client:
@@ -546,6 +566,16 @@ def public_user_view(user: dict[str, Any]) -> dict[str, Any]:
 
 def _token_hash(token: str) -> str:
     return sha256(token.encode("utf-8")).hexdigest()
+
+
+def _new_pkce_parameters() -> tuple[str, str]:
+    verifier = secrets.token_urlsafe(64)
+    challenge = (
+        urlsafe_b64encode(sha256(verifier.encode("ascii")).digest())
+        .rstrip(b"=")
+        .decode("ascii")
+    )
+    return verifier, challenge
 
 
 def _safe_return_to(value: str | None) -> str | None:

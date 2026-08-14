@@ -4,10 +4,8 @@ use serde::{Deserialize, Serialize};
 
 const KEYRING_SERVICE: &str = "top.liuyanai.combo.github";
 const KEYRING_ACCOUNT: &str = "default";
-const GITHUB_CLIENT_ID: &str = "Ov23lipoe6KMBX7wd8dL";
 const GITHUB_API_VERSION: &str = "2022-11-28";
-const GITHUB_DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
-const GITHUB_ACCESS_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
+const COMBO_SERVICE_URL: &str = env!("COMBO_SERVICE_URL");
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct GitHubAccount {
@@ -22,43 +20,51 @@ struct StoredGitHubCredential {
     github_access_token: String,
 }
 
-#[derive(Serialize)]
-pub struct GitHubDeviceAuthorization {
-    device_code: String,
-    user_code: String,
-    verification_uri: String,
+#[derive(Deserialize, Serialize)]
+pub struct GitHubBrowserAuthorization {
+    flow_id: String,
+    poll_secret: String,
+    authorization_url: String,
     expires_in: u64,
     interval: u64,
 }
 
 #[derive(Serialize)]
-pub struct GitHubDevicePoll {
+pub struct GitHubBrowserPoll {
     status: String,
     retry_after_seconds: u64,
     account: Option<GitHubAccount>,
 }
 
 #[derive(Deserialize)]
-struct GitHubDeviceAuthorizationResponse {
-    device_code: String,
-    user_code: String,
-    verification_uri: String,
-    expires_in: u64,
-    interval: u64,
+struct GitHubBrowserAuthorizedResponse {
+    status: String,
+    github_access_token: String,
+    user: GitHubServiceUser,
 }
 
 #[derive(Deserialize)]
-struct GitHubDeviceTokenResponse {
-    access_token: Option<String>,
-    error: Option<String>,
-    interval: Option<u64>,
-}
-
-#[derive(Deserialize)]
-struct GitHubUserResponse {
-    login: String,
-    name: Option<String>,
+struct GitHubServiceUser {
+    github_login: String,
+    display_name: String,
     avatar_url: String,
+}
+
+#[derive(Deserialize)]
+struct GitHubAuthorizationPending {
+    status: String,
+    retry_after_seconds: u64,
+}
+
+#[derive(Deserialize)]
+struct GitHubServiceErrorEnvelope {
+    error: Option<GitHubServiceError>,
+    message: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GitHubServiceError {
+    message: String,
 }
 
 #[derive(Serialize)]
@@ -93,80 +99,94 @@ struct GitHubOwner {
 }
 
 #[tauri::command]
-pub async fn github_start_device_authorization() -> Result<GitHubDeviceAuthorization, String> {
+pub async fn github_start_browser_authorization() -> Result<GitHubBrowserAuthorization, String> {
     let response = reqwest::Client::new()
-        .post(GITHUB_DEVICE_CODE_URL)
+        .post(service_endpoint("/api/v1/auth/github/desktop/start"))
         .header(USER_AGENT, "Combo-Desktop")
         .header(ACCEPT, "application/json")
-        .form(&[("client_id", GITHUB_CLIENT_ID), ("scope", "read:user repo")])
         .send()
         .await
         .map_err(error_text)?;
     if !response.status().is_success() {
-        return Err(format!(
-            "GitHub device authorization failed: HTTP {}",
-            response.status()
-        ));
+        return Err(service_error(response, "GitHub browser authorization failed").await);
     }
-    let value = response
-        .json::<GitHubDeviceAuthorizationResponse>()
+    response
+        .json::<GitHubBrowserAuthorization>()
+        .await
+        .map_err(error_text)
+}
+
+#[tauri::command]
+pub async fn github_poll_browser_authorization(
+    flow_id: String,
+    poll_secret: String,
+) -> Result<GitHubBrowserPoll, String> {
+    let request = authorization_request(&flow_id, &poll_secret)?;
+    let response = reqwest::Client::new()
+        .post(service_endpoint("/api/v1/auth/github/desktop/poll"))
+        .header(USER_AGENT, "Combo-Desktop")
+        .header(ACCEPT, "application/json")
+        .json(&request)
+        .send()
         .await
         .map_err(error_text)?;
-    Ok(GitHubDeviceAuthorization {
-        device_code: value.device_code,
-        user_code: value.user_code,
-        verification_uri: value.verification_uri,
-        expires_in: value.expires_in,
-        interval: value.interval.max(5),
+    if response.status() == reqwest::StatusCode::ACCEPTED {
+        let pending = response
+            .json::<GitHubAuthorizationPending>()
+            .await
+            .map_err(error_text)?;
+        return Ok(GitHubBrowserPoll {
+            status: pending.status,
+            retry_after_seconds: pending.retry_after_seconds.max(1),
+            account: None,
+        });
+    }
+    if !response.status().is_success() {
+        return Err(service_error(response, "GitHub browser authorization failed").await);
+    }
+    let authorized = response
+        .json::<GitHubBrowserAuthorizedResponse>()
+        .await
+        .map_err(error_text)?;
+    if authorized.status != "authorized" || authorized.github_access_token.trim().is_empty() {
+        return Err("GitHub authorization response is incomplete".to_string());
+    }
+    let account = GitHubAccount {
+        display_name: if authorized.user.display_name.trim().is_empty() {
+            authorized.user.github_login.clone()
+        } else {
+            authorized.user.display_name
+        },
+        login: authorized.user.github_login,
+        avatar_url: authorized.user.avatar_url,
+    };
+    store_credential(account.clone(), authorized.github_access_token)?;
+    Ok(GitHubBrowserPoll {
+        status: "authorized".to_string(),
+        retry_after_seconds: 0,
+        account: Some(account),
     })
 }
 
 #[tauri::command]
-pub async fn github_poll_device_authorization(
-    device_code: String,
-) -> Result<GitHubDevicePoll, String> {
-    if device_code.trim().is_empty() {
-        return Err("GitHub device code is required".to_string());
-    }
+pub async fn github_cancel_browser_authorization(
+    flow_id: String,
+    poll_secret: String,
+) -> Result<(), String> {
+    let request = authorization_request(&flow_id, &poll_secret)?;
     let response = reqwest::Client::new()
-        .post(GITHUB_ACCESS_TOKEN_URL)
+        .post(service_endpoint("/api/v1/auth/github/desktop/cancel"))
         .header(USER_AGENT, "Combo-Desktop")
         .header(ACCEPT, "application/json")
-        .form(&[
-            ("client_id", GITHUB_CLIENT_ID),
-            ("device_code", device_code.trim()),
-            ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
-        ])
+        .json(&request)
         .send()
         .await
         .map_err(error_text)?;
-    if !response.status().is_success() {
-        return Err(format!(
-            "GitHub device token request failed: HTTP {}",
-            response.status()
-        ));
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        Err(service_error(response, "GitHub authorization cancellation failed").await)
     }
-    let value = response
-        .json::<GitHubDeviceTokenResponse>()
-        .await
-        .map_err(error_text)?;
-    if let Some(access_token) = value.access_token.filter(|token| !token.trim().is_empty()) {
-        let account = fetch_account(&access_token).await?;
-        store_credential(account.clone(), access_token)?;
-        return Ok(GitHubDevicePoll {
-            status: "authorized".to_string(),
-            retry_after_seconds: 0,
-            account: Some(account),
-        });
-    }
-    let status = value
-        .error
-        .unwrap_or_else(|| "authorization_pending".to_string());
-    Ok(GitHubDevicePoll {
-        retry_after_seconds: value.interval.unwrap_or(5).max(5),
-        status,
-        account: None,
-    })
 }
 
 #[tauri::command]
@@ -239,34 +259,40 @@ pub(crate) fn github_access_token() -> Result<String, String> {
     stored_credential().map(|credential| credential.github_access_token)
 }
 
-async fn fetch_account(access_token: &str) -> Result<GitHubAccount, String> {
-    let response = reqwest::Client::new()
-        .get("https://api.github.com/user")
-        .header(USER_AGENT, "Combo-Desktop")
-        .header(ACCEPT, "application/vnd.github+json")
-        .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
-        .header(AUTHORIZATION, format!("Bearer {access_token}"))
-        .send()
-        .await
-        .map_err(error_text)?;
-    if !response.status().is_success() {
-        return Err(format!(
-            "GitHub account request failed: HTTP {}",
-            response.status()
-        ));
+#[derive(Serialize)]
+struct GitHubAuthorizationRequest<'a> {
+    flow_id: &'a str,
+    poll_secret: &'a str,
+}
+
+fn authorization_request<'a>(
+    flow_id: &'a str,
+    poll_secret: &'a str,
+) -> Result<GitHubAuthorizationRequest<'a>, String> {
+    let flow_id = flow_id.trim();
+    let poll_secret = poll_secret.trim();
+    if flow_id.is_empty() || poll_secret.is_empty() {
+        return Err("GitHub browser authorization session is required".to_string());
     }
-    let user = response
-        .json::<GitHubUserResponse>()
-        .await
-        .map_err(error_text)?;
-    Ok(GitHubAccount {
-        display_name: user
-            .name
-            .filter(|name| !name.trim().is_empty())
-            .unwrap_or_else(|| user.login.clone()),
-        login: user.login,
-        avatar_url: user.avatar_url,
+    Ok(GitHubAuthorizationRequest {
+        flow_id,
+        poll_secret,
     })
+}
+
+fn service_endpoint(path: &str) -> String {
+    format!("{}{}", COMBO_SERVICE_URL.trim_end_matches('/'), path)
+}
+
+async fn service_error(response: reqwest::Response, context: &str) -> String {
+    let status = response.status();
+    let payload = response.json::<GitHubServiceErrorEnvelope>().await.ok();
+    let detail = payload
+        .and_then(|value| value.error.map(|error| error.message).or(value.message))
+        .filter(|message| !message.trim().is_empty());
+    detail
+        .map(|message| format!("{context}: {message}"))
+        .unwrap_or_else(|| format!("{context}: HTTP {status}"))
 }
 
 fn store_credential(account: GitHubAccount, github_access_token: String) -> Result<(), String> {

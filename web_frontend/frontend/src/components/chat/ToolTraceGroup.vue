@@ -119,9 +119,9 @@ const formattedTime = computed(() => new Date(props.messages[0]?.timestamp || Da
 }
 
 .trace-caption {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
   margin-bottom: 5px;
   padding: 3px 0;
   color: var(--app-text-muted);
@@ -133,6 +133,7 @@ const formattedTime = computed(() => new Date(props.messages[0]?.timestamp || Da
 .trace-caption::-webkit-details-marker { display: none; }
 
 .trace-caption-copy {
+  grid-column: 2;
   display: flex;
   align-items: baseline;
   gap: 7px;
@@ -144,6 +145,8 @@ const formattedTime = computed(() => new Date(props.messages[0]?.timestamp || Da
 }
 
 .trace-chevron {
+  grid-column: 3;
+  justify-self: end;
   transition: transform 160ms ease;
 }
 

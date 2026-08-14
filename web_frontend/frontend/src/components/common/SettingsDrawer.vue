@@ -442,6 +442,10 @@ import { useAppUpdateStore } from '@/stores/appUpdate'
 import { storageApi, type ConversationStorageUsage } from '@/api/storage'
 import ComboLogo from '@/components/brand/ComboLogo.vue'
 import { knowledgeApi, type KnowledgeRetrievalSettings } from '@/api/knowledge'
+import { useAgentStore } from '@/stores/agent'
+import { useRuntimeStore } from '@/stores/runtime'
+import { useSessionStore } from '@/stores/session'
+import { SYSTEM_CHAT_PACKAGE_ID } from '@/utils/resourceScope'
 
 const props = defineProps<{
   show: boolean
@@ -456,6 +460,9 @@ const router = useRouter()
 const runtimePreferences = useRuntimePreferencesStore()
 const taskNotificationPreferences = useTaskNotificationPreferencesStore()
 const appUpdateStore = useAppUpdateStore()
+const agentStore = useAgentStore()
+const runtimeStore = useRuntimeStore()
+const sessionStore = useSessionStore()
 const { localeOptions, t } = useI18n()
 const updateCheckMessage = ref('')
 const dialog = useDialog()
@@ -671,6 +678,16 @@ async function clearConversations(): Promise<void> {
   try {
     const result = await storageApi.clearConversations()
     conversationUsage.value = result.after
+    const workspaceId = runtimeStore.activeWorkspaceId
+    sessionStore.clearSessions()
+    agentStore.clearSessions()
+    runtimeStore.clearConversationHistory(SYSTEM_CHAT_PACKAGE_ID, workspaceId)
+    if (router.currentRoute.value.name === 'ChatSession') {
+      await router.replace({
+        name: 'ChatNew',
+        query: workspaceId ? { workspace: workspaceId } : undefined,
+      })
+    }
   } catch (error) {
     conversationStorageError.value = error instanceof Error ? error.message : String(error)
   } finally {

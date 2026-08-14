@@ -64,6 +64,12 @@ export interface AppPalette {
   errorHover: string
   errorPressed: string
 
+  // Git 差异（仅用于增删语义，不改变应用全局信号色）
+  diffAddition: string
+  diffAdditionSurface: string
+  diffDeletion: string
+  diffDeletionSurface: string
+
   // 特殊用途
   focusShadow: string
   transparent: string
@@ -137,6 +143,10 @@ export const lightPalette: AppPalette = {
   error: '#000000',
   errorHover: '#000000',
   errorPressed: '#000000',
+  diffAddition: '#1a7f37',
+  diffAdditionSurface: 'rgba(26, 127, 55, 0.12)',
+  diffDeletion: '#cf222e',
+  diffDeletionSurface: 'rgba(207, 34, 46, 0.12)',
 
   // 特殊用途
   focusShadow: 'rgba(0, 0, 0, 0.1)',
@@ -211,6 +221,10 @@ export const darkPalette: AppPalette = {
   error: '#ffffff',
   errorHover: '#ffffff',
   errorPressed: '#ffffff',
+  diffAddition: '#3fb950',
+  diffAdditionSurface: 'rgba(46, 160, 67, 0.2)',
+  diffDeletion: '#f85149',
+  diffDeletionSurface: 'rgba(248, 81, 73, 0.2)',
 
   // 特殊用途
   focusShadow: 'rgba(255, 255, 255, 0.2)',

@@ -9,7 +9,7 @@ from typing import Iterator
 from agent_hub.config import Settings
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 SQLITE_BUSY_TIMEOUT_MS = 10_000
 
 
@@ -46,6 +46,7 @@ class Database:
                   flow_kind text not null default 'browser',
                   desktop_flow_id text,
                   return_to text,
+                  pkce_verifier_ciphertext text,
                   expires_at text not null,
                   created_at text not null
                 );
@@ -183,6 +184,12 @@ class Database:
                 connection,
                 table="oauth_states",
                 column="return_to",
+                declaration="text",
+            )
+            _add_column_if_missing(
+                connection,
+                table="oauth_states",
+                column="pkce_verifier_ciphertext",
                 declaration="text",
             )
             _migrate_app_release_assets_v4(connection)

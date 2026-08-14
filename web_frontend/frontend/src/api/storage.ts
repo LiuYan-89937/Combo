@@ -14,6 +14,8 @@ export interface ConversationStorageClearResult {
   before: ConversationStorageUsage
   after: ConversationStorageUsage
   released_bytes: number
+  deleted_file_count: number
+  deleted_session_ids: string[]
 }
 
 export const storageApi = {

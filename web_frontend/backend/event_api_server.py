@@ -17,7 +17,6 @@ from web_frontend.backend.dynamic_runtime_api import (
     create_dynamic_runtime_router,
 )
 from web_frontend.backend.event_loop_watchdog import EventLoopWatchdog
-from web_frontend.backend.parent_process_watchdog import start_parent_process_watchdog
 from web_frontend.backend.routes.files import create_file_router
 from web_frontend.backend.routes.browser_views import create_browser_view_router
 from web_frontend.backend.routes.model_pool import create_model_pool_router
@@ -47,16 +46,17 @@ def create_app(config: RuntimeBackendConfig | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        start_parent_process_watchdog()
         watchdog.start(asyncio.get_running_loop())
         backend.frontend_events.start(asyncio.get_running_loop())
-        backend.start()
         try:
+            backend.start()
             yield
         finally:
-            await backend.stop()
-            backend.frontend_events.stop()
-            watchdog.stop()
+            try:
+                await backend.stop()
+            finally:
+                backend.frontend_events.stop()
+                watchdog.stop()
 
     application = FastAPI(
         title="Combo Dynamic Runtime Service",

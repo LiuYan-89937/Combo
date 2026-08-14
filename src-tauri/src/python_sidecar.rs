@@ -4,7 +4,9 @@ use std::io;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::time::Duration;
 use tauri::{AppHandle, Manager};
+use wait_timeout::ChildExt;
 
 use crate::user_environment;
 
@@ -14,6 +16,7 @@ use std::os::windows::process::CommandExt;
 use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
 const BACKEND_LOG_TAIL_BYTES: usize = 12_000;
+const BACKEND_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// Python backend sidecar process manager.
 pub struct PythonSidecar {
@@ -63,12 +66,7 @@ impl PythonSidecar {
         // Launch Python backend
         let mut cmd = Command::new(&python_path);
         cmd.arg("-m")
-            .arg("uvicorn")
-            .arg("web_frontend.backend.event_api_server:app")
-            .arg("--host")
-            .arg("127.0.0.1")
-            .arg("--port")
-            .arg(port.to_string())
+            .arg("web_frontend.backend.desktop_server")
             .current_dir(&project_root)
             .env("AGENTFACTORY_PORT", &port_str)
             .env("AGENTFACTORY_PROJECT_ROOT", &project_root)
@@ -222,9 +220,14 @@ impl PythonSidecar {
     pub fn shutdown(&mut self) {
         if let Some(mut process) = self.process.take() {
             println!("Shutting down Python backend (PID: {})", process.id());
-            let _ = process.kill();
-            if let Ok(status) = process.wait() {
-                self.record_exit_status(status);
+            drop(process.stdin.take());
+            match process.wait_timeout(BACKEND_SHUTDOWN_TIMEOUT) {
+                Ok(Some(status)) if !status.success() => self.record_exit_status(status),
+                Ok(Some(_)) => {}
+                Ok(None) | Err(_) => {
+                    let _ = process.kill();
+                    let _ = process.wait();
+                }
             }
         }
     }

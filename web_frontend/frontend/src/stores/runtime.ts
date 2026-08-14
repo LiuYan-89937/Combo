@@ -1259,6 +1259,18 @@ export const useRuntimeStore = defineStore('runtime', {
       this.workspaceEntries = []
     },
 
+    clearConversationHistory(
+      packageId: string | null = null,
+      workspaceId: string | null = null,
+    ) {
+      this.sessions = []
+      this.agentSessions = []
+      this.activeRequests = {}
+      this.conversationScopes = {}
+      this.activeConversationScope = null
+      this.showEmptyAgentPackageSession(packageId, workspaceId)
+    },
+
     expectAgentPackageSession(
       packageId: string,
       sessionId: string,

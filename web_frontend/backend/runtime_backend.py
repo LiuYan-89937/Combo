@@ -1602,14 +1602,26 @@ class RuntimeBackend:
         return self.capability_pool_snapshot()
 
     async def stop(self) -> None:
-        await self.scheduler_service.stop()
-        await self.supervisor.stop()
-        self.application.close()
-        self.browser_runtime.shutdown()
-        self.process_resources.close()
-        self.filesystem_resources.close()
-        self.mcp_runtime.close()
-        close_shared_sqlite_checkpointers(under_root=factory_artifact_path())
+        failures: list[Exception] = []
+        for stop_operation in (self.scheduler_service.stop, self.supervisor.stop):
+            try:
+                await stop_operation()
+            except Exception as exc:
+                failures.append(exc)
+        for close_operation in (
+            self.application.close,
+            self.browser_runtime.shutdown,
+            self.process_resources.close,
+            self.filesystem_resources.close,
+            self.mcp_runtime.close,
+            lambda: close_shared_sqlite_checkpointers(under_root=factory_artifact_path()),
+        ):
+            try:
+                close_operation()
+            except Exception as exc:
+                failures.append(exc)
+        if failures:
+            raise ExceptionGroup("runtime backend shutdown failed", failures)
 
     def _open_application(self) -> DynamicRuntimeApplication:
         config = self.config

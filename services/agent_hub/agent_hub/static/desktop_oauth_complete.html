@@ -33,16 +33,10 @@
       background: rgba(255, 255, 255, .92);
     }
     .mark {
-      width: 52px;
-      height: 52px;
+      width: 64px;
+      height: 64px;
       margin: 0 auto 22px;
-      display: grid;
-      place-items: center;
-      border-radius: 16px;
-      background: #000;
-      color: #fff;
-      font-size: 25px;
-      font-weight: 700;
+      object-fit: contain;
     }
     h1 { margin: 0; font-size: 24px; letter-spacing: -.02em }
     p { margin: 12px 0 0; color: #737373; line-height: 1.65 }
@@ -58,14 +52,14 @@
         box-shadow: 0 18px 60px rgba(0, 0, 0, .7);
         background: rgba(10, 10, 10, .94);
       }
-      .mark { background: #fff; color: #000 }
+      .mark { filter: invert(1) }
       p { color: #a3a3a3 }
     }
   </style>
 </head>
 <body>
   <main>
-    <div class="mark" aria-hidden="true">F</div>
+    <img class="mark" src="/brand/combo/logo-mark.png" alt="">
     <h1>GitHub 授权已完成</h1>
     <p>Combo 会自动完成登录。现在可以关闭此页面并返回应用。</p>
   </main>

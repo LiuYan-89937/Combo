@@ -28,16 +28,16 @@ export interface GitCloneProgress {
   received_bytes: number
 }
 
-export interface GitHubDeviceAuthorization {
-  device_code: string
-  user_code: string
-  verification_uri: string
+interface GitHubBrowserAuthorization {
+  flow_id: string
+  poll_secret: string
+  authorization_url: string
   expires_in: number
   interval: number
 }
 
-interface GitHubDevicePoll {
-  status: 'authorized' | 'authorization_pending' | 'slow_down' | 'expired_token' | 'access_denied'
+interface GitHubBrowserPoll {
+  status: 'authorized' | 'authorization_pending'
   retry_after_seconds: number
   account: GitHubAccount | null
 }
@@ -59,24 +59,36 @@ export const githubApi = {
     requireDesktop()
     return invoke<void>('github_logout')
   },
-  async login(onWaiting?: (flow: GitHubDeviceAuthorization) => void): Promise<GitHubAccount> {
+  async login(onWaiting?: () => void): Promise<GitHubAccount> {
     requireDesktop()
-    const flow = await invoke<GitHubDeviceAuthorization>('github_start_device_authorization')
-    await open(flow.verification_uri)
-    onWaiting?.(flow)
+    const flow = await invoke<GitHubBrowserAuthorization>('github_start_browser_authorization')
     const deadline = Date.now() + flow.expires_in * 1000
-    let interval = Math.max(5, flow.interval)
-    while (Date.now() < deadline) {
-      await delay(interval * 1000)
-      const result = await invoke<GitHubDevicePoll>('github_poll_device_authorization', {
-        deviceCode: flow.device_code,
-      })
-      if (result.status === 'authorized' && result.account) return result.account
-      if (result.status === 'slow_down') interval = Math.max(interval + 5, result.retry_after_seconds)
-      if (result.status === 'expired_token') throw new Error('GitHub authorization expired')
-      if (result.status === 'access_denied') throw new Error('GitHub authorization was cancelled')
+    let authorized = false
+    try {
+      await open(flow.authorization_url)
+      onWaiting?.()
+      let retryAfterSeconds = Math.max(1, flow.interval)
+      while (Date.now() < deadline) {
+        const result = await invoke<GitHubBrowserPoll>('github_poll_browser_authorization', {
+          flowId: flow.flow_id,
+          pollSecret: flow.poll_secret,
+        })
+        if (result.status === 'authorized' && result.account) {
+          authorized = true
+          return result.account
+        }
+        retryAfterSeconds = Math.max(retryAfterSeconds, result.retry_after_seconds)
+        await delay(retryAfterSeconds * 1000)
+      }
+      throw new Error('GitHub authorization expired')
+    } finally {
+      if (!authorized) {
+        await invoke('github_cancel_browser_authorization', {
+          flowId: flow.flow_id,
+          pollSecret: flow.poll_secret,
+        }).catch(() => undefined)
+      }
     }
-    throw new Error('GitHub authorization expired')
   },
   clone(
     repository: GitHubRepository,
