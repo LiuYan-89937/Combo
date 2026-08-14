@@ -1,6 +1,6 @@
 [package]
 name = "combo"
-version = "0.1.0"
+version = "1.0.0"
 description = "Combo - 动态智能体协作桌面应用"
 authors = ["Combo Team"]
 license = "MIT"

@@ -74,6 +74,7 @@ impl PythonSidecar {
             .env("AGENTFACTORY_PROJECT_ROOT", &project_root)
             .env("AGENTFACTORY_DATA_ROOT", &data_root)
             .env("AGENTFACTORY_PARENT_STDIN_WATCHDOG", "1")
+            .env("PYTHONDONTWRITEBYTECODE", "1")
             .env("PYTHONUTF8", "1")
             .env("PYTHONUNBUFFERED", "1")
             .stdin(Stdio::piped())
