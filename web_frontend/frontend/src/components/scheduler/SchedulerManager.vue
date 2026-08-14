@@ -75,6 +75,7 @@
         :description="t('scheduler.empty')"
         class="manager-empty"
       >
+        <template #icon><ComboEmptyStateIcon kind="scheduler" /></template>
         <template #extra>
           <n-button type="primary" @click="showCreateModal = true">{{ t('scheduler.createFirst') }}</n-button>
         </template>
@@ -104,6 +105,7 @@ import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
 import SchedulerJobFormModal from './SchedulerJobFormModal.vue'
 import SchedulerHistoryDrawer from './SchedulerHistoryDrawer.vue'
+import ComboEmptyStateIcon from '@/components/brand/ComboEmptyStateIcon.vue'
 import type { SchedulerJobView } from '@/types/protocol'
 
 const schedulerStore = useSchedulerStore()

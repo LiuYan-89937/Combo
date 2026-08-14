@@ -1,9 +1,11 @@
 <template>
-  <div class="tool-trace-message">
-    <div class="assistant-avatar" aria-hidden="true">A</div>
+  <div class="tool-trace-message" :class="{ embedded }">
+    <div v-if="!embedded" class="assistant-avatar" aria-hidden="true">
+      <ComboFrameAnimation character="companion" action="idle" :size="34" paused />
+    </div>
     <div class="trace-content">
-      <div class="trace-header">
-        <strong>{{ t('roles.assistant') }}</strong>
+      <div v-if="!embedded" class="trace-header">
+        <strong>Combo</strong>
         <span>{{ formattedTime }}</span>
       </div>
       <details class="trace-group" open>
@@ -26,6 +28,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import ToolExecutionChain from '@/components/chat/ToolExecutionChain.vue'
+import ComboFrameAnimation from '@/components/brand/ComboFrameAnimation.vue'
 import { useI18n } from '@/composables/useI18n'
 import type { TranscriptItem, ToolExecutionMessagePart } from '@/types/protocol'
 import type { WorkspaceRequestContext } from '@/api/resourceTypes'
@@ -34,8 +37,10 @@ import { conversationVisibleParts } from '@/utils/toolPresentation'
 const props = withDefaults(defineProps<{
   messages: TranscriptItem[]
   workspaceContext?: WorkspaceRequestContext | null
+  embedded?: boolean
 }>(), {
   workspaceContext: null,
+  embedded: false,
 })
 
 const { locale, t } = useI18n()
@@ -43,7 +48,17 @@ const executions = computed<ToolExecutionMessagePart[]>(() => props.messages.fla
   conversationVisibleParts(message.parts).filter(
     (part): part is ToolExecutionMessagePart => part.type === 'tool_execution',
   )
-)))
+)).map((part, sourceIndex) => ({ part, sourceIndex })).sort((left, right) => {
+  const leftCompleted = Date.parse(String(left.part.completedAt || ''))
+  const rightCompleted = Date.parse(String(right.part.completedAt || ''))
+  const leftHasCompleted = Number.isFinite(leftCompleted)
+  const rightHasCompleted = Number.isFinite(rightCompleted)
+  if (leftHasCompleted && rightHasCompleted && leftCompleted !== rightCompleted) {
+    return leftCompleted - rightCompleted
+  }
+  if (leftHasCompleted !== rightHasCompleted) return leftHasCompleted ? -1 : 1
+  return left.sourceIndex - right.sourceIndex
+}).map(item => item.part))
 const groupState = computed(() => {
   if (executions.value.some(item => item.status === 'awaiting_approval')) return 'approval'
   if (executions.value.some(item => item.error || item.status === 'failed')) return 'failed'
@@ -66,17 +81,16 @@ const formattedTime = computed(() => new Date(props.messages[0]?.timestamp || Da
   padding: 8px var(--app-space-md);
 }
 
+.tool-trace-message.embedded {
+  padding: 0 0 12px;
+}
+
 .assistant-avatar {
   display: grid;
-  width: 36px;
+  width: 40px;
   height: 36px;
-  flex: 0 0 36px;
+  flex: 0 0 40px;
   place-items: center;
-  border: 1px solid var(--app-text);
-  border-radius: 50%;
-  background: var(--app-surface);
-  color: var(--app-text);
-  font-size: 14px;
 }
 
 .trace-content {
@@ -90,6 +104,13 @@ const formattedTime = computed(() => new Date(props.messages[0]?.timestamp || Da
   gap: 8px;
   margin: 0 0 5px;
   font-size: 13px;
+}
+
+.trace-header strong {
+  font-family: 'Avenir Next', 'SF Pro Display', 'Arial Rounded MT Bold', sans-serif;
+  font-size: 16px;
+  font-weight: 780;
+  letter-spacing: -.055em;
 }
 
 .trace-header span {

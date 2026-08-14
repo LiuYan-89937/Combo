@@ -774,8 +774,10 @@ def _tool_call_records(
                     "model_alias": part.model_alias,
                     "arguments": dict(part.arguments),
                     "status": initial_status,
-                    "created_at": observed.get("started_at") or message.created_at,
-                    "updated_at": observed.get("started_at") or message.created_at,
+                    "created_at": observed.get("requested_at") or message.created_at,
+                    "updated_at": observed.get("started_at") or observed.get("requested_at") or message.created_at,
+                    "started_at": observed.get("started_at"),
+                    "completed_at": None,
                 }
             elif isinstance(part, ToolResultPart):
                 record = records.get(part.tool_call_id)
@@ -783,10 +785,10 @@ def _tool_call_records(
                     raise RuntimeError(f"tool result has no projected tool call: {part.tool_call_id}")
                 record["status"] = part.status
                 observed = event_times.get(part.tool_call_id, {})
-                started_at = part.started_at or observed.get("started_at")
-                completed_at = part.completed_at or observed.get("completed_at") or message.created_at
-                if started_at:
-                    record["created_at"] = started_at
+                started_at = observed.get("started_at") or part.started_at
+                completed_at = observed.get("completed_at") or part.completed_at or message.created_at
+                record["started_at"] = started_at
+                record["completed_at"] = completed_at
                 record["updated_at"] = completed_at
                 if part.status == "completed":
                     record["result"] = dict(part.output or {})
@@ -801,7 +803,13 @@ def _tool_event_times(observations: list[dict[str, Any]]) -> dict[str, dict[str,
     event_times: dict[str, dict[str, str]] = {}
     for observation in observations:
         event_type = str(observation.get("event_type") or "")
-        if event_type not in {"tool_proposed", "tool_started", "tool_completed", "tool_failed"}:
+        if event_type not in {
+            "tool_proposed",
+            "tool_started",
+            "tool_completed",
+            "tool_failed",
+            "tool_contract_invalid",
+        }:
             continue
         payload = observation.get("payload")
         if not isinstance(payload, dict):
@@ -811,7 +819,9 @@ def _tool_event_times(observations: list[dict[str, Any]]) -> dict[str, dict[str,
         if not tool_call_id or not created_at:
             continue
         times = event_times.setdefault(tool_call_id, {})
-        if event_type in {"tool_proposed", "tool_started"}:
+        if event_type == "tool_proposed":
+            times.setdefault("requested_at", created_at)
+        elif event_type == "tool_started":
             times.setdefault("started_at", created_at)
         else:
             times["completed_at"] = created_at

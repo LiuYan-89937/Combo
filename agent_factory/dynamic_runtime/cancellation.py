@@ -257,7 +257,12 @@ def _cancel_tool_calls(
     for row in rows:
         current = ToolCallRecord.model_validate_json(str(row["payload_json"]))
         cancelled = current.model_copy(
-            update={"status": "cancelled", "error_code": "runtime_cancelled", "updated_at": now}
+            update={
+                "status": "cancelled",
+                "error_code": "runtime_cancelled",
+                "updated_at": now,
+                "completed_at": now,
+            }
         )
         changed = conn.execute(
             """

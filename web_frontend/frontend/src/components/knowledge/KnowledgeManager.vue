@@ -120,6 +120,7 @@
         :description="t('knowledge.empty')"
         class="manager-empty"
       >
+        <template #icon><ComboEmptyStateIcon kind="knowledge" /></template>
         <template #extra>
           <n-button type="primary" @click="showCreateModal = true">{{ t('knowledge.addFirst') }}</n-button>
         </template>
@@ -202,6 +203,7 @@ import { Add, ArrowForward, Document, Settings, EllipsisHorizontal } from '@/com
 import { useKnowledgeManager } from '@/composables/knowledge/useKnowledgeManager'
 import KnowledgeSourceFormModal from './KnowledgeSourceFormModal.vue'
 import FilePreviewContent from '@/components/workspace/FilePreviewContent.vue'
+import ComboEmptyStateIcon from '@/components/brand/ComboEmptyStateIcon.vue'
 import { useI18n } from '@/composables/useI18n'
 import type { KnowledgeSourceView, WorkspaceFileView } from '@/types/protocol'
 import type { KnowledgeIngestionProgress } from '@/stores/knowledge'

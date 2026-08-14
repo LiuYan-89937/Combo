@@ -196,12 +196,10 @@ onBeforeUnmount(() => {
 })
 
 const durationMs = computed(() => {
-  const startedAt = Date.parse(String(
-    props.part.startedAt || (timingActive.value ? '' : props.part.createdAt) || '',
-  ))
+  const startedAt = Date.parse(String(props.part.startedAt || ''))
   const completedAt = timingActive.value
     ? clockMs.value
-    : Date.parse(String(props.part.updatedAt || ''))
+    : Date.parse(String(props.part.completedAt || ''))
   return Number.isFinite(startedAt) && Number.isFinite(completedAt) && completedAt >= startedAt
     ? completedAt - startedAt
     : null

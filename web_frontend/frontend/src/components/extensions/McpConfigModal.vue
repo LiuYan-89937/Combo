@@ -2,10 +2,11 @@
   <n-modal
     v-model:show="show"
     preset="card"
+    class="editor-modal-shell mcp-config-modal"
+    :bordered="false"
     :title="modalTitle"
     :mask-closable="!busy"
     :closable="!busy"
-    style="width: min(900px, calc(100vw - 32px))"
   >
     <div class="install-steps" aria-label="MCP connection workflow">
       <div v-for="step in workflowSteps" :key="step.key" :class="step.state">
@@ -58,7 +59,7 @@
         </div>
       </section>
 
-      <n-form v-else ref="formRef" :model="formData" :rules="rules" label-placement="top">
+      <n-form v-else ref="formRef" :model="formData" :rules="rules" label-placement="top" class="mcp-manual-form">
         <n-grid :cols="2" :x-gap="16">
           <n-form-item-gi :label="t('common.name')" path="display_name">
             <n-input v-model:value="formData.display_name" :placeholder="t('extensions.serverName')" />
@@ -68,7 +69,7 @@
           </n-form-item-gi>
         </n-grid>
 
-        <n-form-item :label="t('common.description')">
+        <n-form-item :label="t('common.description')" class="mcp-full-row">
           <n-input v-model:value="formData.description" type="textarea" :rows="2" />
         </n-form-item>
 
@@ -550,7 +551,10 @@ function stageDetail(entry: { stage: string; detail: Record<string, unknown> }):
 </script>
 
 <style scoped>
+.mcp-config-modal { --editor-modal-width: 980px; }
 .mode-switch, .import-panel, .preview-list, .test-row { display: grid; gap: var(--app-space-md); }
+.mcp-manual-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; align-items: start; }
+.mcp-manual-form > :deep(.n-grid),.mcp-manual-form > :deep(.mcp-full-row),.mcp-manual-form > .policy-section { grid-column: 1 / -1; }
 .mode-switch { margin-bottom: var(--app-space-lg); }
 .preview-card { padding: var(--app-space-md); border: 1px solid var(--app-divider); border-radius: var(--app-radius-md); background: var(--app-surface-soft); }
 .preview-heading, .preview-meta { display: flex; align-items: center; justify-content: space-between; gap: var(--app-space-md); }
@@ -561,11 +565,11 @@ function stageDetail(entry: { stage: string; detail: Record<string, unknown> }):
 .policy-section { margin-top: 8px; padding: 16px; border: 1px solid var(--app-border); border-radius: 12px; }
 .section-copy,.switch-row > span { display: grid; gap: 3px; }
 .section-copy { margin-bottom: 12px; }
-.section-copy span,.switch-row small { color: var(--app-text-muted); font-size: 10px; }
+.section-copy span,.switch-row small { color: var(--app-text-muted); font-size: 11px; line-height: 1.5; }
 .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .install-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 20px; overflow: hidden; border: 1px solid var(--app-border); border-radius: 13px; }
 .install-steps > div { display: flex; min-width: 0; align-items: center; gap: 9px; padding: 11px 12px; border-right: 1px solid var(--app-border); }
-.install-steps > div:last-child { border-right: 0; }.install-steps i { display: grid; flex: none; width: 22px; height: 22px; place-items: center; border: 1px solid var(--app-border); border-radius: 50%; font-size: 9px; font-style: normal; }.install-steps span { display: grid; min-width: 0; gap: 1px; }.install-steps strong { font-size: 10px; }.install-steps small { overflow: hidden; color: var(--app-text-muted); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }.install-steps .active { background: color-mix(in srgb, var(--app-text) 5%, transparent); }.install-steps .active i,.install-steps .done i { color: var(--app-surface); border-color: var(--app-text); background: var(--app-text); }.install-steps .pending { opacity: .48; }
+.install-steps > div:last-child { border-right: 0; }.install-steps i { display: grid; flex: none; width: 24px; height: 24px; place-items: center; border: 1px solid var(--app-border); border-radius: 50%; font-size: 10px; font-style: normal; }.install-steps span { display: grid; min-width: 0; gap: 2px; }.install-steps strong { font-size: 11px; }.install-steps small { overflow: hidden; color: var(--app-text-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }.install-steps .active { background: color-mix(in srgb, var(--app-text) 5%, transparent); }.install-steps .active i,.install-steps .done i { color: var(--app-surface); border-color: var(--app-text); background: var(--app-text); }.install-steps .pending { opacity: .62; }
 .install-console { display: grid; gap: 13px; margin-top: 18px; padding: 15px; border: 1px solid var(--app-border); border-radius: 13px; background: var(--app-surface); }.install-console header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }.install-console header > div { display: grid; gap: 2px; }.console-kicker { color: var(--app-text-muted); font-size: 8px; font-weight: 800; letter-spacing: .14em; }.install-console header strong { font-size: 12px; }.install-timeline { display: grid; max-height: 230px; overflow-y: auto; }.install-event { position: relative; display: grid; grid-template-columns: 12px minmax(0, 1fr); gap: 9px; min-height: 42px; }.install-event::before { position: absolute; top: 14px; bottom: 0; left: 4px; width: 1px; content: ''; background: var(--app-border); }.install-event:last-child::before { display: none; }.install-event > i { z-index: 1; width: 9px; height: 9px; margin-top: 3px; border: 2px solid var(--app-surface); border-radius: 50%; background: var(--app-text); }.install-event > div { display: grid; align-content: start; gap: 3px; padding-bottom: 11px; }.install-event strong { font-size: 10px; }.install-event span { color: var(--app-text-muted); font-family: var(--app-font-mono); font-size: 9px; overflow-wrap: anywhere; }.install-error { margin: 0; padding: 10px; color: var(--app-error); border: 1px solid color-mix(in srgb, var(--app-error) 30%, transparent); border-radius: 9px; font-family: var(--app-font-mono); font-size: 10px; white-space: pre-wrap; }
-@media (max-width: 680px) { .install-steps { grid-template-columns: 1fr 1fr; }.install-steps > div:nth-child(2) { border-right: 0; }.install-steps > div:nth-child(-n + 2) { border-bottom: 1px solid var(--app-border); } }
+@media (max-width: 680px) { .mcp-manual-form { grid-template-columns: 1fr; }.mcp-manual-form > :deep(.n-grid),.mcp-manual-form > :deep(.mcp-full-row),.mcp-manual-form > .policy-section { grid-column: auto; }.install-steps { grid-template-columns: 1fr 1fr; }.install-steps > div:nth-child(2) { border-right: 0; }.install-steps > div:nth-child(-n + 2) { border-bottom: 1px solid var(--app-border); } }
 </style>

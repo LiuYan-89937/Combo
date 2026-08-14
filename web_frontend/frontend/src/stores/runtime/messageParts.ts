@@ -84,6 +84,7 @@ export function toolCallPart(tool: ToolActivity): ChatMessagePart {
     status: toolPartStatus(tool),
     createdAt: tool.createdAt,
     startedAt: tool.startedAt,
+    completedAt: tool.completedAt,
     updatedAt: tool.timestamp,
   }
 }
@@ -100,6 +101,7 @@ export function toolResultPart(tool: ToolActivity): ChatMessagePart | null {
     status: tool.status === 'failed' ? 'failed' : tool.status === 'cancelled' ? 'cancelled' : 'completed',
     createdAt: tool.createdAt,
     startedAt: tool.startedAt,
+    completedAt: tool.completedAt,
     updatedAt: tool.timestamp,
   }
 }

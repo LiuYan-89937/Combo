@@ -54,7 +54,16 @@ def build_chat_turn_messages(
         if not isinstance(activity, dict):
             continue
         activity_key = _tool_activity_key(activity, fallback=str(activity_index))
-        activity_timestamp = str(activity.get("createdAt") or activity.get("timestamp") or updated_at)
+        activity_timestamp = str(
+            activity.get("completedAt")
+            or activity.get("completed_at")
+            or activity.get("startedAt")
+            or activity.get("started_at")
+            or activity.get("createdAt")
+            or activity.get("created_at")
+            or activity.get("timestamp")
+            or updated_at
+        )
         messages.append(
             _chat_message(
                 message_id=f"turn-{turn_id}-tool-{activity_key}",
@@ -179,8 +188,9 @@ def _tool_parts(*, turn_id: str, updated_at: str, activity: dict[str, Any]) -> l
             "arguments": payload.get("arguments") or payload.get("args") or {},
             "liveOutput": payload.get("output"),
             "status": _tool_part_status(status),
-            "createdAt": activity.get("startedAt") or activity.get("started_at") or activity.get("createdAt") or updated_at,
-            "startedAt": activity.get("startedAt") or activity.get("started_at") or activity.get("createdAt"),
+            "createdAt": activity.get("createdAt") or activity.get("created_at") or updated_at,
+            "startedAt": activity.get("startedAt") or activity.get("started_at"),
+            "completedAt": activity.get("completedAt") or activity.get("completed_at"),
             "updatedAt": activity.get("timestamp") or updated_at,
         }
     ]
@@ -195,8 +205,9 @@ def _tool_parts(*, turn_id: str, updated_at: str, activity: dict[str, Any]) -> l
                 "output": output,
                 "error": payload.get("error"),
                 "status": "failed" if status == "failed" else "completed",
-                "createdAt": activity.get("startedAt") or activity.get("started_at") or activity.get("createdAt") or updated_at,
-                "startedAt": activity.get("startedAt") or activity.get("started_at") or activity.get("createdAt"),
+                "createdAt": activity.get("createdAt") or activity.get("created_at") or updated_at,
+                "startedAt": activity.get("startedAt") or activity.get("started_at"),
+                "completedAt": activity.get("completedAt") or activity.get("completed_at"),
                 "updatedAt": activity.get("timestamp") or updated_at,
             }
         )

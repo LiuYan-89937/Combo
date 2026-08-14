@@ -7,8 +7,7 @@ import { textPart } from '@/stores/runtime/messageParts'
 import { conversationVisibleParts } from '@/utils/toolPresentation'
 
 export type FactoryTimelineItem =
-  | { kind: 'message'; id: string; timestamp: string; order: number; message: TranscriptItem; thinking: boolean }
-  | { kind: 'tool_trace'; id: string; timestamp: string; order: number; messages: TranscriptItem[] }
+  | { kind: 'message'; id: string; timestamp: string; order: number; message: TranscriptItem; messages: TranscriptItem[]; thinking: boolean }
 
 export function useFactoryMessageProjection() {
   const runtimeStore = useRuntimeStore()
@@ -26,41 +25,40 @@ export function useFactoryMessageProjection() {
   const hasActiveStreams = computed(() => activeStreams.value.length > 0)
   const timelineItems = computed<FactoryTimelineItem[]>(() => {
     const items: FactoryTimelineItem[] = []
-    const projectedAssistantRequests = new Set<string>()
-    let pendingToolTrace: Extract<FactoryTimelineItem, { kind: 'tool_trace' }> | null = null
+    let activeAssistantItem: FactoryTimelineItem | null = null
     runtimeStore.transcript.forEach((message, index) => {
       if (message.metadata?.dispatch_state === 'queued') return
       if (conversationVisibleParts(message.parts).length === 0) return
       const requestId = String(message.metadata?.request_id || '').trim()
-      if (isToolTraceMessage(message)) {
-        if (pendingToolTrace) {
-          pendingToolTrace.messages.push(message)
+      if (message.role === 'assistant' && !message.metadata?.delegated_delivery) {
+        const activeRequestId = activeAssistantItem
+          ? String(activeAssistantItem.message.metadata?.request_id || '').trim()
+          : ''
+        if (activeAssistantItem && assistantMessagesBelongTogether(activeRequestId, requestId)) {
+          activeAssistantItem.messages.push(message)
+          activeAssistantItem.message = message
         } else {
-          pendingToolTrace = {
-            kind: 'tool_trace',
-            id: `tool-trace-${message.id}`,
+          activeAssistantItem = {
+            kind: 'message',
+            id: requestId ? assistantProjectionId(requestId) : `assistant-turn-${message.id}`,
             timestamp: message.timestamp,
             order: index,
+            message,
             messages: [message],
+            thinking: false,
           }
-          items.push(pendingToolTrace)
+          items.push(activeAssistantItem)
         }
         return
       }
-      pendingToolTrace = null
-      const isPrimaryAssistant = Boolean(
-        requestId
-        && message.role === 'assistant'
-        && !message.metadata?.tool_activity
-        && !projectedAssistantRequests.has(requestId),
-      )
-      if (isPrimaryAssistant) projectedAssistantRequests.add(requestId)
+      activeAssistantItem = null
       items.push({
         kind: 'message',
-        id: isPrimaryAssistant ? assistantProjectionId(requestId) : message.id,
+        id: message.id,
         timestamp: message.timestamp,
         order: index,
         message,
+        messages: [message],
         thinking: false,
       })
     })
@@ -72,6 +70,7 @@ export function useFactoryMessageProjection() {
         timestamp: message.timestamp,
         order: runtimeStore.transcript.length + index,
         message,
+        messages: [message],
         thinking: true,
       })
     })
@@ -196,11 +195,9 @@ function messageHasDisplayParts(message: TranscriptItem): boolean {
   return conversationVisibleParts(message.parts).some(partHasDisplayContent)
 }
 
-function isToolTraceMessage(message: TranscriptItem): boolean {
-  const parts = conversationVisibleParts(message.parts)
-  return message.role === 'assistant'
-    && parts.length > 0
-    && parts.every(part => part.type === 'tool_execution')
+function assistantMessagesBelongTogether(activeRequestId: string, nextRequestId: string): boolean {
+  if (activeRequestId && nextRequestId) return activeRequestId === nextRequestId
+  return true
 }
 
 function messagePartsKey(message: TranscriptItem): string {

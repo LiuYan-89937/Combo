@@ -19,20 +19,15 @@
               <ComboMascot state="idle" :size="148" />
             </div>
 
-            <template v-for="item in timelineItems" :key="`${item.kind}-${item.id}`">
+            <template v-for="item in timelineItems" :key="item.id">
               <MessageItem
-                v-if="item.kind === 'message'"
                 :message="item.message"
+                :messages="item.messages"
                 :streaming="isMessageStreaming(item.message.streamId)"
                 :thinking="item.thinking"
                 quoteable
                 :workspace-context="messageWorkspaceContext"
                 @quote="addMessageReference"
-              />
-              <ToolTraceGroup
-                v-else
-                :messages="item.messages"
-                :workspace-context="messageWorkspaceContext"
               />
             </template>
 
@@ -111,7 +106,6 @@ import { useFactoryConversation } from '@/composables/factory/useFactoryConversa
 import { useFactoryMessageProjection } from '@/composables/factory/useFactoryMessageProjection'
 import { useCommand } from '@/composables/useCommand'
 import MessageItem from '@/components/chat/MessageItem.vue'
-import ToolTraceGroup from '@/components/chat/ToolTraceGroup.vue'
 import MessageInput from '@/components/chat/MessageInput.vue'
 import ToolApprovalPanel from '@/components/chat/ToolApprovalPanel.vue'
 import ConversationFloatingDock from '@/components/chat/ConversationFloatingDock.vue'

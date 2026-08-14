@@ -35,6 +35,8 @@ class ToolCallRecord(BaseModel):
     error_code: str | None = None
     created_at: str
     updated_at: str
+    started_at: str | None = None
+    completed_at: str | None = None
 
     @field_validator(
         "tool_call_id",
@@ -57,6 +59,12 @@ class ToolCallRecord(BaseModel):
     @field_validator("error_code")
     @classmethod
     def _optional_text(cls, value: str | None) -> str | None:
+        text = str(value or "").strip()
+        return text or None
+
+    @field_validator("started_at", "completed_at")
+    @classmethod
+    def _optional_timestamp(cls, value: str | None) -> str | None:
         text = str(value or "").strip()
         return text or None
 

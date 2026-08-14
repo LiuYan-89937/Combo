@@ -226,7 +226,9 @@
 
     <n-modal
       v-model:show="credentialModalOpen"
-      preset="dialog"
+      preset="card"
+      class="editor-modal-shell model-editor-modal model-credential-modal"
+      :bordered="false"
       :title="credentialEditing ? t('modelPool.editCredential') : t('modelPool.addCredential')"
     >
       <n-form
@@ -234,24 +236,43 @@
         :model="credentialForm"
         :rules="credentialRules"
         label-placement="top"
+        class="credential-editor-form"
       >
-        <n-form-item :label="t('modelPool.displayName')" path="display_name">
-          <n-input v-model:value="credentialForm.display_name" :placeholder="t('modelPool.credentialNamePlaceholder')" />
-        </n-form-item>
-        <n-form-item :label="t('modelPool.provider')" path="provider">
-          <n-select v-model:value="credentialForm.provider" :options="providerOptions" :placeholder="t('modelPool.providerPlaceholder')" />
-        </n-form-item>
-        <n-form-item :label="t('modelPool.baseUrl')" path="base_url">
-          <n-input v-model:value="credentialForm.base_url" :placeholder="t('modelPool.baseUrlPlaceholder')" />
-        </n-form-item>
-        <n-form-item
-          :label="credentialEditing ? t('modelPool.replaceApiKey') : t('modelPool.apiKey')"
-          path="api_key"
-        >
-          <n-input v-model:value="credentialForm.api_key" type="password" show-password-on="mousedown" :placeholder="t('modelPool.apiKeyPlaceholder')" />
-        </n-form-item>
+        <section class="model-editor-pane">
+          <header class="model-editor-pane__header">
+            <span>01</span>
+            <div>
+              <strong>{{ t('modelPool.identitySection') }}</strong>
+              <small>{{ t('modelPool.identitySectionHint') }}</small>
+            </div>
+          </header>
+          <n-form-item :label="t('modelPool.displayName')" path="display_name">
+            <n-input v-model:value="credentialForm.display_name" :placeholder="t('modelPool.credentialNamePlaceholder')" />
+          </n-form-item>
+          <n-form-item :label="t('modelPool.provider')" path="provider">
+            <n-select v-model:value="credentialForm.provider" :options="providerOptions" :placeholder="t('modelPool.providerPlaceholder')" />
+          </n-form-item>
+        </section>
+        <section class="model-editor-pane">
+          <header class="model-editor-pane__header">
+            <span>02</span>
+            <div>
+              <strong>{{ t('modelPool.connectionSection') }}</strong>
+              <small>{{ t('modelPool.connectionSectionHint') }}</small>
+            </div>
+          </header>
+          <n-form-item :label="t('modelPool.baseUrl')" path="base_url">
+            <n-input v-model:value="credentialForm.base_url" :placeholder="t('modelPool.baseUrlPlaceholder')" />
+          </n-form-item>
+          <n-form-item
+            :label="credentialEditing ? t('modelPool.replaceApiKey') : t('modelPool.apiKey')"
+            path="api_key"
+          >
+            <n-input v-model:value="credentialForm.api_key" type="password" show-password-on="mousedown" :placeholder="t('modelPool.apiKeyPlaceholder')" />
+          </n-form-item>
+        </section>
       </n-form>
-      <template #action>
+      <template #footer>
         <n-space justify="end">
           <n-button @click="credentialModalOpen = false">{{ t('common.cancel') }}</n-button>
           <n-button type="primary" :loading="saving" @click="saveCredential">{{ t('common.save') }}</n-button>
@@ -261,57 +282,78 @@
 
     <n-modal
       v-model:show="profileModalOpen"
-      preset="dialog"
+      preset="card"
+      class="editor-modal-shell model-editor-modal model-profile-modal"
+      :bordered="false"
       :title="profileEditing ? t('modelPool.editProfile') : t('modelPool.addProfile')"
-      style="width: min(720px, 92vw)"
     >
       <n-form
         ref="profileFormRef"
         :model="profileForm"
         :rules="profileRules"
         label-placement="top"
+        class="profile-editor-form"
       >
-        <n-form-item :label="t('modelPool.displayName')" path="display_name">
-          <n-input v-model:value="profileForm.display_name" :placeholder="t('modelPool.profileNamePlaceholder')" />
-        </n-form-item>
-        <n-form-item :label="t('modelPool.profileDescription')">
-          <n-input
-            v-model:value="profileForm.description"
-            type="textarea"
-            :autosize="{ minRows: 2, maxRows: 5 }"
-            :placeholder="t('modelPool.profileDescriptionPlaceholder')"
-          />
-        </n-form-item>
-        <n-form-item :label="t('modelPool.modelType')" path="kind">
-          <n-select v-model:value="profileForm.kind" :options="modelKindOptions" />
-        </n-form-item>
-        <n-form-item :label="t('modelPool.credential')" path="credential_id">
-          <n-select v-model:value="profileForm.credential_id" :options="credentialOptions" :placeholder="t('modelPool.credentialPlaceholder')" />
-        </n-form-item>
-        <n-form-item :label="t('modelPool.modelName')" path="model_name">
-          <n-input v-model:value="profileForm.model_name" :placeholder="t('modelPool.modelNamePlaceholder')" />
-        </n-form-item>
-        <n-form-item v-if="profileForm.kind === 'chat'" :label="t('modelPool.capabilities')">
-          <n-space vertical>
-            <n-checkbox v-model:checked="profileForm.tool_calling">{{ t('modelPool.toolCalling') }}</n-checkbox>
-            <n-checkbox v-model:checked="profileForm.image_input">{{ t('modelPool.imageInput') }}</n-checkbox>
-            <n-checkbox v-model:checked="profileForm.image_output">{{ t('modelPool.imageOutput') }}</n-checkbox>
-            <n-checkbox v-model:checked="profileForm.audio_input">{{ t('modelPool.audioInput') }}</n-checkbox>
-            <n-checkbox v-model:checked="profileForm.audio_output">{{ t('modelPool.audioOutput') }}</n-checkbox>
-            <n-checkbox v-model:checked="profileForm.reasoning_supported">{{ t('modelPool.reasoning') }}</n-checkbox>
-          </n-space>
-        </n-form-item>
-        <n-form-item v-else-if="profileForm.kind === 'image_generation'" :label="t('modelPool.imageCapabilities')">
-          <n-space vertical>
-            <n-checkbox v-model:checked="profileForm.text_to_image" :disabled="!providerImageCapability('text_to_image')">{{ t('modelPool.textToImage') }}</n-checkbox>
-            <n-checkbox v-model:checked="profileForm.image_to_image" :disabled="!providerImageCapability('image_to_image')">{{ t('modelPool.imageToImage') }}</n-checkbox>
-            <n-checkbox v-model:checked="profileForm.image_edit" :disabled="!providerImageCapability('image_edit')">{{ t('modelPool.imageEdit') }}</n-checkbox>
-            <n-checkbox v-model:checked="profileForm.multi_image_reference" :disabled="!providerImageCapability('multi_image_reference')">{{ t('modelPool.multiImageReference') }}</n-checkbox>
-            <n-checkbox v-model:checked="profileForm.batch_generation" :disabled="!providerImageCapability('batch_generation')">{{ t('modelPool.batchGeneration') }}</n-checkbox>
-            <n-text depth="3">{{ t('modelPool.imageCapabilitiesDeclarationHint') }}</n-text>
-          </n-space>
-        </n-form-item>
-        <div v-if="profileForm.kind === 'chat'" class="form-grid">
+        <section class="model-editor-pane">
+          <header class="model-editor-pane__header">
+            <span>01</span>
+            <div>
+              <strong>{{ t('modelPool.identitySection') }}</strong>
+              <small>{{ t('modelPool.identitySectionHint') }}</small>
+            </div>
+          </header>
+          <n-form-item :label="t('modelPool.displayName')" path="display_name">
+            <n-input v-model:value="profileForm.display_name" :placeholder="t('modelPool.profileNamePlaceholder')" />
+          </n-form-item>
+          <n-form-item :label="t('modelPool.profileDescription')">
+            <n-input
+              v-model:value="profileForm.description"
+              type="textarea"
+              :autosize="{ minRows: 2, maxRows: 4 }"
+              :placeholder="t('modelPool.profileDescriptionPlaceholder')"
+            />
+          </n-form-item>
+          <div class="model-editor-field-grid">
+            <n-form-item :label="t('modelPool.modelType')" path="kind">
+              <n-select v-model:value="profileForm.kind" :options="modelKindOptions" />
+            </n-form-item>
+            <n-form-item :label="t('modelPool.credential')" path="credential_id">
+              <n-select v-model:value="profileForm.credential_id" :options="credentialOptions" :placeholder="t('modelPool.credentialPlaceholder')" />
+            </n-form-item>
+          </div>
+          <n-form-item :label="t('modelPool.modelName')" path="model_name">
+            <n-input v-model:value="profileForm.model_name" :placeholder="t('modelPool.modelNamePlaceholder')" />
+          </n-form-item>
+        </section>
+        <section class="model-editor-pane">
+          <header class="model-editor-pane__header">
+            <span>02</span>
+            <div>
+              <strong>{{ t('modelPool.runtimeSection') }}</strong>
+              <small>{{ t('modelPool.runtimeSectionHint') }}</small>
+            </div>
+          </header>
+          <n-form-item v-if="profileForm.kind === 'chat'" :label="t('modelPool.capabilities')" class="model-capability-field">
+            <n-space>
+              <n-checkbox v-model:checked="profileForm.tool_calling">{{ t('modelPool.toolCalling') }}</n-checkbox>
+              <n-checkbox v-model:checked="profileForm.image_input">{{ t('modelPool.imageInput') }}</n-checkbox>
+              <n-checkbox v-model:checked="profileForm.image_output">{{ t('modelPool.imageOutput') }}</n-checkbox>
+              <n-checkbox v-model:checked="profileForm.audio_input">{{ t('modelPool.audioInput') }}</n-checkbox>
+              <n-checkbox v-model:checked="profileForm.audio_output">{{ t('modelPool.audioOutput') }}</n-checkbox>
+              <n-checkbox v-model:checked="profileForm.reasoning_supported">{{ t('modelPool.reasoning') }}</n-checkbox>
+            </n-space>
+          </n-form-item>
+          <n-form-item v-else-if="profileForm.kind === 'image_generation'" :label="t('modelPool.imageCapabilities')" class="model-capability-field">
+            <n-space>
+              <n-checkbox v-model:checked="profileForm.text_to_image" :disabled="!providerImageCapability('text_to_image')">{{ t('modelPool.textToImage') }}</n-checkbox>
+              <n-checkbox v-model:checked="profileForm.image_to_image" :disabled="!providerImageCapability('image_to_image')">{{ t('modelPool.imageToImage') }}</n-checkbox>
+              <n-checkbox v-model:checked="profileForm.image_edit" :disabled="!providerImageCapability('image_edit')">{{ t('modelPool.imageEdit') }}</n-checkbox>
+              <n-checkbox v-model:checked="profileForm.multi_image_reference" :disabled="!providerImageCapability('multi_image_reference')">{{ t('modelPool.multiImageReference') }}</n-checkbox>
+              <n-checkbox v-model:checked="profileForm.batch_generation" :disabled="!providerImageCapability('batch_generation')">{{ t('modelPool.batchGeneration') }}</n-checkbox>
+              <n-text depth="3">{{ t('modelPool.imageCapabilitiesDeclarationHint') }}</n-text>
+            </n-space>
+          </n-form-item>
+          <div v-if="profileForm.kind === 'chat'" class="form-grid">
           <n-form-item :label="t('modelPool.maxInput')">
             <n-input-number v-model:value="profileForm.max_input_tokens" :min="1" clearable />
           </n-form-item>
@@ -341,8 +383,8 @@
           <n-form-item :label="t('modelPool.outputPrice')">
             <n-input-number v-model:value="profileForm.output_per_1m_tokens" :min="0" clearable />
           </n-form-item>
-        </div>
-        <div v-else-if="profileForm.kind === 'embedding'" class="form-grid">
+          </div>
+          <div v-else-if="profileForm.kind === 'embedding'" class="form-grid">
           <n-form-item :label="t('modelPool.embeddingDimensions')" path="embedding_dimensions">
             <n-input-number v-model:value="profileForm.embedding_dimensions" :min="1" clearable />
           </n-form-item>
@@ -355,8 +397,8 @@
           <n-form-item :label="t('modelPool.inputPrice')">
             <n-input-number v-model:value="profileForm.input_per_1m_tokens" :min="0" clearable />
           </n-form-item>
-        </div>
-        <div v-else class="form-grid">
+          </div>
+          <div v-else class="form-grid">
           <n-form-item :label="t('modelPool.defaultImageCount')">
             <n-input-number v-model:value="profileForm.max_output_tokens" :min="1" :max="4" clearable />
           </n-form-item>
@@ -369,12 +411,13 @@
           <n-form-item :label="t('modelPool.imageEditPrice')">
             <n-input-number v-model:value="profileForm.image_edit_unit_price" :min="0" clearable />
           </n-form-item>
-        </div>
-        <n-form-item :label="t('modelPool.notes')">
-          <n-input v-model:value="profileForm.notes" type="textarea" :placeholder="t('modelPool.notesPlaceholder')" />
-        </n-form-item>
+          </div>
+          <n-form-item :label="t('modelPool.notes')">
+            <n-input v-model:value="profileForm.notes" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" :placeholder="t('modelPool.notesPlaceholder')" />
+          </n-form-item>
+        </section>
       </n-form>
-      <template #action>
+      <template #footer>
         <n-space justify="end">
           <n-button @click="profileModalOpen = false">{{ t('common.cancel') }}</n-button>
           <n-button type="primary" :loading="saving" @click="saveProfile">{{ t('common.save') }}</n-button>
@@ -1165,6 +1208,91 @@ function formatCost(value: number | null | undefined): string {
   gap: 12px;
 }
 
+.credential-editor-form,
+.profile-editor-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
+  gap: 20px;
+}
+
+.model-credential-modal {
+  --editor-modal-width: 900px;
+}
+
+.model-profile-modal {
+  --editor-modal-width: 1120px;
+}
+
+.model-editor-pane {
+  box-sizing: border-box;
+  min-width: 0;
+  height: 100%;
+  padding: 20px;
+  border: 1px solid var(--app-border);
+  border-radius: 18px;
+  background: var(--app-surface);
+}
+
+.model-editor-pane__header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.model-editor-pane__header > span {
+  display: grid;
+  flex: 0 0 38px;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border-radius: 12px;
+  color: var(--app-surface);
+  background: var(--app-text);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.model-editor-pane__header > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.model-editor-pane__header strong {
+  color: var(--app-text);
+  font-size: 15px;
+  line-height: 1.3;
+}
+
+.model-editor-pane__header small {
+  color: var(--app-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.model-editor-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.model-capability-field :deep(.n-space) {
+  gap: 12px 20px !important;
+}
+
+.profile-editor-form .form-grid {
+  gap: 0 14px;
+  padding-top: 16px;
+  border-top: 1px solid var(--app-divider);
+}
+
+.profile-editor-form :deep(.n-form-item),
+.credential-editor-form :deep(.n-form-item) {
+  min-width: 0;
+}
+
 .manager-empty {
   padding: 48px 0;
 }
@@ -1178,6 +1306,15 @@ function formatCost(value: number | null | undefined): string {
   }
 
   .form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .credential-editor-form,
+  .profile-editor-form {
+    grid-template-columns: 1fr;
+  }
+
+  .model-editor-field-grid {
     grid-template-columns: 1fr;
   }
 

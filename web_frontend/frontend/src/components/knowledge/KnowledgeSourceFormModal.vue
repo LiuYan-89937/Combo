@@ -2,132 +2,140 @@
   <n-modal
     v-model:show="show"
     preset="card"
+    class="editor-modal-shell knowledge-source-modal"
+    :bordered="false"
     :title="t('knowledge.formTitle')"
     :closable="!submitting"
     :mask-closable="!submitting"
     :close-on-esc="!submitting"
-    style="width: min(560px, calc(100vw - 32px)); max-height: min(760px, calc(100vh - 48px))"
-    content-style="min-height: 0; overflow-y: auto"
   >
-    <n-form ref="formRef" :model="formData" :rules="rules">
-      <n-form-item :label="t('knowledge.kind')" path="kind">
-        <n-select v-model:value="formData.kind" :options="kindOptions" @update:value="handleKindChange" />
-      </n-form-item>
-
-      <n-form-item :label="t('knowledge.displayName')" path="display_name">
-        <n-input v-model:value="formData.display_name" :placeholder="t('knowledge.displayNamePlaceholder')" />
-      </n-form-item>
-
-      <n-form-item
-        v-if="usesUpload"
-        :label="t('knowledge.fileContent')"
-        required
-        :validation-status="uploadValidationError ? 'error' : undefined"
-        :feedback="uploadValidationError ? t('knowledge.validateFiles') : undefined"
-      >
-        <div class="upload-field">
-          <n-alert v-if="capabilitiesError" type="error" :title="t('knowledge.capabilitiesUnavailable')">
-            {{ capabilitiesError }}
-          </n-alert>
-          <n-alert v-else type="info" :title="t('knowledge.supportedFormats')">
-            <div class="format-groups">
-              <n-tag
-                v-for="group in knowledgeFormatGroups"
-                :key="group.group_id"
-                size="small"
-                :bordered="false"
-              >
-                {{ formatGroupLabel(group.group_id) }}
-              </n-tag>
-            </div>
-          </n-alert>
-          <n-alert v-if="rejectedFileNames.length" type="warning" :title="t('knowledge.unsupportedFilesRejected')">
-            {{ rejectedFileNames.join(', ') }}
-          </n-alert>
-          <div
-            class="upload-zone"
-            @dragover.prevent
-            @drop.prevent="handleDrop"
-          >
-            <n-text>{{ uploadTitle }}</n-text>
-            <n-text depth="3" class="upload-hint">
-              {{ t('knowledge.uploadHint') }}
-            </n-text>
-            <n-space>
-              <n-button :disabled="!capabilities" @click="openFilePicker">{{ t('knowledge.selectFile') }}</n-button>
-              <n-button :disabled="!capabilities" @click="openFolderPicker">{{ t('knowledge.selectFolder') }}</n-button>
-            </n-space>
+    <n-form ref="formRef" :model="formData" :rules="rules" class="knowledge-editor-form">
+      <section class="knowledge-editor-pane">
+        <header class="knowledge-pane-header">
+          <span>01</span>
+          <div>
+            <strong>{{ t('knowledge.sourceSection') }}</strong>
+            <small>{{ t('knowledge.sourceSectionHint') }}</small>
           </div>
-          <input
-            ref="fileInputRef"
-            class="native-input"
-            type="file"
-            multiple
-            :accept="fileAccept"
-            @change="handleFileInput"
-          />
-          <input
-            ref="folderInputRef"
-            class="native-input"
-            type="file"
-            multiple
-            :accept="fileAccept"
-            webkitdirectory
-            directory
-            @change="handleFileInput"
-          />
-          <div v-if="selectedFiles.length" class="selected-files">
-            <n-text depth="3">{{ t('knowledge.filesSelected', { count: selectedFiles.length }) }}</n-text>
-            <div
-              v-for="item in selectedFiles.slice(0, 8)"
-              :key="item.relativePath"
-              class="selected-file"
-              :title="item.relativePath"
-            >
-              {{ item.relativePath }}
-            </div>
-            <n-text v-if="selectedFiles.length > 8" depth="3" class="upload-hint">
-              {{ t('knowledge.moreFiles', { count: selectedFiles.length - 8 }) }}
-            </n-text>
-          </div>
-        </div>
-      </n-form-item>
+        </header>
 
-      <n-form-item v-if="formData.kind === 'url'" :label="t('knowledge.urlAddress')" path="uri">
-        <n-input v-model:value="formData.uri" placeholder="https://example.com/docs" />
-      </n-form-item>
-
-      <n-form-item v-if="formData.kind === 'note'" :label="t('knowledge.content')" path="content">
-        <n-input
-          v-model:value="formData.content"
-          type="textarea"
-          :rows="6"
-          :placeholder="t('knowledge.notePlaceholder')"
-        />
-      </n-form-item>
-
-      <n-form-item :label="t('knowledge.mountMode')" path="mount_mode">
-        <n-radio-group v-model:value="formData.mount_mode">
-          <n-radio value="index_only">{{ t('knowledge.indexOnly') }}</n-radio>
-          <n-radio value="rag">{{ t('knowledge.rag') }}</n-radio>
-        </n-radio-group>
-      </n-form-item>
-
-      <n-collapse-transition :show="formData.mount_mode === 'rag'">
-        <div class="rag-options">
-          <n-form-item :label="t('knowledge.chunkingStrategy')">
-            <n-select v-model:value="chunking.splitter" :options="splitterOptions" />
+        <div class="knowledge-basic-grid">
+          <n-form-item :label="t('knowledge.kind')" path="kind">
+            <n-select v-model:value="formData.kind" :options="kindOptions" @update:value="handleKindChange" />
           </n-form-item>
-          <div class="chunk-grid">
-            <n-form-item :label="t('knowledge.chunkSize')">
-              <n-input-number v-model:value="chunking.chunkSize" :min="100" :max="8000" :step="100" />
-            </n-form-item>
-            <n-form-item :label="t('knowledge.chunkOverlap')">
-              <n-input-number v-model:value="chunking.chunkOverlap" :min="0" :max="2000" :step="20" />
-            </n-form-item>
-          </div>
+          <n-form-item :label="t('knowledge.displayName')" path="display_name">
+            <n-input v-model:value="formData.display_name" :placeholder="t('knowledge.displayNamePlaceholder')" />
+          </n-form-item>
         </div>
-      </n-collapse-transition>
+
+        <n-form-item
+          v-if="usesUpload"
+          :label="t('knowledge.fileContent')"
+          required
+          :validation-status="uploadValidationError ? 'error' : undefined"
+          :feedback="uploadValidationError ? t('knowledge.validateFiles') : undefined"
+        >
+          <div class="upload-field">
+            <n-alert v-if="capabilitiesError" type="error" :title="t('knowledge.capabilitiesUnavailable')">
+              {{ capabilitiesError }}
+            </n-alert>
+            <section v-else class="format-support-note" aria-live="polite">
+              <header>
+                <span aria-hidden="true">i</span>
+                <strong>{{ t('knowledge.supportedFormats') }}</strong>
+              </header>
+              <div class="format-groups">
+                <n-tag
+                  v-for="group in knowledgeFormatGroups"
+                  :key="group.group_id"
+                  size="small"
+                  :bordered="false"
+                >
+                  {{ formatGroupLabel(group.group_id) }}
+                </n-tag>
+              </div>
+            </section>
+            <n-alert v-if="rejectedFileNames.length" type="warning" :title="t('knowledge.unsupportedFilesRejected')">
+              {{ rejectedFileNames.join(', ') }}
+            </n-alert>
+            <div class="upload-zone" @dragover.prevent @drop.prevent="handleDrop">
+              <n-text>{{ uploadTitle }}</n-text>
+              <n-text depth="3" class="upload-hint">{{ t('knowledge.uploadHint') }}</n-text>
+              <n-space>
+                <n-button :disabled="!capabilities" @click="openFilePicker">{{ t('knowledge.selectFile') }}</n-button>
+                <n-button :disabled="!capabilities" @click="openFolderPicker">{{ t('knowledge.selectFolder') }}</n-button>
+              </n-space>
+            </div>
+            <input ref="fileInputRef" class="native-input" type="file" multiple :accept="fileAccept" @change="handleFileInput" />
+            <input ref="folderInputRef" class="native-input" type="file" multiple :accept="fileAccept" webkitdirectory directory @change="handleFileInput" />
+            <div v-if="selectedFiles.length" class="selected-files">
+              <n-text depth="3">{{ t('knowledge.filesSelected', { count: selectedFiles.length }) }}</n-text>
+              <div v-for="item in selectedFiles.slice(0, 8)" :key="item.relativePath" class="selected-file" :title="item.relativePath">
+                {{ item.relativePath }}
+              </div>
+              <n-text v-if="selectedFiles.length > 8" depth="3" class="upload-hint">
+                {{ t('knowledge.moreFiles', { count: selectedFiles.length - 8 }) }}
+              </n-text>
+            </div>
+          </div>
+        </n-form-item>
+
+        <n-form-item v-if="formData.kind === 'url'" :label="t('knowledge.urlAddress')" path="uri">
+          <n-input v-model:value="formData.uri" placeholder="https://example.com/docs" />
+        </n-form-item>
+        <n-form-item v-if="formData.kind === 'note'" :label="t('knowledge.content')" path="content">
+          <n-input v-model:value="formData.content" type="textarea" :rows="8" :placeholder="t('knowledge.notePlaceholder')" />
+        </n-form-item>
+      </section>
+
+      <section class="knowledge-editor-pane">
+        <header class="knowledge-pane-header">
+          <span>02</span>
+          <div>
+            <strong>{{ t('knowledge.indexSection') }}</strong>
+            <small>{{ t('knowledge.indexSectionHint') }}</small>
+          </div>
+        </header>
+
+        <n-form-item :label="t('knowledge.mountMode')" path="mount_mode">
+          <div class="knowledge-mode-grid">
+            <button
+              type="button"
+              class="knowledge-mode-card"
+              :class="{ 'is-active': formData.mount_mode === 'index_only' }"
+              @click="formData.mount_mode = 'index_only'"
+            >
+              <strong>{{ t('knowledge.indexOnly') }}</strong>
+              <small>{{ t('knowledge.indexOnlyHint') }}</small>
+            </button>
+            <button
+              type="button"
+              class="knowledge-mode-card"
+              :class="{ 'is-active': formData.mount_mode === 'rag' }"
+              @click="formData.mount_mode = 'rag'"
+            >
+              <strong>{{ t('knowledge.rag') }}</strong>
+              <small>{{ t('knowledge.ragHint') }}</small>
+            </button>
+          </div>
+        </n-form-item>
+
+        <n-collapse-transition :show="formData.mount_mode === 'rag'">
+          <div class="rag-options">
+            <n-form-item :label="t('knowledge.chunkingStrategy')">
+              <n-select v-model:value="chunking.splitter" :options="splitterOptions" />
+            </n-form-item>
+            <div class="chunk-grid">
+              <n-form-item :label="t('knowledge.chunkSize')">
+                <n-input-number v-model:value="chunking.chunkSize" :min="100" :max="8000" :step="100" />
+              </n-form-item>
+              <n-form-item :label="t('knowledge.chunkOverlap')">
+                <n-input-number v-model:value="chunking.chunkOverlap" :min="0" :max="2000" :step="20" />
+              </n-form-item>
+            </div>
+          </div>
+        </n-collapse-transition>
+      </section>
     </n-form>
 
     <template #footer>
@@ -152,8 +160,6 @@ import {
   NInput,
   NInputNumber,
   NModal,
-  NRadio,
-  NRadioGroup,
   NSelect,
   NSpace,
   NTag,
@@ -483,6 +489,72 @@ function isValidUrl(value: string): boolean {
 </script>
 
 <style scoped>
+.knowledge-editor-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
+  gap: 20px;
+}
+
+.knowledge-source-modal {
+  --editor-modal-width: 1080px;
+}
+
+.knowledge-editor-pane {
+  box-sizing: border-box;
+  min-width: 0;
+  height: 100%;
+  padding: 20px;
+  border: 1px solid var(--app-border);
+  border-radius: 18px;
+  background: var(--app-surface);
+}
+
+.knowledge-pane-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.knowledge-pane-header > span {
+  display: grid;
+  flex: 0 0 38px;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  color: var(--app-surface);
+  border-radius: 12px;
+  background: var(--app-text);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.knowledge-pane-header > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.knowledge-pane-header strong {
+  color: var(--app-text);
+  font-size: 15px;
+  line-height: 1.3;
+}
+
+.knowledge-pane-header small,
+.knowledge-mode-card small {
+  color: var(--app-text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.knowledge-basic-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
 .upload-field {
   width: 100%;
   min-width: 0;
@@ -497,6 +569,44 @@ function isValidUrl(value: string): boolean {
   gap: var(--app-space-xs);
 }
 
+.format-support-note {
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--app-border);
+  border-radius: 13px;
+  background: var(--app-surface);
+}
+
+.format-support-note header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.format-support-note header > span {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  color: var(--app-surface);
+  border-radius: 50%;
+  background: var(--app-text);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.format-support-note strong {
+  font-size: 12px;
+}
+
+.format-support-note :deep(.n-tag) {
+  color: var(--app-text-secondary);
+  border: 1px solid var(--app-border);
+  background: var(--app-surface);
+}
+
 .upload-zone {
   box-sizing: border-box;
   width: 100%;
@@ -508,7 +618,7 @@ function isValidUrl(value: string): boolean {
   align-items: center;
   justify-content: center;
   gap: 10px;
-  background: var(--app-surface-muted);
+  background: var(--app-surface);
   transition: border-color 0.15s ease, background-color 0.15s ease;
 }
 
@@ -535,7 +645,7 @@ function isValidUrl(value: string): boolean {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  background: var(--app-surface-muted);
+  background: var(--app-surface);
   max-height: 132px;
   overflow-y: auto;
 }
@@ -549,11 +659,43 @@ function isValidUrl(value: string): boolean {
 }
 
 .rag-options {
-  padding: 10px 12px 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--app-divider);
+}
+
+.knowledge-mode-grid {
+  display: grid;
+  width: 100%;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.knowledge-mode-card {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  padding: 16px;
+  color: var(--app-text);
+  text-align: left;
   border: 1px solid var(--app-border);
-  border-radius: var(--app-radius-md);
-  margin-bottom: 12px;
-  background: var(--app-surface-muted);
+  border-radius: 14px;
+  background: var(--app-surface);
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background-color 0.15s ease;
+}
+
+.knowledge-mode-card:hover {
+  border-color: var(--app-border-hover);
+}
+
+.knowledge-mode-card.is-active {
+  color: var(--app-surface);
+  border-color: var(--app-text);
+  background: var(--app-text);
+}
+
+.knowledge-mode-card.is-active small {
+  color: color-mix(in srgb, var(--app-surface) 72%, transparent);
 }
 
 .chunk-grid {
@@ -563,6 +705,12 @@ function isValidUrl(value: string): boolean {
 }
 
 @media (max-width: 560px) {
+  .knowledge-editor-form {
+    grid-template-columns: 1fr;
+  }
+
+  .knowledge-basic-grid,
+  .knowledge-mode-grid,
   .chunk-grid {
     grid-template-columns: minmax(0, 1fr);
   }

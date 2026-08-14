@@ -32,15 +32,18 @@
     </template>
 
     <template v-else>
-    <div class="message-avatar">
-      <n-avatar :size="36" :style="avatarStyle">
-        {{ avatarText }}
-      </n-avatar>
+    <div class="message-avatar" aria-hidden="true">
+      <ComboFrameAnimation
+        :character="message.role === 'user' ? 'lead' : 'companion'"
+        action="idle"
+        :size="message.role === 'user' ? 40 : 34"
+        paused
+      />
     </div>
 
     <div class="message-content">
       <div class="message-header">
-        <n-text strong>{{ roleLabel }}</n-text>
+        <span class="message-author" :class="{ 'combo-wordmark': message.role === 'assistant' }">{{ roleLabel }}</span>
         <n-text depth="3" style="font-size: 12px">
           {{ formatTime(message.timestamp) }}
         </n-text>
@@ -66,15 +69,25 @@
       </div>
 
       <div class="message-body">
-        <MessagePartRenderer
-          v-for="part in visibleParts"
-          :key="part.id"
-          :part="part"
-          :streaming="streaming"
-          :highlight-mentions="isGroupUserMessage"
-          :mention-names="mentionNames"
-          :workspace-context="workspaceContext"
-        />
+        <template v-for="block in displayBlocks" :key="block.id">
+          <ToolTraceGroup
+            v-if="block.kind === 'tools'"
+            embedded
+            :messages="block.messages"
+            :workspace-context="workspaceContext"
+          />
+          <template v-else>
+            <MessagePartRenderer
+              v-for="part in block.parts"
+              :key="part.id"
+              :part="part"
+              :streaming="streaming"
+              :highlight-mentions="isGroupUserMessage"
+              :mention-names="mentionNames"
+              :workspace-context="workspaceContext"
+            />
+          </template>
+        </template>
 
         <ComboFrameAnimation
           v-if="streaming && !thinking"
@@ -92,14 +105,14 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { CSSProperties } from 'vue'
-import { NAvatar, NButton, NIcon, NTag, NText } from 'naive-ui'
+import { NButton, NIcon, NTag, NText } from 'naive-ui'
 import { ReturnUpBackOutline } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import MessagePartRenderer from './MessagePartRenderer.vue'
 import ComboFrameAnimation from '@/components/brand/ComboFrameAnimation.vue'
-import type { TranscriptItem } from '@/types/protocol'
-import { conversationVisibleParts } from '@/utils/toolPresentation'
+import ToolTraceGroup from './ToolTraceGroup.vue'
+import type { ChatMessagePart, TranscriptItem } from '@/types/protocol'
+import { conversationVisibleParts, mergeToolMessageParts } from '@/utils/toolPresentation'
 import type { WorkspaceRequestContext } from '@/api/resourceTypes'
 
 const props = withDefaults(
@@ -109,12 +122,14 @@ const props = withDefaults(
     thinking?: boolean
     quoteable?: boolean
     workspaceContext?: WorkspaceRequestContext | null
+    messages?: TranscriptItem[]
   }>(),
   {
     streaming: false,
     thinking: false,
     quoteable: false,
     workspaceContext: null,
+    messages: () => [],
   }
 )
 
@@ -125,38 +140,57 @@ defineEmits<{
 const { locale, t } = useI18n()
 const roleLabel = computed(() => {
   const displayName = String(props.message.metadata?.display_name || '').trim()
+  if (props.message.role === 'assistant' && !props.message.metadata?.agent_group_speaker) return 'Combo'
   if (displayName) return displayName
   if (props.message.role === 'user') return t('roles.user')
   if (props.message.role === 'system') return t('roles.system')
   return t('roles.assistant')
 })
 
-const avatarStyle = computed<CSSProperties>(() => {
-  if (props.message.role === 'assistant') {
-    if (Boolean(props.message.metadata?.agent_group_speaker)) {
-      return groupAgentAvatarStyle(props.message.metadata)
-    }
-    return {
-      background: 'var(--app-surface)',
-      color: 'var(--app-text)',
-      border: '1px solid var(--app-text)',
-    }
-  }
-  return {
-    background: 'var(--app-text)',
-    color: 'var(--app-text-inverse)',
-  }
-})
-
-const avatarText = computed(() => {
-  const avatarLabel = String(props.message.metadata?.avatar_label || '').trim()
-  if (avatarLabel) return avatarLabel.slice(0, 2)
-  if (props.message.role === 'user') return 'U'
-  if (props.message.role === 'system') return 'S'
-  return 'A'
-})
-
 const visibleParts = computed(() => conversationVisibleParts(props.message.parts))
+type MessageDisplayBlock =
+  | { kind: 'parts'; id: string; parts: ChatMessagePart[] }
+  | { kind: 'tools'; id: string; messages: TranscriptItem[] }
+
+const displayBlocks = computed<MessageDisplayBlock[]>(() => {
+  const blocks: MessageDisplayBlock[] = []
+  const sequence = props.messages.length ? props.messages : [props.message]
+  sequence.forEach((message) => {
+    let currentKind: 'parts' | 'tools' | null = null
+    let currentParts: ChatMessagePart[] = []
+    const flush = () => {
+      if (!currentKind || currentParts.length === 0) return
+      if (currentKind === 'parts') {
+        blocks.push({
+          kind: 'parts',
+          id: `parts-${message.id}-${currentParts[0].id}`,
+          parts: currentParts,
+        })
+      } else {
+        const toolMessage: TranscriptItem = { ...message, parts: currentParts }
+        const previous = blocks[blocks.length - 1]
+        if (previous?.kind === 'tools') {
+          previous.messages.push(toolMessage)
+        } else {
+          blocks.push({
+            kind: 'tools',
+            id: `tools-${message.id}-${currentParts[0].id}`,
+            messages: [toolMessage],
+          })
+        }
+      }
+      currentParts = []
+    }
+    mergeToolMessageParts(message.parts).forEach((part) => {
+      const nextKind = part.type === 'tool_execution' ? 'tools' : 'parts'
+      if (currentKind && currentKind !== nextKind) flush()
+      currentKind = nextKind
+      currentParts.push(part)
+    })
+    flush()
+  })
+  return blocks
+})
 const delegatedDelivery = computed(() => (
   Boolean(props.message.metadata?.delegated_delivery)
   && visibleParts.value.some(part => part.type === 'delegated_delivery')
@@ -215,15 +249,6 @@ function formatTime(timestamp: string): string {
     hour: '2-digit',
     minute: '2-digit',
   })
-}
-
-function groupAgentAvatarStyle(metadata: Record<string, unknown>): CSSProperties {
-  void metadata
-  return {
-    background: 'var(--app-text)',
-    color: 'var(--app-surface)',
-    border: '1px solid var(--app-text)',
-  }
 }
 
 </script>
@@ -285,6 +310,8 @@ function groupAgentAvatarStyle(metadata: Record<string, unknown>): CSSProperties
 
 .message-item.role-user {
   background-color: transparent;
+  flex-direction: row-reverse;
+  justify-content: flex-start;
 }
 
 .message-item:hover {
@@ -302,8 +329,11 @@ function groupAgentAvatarStyle(metadata: Record<string, unknown>): CSSProperties
 }
 
 .message-avatar {
+  display: grid;
   flex-shrink: 0;
-  padding-top: 2px;
+  min-width: 40px;
+  padding-top: 0;
+  place-items: start center;
 }
 
 .message-content {
@@ -319,6 +349,42 @@ function groupAgentAvatarStyle(metadata: Record<string, unknown>): CSSProperties
   margin-bottom: var(--app-space-sm);
 }
 
+.message-author {
+  color: var(--app-text);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.combo-wordmark {
+  font-family: 'Avenir Next', 'SF Pro Display', 'Arial Rounded MT Bold', sans-serif;
+  font-size: 16px;
+  font-weight: 780;
+  letter-spacing: -.055em;
+}
+
+.role-user .message-content {
+  flex: 0 1 auto;
+  width: fit-content;
+  max-width: min(82%, 920px);
+  margin-left: auto;
+}
+
+.role-user .message-header {
+  justify-content: flex-end;
+}
+
+.role-user .quote-button {
+  order: -1;
+  margin-right: auto;
+  margin-left: 0;
+}
+
+.role-user .message-body {
+  display: grid;
+  justify-items: end;
+}
+
 .quote-button {
   margin-left: auto;
 }
@@ -327,6 +393,16 @@ function groupAgentAvatarStyle(metadata: Record<string, unknown>): CSSProperties
   position: relative;
   font-size: var(--app-font-lg);
   line-height: var(--app-leading-relaxed);
+}
+
+@media (max-width: 680px) {
+  .message-item {
+    padding-inline: var(--app-space-sm);
+  }
+
+  .role-user .message-content {
+    max-width: calc(100% - 52px);
+  }
 }
 
 .streaming-running-note {

@@ -78,7 +78,7 @@ export function createThemeOverrides(p: AppPalette): GlobalThemeOverrides {
       color: p.surface,
       textColor: p.text,
       headerTextColor: p.text,
-      descriptionTextColor: p.text,
+      descriptionTextColor: p.textSecondary,
       actionTextColor: p.text,
       iconColor: p.text,
       iconColorInfo: p.text,

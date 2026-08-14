@@ -114,6 +114,8 @@ export function mergeToolMessageParts(parts: ChatMessagePart[]): ChatMessagePart
         target.output = part.output
         target.error = part.error
         target.status = part.status
+        target.startedAt = target.startedAt || part.startedAt
+        target.completedAt = part.completedAt
         target.updatedAt = part.updatedAt
         activeExecution = target
       } else {
@@ -145,6 +147,7 @@ function executionFromCall(part: ToolCallMessagePart): ToolExecutionMessagePart 
     status: part.status,
     createdAt: part.createdAt,
     startedAt: part.startedAt,
+    completedAt: part.completedAt,
     updatedAt: part.updatedAt,
   }
 }
@@ -162,6 +165,7 @@ function executionFromResult(part: ToolResultMessagePart): ToolExecutionMessageP
     status: part.status,
     createdAt: part.createdAt,
     startedAt: part.startedAt,
+    completedAt: part.completedAt,
     updatedAt: part.updatedAt,
   }
 }

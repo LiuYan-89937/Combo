@@ -450,6 +450,65 @@ html {
   border-radius: var(--app-radius-lg) !important;
 }
 
+/* 横版资源编辑器统一壳：固定头尾，内容区独立滚动。 */
+.editor-modal-shell.n-card {
+  width: min(var(--editor-modal-width, 1120px), calc(100vw - 48px)) !important;
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 24px !important;
+  background: var(--app-surface);
+}
+
+.editor-modal-shell > .n-card-header,
+.editor-modal-shell > .n-card__footer,
+.editor-modal-shell > .n-dialog__action {
+  flex: none;
+}
+
+.editor-modal-shell > .n-card-content {
+  flex: 1;
+  min-height: 0;
+  padding: 20px 26px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.editor-modal-shell > .n-card-header {
+  padding: 24px 26px 18px;
+  border-bottom: 1px solid var(--app-divider);
+}
+
+.editor-modal-shell > .n-card__footer {
+  padding: 16px 26px 20px;
+  border-top: 1px solid var(--app-divider);
+}
+
+.editor-modal-shell .editor-secondary-copy {
+  color: var(--app-text-secondary);
+}
+
+.editor-modal-shell .editor-muted-copy {
+  color: var(--app-text-muted);
+}
+
+.editor-modal-shell small,
+.editor-modal-shell .n-text--depth-3 {
+  color: var(--app-text-muted) !important;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+@media (max-width: 720px) {
+  .editor-modal-shell.n-card {
+    width: calc(100vw - 24px) !important;
+    max-height: calc(100vh - 24px);
+    border-radius: 18px !important;
+  }
+}
+
 .n-popover {
   border: 1px solid var(--app-border);
   box-shadow: var(--app-shadow-lg) !important;

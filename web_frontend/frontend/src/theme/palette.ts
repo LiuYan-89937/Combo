@@ -108,13 +108,13 @@ export const lightPalette: AppPalette = {
   borderFocus: '#000000',
   divider: 'rgba(0, 0, 0, 0.06)',
 
-  // 文本（黑白灰）
+  // 文本（单色透明度层级，不引入额外色相）
   text: '#000000',
   textStrong: '#000000',
-  textSecondary: '#000000',
-  textMuted: '#000000',
-  textPlaceholder: '#000000',
-  textDisabled: '#000000',
+  textSecondary: 'rgba(0, 0, 0, 0.72)',
+  textMuted: 'rgba(0, 0, 0, 0.52)',
+  textPlaceholder: 'rgba(0, 0, 0, 0.4)',
+  textDisabled: 'rgba(0, 0, 0, 0.32)',
   textInverse: '#ffffff',
 
   // 主色（纯黑）
@@ -180,13 +180,13 @@ export const darkPalette: AppPalette = {
   borderFocus: '#ffffff',
   divider: 'rgba(255, 255, 255, 0.1)',
 
-  // 文本（黑白灰）
+  // 文本（单色透明度层级，不引入额外色相）
   text: '#ffffff',
   textStrong: '#ffffff',
-  textSecondary: '#ffffff',
-  textMuted: '#ffffff',
-  textPlaceholder: '#ffffff',
-  textDisabled: '#ffffff',
+  textSecondary: 'rgba(255, 255, 255, 0.74)',
+  textMuted: 'rgba(255, 255, 255, 0.56)',
+  textPlaceholder: 'rgba(255, 255, 255, 0.42)',
+  textDisabled: 'rgba(255, 255, 255, 0.34)',
   textInverse: '#000000',
 
   // 主色（纯白）

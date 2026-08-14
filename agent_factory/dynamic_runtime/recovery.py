@@ -370,6 +370,7 @@ def _cancel_tool_calls(
                 "status": "cancelled",
                 "error_code": error_code,
                 "updated_at": now,
+                "completed_at": now,
             }
         )
         changed = conn.execute(

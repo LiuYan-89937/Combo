@@ -330,11 +330,13 @@ function showError(error: unknown) {
 
 <style scoped>
 :global(.new-agent-session-modal) {
-  width: min(620px, calc(100vw - 32px));
+  width: min(820px, calc(100vw - 32px));
 }
 
 .new-session-options {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
   gap: var(--app-space-md);
 }
 
@@ -347,6 +349,7 @@ function showError(error: unknown) {
 }
 
 .new-session-option {
+  height: 100%;
   width: 100%;
   border: 1px solid var(--app-border);
   border-radius: var(--app-radius-lg);
@@ -389,6 +392,12 @@ button.new-session-option:hover {
   display: flex;
   justify-content: flex-end;
   gap: var(--app-space-sm);
+}
+
+@media (max-width: 680px) {
+  .new-session-options {
+    grid-template-columns: 1fr;
+  }
 }
 
 .directory-picker-toolbar {

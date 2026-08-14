@@ -1434,7 +1434,11 @@ def _session_snapshot(backend: Any, principal_id: str, session_id: str) -> dict[
             join conversation_turns as turn on turn.turn_id = tool.turn_id
             where turn.session_id = ?
               and tool.runtime_instance_id = turn.active_runtime_instance_id
-            order by tool.created_at, tool.rowid
+            order by
+              case when json_extract(tool.payload_json, '$.completed_at') is null then 1 else 0 end,
+              json_extract(tool.payload_json, '$.completed_at'),
+              tool.created_at,
+              tool.rowid
             """,
             (session_id,),
         ).fetchall()
@@ -1700,6 +1704,7 @@ def _frontend_message_part(
             "error": value.get("error_code"),
             "status": "failed" if value.get("error_code") else value.get("status") or "completed",
             "startedAt": value.get("started_at"),
+            "completedAt": value.get("completed_at"),
             "updatedAt": value.get("completed_at"),
         }
     return {"id": part_id, "type": kind, **value}
@@ -1720,9 +1725,10 @@ def _tool_activity_view(backend: Any, record: ToolCallRecord) -> dict[str, Any]:
             record.request_id,
         ),
         "eventType": f"tool_call_{status}",
-        "timestamp": record.updated_at,
+        "timestamp": record.completed_at or record.started_at or record.updated_at,
         "createdAt": record.created_at,
-        "startedAt": record.created_at if status not in {"proposed", "approval"} else None,
+        "startedAt": record.started_at,
+        "completedAt": record.completed_at,
         "stageId": None,
         "nodeId": None,
         "toolCallId": record.tool_call_id,
@@ -1736,6 +1742,8 @@ def _tool_activity_view(backend: Any, record: ToolCallRecord) -> dict[str, Any]:
             "arguments": record.arguments,
             "output": record.result,
             "error": record.error_code,
+            "started_at": record.started_at,
+            "completed_at": record.completed_at,
         },
     }
 
@@ -1963,7 +1971,12 @@ def _delegated_task_event_views(
         tool_rows = connection.execute(
             """
             select payload_json from tool_calls
-            where runtime_instance_id = ? order by created_at, rowid
+            where runtime_instance_id = ?
+            order by
+              case when json_extract(payload_json, '$.completed_at') is null then 1 else 0 end,
+              json_extract(payload_json, '$.completed_at'),
+              created_at,
+              rowid
             """,
             (child_runtime_id,),
         ).fetchall()
@@ -1979,7 +1992,8 @@ def _delegated_task_event_views(
             timeline.append((str(row["created_at"]), str(row["event_id"]), activity, str(row["event_type"])))
     for row in tool_rows:
         record = ToolCallRecord.model_validate_json(str(row["payload_json"]))
-        timeline.append((record.updated_at, f"tool:{record.tool_call_id}:{record.status}", _tool_activity_payload(record), "tool"))
+        activity_at = record.completed_at or record.started_at or record.created_at
+        timeline.append((activity_at, f"tool:{record.tool_call_id}:{record.status}", _tool_activity_payload(record), "tool"))
     timeline.sort(key=lambda item: (item[0], item[1]))
     return [
         {

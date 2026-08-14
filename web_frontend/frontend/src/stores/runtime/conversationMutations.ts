@@ -71,6 +71,9 @@ export function upsertToolActivityFromEvent(
     timestamp: event.timestamp,
     createdAt: existing?.createdAt || event.timestamp,
     startedAt: existing?.startedAt || (status === 'started' ? event.timestamp : null),
+    completedAt: ['completed', 'failed', 'cancelled', 'observed'].includes(status)
+      ? existing?.completedAt || event.timestamp
+      : existing?.completedAt || null,
     stageId: event.stage_id || existing?.stageId || null,
     nodeId: event.node_id || existing?.nodeId || null,
     toolCallId: toolCallId ? String(toolCallId) : existing?.toolCallId || null,
