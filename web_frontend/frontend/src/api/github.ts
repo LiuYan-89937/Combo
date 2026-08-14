@@ -2,8 +2,6 @@ import { invoke, isTauri } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { open } from '@tauri-apps/plugin-shell'
 
-const COMBO_SERVICE_URL = String(import.meta.env.VITE_COMBO_SERVICE_URL || 'https://liuyanai.top').replace(/\/$/, '')
-
 export interface GitHubAccount {
   login: string
   display_name: string
@@ -30,49 +28,22 @@ export interface GitCloneProgress {
   received_bytes: number
 }
 
-interface DesktopLoginStart {
-  flow_id: string
-  poll_secret: string
-  authorization_url: string
+export interface GitHubDeviceAuthorization {
+  device_code: string
+  user_code: string
+  verification_uri: string
   expires_in: number
   interval: number
 }
 
-interface DesktopLoginResult {
-  status: 'authorized'
-  access_token: string
-  github_access_token: string
-  user: {
-    github_login: string
-    display_name: string
-    avatar_url: string
-  }
+interface GitHubDevicePoll {
+  status: 'authorized' | 'authorization_pending' | 'slow_down' | 'expired_token' | 'access_denied'
+  retry_after_seconds: number
+  account: GitHubAccount | null
 }
 
 function requireDesktop(): void {
   if (!isTauri()) throw new Error('GitHub workspaces are available in the Combo desktop app')
-}
-
-async function serviceRequest<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${COMBO_SERVICE_URL}${path}`, {
-    ...init,
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json', ...(init?.headers || {}) },
-  })
-  if (response.status === 202) {
-    const pending = await response.json().catch(() => ({}))
-    throw new AuthorizationPending(Number(pending.retry_after_seconds || response.headers.get('Retry-After') || 3))
-  }
-  const payload = await response.json().catch(() => ({}))
-  if (!response.ok) {
-    throw new Error(String(payload?.error?.message || payload?.message || `HTTP ${response.status}`))
-  }
-  return payload as T
-}
-
-class AuthorizationPending extends Error {
-  constructor(readonly retryAfterSeconds: number) {
-    super('authorization_pending')
-  }
 }
 
 export const githubApi = {
@@ -88,37 +59,23 @@ export const githubApi = {
     requireDesktop()
     return invoke<void>('github_logout')
   },
-  async login(onWaiting?: () => void): Promise<GitHubAccount> {
+  async login(onWaiting?: (flow: GitHubDeviceAuthorization) => void): Promise<GitHubAccount> {
     requireDesktop()
-    const flow = await serviceRequest<DesktopLoginStart>('/api/v1/auth/github/desktop/start', { method: 'POST' })
-    await open(flow.authorization_url)
-    onWaiting?.()
+    const flow = await invoke<GitHubDeviceAuthorization>('github_start_device_authorization')
+    await open(flow.verification_uri)
+    onWaiting?.(flow)
     const deadline = Date.now() + flow.expires_in * 1000
+    let interval = Math.max(5, flow.interval)
     while (Date.now() < deadline) {
-      try {
-        const result = await serviceRequest<DesktopLoginResult>('/api/v1/auth/github/desktop/poll', {
-          method: 'POST',
-          body: JSON.stringify({ flow_id: flow.flow_id, poll_secret: flow.poll_secret }),
-        })
-        const account: GitHubAccount = {
-          login: result.user.github_login,
-          display_name: result.user.display_name || result.user.github_login,
-          avatar_url: result.user.avatar_url,
-        }
-        return invoke<GitHubAccount>('github_store_account', {
-          account,
-          comboSessionToken: result.access_token,
-          githubAccessToken: result.github_access_token,
-        })
-      } catch (error) {
-        if (!(error instanceof AuthorizationPending)) throw error
-        await delay(Math.max(flow.interval, error.retryAfterSeconds) * 1000)
-      }
+      await delay(interval * 1000)
+      const result = await invoke<GitHubDevicePoll>('github_poll_device_authorization', {
+        deviceCode: flow.device_code,
+      })
+      if (result.status === 'authorized' && result.account) return result.account
+      if (result.status === 'slow_down') interval = Math.max(interval + 5, result.retry_after_seconds)
+      if (result.status === 'expired_token') throw new Error('GitHub authorization expired')
+      if (result.status === 'access_denied') throw new Error('GitHub authorization was cancelled')
     }
-    await serviceRequest('/api/v1/auth/github/desktop/cancel', {
-      method: 'POST',
-      body: JSON.stringify({ flow_id: flow.flow_id, poll_secret: flow.poll_secret }),
-    }).catch(() => undefined)
     throw new Error('GitHub authorization expired')
   },
   clone(

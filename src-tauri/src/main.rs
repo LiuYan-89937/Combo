@@ -9,11 +9,12 @@ mod user_environment;
 
 use desktop_file_actions::{reveal_in_file_manager, save_file_as, select_directory};
 use git_repository::{
-    git_begin_turn_snapshot, git_repository_diff, git_repository_status,
-    git_clone_repository, git_revert_turn, git_turn_changes,
+    git_begin_turn_snapshot, git_clone_repository, git_repository_diff, git_repository_status,
+    git_revert_turn, git_turn_changes,
 };
 use github_account::{
-    github_account, github_list_repositories, github_logout, github_store_account,
+    github_account, github_list_repositories, github_logout, github_poll_device_authorization,
+    github_start_device_authorization,
 };
 use python_sidecar::PythonSidecar;
 use std::sync::Mutex;
@@ -151,7 +152,8 @@ fn main() {
             git_repository_diff,
             git_revert_turn,
             git_clone_repository,
-            github_store_account,
+            github_start_device_authorization,
+            github_poll_device_authorization,
             github_account,
             github_list_repositories,
             github_logout,

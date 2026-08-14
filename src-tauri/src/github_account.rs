@@ -4,7 +4,10 @@ use serde::{Deserialize, Serialize};
 
 const KEYRING_SERVICE: &str = "top.liuyanai.combo.github";
 const KEYRING_ACCOUNT: &str = "default";
+const GITHUB_CLIENT_ID: &str = "Ov23lipoe6KMBX7wd8dL";
 const GITHUB_API_VERSION: &str = "2022-11-28";
+const GITHUB_DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
+const GITHUB_ACCESS_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct GitHubAccount {
@@ -16,8 +19,46 @@ pub struct GitHubAccount {
 #[derive(Deserialize, Serialize)]
 struct StoredGitHubCredential {
     account: GitHubAccount,
-    combo_session_token: String,
     github_access_token: String,
+}
+
+#[derive(Serialize)]
+pub struct GitHubDeviceAuthorization {
+    device_code: String,
+    user_code: String,
+    verification_uri: String,
+    expires_in: u64,
+    interval: u64,
+}
+
+#[derive(Serialize)]
+pub struct GitHubDevicePoll {
+    status: String,
+    retry_after_seconds: u64,
+    account: Option<GitHubAccount>,
+}
+
+#[derive(Deserialize)]
+struct GitHubDeviceAuthorizationResponse {
+    device_code: String,
+    user_code: String,
+    verification_uri: String,
+    expires_in: u64,
+    interval: u64,
+}
+
+#[derive(Deserialize)]
+struct GitHubDeviceTokenResponse {
+    access_token: Option<String>,
+    error: Option<String>,
+    interval: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct GitHubUserResponse {
+    login: String,
+    name: Option<String>,
+    avatar_url: String,
 }
 
 #[derive(Serialize)]
@@ -52,33 +93,89 @@ struct GitHubOwner {
 }
 
 #[tauri::command]
-pub fn github_store_account(
-    account: GitHubAccount,
-    combo_session_token: String,
-    github_access_token: String,
-) -> Result<GitHubAccount, String> {
-    if account.login.trim().is_empty()
-        || combo_session_token.trim().is_empty()
-        || github_access_token.trim().is_empty()
-    {
-        return Err("GitHub authorization response is incomplete".to_string());
-    }
-    let stored = StoredGitHubCredential {
-        account: account.clone(),
-        combo_session_token,
-        github_access_token,
-    };
-    credential_entry()?
-        .set_password(&serde_json::to_string(&stored).map_err(error_text)?)
+pub async fn github_start_device_authorization() -> Result<GitHubDeviceAuthorization, String> {
+    let response = reqwest::Client::new()
+        .post(GITHUB_DEVICE_CODE_URL)
+        .header(USER_AGENT, "Combo-Desktop")
+        .header(ACCEPT, "application/json")
+        .form(&[("client_id", GITHUB_CLIENT_ID), ("scope", "read:user repo")])
+        .send()
+        .await
         .map_err(error_text)?;
-    Ok(account)
+    if !response.status().is_success() {
+        return Err(format!(
+            "GitHub device authorization failed: HTTP {}",
+            response.status()
+        ));
+    }
+    let value = response
+        .json::<GitHubDeviceAuthorizationResponse>()
+        .await
+        .map_err(error_text)?;
+    Ok(GitHubDeviceAuthorization {
+        device_code: value.device_code,
+        user_code: value.user_code,
+        verification_uri: value.verification_uri,
+        expires_in: value.expires_in,
+        interval: value.interval.max(5),
+    })
+}
+
+#[tauri::command]
+pub async fn github_poll_device_authorization(
+    device_code: String,
+) -> Result<GitHubDevicePoll, String> {
+    if device_code.trim().is_empty() {
+        return Err("GitHub device code is required".to_string());
+    }
+    let response = reqwest::Client::new()
+        .post(GITHUB_ACCESS_TOKEN_URL)
+        .header(USER_AGENT, "Combo-Desktop")
+        .header(ACCEPT, "application/json")
+        .form(&[
+            ("client_id", GITHUB_CLIENT_ID),
+            ("device_code", device_code.trim()),
+            ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+        ])
+        .send()
+        .await
+        .map_err(error_text)?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "GitHub device token request failed: HTTP {}",
+            response.status()
+        ));
+    }
+    let value = response
+        .json::<GitHubDeviceTokenResponse>()
+        .await
+        .map_err(error_text)?;
+    if let Some(access_token) = value.access_token.filter(|token| !token.trim().is_empty()) {
+        let account = fetch_account(&access_token).await?;
+        store_credential(account.clone(), access_token)?;
+        return Ok(GitHubDevicePoll {
+            status: "authorized".to_string(),
+            retry_after_seconds: 0,
+            account: Some(account),
+        });
+    }
+    let status = value
+        .error
+        .unwrap_or_else(|| "authorization_pending".to_string());
+    Ok(GitHubDevicePoll {
+        retry_after_seconds: value.interval.unwrap_or(5).max(5),
+        status,
+        account: None,
+    })
 }
 
 #[tauri::command]
 pub fn github_account() -> Result<Option<GitHubAccount>, String> {
     match stored_credential() {
         Ok(stored) => Ok(Some(stored.account)),
-        Err(error) if error.contains("No matching entry") || error.contains("not found") => Ok(None),
+        Err(error) if error.contains("No matching entry") || error.contains("not found") => {
+            Ok(None)
+        }
         Err(error) => Err(error),
     }
 }
@@ -101,7 +198,10 @@ pub async fn github_list_repositories() -> Result<Vec<GitHubRepository>, String>
             .await
             .map_err(error_text)?;
         if !response.status().is_success() {
-            return Err(format!("GitHub repository request failed: HTTP {}", response.status()));
+            return Err(format!(
+                "GitHub repository request failed: HTTP {}",
+                response.status()
+            ));
         }
         let page_values = response
             .json::<Vec<GitHubRepositoryResponse>>()
@@ -137,6 +237,46 @@ pub fn github_logout() -> Result<(), String> {
 
 pub(crate) fn github_access_token() -> Result<String, String> {
     stored_credential().map(|credential| credential.github_access_token)
+}
+
+async fn fetch_account(access_token: &str) -> Result<GitHubAccount, String> {
+    let response = reqwest::Client::new()
+        .get("https://api.github.com/user")
+        .header(USER_AGENT, "Combo-Desktop")
+        .header(ACCEPT, "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
+        .header(AUTHORIZATION, format!("Bearer {access_token}"))
+        .send()
+        .await
+        .map_err(error_text)?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "GitHub account request failed: HTTP {}",
+            response.status()
+        ));
+    }
+    let user = response
+        .json::<GitHubUserResponse>()
+        .await
+        .map_err(error_text)?;
+    Ok(GitHubAccount {
+        display_name: user
+            .name
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| user.login.clone()),
+        login: user.login,
+        avatar_url: user.avatar_url,
+    })
+}
+
+fn store_credential(account: GitHubAccount, github_access_token: String) -> Result<(), String> {
+    let stored = StoredGitHubCredential {
+        account,
+        github_access_token,
+    };
+    credential_entry()?
+        .set_password(&serde_json::to_string(&stored).map_err(error_text)?)
+        .map_err(error_text)
 }
 
 fn stored_credential() -> Result<StoredGitHubCredential, String> {

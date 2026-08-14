@@ -24,6 +24,10 @@
       <img src="/brand/combo/ui-icons/empty-workspace.png" alt="" />
       <strong>{{ t('gitImport.loginTitle') }}</strong>
       <p>{{ t('gitImport.loginDescription') }}</p>
+      <div v-if="authorizationCode" class="device-code">
+        <span>{{ t('gitImport.userCodeHint') }}</span>
+        <strong>{{ authorizationCode }}</strong>
+      </div>
       <button type="button" class="primary-pill" :disabled="loginBusy" @click="login">
         {{ loginBusy ? t('gitImport.waitingAuthorization') : t('gitImport.login') }}
       </button>
@@ -104,6 +108,7 @@ const query = ref('')
 const loadingAccount = ref(true)
 const loadingRepositories = ref(false)
 const loginBusy = ref(false)
+const authorizationCode = ref('')
 const cloningRepository = ref<GitHubRepository | null>(null)
 const errorMessage = ref('')
 const cloneProgress = ref<GitCloneProgress>({
@@ -142,12 +147,15 @@ async function login() {
   loginBusy.value = true
   errorMessage.value = ''
   try {
-    account.value = await githubApi.login()
+    account.value = await githubApi.login(flow => {
+      authorizationCode.value = flow.user_code
+    })
     await loadRepositories()
   } catch (error) {
     message.error(errorText(error))
   } finally {
     loginBusy.value = false
+    authorizationCode.value = ''
   }
 }
 
@@ -214,6 +222,7 @@ function errorText(error: unknown): string {
 .git-import-state.compact { min-height: 300px; }.git-import-state.error { color: var(--app-error); }
 .github-login-panel img { width: 82px; height: 82px; object-fit: contain; filter: var(--app-brand-mark-filter); }.github-login-panel strong, .clone-progress-panel strong { color: var(--app-text-strong); font-size: 22px; }.github-login-panel p { max-width: 440px; margin: 0; color: var(--app-text-secondary); line-height: 1.7; }.github-login-panel small { color: var(--app-text-muted); }
 .primary-pill { min-height: 44px; padding: 0 22px; border: 1px solid var(--app-text); background: var(--app-text); color: var(--app-text-inverse); font: inherit; cursor: pointer; }
+.device-code { display: grid; gap: 7px; padding: 12px 22px; border: 1px solid var(--app-border); border-radius: 18px; background: var(--app-surface-muted); }.device-code span { color: var(--app-text-muted); font-size: 12px; }.device-code strong { color: var(--app-text-strong); font: 24px/1.2 var(--app-font-mono); letter-spacing: .14em; }
 .repository-browser { min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 12px; }.repository-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; }.repository-toolbar span { color: var(--app-text-muted); font-size: 12px; }
 .repository-list { min-height: 0; overflow: auto; display: grid; align-content: start; gap: 8px; padding-right: 4px; }.repository-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 12px; width: 100%; padding: 12px; border: 1px solid var(--app-border); border-radius: 20px; background: var(--app-surface); color: var(--app-text); text-align: left; cursor: pointer; }.repository-row:hover { border-color: var(--app-text-muted); transform: translateY(-1px); }.repository-row img { width: 40px; height: 40px; border-radius: 13px; }.repository-row > span { min-width: 0; display: grid; gap: 4px; }.repository-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.repository-row small { color: var(--app-text-muted); }.repository-row i, .repository-row b { padding: 7px 10px; font-size: 11px; font-style: normal; font-weight: 500; }.repository-row i { border: 1px solid var(--app-border); color: var(--app-text-muted); }.repository-row b { background: var(--app-text); color: var(--app-text-inverse); }
 .repository-empty { min-height: 240px; display: grid; place-items: center; color: var(--app-text-muted); }.clone-progress-panel > span { color: var(--app-text-muted); }.clone-progress-track { width: min(480px, 70vw); height: 7px; overflow: hidden; border-radius: 999px; background: var(--app-surface-muted); }.clone-progress-track i { display: block; height: 100%; border-radius: inherit; background: var(--app-text); transition: width 180ms ease; }.clone-progress-meta { width: min(480px, 70vw); display: flex; justify-content: space-between; color: var(--app-text-muted); font: 11px/1.2 var(--app-font-mono); }

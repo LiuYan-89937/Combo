@@ -1,7 +1,7 @@
 use git2::{
-    build::RepoBuilder, Cred, CredentialType, Diff, DiffDelta, DiffOptions,
-    FetchOptions, IndexAddOption, ObjectType, Patch, RemoteCallbacks, Repository,
-    Signature, Status, StatusOptions,
+    build::RepoBuilder, Cred, CredentialType, Diff, DiffDelta, DiffOptions, FetchOptions,
+    IndexAddOption, ObjectType, Patch, RemoteCallbacks, Repository, Signature, Status,
+    StatusOptions,
 };
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -93,7 +93,14 @@ pub async fn git_clone_repository(
 ) -> Result<GitCloneResult, String> {
     let token = github_access_token().ok();
     tauri::async_runtime::spawn_blocking(move || {
-        clone_repository(app, remote_url, destination_parent, directory_name, branch, token)
+        clone_repository(
+            app,
+            remote_url,
+            destination_parent,
+            directory_name,
+            branch,
+            token,
+        )
     })
     .await
     .map_err(error_text)?
@@ -111,10 +118,14 @@ pub fn git_repository_status(path: String) -> Result<GitRepositoryStatus, String
         .recurse_untracked_dirs(true)
         .renames_head_to_index(true)
         .renames_index_to_workdir(true);
-    let statuses = repo.statuses(Some(&mut status_options)).map_err(error_text)?;
+    let statuses = repo
+        .statuses(Some(&mut status_options))
+        .map_err(error_text)?;
     let mut files = Vec::new();
     for entry in statuses.iter() {
-        let Some(relative) = entry.path() else { continue };
+        let Some(relative) = entry.path() else {
+            continue;
+        };
         let state = entry.status();
         let (additions, deletions) = line_counts.get(relative).copied().unwrap_or_default();
         files.push(GitFileStatus {
@@ -191,7 +202,9 @@ pub fn git_repository_diff(
     let before = snapshot_tree(&repo, &snapshot_reference(&request_key, "before"))?;
     let after = snapshot_tree(&repo, &snapshot_reference(&request_key, "after"))?;
     let requested = safe_relative_path(&file_path)?;
-    let diff = repo.diff_tree_to_tree(Some(&before), Some(&after), None).map_err(error_text)?;
+    let diff = repo
+        .diff_tree_to_tree(Some(&before), Some(&after), None)
+        .map_err(error_text)?;
     let delta = diff
         .deltas()
         .find(|delta| {
@@ -211,14 +224,21 @@ pub fn git_repository_diff(
         .map(|path| tree_file_bytes(&repo, &after, path))
         .transpose()?
         .flatten();
-    let binary = old_content.as_deref().is_some_and(|value| value.contains(&0))
-        || new_content.as_deref().is_some_and(|value| value.contains(&0));
+    let binary = old_content
+        .as_deref()
+        .is_some_and(|value| value.contains(&0))
+        || new_content
+            .as_deref()
+            .is_some_and(|value| value.contains(&0));
     let old_bytes = old_content.unwrap_or_default();
     let new_bytes = new_content.unwrap_or_default();
     let truncated = old_bytes.len() > MAX_DIFF_TEXT_BYTES || new_bytes.len() > MAX_DIFF_TEXT_BYTES;
     Ok(GitFileDiff {
         old_path: old_path.map(|path| path.to_string_lossy().replace('\\', "/")),
-        path: new_path.unwrap_or(requested).to_string_lossy().replace('\\', "/"),
+        path: new_path
+            .unwrap_or(requested)
+            .to_string_lossy()
+            .replace('\\', "/"),
         old_content: visible_text(&old_bytes),
         new_content: visible_text(&new_bytes),
         binary,
@@ -233,7 +253,9 @@ pub fn git_revert_turn(path: String, request_id: String) -> Result<GitRevertResu
     let request_key = reference_key(&request_id)?;
     let before = snapshot_tree(&repo, &snapshot_reference(&request_key, "before"))?;
     let after = snapshot_tree(&repo, &snapshot_reference(&request_key, "after"))?;
-    let diff = repo.diff_tree_to_tree(Some(&before), Some(&after), None).map_err(error_text)?;
+    let diff = repo
+        .diff_tree_to_tree(Some(&before), Some(&after), None)
+        .map_err(error_text)?;
     let mut restore_targets: BTreeMap<PathBuf, Option<Vec<u8>>> = BTreeMap::new();
     let mut conflicts = Vec::new();
     for delta in diff.deltas() {
@@ -248,7 +270,10 @@ pub fn git_revert_turn(path: String, request_id: String) -> Result<GitRevertResu
             if current != expected {
                 conflicts.push(relative.to_string_lossy().replace('\\', "/"));
             }
-            restore_targets.insert(relative.clone(), tree_file_bytes(&repo, &before, &relative)?);
+            restore_targets.insert(
+                relative.clone(),
+                tree_file_bytes(&repo, &before, &relative)?,
+            );
         }
     }
     if !conflicts.is_empty() {
@@ -317,13 +342,16 @@ fn clone_repository(
     let progress_app = app.clone();
     let mut callbacks = RemoteCallbacks::new();
     callbacks.transfer_progress(move |progress| {
-        let _ = progress_app.emit("git-clone-progress", GitCloneProgress {
-            stage: "receiving".to_string(),
-            received_objects: progress.received_objects(),
-            total_objects: progress.total_objects(),
-            indexed_objects: progress.indexed_objects(),
-            received_bytes: progress.received_bytes(),
-        });
+        let _ = progress_app.emit(
+            "git-clone-progress",
+            GitCloneProgress {
+                stage: "receiving".to_string(),
+                received_objects: progress.received_objects(),
+                total_objects: progress.total_objects(),
+                indexed_objects: progress.indexed_objects(),
+                received_bytes: progress.received_bytes(),
+            },
+        );
         true
     });
     callbacks.credentials(move |_url, username, allowed| {
@@ -346,28 +374,40 @@ fn clone_repository(
     if let Some(branch) = branch.as_deref().filter(|value| !value.trim().is_empty()) {
         builder.branch(branch.trim());
     }
-    let _ = app.emit("git-clone-progress", GitCloneProgress {
-        stage: "connecting".to_string(),
-        received_objects: 0,
-        total_objects: 0,
-        indexed_objects: 0,
-        received_bytes: 0,
-    });
-    let repo = builder.clone(&remote_url, &destination_path).map_err(error_text)?;
+    let _ = app.emit(
+        "git-clone-progress",
+        GitCloneProgress {
+            stage: "connecting".to_string(),
+            received_objects: 0,
+            total_objects: 0,
+            indexed_objects: 0,
+            received_bytes: 0,
+        },
+    );
+    let repo = builder
+        .clone(&remote_url, &destination_path)
+        .map_err(error_text)?;
     let (branch, _, _, _) = branch_state(&repo)?;
     let root = path_text(repository_root(&repo)?);
-    let _ = app.emit("git-clone-progress", GitCloneProgress {
-        stage: "complete".to_string(),
-        received_objects: 0,
-        total_objects: 0,
-        indexed_objects: 0,
-        received_bytes: 0,
-    });
-    Ok(GitCloneResult { repository_root: root, branch })
+    let _ = app.emit(
+        "git-clone-progress",
+        GitCloneProgress {
+            stage: "complete".to_string(),
+            received_objects: 0,
+            total_objects: 0,
+            indexed_objects: 0,
+            received_bytes: 0,
+        },
+    );
+    Ok(GitCloneResult {
+        repository_root: root,
+        branch,
+    })
 }
 
 fn repository_root(repo: &Repository) -> Result<&Path, String> {
-    repo.workdir().ok_or_else(|| "bare repositories cannot be used as workspaces".to_string())
+    repo.workdir()
+        .ok_or_else(|| "bare repositories cannot be used as workspaces".to_string())
 }
 
 fn branch_state(repo: &Repository) -> Result<(Option<String>, bool, usize, usize), String> {
@@ -377,7 +417,9 @@ fn branch_state(repo: &Repository) -> Result<(Option<String>, bool, usize, usize
     };
     let detached = !head.is_branch();
     let branch = head.shorthand().map(str::to_string);
-    let Some(local_oid) = head.target() else { return Ok((branch, detached, 0, 0)) };
+    let Some(local_oid) = head.target() else {
+        return Ok((branch, detached, 0, 0));
+    };
     let upstream_oid = if let Some(name) = head.shorthand() {
         repo.find_branch(name, git2::BranchType::Local)
             .ok()
@@ -410,9 +452,13 @@ fn working_tree_line_counts(repo: &Repository) -> Result<BTreeMap<String, (usize
 fn diff_line_counts(diff: &Diff<'_>) -> Result<BTreeMap<String, (usize, usize)>, String> {
     let mut counts = BTreeMap::new();
     for index in 0..diff.deltas().len() {
-        let Some(patch) = Patch::from_diff(diff, index).map_err(error_text)? else { continue };
+        let Some(patch) = Patch::from_diff(diff, index).map_err(error_text)? else {
+            continue;
+        };
         let (_, additions, deletions) = patch.line_stats().map_err(error_text)?;
-        let delta = diff.get_delta(index).ok_or_else(|| "Git diff delta is missing".to_string())?;
+        let delta = diff
+            .get_delta(index)
+            .ok_or_else(|| "Git diff delta is missing".to_string())?;
         let relative = delta_path(&delta)?.to_string_lossy().replace('\\', "/");
         counts.insert(relative, (additions, deletions));
     }
@@ -450,10 +496,16 @@ fn create_worktree_snapshot(
     .map_err(error_text)
 }
 
-fn turn_changes(repo: &Repository, request_id: &str, request_key: &str) -> Result<GitTurnChanges, String> {
+fn turn_changes(
+    repo: &Repository,
+    request_id: &str,
+    request_key: &str,
+) -> Result<GitTurnChanges, String> {
     let before = snapshot_tree(repo, &snapshot_reference(request_key, "before"))?;
     let after = snapshot_tree(repo, &snapshot_reference(request_key, "after"))?;
-    let diff = repo.diff_tree_to_tree(Some(&before), Some(&after), None).map_err(error_text)?;
+    let diff = repo
+        .diff_tree_to_tree(Some(&before), Some(&after), None)
+        .map_err(error_text)?;
     let counts = diff_line_counts(&diff)?;
     let mut files = Vec::new();
     let mut additions = 0;
@@ -464,7 +516,10 @@ fn turn_changes(repo: &Repository, request_id: &str, request_key: &str) -> Resul
         additions += file_additions;
         deletions += file_deletions;
         files.push(GitFileChange {
-            old_path: delta.old_file().path().map(|value| value.to_string_lossy().replace('\\', "/")),
+            old_path: delta
+                .old_file()
+                .path()
+                .map(|value| value.to_string_lossy().replace('\\', "/")),
             path,
             change_type: delta_status(delta.status()).to_string(),
             additions: file_additions,
@@ -481,9 +536,15 @@ fn turn_changes(repo: &Repository, request_id: &str, request_key: &str) -> Resul
     })
 }
 
-fn snapshot_tree<'repo>(repo: &'repo Repository, reference: &str) -> Result<git2::Tree<'repo>, String> {
+fn snapshot_tree<'repo>(
+    repo: &'repo Repository,
+    reference: &str,
+) -> Result<git2::Tree<'repo>, String> {
     let oid = reference_target(repo, reference)?;
-    repo.find_commit(oid).map_err(error_text)?.tree().map_err(error_text)
+    repo.find_commit(oid)
+        .map_err(error_text)?
+        .tree()
+        .map_err(error_text)
 }
 
 fn reference_target(repo: &Repository, reference: &str) -> Result<git2::Oid, String> {
@@ -500,7 +561,9 @@ fn snapshot_reference(request_key: &str, phase: &str) -> String {
 fn reference_key(request_id: &str) -> Result<String, String> {
     let value: String = request_id
         .chars()
-        .filter(|character| character.is_ascii_alphanumeric() || *character == '-' || *character == '_')
+        .filter(|character| {
+            character.is_ascii_alphanumeric() || *character == '-' || *character == '_'
+        })
         .take(120)
         .collect();
     if value.is_empty() {
@@ -539,7 +602,12 @@ fn filesystem_bytes(path: &Path) -> Result<Option<Vec<u8>>, String> {
 fn safe_relative_path(value: &str) -> Result<PathBuf, String> {
     let path = Path::new(value);
     if path.is_absolute()
-        || path.components().any(|part| matches!(part, Component::ParentDir | Component::RootDir | Component::Prefix(_)))
+        || path.components().any(|part| {
+            matches!(
+                part,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
     {
         return Err("file path must stay inside the repository".to_string());
     }
