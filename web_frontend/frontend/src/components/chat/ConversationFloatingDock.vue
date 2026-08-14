@@ -403,7 +403,8 @@ onBeforeUnmount(() => {
   box-shadow: 0 24px 64px color-mix(in srgb, var(--app-text) 16%, transparent);
   animation: dock-panel-enter .24s cubic-bezier(.16, 1, .3, 1) both;
 }
-.workspace-panel-shell, .session-panel-shell { width: min(420px, calc(100vw - 44px)); max-height: min(68vh, 620px); overflow: auto; }
+.session-panel-shell { width: min(440px, calc(100vw - 44px)); max-height: min(72vh, 660px); overflow: auto; }
+.workspace-panel-shell { width: min(500px, calc(100vw - 44px)); height: min(74vh, 700px); overflow: auto; }
 @keyframes dock-panel-enter { from { opacity: 0; transform: translateY(7px) scale(.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
 @media (prefers-reduced-motion: reduce) { .dock-panel { animation: none; } }
 </style>

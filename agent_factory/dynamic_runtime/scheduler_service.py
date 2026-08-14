@@ -271,12 +271,10 @@ class SchedulerService:
         script = str(payload.get("script") or payload.get("command") or "").strip()
         if not script:
             raise ValueError("script task requires script content")
-        workspace = self._conversations.require_workspace(_required(job, "workspace_id"))
-        cwd = workspace.managed_path
-        if workspace.kind == "mounted" and workspace.mount_record_id:
-            cwd = self._conversations.require_mount_path(workspace.mount_record_id, workspace.principal_id)
-        if not cwd:
-            raise RuntimeError("scheduler workspace path is unavailable")
+        cwd = self._conversations.require_workspace_root(
+            _required(job, "workspace_id"),
+            _required(job, "principal_id"),
+        )
         command = ["/bin/sh", "-lc", script] if interpreter == "shell" else ["python3", "-c", script]
         process = await asyncio.create_subprocess_exec(
             *command,

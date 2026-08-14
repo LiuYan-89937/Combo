@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -273,6 +274,22 @@ class ConversationStore:
         if row is None:
             raise LookupError(f"workspace mount not found: {mount_record_id}")
         return str(row["source_path"])
+
+    def require_workspace_root(self, workspace_id: str, principal_id: str) -> str:
+        workspace = self.require_workspace(workspace_id)
+        owner = _required_text(principal_id, "principal_id")
+        if workspace.principal_id != owner or workspace.status != "active":
+            raise PermissionError("workspace is unavailable to the runtime principal")
+        if workspace.kind == "managed" and workspace.managed_path is not None:
+            root = workspace.managed_path
+        elif workspace.kind == "mounted" and workspace.mount_record_id is not None:
+            root = self.require_mount_path(workspace.mount_record_id, owner)
+        else:
+            raise RuntimeError("workspace has no executable filesystem projection")
+        resolved = Path(root).expanduser().resolve()
+        if not resolved.is_dir():
+            raise FileNotFoundError(f"workspace directory not found: {resolved}")
+        return str(resolved)
 
     def create_conversation(
         self,

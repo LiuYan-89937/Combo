@@ -1474,11 +1474,13 @@ def _session_views(backend: Any, principal_id: str) -> list[dict[str, Any]]:
     for item in summaries:
         if item.status != "active":
             continue
+        workspace = backend.application.stores.conversations.require_workspace(item.workspace_id)
         first_user_input = _first_user_text(backend, item.session_id)
         display_title = first_user_input if item.title in {"新对话", "新会话"} and first_user_input else item.title
         views.append({
             "session_id": item.session_id,
             "workspace_id": item.workspace_id,
+            "workspace": _workspace_project_view(backend, workspace),
             "package_id": SYSTEM_CHAT_PACKAGE_ID,
             "session_kind": "agent_package",
             "visible_in_agent_session_list": True,
@@ -1574,19 +1576,14 @@ def _session_snapshot(backend: Any, principal_id: str, session_id: str) -> dict[
             }
         )
     workspace = backend.application.stores.conversations.require_workspace(identity.workspace_id)
+    workspace_view = _workspace_project_view(backend, workspace)
     current_plan = _session_current_plan(backend, session_id)
     context_window = _session_context_window(backend, session_id)
     return {
         "session_id": session_id,
         "package_id": SYSTEM_CHAT_PACKAGE_ID,
         "workspace_id": identity.workspace_id,
-        "workspace": {
-            "workspace_id": workspace.workspace_id,
-            "title": "工作区",
-            "mode": "isolated",
-            "root_kind": "managed",
-            "workdir_root": workspace.managed_path or "",
-        },
+        "workspace": workspace_view,
         "turns": turns,
         "process_events": _process_events(backend, session_id),
         "current_plan": current_plan,
@@ -2313,15 +2310,14 @@ def _workspace_root(
         resolved_workspace_id = conversation.workspace_id
     if not resolved_workspace_id:
         raise HTTPException(status_code=409, detail="active workspace is required")
-    workspace = backend.application.stores.conversations.require_workspace(resolved_workspace_id)
-    if workspace.principal_id != principal_id or workspace.status != "active":
-        raise HTTPException(status_code=404, detail="workspace not found")
-    root = workspace.managed_path
-    if workspace.kind == "mounted" and workspace.mount_record_id:
-        root = backend.application.stores.conversations.require_mount_path(workspace.mount_record_id, principal_id)
-    if not root:
-        raise HTTPException(status_code=404, detail="workspace root not found")
-    return Path(root).resolve()
+    try:
+        root = backend.application.stores.conversations.require_workspace_root(
+            resolved_workspace_id,
+            principal_id,
+        )
+    except (LookupError, PermissionError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail="workspace not found") from exc
+    return Path(root)
 
 
 def _memory_workspace_id(

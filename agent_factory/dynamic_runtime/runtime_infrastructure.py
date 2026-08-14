@@ -271,15 +271,11 @@ class RevisionBoundMCPEntrypointResolver(SnapshotMCPEntrypointResolver):
         if server.runtime_definition_schema != "mcp_server_definition.v1":
             raise RuntimeError("MCP server projection uses an unsupported definition schema")
         MCPServerDefinition.model_validate(server.runtime_definition)
-        workspace = self._conversations.require_workspace(runtime_instance.request.workspace_id)
-        if (
-            workspace.principal_id != runtime_instance.request.principal_id
-            or workspace.kind != "managed"
-            or workspace.managed_path is None
-            or workspace.status != "active"
-        ):
-            raise PermissionError("runtime workspace is unavailable for MCP tool content")
-        materializer = MCPBinaryContentMaterializer(Path(workspace.managed_path))
+        workspace_root = self._conversations.require_workspace_root(
+            runtime_instance.request.workspace_id,
+            runtime_instance.request.principal_id,
+        )
+        materializer = MCPBinaryContentMaterializer(Path(workspace_root))
 
         def invoke(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
             if resources:
@@ -393,15 +389,11 @@ class ConversationWorkspaceLaunchResolver(WorkspaceLaunchResolver):
         self._conversations = conversations
 
     def resolve(self, *, principal_id: str, workspace_id: str) -> WorkspaceLaunchProjection:
-        workspace = self._conversations.require_workspace(workspace_id)
-        if workspace.principal_id != principal_id or workspace.status != "active":
-            raise PermissionError("workspace is unavailable to the runtime principal")
-        if workspace.kind != "managed" or workspace.managed_path is None:
-            raise RuntimeError("mounted workspace resolution requires a platform mount adapter")
+        workspace_root = self._conversations.require_workspace_root(workspace_id, principal_id)
         return WorkspaceLaunchProjection(
-            workspace_id=workspace.workspace_id,
+            workspace_id=workspace_id,
             root_alias="workspace",
-            root_path=workspace.managed_path,
+            root_path=workspace_root,
             allow_external_paths=False,
         )
 
@@ -484,42 +476,41 @@ def runtime_resource_factory(
                 "skillhub_runtime": skillhub_runtime,
             }
             return ProjectedRuntimeResource(value=control_plane_resources[resource_name])
-        workspace = conversations.require_workspace(instance.request.workspace_id)
-        if workspace.principal_id != instance.request.principal_id:
-            raise PermissionError("runtime workspace belongs to another principal")
-        if workspace.kind != "managed" or workspace.managed_path is None or workspace.status != "active":
-            raise RuntimeError("runtime workspace is not an active managed workspace")
+        workspace_root = Path(conversations.require_workspace_root(
+            instance.request.workspace_id,
+            instance.request.principal_id,
+        ))
         if resource_name == "mcp_content_runtime":
             return ProjectedRuntimeResource(
-                value=mcp_content_runtime.for_workspace(Path(workspace.managed_path))
+                value=mcp_content_runtime.for_workspace(workspace_root)
             )
         if resource_name == "image_generation_runtime":
             if instance.request.runtime_role != "main":
                 raise PermissionError("image generation runtime is available only to the main runtime")
-            return ProjectedRuntimeResource(value=ImageGenerationRuntime(Path(workspace.managed_path)))
+            return ProjectedRuntimeResource(value=ImageGenerationRuntime(workspace_root))
         if resource_name == "process_runtime":
             if instance.request.runtime_role == "temporary":
                 allowed = _delegated_write_paths(
-                    root=Path(workspace.managed_path),
+                    root=workspace_root,
                     values=delegations.for_runtime(instance.runtime_instance_id).grant.allowed_write_roots,
                 )
-                if Path(workspace.managed_path).resolve() not in allowed:
+                if workspace_root not in allowed:
                     raise PermissionError(
                         "temporary process capability requires an explicit full-workspace write grant"
                     )
-            return process_resources.acquire(instance, root=Path(workspace.managed_path))
+            return process_resources.acquire(instance, root=workspace_root)
         if instance.request.runtime_role == "temporary":
             allowed = _delegated_write_paths(
-                root=Path(workspace.managed_path),
+                root=workspace_root,
                 values=delegations.for_runtime(instance.runtime_instance_id).grant.allowed_write_roots,
             )
             return filesystem_resources.acquire(
                 instance,
-                root=Path(workspace.managed_path),
+                root=workspace_root,
                 allowed_write_paths=allowed,
                 write_scope_enforced=True,
             )
-        return filesystem_resources.acquire(instance, root=Path(workspace.managed_path))
+        return filesystem_resources.acquire(instance, root=workspace_root)
 
     return project
 

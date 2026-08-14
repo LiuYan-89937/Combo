@@ -224,16 +224,10 @@ class ToolPackageRuntime:
 
     def _workspace_root(self, runtime_instance: RuntimeInstance) -> Path:
         request = runtime_instance.request
-        workspace = self._conversations.require_workspace(request.workspace_id)
-        if workspace.principal_id != request.principal_id or workspace.status != "active":
-            raise PermissionError("ToolPackage workspace is unavailable to the runtime principal")
-        if workspace.kind == "managed" and workspace.managed_path is not None:
-            return Path(workspace.managed_path).expanduser().resolve()
-        if workspace.kind == "mounted" and workspace.mount_record_id is not None:
-            return Path(
-                self._conversations.require_mount_path(workspace.mount_record_id, request.principal_id)
-            ).expanduser().resolve()
-        raise RuntimeError("ToolPackage workspace has no executable filesystem projection")
+        return Path(self._conversations.require_workspace_root(
+            request.workspace_id,
+            request.principal_id,
+        ))
 
     def _invoke(
         self,
