@@ -1,6 +1,6 @@
 {
   "ok": true,
-  "frames_root": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-lead/qa/rows/running-right/frames",
+  "frames_root": "/Users/admin/Desktop/Combo/design/brand/combo/hatch-lead/qa/rows/running-right/frames",
   "states": [
     "running-right"
   ],
@@ -18,7 +18,7 @@
       "frames": [
         {
           "index": 0,
-          "file": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-lead/qa/rows/running-right/frames/running-right/00.png",
+          "file": "/Users/admin/Desktop/Combo/design/brand/combo/hatch-lead/qa/rows/running-right/frames/running-right/00.png",
           "width": 192,
           "height": 208,
           "nontransparent_pixels": 12867,
@@ -33,7 +33,7 @@
         },
         {
           "index": 1,
-          "file": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-lead/qa/rows/running-right/frames/running-right/01.png",
+          "file": "/Users/admin/Desktop/Combo/design/brand/combo/hatch-lead/qa/rows/running-right/frames/running-right/01.png",
           "width": 192,
           "height": 208,
           "nontransparent_pixels": 12115,
@@ -48,7 +48,7 @@
         },
         {
           "index": 2,
-          "file": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-lead/qa/rows/running-right/frames/running-right/02.png",
+          "file": "/Users/admin/Desktop/Combo/design/brand/combo/hatch-lead/qa/rows/running-right/frames/running-right/02.png",
           "width": 192,
           "height": 208,
           "nontransparent_pixels": 13265,
@@ -63,7 +63,7 @@
         },
         {
           "index": 3,
-          "file": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-lead/qa/rows/running-right/frames/running-right/03.png",
+          "file": "/Users/admin/Desktop/Combo/design/brand/combo/hatch-lead/qa/rows/running-right/frames/running-right/03.png",
           "width": 192,
           "height": 208,
           "nontransparent_pixels": 12036,
@@ -78,7 +78,7 @@
         },
         {
           "index": 4,
-          "file": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-lead/qa/rows/running-right/frames/running-right/04.png",
+          "file": "/Users/admin/Desktop/Combo/design/brand/combo/hatch-lead/qa/rows/running-right/frames/running-right/04.png",
           "width": 192,
           "height": 208,
           "nontransparent_pixels": 12886,
@@ -93,7 +93,7 @@
         },
         {
           "index": 5,
-          "file": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-lead/qa/rows/running-right/frames/running-right/05.png",
+          "file": "/Users/admin/Desktop/Combo/design/brand/combo/hatch-lead/qa/rows/running-right/frames/running-right/05.png",
           "width": 192,
           "height": 208,
           "nontransparent_pixels": 11575,
@@ -108,7 +108,7 @@
         },
         {
           "index": 6,
-          "file": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-lead/qa/rows/running-right/frames/running-right/06.png",
+          "file": "/Users/admin/Desktop/Combo/design/brand/combo/hatch-lead/qa/rows/running-right/frames/running-right/06.png",
           "width": 192,
           "height": 208,
           "nontransparent_pixels": 12767,
@@ -123,7 +123,7 @@
         },
         {
           "index": 7,
-          "file": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-lead/qa/rows/running-right/frames/running-right/07.png",
+          "file": "/Users/admin/Desktop/Combo/design/brand/combo/hatch-lead/qa/rows/running-right/frames/running-right/07.png",
           "width": 192,
           "height": 208,
           "nontransparent_pixels": 12750,

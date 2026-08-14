@@ -1,8 +1,8 @@
 import { backendUrl } from './backendUrl'
 import { runtimeClientInstanceId, runtimePrincipalId } from './runtimeIdentity'
 
-export const RUNTIME_PROTOCOL_VERSION = 'dynamic_runtime.v13'
-export const RUNTIME_SCHEMA_VERSION = 'dynamic_runtime_schema.v12'
+export const RUNTIME_PROTOCOL_VERSION = 'dynamic_runtime.v14'
+export const RUNTIME_SCHEMA_VERSION = 'dynamic_runtime_schema.v13'
 
 export type ExecutionPreference = 'react' | 'plan_and_execute'
 export type ApprovalMode = 'ask' | 'auto' | 'always_approval'
@@ -15,7 +15,6 @@ export interface RuntimeDescriptor {
 
 export interface RuntimeConnection {
   descriptor: RuntimeDescriptor
-  generation: number
   clientInstanceId: string
   principalId: string
 }
@@ -90,21 +89,21 @@ interface CommandReceipt {
 export async function connectRuntime(): Promise<RuntimeConnection> {
   const principalId = runtimePrincipalId()
   const clientInstanceId = runtimeClientInstanceId()
-  const health = await rawRequest<{ status: string; protocol: RuntimeDescriptor; generation: number }>('/health')
+  const health = await rawRequest<{ status: string; protocol: RuntimeDescriptor }>('/health')
   if (
     health.protocol.protocol_version !== RUNTIME_PROTOCOL_VERSION
     || health.protocol.schema_version !== RUNTIME_SCHEMA_VERSION
   ) {
     throw new Error('The frontend and dynamic runtime protocols are incompatible.')
   }
-  const handshake = await rawRequest<{ status: string; generation: number }>('/api/runtime/handshake', {
+  const handshake = await rawRequest<{ status: string }>('/api/runtime/handshake', {
     method: 'POST',
     body: JSON.stringify({ client_instance_id: clientInstanceId, client: health.protocol }),
   }, principalId)
-  if (handshake.status !== 'accepted' || handshake.generation !== health.generation) {
+  if (handshake.status !== 'accepted') {
     throw new Error('Dynamic runtime handshake was rejected.')
   }
-  return { descriptor: health.protocol, generation: health.generation, clientInstanceId, principalId }
+  return { descriptor: health.protocol, clientInstanceId, principalId }
 }
 
 export const dynamicRuntimeApi = {
@@ -172,10 +171,9 @@ async function request<T>(connection: RuntimeConnection, path: string, init: Req
   return rawRequest<T>(path, {
     ...init,
     headers: {
-      'X-AgentFactory-Protocol': connection.descriptor.protocol_version,
-      'X-AgentFactory-Schema': connection.descriptor.schema_version,
-      'X-AgentFactory-Build': connection.descriptor.build_revision,
-      'X-AgentFactory-Generation': String(connection.generation),
+      'X-Combo-Protocol': connection.descriptor.protocol_version,
+      'X-Combo-Schema': connection.descriptor.schema_version,
+      'X-Combo-Build': connection.descriptor.build_revision,
       ...(init.headers || {}),
     },
   }, connection.principalId)
@@ -186,7 +184,7 @@ async function rawRequest<T>(path: string, init: RequestInit = {}, principalId?:
     ...init,
     headers: {
       'Content-Type': 'application/json',
-      ...(principalId ? { 'X-AgentFactory-Principal': principalId } : {}),
+      ...(principalId ? { 'X-Combo-Principal': principalId } : {}),
       ...(init.headers || {}),
     },
   })
@@ -212,7 +210,7 @@ async function streamEvents(
   const response = await fetch(url, {
     signal,
     headers: {
-      'X-AgentFactory-Principal': connection.principalId,
+      'X-Combo-Principal': connection.principalId,
       ...(afterEventId ? { 'Last-Event-ID': afterEventId } : {}),
     },
   })

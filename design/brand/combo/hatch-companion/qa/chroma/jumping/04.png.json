@@ -1,7 +1,7 @@
 {
   "ok": true,
-  "input": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-companion/qa/rows/jumping/frames/jumping/04.png",
-  "output": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-companion/qa/clean-frames/jumping/04.png",
+  "input": "/Users/admin/Desktop/Combo/design/brand/combo/hatch-companion/qa/rows/jumping/frames/jumping/04.png",
+  "output": "/Users/admin/Desktop/Combo/design/brand/combo/hatch-companion/qa/clean-frames/jumping/04.png",
   "chroma_key": "#00FF00",
   "algorithm": "edge-local-chroma-spill-suppression",
   "strength": 1,

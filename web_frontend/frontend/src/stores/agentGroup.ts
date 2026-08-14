@@ -6,7 +6,7 @@
 
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { ContextReferenceInput, FactoryFrontendEvent, RuntimeAttachmentInput, TranscriptItem, ChatMessagePart } from '@/types/protocol'
+import type { ContextReferenceInput, RuntimeFrontendEvent, RuntimeAttachmentInput, TranscriptItem, ChatMessagePart } from '@/types/protocol'
 import { attachmentPart, reasoningPart, textPart, upsertPart } from '@/stores/runtime/messageParts'
 import {
   agentGroupApi,
@@ -15,7 +15,7 @@ import {
   type AgentView,
 } from '@/api/agentGroup'
 
-const ACTIVE_GROUP_STORAGE_KEY = 'fastagentfactory.activeAgentGroupId'
+const ACTIVE_GROUP_STORAGE_KEY = 'combo.activeAgentGroupId'
 
 // 动态参与者视图（聚合 runs 信息）
 export interface DynamicParticipantView {
@@ -39,8 +39,8 @@ export const useAgentGroupStore = defineStore('agentGroup', () => {
   const error = ref<string | null>(null)
   // Runtime events are transient projections. Persisted group messages remain the source of truth.
   const liveMessages = ref<Record<string, TranscriptItem>>({})
-  const pendingApprovals = ref<Record<string, FactoryFrontendEvent>>({})
-  const bufferedRuntimeEvents = ref<Record<string, FactoryFrontendEvent[]>>({})
+  const pendingApprovals = ref<Record<string, RuntimeFrontendEvent>>({})
+  const bufferedRuntimeEvents = ref<Record<string, RuntimeFrontendEvent[]>>({})
 
   // ===== Computed =====
   const members = computed(() => activeGroup.value?.members || [])
@@ -328,7 +328,7 @@ export const useAgentGroupStore = defineStore('agentGroup', () => {
     }
   }
 
-  const applyRuntimeEvent = (event: FactoryFrontendEvent) => {
+  const applyRuntimeEvent = (event: RuntimeFrontendEvent) => {
     const payload = event.payload || {}
     const groupId = String(payload.group_id || '').trim()
     const groupRunId = String(payload.group_run_id || '').trim()
@@ -537,7 +537,7 @@ function messageToTranscript(message: AgentGroupMessageView, agentName?: string,
   }
 }
 
-function createLiveMessage(messageId: string, event: FactoryFrontendEvent, groupRunId: string, metadata: Record<string, unknown>): TranscriptItem {
+function createLiveMessage(messageId: string, event: RuntimeFrontendEvent, groupRunId: string, metadata: Record<string, unknown>): TranscriptItem {
   return { id: messageId, role: 'assistant', content: '', timestamp: event.timestamp, status: 'streaming', parts: [], streamId: messageId, metadata: { ...metadata, group_run_id: groupRunId, request_id: event.request_id } }
 }
 

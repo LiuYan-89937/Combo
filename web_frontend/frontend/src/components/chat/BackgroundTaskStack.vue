@@ -354,12 +354,12 @@ onBeforeUnmount(() => {
   stopPolling()
   stopElapsedClock()
   stopHopAnimation()
-  window.removeEventListener('fastagentfactory:background-task-updated', handleTaskEvent)
+  window.removeEventListener('combo:background-task-updated', handleTaskEvent)
   window.removeEventListener('combo:reopen-background-task', handleReopenTask)
 })
 
 onMounted(() => {
-  window.addEventListener('fastagentfactory:background-task-updated', handleTaskEvent)
+  window.addEventListener('combo:background-task-updated', handleTaskEvent)
   window.addEventListener('combo:reopen-background-task', handleReopenTask)
   elapsedTimer = window.setInterval(() => { currentTime.value = Date.now() }, 1000)
 })

@@ -1,6 +1,6 @@
 import type {
   ConversationTurn,
-  FactoryFrontendEvent,
+  RuntimeFrontendEvent,
   RuntimeViewState,
   ToolActivity,
   TranscriptItem,
@@ -52,7 +52,7 @@ export function ensureConversationTurn(
 
 export function upsertToolActivityFromEvent(
   state: ConversationMutationState,
-  event: FactoryFrontendEvent,
+  event: RuntimeFrontendEvent,
   status: ToolActivity['status'],
 ): ToolActivity | null {
   const payload = event.payload || {}

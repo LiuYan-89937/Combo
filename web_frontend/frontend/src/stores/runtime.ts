@@ -6,8 +6,8 @@
  */
 import { defineStore } from 'pinia'
 import type {
-  FactoryFrontendEvent,
-  FactoryMode,
+  RuntimeFrontendEvent,
+  RuntimeMode,
   RuntimeViewState,
   ActiveRequestView,
   ChatMessagePart,
@@ -117,7 +117,7 @@ const processedEventIds = new Set<string>()
 
 export const useRuntimeStore = defineStore('runtime', {
   state: (): RuntimeViewState => ({
-    protocolVersion: 'factory_frontend.v1',
+    protocolVersion: 'combo_frontend.v1',
     connectionStatus: 'disconnected',
     runtimeOptions: {
       context_window_tokens: null,
@@ -128,7 +128,7 @@ export const useRuntimeStore = defineStore('runtime', {
     runStatus: 'idle',
     pendingInterrupt: null,
     currentMode: null,
-    activeFactorySessionId: null,
+    activeMainSessionId: null,
     activeAgentSessionId: null,
     activeWorkspaceId: null,
     currentRunId: null,
@@ -262,7 +262,7 @@ export const useRuntimeStore = defineStore('runtime', {
     /**
      * 处理事件 - 主 reducer
      */
-    handleEvent(event: FactoryFrontendEvent) {
+    handleEvent(event: RuntimeFrontendEvent) {
       // 1. 事件去重
       if (processedEventIds.has(event.event_id)) {
         console.debug('Duplicate event ignored:', event.event_id)
@@ -312,7 +312,7 @@ export const useRuntimeStore = defineStore('runtime', {
     /**
      * 事件分发器
      */
-    _dispatchEvent(event: FactoryFrontendEvent) {
+    _dispatchEvent(event: RuntimeFrontendEvent) {
       const { event_type: type, payload } = event
 
       // Runtime lifecycle
@@ -508,19 +508,19 @@ export const useRuntimeStore = defineStore('runtime', {
     /**
      * Run lifecycle handlers
      */
-    _handleModeChanged(event: FactoryFrontendEvent) {
+    _handleModeChanged(event: RuntimeFrontendEvent) {
       const nextMode = event.mode || event.payload?.mode || null
       this.currentMode = nextMode
       const nextScope = conversationScopeForMode(nextMode, {
         ...(event.payload || {}),
-        session_id: event.session_id || event.payload?.session_id || this.activeFactorySessionId,
+        session_id: event.session_id || event.payload?.session_id || this.activeMainSessionId,
       })
       if (nextScope) {
         this._switchConversationScope(nextScope)
       }
     },
 
-    _handleRuntimeOptionsChanged(event: FactoryFrontendEvent) {
+    _handleRuntimeOptionsChanged(event: RuntimeFrontendEvent) {
       const options = event.payload?.options
       if (!options || typeof options !== 'object') return
       this.runtimeOptions = {
@@ -531,7 +531,7 @@ export const useRuntimeStore = defineStore('runtime', {
       }
     },
 
-    _handleDelegatedTaskTerminal(event: FactoryFrontendEvent) {
+    _handleDelegatedTaskTerminal(event: RuntimeFrontendEvent) {
       const taskId = String(event.payload?.task_id || '').trim()
       const terminalStatus = String(event.payload?.terminal_status || '').trim()
       if (!taskId || !['result', 'failed', 'cancelled'].includes(terminalStatus)) return
@@ -563,7 +563,7 @@ export const useRuntimeStore = defineStore('runtime', {
       })
     },
 
-    _restoreActiveRequestsFromRuntimeSnapshot(event: FactoryFrontendEvent) {
+    _restoreActiveRequestsFromRuntimeSnapshot(event: RuntimeFrontendEvent) {
       const activeRequests = Array.isArray(event.payload?.active_requests)
         ? event.payload.active_requests.map(activeRequestViewFromPayload).filter(Boolean) as ActiveRequestView[]
         : []
@@ -583,7 +583,7 @@ export const useRuntimeStore = defineStore('runtime', {
           mode: request.mode,
           session_id: request.payload?.session_id || null,
           payload: request.payload,
-        } satisfies FactoryFrontendEvent
+        } satisfies RuntimeFrontendEvent
         request.conversationScope = request.conversationScope
           || scopeFromRequestPayload(request.mode, request.payload)
           || scopeFromEventPayload(scopeEvent)
@@ -630,7 +630,7 @@ export const useRuntimeStore = defineStore('runtime', {
       this.runStatus = 'idle'
     },
 
-    _handleRunStarted(event: FactoryFrontendEvent) {
+    _handleRunStarted(event: RuntimeFrontendEvent) {
       if (isSchedulerRequest(event.request_id)) {
         this._registerActiveRequest(event, 'running')
         return
@@ -662,7 +662,7 @@ export const useRuntimeStore = defineStore('runtime', {
       // 不清空 transcript，累积历史对话
     },
 
-    _handleRunCompleted(event: FactoryFrontendEvent) {
+    _handleRunCompleted(event: RuntimeFrontendEvent) {
       const contextWindow = event.payload?.context_window
       if (contextWindow && typeof contextWindow === 'object' && !Array.isArray(contextWindow)) {
         applyContextActivityEvent(this, {
@@ -712,7 +712,7 @@ export const useRuntimeStore = defineStore('runtime', {
       this._syncAgentSessionFromRunEvent(event)
     },
 
-    _handleRunCancelled(event: FactoryFrontendEvent) {
+    _handleRunCancelled(event: RuntimeFrontendEvent) {
       const existingRequest = event.request_id ? this.activeRequests[event.request_id] : null
       if (existingRequest?.background) {
         this._completeActiveRequest(event, 'cancelled')
@@ -761,7 +761,7 @@ export const useRuntimeStore = defineStore('runtime', {
       }
     },
 
-    _handleRunFailed(event: FactoryFrontendEvent) {
+    _handleRunFailed(event: RuntimeFrontendEvent) {
       const existingRequest = event.request_id ? this.activeRequests[event.request_id] : null
       if (existingRequest?.background) {
         this._completeActiveRequest(event, 'failed')
@@ -817,7 +817,7 @@ export const useRuntimeStore = defineStore('runtime', {
       }
     },
 
-    _syncAgentSessionFromRunEvent(event: FactoryFrontendEvent) {
+    _syncAgentSessionFromRunEvent(event: RuntimeFrontendEvent) {
       if (event.mode !== 'agent_package') return
       this._promoteAgentPackageScopeFromEvent(event)
       if (event.payload?.agent_session?.session_id) {
@@ -825,7 +825,7 @@ export const useRuntimeStore = defineStore('runtime', {
       }
     },
 
-    _handleInterruptRequested(event: FactoryFrontendEvent) {
+    _handleInterruptRequested(event: RuntimeFrontendEvent) {
       if (isSchedulerRequest(event.request_id) && event.request_id !== this.activeRequestId) {
         this._completeActiveRequest(event, 'interrupted')
         return
@@ -875,41 +875,41 @@ export const useRuntimeStore = defineStore('runtime', {
     /**
      * Stage handlers
      */
-    _handleStageStarted(event: FactoryFrontendEvent) {
+    _handleStageStarted(event: RuntimeFrontendEvent) {
       applyStageStarted(this, event)
     },
 
-    _handleStageCompleted(event: FactoryFrontendEvent) {
+    _handleStageCompleted(event: RuntimeFrontendEvent) {
       applyStageCompleted(this, event)
     },
 
-    _handleStageFailed(event: FactoryFrontendEvent) {
+    _handleStageFailed(event: RuntimeFrontendEvent) {
       applyStageFailed(this, event)
     },
 
     /**
      * Node handlers
      */
-    _handleNodeStarted(event: FactoryFrontendEvent) {
+    _handleNodeStarted(event: RuntimeFrontendEvent) {
       applyNodeStarted(this, event)
     },
 
-    _handleNodeProgress(event: FactoryFrontendEvent) {
+    _handleNodeProgress(event: RuntimeFrontendEvent) {
       applyNodeProgress(this, event)
     },
 
-    _handleNodeCompleted(event: FactoryFrontendEvent) {
+    _handleNodeCompleted(event: RuntimeFrontendEvent) {
       applyNodeCompleted(this, event)
     },
 
-    _handleNodeFailed(event: FactoryFrontendEvent) {
+    _handleNodeFailed(event: RuntimeFrontendEvent) {
       applyNodeFailed(this, event)
     },
 
     /**
      * Plan handler
      */
-    _handlePlanUpdated(event: FactoryFrontendEvent) {
+    _handlePlanUpdated(event: RuntimeFrontendEvent) {
       if (isBackgroundEvent(event, this.activeRequestId)) return
       const payload = event.payload
       if (!payload || payload.version !== 'plan_state.v0') return
@@ -940,34 +940,34 @@ export const useRuntimeStore = defineStore('runtime', {
     /**
      * Model stream handlers
      */
-    _handleModelCallStarted(event: FactoryFrontendEvent) {
+    _handleModelCallStarted(event: RuntimeFrontendEvent) {
       applyModelCallStarted(this, event)
     },
 
-    _handleModelReasoningDelta(event: FactoryFrontendEvent) {
+    _handleModelReasoningDelta(event: RuntimeFrontendEvent) {
       applyModelReasoningDelta(this, event)
     },
 
-    _handleModelReasoningCompleted(event: FactoryFrontendEvent) {
+    _handleModelReasoningCompleted(event: RuntimeFrontendEvent) {
       applyModelReasoningCompleted(this, event)
     },
 
-    _handleModelStreamDelta(event: FactoryFrontendEvent) {
+    _handleModelStreamDelta(event: RuntimeFrontendEvent) {
       applyModelStreamDelta(this, event)
     },
 
-    _handleModelMessageCompleted(event: FactoryFrontendEvent) {
+    _handleModelMessageCompleted(event: RuntimeFrontendEvent) {
       applyModelMessageCompleted(this, event)
     },
 
     /**
      * Tool handlers
      */
-    _handleToolCallProposed(event: FactoryFrontendEvent) {
+    _handleToolCallProposed(event: RuntimeFrontendEvent) {
       applyToolLifecycleEvent(this, event, 'proposed')
     },
 
-    _handleToolApprovalRequested(event: FactoryFrontendEvent) {
+    _handleToolApprovalRequested(event: RuntimeFrontendEvent) {
       if (isBackgroundEvent(event, this.activeRequestId)) return
       applyToolApprovalRequested(this, event)
       if (!String(event.payload?.source_task_id || '').trim()) {
@@ -975,57 +975,57 @@ export const useRuntimeStore = defineStore('runtime', {
       }
     },
 
-    _handleToolApprovalResolved(event: FactoryFrontendEvent) {
+    _handleToolApprovalResolved(event: RuntimeFrontendEvent) {
       applyToolApprovalResolved(this, event)
     },
 
-    _handleToolCallStarted(event: FactoryFrontendEvent) {
+    _handleToolCallStarted(event: RuntimeFrontendEvent) {
       applyToolLifecycleEvent(this, event, 'started')
     },
 
-    _handleToolCallCompleted(event: FactoryFrontendEvent) {
+    _handleToolCallCompleted(event: RuntimeFrontendEvent) {
       applyToolLifecycleEvent(this, event, 'completed')
     },
 
-    _handleToolCallFailed(event: FactoryFrontendEvent) {
+    _handleToolCallFailed(event: RuntimeFrontendEvent) {
       applyToolLifecycleEvent(this, event, 'failed')
     },
 
-    _handleToolObservation(event: FactoryFrontendEvent) {
+    _handleToolObservation(event: RuntimeFrontendEvent) {
       applyToolLifecycleEvent(this, event, 'observed')
     },
 
     /**
      * Context/Memory/Knowledge/Scheduler handlers
      */
-    _handleContextEvent(event: FactoryFrontendEvent) {
+    _handleContextEvent(event: RuntimeFrontendEvent) {
       applyContextActivityEvent(this, event)
     },
 
-    _handleMemoryEvent(event: FactoryFrontendEvent) {
+    _handleMemoryEvent(event: RuntimeFrontendEvent) {
       applyMemoryActivityEvent(this, event)
     },
 
-    _handleKnowledgeEvent(event: FactoryFrontendEvent) {
+    _handleKnowledgeEvent(event: RuntimeFrontendEvent) {
       applyKnowledgeActivityEvent(this, event)
     },
 
-    _handleWorkspaceEvent(event: FactoryFrontendEvent) {
+    _handleWorkspaceEvent(event: RuntimeFrontendEvent) {
       applyWorkspaceEvent(this, event)
     },
 
-    _handleExtensionsEvent(event: FactoryFrontendEvent) {
+    _handleExtensionsEvent(event: RuntimeFrontendEvent) {
       applyExtensionsEvent(this, event)
     },
 
-    _handleSchedulerEvent(event: FactoryFrontendEvent) {
+    _handleSchedulerEvent(event: RuntimeFrontendEvent) {
       applySchedulerActivityEvent(this, event)
     },
 
     /**
      * Error handler
      */
-    _handleError(event: FactoryFrontendEvent) {
+    _handleError(event: RuntimeFrontendEvent) {
       if (isSchedulerRequest(event.request_id)) {
         this._completeActiveRequest(event, 'failed')
         return
@@ -1065,7 +1065,7 @@ export const useRuntimeStore = defineStore('runtime', {
       }
     },
 
-    _registerActiveRequest(event: FactoryFrontendEvent, status: RunStatus) {
+    _registerActiveRequest(event: RuntimeFrontendEvent, status: RunStatus) {
       const requestId = event.request_id
       if (!requestId) return
       const existing = this.activeRequests[requestId]
@@ -1091,17 +1091,17 @@ export const useRuntimeStore = defineStore('runtime', {
       }
     },
 
-    _handleRuntimeRequestQueued(event: FactoryFrontendEvent) {
+    _handleRuntimeRequestQueued(event: RuntimeFrontendEvent) {
       this._registerActiveRequest(event, 'running')
       this._setRequestDispatchState(event.request_id, 'queued', event.payload)
     },
 
-    _handleRuntimeRequestSteering(event: FactoryFrontendEvent) {
+    _handleRuntimeRequestSteering(event: RuntimeFrontendEvent) {
       this._registerActiveRequest(event, 'completed')
       this._setRequestDispatchState(event.request_id, 'promoted', event.payload)
     },
 
-    _handleRuntimeRequestDispatched(event: FactoryFrontendEvent) {
+    _handleRuntimeRequestDispatched(event: RuntimeFrontendEvent) {
       this._registerActiveRequest(event, 'running')
       this._setRequestDispatchState(event.request_id, 'running', event.payload)
       const request = event.request_id ? this.activeRequests[event.request_id] : null
@@ -1152,7 +1152,7 @@ export const useRuntimeStore = defineStore('runtime', {
         })
     },
 
-    _resolveRequestScopeForEvent(event: FactoryFrontendEvent): string | null {
+    _resolveRequestScopeForEvent(event: RuntimeFrontendEvent): string | null {
       const requestId = event.request_id || null
       const payloadScope = scopeFromEventPayload(event)
       if (!requestId) return payloadScope
@@ -1166,7 +1166,7 @@ export const useRuntimeStore = defineStore('runtime', {
       return currentScope || payloadScope
     },
 
-    _completeActiveRequest(event: FactoryFrontendEvent, status: RunStatus) {
+    _completeActiveRequest(event: RuntimeFrontendEvent, status: RunStatus) {
       this._registerActiveRequest(event, status)
       const dispatchState = status === 'cancelled'
         ? 'cancelled'
@@ -1200,7 +1200,7 @@ export const useRuntimeStore = defineStore('runtime', {
       scope: string,
       activate: boolean,
     ) {
-      this.activeFactorySessionId = null
+      this.activeMainSessionId = null
       this.activeAgentSessionId = String(session.session_id)
       this.activeWorkspaceId = String(session.workspace_id || '') || null
       if (activate) this.currentMode = 'agent_package'
@@ -1234,7 +1234,7 @@ export const useRuntimeStore = defineStore('runtime', {
       })
     },
 
-    _restoreProcessEvents(events: FactoryFrontendEvent[]) {
+    _restoreProcessEvents(events: RuntimeFrontendEvent[]) {
       this.timeline = []
       this.nodes = {}
       this.stages = {}
@@ -1251,7 +1251,7 @@ export const useRuntimeStore = defineStore('runtime', {
       workspaceId: string | null = null,
     ) {
       this._resetConversationScope(agentPackageConversationScope(packageId, null))
-      this.activeFactorySessionId = null
+      this.activeMainSessionId = null
       this.activeAgentSessionId = null
       this.activeWorkspaceId = String(workspaceId || '').trim() || null
       this.currentMode = 'agent_package'
@@ -1278,7 +1278,7 @@ export const useRuntimeStore = defineStore('runtime', {
       this.expectAgentPackageSelection(packageId, 'run')
       this._switchConversationScope(agentPackageConversationScope(packageId, sessionId))
       this.currentMode = 'agent_package'
-      this.activeFactorySessionId = null
+      this.activeMainSessionId = null
       this.activeAgentSessionId = sessionId
     },
 
@@ -1291,7 +1291,7 @@ export const useRuntimeStore = defineStore('runtime', {
         this._switchConversationScope(acceptedScope)
       }
       this.currentMode = 'agent_package'
-      this.activeFactorySessionId = null
+      this.activeMainSessionId = null
       this.activeAgentSessionId = sessionId
       this._saveActiveConversationScope()
     },
@@ -1336,7 +1336,7 @@ export const useRuntimeStore = defineStore('runtime', {
       this.agentPackageSelectionIntent = { packageId: null, purpose: null }
     },
 
-    ownsAgentPackageSelection(event: FactoryFrontendEvent): boolean {
+    ownsAgentPackageSelection(event: RuntimeFrontendEvent): boolean {
       const packageId = String(event.payload?.package_id || event.payload?.package?.package_id || '').trim()
       const purpose = 'run'
       return Boolean(packageId)
@@ -1434,12 +1434,12 @@ export const useRuntimeStore = defineStore('runtime', {
       this.contextWindow = restored.contextWindow
       this.memoryActivity = restored.memoryActivity
       this.modelStreams = restored.modelStreams
-      this.activeFactorySessionId = restored.activeFactorySessionId
+      this.activeMainSessionId = restored.activeMainSessionId
       this.activeAgentSessionId = restored.activeAgentSessionId
       this.activeWorkspaceId = restored.activeWorkspaceId
     },
 
-    _dispatchEventToConversationScope(scope: string, event: FactoryFrontendEvent) {
+    _dispatchEventToConversationScope(scope: string, event: RuntimeFrontendEvent) {
       this._projectConversationScope(scope, () => {
         this._dispatchEvent(event)
         this._recordTimelineEvent(event)
@@ -1489,10 +1489,10 @@ export const useRuntimeStore = defineStore('runtime', {
         })
     },
 
-    _promoteAgentPackageScopeFromEvent(event: FactoryFrontendEvent) {
+    _promoteAgentPackageScopeFromEvent(event: RuntimeFrontendEvent) {
       const scopeInfo = agentPackageScopeInfoFromEvent(event)
       if (!scopeInfo) return
-      this.activeFactorySessionId = null
+      this.activeMainSessionId = null
       this.activeAgentSessionId = scopeInfo.sessionId
       const workspaceId = String(
         event.payload?.agent_session?.workspace_id
@@ -1527,7 +1527,7 @@ export const useRuntimeStore = defineStore('runtime', {
     _restoreActiveTurnFromSnapshot(
       turn: ConversationTurn | null,
       options: {
-        mode: FactoryMode | null
+        mode: RuntimeMode | null
         conversationScope: string | null
         payload?: Record<string, any>
       },
@@ -1584,16 +1584,16 @@ export const useRuntimeStore = defineStore('runtime', {
       this.transcript = []
       this.conversationTurns = []
       this.timeline = []
-      this.activeFactorySessionId = null
+      this.activeMainSessionId = null
       this.activeAgentSessionId = null
       this.activeWorkspaceId = null
     },
 
-    _recordDebugEvent(event: FactoryFrontendEvent) {
+    _recordDebugEvent(event: RuntimeFrontendEvent) {
       recordDebugEvent(this, event)
     },
 
-    _recordTimelineEvent(event: FactoryFrontendEvent) {
+    _recordTimelineEvent(event: RuntimeFrontendEvent) {
       recordTimelineEvent(this, event)
     },
 
@@ -1655,7 +1655,7 @@ export const useRuntimeStore = defineStore('runtime', {
         this.activeRequests[requestId] = {
           requestId,
           status: 'running',
-          mode: (metadata.mode as FactoryMode | undefined) || this.currentMode || null,
+          mode: (metadata.mode as RuntimeMode | undefined) || this.currentMode || null,
           runId: null,
           conversationScope,
           background: false,
@@ -1756,7 +1756,7 @@ function activeRequestViewFromPayload(value: unknown): ActiveRequestView | null 
   return {
     requestId,
     status,
-    mode: normalizeFactoryMode(payload.mode),
+    mode: normalizeRuntimeMode(payload.mode),
     runId: payload.runId || payload.run_id || null,
     conversationScope: payload.conversationScope || payload.conversation_scope || null,
     background: source === 'scheduler',
@@ -1777,7 +1777,7 @@ function activeRequestSource(
   return requestId.startsWith('scheduler-') ? 'scheduler' : 'user'
 }
 
-function normalizeFactoryMode(value: unknown): FactoryMode | null {
+function normalizeRuntimeMode(value: unknown): RuntimeMode | null {
   if (value === 'agent_package' || value === 'agent_group') {
     return value
   }

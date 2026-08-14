@@ -1,4 +1,4 @@
-import type { FactoryFrontendEvent } from '@/types/protocol'
+import type { RuntimeFrontendEvent } from '@/types/protocol'
 
 const REQUEST_SCOPED_PREFIXES = [
   'run_',
@@ -46,7 +46,7 @@ export function isSchedulerRequest(requestId: string | null | undefined): boolea
 }
 
 export function isBackgroundEvent(
-  event: FactoryFrontendEvent,
+  event: RuntimeFrontendEvent,
   activeRequestId: string | null,
 ): boolean {
   return Boolean(
@@ -61,18 +61,18 @@ export function isRestorableProcessStateEvent(eventType: string): boolean {
     .some((prefix) => eventType.startsWith(prefix))
 }
 
-export function interruptType(event: FactoryFrontendEvent | null): string {
+export function interruptType(event: RuntimeFrontendEvent | null): string {
   return String(event?.payload?.type || '')
 }
 
-export function isUserInputInterrupt(event: FactoryFrontendEvent | null): boolean {
+export function isUserInputInterrupt(event: RuntimeFrontendEvent | null): boolean {
   return USER_INPUT_INTERRUPT_TYPES.has(interruptType(event))
 }
 
-export function shouldRenderInterruptMessage(event: FactoryFrontendEvent): boolean {
+export function shouldRenderInterruptMessage(event: RuntimeFrontendEvent): boolean {
   return !DEDICATED_INTERRUPT_PANEL_TYPES.has(interruptType(event))
 }
 
-export function interruptMessage(event: FactoryFrontendEvent): string {
+export function interruptMessage(event: RuntimeFrontendEvent): string {
   return String(event.payload?.message || event.message || '').trim()
 }

@@ -1,8 +1,8 @@
 import type {
   ContextWindowView,
   ConversationTurn,
-  FactoryFrontendEvent,
-  FactoryMode,
+  RuntimeFrontendEvent,
+  RuntimeMode,
   RunStatus,
   RuntimePlanView,
   ToolActivity,
@@ -18,9 +18,9 @@ export interface AgentPackageSessionSnapshotView {
   activeTurn: ConversationTurn | null
   contextWindow: ContextWindowView | null
   currentPlan: RuntimePlanView | null
-  processEvents: FactoryFrontendEvent[]
+  processEvents: RuntimeFrontendEvent[]
   tools: ToolActivity[]
-  pendingInterrupt: FactoryFrontendEvent | null
+  pendingInterrupt: RuntimeFrontendEvent | null
   scope: string
 }
 
@@ -53,9 +53,9 @@ export function agentPackageSessionSnapshotView(
   }
 }
 
-function normalizedProcessEvents(value: any): FactoryFrontendEvent[] {
+function normalizedProcessEvents(value: any): RuntimeFrontendEvent[] {
   if (!Array.isArray(value)) return []
-  return value.filter((item): item is FactoryFrontendEvent => (
+  return value.filter((item): item is RuntimeFrontendEvent => (
     Boolean(item)
     && typeof item === 'object'
     && typeof item.event_id === 'string'
@@ -76,11 +76,11 @@ function toolsFromTurns(turns: ConversationTurn[]): ToolActivity[] {
 }
 
 function pendingInterruptFrom(
-  events: FactoryFrontendEvent[],
+  events: RuntimeFrontendEvent[],
   activeTurn: ConversationTurn | null,
-): FactoryFrontendEvent | null {
+): RuntimeFrontendEvent | null {
   if (activeTurn?.status !== 'interrupted') return null
-  let pending: FactoryFrontendEvent | null = null
+  let pending: RuntimeFrontendEvent | null = null
   events.forEach((event) => {
     if (event.event_type === 'tool_approval_requested' || event.event_type === 'interrupt_requested') {
       pending = event
@@ -98,8 +98,8 @@ function pendingInterruptFrom(
 }
 
 function eventBelongsToInterrupt(
-  event: FactoryFrontendEvent,
-  interrupt: FactoryFrontendEvent,
+  event: RuntimeFrontendEvent,
+  interrupt: RuntimeFrontendEvent,
 ): boolean {
   if (event.run_id && interrupt.run_id) return event.run_id === interrupt.run_id
   if (event.request_id && interrupt.request_id) return event.request_id === interrupt.request_id
@@ -108,7 +108,7 @@ function eventBelongsToInterrupt(
 
 interface TurnRestoreContext {
   keyPrefix: string
-  mode: FactoryMode | null
+  mode: RuntimeMode | null
   packageId: string | null
   agentSessionId: string | null
   fallbackTimestamp?: string | null

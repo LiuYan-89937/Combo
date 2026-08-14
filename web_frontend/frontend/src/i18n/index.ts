@@ -1,5 +1,5 @@
 export type Locale = 'zh-CN' | 'en-US'
-export const localeStorageKey = 'fast-agent-factory.locale'
+export const localeStorageKey = 'combo.locale'
 
 const zhCN = {
   'app.name': 'Combo',
@@ -373,9 +373,9 @@ const zhCN = {
   'roles.assistantThinking': 'Assistant 正在思考',
   'roles.assistantReasoning': '思考过程',
   'roles.assistantReasoningActive': '思考中',
-  'factory.status.intentAnalysis': '正在分析请求意图',
-  'factory.status.taskAnalysis': '正在分析任务',
-  'factory.status.runtimeInitialization': '正在初始化运行环境…',
+  'conversation.status.intentAnalysis': '正在分析请求意图',
+  'conversation.status.taskAnalysis': '正在分析任务',
+  'conversation.status.runtimeInitialization': '正在初始化运行环境…',
 
   'attachments.title': '添加附件',
   'attachments.localFile': '本地文件',
@@ -414,13 +414,13 @@ const zhCN = {
   'attachments.uploadFailed': '附件上传失败：{reason}',
   'attachments.messageAttachments': '消息附件',
 
-  'factory.selectAgentFirst': '请先选择一个子 Agent',
-  'factory.emptyAgentSelection': '开始新的子 Agent 对话',
-  'factory.emptyAgentSelectionHint': '从顶部选择任意已发布 Agent，发送第一条消息时将自动初始化',
-  'factory.waitToolApproval': '等待工具确认',
-  'factory.knowledgeRetrieving': '知识库检索中',
-  'factory.toolsRunning': '{count} 个工具调用中',
-  'factory.toolRunning': '工具调用中',
+  'conversation.selectAgentFirst': '请先选择一个子 Agent',
+  'conversation.emptyAgentSelection': '开始新的子 Agent 对话',
+  'conversation.emptyAgentSelectionHint': '从顶部选择任意已发布 Agent，发送第一条消息时将自动初始化',
+  'conversation.waitToolApproval': '等待工具确认',
+  'conversation.knowledgeRetrieving': '知识库检索中',
+  'conversation.toolsRunning': '{count} 个工具调用中',
+  'conversation.toolRunning': '工具调用中',
 
   'tool.call': '工具调用',
   'tool.pendingApproval': '工具调用待确认',
@@ -1837,9 +1837,9 @@ const enUS: Record<MessageKey, string> = {
   'roles.assistantThinking': 'Assistant is thinking',
   'roles.assistantReasoning': 'Reasoning',
   'roles.assistantReasoningActive': 'Reasoning',
-  'factory.status.intentAnalysis': 'Analyzing request intent',
-  'factory.status.taskAnalysis': 'Analyzing task',
-  'factory.status.runtimeInitialization': 'Initializing runtime…',
+  'conversation.status.intentAnalysis': 'Analyzing request intent',
+  'conversation.status.taskAnalysis': 'Analyzing task',
+  'conversation.status.runtimeInitialization': 'Initializing runtime…',
 
   'attachments.title': 'Add attachment',
   'attachments.localFile': 'Local file',
@@ -1878,13 +1878,13 @@ const enUS: Record<MessageKey, string> = {
   'attachments.uploadFailed': 'Attachment upload failed: {reason}',
   'attachments.messageAttachments': 'Message attachments',
 
-  'factory.selectAgentFirst': 'Select a sub-agent first',
-  'factory.emptyAgentSelection': 'Start a new sub-agent conversation',
-  'factory.emptyAgentSelectionHint': 'Select any published Agent from the header. Its runtime starts automatically when you send the first message.',
-  'factory.waitToolApproval': 'Waiting for tool approval',
-  'factory.knowledgeRetrieving': 'Searching knowledge base',
-  'factory.toolsRunning': '{count} tools running',
-  'factory.toolRunning': 'Tool running',
+  'conversation.selectAgentFirst': 'Select a sub-agent first',
+  'conversation.emptyAgentSelection': 'Start a new sub-agent conversation',
+  'conversation.emptyAgentSelectionHint': 'Select any published Agent from the header. Its runtime starts automatically when you send the first message.',
+  'conversation.waitToolApproval': 'Waiting for tool approval',
+  'conversation.knowledgeRetrieving': 'Searching knowledge base',
+  'conversation.toolsRunning': '{count} tools running',
+  'conversation.toolRunning': 'Tool running',
 
   'tool.call': 'Tool call',
   'tool.pendingApproval': 'Tool call pending approval',

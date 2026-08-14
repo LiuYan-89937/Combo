@@ -17,9 +17,9 @@ from uuid import uuid4
 from ruamel.yaml import YAML
 import uritemplate
 
-from agent_factory import __version__
-from agent_factory.context_system.runtime import default_context_runtime
-from agent_factory.dynamic_runtime import (
+from combo import __version__
+from combo.context_system.runtime import default_context_runtime
+from combo.dynamic_runtime import (
     CapabilityResolutionConfig,
     CapabilitySearchConfig,
     ComposedRuntimeLaunchContextResolver,
@@ -45,39 +45,39 @@ from agent_factory.dynamic_runtime import (
     ToolProjectionMaterializer,
     remove_sqlite_database_files,
 )
-from agent_factory.dynamic_runtime.capability_bootstrap import (
+from combo.dynamic_runtime.capability_bootstrap import (
     CapabilityBootstrapConfig,
     CapabilityBootstrapPublisher,
 )
-from agent_factory.dynamic_runtime.capability_adapters import CapabilityAdapterRegistry
-from agent_factory.dynamic_runtime.capability_kind_adapters import default_capability_adapters
-from agent_factory.dynamic_runtime.capability_definitions import (
+from combo.dynamic_runtime.capability_adapters import CapabilityAdapterRegistry
+from combo.dynamic_runtime.capability_kind_adapters import default_capability_adapters
+from combo.dynamic_runtime.capability_definitions import (
     MCPServerDefinition,
     MCPToolDefinition,
     SkillDefinition,
     ToolDefinition,
 )
-from agent_factory.dynamic_runtime.capability_catalog_runtime import CapabilityCatalogRuntime
-from agent_factory.dynamic_runtime.delegated_model_selector import DelegatedTaskModelSelector
-from agent_factory.dynamic_runtime.delegation_runtime import DelegationRuntimeCoordinator
-from agent_factory.dynamic_runtime.scheduler_service import SchedulerService
-from agent_factory.dynamic_runtime.capability_blob_store import CapabilityBlobStore
-from agent_factory.dynamic_runtime.skill_source import (
+from combo.dynamic_runtime.capability_catalog_runtime import CapabilityCatalogRuntime
+from combo.dynamic_runtime.delegated_model_selector import DelegatedTaskModelSelector
+from combo.dynamic_runtime.delegation_runtime import DelegationRuntimeCoordinator
+from combo.dynamic_runtime.scheduler_service import SchedulerService
+from combo.dynamic_runtime.capability_blob_store import CapabilityBlobStore
+from combo.dynamic_runtime.skill_source import (
     FileSystemSkillCapabilitySource,
     FileSystemSkillSourceConfig,
     SkillSourceRoot,
     normalize_staged_skill_package,
 )
-from agent_factory.dynamic_runtime.tool_package_source import (
+from combo.dynamic_runtime.tool_package_source import (
     FileSystemToolCapabilitySource,
     FileSystemToolSourceConfig,
     ToolSourceRoot,
 )
-from agent_factory.dynamic_runtime.tool_package_runtime import ToolPackageRuntime
-from agent_factory.dynamic_runtime.mcp_content_runtime import MCPContentRuntime
-from agent_factory.environment_system import DependencyPoolService
-from agent_factory.dynamic_runtime.application import DynamicRuntimeStores
-from agent_factory.dynamic_runtime.runtime_infrastructure import (
+from combo.dynamic_runtime.tool_package_runtime import ToolPackageRuntime
+from combo.dynamic_runtime.mcp_content_runtime import MCPContentRuntime
+from combo.environment_system import DependencyPoolService
+from combo.dynamic_runtime.application import DynamicRuntimeStores
+from combo.dynamic_runtime.runtime_infrastructure import (
     ConversationWorkspaceLaunchResolver,
     ToolEntrypointResolver,
     SharedToolOutputResolver,
@@ -87,32 +87,32 @@ from agent_factory.dynamic_runtime.runtime_infrastructure import (
     RevisionBoundMCPEntrypointResolver,
     runtime_resource_factory,
 )
-from agent_factory.model_pool import ModelPoolStore
-from agent_factory.paths import factory_artifact_path, project_root
-from agent_factory.resource_system import ResourceStore
-from agent_factory.runtime_protocol import (
+from combo.model_pool import ModelPoolStore
+from combo.paths import combo_data_path, project_root
+from combo.resource_system import ResourceStore
+from combo.runtime_protocol import (
     CapabilityActivation,
     CommandEnvelope,
     CommandReceipt,
     SendMessagePayload,
 )
-from agent_factory.runtime_kernel.context.engine import ContextEngine
-from agent_factory.runtime_kernel.persistence import (
+from combo.runtime_kernel.context.engine import ContextEngine
+from combo.runtime_kernel.persistence import (
     LangGraphCheckpointerConfig,
     LangGraphCheckpointerFactory,
     LangGraphStoreConfig,
     LangGraphStoreFactory,
     close_shared_sqlite_checkpointers,
 )
-from agent_factory.tooling.builtins.source import (
+from combo.tooling.builtins.source import (
     BuiltinToolCapabilitySource,
     BuiltinToolSourceConfig,
 )
-from agent_factory.tooling.builtins.browser.runtime import BrowserRuntime, BrowserRuntimeConfig
-from agent_factory.tooling.skillhub.service import SkillHubService
-from agent_factory.dynamic_runtime.mcp_runtime import MCPRuntimePool
-from agent_factory.dynamic_runtime.mcp_source import MCPConfigCapabilitySource, MCPConfigSourceConfig
-from agent_factory.dynamic_runtime.main_agent_profile import MainAgentCapabilityProfileStore
+from combo.tooling.builtins.browser.runtime import BrowserRuntime, BrowserRuntimeConfig
+from combo.tooling.skillhub.service import SkillHubService
+from combo.dynamic_runtime.mcp_runtime import MCPRuntimePool
+from combo.dynamic_runtime.mcp_source import MCPConfigCapabilitySource, MCPConfigSourceConfig
+from combo.dynamic_runtime.main_agent_profile import MainAgentCapabilityProfileStore
 from web_frontend.backend.frontend_event_bridge import FrontendEventBridge, RuntimeEventFanout
 from web_frontend.backend.attachment_upload_store import StagedAttachmentLaunchResolver
 from web_frontend.backend.attachment_upload_store import attachment_upload_store
@@ -151,12 +151,10 @@ class RuntimeBackendConfig:
     allowed_frontend_origins: tuple[str, ...]
     staged_write_ttl_seconds: int = 600
     workspace_transaction_ttl_seconds: int = 600
-    generation_lease_seconds: int = 30
     command_worker_count: int = 4
     temporary_worker_count: int = 4
     temporary_claim_lease_seconds: int = 30
     idle_poll_seconds: float = 0.25
-    generation_renew_seconds: float = 10.0
     subscriber_queue_capacity: int = 256
     outbox_max_attempts: int = 8
     outbox_retry_delay_seconds: float = 1.0
@@ -166,31 +164,31 @@ class RuntimeBackendConfig:
 
     @classmethod
     def local(cls) -> "RuntimeBackendConfig":
-        prompts = project_root() / "agent_factory" / "dynamic_runtime" / "prompts"
+        prompts = project_root() / "combo" / "dynamic_runtime" / "prompts"
         return cls(
-            database_path=factory_artifact_path("dynamic_runtime", "runtime.sqlite"),
-            checkpoint_path=factory_artifact_path("dynamic_runtime", "checkpoints.sqlite"),
-            graph_store_path=factory_artifact_path("graph_store", "runtime.sqlite"),
-            resource_store_path=factory_artifact_path("resources", "runtime.sqlite"),
-            tool_output_root=factory_artifact_path("tool_outputs"),
-            workspace_root=factory_artifact_path("workspaces"),
+            database_path=combo_data_path("dynamic_runtime", "runtime.sqlite"),
+            checkpoint_path=combo_data_path("dynamic_runtime", "checkpoints.sqlite"),
+            graph_store_path=combo_data_path("graph_store", "runtime.sqlite"),
+            resource_store_path=combo_data_path("resources", "runtime.sqlite"),
+            tool_output_root=combo_data_path("tool_outputs"),
+            workspace_root=combo_data_path("workspaces"),
             main_prompt_path=prompts / "main_agent.md",
             child_prompt_path=prompts / "child_agent.md",
             build_revision=__version__,
             capability_publisher_principal_id=f"application-build:{__version__}",
             builtin_capability_source_prefix="builtin-tool://",
-            builtin_tool_overrides_path=factory_artifact_path(
+            builtin_tool_overrides_path=combo_data_path(
                 "extension_registry", "builtin_tool_overrides.json"
             ),
-            main_agent_capability_profile_path=factory_artifact_path(
+            main_agent_capability_profile_path=combo_data_path(
                 "extension_registry", "main_agent_capability_profile.json"
             ),
             skill_capability_source_prefix="filesystem-skill://",
-            capability_blob_root=factory_artifact_path("capability_blobs"),
+            capability_blob_root=combo_data_path("capability_blobs"),
             skill_source_roots=(
                 SkillSourceRoot(
                     root_id="local-skills",
-                    path=factory_artifact_path("extension_registry", "skills"),
+                    path=combo_data_path("extension_registry", "skills"),
                     trust_level="local_user",
                 ),
             ),
@@ -200,15 +198,15 @@ class RuntimeBackendConfig:
             tool_source_roots=(
                 ToolSourceRoot(
                     root_id="local-tools",
-                    path=factory_artifact_path("extension_registry", "tools"),
+                    path=combo_data_path("extension_registry", "tools"),
                     trust_level="local_user",
                 ),
             ),
             maximum_tool_file_bytes=8 * 1024 * 1024,
             maximum_tool_bytes=64 * 1024 * 1024,
-            tool_package_runtime_root=factory_artifact_path("tool_package_runtime"),
+            tool_package_runtime_root=combo_data_path("tool_package_runtime"),
             mcp_capability_source_prefix="mcp-config://",
-            mcp_server_registry_path=factory_artifact_path(
+            mcp_server_registry_path=combo_data_path(
                 "extension_registry", "mcp_servers.json"
             ),
             browser_runtime=_browser_runtime_config(),
@@ -216,7 +214,7 @@ class RuntimeBackendConfig:
             allowed_frontend_origins=_allowed_frontend_origins(),
             conversation_delete_quiesce_timeout_seconds=float(
                 _environment_int(
-                    "AGENTFACTORY_CONVERSATION_DELETE_QUIESCE_TIMEOUT_SECONDS",
+                    "COMBO_CONVERSATION_DELETE_QUIESCE_TIMEOUT_SECONDS",
                     30,
                     minimum=1,
                 )
@@ -311,7 +309,6 @@ class RuntimeBackend:
                 temporary_worker_count=config.temporary_worker_count,
                 temporary_claim_lease_seconds=config.temporary_claim_lease_seconds,
                 idle_poll_seconds=config.idle_poll_seconds,
-                generation_renew_seconds=config.generation_renew_seconds,
             ),
             report_failure=self._report_failure,
         )
@@ -415,7 +412,7 @@ class RuntimeBackend:
                         "runtime_status": runtime_status or None,
                         "session_id": session_id,
                         "agent_session_id": session_id,
-                        "package_id": "factory_chat",
+                        "package_id": "main_chat",
                     },
                 }
             )
@@ -752,7 +749,7 @@ class RuntimeBackend:
                     _capability_adapters(),
                     on_progress=on_progress,
                 )
-                _report_tool_preparation(on_progress, "published", {"server_id": server_id})
+                _report_tool_preparation(on_progress, "published", server_id=server_id)
             except BaseException:
                 _write_mcp_registry(path, current)
                 try:
@@ -823,7 +820,7 @@ class RuntimeBackend:
                     _capability_adapters(),
                     on_progress=on_progress,
                 )
-                _report_tool_preparation(on_progress, "published", {"server_id": normalized_id})
+                _report_tool_preparation(on_progress, "published", server_id=normalized_id)
             except BaseException:
                 _write_mcp_registry(path, current)
                 self._synchronize_mcp_capabilities(self.application.stores, _capability_adapters())
@@ -1175,7 +1172,7 @@ class RuntimeBackend:
                 "retain_raw_output": runtime_policy["retain_raw_output"],
             },
         }
-        staging_parent = Path(tempfile.mkdtemp(prefix="agentfactory-tool-create-"))
+        staging_parent = Path(tempfile.mkdtemp(prefix="combo-tool-create-"))
         source = staging_parent / package_name
         source.mkdir()
         try:
@@ -1614,7 +1611,7 @@ class RuntimeBackend:
             self.process_resources.close,
             self.filesystem_resources.close,
             self.mcp_runtime.close,
-            lambda: close_shared_sqlite_checkpointers(under_root=factory_artifact_path()),
+            lambda: close_shared_sqlite_checkpointers(under_root=combo_data_path()),
         ):
             try:
                 close_operation()
@@ -1751,7 +1748,6 @@ class RuntimeBackend:
             config=DynamicRuntimeApplicationConfig(
                 database_path=config.database_path,
                 build_revision=config.build_revision,
-                generation_lease_seconds=config.generation_lease_seconds,
                 capability_resolution=CapabilityResolutionConfig(
                     search=CapabilitySearchConfig(
                         maximum_results=24,
@@ -1780,7 +1776,6 @@ class RuntimeBackend:
             model_resolver=application.model_resolver,
             model_selector=self.delegated_model_selector,
             capability_resolver=application.capability_resolver,
-            generation=application.generation.generation,
         )
         self.skillhub_runtime.bind_publisher(
             lambda: self._synchronize_skill_capabilities(
@@ -2204,26 +2199,26 @@ def _process_environment() -> tuple[tuple[str, str], ...]:
 
 def _browser_runtime_config() -> BrowserRuntimeConfig:
     return BrowserRuntimeConfig(
-        headless=_environment_bool("AGENTFACTORY_BROWSER_HEADLESS", True),
-        allow_private_hosts=_environment_bool("AGENTFACTORY_BROWSER_ALLOW_PRIVATE_HOSTS", False),
-        default_timeout_ms=_environment_int("AGENTFACTORY_BROWSER_TIMEOUT_MS", 30_000, minimum=1_000),
+        headless=_environment_bool("COMBO_BROWSER_HEADLESS", True),
+        allow_private_hosts=_environment_bool("COMBO_BROWSER_ALLOW_PRIVATE_HOSTS", False),
+        default_timeout_ms=_environment_int("COMBO_BROWSER_TIMEOUT_MS", 30_000, minimum=1_000),
         navigation_timeout_ms=_environment_int(
-            "AGENTFACTORY_BROWSER_NAVIGATION_TIMEOUT_MS", 45_000, minimum=1_000
+            "COMBO_BROWSER_NAVIGATION_TIMEOUT_MS", 45_000, minimum=1_000
         ),
-        max_contexts=_environment_int("AGENTFACTORY_BROWSER_MAX_CONTEXTS", 24, minimum=1),
-        max_pages_per_context=_environment_int("AGENTFACTORY_BROWSER_MAX_PAGES", 12, minimum=1),
+        max_contexts=_environment_int("COMBO_BROWSER_MAX_CONTEXTS", 24, minimum=1),
+        max_pages_per_context=_environment_int("COMBO_BROWSER_MAX_PAGES", 12, minimum=1),
         idle_context_seconds=_environment_int(
-            "AGENTFACTORY_BROWSER_IDLE_CONTEXT_SECONDS", 1_800, minimum=60
+            "COMBO_BROWSER_IDLE_CONTEXT_SECONDS", 1_800, minimum=60
         ),
-        viewport_width=_environment_int("AGENTFACTORY_BROWSER_VIEWPORT_WIDTH", 1_440, minimum=320),
-        viewport_height=_environment_int("AGENTFACTORY_BROWSER_VIEWPORT_HEIGHT", 900, minimum=240),
+        viewport_width=_environment_int("COMBO_BROWSER_VIEWPORT_WIDTH", 1_440, minimum=320),
+        viewport_height=_environment_int("COMBO_BROWSER_VIEWPORT_HEIGHT", 900, minimum=240),
         max_snapshot_links=_environment_int(
-            "AGENTFACTORY_BROWSER_MAX_SNAPSHOT_LINKS", 200, minimum=1
+            "COMBO_BROWSER_MAX_SNAPSHOT_LINKS", 200, minimum=1
         ),
         host_validation_ttl_seconds=_environment_int(
-            "AGENTFACTORY_BROWSER_HOST_VALIDATION_TTL_SECONDS", 300, minimum=1
+            "COMBO_BROWSER_HOST_VALIDATION_TTL_SECONDS", 300, minimum=1
         ),
-        executable_path=_environment_optional("AGENTFACTORY_BROWSER_EXECUTABLE_PATH"),
+        executable_path=_environment_optional("COMBO_BROWSER_EXECUTABLE_PATH"),
     )
 
 
@@ -2233,7 +2228,7 @@ def _environment_optional(name: str) -> str | None:
 
 
 def _allowed_frontend_origins() -> tuple[str, ...]:
-    configured = os.getenv("AGENTFACTORY_FRONTEND_ORIGINS")
+    configured = os.getenv("COMBO_FRONTEND_ORIGINS")
     if configured is not None:
         return tuple(origin.strip() for origin in configured.split(",") if origin.strip())
     return (

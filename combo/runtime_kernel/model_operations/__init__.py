@@ -1,0 +1,17 @@
+from combo.runtime_kernel.model_operations.service import (
+    ModelInvocationOperations,
+    ModelOperationService,
+    RuntimeModelHandle,
+    RuntimeModelHandleRegistry,
+    StructuredOutputInvocation,
+    prepare_structured_output_invocation,
+)
+
+__all__ = [
+    "ModelInvocationOperations",
+    "ModelOperationService",
+    "RuntimeModelHandle",
+    "RuntimeModelHandleRegistry",
+    "StructuredOutputInvocation",
+    "prepare_structured_output_invocation",
+]

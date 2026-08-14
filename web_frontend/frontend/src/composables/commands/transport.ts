@@ -4,16 +4,16 @@ import { useI18n } from '@/composables/useI18n'
 import { useUiStore } from '@/stores/ui'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useAgentStore } from '@/stores/agent'
-import type { FactoryFrontendCommand, FactoryFrontendEvent } from '@/types/protocol'
+import type { RuntimeFrontendCommand, RuntimeFrontendEvent } from '@/types/protocol'
 
-const FOREGROUND_RUN_COMMANDS = new Set<FactoryFrontendCommand['type']>([
+const FOREGROUND_RUN_COMMANDS = new Set<RuntimeFrontendCommand['type']>([
   'send_message',
   'resume_interrupt',
   'run_agent_package',
   'send_agent_package_message',
 ])
 
-const SESSION_ESTABLISHING_COMMANDS = new Set<FactoryFrontendCommand['type']>([
+const SESSION_ESTABLISHING_COMMANDS = new Set<RuntimeFrontendCommand['type']>([
   'send_message',
   'run_agent_package',
   'send_agent_package_message',
@@ -38,7 +38,7 @@ export function useCommandTransport() {
     })
   }
 
-  function sendRuntimeCommand(command: FactoryFrontendCommand) {
+  function sendRuntimeCommand(command: RuntimeFrontendCommand) {
     const dispatch = () => postCommand(command)
     const request = command.type !== 'cancel_runtime_request' && FOREGROUND_RUN_COMMANDS.has(command.type)
       ? cancellationBarrier.then(dispatch)
@@ -59,7 +59,7 @@ export function useCommandTransport() {
     return request
   }
 
-  async function applyEventRequest(request: Promise<FactoryFrontendEvent>) {
+  async function applyEventRequest(request: Promise<RuntimeFrontendEvent>) {
     try {
       const event = await request
       applyRuntimeEvent(event)

@@ -12,9 +12,9 @@ export async function uploadRuntimeAttachment(file: File): Promise<RuntimeAttach
   const response = await fetch(await backendUrl('/api/attachments'), {
     method: 'POST',
     headers: {
-      'X-AgentFactory-Principal': runtimePrincipalId(),
-      'X-AgentFactory-Client': runtimeClientInstanceId(),
-      'X-AgentFactory-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
+      'X-Combo-Principal': runtimePrincipalId(),
+      'X-Combo-Client': runtimeClientInstanceId(),
+      'X-Combo-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
     },
     body: formData,
   })

@@ -1,4 +1,4 @@
-import type { FactoryFrontendEvent, RuntimeViewState, ToolActivity } from '@/types/protocol'
+import type { RuntimeFrontendEvent, RuntimeViewState, ToolActivity } from '@/types/protocol'
 import {
   upsertToolActivityFromEvent,
   upsertToolMessagePart,
@@ -20,7 +20,7 @@ type ToolMutationState = Pick<
 
 export function applyToolLifecycleEvent(
   state: ToolMutationState,
-  event: FactoryFrontendEvent,
+  event: RuntimeFrontendEvent,
   status: ToolActivity['status'],
 ) {
   if (isBackgroundEvent(event, state.activeRequestId)) return
@@ -35,7 +35,7 @@ export function applyToolLifecycleEvent(
   upsertToolActivityFromEvent(state, event, nextStatus)
 }
 
-export function applyToolApprovalRequested(state: ToolMutationState, event: FactoryFrontendEvent) {
+export function applyToolApprovalRequested(state: ToolMutationState, event: RuntimeFrontendEvent) {
   const delegatedTaskId = String(event.payload?.source_task_id || '').trim()
   if (!delegatedTaskId) state.runStatus = 'interrupted'
   state.pendingInterrupt = event
@@ -47,7 +47,7 @@ export function applyToolApprovalRequested(state: ToolMutationState, event: Fact
     const approvalEvent = {
       ...event,
       payload: { ...(event.payload || {}), ...req },
-    } satisfies FactoryFrontendEvent
+    } satisfies RuntimeFrontendEvent
     const activity = upsertToolActivityFromEvent(state, approvalEvent, 'approval')
     if (activity) {
       activity.approvalState = 'pending'
@@ -56,7 +56,7 @@ export function applyToolApprovalRequested(state: ToolMutationState, event: Fact
   })
 }
 
-export function applyToolApprovalResolved(state: ToolMutationState, event: FactoryFrontendEvent) {
+export function applyToolApprovalResolved(state: ToolMutationState, event: RuntimeFrontendEvent) {
   if (isBackgroundEvent(event, state.activeRequestId)) return
   const approved = event.payload?.approved
   const toolCallIds = approvalToolCallIds(event.payload)
@@ -132,7 +132,7 @@ function isToolActivityInFlight(tool: ToolActivity): boolean {
   return tool.status === 'proposed' || tool.status === 'started' || tool.status === 'approval'
 }
 
-function toolEventWasUserCancelled(event: FactoryFrontendEvent): boolean {
+function toolEventWasUserCancelled(event: RuntimeFrontendEvent): boolean {
   const payload = event.payload || {}
   const result = payload.result && typeof payload.result === 'object' ? payload.result : null
   const observation = payload.observation && typeof payload.observation === 'object' ? payload.observation : null
@@ -149,7 +149,7 @@ function toolEventWasUserCancelled(event: FactoryFrontendEvent): boolean {
     .some((value) => /user_cancelled|user-cancelled/i.test(String(value || '')))
 }
 
-function resolveApprovalTool(tool: ToolActivity, event: FactoryFrontendEvent, approved: boolean) {
+function resolveApprovalTool(tool: ToolActivity, event: RuntimeFrontendEvent, approved: boolean) {
   tool.approvalState = approved ? 'approved' : 'rejected'
   tool.eventType = event.event_type
   tool.timestamp = event.timestamp

@@ -1,7 +1,7 @@
 import type {
   ContextWindowView,
   ExtensionItemView,
-  FactoryFrontendEvent,
+  RuntimeFrontendEvent,
   KnowledgeDocumentView,
   KnowledgeSearchResultView,
   KnowledgeSourceView,
@@ -17,7 +17,7 @@ import type {
   WorkspaceRootView,
 } from '@/types/protocol'
 
-export function contextWindowView(event: FactoryFrontendEvent): ContextWindowView {
+export function contextWindowView(event: RuntimeFrontendEvent): ContextWindowView {
   const payload = event.payload || {}
   return {
     tokenCount: optionalNumber(payload.token_count),
@@ -141,7 +141,7 @@ export function schedulerToolOptionView(tool: any): SchedulerToolOptionView | nu
   }
 }
 
-export function schedulerRunNoticeView(event: FactoryFrontendEvent): SchedulerRunNoticeView | null {
+export function schedulerRunNoticeView(event: RuntimeFrontendEvent): SchedulerRunNoticeView | null {
   const payload = event.payload || {}
   const nested = payload.payload && typeof payload.payload === 'object' ? payload.payload : {}
   const execution = nested.execution && typeof nested.execution === 'object' ? nested.execution : {}
@@ -154,7 +154,6 @@ export function schedulerRunNoticeView(event: FactoryFrontendEvent): SchedulerRu
   const conversation = execution.conversation && typeof execution.conversation === 'object' ? execution.conversation : {}
   const agentSession = execution.agent_session && typeof execution.agent_session === 'object' ? execution.agent_session : {}
   const sessionId = String(conversation.session_id || agentSession.session_id || '').trim() || null
-  const factorySessionId = null
   const packageId = String(payload.package_id || execution.package_id || '').trim() || null
   const packageName = String(payload.package_name || execution.package_name || '').trim() || null
   const title = String(payload.task_content || '').trim()
@@ -181,7 +180,6 @@ export function schedulerRunNoticeView(event: FactoryFrontendEvent): SchedulerRu
     packageId,
     packageName,
     sessionId,
-    factorySessionId,
     reportPath: payload.report_path ? String(payload.report_path) : null,
     timestamp: event.timestamp,
     unread: !['scheduled', 'running', 'pending'].includes(status),

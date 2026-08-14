@@ -2,7 +2,7 @@ import * as commands from '@/api/commands'
 import { withPendingInterruptContext } from '@/composables/commands/interruptContext'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useRuntimePreferencesStore } from '@/stores/runtimePreferences'
-import type { FactoryMode, RuntimeAttachmentInput } from '@/types/protocol'
+import type { RuntimeMode, RuntimeAttachmentInput } from '@/types/protocol'
 import { useCommandTransport } from './transport'
 
 export function useRuntimeCommands() {
@@ -10,7 +10,7 @@ export function useRuntimeCommands() {
   const runtimePreferences = useRuntimePreferencesStore()
   const transport = useCommandTransport()
 
-  const startSession = (resumeLatest = false, mode?: FactoryMode | null, packageId?: string | null) => {
+  const startSession = (resumeLatest = false, mode?: RuntimeMode | null, packageId?: string | null) => {
     transport.sendRuntimeCommand(commands.startSessionCommand(resumeLatest, mode, packageId))
   }
 
@@ -18,35 +18,35 @@ export function useRuntimeCommands() {
     transport.sendRuntimeCommand(commands.listSessionsCommand())
   }
 
-  const switchSession = (sessionId: string, mode?: FactoryMode | null) => {
+  const switchSession = (sessionId: string, mode?: RuntimeMode | null) => {
     transport.sendRuntimeCommand(commands.switchSessionCommand(sessionId, mode))
   }
 
   const newSession = (
-    mode?: FactoryMode | null,
+    mode?: RuntimeMode | null,
     packageId?: string | null,
   ) => {
     transport.sendRuntimeCommand(commands.newSessionCommand(mode, packageId))
   }
 
-  const deleteSession = (sessionId: string, mode?: FactoryMode | null) => {
+  const deleteSession = (sessionId: string, mode?: RuntimeMode | null) => {
     transport.sendRuntimeCommand(commands.deleteSessionCommand(sessionId, mode))
   }
 
-  const setMode = (mode: FactoryMode) => {
+  const setMode = (mode: RuntimeMode) => {
     transport.sendRuntimeCommand(commands.setModeCommand(mode))
   }
 
   const sendMessage = (
     message: string,
-    mode?: FactoryMode,
+    mode?: RuntimeMode,
     attachments?: RuntimeAttachmentInput[],
     runtimeOptions?: commands.RuntimeMainModelOptions,
     displayUserInput?: string | null,
   ) => {
     const command = commands.sendMessageCommand({
       message,
-      sessionId: runtimeStore.activeFactorySessionId,
+      sessionId: runtimeStore.activeMainSessionId,
       mode,
       attachments,
       runtimeOptions,
@@ -59,7 +59,7 @@ export function useRuntimeCommands() {
   function sendInterruptDecision(payload: commands.ResumeInterruptOptions) {
     const command = commands.resumeInterruptCommand(
       withPendingInterruptContext(runtimeStore, payload),
-      runtimeStore.activeAgentSessionId || runtimeStore.activeFactorySessionId,
+      runtimeStore.activeAgentSessionId || runtimeStore.activeMainSessionId,
       {
         requestTimeoutSeconds: runtimePreferences.requestTimeoutSeconds,
         maxRetries: runtimePreferences.maxRetries,
@@ -120,7 +120,7 @@ export function useRuntimeCommands() {
     const mode = activeRequest?.mode || runtimeStore.currentMode
     const sessionId = String(
       activeRequest?.payload?.session_id
-      || (mode === 'agent_package' ? runtimeStore.activeAgentSessionId : runtimeStore.activeFactorySessionId)
+      || (mode === 'agent_package' ? runtimeStore.activeAgentSessionId : runtimeStore.activeMainSessionId)
       || '',
     ).trim() || null
     const packageId = String(activeRequest?.payload?.package_id || '').trim() || null
@@ -141,7 +141,7 @@ export function useRuntimeCommands() {
     const mode = queuedRequest?.mode || runtimeStore.currentMode
     const sessionId = String(
       queuedRequest?.payload?.session_id
-      || (mode === 'agent_package' ? runtimeStore.activeAgentSessionId : runtimeStore.activeFactorySessionId)
+      || (mode === 'agent_package' ? runtimeStore.activeAgentSessionId : runtimeStore.activeMainSessionId)
       || '',
     ).trim() || null
     const command = commands.steerRuntimeRequestCommand({

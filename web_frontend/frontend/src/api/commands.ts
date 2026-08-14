@@ -3,7 +3,7 @@
  * 提供类型安全的命令发送接口
  */
 
-import type { FactoryFrontendCommand, FactoryMode, RuntimeAttachmentInput } from '@/types/protocol'
+import type { RuntimeFrontendCommand, RuntimeMode, RuntimeAttachmentInput } from '@/types/protocol'
 import type { ExecutionPreference } from './dynamicRuntime'
 
 let requestIdCounter = 0
@@ -13,9 +13,9 @@ export function generateRequestId(): string {
 }
 
 export function createCommand(
-  type: FactoryFrontendCommand['type'],
-  options: Partial<Omit<FactoryFrontendCommand, 'type'>> = {}
-): FactoryFrontendCommand {
+  type: RuntimeFrontendCommand['type'],
+  options: Partial<Omit<RuntimeFrontendCommand, 'type'>> = {}
+): RuntimeFrontendCommand {
   return {
     type,
     request_id: options.request_id || null,
@@ -32,9 +32,9 @@ export function createCommand(
 
 export function startSessionCommand(
   resumeLatest = false,
-  mode?: FactoryMode | null,
+  mode?: RuntimeMode | null,
   packageId?: string | null
-): FactoryFrontendCommand {
+): RuntimeFrontendCommand {
   return createCommand('start_session', {
     resume_latest: resumeLatest,
     mode,
@@ -42,14 +42,14 @@ export function startSessionCommand(
   })
 }
 
-export function listSessionsCommand(): FactoryFrontendCommand {
+export function listSessionsCommand(): RuntimeFrontendCommand {
   return createCommand('list_sessions')
 }
 
 export function switchSessionCommand(
   sessionId: string,
-  mode?: FactoryMode | null,
-): FactoryFrontendCommand {
+  mode?: RuntimeMode | null,
+): RuntimeFrontendCommand {
   return createCommand('switch_session', {
     session_id: sessionId,
     mode,
@@ -58,9 +58,9 @@ export function switchSessionCommand(
 }
 
 export function newSessionCommand(
-  mode?: FactoryMode | null,
+  mode?: RuntimeMode | null,
   packageId?: string | null,
-): FactoryFrontendCommand {
+): RuntimeFrontendCommand {
   return createCommand('new_session', {
     mode,
     payload: {
@@ -69,7 +69,7 @@ export function newSessionCommand(
   })
 }
 
-export function deleteSessionCommand(sessionId: string, mode?: FactoryMode | null): FactoryFrontendCommand {
+export function deleteSessionCommand(sessionId: string, mode?: RuntimeMode | null): RuntimeFrontendCommand {
   return createCommand('delete_session', {
     session_id: sessionId,
     mode,
@@ -77,7 +77,7 @@ export function deleteSessionCommand(sessionId: string, mode?: FactoryMode | nul
   })
 }
 
-export function setModeCommand(mode: FactoryMode): FactoryFrontendCommand {
+export function setModeCommand(mode: RuntimeMode): RuntimeFrontendCommand {
   return createCommand('set_mode', { mode })
 }
 
@@ -86,7 +86,7 @@ export function setModeCommand(mode: FactoryMode): FactoryFrontendCommand {
 export interface SendMessageOptions {
   message: string
   sessionId?: string | null
-  mode?: FactoryMode
+  mode?: RuntimeMode
   attachments?: RuntimeAttachmentInput[]
   runtimeOptions?: RuntimeMainModelOptions
   displayUserInput?: string | null
@@ -102,7 +102,7 @@ export interface RuntimeMainModelOptions {
   forceCollaboration?: boolean
 }
 
-export function sendMessageCommand(options: SendMessageOptions): FactoryFrontendCommand {
+export function sendMessageCommand(options: SendMessageOptions): RuntimeFrontendCommand {
   const requestId = generateRequestId()
   return createCommand('send_message', {
     request_id: requestId,
@@ -129,7 +129,7 @@ export function runAgentPackageCommand(
   runtimeOptions?: RuntimeMainModelOptions,
   displayUserInput?: string | null,
   workspaceId?: string | null,
-): FactoryFrontendCommand {
+): RuntimeFrontendCommand {
   const requestId = generateRequestId()
   return createCommand('run_agent_package', {
     request_id: requestId,
@@ -156,7 +156,7 @@ export function sendAgentPackageMessageCommand(
   runtimeOptions?: RuntimeMainModelOptions,
   displayUserInput?: string | null,
   workspaceId?: string | null,
-): FactoryFrontendCommand {
+): RuntimeFrontendCommand {
   const requestId = generateRequestId()
   return createCommand('send_agent_package_message', {
     request_id: requestId,
@@ -268,7 +268,7 @@ export function resumeInterruptCommand(
   options: ResumeInterruptOptions,
   sessionId?: string | null,
   runtimeOptions?: RuntimeMainModelOptions,
-): FactoryFrontendCommand {
+): RuntimeFrontendCommand {
   const requestId = generateRequestId()
   return createCommand('resume_interrupt', {
     request_id: requestId,
@@ -281,7 +281,7 @@ export interface CancelRuntimeRequestOptions {
   reason?: string
   targetRequestId?: string | null
   sessionId?: string | null
-  mode?: FactoryMode | null
+  mode?: RuntimeMode | null
   packageId?: string | null
   runtimeInstanceId?: string | null
 }
@@ -289,10 +289,10 @@ export interface CancelRuntimeRequestOptions {
 export interface SteerRuntimeRequestOptions {
   queuedRequestId: string
   sessionId?: string | null
-  mode?: FactoryMode | null
+  mode?: RuntimeMode | null
 }
 
-export function steerRuntimeRequestCommand(options: SteerRuntimeRequestOptions): FactoryFrontendCommand {
+export function steerRuntimeRequestCommand(options: SteerRuntimeRequestOptions): RuntimeFrontendCommand {
   const requestId = generateRequestId()
   return createCommand('steer_runtime_request', {
     request_id: requestId,
@@ -304,7 +304,7 @@ export function steerRuntimeRequestCommand(options: SteerRuntimeRequestOptions):
   })
 }
 
-export function cancelRuntimeRequestCommand(options: CancelRuntimeRequestOptions = {}): FactoryFrontendCommand {
+export function cancelRuntimeRequestCommand(options: CancelRuntimeRequestOptions = {}): RuntimeFrontendCommand {
   const requestId = generateRequestId()
   return createCommand('cancel_runtime_request', {
     request_id: requestId,

@@ -15,7 +15,7 @@ use std::time::Duration;
 use wait_timeout::ChildExt;
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-const SHELL_PATH_MARKER: &str = "__FASTAGENTFACTORY_SHELL_PATH__";
+const SHELL_PATH_MARKER: &str = "__COMBO_SHELL_PATH__";
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 const SHELL_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 

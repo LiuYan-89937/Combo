@@ -2,7 +2,7 @@ import { isSchedulerRequest } from '@/stores/runtime/eventUtils'
 import { scopeFromEventPayload } from '@/stores/runtime/scopes'
 import { schedulerRunNoticeView } from '@/stores/runtime/viewMappers'
 import { useRuntimeStore } from '@/stores/runtime'
-import type { FactoryFrontendEvent } from '@/types/protocol'
+import type { RuntimeFrontendEvent } from '@/types/protocol'
 import {
   publishTaskNotification,
   type TaskNotificationStatus,
@@ -20,7 +20,7 @@ const TERMINAL_SCHEDULER_EVENTS = new Set([
 ])
 
 export function captureTaskNotificationEventContext(
-  event: FactoryFrontendEvent,
+  event: RuntimeFrontendEvent,
 ): TaskNotificationEventContext {
   const runtimeStore = useRuntimeStore()
   const sessionId = conversationSessionId(event)
@@ -33,7 +33,7 @@ export function captureTaskNotificationEventContext(
 }
 
 export function publishTaskNotificationsForEvent(
-  event: FactoryFrontendEvent,
+  event: RuntimeFrontendEvent,
   _context: TaskNotificationEventContext,
 ): void {
   if (TERMINAL_SCHEDULER_EVENTS.has(event.event_type)) {
@@ -46,7 +46,7 @@ export function publishTaskNotificationsForEvent(
 }
 
 function conversationNotification(
-  event: FactoryFrontendEvent,
+  event: RuntimeFrontendEvent,
   context: TaskNotificationEventContext,
 ): TaskTerminalNotification | null {
   const status = runTerminalStatus(event)
@@ -79,7 +79,7 @@ function conversationNotification(
   }
 }
 
-function schedulerNotification(event: FactoryFrontendEvent): TaskTerminalNotification | null {
+function schedulerNotification(event: RuntimeFrontendEvent): TaskTerminalNotification | null {
   const notice = schedulerRunNoticeView(event)
   if (!notice) return null
   const status = notificationStatus(notice.status)
@@ -94,7 +94,7 @@ function schedulerNotification(event: FactoryFrontendEvent): TaskTerminalNotific
   }
 }
 
-function runTerminalStatus(event: FactoryFrontendEvent): TaskNotificationStatus | null {
+function runTerminalStatus(event: RuntimeFrontendEvent): TaskNotificationStatus | null {
   if (event.event_type === 'run_failed') return 'failed'
   if (event.event_type === 'run_cancelled') return 'cancelled'
   if (event.event_type !== 'run_completed') return null
@@ -110,7 +110,7 @@ function notificationStatus(value: string): TaskNotificationStatus | null {
   return null
 }
 
-function conversationSessionId(event: FactoryFrontendEvent): string | null {
+function conversationSessionId(event: RuntimeFrontendEvent): string | null {
   return text(
     event.payload?.agent_session?.session_id
     || event.payload?.session_id
@@ -118,7 +118,7 @@ function conversationSessionId(event: FactoryFrontendEvent): string | null {
   )
 }
 
-function eventSummary(event: FactoryFrontendEvent): string | null {
+function eventSummary(event: RuntimeFrontendEvent): string | null {
   if (event.event_type === 'run_cancelled') return null
   return text(
     event.payload?.output_summary

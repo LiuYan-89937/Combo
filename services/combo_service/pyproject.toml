@@ -1,0 +1,25 @@
+[project]
+name = "combo-service"
+version = "0.1.0"
+description = "Combo website authentication and application release service"
+requires-python = ">=3.10"
+dependencies = [
+    "cryptography>=45,<51",
+    "fastapi>=0.115,<1",
+    "httpx>=0.27,<1",
+    "jsonschema>=4.23,<5",
+    "oss2>=2.19,<3",
+    "pydantic>=2.8,<3",
+    "uvicorn[standard]>=0.30,<1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["combo_service"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

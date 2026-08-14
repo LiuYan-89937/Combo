@@ -9,7 +9,7 @@ import type {
   KnowledgeSourceView,
   KnowledgeDocumentView,
   KnowledgeSearchResultView,
-  FactoryFrontendEvent,
+  RuntimeFrontendEvent,
 } from '@/types/protocol'
 
 export interface KnowledgeIngestionProgress {
@@ -121,7 +121,7 @@ export const useKnowledgeStore = defineStore('knowledge', () => {
     }
   }
 
-  function applyIngestionEvent(event: FactoryFrontendEvent): void {
+  function applyIngestionEvent(event: RuntimeFrontendEvent): void {
     const sourceId = String(event.payload?.source_id || '').trim()
     if (!sourceId) return
     const progress = event.payload?.progress && typeof event.payload.progress === 'object'

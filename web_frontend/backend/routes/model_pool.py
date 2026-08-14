@@ -10,9 +10,9 @@ from typing import Any, Callable
 
 from fastapi import APIRouter, HTTPException
 from langchain_core.messages import HumanMessage
-from agent_factory.models import resolve_embedding_model_profile, reset_embedding_model
+from combo.models import resolve_embedding_model_profile, reset_embedding_model
 
-from agent_factory.model_pool import (
+from combo.model_pool import (
     ModelPoolCredential,
     ModelPoolProfile,
     ModelPoolSelector,
@@ -22,18 +22,18 @@ from agent_factory.model_pool import (
     ModelSelectionRequest,
     list_model_pool_provider_profiles,
 )
-from agent_factory.model_pool.resolver import resolve_chat_model_profile
-from agent_factory.model_pool.resolver import resolve_image_generation_model_profile
-from agent_factory.models.image_generation import ImageGenerationRequest
-from agent_factory.artifact_system import ArtifactStore
+from combo.model_pool.resolver import resolve_chat_model_profile
+from combo.model_pool.resolver import resolve_image_generation_model_profile
+from combo.models.image_generation import ImageGenerationRequest
+from combo.artifact_system import ArtifactStore
 from tempfile import TemporaryDirectory
-from agent_factory.model_pool.schema import (
+from combo.model_pool.schema import (
     DEFAULT_MODEL_COMPRESSION_TRIGGER_TOKENS,
     DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS,
     ModelProfileBinding,
 )
-from agent_factory.model_pool.defaults import DEFAULT_EMBEDDING_BATCH_SIZE
-from agent_factory.model_pool.store import ModelPoolRevisionConflict, ModelPoolStoreError
+from combo.model_pool.defaults import DEFAULT_EMBEDDING_BATCH_SIZE
+from combo.model_pool.store import ModelPoolRevisionConflict, ModelPoolStoreError
 
 
 def create_model_pool_router(

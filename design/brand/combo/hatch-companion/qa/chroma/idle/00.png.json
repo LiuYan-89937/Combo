@@ -1,7 +1,7 @@
 {
   "ok": true,
-  "input": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-companion/qa/rows/idle/frames/idle/00.png",
-  "output": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-companion/qa/clean-frames/idle/00.png",
+  "input": "/Users/admin/Desktop/Combo/design/brand/combo/hatch-companion/qa/rows/idle/frames/idle/00.png",
+  "output": "/Users/admin/Desktop/Combo/design/brand/combo/hatch-companion/qa/clean-frames/idle/00.png",
   "chroma_key": "#00FF00",
   "algorithm": "edge-local-chroma-spill-suppression",
   "strength": 1,

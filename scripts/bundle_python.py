@@ -5,6 +5,7 @@
 """
 import os
 import platform
+import json
 import shutil
 import sys
 import tarfile
@@ -172,6 +173,59 @@ def _convert_symlinks_to_files(python_dir: Path):
     print(f"✓ 转换了 {converted} 个符号链接")
 
 
+def _default_playwright_cache_dir() -> Optional[Path]:
+    """返回 Playwright 在当前平台使用的共享浏览器缓存目录。"""
+    system = platform.system()
+    if system == "Darwin":
+        return Path.home() / "Library" / "Caches" / "ms-playwright"
+    if system == "Linux":
+        cache_home = os.environ.get("XDG_CACHE_HOME")
+        return Path(cache_home) / "ms-playwright" if cache_home else Path.home() / ".cache" / "ms-playwright"
+    if system == "Windows":
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        return Path(local_app_data) / "ms-playwright" if local_app_data else None
+    return None
+
+
+def _seed_playwright_browser_cache(python_dir: Path, browser_dir: Path) -> None:
+    """复用与当前 Playwright 版本完全匹配的共享浏览器缓存。"""
+    cache_dir = _default_playwright_cache_dir()
+    if cache_dir is None or not cache_dir.is_dir():
+        return
+
+    manifests = list(
+        python_dir.glob("lib/python*/site-packages/playwright/driver/package/browsers.json")
+    )
+    manifests.extend(
+        python_dir.glob("Lib/site-packages/playwright/driver/package/browsers.json")
+    )
+    if not manifests:
+        return
+
+    with manifests[0].open(encoding="utf-8") as manifest_file:
+        browsers = json.load(manifest_file).get("browsers", [])
+
+    revisions = {
+        browser["name"]: str(browser["revision"])
+        for browser in browsers
+        if browser.get("name") in {"chromium-headless-shell", "ffmpeg"}
+        and browser.get("revision") is not None
+    }
+    browser_dir.mkdir(parents=True, exist_ok=True)
+    reused = []
+    for browser_name, revision in revisions.items():
+        directory_name = f"{browser_name.replace('-', '_')}-{revision}"
+        source = cache_dir / directory_name
+        destination = browser_dir / directory_name
+        if not source.is_dir():
+            continue
+        shutil.copytree(source, destination, dirs_exist_ok=True)
+        reused.append(directory_name)
+
+    if reused:
+        print(f"复用 Playwright 浏览器缓存: {', '.join(reused)}")
+
+
 def install_dependencies(python_dir: Path, project_root: Path):
     """使用打包的 Python 安装项目依赖"""
     python_exe = _find_python_executable(python_dir)
@@ -194,6 +248,7 @@ def install_dependencies(python_dir: Path, project_root: Path):
             check=True
         )
         browser_dir = python_dir / "playwright-browsers"
+        _seed_playwright_browser_cache(python_dir, browser_dir)
         browser_environment = {**os.environ, "PLAYWRIGHT_BROWSERS_PATH": str(browser_dir)}
         print("安装 Chromium headless shell...")
         subprocess.run(

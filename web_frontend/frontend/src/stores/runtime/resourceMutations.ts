@@ -1,4 +1,4 @@
-import type { FactoryFrontendEvent, RuntimeViewState } from '@/types/protocol'
+import type { RuntimeFrontendEvent, RuntimeViewState } from '@/types/protocol'
 import {
   extensionItemView,
   knowledgeDocumentView,
@@ -26,7 +26,7 @@ export type ResourceMutationState = Pick<
   | 'schedulerJobs'
   | 'schedulerRunNotices'
   | 'activeConversationScope'
-  | 'activeFactorySessionId'
+  | 'activeMainSessionId'
   | 'activeAgentSessionId'
   | 'schedulerToolOptions'
   | 'workspaceEntries'
@@ -43,7 +43,7 @@ const SCHEDULER_NOTICE_EVENTS = new Set([
   'scheduler_run_cancelled',
 ])
 
-export function applyKnowledgeEvent(state: ResourceMutationState, event: FactoryFrontendEvent) {
+export function applyKnowledgeEvent(state: ResourceMutationState, event: RuntimeFrontendEvent) {
   updateKnowledgeSources(state, event)
   if (event.event_type === 'knowledge_documents_listed') {
     const documents = event.payload?.documents || []
@@ -60,7 +60,7 @@ export function applyKnowledgeEvent(state: ResourceMutationState, event: Factory
   }
 }
 
-export function applyWorkspaceEvent(state: ResourceMutationState, event: FactoryFrontendEvent) {
+export function applyWorkspaceEvent(state: ResourceMutationState, event: RuntimeFrontendEvent) {
   if (event.event_type === 'workspace_roots_listed') {
     const roots = event.payload?.roots || []
     state.workspaceRoots = Array.isArray(roots)
@@ -76,7 +76,7 @@ export function applyWorkspaceEvent(state: ResourceMutationState, event: Factory
   }
 }
 
-export function applyExtensionsEvent(state: ResourceMutationState, event: FactoryFrontendEvent) {
+export function applyExtensionsEvent(state: ResourceMutationState, event: RuntimeFrontendEvent) {
   if (event.event_type === 'extension_config_test_output_delta') {
     const requestId = String(event.request_id || '')
     const serverId = String(event.payload?.server_id || '')
@@ -142,7 +142,7 @@ export function applyExtensionsEvent(state: ResourceMutationState, event: Factor
   }
 }
 
-export function applySchedulerEvent(state: ResourceMutationState, event: FactoryFrontendEvent) {
+export function applySchedulerEvent(state: ResourceMutationState, event: RuntimeFrontendEvent) {
   updateSchedulerJobs(state, event)
   updateSchedulerOptions(state, event)
   updateSchedulerRunNotices(state, event)
@@ -162,7 +162,7 @@ export function dismissSchedulerRunNoticeFromConversation(state: ResourceMutatio
   }
 }
 
-function updateKnowledgeSources(state: ResourceMutationState, event: FactoryFrontendEvent) {
+function updateKnowledgeSources(state: ResourceMutationState, event: RuntimeFrontendEvent) {
   if (Array.isArray(event.payload?.sources)) {
     state.knowledgeSources = event.payload.sources.map((source: any) => knowledgeSourceView(source, event.timestamp))
     return
@@ -222,7 +222,7 @@ function updateKnowledgeSources(state: ResourceMutationState, event: FactoryFron
   }
 }
 
-function updateSchedulerJobs(state: ResourceMutationState, event: FactoryFrontendEvent) {
+function updateSchedulerJobs(state: ResourceMutationState, event: RuntimeFrontendEvent) {
   if (event.event_type === 'scheduler_job_deleted') {
     const jobId = event.payload?.job_id
     state.schedulerJobs = state.schedulerJobs.filter((item) => item.payload?.job_id !== jobId)
@@ -245,7 +245,7 @@ function updateSchedulerJobs(state: ResourceMutationState, event: FactoryFronten
   }
 }
 
-function updateSchedulerOptions(state: ResourceMutationState, event: FactoryFrontendEvent) {
+function updateSchedulerOptions(state: ResourceMutationState, event: RuntimeFrontendEvent) {
   if (event.event_type !== 'scheduler_options_listed') return
   const tools = event.payload?.payload?.tools || event.payload?.tools || []
   state.schedulerToolOptions = Array.isArray(tools)
@@ -255,7 +255,7 @@ function updateSchedulerOptions(state: ResourceMutationState, event: FactoryFron
     : []
 }
 
-function updateSchedulerRunNotices(state: ResourceMutationState, event: FactoryFrontendEvent) {
+function updateSchedulerRunNotices(state: ResourceMutationState, event: RuntimeFrontendEvent) {
   if (!SCHEDULER_NOTICE_EVENTS.has(event.event_type)) return
 
   const notice = schedulerRunNoticeView(event)
@@ -278,6 +278,6 @@ function updateSchedulerRunNotices(state: ResourceMutationState, event: FactoryF
 }
 
 function activeConversationScope(state: ResourceMutationState): string | null {
-  if (!state.activeFactorySessionId && !state.activeAgentSessionId) return null
+  if (!state.activeMainSessionId && !state.activeAgentSessionId) return null
   return state.activeConversationScope
 }

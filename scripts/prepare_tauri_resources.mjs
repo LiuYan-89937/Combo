@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 
 const projectRoot = process.cwd()
 const resourceSourceRoots = [
-  resolve(projectRoot, 'agent_factory'),
+  resolve(projectRoot, 'combo'),
   resolve(projectRoot, 'web_frontend/backend'),
 ]
 

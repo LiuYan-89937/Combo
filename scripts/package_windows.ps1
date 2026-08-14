@@ -26,7 +26,7 @@ $PythonExecutable = Join-Path $PythonResourcesDir "python.exe"
 $DownloadDir = Join-Path $ProjectRoot "build\python-downloads"
 $BuildLogDir = Join-Path $ProjectRoot "build\logs"
 $BuildLogPath = Join-Path $BuildLogDir "windows-package.log"
-$DefaultUpdaterKey = Join-Path $env:USERPROFILE ".fastagentfactory\updater\fastagentfactory.key"
+$DefaultUpdaterKey = Join-Path $env:USERPROFILE ".combo\updater\combo.key"
 
 $PythonArchiveName = "cpython-3.11.9+20240726-x86_64-pc-windows-msvc-shared-install_only.tar.gz"
 $PythonArchiveUrl = "https://github.com/astral-sh/python-build-standalone/releases/download/20240726/cpython-3.11.9%2B20240726-x86_64-pc-windows-msvc-shared-install_only.tar.gz"

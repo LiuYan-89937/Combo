@@ -20,12 +20,12 @@ export const routes: RouteRecordRaw[] = [
   {
     path: '/chat/new',
     name: 'ChatNew',
-    component: () => import('@/views/FactoryView.vue'),
+    component: () => import('@/views/ConversationView.vue'),
   },
   {
     path: '/chat/:sessionId',
     name: 'ChatSession',
-    component: () => import('@/views/FactoryView.vue'),
+    component: () => import('@/views/ConversationView.vue'),
   },
   {
     path: '/knowledge',

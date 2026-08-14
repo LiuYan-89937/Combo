@@ -13,12 +13,12 @@
     {
       "state": "idle",
       "frames": [
-        "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-lead/qa/rows/idle/frames/idle/00.png",
-        "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-lead/qa/rows/idle/frames/idle/01.png",
-        "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-lead/qa/rows/idle/frames/idle/02.png",
-        "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-lead/qa/rows/idle/frames/idle/03.png",
-        "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-lead/qa/rows/idle/frames/idle/04.png",
-        "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-lead/qa/rows/idle/frames/idle/05.png"
+        "/Users/admin/Desktop/Combo/design/brand/combo/hatch-lead/qa/rows/idle/frames/idle/00.png",
+        "/Users/admin/Desktop/Combo/design/brand/combo/hatch-lead/qa/rows/idle/frames/idle/01.png",
+        "/Users/admin/Desktop/Combo/design/brand/combo/hatch-lead/qa/rows/idle/frames/idle/02.png",
+        "/Users/admin/Desktop/Combo/design/brand/combo/hatch-lead/qa/rows/idle/frames/idle/03.png",
+        "/Users/admin/Desktop/Combo/design/brand/combo/hatch-lead/qa/rows/idle/frames/idle/04.png",
+        "/Users/admin/Desktop/Combo/design/brand/combo/hatch-lead/qa/rows/idle/frames/idle/05.png"
       ],
       "method": "components"
     }

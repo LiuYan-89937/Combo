@@ -96,7 +96,7 @@ Carbon 中的 `Document` 和 `Search` 与 Ionicons 同名语义已在 57 个总�
 
 ## 官网功能图标
 
-官网在 `services/agent_hub/frontend/src/components/base/BaseIcon.vue` 中注册了 28 个内联母版。
+官网在 `services/combo_service/frontend/src/components/base/BaseIcon.vue` 中注册了 28 个内联母版。
 
 ### 当前已使用（21）
 

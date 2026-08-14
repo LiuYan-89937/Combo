@@ -35,11 +35,11 @@ export interface TaskTerminalNotification {
   target: TaskNotificationTarget
 }
 
-const SEEN_NOTIFICATION_STORAGE_KEY = 'fast-agent-factory.seenTaskNotifications'
+const SEEN_NOTIFICATION_STORAGE_KEY = 'combo.seenTaskNotifications'
 const MAX_SEEN_NOTIFICATION_KEYS = 256
 const MAX_NOTIFICATION_BODY_LENGTH = 240
-const NATIVE_TARGET_EXTRA_KEY = 'fastAgentFactoryTarget'
-const NATIVE_TARGET_STORAGE_KEY = 'fast-agent-factory.nativeNotificationTargets'
+const NATIVE_TARGET_EXTRA_KEY = 'comboTarget'
+const NATIVE_TARGET_STORAGE_KEY = 'combo.nativeNotificationTargets'
 const MAX_NATIVE_NOTIFICATION_TARGETS = 128
 
 let router: Router | null = null

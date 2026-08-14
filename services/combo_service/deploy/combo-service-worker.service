@@ -1,0 +1,33 @@
+[Unit]
+Description=Combo Service background worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=combo_service
+Group=combo_service
+WorkingDirectory=/opt/combo-service/service
+EnvironmentFile=/etc/combo-service.env
+ExecStart=/opt/combo-service/venv/bin/python -m combo_service.worker
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=60
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+ReadWritePaths=/var/lib/combo-service
+UMask=0027
+MemoryMax=768M
+TasksMax=128
+
+[Install]
+WantedBy=multi-user.target

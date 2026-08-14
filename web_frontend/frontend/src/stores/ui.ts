@@ -17,7 +17,7 @@ export type ConversationDockPanel = 'workspace' | 'memory' | 'sessions' | 'tasks
 
 const STORAGE_KEYS = {
   locale: localeStorageKey,
-  themeMode: 'fast-agent-factory.themeMode',
+  themeMode: 'combo.themeMode',
 } as const
 
 function readStoredLocale(): Locale {

@@ -132,11 +132,11 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // Cleanup Python backend when the main window closes
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
+            // Let the window disappear before waiting for backend shutdown.
+            if let tauri::WindowEvent::Destroyed = event {
                 let app_handle = window.app_handle();
                 let state = app_handle.state::<AppState>();
-                if let Some(sidecar) = state.sidecar.lock().unwrap().as_mut() {
+                if let Some(mut sidecar) = state.sidecar.lock().unwrap().take() {
                     sidecar.shutdown();
                 };
             }

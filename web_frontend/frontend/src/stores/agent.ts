@@ -115,7 +115,6 @@ export interface AgentPackageView {
     deletable?: boolean
     exportable?: boolean
   }
-  factory_run_id?: string | null
   agent_id?: string | null
   agent_name: string | null
   name: string | null
@@ -167,7 +166,7 @@ export interface AgentRecentSessionView extends AgentSessionView {
   agent_name?: string | null
 }
 
-const LAST_AGENT_SESSION_STORAGE_KEY = 'fastagentfactory.lastAgentSession'
+const LAST_AGENT_SESSION_STORAGE_KEY = 'combo.lastAgentSession'
 
 interface LastAgentSessionSelection {
   packageId: string

@@ -18,13 +18,13 @@ export type RunningMessageMode = 'queue' | 'steer'
 export const DEFAULT_RUNNING_MESSAGE_MODE: RunningMessageMode = 'queue'
 
 const STORAGE_KEYS = {
-  mainModelProfileId: 'fast-agent-factory.runtimeMainModelProfileId',
-  reasoningIntensity: 'fastagentfactory.runtimeReasoningIntensity',
-  requestTimeoutSeconds: 'fast-agent-factory.runtimeRequestTimeoutSeconds',
-  maxRetries: 'fast-agent-factory.runtimeMaxRetries',
-  maxParallelSubAgents: 'fast-agent-factory.maxParallelSubAgents',
-  approvalMode: 'fast-agent-factory.approvalMode',
-  executionPreference: 'fast-agent-factory.executionPreference',
+  mainModelProfileId: 'combo.runtimeMainModelProfileId',
+  reasoningIntensity: 'combo.runtimeReasoningIntensity',
+  requestTimeoutSeconds: 'combo.runtimeRequestTimeoutSeconds',
+  maxRetries: 'combo.runtimeMaxRetries',
+  maxParallelSubAgents: 'combo.maxParallelSubAgents',
+  approvalMode: 'combo.approvalMode',
+  executionPreference: 'combo.executionPreference',
   forceCollaboration: 'combo.forceCollaboration',
   runningMessageMode: 'combo.runningMessageMode',
 } as const

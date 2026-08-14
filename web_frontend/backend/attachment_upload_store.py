@@ -13,12 +13,12 @@ from uuid import uuid4
 
 from fastapi import UploadFile
 
-from agent_factory.paths import factory_artifact_path
-from agent_factory.runtime_attachments import AttachmentImportPolicy
-from agent_factory.runtime_protocol import AttachmentRevisionRef
+from combo.paths import combo_data_path
+from combo.runtime_attachments import AttachmentImportPolicy
+from combo.runtime_protocol import AttachmentRevisionRef
 
 
-ATTACHMENT_UPLOAD_TTL_SECONDS_ENV = "AGENTFACTORY_ATTACHMENT_UPLOAD_TTL_SECONDS"
+ATTACHMENT_UPLOAD_TTL_SECONDS_ENV = "COMBO_ATTACHMENT_UPLOAD_TTL_SECONDS"
 DEFAULT_ATTACHMENT_UPLOAD_TTL_SECONDS = 24 * 60 * 60
 _UPLOAD_ID_PATTERN = re.compile(r"^[a-f0-9]{32}$")
 
@@ -53,7 +53,7 @@ class AttachmentUploadStore:
     """Stages browser uploads and resolves opaque IDs before runtime dispatch."""
 
     def __init__(self, root: Path | None = None) -> None:
-        self.root = (root or factory_artifact_path("attachment_uploads")).resolve()
+        self.root = (root or combo_data_path("attachment_uploads")).resolve()
         self.ttl_seconds = _positive_int_env(
             ATTACHMENT_UPLOAD_TTL_SECONDS_ENV,
             DEFAULT_ATTACHMENT_UPLOAD_TTL_SECONDS,

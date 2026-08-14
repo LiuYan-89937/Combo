@@ -1,4 +1,4 @@
-import type { FactoryFrontendEvent, RuntimeViewState } from '@/types/protocol'
+import type { RuntimeFrontendEvent, RuntimeViewState } from '@/types/protocol'
 import {
   applyKnowledgeEvent,
   applySchedulerEvent,
@@ -18,7 +18,7 @@ type ActivityMutationState = Pick<
 
 export function applyRuntimeActivityEvent(
   state: Pick<RuntimeViewState, 'runtimeActivity'>,
-  event: FactoryFrontendEvent,
+  event: RuntimeFrontendEvent,
 ) {
   state.runtimeActivity = {
     status: String(event.payload?.status || 'active'),
@@ -30,7 +30,7 @@ export function applyRuntimeActivityEvent(
   }
 }
 
-export function applyContextActivityEvent(state: ActivityMutationState, event: FactoryFrontendEvent) {
+export function applyContextActivityEvent(state: ActivityMutationState, event: RuntimeFrontendEvent) {
   const type = event.event_type
   if (type === 'context_prepare_started') {
     state.contextActivity = { status: 'idle' }
@@ -58,7 +58,7 @@ export function applyContextActivityEvent(state: ActivityMutationState, event: F
 
 export function applyMemoryActivityEvent(
   state: Pick<RuntimeViewState, 'memoryActivity'>,
-  event: FactoryFrontendEvent,
+  event: RuntimeFrontendEvent,
 ) {
   const type = event.event_type
   if (
@@ -76,7 +76,7 @@ export function applyMemoryActivityEvent(
   state.memoryActivity.payload = event.payload
 }
 
-export function applyKnowledgeActivityEvent(state: ActivityMutationState, event: FactoryFrontendEvent) {
+export function applyKnowledgeActivityEvent(state: ActivityMutationState, event: RuntimeFrontendEvent) {
   state.knowledgeActivity.push({
     eventType: event.event_type,
     timestamp: event.timestamp,
@@ -91,7 +91,7 @@ export function applyKnowledgeActivityEvent(state: ActivityMutationState, event:
   applyKnowledgeEvent(state, event)
 }
 
-export function applySchedulerActivityEvent(state: ActivityMutationState, event: FactoryFrontendEvent) {
+export function applySchedulerActivityEvent(state: ActivityMutationState, event: RuntimeFrontendEvent) {
   state.schedulerActivity.push({
     eventType: event.event_type,
     timestamp: event.timestamp,
@@ -105,14 +105,14 @@ export function applySchedulerActivityEvent(state: ActivityMutationState, event:
   applySchedulerEvent(state, event)
 }
 
-export function recordDebugEvent(state: Pick<RuntimeViewState, 'debugEvents'>, event: FactoryFrontendEvent) {
+export function recordDebugEvent(state: Pick<RuntimeViewState, 'debugEvents'>, event: RuntimeFrontendEvent) {
   state.debugEvents.push(event)
   if (state.debugEvents.length > 100) {
     state.debugEvents.shift()
   }
 }
 
-export function recordTimelineEvent(state: Pick<RuntimeViewState, 'timeline'>, event: FactoryFrontendEvent) {
+export function recordTimelineEvent(state: Pick<RuntimeViewState, 'timeline'>, event: RuntimeFrontendEvent) {
   if (!event.process_event) return
   state.timeline.push({
     id: event.event_id,

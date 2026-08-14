@@ -1,7 +1,7 @@
 {
   "ok": true,
-  "input": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/qa/rows/review/frames/review/04.png",
-  "output": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/qa/clean-frames/review/04.png",
+  "input": "/Users/admin/Desktop/Combo/design/brand/combo/hatch-idle-v2/qa/rows/review/frames/review/04.png",
+  "output": "/Users/admin/Desktop/Combo/design/brand/combo/hatch-idle-v2/qa/clean-frames/review/04.png",
   "chroma_key": "#00FF00",
   "algorithm": "edge-local-chroma-spill-suppression",
   "strength": 1,

@@ -6,8 +6,8 @@ from threading import RLock
 from typing import Any, Callable
 from uuid import uuid4
 
-from agent_factory.runtime_kernel.fixed_graphs import fixed_graph_model_output_visible
-from agent_factory.runtime_protocol import CommandReceipt, OutboxRecord, RuntimeEvent, RuntimeInstance
+from combo.runtime_kernel.fixed_graphs import fixed_graph_model_output_visible
+from combo.runtime_protocol import CommandReceipt, OutboxRecord, RuntimeEvent, RuntimeInstance
 
 
 @dataclass(eq=False, slots=True)
@@ -17,7 +17,7 @@ class FrontendEventSubscription:
 
 
 class FrontendEventBridge:
-    """Projects the dynamic runtime onto the stable factory_frontend.v1 UI protocol."""
+    """Projects the dynamic runtime onto the stable combo_frontend.v1 UI protocol."""
 
     def __init__(self, *, queue_capacity: int) -> None:
         if queue_capacity < 1:
@@ -292,7 +292,7 @@ def project_runtime_observation(
     shared_payload = {
         **event_payload,
         "workspace_id": instance.request.workspace_id,
-        "package_id": "factory_chat",
+        "package_id": "main_chat",
         "agent_session_id": instance.request.session_id,
         "runtime_role": instance.request.runtime_role,
         "source_task_id": instance.request.task_id,
@@ -347,7 +347,7 @@ def _message_events_from_model_event(
     }
     source = {
         "workspace_id": instance.request.workspace_id,
-        "package_id": "factory_chat",
+        "package_id": "main_chat",
         "agent_session_id": instance.request.session_id,
         "runtime_role": instance.request.runtime_role,
         "source_task_id": instance.request.task_id,
@@ -582,7 +582,7 @@ def project_runtime_event(
     payload.update(
         {
             "workspace_id": event.workspace_id,
-            "package_id": "factory_chat",
+            "package_id": "main_chat",
             "agent_session_id": event.session_id,
             "principal_id": None,
             "runtime_role": event.runtime_role,
@@ -648,7 +648,7 @@ def project_command_event(record: OutboxRecord) -> list[dict[str, Any]]:
     payload.update(
         {
             "principal_id": receipt.principal_id,
-            "package_id": "factory_chat",
+            "package_id": "main_chat",
             "agent_session_id": receipt.session_id,
             "request_source": request_source,
         }
@@ -684,7 +684,7 @@ def _observation_event(
         payload={
             **event,
             "workspace_id": instance.request.workspace_id,
-            "package_id": "factory_chat",
+            "package_id": "main_chat",
             "agent_session_id": instance.request.session_id,
             "runtime_role": instance.request.runtime_role,
             "source_task_id": instance.request.task_id,
@@ -715,7 +715,7 @@ def _frontend_event(
 
     return {
         "event_id": event_id or uuid4().hex,
-        "protocol_version": "factory_frontend.v1",
+        "protocol_version": "combo_frontend.v1",
         "event_type": event_type,
         "persistence": "transient" if event_type.endswith("_delta") else "durable",
         "producer_type": "dynamic_runtime",

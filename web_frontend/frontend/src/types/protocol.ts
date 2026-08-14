@@ -1,11 +1,11 @@
 /**
  * 协议类型定义
- * 与后端 FactoryFrontendEvent/Command 协议对应
+ * 与后端 RuntimeFrontendEvent/Command 协议对应
  */
 
 // ========== 基础类型 ==========
 
-export type FactoryMode = 'agent_package' | 'agent_group'
+export type RuntimeMode = 'agent_package' | 'agent_group'
 
 export type RunStatus = 'idle' | 'running' | 'stopping' | 'waiting_for_workers' | 'interrupted' | 'completed' | 'stopped' | 'cancelled' | 'failed'
 
@@ -157,12 +157,12 @@ export type ChatMessagePart =
 
 // ========== 命令类型 ==========
 
-export interface FactoryFrontendCommand {
+export interface RuntimeFrontendCommand {
   type: string
   request_id: string | null
   session_id: string | null
   resume_latest: boolean
-  mode: FactoryMode | null
+  mode: RuntimeMode | null
   message: string | null
   payload: Record<string, any>
   options: Record<string, any>
@@ -170,7 +170,7 @@ export interface FactoryFrontendCommand {
 
 // ========== 事件类型 ==========
 
-export interface FactoryFrontendEvent {
+export interface RuntimeFrontendEvent {
   event_id: string
   protocol_version: string
   event_type: string
@@ -180,7 +180,7 @@ export interface FactoryFrontendEvent {
   run_id: string | null
   session_id: string | null
   thread_id: string | null
-  mode: FactoryMode | null
+  mode: RuntimeMode | null
   graph_id: string | null
   node_id: string | null
   node_label: string | null
@@ -246,12 +246,12 @@ export interface ConversationScopeState {
   contextWindow: ContextWindowView | null
   memoryActivity: RuntimeActivityView
   modelStreams: Record<string, ModelStream>
-  activeFactorySessionId: string | null
+  activeMainSessionId: string | null
   activeAgentSessionId: string | null
   activeWorkspaceId: string | null
   activeRequestId?: string | null
   runStatus?: RunStatus
-  pendingInterrupt?: FactoryFrontendEvent | null
+  pendingInterrupt?: RuntimeFrontendEvent | null
   currentRunId?: string | null
   nodes?: Record<string, NodeViewState>
   stages?: Record<string, StageStatus>
@@ -280,7 +280,7 @@ export interface ModelStream {
 export interface ActiveRequestView {
   requestId: string
   status: RunStatus
-  mode: FactoryMode | null
+  mode: RuntimeMode | null
   runId: string | null
   conversationScope?: string | null
   background: boolean
@@ -487,7 +487,6 @@ export interface SchedulerRunNoticeView {
   packageId: string | null
   packageName: string | null
   sessionId: string | null
-  factorySessionId: string | null
   reportPath: string | null
   timestamp: string
   unread: boolean
@@ -564,9 +563,9 @@ export interface RuntimeViewState {
   activeRequestId: string | null
   activeRequests: Record<string, ActiveRequestView>
   runStatus: RunStatus
-  pendingInterrupt: FactoryFrontendEvent | null
-  currentMode: FactoryMode | null
-  activeFactorySessionId: string | null
+  pendingInterrupt: RuntimeFrontendEvent | null
+  currentMode: RuntimeMode | null
+  activeMainSessionId: string | null
   activeAgentSessionId: string | null
   activeWorkspaceId: string | null
   currentRunId: string | null
@@ -580,7 +579,7 @@ export interface RuntimeViewState {
   transcript: TranscriptItem[]
   conversationTurns: ConversationTurn[]
   timeline: TimelineItem[]
-  debugEvents: FactoryFrontendEvent[]
+  debugEvents: RuntimeFrontendEvent[]
   runtimeActivity: RuntimeActivityView
   contextActivity: RuntimeActivityView
   contextWindow: ContextWindowView | null

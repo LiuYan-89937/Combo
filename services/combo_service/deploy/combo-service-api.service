@@ -1,0 +1,33 @@
+[Unit]
+Description=Combo Service API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=combo_service
+Group=combo_service
+WorkingDirectory=/opt/combo-service/service
+EnvironmentFile=/etc/combo-service.env
+ExecStart=/opt/combo-service/venv/bin/uvicorn combo_service.api:app --host 127.0.0.1 --port 8787 --workers 1 --proxy-headers --forwarded-allow-ips=127.0.0.1
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+ReadWritePaths=/var/lib/combo-service
+UMask=0027
+MemoryMax=512M
+TasksMax=128
+
+[Install]
+WantedBy=multi-user.target

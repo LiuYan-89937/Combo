@@ -1,6 +1,6 @@
 # ToolPackage 文件协议
 
-FastAgentFactory 使用“一目录一个工具”的 `tool_package.v1` 协议。内置工具、用户上传工具和后续在线创建工具共享同一份能力定义、发布、索引和执行网关；来源仅决定信任等级与运行隔离方式。
+Combo 使用“一目录一个工具”的 `tool_package.v1` 协议。内置工具、用户上传工具和后续在线创建工具共享同一份能力定义、发布、索引和执行网关；来源仅决定信任等级与运行隔离方式。
 
 ```text
 my-tool/
@@ -72,7 +72,7 @@ def run(arguments, context):
     return {"result": value, "workspace": workspace, "resources": resources}
 ```
 
-用户函数返回普通 JSON 对象即可。平台适配器负责封装内部执行信封，用户代码不依赖 FastAgentFactory 的内部协议。
+用户函数返回普通 JSON 对象即可。平台适配器负责封装内部执行信封，用户代码不依赖 Combo 的内部协议。
 
 `platform_resources` 与 `system_available` 是内置 ToolPackage 的受信字段。本地上传工具必须保持空值/`false`，通过 `context` 中的工作区和资源目录工作，不能把 Web 后端对象注入用户进程。
 

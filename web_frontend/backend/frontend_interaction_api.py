@@ -13,23 +13,23 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from agent_factory.dynamic_runtime.repositories import utc_now_text
-from agent_factory.dynamic_runtime.knowledge_search import KnowledgeRetrievalSettings
-from agent_factory.native_directory_picker import NativeDirectoryPicker, NativeDirectoryPickerUnavailableError
-from agent_factory.runtime_protocol import (
+from combo.dynamic_runtime.repositories import utc_now_text
+from combo.dynamic_runtime.knowledge_search import KnowledgeRetrievalSettings
+from combo.native_directory_picker import NativeDirectoryPicker, NativeDirectoryPickerUnavailableError
+from combo.runtime_protocol import (
     CommandEnvelope,
     CommandReceipt,
     RuntimeProtocolDescriptor,
     ToolCallRecord,
     UserRuntimePolicy,
 )
-from agent_factory.runtime_protocol.chat_parts import build_chat_turn_messages
-from agent_factory.workspace_directories import WorkspaceDirectoryBrowser
+from combo.runtime_protocol.chat_parts import build_chat_turn_messages
+from combo.workspace_directories import WorkspaceDirectoryBrowser
 from web_frontend.backend.frontend_event_bridge import project_runtime_event
 from web_frontend.backend.attachment_upload_store import AttachmentUploadError, attachment_upload_store
 
 
-SYSTEM_CHAT_PACKAGE_ID = "factory_chat"
+SYSTEM_CHAT_PACKAGE_ID = "main_chat"
 
 
 class FrontendCommandRequest(BaseModel):
@@ -143,15 +143,15 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
     @router.post("/api/commands")
     async def submit_frontend_command(
         body: FrontendCommandRequest,
-        x_agentfactory_principal: str = Header(alias="X-AgentFactory-Principal"),
-        x_agentfactory_client: str = Header(alias="X-AgentFactory-Client"),
-        x_agentfactory_timezone: str = Header(alias="X-AgentFactory-Timezone"),
+        x_combo_principal: str = Header(alias="X-Combo-Principal"),
+        x_combo_client: str = Header(alias="X-Combo-Client"),
+        x_combo_timezone: str = Header(alias="X-Combo-Timezone"),
     ) -> dict[str, Any]:
         command = body.command
         command_type = _required_text(command.get("type"), "command.type")
-        principal_id = _required_text(x_agentfactory_principal, "principal header")
-        client_id = _required_text(x_agentfactory_client, "client header")
-        timezone = _required_text(x_agentfactory_timezone, "timezone header")
+        principal_id = _required_text(x_combo_principal, "principal header")
+        client_id = _required_text(x_combo_client, "client header")
+        timezone = _required_text(x_combo_timezone, "timezone header")
         backend.application.stores.conversations.create_principal(principal_id)
 
         if command_type in {"send_message", "run_agent_package", "send_agent_package_message"}:
@@ -393,7 +393,7 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
     ) -> dict[str, Any]:
         principal_id = _principal(request)
         backend.application.stores.conversations.create_principal(principal_id)
-        timezone = _required_text(request.headers.get("X-AgentFactory-Timezone"), "timezone header")
+        timezone = _required_text(request.headers.get("X-Combo-Timezone"), "timezone header")
         current = _policy_or_none(backend, principal_id)
         if current is not None and payload.expected_revision != current.revision:
             raise HTTPException(status_code=409, detail="runtime policy revision conflict")
@@ -442,7 +442,7 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
         payload: BackgroundTaskSettingsWrite,
     ) -> dict[str, Any]:
         principal_id = _principal(request)
-        timezone = _required_text(request.headers.get("X-AgentFactory-Timezone"), "timezone header")
+        timezone = _required_text(request.headers.get("X-Combo-Timezone"), "timezone header")
         current = _policy_or_none(backend, principal_id)
         if current is None:
             policy = UserRuntimePolicy(
@@ -587,7 +587,6 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
         return {
             "bytes_used": bytes_used,
             "file_count": sum(_directory_file_count(Path(root)) for root in roots if root),
-            "factory_session_count": 0,
             "agent_session_count": len(sessions),
             "background_task_session_count": 0,
             "session_count": len(sessions),
@@ -882,7 +881,7 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
                 limit=max(1, limit),
             )
         else:
-            from agent_factory.dynamic_runtime.memory_store import MemorySearchResult
+            from combo.dynamic_runtime.memory_store import MemorySearchResult
             results = tuple(
                 MemorySearchResult(revision=item, score=1.0)
                 for item in store.list_active(
@@ -1099,7 +1098,7 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
         created = backend.application.stores.scheduler.create_job({
             **job,
             "workspace_id": workspace_id,
-            "timezone": str(job.get("timezone") or request.headers.get("X-AgentFactory-Timezone") or "UTC"),
+            "timezone": str(job.get("timezone") or request.headers.get("X-Combo-Timezone") or "UTC"),
         })
         return {"event": _event("scheduler_job_created", {"job": created})}
 
@@ -1206,8 +1205,8 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
     async def run_scheduler_job(
         request: Request,
         job_id: str,
-        x_agentfactory_client: str = Header(alias="X-AgentFactory-Client"),
-        x_agentfactory_timezone: str = Header(alias="X-AgentFactory-Timezone"),
+        x_combo_client: str = Header(alias="X-Combo-Client"),
+        x_combo_timezone: str = Header(alias="X-Combo-Timezone"),
     ) -> dict[str, Any]:
         principal_id = _principal(request)
         try:
@@ -1220,7 +1219,7 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
         workspace = backend.application.stores.conversations.require_workspace(workspace_id)
         if workspace.principal_id != principal_id:
             raise HTTPException(status_code=404, detail="scheduler workspace not found")
-        del x_agentfactory_client, x_agentfactory_timezone
+        del x_combo_client, x_combo_timezone
         run = backend.scheduler_service.launch(job_id, trigger_source="manual")
         return {"accepted": True, "command": {"type": "scheduler_run", "request_id": run["run_id"]}}
 
@@ -1367,7 +1366,7 @@ def _active_runtime_or_none(backend: Any, principal_id: str, command: dict[str, 
         ).fetchone()
     if row is None:
         return None
-    from agent_factory.runtime_protocol import RuntimeInstance
+    from combo.runtime_protocol import RuntimeInstance
     return RuntimeInstance.model_validate_json(str(row["payload_json"]))
 
 
@@ -1405,7 +1404,7 @@ def _runtime_cancel_target_or_none(backend: Any, principal_id: str, command: dic
         ).fetchone()
     if row is None:
         return None
-    from agent_factory.runtime_protocol import RuntimeInstance
+    from combo.runtime_protocol import RuntimeInstance
     return RuntimeInstance.model_validate_json(str(row["payload_json"]))
 
 
@@ -1527,7 +1526,7 @@ def _session_snapshot(backend: Any, principal_id: str, session_id: str) -> dict[
         tool_calls_by_turn[record.turn_id].append(record)
     turns = []
     for row in rows:
-        from agent_factory.runtime_protocol import ConversationTurn
+        from combo.runtime_protocol import ConversationTurn
         turn = ConversationTurn.model_validate_json(str(row["payload_json"]))
         frontend_request_id = turn.source_command_id or _frontend_request_for_runtime(
             backend,
@@ -1627,7 +1626,7 @@ def _session_current_plan(backend: Any, session_id: str) -> dict[str, Any] | Non
         ).fetchone()
     if row is None:
         return None
-    from agent_factory.runtime_protocol import RuntimeInstance
+    from combo.runtime_protocol import RuntimeInstance
     instance = RuntimeInstance.model_validate_json(str(row["payload_json"]))
     if instance.request.strategy != "plan_and_execute":
         return None
@@ -1703,7 +1702,7 @@ def _delegated_delivery_message_view(
         ).fetchone()
     if row is None:
         return None
-    from agent_factory.runtime_protocol import DelegatedTaskEvent
+    from combo.runtime_protocol import DelegatedTaskEvent
     event = DelegatedTaskEvent.model_validate_json(str(row["payload_json"]))
     if event.event_type not in {"result", "failed", "cancelled"}:
         return None
@@ -1945,7 +1944,7 @@ def _delegated_task_rows(
 
 
 def _delegated_task_row_view(backend: Any, row: Any) -> dict[str, Any]:
-    from agent_factory.runtime_protocol import DelegatedTaskEvent, RuntimeInstance, TaskEnvelope
+    from combo.runtime_protocol import DelegatedTaskEvent, RuntimeInstance, TaskEnvelope
 
     task = TaskEnvelope.model_validate_json(str(row["task_json"]))
     child_runtime = RuntimeInstance.model_validate_json(str(row["runtime_json"]))
@@ -2414,7 +2413,7 @@ def _event(
 
 
 def _principal(request: Request) -> str:
-    return _required_text(request.headers.get("X-AgentFactory-Principal"), "principal header")
+    return _required_text(request.headers.get("X-Combo-Principal"), "principal header")
 
 
 def _knowledge_source_payload(value: Any) -> dict[str, Any]:

@@ -14,7 +14,7 @@ resources/python/lib/python3.11/site-packages/*/*/tests/
 
 # 排除开发时不需要的文件
 ../web_frontend/frontend/node_modules/
-../.agentfactory/mcp/web_search/.git/
+../.combo/mcp/web_search/.git/
 *.pyc
 __pycache__/
 .pytest_cache/

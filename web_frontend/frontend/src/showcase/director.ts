@@ -12,7 +12,7 @@ import {
 } from './fakeServer'
 
 const BASE_TIME = '2026-07-29T02:20:00.000Z'
-const CHAT_PACKAGE_ID = 'factory_chat'
+const CHAT_PACKAGE_ID = 'main_chat'
 const showcaseCopy = {
   'zh-CN': {
     prompt: '请分工完成东京五日亲子旅行手册，并给出可直接执行的最终版本。',
@@ -89,7 +89,7 @@ export function useShowcaseDirector() {
     await showcaseRouter.replace({
       name: 'ChatNew',
     })
-    await waitForView('.factory-view')
+    await waitForView('.conversation-view')
     agentStore.enterAgentChat(CHAT_PACKAGE_ID, null)
     runtimeStore.showEmptyAgentPackageSession(CHAT_PACKAGE_ID)
     resetConversation()

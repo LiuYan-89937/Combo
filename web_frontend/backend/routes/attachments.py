@@ -14,7 +14,7 @@ def create_attachment_router() -> APIRouter:
     @router.post("")
     async def upload_attachment(
         file: UploadFile = File(...),
-        principal_id: str = Header(alias="X-AgentFactory-Principal"),
+        principal_id: str = Header(alias="X-Combo-Principal"),
     ) -> dict:
         try:
             staged = await attachment_upload_store().stage(file, principal_id=principal_id)

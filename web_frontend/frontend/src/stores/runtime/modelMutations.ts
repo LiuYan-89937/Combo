@@ -1,4 +1,4 @@
-import type { FactoryFrontendEvent, RuntimeViewState } from '@/types/protocol'
+import type { RuntimeFrontendEvent, RuntimeViewState } from '@/types/protocol'
 import { isBackgroundEvent } from './eventUtils'
 
 type ModelMutationState = Pick<
@@ -12,7 +12,7 @@ type ModelMutationState = Pick<
   | 'transcript'
 >
 
-export function applyModelCallStarted(state: ModelMutationState, event: FactoryFrontendEvent) {
+export function applyModelCallStarted(state: ModelMutationState, event: RuntimeFrontendEvent) {
   if (isBackgroundEvent(event, state.activeRequestId)) return
   if (isStoppingRequestEvent(state, event)) return
   const streamId = event.payload?.stream_id
@@ -32,7 +32,7 @@ export function applyModelCallStarted(state: ModelMutationState, event: FactoryF
   }
 }
 
-export function applyModelReasoningDelta(state: ModelMutationState, event: FactoryFrontendEvent) {
+export function applyModelReasoningDelta(state: ModelMutationState, event: RuntimeFrontendEvent) {
   if (isBackgroundEvent(event, state.activeRequestId)) return
   if (isStoppingRequestEvent(state, event)) return
   const streamId = event.payload?.stream_id
@@ -50,7 +50,7 @@ export function applyModelReasoningDelta(state: ModelMutationState, event: Facto
   stream.reasoningCompletedAt = null
 }
 
-export function applyModelReasoningCompleted(state: ModelMutationState, event: FactoryFrontendEvent) {
+export function applyModelReasoningCompleted(state: ModelMutationState, event: RuntimeFrontendEvent) {
   if (isBackgroundEvent(event, state.activeRequestId)) return
   if (isStoppingRequestEvent(state, event)) return
   const streamId = event.payload?.stream_id
@@ -69,7 +69,7 @@ export function applyModelReasoningCompleted(state: ModelMutationState, event: F
   stream.reasoningCompletedAt = event.timestamp
 }
 
-export function applyModelStreamDelta(state: ModelMutationState, event: FactoryFrontendEvent) {
+export function applyModelStreamDelta(state: ModelMutationState, event: RuntimeFrontendEvent) {
   if (isBackgroundEvent(event, state.activeRequestId)) return
   if (isStoppingRequestEvent(state, event)) return
   const streamId = event.payload?.stream_id
@@ -85,7 +85,7 @@ export function applyModelStreamDelta(state: ModelMutationState, event: FactoryF
   target.content += String(delta)
 }
 
-export function applyModelMessageCompleted(state: ModelMutationState, event: FactoryFrontendEvent) {
+export function applyModelMessageCompleted(state: ModelMutationState, event: RuntimeFrontendEvent) {
   if (isBackgroundEvent(event, state.activeRequestId)) return
   if (isStoppingRequestEvent(state, event)) return
   const streamId = event.payload?.stream_id
@@ -127,7 +127,7 @@ export function applyModelMessageCompleted(state: ModelMutationState, event: Fac
 
 }
 
-function isStoppingRequestEvent(state: ModelMutationState, event: FactoryFrontendEvent): boolean {
+function isStoppingRequestEvent(state: ModelMutationState, event: RuntimeFrontendEvent): boolean {
   const requestId = event.request_id
   if (!requestId) return false
   return Boolean(state.activeRequests[requestId]?.payload?.stop_requested_at)
@@ -136,7 +136,7 @@ function isStoppingRequestEvent(state: ModelMutationState, event: FactoryFronten
 function ensureModelStream(
   state: ModelMutationState,
   streamId: string,
-  event: FactoryFrontendEvent,
+  event: RuntimeFrontendEvent,
   visibleToUser: boolean,
 ) {
   if (!state.modelStreams[streamId]) {
@@ -166,7 +166,7 @@ function ensureModelStream(
 function markModelStreamDiscarded(
   state: ModelMutationState,
   streamId: string,
-  event: FactoryFrontendEvent,
+  event: RuntimeFrontendEvent,
 ) {
   const stream = ensureModelStream(state, streamId, event, false)
   stream.content = ''

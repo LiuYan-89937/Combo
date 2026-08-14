@@ -9,8 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 import json
 
-from agent_factory.env import load_agentfactory_dotenv
-from agent_factory.runtime_protocol import RuntimeProtocolDescriptor
+from combo.runtime_protocol import RuntimeProtocolDescriptor
 from web_frontend.backend.dynamic_runtime_api import (
     DynamicRuntimeApiConfig,
     RequestPrincipalResolver,
@@ -27,14 +26,13 @@ from web_frontend.backend.routes.attachments import create_attachment_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-load_agentfactory_dotenv()
 
 
 class HeaderPrincipalResolver(RequestPrincipalResolver):
     """Require the authenticated loopback client to name its stable principal."""
 
     def resolve(self, request: Request) -> str:
-        principal_id = str(request.headers.get("X-AgentFactory-Principal") or "").strip()
+        principal_id = str(request.headers.get("X-Combo-Principal") or "").strip()
         if not principal_id:
             raise HTTPException(status_code=401, detail="runtime principal header is required")
         return principal_id
@@ -70,7 +68,6 @@ def create_app(config: RuntimeBackendConfig | None = None) -> FastAPI:
         return {
             "status": "ready",
             "protocol": descriptor.model_dump(mode="json"),
-            "generation": backend.application.generation.generation,
         }
 
     @application.get("/events")
@@ -85,7 +82,7 @@ def create_app(config: RuntimeBackendConfig | None = None) -> FastAPI:
                     try:
                         event = await asyncio.wait_for(subscription.queue.get(), timeout=15.0)
                     except asyncio.TimeoutError:
-                        yield "event: factory_frontend_heartbeat\ndata: {}\n\n"
+                        yield "event: combo_frontend_heartbeat\ndata: {}\n\n"
                         continue
                     yield _frontend_sse(event)
             finally:
@@ -100,13 +97,12 @@ def create_app(config: RuntimeBackendConfig | None = None) -> FastAPI:
         allow_headers=[
             "Content-Type",
             "Last-Event-ID",
-            "X-AgentFactory-Build",
-            "X-AgentFactory-Client",
-            "X-AgentFactory-Generation",
-            "X-AgentFactory-Principal",
-            "X-AgentFactory-Protocol",
-            "X-AgentFactory-Schema",
-            "X-AgentFactory-Timezone",
+            "X-Combo-Build",
+            "X-Combo-Client",
+            "X-Combo-Principal",
+            "X-Combo-Protocol",
+            "X-Combo-Schema",
+            "X-Combo-Timezone",
         ],
     )
     application.include_router(
@@ -144,7 +140,7 @@ app = create_app()
 
 def _frontend_sse(event: dict[str, object]) -> str:
     payload = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
-    return f"id: {event['event_id']}\nevent: factory_frontend_event\ndata: {payload}\n\n"
+    return f"id: {event['event_id']}\nevent: combo_frontend_event\ndata: {payload}\n\n"
 
 
 if __name__ == "__main__":

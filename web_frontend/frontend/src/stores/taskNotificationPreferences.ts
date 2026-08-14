@@ -8,7 +8,7 @@ interface StoredTaskNotificationPreferences {
   categories: Record<TaskNotificationCategory, boolean>
 }
 
-const STORAGE_KEY = 'fast-agent-factory.taskNotifications'
+const STORAGE_KEY = 'combo.taskNotifications'
 
 const DEFAULT_PREFERENCES: StoredTaskNotificationPreferences = {
   enabled: true,

@@ -29,7 +29,7 @@ import { useRouter } from 'vue-router'
 import { modelPoolApi } from '@/api/modelPool'
 import { useI18n } from '@/composables/useI18n'
 
-const DISMISSAL_KEY = 'agentfactory.embedding-setup-reminder.v1'
+const DISMISSAL_KEY = 'combo.embedding-setup-reminder.v1'
 const router = useRouter()
 const { t } = useI18n()
 const visible = ref(false)

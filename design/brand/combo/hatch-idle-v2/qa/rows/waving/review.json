@@ -1,6 +1,6 @@
 {
   "ok": true,
-  "frames_root": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/qa/rows/waving/frames",
+  "frames_root": "/Users/admin/Desktop/Combo/design/brand/combo/hatch-idle-v2/qa/rows/waving/frames",
   "states": [
     "waving"
   ],
@@ -18,7 +18,7 @@
       "frames": [
         {
           "index": 0,
-          "file": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/qa/rows/waving/frames/waving/00.png",
+          "file": "/Users/admin/Desktop/Combo/design/brand/combo/hatch-idle-v2/qa/rows/waving/frames/waving/00.png",
           "width": 192,
           "height": 208,
           "nontransparent_pixels": 16717,
@@ -33,7 +33,7 @@
         },
         {
           "index": 1,
-          "file": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/qa/rows/waving/frames/waving/01.png",
+          "file": "/Users/admin/Desktop/Combo/design/brand/combo/hatch-idle-v2/qa/rows/waving/frames/waving/01.png",
           "width": 192,
           "height": 208,
           "nontransparent_pixels": 17088,
@@ -48,7 +48,7 @@
         },
         {
           "index": 2,
-          "file": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/qa/rows/waving/frames/waving/02.png",
+          "file": "/Users/admin/Desktop/Combo/design/brand/combo/hatch-idle-v2/qa/rows/waving/frames/waving/02.png",
           "width": 192,
           "height": 208,
           "nontransparent_pixels": 15543,
@@ -63,7 +63,7 @@
         },
         {
           "index": 3,
-          "file": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/qa/rows/waving/frames/waving/03.png",
+          "file": "/Users/admin/Desktop/Combo/design/brand/combo/hatch-idle-v2/qa/rows/waving/frames/waving/03.png",
           "width": 192,
           "height": 208,
           "nontransparent_pixels": 16623,

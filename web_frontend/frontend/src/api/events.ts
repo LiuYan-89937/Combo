@@ -1,11 +1,11 @@
-import type { FactoryFrontendEvent } from '@/types/protocol'
+import type { RuntimeFrontendEvent } from '@/types/protocol'
 import { runtimePrincipalId } from './runtimeIdentity'
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error' | 'reconnecting'
 
 export interface EventStreamConfig {
   url: string
-  onEvent: (event: FactoryFrontendEvent) => void
+  onEvent: (event: RuntimeFrontendEvent) => void
   onStatusChange: (status: ConnectionStatus) => void
   onError: (error: Error) => void
 }
@@ -85,8 +85,8 @@ export class EventStreamClient {
       const source = new EventSource(url)
       this.source = source
       source.addEventListener('open', this.handleOpen)
-      source.addEventListener('factory_frontend_event', this.handleMessage)
-      source.addEventListener('factory_frontend_heartbeat', this.handleHeartbeat)
+      source.addEventListener('combo_frontend_event', this.handleMessage)
+      source.addEventListener('combo_frontend_heartbeat', this.handleHeartbeat)
       source.addEventListener('message', this.handleMessage)
       source.addEventListener('error', this.handleError)
     } catch (error) {
@@ -106,15 +106,15 @@ export class EventStreamClient {
     this.markActivity()
     try {
       const data = JSON.parse(event.data)
-      const factoryEvent = data.kind === 'factory_frontend_event' ? data.event : data
-      if (!factoryEvent?.event_id) return
-      if (this.seenEventIds.has(factoryEvent.event_id)) return
-      this.seenEventIds.add(factoryEvent.event_id)
+      const runtimeEvent = data.kind === 'combo_frontend_event' ? data.event : data
+      if (!runtimeEvent?.event_id) return
+      if (this.seenEventIds.has(runtimeEvent.event_id)) return
+      this.seenEventIds.add(runtimeEvent.event_id)
       if (this.seenEventIds.size > 10000) {
         const firstId = this.seenEventIds.values().next().value
         if (firstId !== undefined) this.seenEventIds.delete(firstId)
       }
-      this.config.onEvent(factoryEvent as FactoryFrontendEvent)
+      this.config.onEvent(runtimeEvent as RuntimeFrontendEvent)
     } catch (error) {
       this.config.onError(error as Error)
     }
@@ -150,8 +150,8 @@ export class EventStreamClient {
     if (!source) return
     this.source = null
     source.removeEventListener('open', this.handleOpen)
-    source.removeEventListener('factory_frontend_event', this.handleMessage)
-    source.removeEventListener('factory_frontend_heartbeat', this.handleHeartbeat)
+    source.removeEventListener('combo_frontend_event', this.handleMessage)
+    source.removeEventListener('combo_frontend_heartbeat', this.handleHeartbeat)
     source.removeEventListener('message', this.handleMessage)
     source.removeEventListener('error', this.handleError)
     source.close()

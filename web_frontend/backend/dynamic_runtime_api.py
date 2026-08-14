@@ -14,13 +14,13 @@ from fastapi import APIRouter, File, Form, Header, HTTPException, Request, Uploa
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from agent_factory.dynamic_runtime import (
+from combo.dynamic_runtime import (
     DynamicRuntimeApplication,
     DynamicRuntimeSupervisor,
     RuntimeEventBroadcaster,
 )
-from agent_factory.dynamic_runtime.repositories import utc_now_text
-from agent_factory.runtime_protocol import (
+from combo.dynamic_runtime.repositories import utc_now_text
+from combo.runtime_protocol import (
     CommandEnvelope,
     CommandReceipt,
     RuntimeProtocolDescriptor,
@@ -694,7 +694,7 @@ def create_dynamic_runtime_router(
         try:
             paths = _folder_upload_paths(relative_paths, expected_count=len(files), capability="Skill")
             normalized_root = _portable_folder_root_name(root_name, capability="Skill")
-            with tempfile.TemporaryDirectory(prefix="agentfactory-skill-upload-") as temporary:
+            with tempfile.TemporaryDirectory(prefix="combo-skill-upload-") as temporary:
                 source = Path(temporary) / normalized_root
                 source.mkdir()
                 total_bytes = 0
@@ -724,7 +724,7 @@ def create_dynamic_runtime_router(
         files: list[UploadFile] = File(...),
     ) -> StreamingResponse:
         principal_resolver.resolve(request)
-        temporary = Path(tempfile.mkdtemp(prefix="agentfactory-tool-upload-"))
+        temporary = Path(tempfile.mkdtemp(prefix="combo-tool-upload-"))
         try:
             paths = _folder_upload_paths(relative_paths, expected_count=len(files), capability="ToolPackage")
             normalized_root = _portable_folder_root_name(root_name, capability="ToolPackage")
@@ -768,7 +768,7 @@ def create_dynamic_runtime_router(
         principal_resolver.resolve(request)
         try:
             payload = ToolPackageCreateRequest.model_validate_json(specification)
-            with tempfile.TemporaryDirectory(prefix="agentfactory-tool-main-") as temporary:
+            with tempfile.TemporaryDirectory(prefix="combo-tool-main-") as temporary:
                 destination = Path(temporary) / "main.py"
                 await _write_bounded_upload(
                     main_file,
@@ -1124,7 +1124,6 @@ def create_dynamic_runtime_router(
             status="accepted" if accepted else "incompatible",
             server=server,
             client_instance_id=payload.client_instance_id,
-            generation=application.generation.generation,
             error_code=None if accepted else "runtime_protocol_mismatch",
         )
 
@@ -1188,22 +1187,20 @@ def create_dynamic_runtime_router(
     async def submit_command(
         request: Request,
         envelope: CommandEnvelope,
-        x_agentfactory_protocol: str = Header(alias="X-AgentFactory-Protocol"),
-        x_agentfactory_schema: str = Header(alias="X-AgentFactory-Schema"),
-        x_agentfactory_build: str = Header(alias="X-AgentFactory-Build"),
-        x_agentfactory_generation: int = Header(alias="X-AgentFactory-Generation"),
+        x_combo_protocol: str = Header(alias="X-Combo-Protocol"),
+        x_combo_schema: str = Header(alias="X-Combo-Schema"),
+        x_combo_build: str = Header(alias="X-Combo-Build"),
     ) -> CommandReceipt:
         _require_compatible_headers(
             application,
-            protocol_version=x_agentfactory_protocol,
-            schema_version=x_agentfactory_schema,
-            build_revision=x_agentfactory_build,
-            generation=x_agentfactory_generation,
+            protocol_version=x_combo_protocol,
+            schema_version=x_combo_schema,
+            build_revision=x_combo_build,
         )
         principal_id = principal_resolver.resolve(request)
         if envelope.principal_id != principal_id:
             raise HTTPException(status_code=403, detail="command principal does not match authenticated principal")
-        if envelope.protocol_version != x_agentfactory_protocol:
+        if envelope.protocol_version != x_combo_protocol:
             raise HTTPException(status_code=409, detail="runtime_protocol_mismatch")
         identity = application.stores.conversations.require_identity(envelope.session_id)
         if identity.principal_id != principal_id:
@@ -1447,7 +1444,6 @@ def _require_compatible_headers(
     protocol_version: str,
     schema_version: str,
     build_revision: str,
-    generation: int,
 ) -> None:
     descriptor = _server_descriptor(application)
     if (
@@ -1456,8 +1452,6 @@ def _require_compatible_headers(
         or build_revision != descriptor.build_revision
     ):
         raise HTTPException(status_code=409, detail="runtime_protocol_mismatch")
-    if generation != application.generation.generation:
-        raise HTTPException(status_code=409, detail="application_generation_changed")
 
 
 def _sse_event(event_id: str, payload: dict[str, object]) -> str:

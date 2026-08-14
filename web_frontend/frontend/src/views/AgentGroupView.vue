@@ -109,7 +109,7 @@ import { useAgentGroupStore } from '@/stores/agentGroup'
 import MessageInput from '@/components/chat/MessageInput.vue'
 import MessageItem from '@/components/chat/MessageItem.vue'
 import ToolApprovalPanel from '@/components/chat/ToolApprovalPanel.vue'
-import type { FactoryFrontendEvent, RuntimeAttachmentInput, TranscriptItem } from '@/types/protocol'
+import type { RuntimeFrontendEvent, RuntimeAttachmentInput, TranscriptItem } from '@/types/protocol'
 import { useContextReferenceStore } from '@/stores/contextReferences'
 import { messageContextReference } from '@/utils/contextReferences'
 
@@ -202,7 +202,7 @@ function compactText(value: string): string {
   return text.length > 120 ? `${text.slice(0, 120)}...` : text
 }
 
-async function resolveApproval(event: FactoryFrontendEvent, payload: Record<string, unknown>) {
+async function resolveApproval(event: RuntimeFrontendEvent, payload: Record<string, unknown>) {
   const runId = String(event.payload?.group_run_id || '').trim()
   if (runId) await store.resumeRun(runId, payload)
 }

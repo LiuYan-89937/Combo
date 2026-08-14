@@ -1,10 +1,10 @@
 import type { ResumeInterruptOptions } from '@/api/commands'
-import type { ActiveRequestView, FactoryFrontendEvent, FactoryMode } from '@/types/protocol'
+import type { ActiveRequestView, RuntimeFrontendEvent, RuntimeMode } from '@/types/protocol'
 
 interface InterruptContextState {
   activeRequests: Record<string, ActiveRequestView>
-  currentMode: FactoryMode | null
-  pendingInterrupt: FactoryFrontendEvent | null
+  currentMode: RuntimeMode | null
+  pendingInterrupt: RuntimeFrontendEvent | null
 }
 
 export function withPendingInterruptContext(

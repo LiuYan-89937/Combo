@@ -5,7 +5,7 @@
  * 这里保持两者一致，避免“后端返回了但页面读不到”的状态分叉。
  */
 
-import type { FactoryFrontendEvent } from '@/types/protocol'
+import type { RuntimeFrontendEvent } from '@/types/protocol'
 import { useAgentStore } from './agent'
 import { useExtensionStore } from './extension'
 import { useKnowledgeStore } from './knowledge'
@@ -16,11 +16,11 @@ import { useWorkspaceStore } from './workspace'
 import { SYSTEM_CHAT_PACKAGE_ID, normalizeResourcePackageId } from '@/utils/resourceScope'
 import {
   isStandaloneAgentSession,
-  isStandaloneFactorySession,
+  isStandaloneMainSession,
 } from '@/utils/sessionPresentation'
 import { sessionDeletionFromPayload } from './runtime/sessionDeletion'
 
-export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
+export function syncDomainStoresFromRuntime(event: RuntimeFrontendEvent): void {
   const runtimeStore = useRuntimeStore()
   if (event.event_type === 'agent_package_selected' && !runtimeStore.ownsAgentPackageSelection(event)) {
     return
@@ -43,12 +43,12 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
   ) {
     const sessionStore = useSessionStore()
     sessionStore.setSessions(runtimeStore.sessions as any)
-    const activeFactorySessionId = runtimeStore.activeFactorySessionId
-    const activeFactorySession = runtimeStore.sessions.find((session: any) => (
-      session.session_id === activeFactorySessionId && isStandaloneFactorySession(session)
+    const activeMainSessionId = runtimeStore.activeMainSessionId
+    const activeMainSession = runtimeStore.sessions.find((session: any) => (
+      session.session_id === activeMainSessionId && isStandaloneMainSession(session)
     ))
-    if (activeFactorySession || event.event_type === 'session_deleted' || event.event_type === 'session_empty') {
-      sessionStore.setCurrentSession(activeFactorySession ? activeFactorySessionId : null)
+    if (activeMainSession || event.event_type === 'session_deleted' || event.event_type === 'session_empty') {
+      sessionStore.setCurrentSession(activeMainSession ? activeMainSessionId : null)
     }
     if (event.event_type === 'session_deleted') {
       useAgentStore().removeRecentSessionsForPackage(SYSTEM_CHAT_PACKAGE_ID)
@@ -221,7 +221,7 @@ export function syncDomainStoresFromRuntime(event: FactoryFrontendEvent): void {
   }
 }
 
-function resourceEventMatchesCurrentContext(event: FactoryFrontendEvent): boolean {
+function resourceEventMatchesCurrentContext(event: RuntimeFrontendEvent): boolean {
   return resourceEventPackageId(event) === currentResourcePackageId()
 }
 
@@ -233,7 +233,7 @@ function currentResourcePackageId(): string | null {
   return normalizeResourcePackageId(SYSTEM_CHAT_PACKAGE_ID)
 }
 
-function resourceEventPackageId(event: FactoryFrontendEvent): string | null {
+function resourceEventPackageId(event: RuntimeFrontendEvent): string | null {
   const payload = event.payload || {}
   const nested = payload.payload && typeof payload.payload === 'object' ? payload.payload : {}
   const execution = nested.execution && typeof nested.execution === 'object' ? nested.execution : {}

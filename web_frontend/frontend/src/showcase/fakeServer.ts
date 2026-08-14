@@ -76,7 +76,7 @@ const modelProfile = {
   kind: 'chat',
   provider: 'openai_compatible',
   credential_id: 'showcase',
-  model_name: 'fastagent-main',
+  model_name: 'combo-main',
   enabled: true,
   capabilities: {
     input_modalities: ['text', 'image'],
@@ -313,7 +313,7 @@ function eventResponse(eventType: string, payload: Record<string, any>): Respons
   return jsonResponse({
     event: {
       event_id: crypto.randomUUID(),
-      protocol_version: 'factory_frontend.v1',
+      protocol_version: 'combo_frontend.v1',
       event_type: eventType,
       producer_type: 'showcase',
       request_id: null,

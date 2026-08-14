@@ -9,7 +9,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
-from agent_factory.tooling.builtins.browser.runtime import BrowserRuntime
+from combo.tooling.builtins.browser.runtime import BrowserRuntime
 
 
 def create_browser_view_router(logger: logging.Logger, runtime: BrowserRuntime) -> APIRouter:

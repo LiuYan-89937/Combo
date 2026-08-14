@@ -1,7 +1,7 @@
 .env
 .DS_Store
 .idea/
-.agentfactory/
+.combo/
 .agent_runtime/
 environment.lock.json
 .venv/

@@ -53,19 +53,19 @@ Combo 以一条统一主对话链为产品入口。每次请求从模型池解�
 
 ```text
 macOS:
-~/Library/Application Support/top.liuyanai.combo/.agentfactory/
+~/Library/Application Support/top.liuyanai.combo/.combo/
 
 Windows:
-%LOCALAPPDATA%\top.liuyanai.combo\.agentfactory\
+%LOCALAPPDATA%\top.liuyanai.combo\.combo\
 ```
 
 后端日志位于：
 
 ```text
-<应用数据目录>/.agentfactory/logs/backend.log
+<应用数据目录>/.combo/logs/backend.log
 ```
 
-Combo 使用独立的应用数据目录，不读取或迁移旧 FastAgentFactory 安装目录中的数据。重新安装或升级 Combo 不会主动删除其已有会话、运行记录、模型配置或工作区。主动清理 Combo 应用数据前应先备份需要保留的内容。
+Combo 使用独立的应用数据目录，不读取或迁移旧 Combo 安装目录中的数据。重新安装或升级 Combo 不会主动删除其已有会话、运行记录、模型配置或工作区。主动清理 Combo 应用数据前应先备份需要保留的内容。
 
 ## 架构
 
@@ -128,7 +128,7 @@ cargo tauri dev
 ./scripts/package_macos.sh
 ```
 
-更新签名私钥默认读取自 `~/.fastagentfactory/updater/fastagentfactory.key`。该文件不得提交到仓库，也不能在不同平台构建中使用不一致的密钥。
+更新签名私钥默认读取自 `~/.combo/updater/combo.key`。该文件不得提交到仓库，也不能在不同平台构建中使用不一致的密钥。
 
 ### Windows
 
@@ -142,17 +142,17 @@ Windows 脚本生成 x64 NSIS 安装包。完整构建日志位于 `build/logs/w
 
 ```text
 Combo/
-├── agent_factory/          Python 动态运行时与固定执行图
+├── combo/          Python 动态运行时与固定执行图
 ├── web_frontend/
 │   ├── backend/            FastAPI 应用装配与 HTTP API
 │   └── frontend/           Vue 统一对话与控制面
 ├── src-tauri/              Tauri/Rust 桌面进程
-├── services/agent_hub/     官网、OAuth 与桌面版本发布服务
+├── services/combo_service/     官网、OAuth 与桌面版本发布服务
 ├── docs/                   架构和重构规范
 └── scripts/                审计与桌面构建脚本
 ```
 
-`services/agent_hub` 只负责官网、GitHub OAuth、桌面版本、更新日志和安装包分发，不保存或分发运行时能力。
+`services/combo_service` 只负责官网、GitHub OAuth、桌面版本、更新日志和安装包分发，不保存或分发运行时能力。
 
 ## 安全提示
 

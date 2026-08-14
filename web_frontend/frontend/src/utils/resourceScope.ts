@@ -1,4 +1,4 @@
-export const SYSTEM_CHAT_PACKAGE_ID = 'factory_chat'
+export const SYSTEM_CHAT_PACKAGE_ID = 'main_chat'
 
 export function normalizeResourcePackageId(value: unknown): string | null {
   const normalized = String(value || '').trim()

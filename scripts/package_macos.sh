@@ -9,7 +9,7 @@ TAURI_DIR="${PROJECT_ROOT}/src-tauri"
 CONFIG_PATH="${TAURI_DIR}/tauri.conf.json"
 PYTHON_RUNTIME="${TAURI_DIR}/resources/python/bin/python3"
 FRONTEND_DIR="${PROJECT_ROOT}/web_frontend/frontend"
-DEFAULT_UPDATER_KEY="${HOME}/.fastagentfactory/updater/fastagentfactory.key"
+DEFAULT_UPDATER_KEY="${HOME}/.combo/updater/combo.key"
 
 fail() {
     echo "ERROR: $*" >&2
@@ -127,7 +127,7 @@ fi
 
 DMG_DIR="${TAURI_DIR}/target/release/bundle/dmg"
 DMG_PATH="${DMG_DIR}/${PRODUCT_NAME}_${PRODUCT_VERSION}_${DMG_ARCH}.dmg"
-STAGING_DIR="$(mktemp -d "${TMPDIR:-/tmp}/fastagentfactory-dmg.XXXXXX")"
+STAGING_DIR="$(mktemp -d "${TMPDIR:-/tmp}/combo-dmg.XXXXXX")"
 
 cleanup() {
     rm -rf "${STAGING_DIR}"

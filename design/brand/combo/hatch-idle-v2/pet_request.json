@@ -248,13 +248,13 @@
   ],
   "references": [
     {
-      "path": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/references/reference-01.png",
+      "path": "/Users/admin/Desktop/Combo/design/brand/combo/hatch-idle-v2/references/reference-01.png",
       "width": 1402,
       "height": 1122,
       "mode": "RGB",
       "format": "PNG",
-      "source_path": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/mascot-prototype.png",
-      "copied_path": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/references/reference-01.png"
+      "source_path": "/Users/admin/Desktop/Combo/design/brand/combo/mascot-prototype.png",
+      "copied_path": "/Users/admin/Desktop/Combo/design/brand/combo/hatch-idle-v2/references/reference-01.png"
     }
   ],
   "chroma_key": {

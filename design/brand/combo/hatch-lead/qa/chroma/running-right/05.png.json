@@ -1,7 +1,7 @@
 {
   "ok": true,
-  "input": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-lead/qa/rows/running-right/frames/running-right/05.png",
-  "output": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-lead/qa/clean-frames/running-right/05.png",
+  "input": "/Users/admin/Desktop/Combo/design/brand/combo/hatch-lead/qa/rows/running-right/frames/running-right/05.png",
+  "output": "/Users/admin/Desktop/Combo/design/brand/combo/hatch-lead/qa/clean-frames/running-right/05.png",
   "chroma_key": "#00FF00",
   "algorithm": "edge-local-chroma-spill-suppression",
   "strength": 1,

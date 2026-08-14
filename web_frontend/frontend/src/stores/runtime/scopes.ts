@@ -1,4 +1,4 @@
-import type { FactoryFrontendEvent, FactoryMode } from '@/types/protocol'
+import type { RuntimeFrontendEvent, RuntimeMode } from '@/types/protocol'
 
 export interface AgentPackageScopeInfo {
   packageId: string
@@ -40,7 +40,7 @@ export function isMoreSpecificConversationScope(
   return currentParts.slice(0, -1).join(':') === nextParts.slice(0, -1).join(':')
 }
 
-export function scopeFromEventPayload(event: FactoryFrontendEvent): string | null {
+export function scopeFromEventPayload(event: RuntimeFrontendEvent): string | null {
   if (event.mode === 'agent_package') {
     const agentSession = event.payload?.agent_session && typeof event.payload.agent_session === 'object'
       ? event.payload.agent_session
@@ -67,7 +67,7 @@ export function scopeFromEventPayload(event: FactoryFrontendEvent): string | nul
   })
 }
 
-export function agentPackageScopeInfoFromEvent(event: FactoryFrontendEvent): AgentPackageScopeInfo | null {
+export function agentPackageScopeInfoFromEvent(event: RuntimeFrontendEvent): AgentPackageScopeInfo | null {
   if (event.mode !== 'agent_package') return null
   const agentSession = event.payload?.agent_session && typeof event.payload.agent_session === 'object'
     ? event.payload.agent_session
@@ -93,7 +93,7 @@ export function agentPackageScopeInfoFromEvent(event: FactoryFrontendEvent): Age
 }
 
 export function scopeFromRequestPayload(
-  mode: FactoryMode | null,
+  mode: RuntimeMode | null,
   payload: Record<string, any>,
 ): string | null {
   if (mode !== 'agent_package') {
@@ -106,7 +106,7 @@ export function scopeFromRequestPayload(
 
 export function scopeFromMessageMetadata(
   metadata: Record<string, any>,
-  currentMode: FactoryMode | null,
+  currentMode: RuntimeMode | null,
 ): string | null {
   const mode = String(metadata.mode || currentMode || '')
   if (mode === 'agent_package') {

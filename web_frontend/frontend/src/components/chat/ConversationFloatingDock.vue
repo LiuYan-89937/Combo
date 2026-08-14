@@ -177,7 +177,7 @@ function loadPositions(): Record<FloatingItemId, DockPosition> {
   const defaults = defaultPositions()
   if (typeof window === 'undefined') return defaults
   try {
-    const value = JSON.parse(window.localStorage.getItem('fast-agent-factory.floatingDockPositions') || '{}')
+    const value = JSON.parse(window.localStorage.getItem('combo.floatingDockPositions') || '{}')
     for (const id of Object.keys(defaults) as FloatingItemId[]) {
       const candidate = value?.[id]
       if ((candidate?.side === 'left' || candidate?.side === 'right') && Number.isFinite(candidate?.y)) {
@@ -191,7 +191,7 @@ function loadPositions(): Record<FloatingItemId, DockPosition> {
 }
 
 function savePositions() {
-  window.localStorage.setItem('fast-agent-factory.floatingDockPositions', JSON.stringify(positions.value))
+  window.localStorage.setItem('combo.floatingDockPositions', JSON.stringify(positions.value))
 }
 
 function position(id: FloatingItemId): DockPosition {

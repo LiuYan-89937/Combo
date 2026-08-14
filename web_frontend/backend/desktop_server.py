@@ -7,7 +7,7 @@ import uvicorn
 from web_frontend.backend.parent_process_watchdog import start_parent_process_watchdog
 
 
-PORT_ENVIRONMENT_VARIABLE = "AGENTFACTORY_PORT"
+PORT_ENVIRONMENT_VARIABLE = "COMBO_PORT"
 
 
 def main() -> None:

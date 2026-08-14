@@ -1,8 +1,8 @@
-import type { FactoryFrontendEvent, RuntimeViewState } from '@/types/protocol'
+import type { RuntimeFrontendEvent, RuntimeViewState } from '@/types/protocol'
 
 type GraphMutationState = Pick<RuntimeViewState, 'nodes' | 'stages'>
 
-export function applyStageStarted(state: GraphMutationState, event: FactoryFrontendEvent) {
+export function applyStageStarted(state: GraphMutationState, event: RuntimeFrontendEvent) {
   const stageId = event.stage_id
   if (!stageId) return
 
@@ -18,7 +18,7 @@ export function applyStageStarted(state: GraphMutationState, event: FactoryFront
   }
 }
 
-export function applyStageCompleted(state: GraphMutationState, event: FactoryFrontendEvent) {
+export function applyStageCompleted(state: GraphMutationState, event: RuntimeFrontendEvent) {
   const stageId = event.stage_id
   if (!stageId || !state.stages[stageId]) return
 
@@ -28,7 +28,7 @@ export function applyStageCompleted(state: GraphMutationState, event: FactoryFro
   state.stages[stageId].lastMessage = event.message || null
 }
 
-export function applyStageFailed(state: GraphMutationState, event: FactoryFrontendEvent) {
+export function applyStageFailed(state: GraphMutationState, event: RuntimeFrontendEvent) {
   const stageId = event.stage_id
   if (!stageId || !state.stages[stageId]) return
 
@@ -38,7 +38,7 @@ export function applyStageFailed(state: GraphMutationState, event: FactoryFronte
   state.stages[stageId].lastMessage = event.message || null
 }
 
-export function applyNodeStarted(state: GraphMutationState, event: FactoryFrontendEvent) {
+export function applyNodeStarted(state: GraphMutationState, event: RuntimeFrontendEvent) {
   const nodeId = event.node_id
   if (!nodeId) return
 
@@ -56,7 +56,7 @@ export function applyNodeStarted(state: GraphMutationState, event: FactoryFronte
   }
 }
 
-export function applyNodeProgress(state: GraphMutationState, event: FactoryFrontendEvent) {
+export function applyNodeProgress(state: GraphMutationState, event: RuntimeFrontendEvent) {
   const nodeId = event.node_id
   if (!nodeId) return
 
@@ -79,7 +79,7 @@ export function applyNodeProgress(state: GraphMutationState, event: FactoryFront
   }
 }
 
-export function applyNodeCompleted(state: GraphMutationState, event: FactoryFrontendEvent) {
+export function applyNodeCompleted(state: GraphMutationState, event: RuntimeFrontendEvent) {
   const nodeId = event.node_id
   if (!nodeId || !state.nodes[nodeId]) return
 
@@ -89,7 +89,7 @@ export function applyNodeCompleted(state: GraphMutationState, event: FactoryFron
   state.nodes[nodeId].payload = { ...state.nodes[nodeId].payload, ...event.payload }
 }
 
-export function applyNodeFailed(state: GraphMutationState, event: FactoryFrontendEvent) {
+export function applyNodeFailed(state: GraphMutationState, event: RuntimeFrontendEvent) {
   const nodeId = event.node_id
   if (!nodeId) return
 

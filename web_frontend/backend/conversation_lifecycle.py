@@ -8,10 +8,10 @@ import shutil
 from time import monotonic
 from typing import Any, Iterable
 
-from agent_factory.dynamic_runtime.database import DynamicRuntimeDatabase
-from agent_factory.dynamic_runtime.dispatcher import CommandExecutionRegistry
-from agent_factory.dynamic_runtime.run_control import RuntimeRunControlRegistry
-from agent_factory.runtime_kernel.persistence import delete_checkpoint_thread
+from combo.dynamic_runtime.database import DynamicRuntimeDatabase
+from combo.dynamic_runtime.dispatcher import CommandExecutionRegistry
+from combo.dynamic_runtime.run_control import RuntimeRunControlRegistry
+from combo.runtime_kernel.persistence import delete_checkpoint_thread
 from web_frontend.backend.attachment_upload_store import AttachmentUploadStore
 
 

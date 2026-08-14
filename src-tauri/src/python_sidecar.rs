@@ -54,11 +54,11 @@ impl PythonSidecar {
             // Application resources are immutable. Runtime state belongs to the
             // per-user application data directory and survives app upgrades.
             let data_root = app.path().app_local_data_dir()?;
-            std::fs::create_dir_all(data_root.join(".agentfactory"))?;
+            std::fs::create_dir_all(data_root.join(".combo"))?;
             (resource_dir.clone(), data_root)
         };
         let log_path = data_root
-            .join(".agentfactory")
+            .join(".combo")
             .join("logs")
             .join("backend.log");
         let (stdout_log, stderr_log) = Self::open_backend_log(&log_path)?;
@@ -68,10 +68,10 @@ impl PythonSidecar {
         cmd.arg("-m")
             .arg("web_frontend.backend.desktop_server")
             .current_dir(&project_root)
-            .env("AGENTFACTORY_PORT", &port_str)
-            .env("AGENTFACTORY_PROJECT_ROOT", &project_root)
-            .env("AGENTFACTORY_DATA_ROOT", &data_root)
-            .env("AGENTFACTORY_PARENT_STDIN_WATCHDOG", "1")
+            .env("COMBO_PORT", &port_str)
+            .env("COMBO_PROJECT_ROOT", &project_root)
+            .env("COMBO_DATA_ROOT", &data_root)
+            .env("COMBO_PARENT_STDIN_WATCHDOG", "1")
             .env("PYTHONDONTWRITEBYTECODE", "1")
             .env("PYTHONUTF8", "1")
             .env("PYTHONUNBUFFERED", "1")

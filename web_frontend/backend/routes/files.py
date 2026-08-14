@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from agent_factory.file_capabilities import file_processing_capabilities
+from combo.file_capabilities import file_processing_capabilities
 
 
 def create_file_router() -> APIRouter:

@@ -1,14 +1,14 @@
-import type { FactoryFrontendCommand, FactoryFrontendEvent } from '@/types/protocol'
+import type { RuntimeFrontendCommand, RuntimeFrontendEvent } from '@/types/protocol'
 import { backendUrl } from './backendUrl'
 import { runtimeClientInstanceId, runtimePrincipalId } from './runtimeIdentity'
 
 interface EventResponse {
-  event: FactoryFrontendEvent
+  event: RuntimeFrontendEvent
 }
 
 export interface CommandResponse {
   accepted: boolean
-  command: FactoryFrontendCommand
+  command: RuntimeFrontendCommand
   event_stream_id: string
   receipt: {
     command_id: string
@@ -48,14 +48,14 @@ export class ApiError extends Error {
   }
 }
 
-export async function postCommand(command: FactoryFrontendCommand): Promise<CommandResponse> {
+export async function postCommand(command: RuntimeFrontendCommand): Promise<CommandResponse> {
   return requestJson<CommandResponse>('/api/commands', {
     method: 'POST',
     body: JSON.stringify({ command }),
   })
 }
 
-export async function requestEvent(url: string, init: RequestInit = {}): Promise<FactoryFrontendEvent> {
+export async function requestEvent(url: string, init: RequestInit = {}): Promise<RuntimeFrontendEvent> {
   const response = await requestJson<EventResponse>(url, init)
   return response.event
 }
@@ -64,13 +64,13 @@ export function requestFormEvent(
   url: string,
   formData: FormData,
   onUploadProgress?: (percent: number) => void,
-): Promise<FactoryFrontendEvent> {
+): Promise<RuntimeFrontendEvent> {
   return backendUrl(url).then((requestUrl) => new Promise((resolve, reject) => {
     const request = new XMLHttpRequest()
     request.open('POST', requestUrl)
-    request.setRequestHeader('X-AgentFactory-Principal', runtimePrincipalId())
-    request.setRequestHeader('X-AgentFactory-Client', runtimeClientInstanceId())
-    request.setRequestHeader('X-AgentFactory-Timezone', Intl.DateTimeFormat().resolvedOptions().timeZone)
+    request.setRequestHeader('X-Combo-Principal', runtimePrincipalId())
+    request.setRequestHeader('X-Combo-Client', runtimeClientInstanceId())
+    request.setRequestHeader('X-Combo-Timezone', Intl.DateTimeFormat().resolvedOptions().timeZone)
     request.upload.addEventListener('progress', (event) => {
       if (!event.lengthComputable || event.total <= 0) return
       onUploadProgress?.(Math.round((event.loaded / event.total) * 100))
@@ -97,9 +97,9 @@ export async function requestBlob(url: string, init: RequestInit = {}): Promise<
   const response = await fetch(await backendUrl(url), {
     ...init,
     headers: {
-      'X-AgentFactory-Principal': runtimePrincipalId(),
-      'X-AgentFactory-Client': runtimeClientInstanceId(),
-      'X-AgentFactory-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
+      'X-Combo-Principal': runtimePrincipalId(),
+      'X-Combo-Client': runtimeClientInstanceId(),
+      'X-Combo-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
       ...(init.headers || {}),
     },
   })
@@ -117,9 +117,9 @@ export async function requestJson<T>(url: string, init: RequestInit = {}): Promi
     ...init,
     headers: {
       'Content-Type': 'application/json',
-      'X-AgentFactory-Principal': runtimePrincipalId(),
-      'X-AgentFactory-Client': runtimeClientInstanceId(),
-      'X-AgentFactory-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
+      'X-Combo-Principal': runtimePrincipalId(),
+      'X-Combo-Client': runtimeClientInstanceId(),
+      'X-Combo-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
       ...(init.headers || {}),
     },
   })
@@ -133,9 +133,9 @@ export async function requestFormJson<T>(url: string, formData: FormData): Promi
   const response = await fetch(await backendUrl(url), {
     method: 'POST',
     headers: {
-      'X-AgentFactory-Principal': runtimePrincipalId(),
-      'X-AgentFactory-Client': runtimeClientInstanceId(),
-      'X-AgentFactory-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
+      'X-Combo-Principal': runtimePrincipalId(),
+      'X-Combo-Client': runtimeClientInstanceId(),
+      'X-Combo-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
     },
     body: formData,
   })
@@ -171,9 +171,9 @@ async function requestProgress<T>(
     ...init,
     headers: {
       ...(init.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
-      'X-AgentFactory-Principal': runtimePrincipalId(),
-      'X-AgentFactory-Client': runtimeClientInstanceId(),
-      'X-AgentFactory-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
+      'X-Combo-Principal': runtimePrincipalId(),
+      'X-Combo-Client': runtimeClientInstanceId(),
+      'X-Combo-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
       ...(init.headers || {}),
     },
   })

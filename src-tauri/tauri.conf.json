@@ -37,7 +37,7 @@
     "resources": {
       "resources/python": "python",
       "resources/README.md": "README.md",
-      "../agent_factory": "agent_factory",
+      "../combo": "combo",
       "../web_frontend/backend": "web_frontend/backend",
       "../web_frontend/frontend/dist": "web_frontend/dist"
     },

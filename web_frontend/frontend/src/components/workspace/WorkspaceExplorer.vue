@@ -158,7 +158,7 @@ import {
 import { useContextReferenceStore } from '@/stores/contextReferences'
 import { workspaceFileContextReference } from '@/utils/contextReferences'
 import type { WorkspaceRequestContext } from '@/api/resourceTypes'
-import type { FactoryFrontendEvent, WorkspaceEntry, WorkspaceScope } from '@/types/protocol'
+import type { RuntimeFrontendEvent, WorkspaceEntry, WorkspaceScope } from '@/types/protocol'
 
 interface TreeRow {
   key: string
@@ -307,7 +307,7 @@ async function loadDirectory(path: string) {
   }
 }
 
-function entriesFromEvent(event: FactoryFrontendEvent | null | undefined): WorkspaceEntry[] {
+function entriesFromEvent(event: RuntimeFrontendEvent | null | undefined): WorkspaceEntry[] {
   const entries = event?.payload?.entries
   if (!Array.isArray(entries)) return []
   return entries.map(workspaceEntryView)

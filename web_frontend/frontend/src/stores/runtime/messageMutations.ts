@@ -1,4 +1,4 @@
-import type { ChatMessagePart, FactoryFrontendEvent, RuntimeViewState, TranscriptItem } from '@/types/protocol'
+import type { ChatMessagePart, RuntimeFrontendEvent, RuntimeViewState, TranscriptItem } from '@/types/protocol'
 import { ensureConversationTurn } from './conversationMutations'
 import {
   messageReasoning,
@@ -20,12 +20,12 @@ type MessageMutationState = Pick<
   | 'transcript'
 >
 
-export function applyMessageStarted(state: MessageMutationState, event: FactoryFrontendEvent) {
+export function applyMessageStarted(state: MessageMutationState, event: RuntimeFrontendEvent) {
   if (isBackgroundEvent(event, state.activeRequestId)) return
   if (isStoppingRequestEvent(state, event)) return
 }
 
-export function applyMessagePartDelta(state: MessageMutationState, event: FactoryFrontendEvent) {
+export function applyMessagePartDelta(state: MessageMutationState, event: RuntimeFrontendEvent) {
   if (isBackgroundEvent(event, state.activeRequestId)) return
   if (isStoppingRequestEvent(state, event)) return
   if (hasAuthoritativeAssistantSnapshot(state, event)) return
@@ -44,7 +44,7 @@ export function applyMessagePartDelta(state: MessageMutationState, event: Factor
   syncTurnAssistantMessage(state, message, event)
 }
 
-export function applyMessagePartCompleted(state: MessageMutationState, event: FactoryFrontendEvent) {
+export function applyMessagePartCompleted(state: MessageMutationState, event: RuntimeFrontendEvent) {
   if (isBackgroundEvent(event, state.activeRequestId)) return
   if (isStoppingRequestEvent(state, event)) return
   if (hasAuthoritativeAssistantSnapshot(state, event)) return
@@ -59,7 +59,7 @@ export function applyMessagePartCompleted(state: MessageMutationState, event: Fa
   syncTurnAssistantMessage(state, message, event)
 }
 
-export function applyMessageCompleted(state: MessageMutationState, event: FactoryFrontendEvent) {
+export function applyMessageCompleted(state: MessageMutationState, event: RuntimeFrontendEvent) {
   if (isBackgroundEvent(event, state.activeRequestId)) return
   if (hasAuthoritativeAssistantSnapshot(state, event)) return
   const messageId = messageIdFromEvent(event)
@@ -84,7 +84,7 @@ export function applyMessageCompleted(state: MessageMutationState, event: Factor
 
 export function reconcileCompletedAssistantSnapshot(
   state: MessageMutationState,
-  event: FactoryFrontendEvent,
+  event: RuntimeFrontendEvent,
 ) {
   const turn = ensureConversationTurn(state, event.request_id || state.activeRequestId, event.timestamp)
   const snapshot = event.payload?.message
@@ -153,7 +153,7 @@ export function reconcileCompletedAssistantSnapshot(
 
 export function reconcileAssistantDialogueInterrupt(
   state: MessageMutationState,
-  event: FactoryFrontendEvent,
+  event: RuntimeFrontendEvent,
   text: string,
 ): boolean {
   if (event.payload?.presentation !== 'assistant_dialogue' || !text) return false
@@ -177,7 +177,7 @@ export function reconcileAssistantDialogueInterrupt(
 
 function ensureMessage(
   state: MessageMutationState,
-  event: FactoryFrontendEvent,
+  event: RuntimeFrontendEvent,
   messageId: string,
 ): TranscriptItem {
   const existing = state.transcript.find((item) => item.id === messageId)
@@ -205,7 +205,7 @@ function ensureMessage(
 
 function replaceAssistantDialogueBody(
   message: TranscriptItem,
-  event: FactoryFrontendEvent,
+  event: RuntimeFrontendEvent,
   text: string,
 ) {
   const preservedParts = message.parts.filter(part => part.type !== 'text')
@@ -238,7 +238,7 @@ function upsertMessagePart(message: TranscriptItem, part: ChatMessagePart, times
 }
 
 function messagePartFromPayload(
-  event: FactoryFrontendEvent,
+  event: RuntimeFrontendEvent,
   text: string,
   status: 'streaming' | 'completed',
 ): ChatMessagePart {
@@ -257,7 +257,7 @@ function messagePartFromPayload(
 function syncTurnAssistantMessage(
   state: MessageMutationState,
   message: TranscriptItem,
-  event: FactoryFrontendEvent,
+  event: RuntimeFrontendEvent,
 ) {
   const turn = ensureConversationTurn(state, event.request_id || state.activeRequestId, event.timestamp)
   const existing = turn.assistantMessages.find((item) => item.id === message.id)
@@ -281,7 +281,7 @@ function messageHasVisibleAssistantContent(message: TranscriptItem): boolean {
 
 function hasAuthoritativeAssistantSnapshot(
   state: MessageMutationState,
-  event: FactoryFrontendEvent,
+  event: RuntimeFrontendEvent,
 ): boolean {
   return state.transcript.some(message => (
     message.role === 'assistant'
@@ -292,7 +292,7 @@ function hasAuthoritativeAssistantSnapshot(
 
 function messageBelongsToRuntimeEvent(
   message: TranscriptItem,
-  event: FactoryFrontendEvent,
+  event: RuntimeFrontendEvent,
 ): boolean {
   const runtimeInstanceId = String(event.run_id || '').trim()
   const messageRuntimeInstanceId = String(message.metadata?.runtime_instance_id || '').trim()
@@ -304,15 +304,15 @@ function messageBelongsToRuntimeEvent(
   return Boolean(requestId && messageRequestId && requestId === messageRequestId)
 }
 
-function messageIdFromEvent(event: FactoryFrontendEvent): string {
+function messageIdFromEvent(event: RuntimeFrontendEvent): string {
   return String(event.payload?.message_id || event.payload?.stream_id || '').trim()
 }
 
-function partIdFromEvent(event: FactoryFrontendEvent): string {
+function partIdFromEvent(event: RuntimeFrontendEvent): string {
   return String(event.payload?.part_id || '').trim()
 }
 
-function isStoppingRequestEvent(state: MessageMutationState, event: FactoryFrontendEvent): boolean {
+function isStoppingRequestEvent(state: MessageMutationState, event: RuntimeFrontendEvent): boolean {
   const requestId = event.request_id
   if (!requestId) return false
   return Boolean(state.activeRequests[requestId]?.payload?.stop_requested_at)

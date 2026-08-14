@@ -13,12 +13,12 @@
     {
       "state": "review",
       "frames": [
-        "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/qa/rows/review/frames/review/00.png",
-        "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/qa/rows/review/frames/review/01.png",
-        "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/qa/rows/review/frames/review/02.png",
-        "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/qa/rows/review/frames/review/03.png",
-        "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/qa/rows/review/frames/review/04.png",
-        "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/qa/rows/review/frames/review/05.png"
+        "/Users/admin/Desktop/Combo/design/brand/combo/hatch-idle-v2/qa/rows/review/frames/review/00.png",
+        "/Users/admin/Desktop/Combo/design/brand/combo/hatch-idle-v2/qa/rows/review/frames/review/01.png",
+        "/Users/admin/Desktop/Combo/design/brand/combo/hatch-idle-v2/qa/rows/review/frames/review/02.png",
+        "/Users/admin/Desktop/Combo/design/brand/combo/hatch-idle-v2/qa/rows/review/frames/review/03.png",
+        "/Users/admin/Desktop/Combo/design/brand/combo/hatch-idle-v2/qa/rows/review/frames/review/04.png",
+        "/Users/admin/Desktop/Combo/design/brand/combo/hatch-idle-v2/qa/rows/review/frames/review/05.png"
       ],
       "method": "components"
     }

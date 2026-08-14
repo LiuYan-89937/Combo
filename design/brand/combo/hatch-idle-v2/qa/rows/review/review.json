@@ -1,6 +1,6 @@
 {
   "ok": true,
-  "frames_root": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/qa/rows/review/frames",
+  "frames_root": "/Users/admin/Desktop/Combo/design/brand/combo/hatch-idle-v2/qa/rows/review/frames",
   "states": [
     "review"
   ],
@@ -18,7 +18,7 @@
       "frames": [
         {
           "index": 0,
-          "file": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/qa/rows/review/frames/review/00.png",
+          "file": "/Users/admin/Desktop/Combo/design/brand/combo/hatch-idle-v2/qa/rows/review/frames/review/00.png",
           "width": 192,
           "height": 208,
           "nontransparent_pixels": 16276,
@@ -33,7 +33,7 @@
         },
         {
           "index": 1,
-          "file": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/qa/rows/review/frames/review/01.png",
+          "file": "/Users/admin/Desktop/Combo/design/brand/combo/hatch-idle-v2/qa/rows/review/frames/review/01.png",
           "width": 192,
           "height": 208,
           "nontransparent_pixels": 16873,
@@ -48,7 +48,7 @@
         },
         {
           "index": 2,
-          "file": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/qa/rows/review/frames/review/02.png",
+          "file": "/Users/admin/Desktop/Combo/design/brand/combo/hatch-idle-v2/qa/rows/review/frames/review/02.png",
           "width": 192,
           "height": 208,
           "nontransparent_pixels": 16207,
@@ -63,7 +63,7 @@
         },
         {
           "index": 3,
-          "file": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/qa/rows/review/frames/review/03.png",
+          "file": "/Users/admin/Desktop/Combo/design/brand/combo/hatch-idle-v2/qa/rows/review/frames/review/03.png",
           "width": 192,
           "height": 208,
           "nontransparent_pixels": 17332,
@@ -78,7 +78,7 @@
         },
         {
           "index": 4,
-          "file": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/qa/rows/review/frames/review/04.png",
+          "file": "/Users/admin/Desktop/Combo/design/brand/combo/hatch-idle-v2/qa/rows/review/frames/review/04.png",
           "width": 192,
           "height": 208,
           "nontransparent_pixels": 16622,
@@ -93,7 +93,7 @@
         },
         {
           "index": 5,
-          "file": "/Users/admin/Desktop/FastAgentFactory/design/brand/combo/hatch-idle-v2/qa/rows/review/frames/review/05.png",
+          "file": "/Users/admin/Desktop/Combo/design/brand/combo/hatch-idle-v2/qa/rows/review/frames/review/05.png",
           "width": 192,
           "height": 208,
           "nontransparent_pixels": 16205,

@@ -1,5 +1,5 @@
-const PRINCIPAL_STORAGE_KEY = 'agentfactory.principal_id'
-const CLIENT_STORAGE_KEY = 'agentfactory.client_instance_id'
+const PRINCIPAL_STORAGE_KEY = 'combo.principal_id'
+const CLIENT_STORAGE_KEY = 'combo.client_instance_id'
 
 export function runtimePrincipalId(): string {
   return stableBrowserId(PRINCIPAL_STORAGE_KEY)

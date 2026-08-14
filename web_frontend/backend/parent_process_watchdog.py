@@ -6,7 +6,7 @@ from collections.abc import Callable
 from threading import Thread
 
 
-PARENT_STDIN_WATCHDOG_ENV = "AGENTFACTORY_PARENT_STDIN_WATCHDOG"
+PARENT_STDIN_WATCHDOG_ENV = "COMBO_PARENT_STDIN_WATCHDOG"
 
 
 def start_parent_process_watchdog(on_parent_exit: Callable[[], None]) -> None:
@@ -22,7 +22,9 @@ def start_parent_process_watchdog(on_parent_exit: Callable[[], None]) -> None:
 
 def _wait_for_parent_pipe_close(on_parent_exit: Callable[[], None]) -> None:
     try:
-        sys.stdin.buffer.read()
+        descriptor = sys.stdin.fileno()
+        while os.read(descriptor, 4096):
+            pass
     except (AttributeError, OSError, ValueError):
         pass
     on_parent_exit()

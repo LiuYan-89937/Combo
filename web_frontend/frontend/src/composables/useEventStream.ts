@@ -10,7 +10,7 @@ import { useRuntimeStore } from '@/stores/runtime'
 import { syncDomainStoresFromRuntime } from '@/stores/runtimeSync'
 import { useAgentGroupStore } from '@/stores/agentGroup'
 import { useUiStore } from '@/stores/ui'
-import type { FactoryFrontendEvent } from '@/types/protocol'
+import type { RuntimeFrontendEvent } from '@/types/protocol'
 import { agentPackagesApi } from '@/api/agentPackages'
 import { backendUrl } from '@/api/backendUrl'
 import {
@@ -28,10 +28,10 @@ const BATCHED_STREAM_EVENTS = new Set([
   'model_reasoning_delta',
   'model_stream_delta',
 ])
-let pendingStreamEvents: FactoryFrontendEvent[] = []
+let pendingStreamEvents: RuntimeFrontendEvent[] = []
 let streamFlushTimer: number | null = null
 
-export function applyRuntimeEvent(event: FactoryFrontendEvent): void {
+export function applyRuntimeEvent(event: RuntimeFrontendEvent): void {
   if (BATCHED_STREAM_EVENTS.has(event.event_type)) {
     enqueueStreamEvent(event)
     return
@@ -40,12 +40,12 @@ export function applyRuntimeEvent(event: FactoryFrontendEvent): void {
   applyRuntimeEventImmediately(event)
 }
 
-function applyRuntimeEventImmediately(event: FactoryFrontendEvent): void {
+function applyRuntimeEventImmediately(event: RuntimeFrontendEvent): void {
   if (event.event_type === 'runtime_ready') {
     activeEventStreamId = String(event.payload?.event_stream_id || '').trim() || null
   }
   if (event.event_type === 'background_task_updated' && typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('fastagentfactory:background-task-updated', { detail: event }))
+    window.dispatchEvent(new CustomEvent('combo:background-task-updated', { detail: event }))
   }
   const notificationContext = captureTaskNotificationEventContext(event)
   if (event.payload?.group_id && event.payload?.group_run_id) {
@@ -64,7 +64,7 @@ function applyRuntimeEventImmediately(event: FactoryFrontendEvent): void {
   }
 }
 
-function enqueueStreamEvent(event: FactoryFrontendEvent): void {
+function enqueueStreamEvent(event: RuntimeFrontendEvent): void {
   pendingStreamEvents.push(event)
   if (streamFlushTimer !== null) return
   streamFlushTimer = window.setTimeout(flushStreamEvents, STREAM_RENDER_INTERVAL_MS)
