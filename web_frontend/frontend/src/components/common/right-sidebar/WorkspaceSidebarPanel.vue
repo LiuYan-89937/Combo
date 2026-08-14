@@ -1,5 +1,9 @@
 <template>
   <div class="workspace-sidebar-content">
+    <WorkspaceSourceControl
+      :workspace-id="runtimeStore.activeWorkspaceId"
+      :workspace-root="activeWorkspaceRoot"
+    />
     <div v-show="!previewLoading && !runtimeStore.workspaceFile" class="workspace-browser">
       <WorkspaceExplorer
         v-if="workspaceAvailable"
@@ -33,16 +37,19 @@ import { NEmpty, NSpin, NText } from 'naive-ui'
 import { useCommand } from '@/composables/useCommand'
 import { useResourceContext } from '@/composables/useResourceContext'
 import { useRuntimeStore } from '@/stores/runtime'
+import { useAgentStore } from '@/stores/agent'
 import { useUiStore } from '@/stores/ui'
 import { useWorkspaceStore } from '@/stores/workspace'
 import type { WorkspaceEntry } from '@/types/protocol'
 import FilePreview from '@/components/workspace/FilePreview.vue'
 import WorkspaceExplorer from '@/components/workspace/WorkspaceExplorer.vue'
+import WorkspaceSourceControl from '@/components/workspace/WorkspaceSourceControl.vue'
 import ComboPngIcon from '@/components/icons/ComboPngIcon.vue'
 import { useI18n } from '@/composables/useI18n'
 
 const uiStore = useUiStore()
 const runtimeStore = useRuntimeStore()
+const agentStore = useAgentStore()
 const workspaceStore = useWorkspaceStore()
 const commands = useCommand()
 const resourceContext = useResourceContext()
@@ -52,6 +59,13 @@ const WORKSPACE_PREVIEW_MAX_CHARS = 1_000_000
 
 const workspaceRequestContext = computed(() => resourceContext.workspaceContext.value)
 const workspaceAvailable = computed(() => resourceContext.workspaceAvailable.value)
+const activeWorkspaceRoot = computed(() => {
+  const sessionId = runtimeStore.activeAgentSessionId || agentStore.selectedSessionId
+  if (!sessionId) return ''
+  const session = [...agentStore.agentSessions, ...agentStore.recentAgentSessions]
+    .find(item => item.session_id === sessionId)
+  return session?.workspace?.workdir_root || ''
+})
 
 async function handleWorkspaceFileSelect(entry: WorkspaceEntry) {
   uiStore.setConversationDockPanel('workspace')

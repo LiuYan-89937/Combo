@@ -1,12 +1,13 @@
 use git2::{
-    build::RepoBuilder, Cred, CredentialType, Diff, DiffDelta, DiffOptions, FetchOptions,
-    IndexAddOption, ObjectType, Patch, RemoteCallbacks, Repository, Signature, Status,
-    StatusOptions,
+    build::{CheckoutBuilder, RepoBuilder},
+    Cred, CredentialType, Diff, DiffDelta, DiffOptions, FetchOptions, IndexAddOption, ObjectType,
+    Patch, PushOptions, RemoteCallbacks, Repository, Signature, Status, StatusOptions,
 };
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use tauri::Emitter;
 
 use crate::github_account::github_access_token;
@@ -18,9 +19,27 @@ pub struct GitRepositoryStatus {
     repository_root: String,
     branch: Option<String>,
     detached: bool,
+    has_head: bool,
     ahead: usize,
     behind: usize,
+    remote_name: Option<String>,
+    remote_url: Option<String>,
+    has_upstream: bool,
     files: Vec<GitFileStatus>,
+}
+
+#[derive(Serialize)]
+pub struct GitRepositoryIdentity {
+    name: Option<String>,
+    email: Option<String>,
+    configured: bool,
+}
+
+#[derive(Serialize)]
+pub struct GitRemoteOperationResult {
+    outcome: String,
+    conflicting_files: Vec<String>,
+    status: GitRepositoryStatus,
 }
 
 #[derive(Clone, Serialize)]
@@ -28,6 +47,7 @@ pub struct GitFileStatus {
     path: String,
     change_type: String,
     staged: bool,
+    unstaged: bool,
     additions: usize,
     deletions: usize,
 }
@@ -109,8 +129,139 @@ pub async fn git_clone_repository(
 #[tauri::command]
 pub fn git_repository_status(path: String) -> Result<GitRepositoryStatus, String> {
     let repo = discover_repository(&path)?;
+    repository_status(&repo)
+}
+
+#[tauri::command]
+pub fn git_initialize_repository(path: String) -> Result<GitRepositoryStatus, String> {
+    let candidate = workspace_directory(&path)?;
+    let repo = match Repository::discover(&candidate) {
+        Ok(existing) => existing,
+        Err(_) => Repository::init(&candidate).map_err(error_text)?,
+    };
+    repository_status(&repo)
+}
+
+#[tauri::command]
+pub fn git_add_remote(path: String, remote_url: String) -> Result<GitRepositoryStatus, String> {
+    let repo = discover_repository(&path)?;
+    let remote_url = required_value(&remote_url, "remote URL")?;
+    if repo.find_remote("origin").is_ok() {
+        return Err("origin remote already exists".to_string());
+    }
+    repo.remote("origin", remote_url).map_err(error_text)?;
+    repository_status(&repo)
+}
+
+#[tauri::command]
+pub fn git_repository_identity(path: String) -> Result<GitRepositoryIdentity, String> {
+    let repo = discover_repository(&path)?;
+    repository_identity(&repo)
+}
+
+#[tauri::command]
+pub fn git_set_repository_identity(
+    path: String,
+    name: String,
+    email: String,
+) -> Result<GitRepositoryIdentity, String> {
+    let repo = discover_repository(&path)?;
+    let name = required_value(&name, "Git author name")?;
+    let email = required_value(&email, "Git author email")?;
+    let mut config = repo.config().map_err(error_text)?;
+    config.set_str("user.name", name).map_err(error_text)?;
+    config.set_str("user.email", email).map_err(error_text)?;
+    repository_identity(&repo)
+}
+
+#[tauri::command]
+pub fn git_stage_paths(
+    path: String,
+    file_paths: Vec<String>,
+) -> Result<GitRepositoryStatus, String> {
+    let repo = discover_repository(&path)?;
+    let root = repository_root(&repo)?.to_path_buf();
+    let relative_paths = validated_paths(file_paths)?;
+    let mut index = repo.index().map_err(error_text)?;
+    for relative in relative_paths {
+        if root.join(&relative).is_file() {
+            index.add_path(&relative).map_err(error_text)?;
+        } else {
+            index.remove_path(&relative).map_err(error_text)?;
+        }
+    }
+    index.write().map_err(error_text)?;
+    repository_status(&repo)
+}
+
+#[tauri::command]
+pub fn git_stage_all(path: String) -> Result<GitRepositoryStatus, String> {
+    let repo = discover_repository(&path)?;
+    let mut index = repo.index().map_err(error_text)?;
+    index
+        .add_all(["*"], IndexAddOption::DEFAULT, None)
+        .map_err(error_text)?;
+    index.update_all(["*"], None).map_err(error_text)?;
+    index.write().map_err(error_text)?;
+    repository_status(&repo)
+}
+
+#[tauri::command]
+pub fn git_unstage_paths(
+    path: String,
+    file_paths: Vec<String>,
+) -> Result<GitRepositoryStatus, String> {
+    let repo = discover_repository(&path)?;
+    let paths = validated_paths(file_paths)?;
+    let head = repo
+        .head()
+        .ok()
+        .and_then(|reference| reference.peel(ObjectType::Commit).ok());
+    repo.reset_default(
+        head.as_ref(),
+        paths
+            .iter()
+            .map(|value| value.to_string_lossy().into_owned()),
+    )
+    .map_err(error_text)?;
+    repository_status(&repo)
+}
+
+#[tauri::command]
+pub fn git_commit(path: String, message: String) -> Result<GitRepositoryStatus, String> {
+    let repo = discover_repository(&path)?;
+    commit_index(&repo, required_value(&message, "commit message")?)?;
+    repository_status(&repo)
+}
+
+#[tauri::command]
+pub async fn git_fetch_repository(path: String) -> Result<GitRemoteOperationResult, String> {
+    run_remote_operation(path, RemoteOperation::Fetch).await
+}
+
+#[tauri::command]
+pub async fn git_pull_repository(path: String) -> Result<GitRemoteOperationResult, String> {
+    run_remote_operation(path, RemoteOperation::Pull).await
+}
+
+#[tauri::command]
+pub async fn git_push_repository(path: String) -> Result<GitRemoteOperationResult, String> {
+    run_remote_operation(path, RemoteOperation::Push).await
+}
+
+#[tauri::command]
+pub async fn git_sync_repository(path: String) -> Result<GitRemoteOperationResult, String> {
+    run_remote_operation(path, RemoteOperation::Sync).await
+}
+
+fn repository_status(repo: &Repository) -> Result<GitRepositoryStatus, String> {
     let root = repository_root(&repo)?;
     let (branch, detached, ahead, behind) = branch_state(&repo)?;
+    let remote = branch
+        .as_deref()
+        .map(|branch_name| remote_tracking(repo, branch_name))
+        .transpose()?
+        .flatten();
     let line_counts = working_tree_line_counts(&repo)?;
     let mut status_options = StatusOptions::new();
     status_options
@@ -138,6 +289,13 @@ pub fn git_repository_status(path: String) -> Result<GitRepositoryStatus, String
                     | Status::INDEX_RENAMED
                     | Status::INDEX_TYPECHANGE,
             ),
+            unstaged: state.intersects(
+                Status::WT_NEW
+                    | Status::WT_MODIFIED
+                    | Status::WT_DELETED
+                    | Status::WT_RENAMED
+                    | Status::WT_TYPECHANGE,
+            ),
             additions,
             deletions,
         });
@@ -147,8 +305,12 @@ pub fn git_repository_status(path: String) -> Result<GitRepositoryStatus, String
         repository_root: path_text(root),
         branch,
         detached,
+        has_head: repo.head().ok().and_then(|head| head.target()).is_some(),
         ahead,
         behind,
+        remote_name: remote.as_ref().map(|value| value.name.clone()),
+        remote_url: remote.as_ref().and_then(|value| value.url.clone()),
+        has_upstream: remote.as_ref().is_some_and(|value| value.has_upstream),
         files,
     })
 }
@@ -320,11 +482,367 @@ fn apply_turn_snapshot(
     })
 }
 
-fn discover_repository(path: &str) -> Result<Repository, String> {
-    let candidate = Path::new(path);
-    if !candidate.exists() {
-        return Err("workspace path does not exist".to_string());
+#[derive(Clone, Copy)]
+enum RemoteOperation {
+    Fetch,
+    Pull,
+    Push,
+    Sync,
+}
+
+struct RemoteTracking {
+    name: String,
+    url: Option<String>,
+    tracking_reference: String,
+    has_upstream: bool,
+}
+
+async fn run_remote_operation(
+    path: String,
+    operation: RemoteOperation,
+) -> Result<GitRemoteOperationResult, String> {
+    let access_token = github_access_token().ok();
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo = discover_repository(&path)?;
+        match operation {
+            RemoteOperation::Fetch => fetch_repository(&repo, access_token.as_deref()),
+            RemoteOperation::Pull => pull_repository(&repo, access_token.as_deref()),
+            RemoteOperation::Push => push_repository(&repo, access_token.as_deref()),
+            RemoteOperation::Sync => {
+                let branch = current_branch_name(&repo)?;
+                let has_upstream =
+                    remote_tracking(&repo, &branch)?.is_some_and(|tracking| tracking.has_upstream);
+                if !has_upstream {
+                    return push_repository(&repo, access_token.as_deref());
+                }
+                let pulled = pull_repository(&repo, access_token.as_deref())?;
+                if !pulled.conflicting_files.is_empty() {
+                    return Ok(pulled);
+                }
+                push_repository(&repo, access_token.as_deref())
+            }
+        }
+    })
+    .await
+    .map_err(error_text)?
+}
+
+fn fetch_repository(
+    repo: &Repository,
+    access_token: Option<&str>,
+) -> Result<GitRemoteOperationResult, String> {
+    let branch = current_branch_name(repo)?;
+    let tracking =
+        remote_tracking(repo, &branch)?.ok_or_else(|| "repository has no remote".to_string())?;
+    fetch_remote(repo, &tracking, access_token)?;
+    remote_result(repo, "fetched", Vec::new())
+}
+
+fn pull_repository(
+    repo: &Repository,
+    access_token: Option<&str>,
+) -> Result<GitRemoteOperationResult, String> {
+    ensure_clean_worktree(repo)?;
+    let branch = current_branch_name(repo)?;
+    let tracking = remote_tracking(repo, &branch)?
+        .filter(|value| value.has_upstream)
+        .ok_or_else(|| "current branch has no upstream".to_string())?;
+    fetch_remote(repo, &tracking, access_token)?;
+    let upstream = repo
+        .find_reference(&tracking.tracking_reference)
+        .map_err(|_| "upstream branch was not found after fetch".to_string())?;
+    let annotated = repo
+        .reference_to_annotated_commit(&upstream)
+        .map_err(error_text)?;
+    let (analysis, _) = repo.merge_analysis(&[&annotated]).map_err(error_text)?;
+    if analysis.is_up_to_date() {
+        return remote_result(repo, "up_to_date", Vec::new());
     }
+    if analysis.is_fast_forward() {
+        fast_forward(repo, &branch, annotated.id())?;
+        return remote_result(repo, "pulled", Vec::new());
+    }
+    if !analysis.is_normal() {
+        return Err("upstream cannot be merged into the current branch".to_string());
+    }
+    let signature = repository_signature(repo)?;
+    repo.merge(&[&annotated], None, None).map_err(error_text)?;
+    let mut index = repo.index().map_err(error_text)?;
+    if index.has_conflicts() {
+        let conflicts = conflict_paths(&mut index)?;
+        return remote_result(repo, "conflicts", conflicts);
+    }
+    let tree_oid = index.write_tree_to(repo).map_err(error_text)?;
+    let tree = repo.find_tree(tree_oid).map_err(error_text)?;
+    let local = repo
+        .head()
+        .map_err(error_text)?
+        .peel_to_commit()
+        .map_err(error_text)?;
+    let remote = repo.find_commit(annotated.id()).map_err(error_text)?;
+    repo.commit(
+        Some("HEAD"),
+        &signature,
+        &signature,
+        &format!(
+            "Merge remote-tracking branch '{}/{}'",
+            tracking.name, branch
+        ),
+        &tree,
+        &[&local, &remote],
+    )
+    .map_err(error_text)?;
+    repo.checkout_head(None).map_err(error_text)?;
+    repo.cleanup_state().map_err(error_text)?;
+    remote_result(repo, "pulled", Vec::new())
+}
+
+fn push_repository(
+    repo: &Repository,
+    access_token: Option<&str>,
+) -> Result<GitRemoteOperationResult, String> {
+    let branch = current_branch_name(repo)?;
+    let tracking =
+        remote_tracking(repo, &branch)?.ok_or_else(|| "repository has no remote".to_string())?;
+    require_remote_authentication(tracking.url.as_deref(), access_token)?;
+    let failures = Arc::new(Mutex::new(Vec::<String>::new()));
+    let callback_failures = failures.clone();
+    let mut callbacks = authentication_callbacks(access_token.map(str::to_string));
+    callbacks.push_update_reference(move |_reference, status| {
+        if let Some(message) = status {
+            callback_failures.lock().unwrap().push(message.to_string());
+        }
+        Ok(())
+    });
+    let mut options = PushOptions::new();
+    options.remote_callbacks(callbacks);
+    let mut remote = repo.find_remote(&tracking.name).map_err(error_text)?;
+    let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
+    remote
+        .push(&[&refspec], Some(&mut options))
+        .map_err(error_text)?;
+    let failures = failures.lock().unwrap();
+    if !failures.is_empty() {
+        return Err(failures.join("; "));
+    }
+    drop(failures);
+    configure_upstream_after_push(repo, &tracking.name, &branch)?;
+    remote_result(repo, "pushed", Vec::new())
+}
+
+fn fetch_remote(
+    repo: &Repository,
+    tracking: &RemoteTracking,
+    access_token: Option<&str>,
+) -> Result<(), String> {
+    let mut remote = repo.find_remote(&tracking.name).map_err(error_text)?;
+    let mut options = FetchOptions::new();
+    options.remote_callbacks(authentication_callbacks(access_token.map(str::to_string)));
+    remote
+        .fetch(&[] as &[&str], Some(&mut options), None)
+        .map_err(error_text)
+}
+
+fn authentication_callbacks(access_token: Option<String>) -> RemoteCallbacks<'static> {
+    let mut callbacks = RemoteCallbacks::new();
+    callbacks.credentials(move |_url, username, allowed| {
+        if allowed.contains(CredentialType::USER_PASS_PLAINTEXT) {
+            if let Some(token) = access_token.as_deref() {
+                return Cred::userpass_plaintext("x-access-token", token);
+            }
+        }
+        if allowed.contains(CredentialType::SSH_KEY) {
+            if let Some(username) = username {
+                return Cred::ssh_key_from_agent(username);
+            }
+        }
+        if allowed.contains(CredentialType::USERNAME) {
+            return Cred::username(username.unwrap_or("git"));
+        }
+        Cred::default()
+    });
+    callbacks
+}
+
+fn require_remote_authentication(
+    remote_url: Option<&str>,
+    access_token: Option<&str>,
+) -> Result<(), String> {
+    let url = remote_url.unwrap_or_default().to_ascii_lowercase();
+    if url.starts_with("https://github.com/") && access_token.is_none() {
+        return Err("github authentication required".to_string());
+    }
+    Ok(())
+}
+
+fn fast_forward(repo: &Repository, branch: &str, target: git2::Oid) -> Result<(), String> {
+    let reference_name = format!("refs/heads/{branch}");
+    let mut reference = repo.find_reference(&reference_name).map_err(error_text)?;
+    reference
+        .set_target(target, "Combo pull: fast-forward")
+        .map_err(error_text)?;
+    repo.set_head(&reference_name).map_err(error_text)?;
+    let mut checkout = CheckoutBuilder::new();
+    checkout.force();
+    repo.checkout_head(Some(&mut checkout)).map_err(error_text)
+}
+
+fn configure_upstream_after_push(
+    repo: &Repository,
+    remote_name: &str,
+    branch: &str,
+) -> Result<(), String> {
+    let head_oid = repo
+        .head()
+        .map_err(error_text)?
+        .target()
+        .ok_or_else(|| "current branch has no commit".to_string())?;
+    let tracking_reference = format!("refs/remotes/{remote_name}/{branch}");
+    repo.reference(
+        &tracking_reference,
+        head_oid,
+        true,
+        "Combo push: update remote tracking branch",
+    )
+    .map_err(error_text)?;
+    let mut config = repo.config().map_err(error_text)?;
+    config
+        .set_str(&format!("branch.{branch}.remote"), remote_name)
+        .map_err(error_text)?;
+    config
+        .set_str(
+            &format!("branch.{branch}.merge"),
+            &format!("refs/heads/{branch}"),
+        )
+        .map_err(error_text)
+}
+
+fn remote_result(
+    repo: &Repository,
+    outcome: &str,
+    conflicting_files: Vec<String>,
+) -> Result<GitRemoteOperationResult, String> {
+    Ok(GitRemoteOperationResult {
+        outcome: outcome.to_string(),
+        conflicting_files,
+        status: repository_status(repo)?,
+    })
+}
+
+fn ensure_clean_worktree(repo: &Repository) -> Result<(), String> {
+    let mut options = StatusOptions::new();
+    options.include_untracked(true).recurse_untracked_dirs(true);
+    if repo
+        .statuses(Some(&mut options))
+        .map_err(error_text)?
+        .is_empty()
+    {
+        Ok(())
+    } else {
+        Err("commit or discard local changes before pulling".to_string())
+    }
+}
+
+fn conflict_paths(index: &mut git2::Index) -> Result<Vec<String>, String> {
+    let mut paths = Vec::new();
+    let conflicts = index.conflicts().map_err(error_text)?;
+    for conflict in conflicts {
+        let conflict = conflict.map_err(error_text)?;
+        let path = conflict
+            .our
+            .or(conflict.their)
+            .or(conflict.ancestor)
+            .map(|entry| String::from_utf8_lossy(&entry.path).into_owned());
+        if let Some(path) = path {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
+fn commit_index(repo: &Repository, message: &str) -> Result<git2::Oid, String> {
+    let signature = repository_signature(repo)?;
+    let mut index = repo.index().map_err(error_text)?;
+    let tree_oid = index.write_tree_to(repo).map_err(error_text)?;
+    let tree = repo.find_tree(tree_oid).map_err(error_text)?;
+    let parent = repo.head().ok().and_then(|head| head.peel_to_commit().ok());
+    if parent
+        .as_ref()
+        .is_some_and(|commit| commit.tree_id() == tree_oid)
+    {
+        return Err("there are no staged changes to commit".to_string());
+    }
+    let parents: Vec<&git2::Commit<'_>> = parent.iter().collect();
+    repo.commit(
+        Some("HEAD"),
+        &signature,
+        &signature,
+        message,
+        &tree,
+        &parents,
+    )
+    .map_err(error_text)
+}
+
+fn repository_signature(repo: &Repository) -> Result<Signature<'_>, String> {
+    let identity = repository_identity(repo)?;
+    let name = identity
+        .name
+        .ok_or_else(|| "git identity is not configured".to_string())?;
+    let email = identity
+        .email
+        .ok_or_else(|| "git identity is not configured".to_string())?;
+    Signature::now(&name, &email).map_err(error_text)
+}
+
+fn repository_identity(repo: &Repository) -> Result<GitRepositoryIdentity, String> {
+    let config = repo.config().map_err(error_text)?;
+    let name = config
+        .get_string("user.name")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    let email = config
+        .get_string("user.email")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    Ok(GitRepositoryIdentity {
+        configured: name.is_some() && email.is_some(),
+        name,
+        email,
+    })
+}
+
+fn validated_paths(values: Vec<String>) -> Result<Vec<PathBuf>, String> {
+    if values.is_empty() {
+        return Err("at least one file path is required".to_string());
+    }
+    values
+        .into_iter()
+        .map(|value| safe_relative_path(&value))
+        .collect()
+}
+
+fn required_value<'a>(value: &'a str, field: &str) -> Result<&'a str, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        Err(format!("{field} is required"))
+    } else {
+        Ok(value)
+    }
+}
+
+fn workspace_directory(path: &str) -> Result<PathBuf, String> {
+    let candidate = PathBuf::from(path).expand_home()?;
+    if !candidate.is_dir() {
+        return Err("workspace path is not a directory".to_string());
+    }
+    candidate.canonicalize().map_err(error_text)
+}
+
+fn discover_repository(path: &str) -> Result<Repository, String> {
+    let candidate = workspace_directory(path)?;
     Repository::discover(candidate).map_err(|_| "workspace is not a Git repository".to_string())
 }
 
@@ -425,9 +943,67 @@ fn repository_root(repo: &Repository) -> Result<&Path, String> {
         .ok_or_else(|| "bare repositories cannot be used as workspaces".to_string())
 }
 
+fn current_branch_name(repo: &Repository) -> Result<String, String> {
+    if repo.head_detached().map_err(error_text)? {
+        return Err("detached HEAD cannot be synchronized".to_string());
+    }
+    if let Ok(head) = repo.head() {
+        if let Some(name) = head.shorthand().filter(|value| !value.is_empty()) {
+            return Ok(name.to_string());
+        }
+    }
+    let head = repo.find_reference("HEAD").map_err(error_text)?;
+    head.symbolic_target()
+        .and_then(|value| value.strip_prefix("refs/heads/"))
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| "current branch is unavailable".to_string())
+}
+
+fn remote_tracking(repo: &Repository, branch: &str) -> Result<Option<RemoteTracking>, String> {
+    let config = repo.config().map_err(error_text)?;
+    let configured_remote = config.get_string(&format!("branch.{branch}.remote")).ok();
+    let has_upstream = repo
+        .find_branch(branch, git2::BranchType::Local)
+        .ok()
+        .and_then(|value| value.upstream().ok())
+        .is_some();
+    let name = configured_remote
+        .filter(|value| value != "." && !value.trim().is_empty())
+        .or_else(|| {
+            repo.find_remote("origin")
+                .ok()
+                .map(|_| "origin".to_string())
+        })
+        .or_else(|| {
+            repo.remotes()
+                .ok()
+                .and_then(|values| values.get(0).map(str::to_string))
+        });
+    let Some(name) = name else {
+        return Ok(None);
+    };
+    let merge_reference = config
+        .get_string(&format!("branch.{branch}.merge"))
+        .unwrap_or_else(|_| format!("refs/heads/{branch}"));
+    let remote_branch = merge_reference
+        .strip_prefix("refs/heads/")
+        .unwrap_or(branch);
+    let remote = repo.find_remote(&name).map_err(error_text)?;
+    Ok(Some(RemoteTracking {
+        tracking_reference: format!("refs/remotes/{name}/{remote_branch}"),
+        name,
+        url: remote.url().map(str::to_string),
+        has_upstream,
+    }))
+}
+
 fn branch_state(repo: &Repository) -> Result<(Option<String>, bool, usize, usize), String> {
     let head = match repo.head() {
         Ok(head) => head,
+        Err(error) if error.code() == git2::ErrorCode::UnbornBranch => {
+            return Ok((Some(current_branch_name(repo)?), false, 0, 0));
+        }
         Err(_) => return Ok((None, false, 0, 0)),
     };
     let detached = !head.is_branch();
@@ -644,14 +1220,14 @@ fn visible_text(value: &[u8]) -> String {
 }
 
 fn status_label(status: Status) -> &'static str {
-    if status.intersects(Status::WT_NEW | Status::INDEX_NEW) {
+    if status.intersects(Status::CONFLICTED) {
+        "conflicted"
+    } else if status.intersects(Status::WT_NEW | Status::INDEX_NEW) {
         "added"
     } else if status.intersects(Status::WT_DELETED | Status::INDEX_DELETED) {
         "deleted"
     } else if status.intersects(Status::WT_RENAMED | Status::INDEX_RENAMED) {
         "renamed"
-    } else if status.intersects(Status::CONFLICTED) {
-        "conflicted"
     } else {
         "modified"
     }

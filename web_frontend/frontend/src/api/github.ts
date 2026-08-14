@@ -55,6 +55,10 @@ export const githubApi = {
     requireDesktop()
     return invoke<GitHubRepository[]>('github_list_repositories')
   },
+  createRepository(name: string, isPrivate: boolean) {
+    requireDesktop()
+    return invoke<GitHubRepository>('github_create_repository', { name, private: isPrivate })
+  },
   logout() {
     requireDesktop()
     return invoke<void>('github_logout')
