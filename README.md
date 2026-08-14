@@ -53,10 +53,10 @@ Combo 以一条统一主对话链为产品入口。每次请求从模型池解�
 
 ```text
 macOS:
-~/Library/Application Support/com.fastagentfactory.app/.agentfactory/
+~/Library/Application Support/top.liuyanai.combo/.agentfactory/
 
 Windows:
-%LOCALAPPDATA%\com.fastagentfactory.app\.agentfactory\
+%LOCALAPPDATA%\top.liuyanai.combo\.agentfactory\
 ```
 
 后端日志位于：
@@ -65,7 +65,7 @@ Windows:
 <应用数据目录>/.agentfactory/logs/backend.log
 ```
 
-重新安装或升级应用不会主动删除已有会话、运行记录、模型配置或工作区。主动清理应用数据前应先备份需要保留的内容。
+Combo 使用独立的应用数据目录，不读取或迁移旧 FastAgentFactory 安装目录中的数据。重新安装或升级 Combo 不会主动删除其已有会话、运行记录、模型配置或工作区。主动清理 Combo 应用数据前应先备份需要保留的内容。
 
 ## 架构
 
