@@ -169,12 +169,12 @@ class MCPBinaryContentMaterializer:
 
 def _binary_content(content: dict[str, Any]) -> tuple[str, str] | None:
     if content.get("type") == "image" and isinstance(content.get("data"), str):
-        return content["data"], str(content.get("mimeType") or content.get("mime_type") or "image/png")
+        return content["data"], str(content.get("mime_type") or "image/png")
     if isinstance(content.get("blob"), str):
-        return content["blob"], str(content.get("mimeType") or content.get("mime_type") or "application/octet-stream")
+        return content["blob"], str(content.get("mime_type") or "application/octet-stream")
     resource = content.get("resource")
     if content.get("type") == "resource" and isinstance(resource, dict) and isinstance(resource.get("blob"), str):
-        return resource["blob"], str(resource.get("mimeType") or resource.get("mime_type") or "application/octet-stream")
+        return resource["blob"], str(resource.get("mime_type") or "application/octet-stream")
     return None
 
 
@@ -183,9 +183,13 @@ def _resource_summary(server_id: str, item: Any) -> dict[str, Any]:
         "kind": "resource",
         "server_id": server_id,
         "name": str(getattr(item, "name", "")),
+        "title": getattr(item, "title", None),
         "description": str(getattr(item, "description", "") or ""),
         "uri": str(getattr(item, "uri", "")),
-        "mime_type": str(getattr(item, "mimeType", "") or ""),
+        "mime_type": str(getattr(item, "mime_type", "") or ""),
+        "size": getattr(item, "size", None),
+        "icons": [icon.model_dump(mode="json", exclude_none=True) for icon in (item.icons or ())],
+        "annotations": item.annotations.model_dump(mode="json", exclude_none=True) if item.annotations else None,
     }
 
 
@@ -194,9 +198,12 @@ def _template_summary(server_id: str, item: Any) -> dict[str, Any]:
         "kind": "resource_template",
         "server_id": server_id,
         "name": str(getattr(item, "name", "")),
+        "title": getattr(item, "title", None),
         "description": str(getattr(item, "description", "") or ""),
-        "uri_template": str(getattr(item, "uriTemplate", "")),
-        "mime_type": str(getattr(item, "mimeType", "") or ""),
+        "uri_template": str(getattr(item, "uri_template", "")),
+        "mime_type": str(getattr(item, "mime_type", "") or ""),
+        "icons": [icon.model_dump(mode="json", exclude_none=True) for icon in (item.icons or ())],
+        "annotations": item.annotations.model_dump(mode="json", exclude_none=True) if item.annotations else None,
     }
 
 
@@ -206,6 +213,7 @@ def _prompt_summary(server_id: str, item: Any) -> dict[str, Any]:
         "kind": "prompt",
         "server_id": server_id,
         "name": str(getattr(item, "name", "")),
+        "title": getattr(item, "title", None),
         "description": str(getattr(item, "description", "") or ""),
         "arguments": [
             {
@@ -215,6 +223,7 @@ def _prompt_summary(server_id: str, item: Any) -> dict[str, Any]:
             }
             for argument in arguments
         ],
+        "icons": [icon.model_dump(mode="json", exclude_none=True) for icon in (item.icons or ())],
     }
 
 

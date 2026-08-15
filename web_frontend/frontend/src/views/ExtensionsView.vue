@@ -691,7 +691,7 @@ const probeSummary = computed(() => {
       : '',
     result.prompt_count > 0 ? `${result.prompt_count} 个 Prompt` : '',
   ].filter(Boolean)
-  return [result.server_name || 'MCP', ...facts].join(' · ')
+  return [result.server_title || result.server_name || 'MCP', ...facts].join(' · ')
 })
 const selectedResource = computed<SkillEditorResource | null>(() => skillDocument.value?.resources.find(item => item.path === selectedResourcePath.value) || null)
 const selectedToolFile = computed<SkillEditorResource | null>(() => toolPackageDocument.value?.files.find(item => item.path === selectedToolFilePath.value) || null)
@@ -828,14 +828,7 @@ function mcpResourcePreviewFrom(result: Record<string, unknown>, name: string) {
   const contents = Array.isArray(result.contents) ? result.contents : []
   const content = contents.find(item => item && typeof item === 'object') as Record<string, unknown> | undefined
   if (!content) return { kind: 'binary' as const, name, content: '' }
-  const mimeType = String(content.mimeType || content.mime_type || '')
-  const textContent = typeof content.text === 'string' ? content.text : ''
-  const blob = typeof content.blob === 'string' ? content.blob : ''
-  if (mimeType.startsWith('image/') && blob) {
-    return { kind: 'image' as const, name, content: `data:${mimeType};base64,${blob}` }
-  }
-  if (textContent) return { kind: 'text' as const, name, content: textContent }
-  return { kind: 'binary' as const, name, content: '' }
+  return mcpPreviewContent(content, name)
 }
 function mcpPromptPreviewFrom(result: Record<string, unknown>, name: string) {
   const parts: Array<{ role: string; kind: 'image' | 'text'; content: string }> = []
@@ -847,13 +840,27 @@ function mcpPromptPreviewFrom(result: Record<string, unknown>, name: string) {
     for (const contentItem of contentItems) {
       if (!contentItem || typeof contentItem !== 'object') continue
       const content = contentItem as Record<string, unknown>
-      if (typeof content.text === 'string') parts.push({ role, kind: 'text', content: content.text })
-      else if (typeof content.data === 'string' && String(content.mimeType || content.mime_type).startsWith('image/')) parts.push({ role, kind: 'image', content: `data:${String(content.mimeType || content.mime_type)};base64,${content.data}` })
+      const preview = mcpPreviewContent(content, name)
+      if (preview.kind === 'image' || preview.kind === 'text') parts.push({ role, kind: preview.kind, content: preview.content })
       else parts.push({ role, kind: 'text', content: JSON.stringify(content, null, 2) })
     }
   }
   if (!parts.length) parts.push({ role: 'result', kind: 'text', content: JSON.stringify(result, null, 2) })
   return { name, parts }
+}
+function mcpPreviewContent(content: Record<string, unknown>, name: string): { kind: 'image' | 'text' | 'binary'; name: string; content: string } {
+  const nested = content.type === 'resource' && content.resource && typeof content.resource === 'object'
+    ? content.resource as Record<string, unknown>
+    : content
+  const mimeType = String(nested.mime_type || '')
+  if (typeof nested.text === 'string' && nested.text) return { kind: 'text', name, content: nested.text }
+  if (typeof nested.blob === 'string' && mimeType.startsWith('image/')) {
+    return { kind: 'image', name, content: `data:${mimeType};base64,${nested.blob}` }
+  }
+  if (content.type === 'image' && typeof content.data === 'string' && mimeType.startsWith('image/')) {
+    return { kind: 'image', name, content: `data:${mimeType};base64,${content.data}` }
+  }
+  return { kind: 'binary', name, content: '' }
 }
 
 async function loadAll() { loading.value = true; loadError.value = ''; try { snapshot.value = await capabilityPoolsApi.snapshot() } catch (error) { loadError.value = error instanceof Error ? error.message : String(error) } finally { loading.value = false } }

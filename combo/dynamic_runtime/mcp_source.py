@@ -204,8 +204,8 @@ class MCPConfigCapabilitySource:
                 raise ValueError(f"MCP server exposes duplicate or colliding tool names: {server_id}")
             upstream_names.add(upstream_name)
             aliases.add(alias)
-            input_schema = dict(tool.inputSchema or {"type": "object"})
-            output_schema = dict(tool.outputSchema or {"type": "object", "additionalProperties": True})
+            input_schema = dict(tool.input_schema or {"type": "object"})
+            output_schema = dict(tool.output_schema or {"type": "object", "additionalProperties": True})
             policy_override = runtime_policies.get(upstream_name) or {}
             if not isinstance(policy_override, dict):
                 raise ValueError(f"MCP tool runtime policy must be an object: {server_id}/{upstream_name}")

@@ -523,6 +523,8 @@ class RuntimeBackend:
                     "protocol_version": catalog.protocol_version,
                     "server_name": catalog.server_name,
                     "server_version": catalog.server_version,
+                    "server_title": catalog.server_title,
+                    "server_instructions": catalog.server_instructions,
                     "server_capabilities": list(catalog.capabilities),
                     "tool_count": len(catalog.tools),
                     "resource_count": len(catalog.resources),
@@ -531,24 +533,32 @@ class RuntimeBackend:
                     "resources": [
                         {
                             "name": str(getattr(item, "name", "")),
+                            "title": getattr(item, "title", None),
                             "description": str(getattr(item, "description", "") or ""),
                             "uri": str(getattr(item, "uri", "")),
-                            "mime_type": str(getattr(item, "mimeType", "") or ""),
+                            "mime_type": str(getattr(item, "mime_type", "") or ""),
+                            "size": getattr(item, "size", None),
+                            "icons": [icon.model_dump(mode="json", exclude_none=True) for icon in (item.icons or ())],
+                            "annotations": item.annotations.model_dump(mode="json", exclude_none=True) if item.annotations else None,
                         }
                         for item in catalog.resources
                     ],
                     "resource_templates": [
                         {
                             "name": str(getattr(item, "name", "")),
+                            "title": getattr(item, "title", None),
                             "description": str(getattr(item, "description", "") or ""),
-                            "uri_template": str(getattr(item, "uriTemplate", "")),
-                            "mime_type": str(getattr(item, "mimeType", "") or ""),
+                            "uri_template": str(getattr(item, "uri_template", "")),
+                            "mime_type": str(getattr(item, "mime_type", "") or ""),
+                            "icons": [icon.model_dump(mode="json", exclude_none=True) for icon in (item.icons or ())],
+                            "annotations": item.annotations.model_dump(mode="json", exclude_none=True) if item.annotations else None,
                         }
                         for item in catalog.resource_templates
                     ],
                     "prompts": [
                         {
                             "name": str(getattr(item, "name", "")),
+                            "title": getattr(item, "title", None),
                             "description": str(getattr(item, "description", "") or ""),
                             "arguments": [
                                 {
@@ -558,6 +568,7 @@ class RuntimeBackend:
                                 }
                                 for argument in (getattr(item, "arguments", ()) or ())
                             ],
+                            "icons": [icon.model_dump(mode="json", exclude_none=True) for icon in (item.icons or ())],
                         }
                         for item in catalog.prompts
                     ],
@@ -672,6 +683,8 @@ class RuntimeBackend:
             "protocol_version": catalog.protocol_version,
             "server_name": catalog.server_name,
             "server_version": catalog.server_version,
+            "server_title": catalog.server_title,
+            "server_instructions": catalog.server_instructions,
             "capabilities": list(catalog.capabilities),
             "tool_count": len(catalog.tools),
             "tools": [str(tool.name) for tool in catalog.tools],

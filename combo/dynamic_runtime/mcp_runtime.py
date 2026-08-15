@@ -8,13 +8,22 @@ from threading import RLock, Thread
 from types import MappingProxyType
 from typing import Any, AsyncIterator, Callable, Mapping
 
-import httpx
+import httpx2
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
+from mcp.types import (
+    CallToolResult,
+    GetPromptResult,
+    LoggingMessageNotification,
+    PromptListChangedNotification,
+    ReadResourceResult,
+    ResourceListChangedNotification,
+    ToolListChangedNotification,
+)
 
-from combo.tooling.envelope import tool_envelope
+from combo.tooling.envelope import tool_envelope, tool_failure
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +62,8 @@ class MCPServerCatalog:
     protocol_version: str
     server_name: str
     server_version: str
+    server_title: str | None
+    server_instructions: str | None
     capabilities: tuple[str, ...]
     tools: tuple[Any, ...]
     resources: tuple[Any, ...]
@@ -166,6 +177,8 @@ class MCPRuntimePool:
             self._read_resource(server_content_digest, uri),
             timeout=binding.request_timeout_seconds,
         )
+        if not isinstance(result, ReadResourceResult):
+            raise RuntimeError("MCP resource returned an unsupported result")
         return result.model_dump(mode="json", exclude_none=True)
 
     def get_prompt(
@@ -179,6 +192,8 @@ class MCPRuntimePool:
             self._get_prompt(server_content_digest, name, arguments),
             timeout=binding.request_timeout_seconds,
         )
+        if not isinstance(result, GetPromptResult):
+            raise RuntimeError("MCP prompt returned an unsupported result")
         return result.model_dump(mode="json", exclude_none=True)
 
     def call_tool(
@@ -192,11 +207,17 @@ class MCPRuntimePool:
             self._call_tool(server_content_digest, tool_name, arguments),
             timeout=binding.connect_timeout_seconds + binding.request_timeout_seconds,
         )
+        if not isinstance(result, CallToolResult):
+            raise RuntimeError("MCP tool returned an unsupported result")
         payload = result.model_dump(mode="json", exclude_none=True)
-        return tool_envelope(
-            {"server_revision": server_content_digest, "tool": tool_name, "result": payload},
-            summary=f"MCP tool {tool_name} completed",
-        )
+        output = {"server_revision": server_content_digest, "tool": tool_name, "result": payload}
+        if result.is_error:
+            return tool_failure(
+                _tool_error_message(payload),
+                output=output,
+                summary=f"MCP tool {tool_name} failed",
+            )
+        return tool_envelope(output, summary=f"MCP tool {tool_name} completed")
 
     def close(self) -> None:
         with self._lock:
@@ -300,7 +321,17 @@ class MCPRuntimePool:
                 yield read_stream, write_stream
             return
         if binding.transport == "streamable_http":
-            async with httpx.AsyncClient(headers=dict(binding.headers)) as client:
+            timeout = httpx2.Timeout(
+                connect=binding.connect_timeout_seconds,
+                read=binding.request_timeout_seconds,
+                write=binding.request_timeout_seconds,
+                pool=binding.connect_timeout_seconds,
+            )
+            async with httpx2.AsyncClient(
+                headers=dict(binding.headers),
+                timeout=timeout,
+                follow_redirects=True,
+            ) as client:
                 async with streamable_http_client(
                     str(binding.endpoint),
                     http_client=client,
@@ -386,12 +417,14 @@ class MCPRuntimePool:
         capabilities = set(connection.catalog.capabilities)
         tools = await _paged(connection.session.list_tools, "tools") if "tools" in capabilities else ()
         resources = await _paged(connection.session.list_resources, "resources") if "resources" in capabilities else ()
-        templates = await _paged(connection.session.list_resource_templates, "resourceTemplates") if "resources" in capabilities else ()
+        templates = await _paged(connection.session.list_resource_templates, "resource_templates") if "resources" in capabilities else ()
         prompts = await _paged(connection.session.list_prompts, "prompts") if "prompts" in capabilities else ()
         catalog = MCPServerCatalog(
             protocol_version=connection.catalog.protocol_version,
             server_name=connection.catalog.server_name,
             server_version=connection.catalog.server_version,
+            server_title=connection.catalog.server_title,
+            server_instructions=connection.catalog.server_instructions,
             capabilities=connection.catalog.capabilities,
             tools=tools,
             resources=resources,
@@ -403,15 +436,15 @@ class MCPRuntimePool:
 
     async def _handle_message(self, digest: str, message: Any) -> None:
         root = getattr(message, "root", None)
-        notification = type(root).__name__
-        if notification == "LoggingMessageNotification":
-            await self._handle_log(digest, getattr(root, "params", None))
+        if isinstance(root, LoggingMessageNotification):
+            await self._handle_log(digest, root.params)
             return
-        changed = {
-            "ToolListChangedNotification": "tools",
-            "ResourceListChangedNotification": "resources",
-            "PromptListChangedNotification": "prompts",
-        }.get(notification)
+        changed = (
+            "tools" if isinstance(root, ToolListChangedNotification)
+            else "resources" if isinstance(root, ResourceListChangedNotification)
+            else "prompts" if isinstance(root, PromptListChangedNotification)
+            else None
+        )
         if changed is not None:
             asyncio.create_task(self._refresh_after_notification(digest, changed))
 
@@ -421,7 +454,9 @@ class MCPRuntimePool:
         if connection is None or connection.session is None:
             return
         try:
-            await self._refresh_catalog(digest, connection)
+            binding = self._binding(digest)
+            async with self._request_lane(digest, binding):
+                await self._refresh_catalog(digest, connection)
         except BaseException as exc:
             connection.error = exc
             return
@@ -485,17 +520,18 @@ def _report_initialized(
     callback: Callable[[str, dict[str, Any]], None] | None,
     initialized: Any,
 ) -> None:
-    server = getattr(initialized, "serverInfo", None)
-    capabilities = getattr(initialized, "capabilities", None)
+    server = initialized.server_info
+    capabilities = initialized.capabilities
     _report_progress(callback, "initialized", {
-        "protocol_version": str(getattr(initialized, "protocolVersion", "")),
-        "server_name": str(getattr(server, "name", "")),
-        "server_version": str(getattr(server, "version", "")),
+        "protocol_version": initialized.protocol_version,
+        "server_name": server.name,
+        "server_version": server.version,
+        "server_title": server.title,
+        "server_instructions": initialized.instructions,
         "capabilities": sorted(
             key
             for key, value in (
                 capabilities.model_dump(mode="python", exclude_none=True).items()
-                if capabilities is not None else ()
             )
             if value is not None
         ),
@@ -503,20 +539,21 @@ def _report_initialized(
 
 
 def _empty_catalog(initialized: Any) -> MCPServerCatalog:
-    server = getattr(initialized, "serverInfo", None)
-    capabilities = getattr(initialized, "capabilities", None)
+    server = initialized.server_info
+    capabilities = initialized.capabilities
     names = tuple(sorted(
         key
         for key, value in (
             capabilities.model_dump(mode="python", exclude_none=True).items()
-            if capabilities is not None else ()
         )
         if value is not None
     ))
     return MCPServerCatalog(
-        protocol_version=str(getattr(initialized, "protocolVersion", "")),
-        server_name=str(getattr(server, "name", "")),
-        server_version=str(getattr(server, "version", "")),
+        protocol_version=initialized.protocol_version,
+        server_name=server.name,
+        server_version=server.version,
+        server_title=server.title,
+        server_instructions=initialized.instructions,
         capabilities=names,
         tools=(),
         resources=(),
@@ -530,6 +567,8 @@ def _catalog_identity(catalog: MCPServerCatalog) -> dict[str, Any]:
         "protocol_version": catalog.protocol_version,
         "server_name": catalog.server_name,
         "server_version": catalog.server_version,
+        "server_title": catalog.server_title,
+        "server_instructions": catalog.server_instructions,
         "capabilities": list(catalog.capabilities),
     }
 
@@ -537,12 +576,21 @@ def _catalog_identity(catalog: MCPServerCatalog) -> dict[str, Any]:
 async def _paged(request: Callable[..., Any], collection_name: str) -> tuple[Any, ...]:
     page = await request()
     values = list(getattr(page, collection_name, ()) or ())
-    cursor = getattr(page, "nextCursor", None)
+    cursor = page.next_cursor
     while cursor is not None:
         page = await request(cursor=cursor)
         values.extend(getattr(page, collection_name, ()) or ())
-        cursor = getattr(page, "nextCursor", None)
+        cursor = page.next_cursor
     return tuple(values)
+
+
+def _tool_error_message(payload: dict[str, Any]) -> str:
+    for item in payload.get("content", ()):
+        if isinstance(item, dict) and item.get("type") == "text":
+            text = str(item.get("text") or "").strip()
+            if text:
+                return text
+    return "MCP server reported a tool error"
 
 
 def _report_progress(

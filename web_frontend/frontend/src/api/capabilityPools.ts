@@ -45,6 +45,8 @@ export interface McpProbeResult {
   protocol_version: string
   server_name: string
   server_version: string
+  server_title: string | null
+  server_instructions: string | null
   capabilities: string[]
   resource_count: number
   resources: string[]
