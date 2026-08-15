@@ -1,26 +1,10 @@
 <template>
   <div
     class="message-item"
-    :class="[`role-${message.role}`, { streaming, thinking }]"
+    :class="[`role-${message.role}`, { streaming }]"
     :data-reference-label="`${roleLabel} · ${formatTime(message.timestamp)}`"
   >
-    <template v-if="thinking">
-      <div
-        class="thinking-content"
-        role="status"
-        aria-live="polite"
-        :aria-label="message.content || t('roles.assistantThinking')"
-      >
-        <ComboFrameAnimation
-          character="lead"
-          action="running"
-          :size="22"
-        />
-        <span class="thinking-label">{{ message.content || t('roles.assistantThinking') }}</span>
-      </div>
-    </template>
-
-    <template v-else-if="delegatedDelivery">
+    <template v-if="delegatedDelivery">
       <div class="delegated-delivery-message">
         <MessagePartRenderer
           v-for="part in visibleParts"
@@ -90,14 +74,6 @@
           </template>
         </template>
 
-        <ComboFrameAnimation
-          v-if="streaming && !thinking"
-          class="streaming-running-note"
-          character="lead"
-          action="running"
-          :size="25"
-        />
-
         <GitChangeCapsule
           v-if="message.role === 'assistant' && gitChanges?.files.length"
           :changes="gitChanges"
@@ -127,7 +103,6 @@ const props = withDefaults(
   defineProps<{
     message: TranscriptItem
     streaming?: boolean
-    thinking?: boolean
     quoteable?: boolean
     workspaceContext?: WorkspaceRequestContext | null
     messages?: TranscriptItem[]
@@ -135,7 +110,6 @@ const props = withDefaults(
   }>(),
   {
     streaming: false,
-    thinking: false,
     quoteable: false,
     workspaceContext: null,
     messages: () => [],
@@ -295,25 +269,6 @@ function formatTime(timestamp: string): string {
   animation: app-pulse-soft 2.4s ease-in-out infinite;
 }
 
-.message-item.thinking {
-  width: fit-content;
-  max-width: 100%;
-  padding: 2px var(--app-space-md);
-  background: transparent;
-  border: 0;
-  box-shadow: none;
-}
-
-.message-item.thinking::before {
-  display: none;
-}
-
-.message-item.thinking:hover {
-  background: transparent;
-  box-shadow: none;
-  transform: none;
-}
-
 .message-item.role-user {
   background-color: transparent;
   flex-direction: row-reverse;
@@ -409,34 +364,6 @@ function formatTime(timestamp: string): string {
   .role-user .message-content {
     max-width: calc(100% - 52px);
   }
-}
-
-.streaming-running-note {
-  display: inline-grid;
-  margin-left: 5px;
-  vertical-align: text-bottom;
-}
-
-.thinking-content {
-  width: fit-content;
-  min-height: 24px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-}
-
-.thinking-label {
-  overflow: hidden;
-  max-width: min(72vw, 720px);
-  color: var(--app-text-tertiary);
-  font-size: 12px;
-  line-height: 18px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 </style>

@@ -149,8 +149,10 @@ export function useRuntimeCommands() {
       sessionId,
       mode,
     })
-    transport.sendRuntimeCommand(command)
-    return command
+    runtimeStore.markRequestSteering(queuedRequestId)
+    const request = transport.sendRuntimeCommand(command)
+    void request.catch(() => runtimeStore.restoreRequestQueued(queuedRequestId))
+    return request
   }
 
   return {

@@ -87,7 +87,6 @@
             <div class="content-header">
               <div class="context-title">
                 <n-text strong>{{ t('modelPool.infrastructureBindings') }}</n-text>
-                <n-text depth="3" class="context-subtitle">{{ t('modelPool.infrastructureBindingsHint') }}</n-text>
               </div>
               <n-button type="primary" :loading="savingBindings" @click="saveInfrastructureBindings">
                 {{ t('common.save') }}

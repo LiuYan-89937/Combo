@@ -6,7 +6,7 @@ from uuid import uuid4
 from combo.dynamic_runtime.dispatcher import CommandOutcome
 from combo.dynamic_runtime.capability_resolver import MainTurnCapabilityResolver, MainTurnCapabilityResolverProtocol
 from combo.dynamic_runtime.delegated_model_selector import DelegatedTaskModelSelector
-from combo.dynamic_runtime.delegation_policy import MAIN_RUNTIME_ONLY_CAPABILITY_IDS
+from combo.dynamic_runtime.delegation_policy import MAIN_RUNTIME_EXCLUDED_CAPABILITY_IDS
 from combo.dynamic_runtime.model_service import ResolvedRuntimePolicy, RuntimeModelResolver
 from combo.dynamic_runtime.policy_repositories import UserRuntimePolicyStore
 from combo.dynamic_runtime.repositories import ConversationStore, RuntimeInstanceStore, utc_now_text
@@ -115,7 +115,7 @@ class MainTurnCommandHandler:
                     policy=resolved_policy,
                     workspace_id=conversation.workspace_id,
                     include_system_capabilities=True,
-                    excluded_capability_ids=MAIN_RUNTIME_ONLY_CAPABILITY_IDS,
+                    excluded_capability_ids=MAIN_RUNTIME_EXCLUDED_CAPABILITY_IDS,
                 )
             else:
                 capability_snapshot = await self._capability_resolver.resolve(

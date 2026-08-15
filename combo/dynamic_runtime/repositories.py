@@ -698,6 +698,22 @@ class CommandInbox:
         principal_id: str,
         session_id: str,
     ) -> SendMessagePayload:
+        payload, receipt = self.message_command_payload(
+            command_id=command_id,
+            principal_id=principal_id,
+            session_id=session_id,
+        )
+        if receipt.status != "queued":
+            raise ValueError(f"message command is not queued: {command_id}")
+        return payload
+
+    def message_command_payload(
+        self,
+        *,
+        command_id: str,
+        principal_id: str,
+        session_id: str,
+    ) -> tuple[SendMessagePayload, CommandReceipt]:
         target_id = _required_text(command_id, "command_id")
         owner = _required_text(principal_id, "principal_id")
         session = _required_text(session_id, "session_id")
@@ -711,14 +727,12 @@ class CommandInbox:
                 (target_id, owner, session),
             ).fetchone()
             if row is None:
-                raise LookupError(f"queued message command not found: {target_id}")
+                raise LookupError(f"message command not found: {target_id}")
             receipt = CommandReceipt.model_validate_json(str(row["receipt_json"]))
-            if receipt.status != "queued":
-                raise ValueError(f"message command is not queued: {target_id}")
             envelope = CommandEnvelope.model_validate_json(str(row["envelope_json"]))
             if not isinstance(envelope.payload, SendMessagePayload):
-                raise TypeError("queued steering target is not a send-message command")
-        return envelope.payload
+                raise TypeError("steering target is not a send-message command")
+        return envelope.payload, receipt
 
     def complete_queued_as_steering(
         self,
@@ -740,10 +754,15 @@ class CommandInbox:
                 (target_id, owner, session),
             ).fetchone()
             if row is None:
-                raise LookupError(f"queued message command not found: {target_id}")
+                raise LookupError(f"message command not found: {target_id}")
             receipt = CommandReceipt.model_validate_json(str(row["receipt_json"]))
             if receipt.status != "queued":
-                raise ValueError(f"message command is not queued: {target_id}")
+                # A queued message may be claimed between dispatch and the
+                # checkpoint that acknowledges the injected input.  The
+                # steering caller handles a running target by cancelling its
+                # current runtime; terminal targets are already settled and
+                # must not poison the active runtime with a validation error.
+                return receipt
             now = utc_now_text()
             completed = receipt.model_copy(
                 update={

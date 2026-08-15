@@ -177,7 +177,7 @@ export const useRuntimeStore = defineStore('runtime', {
     },
 
     isAwaitingUserInputInterrupt: (state): boolean => {
-      return state.runStatus === 'interrupted' && isUserInputInterrupt(state.pendingInterrupt)
+      return isUserInputInterrupt(state.pendingInterrupt)
     },
 
     // 当前是否有活跃的运行
@@ -283,8 +283,13 @@ export const useRuntimeStore = defineStore('runtime', {
           && ['run_started', 'run_completed', 'run_failed', 'run_cancelled'].includes(event.event_type)
         ) {
           this.pendingInterrupt = null
+          if (!this.activeRequestId) this.runStatus = 'idle'
         }
-        if (event.event_type !== 'tool_approval_requested') return
+        const isChildQuestion = (
+          event.event_type === 'interrupt_requested'
+          && String(event.payload?.type || '').trim() === 'ask_user'
+        )
+        if (event.event_type !== 'tool_approval_requested' && !isChildQuestion) return
       }
 
       // 3. Request-scoped 事件过滤
@@ -826,6 +831,15 @@ export const useRuntimeStore = defineStore('runtime', {
     },
 
     _handleInterruptRequested(event: RuntimeFrontendEvent) {
+      const isChildQuestion = (
+        event.payload?.runtime_role === 'temporary'
+        && String(event.payload?.type || '').trim() === 'ask_user'
+      )
+      if (isChildQuestion) {
+        this.pendingInterrupt = event
+        if (!this.activeRequestId) this.runStatus = 'interrupted'
+        return
+      }
       if (isSchedulerRequest(event.request_id) && event.request_id !== this.activeRequestId) {
         this._completeActiveRequest(event, 'interrupted')
         return
@@ -1719,6 +1733,56 @@ export const useRuntimeStore = defineStore('runtime', {
       this.runStatus = 'stopping'
       this.pendingInterrupt = null
       this._saveActiveConversationScope()
+    },
+
+    markRequestSteering(requestId: string) {
+      const targetRequestId = String(requestId || '').trim()
+      if (!targetRequestId) return
+      const request = this.activeRequests[targetRequestId]
+      if (request) {
+        request.payload = {
+          ...(request.payload || {}),
+          dispatch_state: 'steering',
+        }
+      }
+      const turn = this.conversationTurns.find((item) => item.requestId === targetRequestId)
+      if (turn) {
+        turn.metadata = {
+          ...(turn.metadata || {}),
+          dispatch_state: 'steering',
+        }
+        if (turn.userMessage) {
+          turn.userMessage.metadata = {
+            ...(turn.userMessage.metadata || {}),
+            dispatch_state: 'steering',
+          }
+        }
+      }
+    },
+
+    restoreRequestQueued(requestId: string) {
+      const targetRequestId = String(requestId || '').trim()
+      if (!targetRequestId) return
+      const request = this.activeRequests[targetRequestId]
+      if (request && request.status === 'running') {
+        request.payload = {
+          ...(request.payload || {}),
+          dispatch_state: 'queued',
+        }
+      }
+      const turn = this.conversationTurns.find((item) => item.requestId === targetRequestId)
+      if (turn) {
+        turn.metadata = {
+          ...(turn.metadata || {}),
+          dispatch_state: 'queued',
+        }
+        if (turn.userMessage) {
+          turn.userMessage.metadata = {
+            ...(turn.userMessage.metadata || {}),
+            dispatch_state: 'queued',
+          }
+        }
+      }
     },
 
   },

@@ -59,10 +59,16 @@ class RuntimeModelGenerationInterrupted(RuntimeError):
         *,
         partial_text: str = "",
         reasoning_content: str = "",
+        partial_tool_calls: tuple[dict[str, Any], ...] = (),
     ) -> None:
         super().__init__(message)
         self.partial_text = str(partial_text or "")
         self.reasoning_content = str(reasoning_content or "")
+        self.partial_tool_calls = tuple(
+            dict(call)
+            for call in (partial_tool_calls or ())
+            if isinstance(call, dict)
+        )
 
 
 class ToolCancellationScope:
@@ -185,6 +191,11 @@ def runtime_terminal_cancellation_requested() -> bool:
     return bool(control is not None and getattr(control, "drain_requested", False))
 
 
+def runtime_tool_interruption_requested() -> bool:
+    control = current_runtime_run_control()
+    return bool(control is not None and getattr(control, "tool_interrupt_requested", False))
+
+
 def consume_runtime_inputs() -> tuple[Any, ...]:
     control = current_runtime_run_control()
     consume = getattr(control, "consume_inputs", None)
@@ -283,7 +294,10 @@ def execute_with_runtime_cancellation(
     if timeout_seconds <= 0:
         raise ValueError("tool timeout_seconds must be positive")
     control = current_runtime_run_control()
-    if control is not None and bool(getattr(control, "drain_requested", False)):
+    if control is not None and (
+        bool(getattr(control, "drain_requested", False))
+        or bool(getattr(control, "tool_interrupt_requested", False))
+    ):
         raise RuntimeToolExecutionCancelled(_runtime_cancel_reason(control))
 
     completed = threading.Event()
@@ -314,11 +328,21 @@ def execute_with_runtime_cancellation(
                 raise RuntimeToolExecutionTimedOut(
                     f"Tool execution timed out after {timeout_seconds:g} seconds."
                 )
-            if cancelled.wait(timeout=min(0.05, remaining)) or bool(
-                control is not None and getattr(control, "drain_requested", False)
+            if cancelled.wait(timeout=min(0.05, remaining)) or (
+                control is not None
+                and (
+                    bool(getattr(control, "drain_requested", False))
+                    or bool(getattr(control, "tool_interrupt_requested", False))
+                )
             ):
                 raise RuntimeToolExecutionCancelled(_runtime_cancel_reason(control))
-        if cancelled.is_set() or bool(control is not None and getattr(control, "drain_requested", False)):
+        if cancelled.is_set() or (
+            control is not None
+            and (
+                bool(getattr(control, "drain_requested", False))
+                or bool(getattr(control, "tool_interrupt_requested", False))
+            )
+        ):
             raise RuntimeToolExecutionCancelled(_runtime_cancel_reason(control))
         error = outcome.get("error")
         if error is not None:
@@ -326,8 +350,15 @@ def execute_with_runtime_cancellation(
         return outcome.get("value")
     finally:
         unregister()
+        clear_interrupt = getattr(control, "clear_tool_interrupt", None)
+        if callable(clear_interrupt):
+            clear_interrupt()
 
 
 def _runtime_cancel_reason(control: Any) -> str:
-    reason = str(getattr(control, "drain_reason", None) or "user_cancelled")
+    reason = str(
+        getattr(control, "drain_reason", None)
+        or getattr(control, "tool_interrupt_reason", None)
+        or "user_cancelled"
+    )
     return f"Tool execution cancelled: {reason}"

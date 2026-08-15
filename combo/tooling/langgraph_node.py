@@ -17,6 +17,7 @@ from langgraph.types import interrupt
 
 from combo.runtime_kernel.observability.tool_events import emit_runtime_tool_activity
 from combo.runtime_protocol.messages import incomplete_tool_call_ids
+from combo.tooling.builtins.ask_usr.specs import ASK_USR_TOOL_ID
 from combo.tooling.execution_context import (
     current_tool_approval_override,
     tool_approval_override,
@@ -109,6 +110,12 @@ class ComboToolNode:
             self._max_parallel_by_name,
             self._serialization_key_by_name,
         ):
+            interactive_calls, ordinary_calls = _split_ask_user_batch(batch)
+            if interactive_calls:
+                outputs.extend(self._ask_user_messages(interactive_calls, state=state))
+            if not ordinary_calls:
+                continue
+            batch = ordinary_calls
             approval_requests = self._approval_requests_for_batch(batch, state=state)
             if approval_requests:
                 decision = interrupt(_batch_approval_payload(approval_requests))
@@ -133,6 +140,90 @@ class ComboToolNode:
                 raw_output = self._invoke_native_tool_node(batch_state, config=config, runtime=runtime)
             outputs.extend(_messages_from_tool_node_output(raw_output, self.messages_key))
         return {self.messages_key: _complete_tool_message_set(tool_calls, outputs)}
+
+    def _ask_user_messages(
+        self,
+        calls: Sequence[dict[str, Any]],
+        *,
+        state: Mapping[str, Any],
+    ) -> list[ToolMessage]:
+        if len(calls) != 1:
+            raise RuntimeError("ask_usr must be invoked one question at a time")
+        call = calls[0]
+        tool_call_id = str(call.get("id") or ASK_USR_TOOL_ID)
+        arguments = dict(call.get("args") or {})
+        question = str(arguments.get("question") or "").strip()
+        if not question:
+            return [
+                tool_observation_message(
+                    status="invalid_arguments",
+                    tool_id=ASK_USR_TOOL_ID,
+                    tool_call_id=tool_call_id,
+                    message="ask_usr requires a non-empty question.",
+                    arguments=arguments,
+                    retryable=True,
+                )
+            ]
+        choices = _ask_user_choices(arguments.get("choices"))
+        allow_free_text = arguments.get("allow_free_text", True) is not False
+        public_arguments = self._public_arguments(ASK_USR_TOOL_ID, arguments)
+        self._emit(
+            {
+                "event_type": "tool_proposed",
+                "tool_id": ASK_USR_TOOL_ID,
+                "tool_call_id": tool_call_id,
+                "arguments": public_arguments,
+                "status": "proposed",
+            }
+        )
+        runtime_state = state.get("runtime") if isinstance(state, Mapping) else None
+        run_state = runtime_state.get("run") if isinstance(runtime_state, Mapping) else {}
+        with tool_call_context(
+            tool_id=ASK_USR_TOOL_ID,
+            tool_call_id=tool_call_id,
+            origin_node_id=self.origin_node_id,
+            origin_impl=self.origin_impl,
+            event_sink=self._emit,
+        ):
+            response = interrupt(
+                {
+                    "type": "ask_user",
+                    "question_id": tool_call_id,
+                    "tool_call_id": tool_call_id,
+                    "message": question,
+                    "choices": choices,
+                    "allow_free_text": allow_free_text,
+                    "source_runtime_instance_id": (
+                        str(run_state.get("runtime_instance_id") or "").strip()
+                        if isinstance(run_state, Mapping)
+                        else ""
+                    ),
+                }
+            )
+        answer = _ask_user_answer(response)
+        self._emit(
+            {
+                "event_type": "tool_completed",
+                "tool_id": ASK_USR_TOOL_ID,
+                "tool_call_id": tool_call_id,
+                "arguments": public_arguments,
+                "status": "completed",
+                "result": {"question_id": tool_call_id, "answer": answer},
+                "output": {"question_id": tool_call_id, "answer": answer},
+            }
+        )
+        return [
+            tool_observation_message(
+                status="completed",
+                tool_id=ASK_USR_TOOL_ID,
+                tool_call_id=tool_call_id,
+                message="User answered the question.",
+                arguments=arguments,
+                output={"question_id": tool_call_id, "answer": answer},
+                evidence={"interaction": "ask_user"},
+                retryable=False,
+            )
+        ]
 
     def _approval_requests_for_batch(
         self,
@@ -623,6 +714,48 @@ def _tool_concurrent(tool: BaseTool) -> bool:
     if not isinstance(combo, dict):
         return True
     return bool(combo.get("concurrent", True))
+
+
+def _split_ask_user_batch(
+    batch: Sequence[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    ask_calls = [call for call in batch if str(call.get("name") or "") == ASK_USR_TOOL_ID]
+    if not ask_calls:
+        return [], [dict(call) for call in batch]
+    ordinary_calls = [
+        dict(call)
+        for call in batch
+        if str(call.get("name") or "") != ASK_USR_TOOL_ID
+    ]
+    return [dict(call) for call in ask_calls], ordinary_calls
+
+
+def _ask_user_choices(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    choices: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+        option_value = str(item.get("value") or "").strip()
+        label = str(item.get("label") or option_value).strip()
+        if not option_value or not label:
+            continue
+        option = {"value": option_value, "label": label}
+        description = str(item.get("description") or "").strip()
+        if description:
+            option["description"] = description
+        choices.append(option)
+    return choices
+
+
+def _ask_user_answer(value: Any) -> str:
+    if isinstance(value, Mapping):
+        value = value.get("answer") or value.get("response") or value.get("value")
+    answer = str(value or "").strip()
+    if not answer:
+        raise ValueError("ask_usr resume requires a non-empty answer")
+    return answer
 
 
 def _tool_serialization_key(tool: BaseTool) -> str | None:

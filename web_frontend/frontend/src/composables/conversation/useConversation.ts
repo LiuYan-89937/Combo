@@ -216,7 +216,7 @@ export function useConversation() {
   }
 
   function steerQueuedRequest(requestId: string) {
-    commands.steerRequest(requestId)
+    void commands.steerRequest(requestId)
   }
 
   function cancelQueuedRequest(requestId: string) {

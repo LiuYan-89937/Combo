@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from hashlib import sha256
 from io import StringIO
 import json
-import mimetypes
 import os
 from pathlib import Path
 import re
@@ -15,6 +14,7 @@ import unicodedata
 from ruamel.yaml import YAML
 
 from combo.dynamic_runtime.capability_blob_store import CapabilityBlobStore
+from combo.dynamic_runtime.content_media import media_type_for_path
 from combo.dynamic_runtime.capability_definitions import (
     SKILL_NAME_PATTERN,
     SkillContentRef,
@@ -219,7 +219,7 @@ class FileSystemSkillCapabilitySource:
                 self._blobs.put_skill_content(
                     logical_path=logical_path,
                     kind=_content_kind(logical_path),
-                    media_type=_media_type(path),
+                    media_type=media_type_for_path(path, content=content),
                     content=content,
                 )
             )
@@ -292,11 +292,6 @@ def _content_kind(logical_path: str) -> str:
         "assets": "asset",
         "scripts": "script",
     }.get(root, "reference")
-
-
-def _media_type(path: Path) -> str:
-    guessed, _ = mimetypes.guess_type(path.name)
-    return guessed or "application/octet-stream"
 
 
 def _keywords(metadata: dict[str, Any], name: str) -> tuple[str, ...]:

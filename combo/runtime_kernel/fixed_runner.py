@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from time import perf_counter
 from typing import Any
 
-from langchain_core.messages import HumanMessage, RemoveMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.errors import GraphInterrupt
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
@@ -24,7 +24,10 @@ from combo.runtime_kernel.state.runtime_graph import (
     validate_patch_sections,
 )
 from combo.runtime_kernel.state import RuntimeState, merge_state_patch
-from combo.runtime_protocol.messages import incomplete_tool_call_ids
+from combo.runtime_protocol.messages import (
+    close_incomplete_tool_call_messages,
+    incomplete_tool_call_ids,
+)
 from combo.tooling.execution_context import consume_runtime_inputs
 from combo.tooling.execution_context import (
     RuntimeModelGenerationInterrupted,
@@ -134,16 +137,10 @@ def make_fixed_runner(
             if implementation.impl_id == "cognitive.answer" and route_decision != "model.requests_tool":
                 late_messages = _consume_injected_messages()
                 if late_messages:
-                    node_messages = late_messages
+                    node_messages = [*node_messages, *late_messages]
                     conversation_patch = dict(patch.get("conversation") or {})
-                    conversation_patch.update(
-                        {
-                            "assistant_draft": None,
-                            "reasoning_content": None,
-                            "final_answer": None,
-                            "clarification_question": None,
-                        }
-                    )
+                    conversation_patch["final_answer"] = None
+                    conversation_patch["clarification_question"] = None
                     patch["conversation"] = conversation_patch
                     execution_patch = dict(patch.get("execution") or {})
                     execution_patch["route_decision"] = "runtime.steered"
@@ -180,28 +177,32 @@ def make_fixed_runner(
         except RuntimeModelGenerationInterrupted as exc:
             interrupted = active_state
             if runtime_terminal_cancellation_requested():
+                _preserve_interrupted_conversation(interrupted, exc)
+                interrupted.conversation.final_answer = None
+                interrupted.conversation.clarification_question = None
                 interrupted.execution.interrupted = True
                 _finish(interrupted, status="cancelled", location="runtime.cancel")
-                return runtime_graph_patch(interrupted, messages=messages_patch)
+                return runtime_graph_patch(
+                    interrupted,
+                    messages=[
+                        *messages_patch,
+                        *_interrupted_model_messages(exc, error_code="runtime_cancelled"),
+                    ],
+                )
             steered_messages = _consume_injected_messages()
             if not steered_messages:
                 raise
-            interrupted.conversation.assistant_draft = None
-            interrupted.conversation.reasoning_content = None
+            _preserve_interrupted_conversation(interrupted, exc)
             interrupted.conversation.final_answer = None
             interrupted.conversation.clarification_question = None
             interrupted.execution.route_decision = "runtime.steered"
             interrupted.execution.current_node = node_id
             interrupted.execution.finished = False
             interrupted.execution.interrupted = False
-            partial_messages = []
-            if exc.partial_text.strip():
-                partial_messages.append(
-                    AIMessage(
-                        content=exc.partial_text,
-                        additional_kwargs={"completion_reason": "user_interrupted"},
-                    )
-                )
+            partial_messages = _interrupted_model_messages(
+                exc,
+                error_code="runtime_steered",
+            )
             _resolve_after_node(
                 state=interrupted,
                 node_id=node_id,
@@ -226,6 +227,47 @@ def make_fixed_runner(
             return runtime_graph_patch(failed)
 
     return runner
+
+
+def _preserve_interrupted_conversation(
+    state: RuntimeState,
+    interruption: RuntimeModelGenerationInterrupted,
+) -> None:
+    partial_text = str(interruption.partial_text or "").strip()
+    reasoning_content = str(interruption.reasoning_content or "").strip()
+    state.conversation.assistant_draft = (
+        partial_text or state.conversation.assistant_draft
+    )
+    state.conversation.reasoning_content = (
+        reasoning_content or state.conversation.reasoning_content
+    )
+
+
+def _interrupted_model_messages(
+    interruption: RuntimeModelGenerationInterrupted,
+    *,
+    error_code: str,
+) -> list[Any]:
+    partial_text = str(interruption.partial_text or "").strip()
+    reasoning_content = str(interruption.reasoning_content or "").strip()
+    partial_tool_calls = [dict(call) for call in interruption.partial_tool_calls]
+    messages: list[Any] = []
+    if partial_text or reasoning_content or partial_tool_calls:
+        additional_kwargs = {"completion_reason": "user_interrupted"}
+        if reasoning_content:
+            additional_kwargs["reasoning_content"] = reasoning_content
+        messages.append(
+            AIMessage(
+                content=partial_text,
+                **({"tool_calls": partial_tool_calls} if partial_tool_calls else {}),
+                additional_kwargs=additional_kwargs,
+            )
+        )
+    return close_incomplete_tool_call_messages(
+        messages,
+        status="cancelled",
+        error_code=error_code,
+    )
 
 
 def _consume_injected_messages() -> list[Any]:

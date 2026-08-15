@@ -24,6 +24,8 @@ class RuntimeRunControl:
     __slots__ = (
         "_drain_event",
         "_drain_reason",
+        "_tool_interrupt_event",
+        "_tool_interrupt_reason",
         "_tool_cancel_callbacks",
         "_tool_cancel_lock",
         "_input_injections",
@@ -36,6 +38,8 @@ class RuntimeRunControl:
     def __init__(self) -> None:
         self._drain_event = threading.Event()
         self._drain_reason: str | None = None
+        self._tool_interrupt_event = threading.Event()
+        self._tool_interrupt_reason: str | None = None
         self._tool_cancel_lock = threading.RLock()
         self._tool_cancel_callbacks: dict[str, Callable[[], None]] = {}
         self._input_injections: dict[str, RuntimeInputInjection] = {}
@@ -107,6 +111,42 @@ class RuntimeRunControl:
             except Exception:
                 continue
         return revision
+
+    def request_tool_interrupt(self, reason: str = "user_steered") -> bool:
+        """Cancel the active tool without making the whole runtime terminal.
+
+        Steering can arrive while a tool is blocking the graph.  A drain would
+        incorrectly cancel the conversation itself, so tool interruption has a
+        separate cooperative boundary.  Registered tool callbacks still get
+        invoked immediately (MCP/browser/process/package workers use these
+        callbacks to release their external operation).
+        """
+        interrupt_reason = _required_text(reason, "reason")
+        with self._tool_cancel_lock:
+            if not self._tool_cancel_callbacks:
+                return False
+            self._tool_interrupt_reason = interrupt_reason
+            self._tool_interrupt_event.set()
+            callbacks = tuple(self._tool_cancel_callbacks.values())
+        for callback in callbacks:
+            try:
+                callback()
+            except Exception:
+                continue
+        return True
+
+    @property
+    def tool_interrupt_requested(self) -> bool:
+        return self._tool_interrupt_event.is_set()
+
+    @property
+    def tool_interrupt_reason(self) -> str | None:
+        return self._tool_interrupt_reason
+
+    def clear_tool_interrupt(self) -> None:
+        with self._tool_cancel_lock:
+            self._tool_interrupt_event.clear()
+            self._tool_interrupt_reason = None
 
     def generation_is_current(self, revision: int) -> bool:
         with self._tool_cancel_lock:
@@ -242,6 +282,14 @@ class RuntimeRunControlRegistry:
             return False
         control.request_generation_interrupt()
         return True
+
+    def request_tool_interrupt(self, *, runtime_instance_id: str, reason: str = "user_steered") -> bool:
+        instance_id = _required_text(runtime_instance_id, "runtime_instance_id")
+        with self._lock:
+            control = self._controls.get(instance_id)
+        if control is None:
+            return False
+        return control.request_tool_interrupt(reason)
 
     def revoke_input(self, *, runtime_instance_id: str, injection_id: str) -> None:
         instance_id = _required_text(runtime_instance_id, "runtime_instance_id")

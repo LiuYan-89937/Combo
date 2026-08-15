@@ -3,11 +3,17 @@ import { useI18n } from '@/composables/useI18n'
 import { useRuntimeStore } from '@/stores/runtime'
 import type { ToolActivity, TranscriptItem } from '@/types/protocol'
 import { isToolActivityActive, isToolActivityPendingApproval } from '@/utils/toolActivityState'
-import { textPart } from '@/stores/runtime/messageParts'
 import { conversationVisibleParts } from '@/utils/toolPresentation'
 
 export type ConversationTimelineItem =
-  | { kind: 'message'; id: string; timestamp: string; order: number; message: TranscriptItem; messages: TranscriptItem[]; thinking: boolean }
+  | { kind: 'message'; id: string; timestamp: string; order: number; message: TranscriptItem; messages: TranscriptItem[] }
+
+export interface ConversationActivitySummary {
+  text: string
+  role: 'assistant' | 'system'
+  status: string
+  requestId: string
+}
 
 export function useConversationMessageProjection() {
   const runtimeStore = useRuntimeStore()
@@ -45,7 +51,6 @@ export function useConversationMessageProjection() {
             order: index,
             message,
             messages: [message],
-            thinking: false,
           }
           items.push(activeAssistantItem)
         }
@@ -59,61 +64,12 @@ export function useConversationMessageProjection() {
         order: index,
         message,
         messages: [message],
-        thinking: false,
       })
-    })
-    thinkingMessages.value.forEach((message, index) => {
-      const requestId = String(message.metadata?.request_id || '').trim()
-      const activityItem: ConversationTimelineItem = {
-        kind: 'message',
-        id: requestId ? runtimeActivityProjectionId(requestId) : message.id,
-        timestamp: message.timestamp,
-        order: runtimeStore.transcript.length + index,
-        message,
-        messages: [message],
-        thinking: true,
-      }
-      const assistantIndex = requestId
-        ? items.findIndex(item => item.id === assistantProjectionId(requestId))
-        : -1
-      if (assistantIndex >= 0) items.splice(assistantIndex, 0, activityItem)
-      else items.push(activityItem)
     })
     return items
   })
-  const thinkingMessages = computed<TranscriptItem[]>(() => {
-    if (!runtimeStore.hasActiveRun || runtimeStore.isAwaitingUserInputInterrupt) return []
-    const activeTurn = runtimeStore.activeTurn
-    if (!activeTurn?.userMessage) return []
-    if (!requestOwnsActivePresentation(activeTurn.requestId)) return []
-    const displayStatus = activeRuntimeDisplayStatus(
-      runtimeStore.runtimeActivity,
-      runtimeStore.contextActivity,
-      t,
-    )
-    const statusText = displayStatus.text
-    return [
-      {
-        id: `thinking-${activeTurn.id}`,
-        role: displayStatus.role,
-        content: statusText,
-        timestamp: activeTurn.startedAt || new Date().toISOString(),
-        status: 'streaming',
-        parts: [
-          textPart(`thinking-${activeTurn.id}:status`, statusText, {
-            format: 'plain',
-            status: 'streaming',
-            timestamp: activeTurn.startedAt || new Date().toISOString(),
-          }),
-        ],
-        metadata: {
-          thinking: true,
-          request_id: activeTurn.requestId,
-        },
-      },
-    ]
-  })
   const hasApprovalRequests = computed(() => runtimeStore.currentApprovalRequests.length > 0)
+  const hasUserQuestionInterrupt = computed(() => runtimeStore.isAwaitingUserInputInterrupt)
   const runningToolActivities = computed(() => {
     return runtimeStore.tools.filter(
       (tool) => isToolActivityRunning(tool) && requestOwnsActivePresentation(tool.requestId),
@@ -127,11 +83,32 @@ export function useConversationMessageProjection() {
       ? t('conversation.toolsRunning', { count: runningToolActivities.value.length })
       : t('conversation.toolRunning')
   })
+  const currentActivity = computed<ConversationActivitySummary | null>(() => {
+    if (!runtimeStore.hasActiveRun || runtimeStore.isAwaitingUserInputInterrupt) return null
+    const activeTurn = runtimeStore.activeTurn
+    if (!activeTurn?.userMessage || !requestOwnsActivePresentation(activeTurn.requestId)) return null
+    const displayStatus = activeRuntimeDisplayStatus(
+      runtimeStore.runtimeActivity,
+      runtimeStore.contextActivity,
+      t,
+      toolActivityHint.value,
+    )
+    return {
+      text: displayStatus.text,
+      role: displayStatus.role,
+      status: String(runtimeStore.runStatus || 'running'),
+      requestId: String(activeTurn.requestId || ''),
+    }
+  })
   const activeStreamContentKey = computed(() => {
     return [
       runtimeStore.transcript.map(messagePartsKey).join('|'),
+      activeStreams.value
+        .map(stream => `${stream.streamId}:${stream.active}:${stream.content}:${stream.reasoningContent}`)
+        .join('|'),
       toolActivityHint.value,
-      thinkingMessages.value.map(message => message.content).join('|'),
+      currentActivity.value?.text || '',
+      currentActivity.value?.status || '',
     ].join('')
   })
 
@@ -157,8 +134,9 @@ export function useConversationMessageProjection() {
     activeStreamContentKey,
     hasActiveStreams,
     hasApprovalRequests,
+    hasUserQuestionInterrupt,
     isMessageStreaming,
-    thinkingMessages,
+    currentActivity,
     timelineItems,
     toolActivityHint,
   }
@@ -168,6 +146,7 @@ function activeRuntimeDisplayStatus(
   runtimeActivity: ReturnType<typeof useRuntimeStore>['runtimeActivity'],
   contextActivity: ReturnType<typeof useRuntimeStore>['contextActivity'],
   t: ReturnType<typeof useI18n>['t'],
+  toolActivityHint: string,
 ): { text: string; role: 'assistant' | 'system' } {
   if (
     contextActivity.status === 'running'
@@ -179,15 +158,11 @@ function activeRuntimeDisplayStatus(
   if (runtimeActivity.status === 'active' && activitySummary) {
     return { text: activitySummary, role: 'assistant' }
   }
-  return { text: t('roles.assistantThinking'), role: 'assistant' }
+  return { text: toolActivityHint || t('roles.assistantThinking'), role: 'assistant' }
 }
 
 function assistantProjectionId(requestId: string): string {
   return `assistant-turn-${requestId}`
-}
-
-function runtimeActivityProjectionId(requestId: string): string {
-  return `runtime-activity-${requestId}`
 }
 
 function assistantMessagesBelongTogether(activeRequestId: string, nextRequestId: string): boolean {
@@ -198,7 +173,7 @@ function assistantMessagesBelongTogether(activeRequestId: string, nextRequestId:
 function messagePartsKey(message: TranscriptItem): string {
   return message.parts.map((part) => {
     if (part.type === 'text' || part.type === 'reasoning') {
-      return `${part.id}:${part.status || ''}:${part.text.length}`
+      return `${part.id}:${part.status || ''}:${part.text}`
     }
     return `${part.id}:${part.type}:${part.status || ''}`
   }).join(',')

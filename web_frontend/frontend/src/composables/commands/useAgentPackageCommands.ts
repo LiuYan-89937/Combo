@@ -125,13 +125,17 @@ export function useAgentPackageCommands() {
     )
     const accepted = Promise.resolve(beforeDispatch?.(command)).then(() => transport.sendRuntimeCommand(command))
     if (steerActiveRuntime) {
-      void accepted.then((response) => transport.sendRuntimeCommand(
-        commands.steerRuntimeRequestCommand({
+      void accepted.then((response) => {
+        runtimeStore.markRequestSteering(response.receipt.command_id)
+        const steerCommand = commands.steerRuntimeRequestCommand({
           queuedRequestId: response.receipt.command_id,
           sessionId: response.receipt.session_id || undefined,
           mode: 'agent_package',
-        }),
-      ))
+        })
+        const steerRequest = transport.sendRuntimeCommand(steerCommand)
+        void steerRequest.catch(() => runtimeStore.restoreRequestQueued(response.receipt.command_id))
+        return steerRequest
+      })
     }
     return command
   }

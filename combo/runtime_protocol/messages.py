@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+import json
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from langchain_core.messages import AIMessage, ToolMessage
@@ -28,25 +29,62 @@ def close_incomplete_tool_call_history(
     *,
     content: str,
 ) -> list[Any]:
+    return _close_incomplete_tool_calls(
+        messages,
+        lambda tool_call_ids: _interrupted_tool_messages(tool_call_ids, content),
+    )
+
+
+def close_incomplete_tool_call_messages(
+    messages: Sequence[Any],
+    *,
+    status: str,
+    error_code: str,
+) -> list[Any]:
+    """Close pending tool calls without changing the surrounding message order.
+
+    This is the terminal normalization shared by runtime interruption and
+    commit paths. A result is inserted before the next non-tool message so a
+    steered model call never receives an invalid assistant/tool sequence.
+    """
+    normalized_status = str(status or "").strip()
+    normalized_error_code = str(error_code or "").strip()
+    if not normalized_status or not normalized_error_code:
+        raise ValueError("tool-call closure requires a status and error_code")
+    return _close_incomplete_tool_calls(
+        messages,
+        lambda tool_call_ids: _terminal_tool_messages(
+            tool_call_ids,
+            status=normalized_status,
+            error_code=normalized_error_code,
+        ),
+    )
+
+
+def _close_incomplete_tool_calls(
+    messages: Sequence[Any],
+    result_factory: Callable[[Sequence[str]], list[Any]],
+) -> list[Any]:
     closed: list[Any] = []
     pending: list[str] = []
     for message in messages:
         if _is_tool_message(message):
             tool_call_id = _tool_message_call_id(message)
-            if tool_call_id not in pending:
-                continue
-            closed.append(message)
-            pending = [item for item in pending if item != tool_call_id]
+            if tool_call_id in pending:
+                closed.append(message)
+                pending = [item for item in pending if item != tool_call_id]
+            else:
+                closed.append(message)
             continue
         if pending:
-            closed.extend(_interrupted_tool_messages(pending, content))
+            closed.extend(result_factory(pending))
             pending = []
         closed.append(message)
         tool_calls = _tool_calls(message)
         if tool_calls:
             pending = [_tool_call_id(call) for call in tool_calls if _tool_call_id(call)]
     if pending:
-        closed.extend(_interrupted_tool_messages(pending, content))
+        closed.extend(result_factory(pending))
     return closed
 
 
@@ -73,10 +111,33 @@ def incomplete_tool_call_ids(messages: Sequence[Any]) -> list[str]:
 def _interrupted_tool_messages(tool_call_ids: Sequence[str], content: str) -> list[ToolMessage]:
     return [
         ToolMessage(
+            id=f"terminal:{error_code}:{tool_call_id}",
             content=content,
             tool_call_id=tool_call_id,
             status="error",
             additional_kwargs={"runtime_control": {"type": "tool_execution_interrupted"}},
+        )
+        for tool_call_id in tool_call_ids
+    ]
+
+
+def _terminal_tool_messages(
+    tool_call_ids: Sequence[str],
+    *,
+    status: str,
+    error_code: str,
+) -> list[ToolMessage]:
+    content = json.dumps(
+        {"status": status, "error_code": error_code},
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return [
+        ToolMessage(
+            content=content,
+            tool_call_id=tool_call_id,
+            status="error",
+            additional_kwargs={"runtime_control": {"type": "tool_call_closed"}},
         )
         for tool_call_id in tool_call_ids
     ]

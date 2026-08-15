@@ -200,6 +200,30 @@ def project_delegated_task_record(record: OutboxRecord) -> dict[str, Any]:
         or ""
     ).strip() or None
     event_kind = str(record.event_kind or "")
+    child_runtime_instance_id = str(payload.get("child_runtime_instance_id") or "").strip() or None
+    if event_kind == "delegated_task_question":
+        interrupt = _delegated_question_interrupt(event_payload)
+        if interrupt is not None:
+            return _frontend_event(
+                event_type="interrupt_requested",
+                request_id=child_runtime_instance_id,
+                runtime_instance_id=child_runtime_instance_id,
+                session_id=session_id,
+                node_id=None,
+                timestamp=record.created_at,
+                payload={
+                    **interrupt,
+                    "workspace_id": event_payload.get("workspace_id"),
+                    "package_id": "main_chat",
+                    "agent_session_id": session_id,
+                    "runtime_role": "temporary",
+                    "source_task_id": payload.get("task_id") or record.aggregate_id,
+                    "source_task_name": event_payload.get("agent_name") or "",
+                    "source_runtime_instance_id": child_runtime_instance_id,
+                    "parent_runtime_instance_id": payload.get("parent_runtime_instance_id"),
+                },
+                event_id=record.event_id,
+            )
     terminal_status = {
         "delegated_task_result": "result",
         "delegated_task_failed": "failed",
@@ -209,7 +233,7 @@ def project_delegated_task_record(record: OutboxRecord) -> dict[str, Any]:
         event_type="delegated_task_terminal" if terminal_status else "background_task_updated",
         request_id=None,
         runtime_instance_id=str(
-            payload.get("child_runtime_instance_id")
+            child_runtime_instance_id
             or ""
         ) or None,
         session_id=session_id,
@@ -228,6 +252,30 @@ def project_delegated_task_record(record: OutboxRecord) -> dict[str, Any]:
         },
         event_id=record.event_id,
     )
+
+
+def _delegated_question_interrupt(event_payload: dict[str, Any]) -> dict[str, Any] | None:
+    details = event_payload.get("details") if isinstance(event_payload.get("details"), dict) else {}
+    interrupts = details.get("interrupts") if isinstance(details.get("interrupts"), list) else []
+    interrupt = next((item for item in interrupts if isinstance(item, dict)), None)
+    if interrupt is None:
+        return None
+    interrupt_id = str(interrupt.get("interrupt_id") or interrupt.get("id") or "").strip()
+    message = str(interrupt.get("message") or interrupt.get("prompt") or "").strip()
+    if not interrupt_id or not message:
+        return None
+    choices = interrupt.get("choices")
+    if not isinstance(choices, list):
+        choices = []
+    return {
+        "type": "ask_user",
+        "interrupt_id": interrupt_id,
+        "question_id": str(interrupt.get("question_id") or interrupt_id),
+        "tool_call_id": str(interrupt.get("tool_call_id") or ""),
+        "message": message,
+        "choices": [dict(item) for item in choices if isinstance(item, dict)],
+        "allow_free_text": interrupt.get("allow_free_text") is not False,
+    }
 
 
 _MODEL_MESSAGE_EVENT_TYPES = frozenset(

@@ -9,8 +9,8 @@
         <span class="summary-left">
           <span v-if="isStreaming" class="reasoning-live-dot" aria-hidden="true"></span>
           <span class="summary-title">{{ isStreaming ? t('roles.assistantReasoningActive') : t('roles.assistantReasoning') }}</span>
+          <span class="summary-chevron" aria-hidden="true">⌄</span>
         </span>
-        <span class="summary-chevron" aria-hidden="true">⌄</span>
       </summary>
       <StreamingReasoningText v-if="isStreaming" :text="part.text" />
       <div v-else class="markdown-content reasoning-markdown" v-html="renderedReasoning"></div>
@@ -356,18 +356,17 @@ function escapeRegExp(value: string): string {
 }
 
 .reasoning-panel {
-  border: 1px solid var(--app-border);
-  border-radius: var(--app-radius-md);
-  background: var(--app-surface-muted);
-  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .reasoning-summary {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: var(--app-space-xs);
-  padding: var(--app-space-sm) var(--app-space-md);
+  padding: var(--app-space-xs) 0;
   cursor: pointer;
   color: var(--app-text-muted);
   font-size: 13px;
@@ -404,7 +403,7 @@ details[open] > summary .summary-chevron {
   max-block-size: min(42vh, 32rem);
   overflow: auto;
   overscroll-behavior: contain;
-  padding: 0 var(--app-space-md) var(--app-space-md);
+  padding: 0 0 var(--app-space-sm);
   color: var(--app-text-muted);
 }
 

@@ -12,8 +12,10 @@ from combo.dynamic_runtime.capability_definitions import (
     ToolRuntimePolicy,
 )
 from combo.dynamic_runtime.capability_blob_store import CapabilityBlobStore
+from combo.dynamic_runtime.content_media import media_type_for_path
 from combo.runtime_protocol import CapabilityContent, CapabilityDraft
 from combo.tooling.builtins.browser.specs import get_browser_tool_specs
+from combo.tooling.builtins.ask_usr.specs import get_ask_usr_tool_specs
 from combo.tooling.builtins.capability.specs import get_capability_tool_specs
 from combo.tooling.builtins.delegation.specs import get_delegation_tool_specs
 from combo.tooling.builtins.filesystem.specs import get_filesystem_tool_specs
@@ -58,6 +60,7 @@ class BuiltinToolCapabilitySource:
     def drafts(self) -> tuple[CapabilityDraft, ...]:
         specs = (
             *get_filesystem_tool_specs(),
+            *get_ask_usr_tool_specs(),
             *get_process_tool_specs(),
             *get_tool_output_tool_specs(),
             *get_capability_tool_specs(),
@@ -214,7 +217,7 @@ class BuiltinToolCapabilitySource:
         files = tuple(
             self._blobs.put_tool_package_file(
                 logical_path=path,
-                media_type="application/yaml" if path.endswith(".yaml") else "text/x-python",
+                media_type=media_type_for_path(path, content=content),
                 content=content,
             )
             for path, content in contents.items()

@@ -85,38 +85,7 @@
       <template v-else-if="interaction.kind === 'ask_user'">
         <div class="interaction-copy">
           <strong>{{ interaction.title }}</strong>
-          <p>{{ interaction.message }}</p>
-        </div>
-        <div v-if="interaction.options.length" class="interaction-options">
-          <button
-            v-for="option in interaction.options"
-            :key="String(option.value || option.label)"
-            type="button"
-            :class="{ selected: selectedOption === option.value }"
-            @click="selectOption(String(option.value || option.label || ''))"
-          >
-            <strong>{{ option.label || option.value }}</strong>
-            <small v-if="option.description">{{ option.description }}</small>
-          </button>
-        </div>
-        <n-input
-          v-if="allowFreeText"
-          v-model:value="answerText"
-          type="textarea"
-          :autosize="{ minRows: 2, maxRows: 5 }"
-          :placeholder="t('backgroundTask.responsePlaceholder')"
-          @update:value="selectedOption = ''"
-        />
-        <div class="interaction-actions">
-          <n-button
-            size="small"
-            type="primary"
-            :loading="submitting"
-            :disabled="!canSubmitAnswer"
-            @click="submitAnswer"
-          >
-            {{ t('backgroundTask.submitResponse') }}
-          </n-button>
+          <p>{{ t('backgroundTask.questionInMainConversation') }}</p>
         </div>
       </template>
 
@@ -164,7 +133,7 @@ export interface BackgroundTaskController {
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { NButton, NInput } from 'naive-ui'
+import { NButton } from 'naive-ui'
 import { useI18n } from '@/composables/useI18n'
 import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
 import { backgroundTasksApi } from '@/api/backgroundTasks'
@@ -183,11 +152,8 @@ const emit = defineEmits<{ updated: [task: BackgroundTask]; deleted: [taskId: st
 const { t } = useI18n()
 const rootRef = ref<HTMLElement | null>(null)
 const { renderMarkdown } = useMarkdownRenderer(rootRef)
-const submitting = ref(false)
 const deleting = ref(false)
 const cancelling = ref(false)
-const answerText = ref('')
-const selectedOption = ref('')
 const actionError = ref('')
 const task = ref<BackgroundTask>(props.task)
 const events = ref<BackgroundTaskEvent[]>([])
@@ -209,16 +175,12 @@ const currentDescription = computed(() => (
 const renderedDelivery = computed(() => renderMarkdown(view.value.delivery, {
   surface: 'chat_message',
 }))
-const allowFreeText = computed(() => interaction.value?.payload.allow_free_text !== false)
-const canSubmitAnswer = computed(() => Boolean(answerText.value.trim() || selectedOption.value))
 
 onMounted(loadEvents)
 onBeforeUnmount(stopPolling)
 watch(() => props.task, value => { task.value = value }, { deep: true })
 watch(() => props.task.task_id, () => {
   events.value = []
-  answerText.value = ''
-  selectedOption.value = ''
   void loadEvents()
 })
 
@@ -234,43 +196,6 @@ async function loadEvents() {
     actionError.value = error instanceof Error ? error.message : String(error)
   }
   if (!terminal.value) schedulePoll()
-}
-
-async function submitAnswer() {
-  const answer = answerText.value.trim() || selectedOption.value
-  if (!answer) return
-  await resolveInteraction('answer', {
-    answer,
-    selected_values: selectedOption.value ? [selectedOption.value] : [],
-  })
-}
-
-function selectOption(value: string) {
-  selectedOption.value = value
-  answerText.value = ''
-}
-
-async function resolveInteraction(action: InteractionAction, payload: Record<string, unknown>) {
-  const pending = interaction.value
-  if (!pending || submitting.value) return
-  submitting.value = true
-  actionError.value = ''
-  try {
-    task.value = await taskController().resolveInteraction(
-      task.value,
-      pending.interaction_id,
-      action,
-      payload,
-    )
-    answerText.value = ''
-    selectedOption.value = ''
-    emit('updated', task.value)
-    schedulePoll()
-  } catch (error) {
-    actionError.value = error instanceof Error ? error.message : String(error)
-  } finally {
-    submitting.value = false
-  }
 }
 
 async function deleteTask() {

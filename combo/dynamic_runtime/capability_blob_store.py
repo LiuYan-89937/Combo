@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 
 from combo.dynamic_runtime.capability_definitions import SkillContentRef, ToolPackageFileRef
+from combo.dynamic_runtime.content_media import is_text_media_type
 
 
 class CapabilityBlobStore:
@@ -87,10 +88,7 @@ class CapabilityBlobStore:
         return content
 
     def read_text(self, reference: SkillContentRef | ToolPackageFileRef) -> str:
-        if not reference.media_type.startswith("text/") and reference.media_type not in {
-            "application/json",
-            "application/yaml",
-        }:
+        if not is_text_media_type(reference.media_type):
             raise TypeError(f"capability content is not textual: {reference.media_type}")
         try:
             return self.read(reference).decode("utf-8")

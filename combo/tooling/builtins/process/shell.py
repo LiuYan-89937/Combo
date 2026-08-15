@@ -19,6 +19,7 @@ from combo.tooling.execution_context import (
     current_runtime_run_control,
     current_tool_call,
     current_tool_event_sink,
+    runtime_tool_interruption_requested,
 )
 from combo.tooling.spec import ToolRiskResult
 
@@ -131,7 +132,7 @@ def _cancellation_check() -> ProcessCancellationCheck | None:
         return None
 
     def requested() -> bool:
-        return bool(getattr(control, "drain_requested", False))
+        return bool(getattr(control, "drain_requested", False)) or runtime_tool_interruption_requested()
 
     return requested
 

@@ -10,6 +10,7 @@ from combo.dynamic_runtime.capability_adapters import (
 )
 from combo.dynamic_runtime.capability_store import ActiveCapability, CapabilityStore
 from combo.dynamic_runtime.capability_definitions import ToolDefinition
+from combo.dynamic_runtime.delegation_policy import TEMPORARY_RUNTIME_ONLY_CAPABILITY_IDS
 from combo.dynamic_runtime.model_service import ResolvedRuntimePolicy
 from combo.runtime_protocol import (
     CapabilityDependencyRef,
@@ -168,6 +169,7 @@ class MainTurnCapabilityResolver:
             requirements=(),
             policy=policy,
             workspace_id=workspace_id,
+            excluded_capability_ids=TEMPORARY_RUNTIME_ONLY_CAPABILITY_IDS,
             required_capability_ids=tuple(dict.fromkeys(self._main_agent_capability_ids())),
         )
 

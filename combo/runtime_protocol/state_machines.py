@@ -52,7 +52,9 @@ COMMAND_TRANSITIONS: Mapping[CommandStatus, frozenset[CommandStatus]] = {
 }
 
 TOOL_CALL_TRANSITIONS: Mapping[ToolCallStatus, frozenset[ToolCallStatus]] = {
-    "proposed": frozenset({"waiting_approval", "running", "rejected", "cancelled"}),
+    # Some synchronous/interactive tools can produce their result without an
+    # observable started event (ask_usr resumes directly from an interrupt).
+    "proposed": frozenset({"waiting_approval", "running", "completed", "rejected", "cancelled"}),
     "waiting_approval": frozenset({"running", "rejected", "cancelled", "timed_out"}),
     "running": frozenset({"completed", "failed", "cancelled", "timed_out"}),
     "completed": frozenset(),

@@ -7,12 +7,16 @@
           ref="scrollbarRef"
           class="messages-scrollbar"
           @scroll="handleMessagesScroll"
+          @wheel="markUserScrollIntent"
+          @touchmove="markUserScrollIntent"
+          @keydown="markUserScrollIntent"
         >
-          <div class="messages-list">
+          <div ref="messagesListRef" class="messages-list">
             <div
               v-if="
                 timelineItems.length === 0
                 && !hasActiveStreams
+                && !currentActivity
               "
               class="chat-empty"
             >
@@ -24,7 +28,6 @@
                 :message="item.message"
                 :messages="item.messages"
                 :streaming="isMessageStreaming(item.message.streamId)"
-                :thinking="item.thinking"
                 quoteable
                 :workspace-context="messageWorkspaceContext"
                 :git-changes="gitChangesStore.changesFor(item.message.metadata?.request_id)"
@@ -32,12 +35,34 @@
               />
             </template>
 
+            <CurrentActivitySummary
+              v-if="currentActivity"
+              :activity="currentActivity"
+            />
+
           </div>
         </n-scrollbar>
+        <n-button
+          v-if="showScrollToLatest"
+          class="scroll-latest-button"
+          circle
+          size="small"
+          :aria-label="t('chat.scrollToLatest')"
+          :title="t('chat.scrollToLatest')"
+          @click="jumpToLatest"
+        >
+          <template #icon>
+            <n-icon><ArrowDownOutline /></n-icon>
+          </template>
+        </n-button>
       </div>
 
+      <QuestionInterruptPanel
+        v-if="hasUserQuestionInterrupt"
+        class="approval-section"
+      />
       <ToolApprovalPanel
-        v-if="hasApprovalRequests"
+        v-else-if="hasApprovalRequests"
         class="approval-section"
       />
 
@@ -99,7 +124,7 @@
 <script setup lang="ts">
 import { computed, ref, onBeforeUnmount, onMounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NScrollbar } from 'naive-ui'
+import { NButton, NIcon, NScrollbar } from 'naive-ui'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useAgentStore } from '@/stores/agent'
 import { useI18n } from '@/composables/useI18n'
@@ -108,7 +133,9 @@ import { useConversationMessageProjection } from '@/composables/conversation/use
 import { useCommand } from '@/composables/useCommand'
 import MessageItem from '@/components/chat/MessageItem.vue'
 import MessageInput from '@/components/chat/MessageInput.vue'
+import CurrentActivitySummary from '@/components/chat/CurrentActivitySummary.vue'
 import ToolApprovalPanel from '@/components/chat/ToolApprovalPanel.vue'
+import QuestionInterruptPanel from '@/components/chat/QuestionInterruptPanel.vue'
 import ConversationFloatingDock from '@/components/chat/ConversationFloatingDock.vue'
 import NewAgentSessionDialog from '@/components/agent/NewAgentSessionDialog.vue'
 import ContextProgressControl from '@/components/chat/ContextProgressControl.vue'
@@ -124,6 +151,7 @@ import { workspaceApi } from '@/api/workspace'
 import { SYSTEM_CHAT_PACKAGE_ID } from '@/utils/resourceScope'
 import { agentPackageConversationScope } from '@/stores/runtime/scopes'
 import { useAgentSessionNavigation } from '@/composables/agent/useAgentSessionNavigation'
+import { ArrowDownOutline } from '@/components/icons'
 
 const runtimeStore = useRuntimeStore()
 const agentStore = useAgentStore()
@@ -134,13 +162,21 @@ const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
 const scrollbarRef = ref()
+const messagesListRef = ref<HTMLElement | null>(null)
 const inputRef = ref()
 const referenceStore = useContextReferenceStore()
 const resourceContext = useResourceContext()
 const { startNewAgentSession } = useAgentSessionNavigation()
 let followBottomFrame: number | null = null
 let followBottomScheduled = false
+let messagesResizeObserver: ResizeObserver | null = null
 const followsLatestMessage = ref(true)
+const showScrollToLatest = computed(() => (
+  !followsLatestMessage.value && runtimeStore.transcript.length > 0
+))
+const latestScrollTop = ref<number | null>(null)
+const bottomDistanceThreshold = 48
+let userScrollIntentUntil = 0
 type PendingWorkspaceAction = {
   kind: 'new_session'
   packageId: string
@@ -185,8 +221,10 @@ const {
 
 const {
   activeStreamContentKey,
+  currentActivity,
   hasActiveStreams,
   hasApprovalRequests,
+  hasUserQuestionInterrupt,
   isMessageStreaming,
   timelineItems,
 } = useConversationMessageProjection()
@@ -252,9 +290,9 @@ function sendAndFollow(
   workspaceId?: string | null,
 ): boolean {
   if (!sendMessage(message, attachments, workspaceId)) return false
-  followsLatestMessage.value = true
+  resumeLatestMessageFollow()
   nextTick(() => {
-    scrollToBottom()
+    followBottomIfNeeded()
   })
   return true
 }
@@ -293,11 +331,60 @@ function scrollContainer(): HTMLElement | null {
 function isNearBottom(): boolean {
   const container = scrollContainer()
   if (!container) return true
-  return container.scrollHeight - container.scrollTop - container.clientHeight < 48
+  return container.scrollHeight - container.scrollTop - container.clientHeight < bottomDistanceThreshold
 }
 
 function handleMessagesScroll() {
-  followsLatestMessage.value = isNearBottom()
+  const container = scrollContainer()
+  if (!container) return
+
+  const currentScrollTop = container.scrollTop
+  const previousScrollTop = latestScrollTop.value
+  latestScrollTop.value = currentScrollTop
+  const userInitiated = Date.now() <= userScrollIntentUntil
+
+  // Content growth and layout changes can emit scroll events without user input.
+  // Only an actual upward movement detaches the view; reaching the bottom always
+  // re-attaches it. This keeps reasoning,正文,工具和图片共用同一条规则。
+  if (isNearBottom()) {
+    followsLatestMessage.value = true
+    return
+  }
+  if (userInitiated || (previousScrollTop !== null && currentScrollTop < previousScrollTop - 1)) {
+    followsLatestMessage.value = false
+  }
+}
+
+function markUserScrollIntent(event: Event) {
+  const container = scrollContainer()
+  if (container && isNestedScrollableTarget(event.target, container)) return
+  if (event.type === 'keydown') {
+    const key = (event as KeyboardEvent).key
+    if (!['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(key)) return
+  }
+  userScrollIntentUntil = Date.now() + 500
+}
+
+function isNestedScrollableTarget(target: EventTarget | null, container: HTMLElement): boolean {
+  let element = target instanceof HTMLElement ? target : null
+  while (element && element !== container) {
+    const style = window.getComputedStyle(element)
+    const scrollable = ['auto', 'scroll', 'overlay'].includes(style.overflowY)
+      && element.scrollHeight > element.clientHeight + 1
+    if (scrollable) return true
+    element = element.parentElement
+  }
+  return false
+}
+
+function resumeLatestMessageFollow() {
+  followsLatestMessage.value = true
+  latestScrollTop.value = null
+}
+
+function jumpToLatest() {
+  resumeLatestMessageFollow()
+  nextTick(() => scrollToBottom('smooth'))
 }
 
 function followBottomIfNeeded() {
@@ -306,17 +393,38 @@ function followBottomIfNeeded() {
   nextTick(() => {
     followBottomFrame = window.requestAnimationFrame(() => {
       followBottomFrame = null
-      followBottomScheduled = false
-      if (!followsLatestMessage.value) return
+      if (!followsLatestMessage.value) {
+        followBottomScheduled = false
+        return
+      }
       scrollToBottom()
+      followBottomFrame = window.requestAnimationFrame(() => {
+        followBottomFrame = null
+        followBottomScheduled = false
+        if (followsLatestMessage.value) {
+          scrollToBottom()
+          latestScrollTop.value = scrollContainer()?.scrollTop ?? null
+        }
+      })
     })
   })
+}
+
+function observeMessagesSize() {
+  messagesResizeObserver?.disconnect()
+  messagesResizeObserver = null
+  const target = messagesListRef.value
+  if (!target || typeof ResizeObserver === 'undefined') return
+  messagesResizeObserver = new ResizeObserver(() => followBottomIfNeeded())
+  messagesResizeObserver.observe(target)
 }
 
 onBeforeUnmount(() => {
   if (followBottomFrame !== null) window.cancelAnimationFrame(followBottomFrame)
   followBottomFrame = null
   followBottomScheduled = false
+  messagesResizeObserver?.disconnect()
+  messagesResizeObserver = null
 })
 
 watch(
@@ -338,22 +446,27 @@ async function captureCompletedGitTurns() {
   })
 }
 
-// 监听消息变化，自动滚动
-watch(
-  () => runtimeStore.transcript.length,
-  followBottomIfNeeded,
-)
-
-watch(
-  () => runtimeStore.tools.map((tool) => `${tool.activityKey}:${tool.status}:${tool.timestamp}`).join('|'),
-  followBottomIfNeeded,
-)
-
-// 监听流式输出，自动滚动
+// 思考、正文、工具状态和活动摘要共用一个渲染变化源；尺寸观察器负责
+// 补充 Markdown、图片和折叠面板完成异步布局后的变化。
 watch(
   () => activeStreamContentKey.value,
   followBottomIfNeeded,
 )
+
+watch(
+  () => [
+    runtimeStore.activeConversationScope,
+    runtimeStore.activeMainSessionId,
+    runtimeStore.activeAgentSessionId,
+  ].join('|'),
+  () => {
+    // 切换会话时从“最新位置”开始，不继承上一个会话的阅读状态。
+    resumeLatestMessageFollow()
+    nextTick(() => followBottomIfNeeded())
+  },
+)
+
+watch(messagesListRef, observeMessagesSize, { flush: 'post' })
 
 let routeActivationVersion = 0
 
@@ -361,6 +474,8 @@ onMounted(async () => {
   // Model availability controls the input state and must not wait for session restoration.
   void loadRuntimeMainModelProfiles()
   await activateCurrentRoute()
+  await nextTick()
+  observeMessagesSize()
 
   if (!route.meta.showcaseMode) {
     nextTick(() => {
@@ -487,6 +602,7 @@ function routeParamText(value: unknown): string | null {
 }
 
 .messages-section {
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow: hidden;
@@ -498,6 +614,24 @@ function routeParamText(value: unknown): string | null {
 
 .messages-list {
   padding: var(--app-space-lg) var(--app-space-lg) var(--app-space-xxl);
+}
+
+.scroll-latest-button {
+  position: absolute;
+  right: var(--app-space-lg);
+  bottom: var(--app-space-lg);
+  z-index: 4;
+  border: 1px solid var(--app-border);
+  background: var(--app-surface-elevated);
+  color: var(--app-text-secondary);
+  box-shadow: none;
+  transition: color var(--app-transition-base), border-color var(--app-transition-base), transform var(--app-transition-spring);
+}
+
+.scroll-latest-button:hover {
+  border-color: var(--app-text);
+  color: var(--app-text);
+  transform: translateY(-2px);
 }
 
 .chat-empty {

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from combo.dynamic_runtime.capability_blob_store import CapabilityBlobStore
 from combo.dynamic_runtime.capability_definitions import SkillContentRef, SkillDefinition
+from combo.dynamic_runtime.content_media import is_text_media_type
 from combo.runtime_protocol import CapabilityProjectionSnapshot, CapabilitySnapshot
 
 
@@ -142,7 +143,4 @@ def _resource_metadata(reference: SkillContentRef) -> dict[str, object]:
 
 
 def _is_text_resource(reference: SkillContentRef) -> bool:
-    return reference.media_type.startswith("text/") or reference.media_type in {
-        "application/json",
-        "application/yaml",
-    }
+    return is_text_media_type(reference.media_type)

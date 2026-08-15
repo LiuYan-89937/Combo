@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from combo.dynamic_runtime.capability_resolver import MainTurnCapabilityResolver
 from combo.dynamic_runtime.delegation_policy import MAIN_RUNTIME_ONLY_CAPABILITY_IDS
+from combo.tooling.builtins.ask_usr.specs import ASK_USR_CAPABILITY_ID
 from combo.dynamic_runtime.delegation_store import DelegationStore
 from combo.dynamic_runtime.delegated_model_selector import DelegatedTaskModelSelector
 from combo.dynamic_runtime.model_service import ResolvedRuntimePolicy, RuntimeModelResolver
@@ -135,6 +136,7 @@ class BoundDelegationRuntime:
                 workspace_id=parent.request.workspace_id,
                 include_system_capabilities=True,
                 excluded_capability_ids=MAIN_RUNTIME_ONLY_CAPABILITY_IDS,
+                required_capability_ids=(ASK_USR_CAPABILITY_ID,),
             )
         except Exception as exc:
             logger.exception(

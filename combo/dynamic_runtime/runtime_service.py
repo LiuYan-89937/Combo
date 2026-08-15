@@ -9,7 +9,7 @@ import logging
 import threading
 from typing import Any, Literal, Protocol
 
-from langchain_core.messages import BaseMessage, ToolMessage
+from langchain_core.messages import BaseMessage
 from langgraph.types import Command
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -49,7 +49,10 @@ from combo.runtime_protocol import (
     ToolCallRecord,
     ToolResultPart,
 )
-from combo.runtime_protocol.messages import incomplete_tool_call_ids
+from combo.runtime_protocol.messages import (
+    close_incomplete_tool_call_messages,
+    incomplete_tool_call_ids,
+)
 from combo.tooling.execution_context import (
     runtime_run_control_context,
     tool_output_session_context,
@@ -726,25 +729,13 @@ def _close_terminal_tool_calls(
     *,
     status: RuntimeExecutionStatus,
 ) -> list[BaseMessage]:
-    missing = incomplete_tool_call_ids(graph_messages)
-    if not missing:
-        return graph_messages
     result_status = "cancelled" if status == "cancelled" else "failed"
     error_code = "runtime_cancelled" if status == "cancelled" else "runtime_terminal_before_tool_result"
-    closed = list(graph_messages)
-    for tool_call_id in missing:
-        closed.append(
-            ToolMessage(
-                id=f"terminal:{tool_call_id}",
-                tool_call_id=tool_call_id,
-                content=json.dumps(
-                    {"status": result_status, "error_code": error_code},
-                    ensure_ascii=False,
-                    sort_keys=True,
-                ),
-            )
-        )
-    return closed
+    return close_incomplete_tool_call_messages(
+        graph_messages,
+        status=result_status,
+        error_code=error_code,
+    )
 
 
 def _tool_call_records(
@@ -761,7 +752,13 @@ def _tool_call_records(
     for message in messages:
         for part in message.parts:
             if isinstance(part, ToolCallPart):
-                initial_status = "waiting_approval" if waiting_status == "waiting_approval" else "proposed"
+                initial_status = (
+                    "waiting_approval"
+                    if waiting_status == "waiting_approval"
+                    else "running"
+                    if waiting_status == "waiting_external"
+                    else "proposed"
+                )
                 observed = event_times.get(part.tool_call_id, {})
                 records[part.tool_call_id] = {
                     "tool_call_id": part.tool_call_id,

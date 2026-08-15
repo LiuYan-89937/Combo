@@ -4,7 +4,6 @@ import ast
 from dataclasses import dataclass
 from hashlib import sha256
 import json
-import mimetypes
 from pathlib import Path
 import re
 from typing import Literal
@@ -22,6 +21,7 @@ from combo.dynamic_runtime.capability_definitions import (
     ToolRuntimePolicy,
     RuntimeResourceName,
 )
+from combo.dynamic_runtime.content_media import media_type_for_path
 from combo.environment_system.python_requirements import normalize_python_requirements
 from combo.runtime_protocol import CapabilityContent, CapabilityDraft, CapabilityTrustLevel
 
@@ -229,7 +229,7 @@ class FileSystemToolCapabilitySource:
             files.append(
                 self._blobs.put_tool_package_file(
                     logical_path=logical_path,
-                    media_type=_media_type(path),
+                    media_type=media_type_for_path(path, content=content),
                     content=content,
                 )
             )
@@ -363,10 +363,3 @@ def _package_digest(files: list[object]) -> str:
     ]
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return sha256(encoded).hexdigest()
-
-
-def _media_type(path: Path) -> str:
-    if path.suffix in {".yaml", ".yml"}:
-        return "application/yaml"
-    guessed, _ = mimetypes.guess_type(path.name)
-    return guessed or "application/octet-stream"

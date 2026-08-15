@@ -599,14 +599,18 @@ def _invoke_tool_bound_chat(
                 )
     except RuntimeModelGenerationInterrupted as exc:
         partial_text = ""
+        partial_tool_calls: tuple[dict[str, Any], ...] = ()
         if chunks:
+            partial_response = _merge_stream_chunks(chunks)
             partial_text = strip_internal_snapshot_blocks(
-                content_to_text(getattr(_merge_stream_chunks(chunks), "content", ""))
+                content_to_text(getattr(partial_response, "content", ""))
             )
+            partial_tool_calls = tuple(tool_calls_from_response(partial_response))
         raise RuntimeModelGenerationInterrupted(
             str(exc),
             partial_text=partial_text,
             reasoning_content="".join(reasoning_parts),
+            partial_tool_calls=partial_tool_calls,
         ) from exc
     except (AttributeError, NotImplementedError):
         if chunks:
