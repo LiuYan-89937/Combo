@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import timedelta
 from pathlib import Path
 from threading import RLock, Thread
 from types import MappingProxyType
@@ -249,7 +248,7 @@ class MCPRuntimePool:
                 return await connection.session.call_tool(
                     name,
                     arguments,
-                    read_timeout_seconds=timedelta(seconds=binding.request_timeout_seconds),
+                    read_timeout_seconds=binding.request_timeout_seconds,
                 )
             except BaseException:
                 await self._restart_connection(digest, connection)
@@ -336,7 +335,7 @@ class MCPRuntimePool:
                     async with ClientSession(
                         read_stream,
                         write_stream,
-                        read_timeout_seconds=timedelta(seconds=connection.binding.request_timeout_seconds),
+                        read_timeout_seconds=connection.binding.request_timeout_seconds,
                         logging_callback=lambda params: self._handle_log(digest, params),
                         message_handler=lambda message: self._handle_message(digest, message),
                     ) as session:
