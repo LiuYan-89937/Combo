@@ -27,6 +27,7 @@ from combo.dynamic_runtime.capability_search import (
     CapabilityEmbeddingRuntime,
     HybridCapabilitySearchIndex,
 )
+from combo.dynamic_runtime.mcp_gateway import MCPGateway
 from combo.dynamic_runtime.cancellation import (
     CancelRuntimeCommandHandler,
     RuntimeCancellationStore,
@@ -157,6 +158,8 @@ class DynamicRuntimeApplication:
         launch_context_resolver: RuntimeLaunchContextResolver | Callable[[DynamicRuntimeStores], RuntimeLaunchContextResolver],
         capability_bootstrap: Callable[[DynamicRuntimeStores, CapabilityAdapterRegistry], None],
         main_agent_capability_ids: Callable[[], tuple[str, ...]],
+        main_agent_mcp_server_ids: Callable[[], tuple[str, ...]],
+        mcp_gateway: MCPGateway,
         observation_sink: RuntimeObservationSink | None = None,
         migration_registry: DynamicRuntimeMigrationRegistry | None = None,
     ) -> "DynamicRuntimeApplication":
@@ -208,6 +211,8 @@ class DynamicRuntimeApplication:
                 ),
                 adapters=adapters,
                 main_agent_capability_ids=main_agent_capability_ids,
+                main_agent_mcp_server_ids=main_agent_mcp_server_ids,
+                mcp_gateway=mcp_gateway,
             )
             runtime_service = DynamicRuntimeService(
                 service_set=service_set,

@@ -336,54 +336,6 @@ class ToolDefinition(FrozenProtocolModel):
         return self
 
 
-class MCPResourceBinding(FrozenProtocolModel):
-    target: Literal["environment", "header"]
-    name: str
-    resource_id: str
-    resource_revision: int = Field(ge=1)
-    purpose: str
-
-    @field_validator("name", "resource_id", "purpose")
-    @classmethod
-    def _binding_text_is_present(cls, value: str, info: object) -> str:
-        return _required_text(value, getattr(info, "field_name", "value"))
-
-
-class MCPServerDefinition(FrozenProtocolModel):
-    schema_version: Literal["mcp_server_definition.v1"] = "mcp_server_definition.v1"
-    transport: Literal["stdio", "streamable_http", "sse"]
-    executable: str | None = None
-    arguments: tuple[str, ...] = ()
-    endpoint: str | None = None
-    working_directory_alias: str | None = None
-    resource_bindings: tuple[MCPResourceBinding, ...] = ()
-    connect_timeout_seconds: float = Field(default=30.0, gt=0)
-    request_timeout_seconds: float = Field(default=120.0, gt=0)
-    max_parallel_requests: int = Field(default=1, ge=1)
-
-    @field_validator("executable", "endpoint", "working_directory_alias")
-    @classmethod
-    def _optional_server_text(cls, value: str | None) -> str | None:
-        return _optional_text(value)
-
-    @field_validator("arguments")
-    @classmethod
-    def _arguments_are_strings(cls, values: tuple[str, ...]) -> tuple[str, ...]:
-        return tuple(str(value) for value in values)
-
-    @model_validator(mode="after")
-    def _transport_fields_match(self) -> "MCPServerDefinition":
-        if self.transport == "stdio":
-            if self.executable is None or self.endpoint is not None:
-                raise ValueError("stdio MCP server requires executable and forbids endpoint")
-        elif self.endpoint is None or self.executable is not None or self.arguments:
-            raise ValueError("HTTP MCP server requires endpoint and forbids executable arguments")
-        binding_keys = [(item.target, item.name.casefold()) for item in self.resource_bindings]
-        if len(binding_keys) != len(set(binding_keys)):
-            raise ValueError("MCP resource binding targets and names must be unique")
-        return self
-
-
 class MCPSchemaRepairRecord(FrozenProtocolModel):
     path: str
     original_digest: str
@@ -420,12 +372,22 @@ class MCPProviderSchemaProjection(FrozenProtocolModel):
 
 class MCPSchemaEvidence(FrozenProtocolModel):
     dialect: Literal["draft_2020_12", "draft_2019_09", "draft_07", "mcp_unspecified"]
-    source_schema: dict[str, JsonValue]
+    source_schema: JsonValue
     source_digest: str
     normalization_receipt: tuple[MCPSchemaRepairRecord, ...] = ()
     canonical_schema: dict[str, JsonValue]
     canonical_digest: str
+    compatibility_status: Literal["valid", "normalized", "degraded"] = "valid"
+    compatibility_note: str | None = None
     provider_projections: tuple[MCPProviderSchemaProjection, ...] = ()
+
+    @model_validator(mode="after")
+    def _compatibility_evidence_is_consistent(self) -> "MCPSchemaEvidence":
+        if self.compatibility_status == "normalized" and not self.normalization_receipt:
+            raise ValueError("normalized MCP schema evidence requires normalization records")
+        if self.compatibility_status == "degraded" and not self.compatibility_note:
+            raise ValueError("degraded MCP schema evidence requires a compatibility note")
+        return self
 
     @model_validator(mode="after")
     def _schema_digests_match(self) -> "MCPSchemaEvidence":
@@ -440,8 +402,9 @@ class MCPSchemaEvidence(FrozenProtocolModel):
 
 
 class MCPToolDefinition(FrozenProtocolModel):
-    schema_version: Literal["mcp_tool_definition.v2"] = "mcp_tool_definition.v2"
-    server_capability_id: str
+    schema_version: Literal["mcp_tool_definition.v3"] = "mcp_tool_definition.v3"
+    server_id: str
+    server_content_digest: str
     upstream_tool_name: str
     model_alias: str
     model_description: str
@@ -450,7 +413,12 @@ class MCPToolDefinition(FrozenProtocolModel):
     runtime_policy: ToolRuntimePolicy = Field(default_factory=lambda: ToolRuntimePolicy(risk_level="medium"))
     effects: tuple[ToolEffect, ...]
 
-    @field_validator("server_capability_id", "upstream_tool_name", "model_description")
+    @field_validator(
+        "server_id",
+        "server_content_digest",
+        "upstream_tool_name",
+        "model_description",
+    )
     @classmethod
     def _tool_text_is_present(cls, value: str, info: object) -> str:
         return _required_text(value, getattr(info, "field_name", "value"))

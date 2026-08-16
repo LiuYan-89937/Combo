@@ -13,6 +13,7 @@ import sys
 import tempfile
 from threading import RLock
 from typing import Any, Callable, Mapping
+from urllib.parse import quote
 from uuid import uuid4
 from ruamel.yaml import YAML
 import uritemplate
@@ -53,7 +54,6 @@ from combo.dynamic_runtime.capability_bootstrap import (
 from combo.dynamic_runtime.capability_adapters import CapabilityAdapterRegistry
 from combo.dynamic_runtime.capability_kind_adapters import default_capability_adapters
 from combo.dynamic_runtime.capability_definitions import (
-    MCPServerDefinition,
     MCPToolDefinition,
     SkillDefinition,
     ToolDefinition,
@@ -114,8 +114,19 @@ from combo.tooling.builtins.source import (
 from combo.tooling.builtins.browser.runtime import BrowserRuntime, BrowserRuntimeConfig
 from combo.tooling.skillhub.service import SkillHubService
 from combo.dynamic_runtime.mcp_runtime import MCPRuntimePool
-from combo.dynamic_runtime.mcp_source import MCPConfigCapabilitySource, MCPConfigSourceConfig
-from combo.dynamic_runtime.main_agent_profile import MainAgentCapabilityProfileStore
+from combo.dynamic_runtime.mcp_gateway import (
+    MCPGateway,
+    MCPGatewayConfig,
+    MCP_GATEWAY_REGISTRY_VERSION,
+    empty_mcp_gateway_registry,
+    read_mcp_gateway_registry,
+    write_mcp_gateway_registry,
+)
+from combo.sensitive_data import redact_sensitive_text
+from combo.dynamic_runtime.main_agent_profile import (
+    MainAgentCapabilityProfileStore,
+    PROFILE_VERSION as MAIN_AGENT_PROFILE_VERSION,
+)
 from web_frontend.backend.frontend_event_bridge import FrontendEventBridge, RuntimeEventFanout
 from web_frontend.backend.attachment_upload_store import StagedAttachmentLaunchResolver
 from web_frontend.backend.attachment_upload_store import attachment_upload_store
@@ -147,7 +158,6 @@ class RuntimeBackendConfig:
     maximum_tool_file_bytes: int
     maximum_tool_bytes: int
     tool_package_runtime_root: Path
-    mcp_capability_source_prefix: str
     mcp_server_registry_path: Path
     browser_runtime: BrowserRuntimeConfig
     process_environment: tuple[tuple[str, str], ...]
@@ -208,7 +218,6 @@ class RuntimeBackendConfig:
             maximum_tool_file_bytes=8 * 1024 * 1024,
             maximum_tool_bytes=64 * 1024 * 1024,
             tool_package_runtime_root=combo_data_path("tool_package_runtime"),
-            mcp_capability_source_prefix="mcp-config://",
             mcp_server_registry_path=combo_data_path(
                 "extension_registry", "mcp_servers.json"
             ),
@@ -250,12 +259,26 @@ class RuntimeBackend:
             staged_write_ttl_seconds=config.staged_write_ttl_seconds,
             transaction_ttl_seconds=config.workspace_transaction_ttl_seconds,
         )
+        self._mcp_registry_lock = RLock()
+        self._builtin_tool_lock = RLock()
         self.mcp_runtime = MCPRuntimePool()
+        self.mcp_gateway = MCPGateway(
+            config=MCPGatewayConfig(
+                registry_path=config.mcp_server_registry_path,
+                base_environment=config.process_environment,
+            ),
+            runtime=self.mcp_runtime,
+            report_unavailable=lambda server_id, error: self.logger.warning(
+                "MCP server is unavailable: %s: %s",
+                server_id,
+                redact_sensitive_text(error),
+            ),
+        )
         self.mcp_runtime.on_catalog_changed(self._mcp_catalog_changed)
+        self.mcp_gateway.synchronize()
         self.skillhub_runtime = SkillHubService(
             skills_dir=config.skill_source_roots[0].path,
         )
-        self._mcp_registry_lock = RLock()
         self._tool_package_lock = RLock()
         self._skill_package_lock = RLock()
         self._main_agent_profile_lock = RLock()
@@ -505,87 +528,111 @@ class RuntimeBackend:
                             **dict(capabilities[-1]["details"]),
                             "source_path": str(source_root.path / tool_parts[1]),
                         }
+        gateway_items = self._mcp_gateway_capability_items()
+        capabilities.extend(gateway_items)
+        counts["mcp_server"] = sum(item["kind"] == "mcp_server" for item in gateway_items)
+        counts["mcp_tool"] = sum(item["kind"] == "mcp_tool" for item in gateway_items)
         capabilities.sort(key=lambda value: (str(value["kind"]), str(value["namespace"])))
-        registry = _read_mcp_registry(self.config.mcp_server_registry_path)
-        registry_servers = {
-            str(server.get("server_id")): server
-            for server in registry["servers"]
+        return {
+            "counts": counts,
+            "capabilities": capabilities,
+            "mcp_registry_digest": self.mcp_gateway.registry_digest(),
         }
-        mcp_catalogs = self.mcp_runtime.catalogs()
-        for capability in capabilities:
-            if capability["kind"] != "mcp_server":
+
+    def _mcp_gateway_capability_items(self) -> list[dict[str, object]]:
+        items: list[dict[str, object]] = []
+        connected_ids = {server.server_id for server in self.mcp_gateway.servers()}
+        for raw in self.mcp_gateway.registry()["servers"]:
+            server_id = str(raw.get("server_id") or "").strip()
+            if server_id in connected_ids:
                 continue
-            server_id = str(capability["capability_id"]).removeprefix("mcp-server://")
-            registry_config = registry_servers.get(server_id)
-            if registry_config is not None:
-                capability["details"] = {
-                    **dict(capability["details"]),
-                    "registry_config": registry_config,
-                }
-            catalog = mcp_catalogs.get(server_id)
-            if catalog is not None:
-                capability["details"] = {
-                    **dict(capability["details"]),
+            content_digest = _stable_json_digest(raw)
+            items.append({
+                "capability_id": f"mcp-server://{server_id}",
+                "kind": "mcp_server",
+                "namespace": f"mcp.{server_id}",
+                "display_name": str(raw.get("display_name") or server_id),
+                "description": str(raw.get("description") or ""),
+                "keywords": ["mcp", server_id],
+                "revision": int(raw.get("revision") or 1),
+                "resolved_version": content_digest,
+                "content_digest": content_digest,
+                "source_uri": f"mcp-gateway://{server_id}",
+                "trust_level": "local_user",
+                "health": "unavailable",
+                "indexing": {"vector": False, "generation_id": None, "embedding_profile_id": None},
+                "definition_schema": "mcp_gateway_server.v1",
+                "details": {
+                    "registry_config": _mcp_server_editor_config(raw),
+                    "connection_status": "unavailable",
+                    "transport": dict(raw.get("connection") or {}).get("transport"),
+                    "tool_count": 0,
+                    "resource_count": 0,
+                    "resource_template_count": 0,
+                    "prompt_count": 0,
+                    "resources": [],
+                    "resource_templates": [],
+                    "prompts": [],
+                    "logs": [],
+                },
+            })
+        for server in self.mcp_gateway.servers():
+            catalog = server.catalog
+            items.append({
+                "capability_id": f"mcp-server://{server.server_id}",
+                "kind": "mcp_server",
+                "namespace": f"mcp.{server.server_id}",
+                "display_name": str(server.raw_config.get("display_name") or server.server_id),
+                "description": str(server.raw_config.get("description") or ""),
+                "keywords": ["mcp", server.server_id],
+                "revision": server.revision,
+                "resolved_version": server.server_digest,
+                "content_digest": server.server_digest,
+                "source_uri": f"mcp-gateway://{server.server_id}",
+                "trust_level": "local_user",
+                "health": "healthy",
+                "indexing": {"vector": False, "generation_id": None, "embedding_profile_id": None},
+                "definition_schema": "mcp_gateway_server.v1",
+                "details": {
+                    "registry_config": _mcp_server_editor_config(server.raw_config),
                     "connection_status": "connected",
+                    "transport": server.raw_config["connection"]["transport"],
                     "protocol_version": catalog.protocol_version,
                     "server_name": catalog.server_name,
                     "server_version": catalog.server_version,
                     "server_title": catalog.server_title,
                     "server_instructions": catalog.server_instructions,
                     "server_capabilities": list(catalog.capabilities),
-                    "tool_count": len(catalog.tools),
+                    "tool_count": len(server.tools),
                     "resource_count": len(catalog.resources),
                     "resource_template_count": len(catalog.resource_templates),
                     "prompt_count": len(catalog.prompts),
-                    "resources": [
-                        {
-                            "name": str(getattr(item, "name", "")),
-                            "title": getattr(item, "title", None),
-                            "description": str(getattr(item, "description", "") or ""),
-                            "uri": str(getattr(item, "uri", "")),
-                            "mime_type": str(getattr(item, "mime_type", "") or ""),
-                            "size": getattr(item, "size", None),
-                            "icons": [icon.model_dump(mode="json", exclude_none=True) for icon in (item.icons or ())],
-                            "annotations": item.annotations.model_dump(mode="json", exclude_none=True) if item.annotations else None,
-                        }
-                        for item in catalog.resources
-                    ],
-                    "resource_templates": [
-                        {
-                            "name": str(getattr(item, "name", "")),
-                            "title": getattr(item, "title", None),
-                            "description": str(getattr(item, "description", "") or ""),
-                            "uri_template": str(getattr(item, "uri_template", "")),
-                            "mime_type": str(getattr(item, "mime_type", "") or ""),
-                            "icons": [icon.model_dump(mode="json", exclude_none=True) for icon in (item.icons or ())],
-                            "annotations": item.annotations.model_dump(mode="json", exclude_none=True) if item.annotations else None,
-                        }
-                        for item in catalog.resource_templates
-                    ],
-                    "prompts": [
-                        {
-                            "name": str(getattr(item, "name", "")),
-                            "title": getattr(item, "title", None),
-                            "description": str(getattr(item, "description", "") or ""),
-                            "arguments": [
-                                {
-                                    "name": str(getattr(argument, "name", "")),
-                                    "description": str(getattr(argument, "description", "") or ""),
-                                    "required": bool(getattr(argument, "required", False)),
-                                }
-                                for argument in (getattr(item, "arguments", ()) or ())
-                            ],
-                            "icons": [icon.model_dump(mode="json", exclude_none=True) for icon in (item.icons or ())],
-                        }
-                        for item in catalog.prompts
-                    ],
-                    "logs": list(self.mcp_runtime.logs(server_id)),
-                }
-        return {
-            "counts": counts,
-            "capabilities": capabilities,
-            "mcp_registry_digest": _json_digest(registry),
-        }
+                    "resources": [_mcp_resource_view(value) for value in catalog.resources],
+                    "resource_templates": [_mcp_resource_template_view(value) for value in catalog.resource_templates],
+                    "prompts": [_mcp_prompt_view(value) for value in catalog.prompts],
+                    "logs": list(self.mcp_runtime.logs(server.server_id)),
+                },
+            })
+            for tool in server.tools:
+                definition = tool.definition
+                items.append({
+                    "capability_id": tool.capability_id,
+                    "kind": "mcp_tool",
+                    "namespace": f"mcp.{server.server_id}.{definition.model_alias}",
+                    "display_name": tool.display_name,
+                    "description": tool.description,
+                    "keywords": ["mcp", server.server_id, definition.upstream_tool_name],
+                    "revision": tool.server_revision,
+                    "resolved_version": definition.server_content_digest,
+                    "content_digest": tool.content_digest,
+                    "source_uri": f"mcp-gateway://{server.server_id}/tools/{quote(definition.upstream_tool_name, safe='')}",
+                    "trust_level": "local_user",
+                    "health": "healthy",
+                    "indexing": {"vector": False, "generation_id": None, "embedding_profile_id": None},
+                    "definition_schema": "mcp_tool_definition.v3",
+                    "details": _mcp_tool_public_details(definition),
+                })
+        return items
 
     def main_agent_capability_profile(self) -> dict[str, object]:
         return self._main_agent_capability_profile_view(
@@ -597,12 +644,14 @@ class RuntimeBackend:
         *,
         expected_revision: int,
         capability_ids: tuple[str, ...],
+        mcp_server_ids: tuple[str, ...],
     ) -> dict[str, object]:
         with self._main_agent_profile_lock:
-            self._validate_main_agent_profile_capabilities(capability_ids)
+            self._validate_main_agent_profile_capabilities(capability_ids, mcp_server_ids)
             saved = self.main_agent_capability_profiles.replace(
                 expected_revision=expected_revision,
                 capability_ids=capability_ids,
+                mcp_server_ids=mcp_server_ids,
             )
         return self._main_agent_capability_profile_view(saved)
 
@@ -621,9 +670,28 @@ class RuntimeBackend:
             self.main_agent_capability_profiles.replace(
                 expected_revision=current.revision,
                 capability_ids=retained,
+                mcp_server_ids=current.mcp_server_ids,
             )
 
-    def _validate_main_agent_profile_capabilities(self, capability_ids: tuple[str, ...]) -> None:
+    def _remove_main_agent_profile_mcp_servers(self, server_ids: set[str]) -> None:
+        if not server_ids:
+            return
+        with self._main_agent_profile_lock:
+            current = self.main_agent_capability_profiles.read()
+            retained = tuple(value for value in current.mcp_server_ids if value not in server_ids)
+            if retained == current.mcp_server_ids:
+                return
+            self.main_agent_capability_profiles.replace(
+                expected_revision=current.revision,
+                capability_ids=current.capability_ids,
+                mcp_server_ids=retained,
+            )
+
+    def _validate_main_agent_profile_capabilities(
+        self,
+        capability_ids: tuple[str, ...],
+        mcp_server_ids: tuple[str, ...],
+    ) -> None:
         active = {
             item.revision.capability_id: item
             for item in self.application.stores.capabilities.active_capabilities()
@@ -634,7 +702,7 @@ class RuntimeBackend:
                 invalid.append(capability_id)
                 continue
             item = active.get(capability_id)
-            if item is None or item.revision.kind not in {"skill", "tool", "mcp_server"}:
+            if item is None or item.revision.kind not in {"skill", "tool"}:
                 invalid.append(capability_id)
                 continue
             if item.revision.kind == "tool" and ToolDefinition.model_validate(
@@ -645,12 +713,22 @@ class RuntimeBackend:
             raise ValueError(
                 "capabilities cannot be enabled for the main Agent: " + ", ".join(invalid)
             )
+        configured_server_ids = {
+            str(item.get("server_id") or "").strip()
+            for item in self.mcp_gateway.registry()["servers"]
+        }
+        invalid_servers = [value for value in mcp_server_ids if value not in configured_server_ids]
+        if invalid_servers:
+            raise ValueError(
+                "MCP servers cannot be enabled for the main Agent: " + ", ".join(invalid_servers)
+            )
 
     def _main_agent_capability_profile_view(self, saved) -> dict[str, object]:
         return {
-            "version": "main_agent_capability_profile.v1",
+            "version": MAIN_AGENT_PROFILE_VERSION,
             "revision": saved.revision,
             "capability_ids": list(saved.capability_ids),
+            "mcp_server_ids": list(saved.mcp_server_ids),
         }
 
     def refresh_capability_search_embeddings(self) -> None:
@@ -673,23 +751,20 @@ class RuntimeBackend:
             )
 
     def probe_mcp_server(self, capability_id: str) -> dict[str, object]:
-        matches = tuple(
-            item
-            for item in self.application.stores.capabilities.active_capabilities()
-            if item.revision.capability_id == capability_id
-            and item.revision.kind == "mcp_server"
-        )
-        if len(matches) != 1:
-            raise LookupError(f"active MCP server capability not found: {capability_id}")
-        revision = matches[0].revision
+        server_id = str(capability_id or "").removeprefix("mcp-server://")
+        server = self.mcp_gateway.server(server_id)
         try:
-            catalog = self.mcp_runtime.discover(revision.content_digest)
+            catalog = self.mcp_runtime.discover(server.server_digest)
         except BaseException as exc:
-            self.logger.warning("MCP probe failed for %s: %s", capability_id, exc)
+            self.logger.warning(
+                "MCP probe failed for %s: %s",
+                capability_id,
+                redact_sensitive_text(exc),
+            )
             raise
         return {
             "capability_id": capability_id,
-            "content_digest": revision.content_digest,
+            "content_digest": server.server_digest,
             "protocol_version": catalog.protocol_version,
             "server_name": catalog.server_name,
             "server_version": catalog.server_version,
@@ -756,33 +831,11 @@ class RuntimeBackend:
         on_progress: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> dict[str, object]:
         with self._mcp_registry_lock:
-            path = self.config.mcp_server_registry_path
-            current = _read_mcp_registry(path)
-            if _json_digest(current) != expected_registry_digest:
-                raise RuntimeError("mcp_registry_revision_conflict")
-            servers = current["servers"]
-            server_id = str(server["server_id"])
-            if any(str(item.get("server_id")) == server_id for item in servers):
-                raise ValueError(f"MCP server already exists: {server_id}")
-            replacement = {**current, "servers": [*servers, server]}
-            _write_mcp_registry(path, replacement)
-            try:
-                self._synchronize_mcp_capabilities(
-                    self.application.stores,
-                    _capability_adapters(),
-                    on_progress=on_progress,
-                )
-                _report_tool_preparation(on_progress, "published", server_id=server_id)
-            except BaseException:
-                _write_mcp_registry(path, current)
-                try:
-                    self._synchronize_mcp_capabilities(
-                        self.application.stores,
-                        _capability_adapters(),
-                    )
-                except BaseException as rollback_error:
-                    self.logger.error("MCP registry rollback synchronization failed: %s", rollback_error)
-                raise
+            self.mcp_gateway.add_server(
+                server,
+                expected_registry_digest=expected_registry_digest,
+                on_progress=on_progress,
+            )
         return self.capability_pool_snapshot()
 
     def replace_mcp_server(
@@ -794,60 +847,12 @@ class RuntimeBackend:
         on_progress: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> dict[str, object]:
         with self._mcp_registry_lock:
-            path = self.config.mcp_server_registry_path
-            current = _read_mcp_registry(path)
-            if _json_digest(current) != expected_registry_digest:
-                raise RuntimeError("mcp_registry_revision_conflict")
-            normalized_id = str(server_id or "").strip()
-            if str(server.get("server_id") or "").strip() != normalized_id:
-                raise ValueError("MCP server identity cannot change")
-            matches = [index for index, item in enumerate(current["servers"]) if str(item.get("server_id")) == normalized_id]
-            if len(matches) != 1:
-                raise LookupError(f"MCP server not found: {normalized_id}")
-            servers = list(current["servers"])
-            existing = dict(servers[matches[0]])
-            existing_source = dict(existing.get("source") or {})
-            requested_source = dict(server.get("source") or {})
-            editable_fields = (
-                "transport", "command", "args", "cwd", "env", "url", "headers",
-                "enabled", "risk_level_default", "concurrent_default", "timeout_seconds",
-                "connect_timeout_seconds", "max_parallel_requests",
+            self.mcp_gateway.replace_server(
+                server_id,
+                server,
+                expected_registry_digest=expected_registry_digest,
+                on_progress=on_progress,
             )
-            defaulted_optional_fields = {
-                "connect_timeout_seconds": 30.0,
-                "max_parallel_requests": 1,
-            }
-            requested_updates = {
-                field: server.get(field)
-                for field in editable_fields
-                if field in existing
-                or field not in defaulted_optional_fields
-                or server.get(field) != defaulted_optional_fields[field]
-            }
-            servers[matches[0]] = {
-                **existing,
-                **requested_updates,
-                "source": {
-                    **existing_source,
-                    "name": requested_source.get("name"),
-                    "description": requested_source.get("description"),
-                },
-            }
-            if servers[matches[0]] == existing:
-                return self.capability_pool_snapshot()
-            replacement = {**current, "servers": servers}
-            _write_mcp_registry(path, replacement)
-            try:
-                self._synchronize_mcp_capabilities(
-                    self.application.stores,
-                    _capability_adapters(),
-                    on_progress=on_progress,
-                )
-                _report_tool_preparation(on_progress, "published", server_id=normalized_id)
-            except BaseException:
-                _write_mcp_registry(path, current)
-                self._synchronize_mcp_capabilities(self.application.stores, _capability_adapters())
-                raise
         return self.capability_pool_snapshot()
 
     def delete_mcp_server(
@@ -858,50 +863,11 @@ class RuntimeBackend:
     ) -> dict[str, object]:
         normalized_id = str(server_id or "").strip()
         with self._mcp_registry_lock:
-            path = self.config.mcp_server_registry_path
-            current = _read_mcp_registry(path)
-            if _json_digest(current) != expected_registry_digest:
-                raise RuntimeError("mcp_registry_revision_conflict")
-            matches = [
-                item for item in current["servers"]
-                if str(item.get("server_id") or "").strip() == normalized_id
-            ]
-            if len(matches) != 1:
-                raise LookupError(f"MCP server not found: {normalized_id}")
-            server_capability_id = f"mcp-server://{normalized_id}"
-            removed_capability_ids = {
-                item.revision.capability_id
-                for item in self.application.stores.capabilities.active_capabilities()
-                if item.revision.capability_id == server_capability_id
-                or (
-                    item.revision.kind == "mcp_tool"
-                    and MCPToolDefinition.model_validate(
-                        item.revision.content.definition
-                    ).server_capability_id == server_capability_id
-                )
-            }
-            replacement = {
-                **current,
-                "servers": [
-                    item for item in current["servers"]
-                    if str(item.get("server_id") or "").strip() != normalized_id
-                ],
-            }
-            _write_mcp_registry(path, replacement)
-            try:
-                self._synchronize_mcp_capabilities(
-                    self.application.stores,
-                    _capability_adapters(),
-                )
-                self._deactivate_capabilities(removed_capability_ids)
-            except BaseException:
-                _write_mcp_registry(path, current)
-                self._synchronize_mcp_capabilities(
-                    self.application.stores,
-                    _capability_adapters(),
-                )
-                raise
-        self._remove_main_agent_profile_capabilities({server_capability_id})
+            self.mcp_gateway.delete_server(
+                normalized_id,
+                expected_registry_digest=expected_registry_digest,
+            )
+        self._remove_main_agent_profile_mcp_servers({normalized_id})
         return self.capability_pool_snapshot()
 
     def _deactivate_capabilities(self, capability_ids: set[str]) -> None:
@@ -1775,12 +1741,22 @@ class RuntimeBackend:
         description: str,
         runtime_policy: dict[str, Any],
     ) -> dict[str, object]:
+        if capability_id.startswith("mcp-tool://"):
+            with self._mcp_registry_lock:
+                self.mcp_gateway.replace_tool_configuration(
+                    capability_id,
+                    expected_content_digest=expected_content_digest,
+                    display_name=display_name,
+                    description=description,
+                    runtime_policy=runtime_policy,
+                )
+            return self.capability_pool_snapshot()
         active = next(
             (
                 item.revision
                 for item in self.application.stores.capabilities.active_capabilities()
                 if item.revision.capability_id == capability_id
-                and item.revision.kind in {"tool", "mcp_tool"}
+                and item.revision.kind == "tool"
             ),
             None,
         )
@@ -1788,11 +1764,7 @@ class RuntimeBackend:
             raise LookupError(f"active tool capability not found: {capability_id}")
         if active.content_digest != expected_content_digest:
             raise RuntimeError("tool_revision_conflict")
-        current_definition = (
-            ToolDefinition.model_validate(active.content.definition)
-            if active.kind == "tool"
-            else MCPToolDefinition.model_validate(active.content.definition)
-        )
+        current_definition = ToolDefinition.model_validate(active.content.definition)
         validated_policy = current_definition.runtime_policy.model_validate(runtime_policy)
         normalized_name = str(display_name or "").strip()
         normalized_description = str(description or "").strip()
@@ -1803,7 +1775,7 @@ class RuntimeBackend:
             active.kind == "tool"
             and active.trust_level == "local_user"
             and current_definition.implementation.kind == "python_package"
-        ) else self._mcp_registry_lock
+        ) else self._builtin_tool_lock
         with lock:
             if (
                 active.kind == "tool"
@@ -1893,43 +1865,6 @@ class RuntimeBackend:
                         _capability_adapters(),
                     )
                     raise
-            else:
-                path = self.config.mcp_server_registry_path
-                document = _read_mcp_registry(path)
-                server_id = active.capability_id.removeprefix("mcp-tool://").split("/", 1)[0]
-                matches = [
-                    index for index, server in enumerate(document["servers"])
-                    if str(server.get("server_id")) == server_id
-                ]
-                if len(matches) != 1:
-                    raise LookupError(f"MCP server not found for tool: {capability_id}")
-                servers = list(document["servers"])
-                server = dict(servers[matches[0]])
-                descriptions = dict(server.get("tool_description_contexts") or {})
-                display_names = dict(server.get("tool_display_names") or {})
-                policies = dict(server.get("tool_runtime_policies") or {})
-                upstream_name = current_definition.upstream_tool_name
-                display_names[upstream_name] = normalized_name
-                descriptions[upstream_name] = normalized_description
-                policies[upstream_name] = validated_policy.model_dump(mode="json")
-                server["tool_description_contexts"] = descriptions
-                server["tool_display_names"] = display_names
-                server["tool_runtime_policies"] = policies
-                servers[matches[0]] = server
-                replacement = {**document, "servers": servers}
-                _write_mcp_registry(path, replacement)
-                try:
-                    self._synchronize_mcp_capabilities(
-                        self.application.stores,
-                        _capability_adapters(),
-                    )
-                except BaseException:
-                    _write_mcp_registry(path, document)
-                    self._synchronize_mcp_capabilities(
-                        self.application.stores,
-                        _capability_adapters(),
-                    )
-                    raise
         return self.capability_pool_snapshot()
 
     async def stop(self) -> None:
@@ -1981,6 +1916,7 @@ class RuntimeBackend:
                 health_receipts=stores.capability_resolution_receipts,
                 allowed_trust_levels=("builtin", "local_user", "verified_external"),
                 search_index=capability_search,
+                mcp_gateway=self.mcp_gateway,
             )
             approvals = DatabaseSnapshotToolApprovalResolver(stores.capability_approval_grants)
             outputs = SharedToolOutputResolver(config.tool_output_root)
@@ -2072,10 +2008,10 @@ class RuntimeBackend:
 
         def bootstrap_capabilities(stores, adapters) -> None:
             stores.conversations.create_principal(config.capability_publisher_principal_id)
+            self._purge_legacy_mcp_capabilities(stores)
             self._synchronize_builtin_tool_capabilities(stores, adapters)
             self._synchronize_tool_package_capabilities(stores, adapters)
             self._synchronize_skill_capabilities(stores, adapters)
-            self._synchronize_mcp_capabilities(stores, adapters)
 
         model_pool_store = ModelPoolStore()
         self.delegated_model_selector = DelegatedTaskModelSelector(model_pool_store)
@@ -2103,6 +2039,8 @@ class RuntimeBackend:
             launch_context_resolver=launch_context,
             capability_bootstrap=bootstrap_capabilities,
             main_agent_capability_ids=lambda: self.main_agent_capability_profiles.read().capability_ids,
+            main_agent_mcp_server_ids=lambda: self.main_agent_capability_profiles.read().mcp_server_ids,
+            mcp_gateway=self.mcp_gateway,
             observation_sink=self._publish_runtime_observation,
             migration_registry=migration_registry,
         )
@@ -2238,52 +2176,28 @@ class RuntimeBackend:
         )
         self._refresh_capability_search_if_ready()
 
-    def _synchronize_mcp_capabilities(
-        self,
-        stores,
-        adapters,
-        *,
-        on_progress: Callable[[str, dict[str, Any]], None] | None = None,
-    ) -> None:
-        config = self.config
-        mcp_source = MCPConfigCapabilitySource(
-            config=MCPConfigSourceConfig(
-                path=config.mcp_server_registry_path,
-                publisher_principal_id=config.capability_publisher_principal_id,
-                source_prefix=config.mcp_capability_source_prefix,
-                base_environment=config.process_environment,
-            ),
-            runtime=self.mcp_runtime,
-            environment_resolver=os.environ.get,
-            report_unavailable=lambda server_id, error: self.logger.warning(
-                "Optional MCP server is unavailable during discovery: %s: %s",
-                server_id,
-                error,
-            ),
-            report_progress=on_progress,
-        )
-        drafts = mcp_source.drafts()
-        CapabilityBootstrapPublisher(
-            config=CapabilityBootstrapConfig(
-                publisher_principal_id=config.capability_publisher_principal_id,
-                managed_source_prefix=config.mcp_capability_source_prefix,
-            ),
-            store=stores.capabilities,
-            resolution_receipts=stores.capability_resolution_receipts,
-            adapters=adapters,
-        ).synchronize(
-            drafts,
-            deactivate_removed_sources=mcp_source.discovery_complete,
-        )
-        if mcp_source.discovery_complete:
-            self.mcp_runtime.retain(set(mcp_source.active_server_digests))
-        self._refresh_capability_search_if_ready()
+    def _purge_legacy_mcp_capabilities(self, stores) -> None:
+        for item in stores.capabilities.active_capabilities():
+            if item.revision.kind not in {"mcp_server", "mcp_tool"}:
+                continue
+            current = item.activation
+            stores.capabilities.set_activation(
+                CapabilityActivation(
+                    capability_id=current.capability_id,
+                    kind=current.kind,
+                    activation_revision=current.activation_revision + 1,
+                    status="inactive",
+                    changed_by_principal_id=self.config.capability_publisher_principal_id,
+                ),
+                expected_activation_revision=current.activation_revision,
+            )
 
     def _mcp_catalog_changed(self, server_content_digest: str, catalog_kind: str) -> None:
         if not hasattr(self, "application"):
             return
         try:
-            self._synchronize_mcp_capabilities(self.application.stores, _capability_adapters())
+            with self._mcp_registry_lock:
+                self.mcp_gateway.synchronize()
             self.logger.info(
                 "MCP %s catalog changed for %s; capability pool refreshed",
                 catalog_kind,
@@ -2296,7 +2210,7 @@ class RuntimeBackend:
         self.logger.error(
             "Dynamic runtime component failed: %s: %s",
             component,
-            error,
+            redact_sensitive_text(error),
             exc_info=(type(error), error, error.__traceback__),
         )
 
@@ -2331,37 +2245,97 @@ def _capability_public_details(kind: str, raw_definition: dict[str, Any]) -> dic
             "package_file_count": len(definition.implementation.package_files),
             "python_requirements": list(definition.implementation.python_requirements),
         }
-    if kind == "mcp_server":
-        definition = MCPServerDefinition.model_validate(raw_definition)
-        return {
-            "transport": definition.transport,
-            "executable": definition.executable,
-            "arguments": list(definition.arguments),
-            "endpoint": definition.endpoint,
-            "working_directory_alias": definition.working_directory_alias,
-            "connect_timeout_seconds": definition.connect_timeout_seconds,
-            "request_timeout_seconds": definition.request_timeout_seconds,
-            "max_parallel_requests": definition.max_parallel_requests,
-        }
-    if kind == "mcp_tool":
-        definition = MCPToolDefinition.model_validate(raw_definition)
-        return {
-            "server_capability_id": definition.server_capability_id,
-            "upstream_tool_name": definition.upstream_tool_name,
-            "model_alias": definition.model_alias,
-            "approval": definition.runtime_policy.approval,
-            "risk_level": definition.runtime_policy.risk_level,
-            "allow_parallel_calls": definition.runtime_policy.allow_parallel_calls,
-            "max_parallel_calls": definition.runtime_policy.max_parallel_calls,
-            "timeout_seconds": definition.runtime_policy.timeout_seconds,
-            "output_projection": definition.runtime_policy.output_projection,
-            "output_max_model_chars": definition.runtime_policy.output_max_model_chars,
-            "retain_raw_output": definition.runtime_policy.retain_raw_output,
-            "effects": list(definition.effects),
-            "input_schema_digest": definition.input_schema.canonical_digest,
-            "output_schema_digest": definition.output_schema.canonical_digest,
-        }
     return {}
+
+
+def _mcp_tool_public_details(definition: MCPToolDefinition) -> dict[str, object]:
+    return {
+        "server_id": definition.server_id,
+        "upstream_tool_name": definition.upstream_tool_name,
+        "model_alias": definition.model_alias,
+        "approval": definition.runtime_policy.approval,
+        "risk_level": definition.runtime_policy.risk_level,
+        "allow_parallel_calls": definition.runtime_policy.allow_parallel_calls,
+        "max_parallel_calls": definition.runtime_policy.max_parallel_calls,
+        "timeout_seconds": definition.runtime_policy.timeout_seconds,
+        "output_projection": definition.runtime_policy.output_projection,
+        "output_max_model_chars": definition.runtime_policy.output_max_model_chars,
+        "retain_raw_output": definition.runtime_policy.retain_raw_output,
+        "effects": list(definition.effects),
+        "input_schema_digest": definition.input_schema.canonical_digest,
+        "output_schema_digest": definition.output_schema.canonical_digest,
+        "input_schema_status": definition.input_schema.compatibility_status,
+        "output_schema_status": definition.output_schema.compatibility_status,
+        "schema_degraded": (
+            definition.input_schema.compatibility_status == "degraded"
+            or definition.output_schema.compatibility_status == "degraded"
+        ),
+    }
+
+
+def _mcp_server_editor_config(document: dict[str, Any]) -> dict[str, object]:
+    connection = dict(document.get("connection") or {})
+    defaults = dict(document.get("defaults") or {})
+    return {
+        "server_id": document.get("server_id"),
+        "display_name": document.get("display_name"),
+        "description": document.get("description"),
+        "enabled": document.get("enabled", True),
+        "transport": connection.get("transport"),
+        "command": connection.get("command"),
+        "args": connection.get("args", []),
+        "cwd": connection.get("cwd"),
+        "url": connection.get("url"),
+        "env": connection.get("env", {}),
+        "headers": connection.get("headers", {}),
+        "connect_timeout_seconds": connection.get("connect_timeout_seconds", 30),
+        "timeout_seconds": connection.get("request_timeout_seconds", 120),
+        "max_parallel_requests": connection.get("max_parallel_requests", 1),
+        "risk_level_default": defaults.get("risk_level", "medium"),
+        "concurrent_default": defaults.get("allow_parallel_calls", True),
+    }
+
+
+def _mcp_resource_view(item: Any) -> dict[str, object]:
+    return {
+        "name": str(getattr(item, "name", "")),
+        "title": getattr(item, "title", None),
+        "description": str(getattr(item, "description", "") or ""),
+        "uri": str(getattr(item, "uri", "")),
+        "mime_type": str(getattr(item, "mime_type", "") or ""),
+        "size": getattr(item, "size", None),
+        "icons": [icon.model_dump(mode="json", exclude_none=True) for icon in (item.icons or ())],
+        "annotations": item.annotations.model_dump(mode="json", exclude_none=True) if item.annotations else None,
+    }
+
+
+def _mcp_resource_template_view(item: Any) -> dict[str, object]:
+    return {
+        "name": str(getattr(item, "name", "")),
+        "title": getattr(item, "title", None),
+        "description": str(getattr(item, "description", "") or ""),
+        "uri_template": str(getattr(item, "uri_template", "")),
+        "mime_type": str(getattr(item, "mime_type", "") or ""),
+        "icons": [icon.model_dump(mode="json", exclude_none=True) for icon in (item.icons or ())],
+        "annotations": item.annotations.model_dump(mode="json", exclude_none=True) if item.annotations else None,
+    }
+
+
+def _mcp_prompt_view(item: Any) -> dict[str, object]:
+    return {
+        "name": str(getattr(item, "name", "")),
+        "title": getattr(item, "title", None),
+        "description": str(getattr(item, "description", "") or ""),
+        "arguments": [
+            {
+                "name": str(getattr(argument, "name", "")),
+                "description": str(getattr(argument, "description", "") or ""),
+                "required": bool(getattr(argument, "required", False)),
+            }
+            for argument in (getattr(item, "arguments", ()) or ())
+        ],
+        "icons": [icon.model_dump(mode="json", exclude_none=True) for icon in (item.icons or ())],
+    }
 
 
 def _normalize_tool_package_path(value: str) -> str:
@@ -2378,20 +2352,6 @@ def _capability_adapters() -> CapabilityAdapterRegistry:
     return adapters
 
 
-def _read_mcp_registry(path: Path) -> dict[str, Any]:
-    document = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(document, dict) or document.get("version") != "mcp_servers.v0":
-        raise ValueError("MCP registry must use mcp_servers.v0")
-    servers = document.get("servers")
-    if not isinstance(servers, list) or any(not isinstance(item, dict) for item in servers):
-        raise ValueError("MCP registry servers must be an array of objects")
-    return document
-
-
-def _write_mcp_registry(path: Path, document: dict[str, Any]) -> None:
-    _write_json_document(path, document, temporary_prefix="mcp-registry-")
-
-
 def _initialize_capability_storage(config: RuntimeBackendConfig) -> None:
     for source_root in config.skill_source_roots:
         source_root.path.mkdir(parents=True, exist_ok=True)
@@ -2399,19 +2359,25 @@ def _initialize_capability_storage(config: RuntimeBackendConfig) -> None:
         source_root.path.mkdir(parents=True, exist_ok=True)
     config.builtin_tool_overrides_path.parent.mkdir(parents=True, exist_ok=True)
     config.main_agent_capability_profile_path.parent.mkdir(parents=True, exist_ok=True)
+    profile_path = config.main_agent_capability_profile_path
+    if profile_path.exists():
+        try:
+            profile_document = json.loads(profile_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            profile_document = None
+        if not isinstance(profile_document, dict) or profile_document.get("version") != MAIN_AGENT_PROFILE_VERSION:
+            profile_path.unlink()
     registry_path = config.mcp_server_registry_path
     registry_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        with registry_path.open("x", encoding="utf-8") as stream:
-            json.dump(
-                {"version": "mcp_servers.v0", "servers": []},
-                stream,
-                ensure_ascii=False,
-                indent=2,
-            )
-            stream.write("\n")
-    except FileExistsError:
-        pass
+    reset_registry = not registry_path.exists()
+    if not reset_registry:
+        try:
+            document = json.loads(registry_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            document = None
+        reset_registry = not isinstance(document, dict) or document.get("version") != MCP_GATEWAY_REGISTRY_VERSION
+    if reset_registry:
+        write_mcp_gateway_registry(registry_path, empty_mcp_gateway_registry())
 
 
 def _read_builtin_tool_overrides(path: Path) -> dict[str, Any]:
@@ -2465,11 +2431,6 @@ def _write_yaml_document(path: Path, document: dict[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _json_digest(value: object) -> str:
-    serialized = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return sha256(serialized.encode("utf-8")).hexdigest()
-
-
 def _report_tool_preparation(
     callback: Callable[[str, dict[str, Any]], None] | None,
     stage: str,
@@ -2477,6 +2438,11 @@ def _report_tool_preparation(
 ) -> None:
     if callback is not None:
         callback(stage, detail)
+
+
+def _stable_json_digest(value: object) -> str:
+    serialized = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return sha256(serialized.encode("utf-8")).hexdigest()
 
 
 def _read_skill_manifest_document(path: Path) -> tuple[dict[str, Any], str]:

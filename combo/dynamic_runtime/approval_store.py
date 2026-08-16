@@ -260,16 +260,6 @@ def _resource_scope_digest(
     workspace_id: str,
 ) -> str:
     definitions: list[dict[str, object]] = [projection.runtime_definition]
-    if projection.kind == "mcp_tool":
-        server_id = str(projection.runtime_definition.get("server_capability_id") or "").strip()
-        servers = [
-            item.runtime_definition
-            for item in capability_snapshot.projections
-            if item.kind == "mcp_server" and item.capability_id == server_id
-        ]
-        if len(servers) != 1:
-            raise ValueError("MCP approval scope requires its immutable server projection")
-        definitions.extend(servers)
     payload = {
         "workspace_id": workspace_id,
         "capability_id": projection.capability_id,

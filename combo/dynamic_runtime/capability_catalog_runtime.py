@@ -8,6 +8,7 @@ from combo.dynamic_runtime.capability_resolution_store import CapabilityResoluti
 from combo.dynamic_runtime.capability_resolver import CapabilitySearchIndex
 from combo.dynamic_runtime.capability_store import ActiveCapability, CapabilityStore
 from combo.dynamic_runtime.delegation_policy import capability_is_delegatable
+from combo.dynamic_runtime.mcp_gateway import MCPGateway, MCPGatewayTool
 from combo.runtime_protocol import CapabilityTrustLevel
 
 
@@ -21,6 +22,7 @@ class CapabilityCatalogRuntime:
         health_receipts: CapabilityResolutionReceiptStore,
         allowed_trust_levels: tuple[CapabilityTrustLevel, ...],
         search_index: CapabilitySearchIndex,
+        mcp_gateway: MCPGateway,
     ) -> None:
         if not allowed_trust_levels:
             raise ValueError("capability catalog requires allowed trust levels")
@@ -28,9 +30,13 @@ class CapabilityCatalogRuntime:
         self._health_receipts = health_receipts
         self._allowed_trust_levels = frozenset(allowed_trust_levels)
         self._search_index = search_index
+        self._mcp_gateway = mcp_gateway
 
     def list_active(self) -> list[dict[str, object]]:
-        return [self._summary(item) for item in self._eligible()]
+        return [
+            *(self._summary(item) for item in self._eligible()),
+            *(self._mcp_summary(tool) for tool in self._mcp_gateway.tools()),
+        ]
 
     def search(self, query: str, *, limit: int) -> list[dict[str, object]]:
         normalized = str(query or "").strip()
@@ -41,7 +47,7 @@ class CapabilityCatalogRuntime:
         eligible = self._eligible()
         by_id = {item.revision.capability_id: item for item in eligible}
         matches = self._search_index.search(requirements=(normalized,), candidates=eligible)
-        return [
+        published_results = [
             {
                 **self._summary(by_id[match.capability_id]),
                 "score": match.score,
@@ -50,9 +56,33 @@ class CapabilityCatalogRuntime:
             for match in matches[:limit]
             if match.capability_id in by_id
         ]
+        external_results = [
+            {
+                **self._mcp_summary(tool),
+                "score": score,
+                "search_evidence_id": f"mcp-gateway:{tool.content_digest}",
+            }
+            for tool in self._mcp_gateway.tools()
+            if (score := _mcp_match_score(normalized, tool)) > 0
+        ]
+        return sorted(
+            (*published_results, *external_results),
+            key=lambda item: (-float(item["score"]), str(item["name"])),
+        )[:limit]
 
     def inspect(self, capability_id: str) -> dict[str, object]:
-        item = self._by_id().get(_required_text(capability_id, "capability_id"))
+        requested = _required_text(capability_id, "capability_id")
+        external = self._mcp_by_id().get(requested)
+        if external is not None:
+            return {
+                **self._mcp_summary(external),
+                "source_uri": f"mcp-gateway://{external.server_id}/tools/{external.definition.upstream_tool_name}",
+                "resolved_version": external.definition.server_content_digest,
+                "dependencies": [],
+                "resources": [],
+                "definition_schema": "mcp_tool_definition.v3",
+            }
+        item = self._by_id().get(requested)
         if item is None:
             raise LookupError(f"active capability not found: {capability_id}")
         revision = item.revision
@@ -73,10 +103,16 @@ class CapabilityCatalogRuntime:
         if not requested:
             raise ValueError("capability preparation requires at least one capability ID")
         active = self._by_id()
+        external = self._mcp_by_id()
         selected: dict[str, ActiveCapability] = {}
+        selected_external: dict[str, MCPGatewayTool] = {}
         visiting: list[str] = []
 
         def include(capability_id: str) -> None:
+            external_tool = external.get(capability_id)
+            if external_tool is not None:
+                selected_external[capability_id] = external_tool
+                return
             if capability_id in selected:
                 return
             item = active.get(capability_id)
@@ -115,6 +151,16 @@ class CapabilityCatalogRuntime:
             }
             for item in sorted(selected.values(), key=lambda value: value.revision.capability_id)
         ]
+        references.extend(
+            {
+                "capability_id": tool.capability_id,
+                "kind": "mcp_tool",
+                "revision": tool.server_revision,
+                "resolved_version": tool.definition.server_content_digest,
+                "content_digest": tool.content_digest,
+            }
+            for tool in sorted(selected_external.values(), key=lambda value: value.capability_id)
+        )
         return {
             "requested_capability_ids": list(requested),
             "capability_revisions": references,
@@ -132,6 +178,9 @@ class CapabilityCatalogRuntime:
     def _by_id(self) -> dict[str, ActiveCapability]:
         return {item.revision.capability_id: item for item in self._eligible()}
 
+    def _mcp_by_id(self) -> dict[str, MCPGatewayTool]:
+        return {item.capability_id: item for item in self._mcp_gateway.tools()}
+
     @staticmethod
     def _summary(item: ActiveCapability) -> dict[str, object]:
         revision = item.revision
@@ -141,9 +190,34 @@ class CapabilityCatalogRuntime:
             "description": revision.content.description,
         }
 
+    @staticmethod
+    def _mcp_summary(tool: MCPGatewayTool) -> dict[str, object]:
+        return {
+            "name": tool.display_name,
+            "kind": "mcp_tool",
+            "description": tool.description,
+        }
+
 
 def _normalize(value: str) -> str:
     return " ".join(str(value or "").casefold().split())
+
+
+def _mcp_match_score(query: str, tool: MCPGatewayTool) -> float:
+    needle = _normalize(query)
+    fields = (
+        _normalize(tool.display_name),
+        _normalize(tool.description),
+        _normalize(tool.definition.upstream_tool_name),
+        _normalize(tool.definition.model_alias),
+    )
+    if needle in {fields[0], fields[2], fields[3]}:
+        return 1.0
+    if any(needle in field for field in fields):
+        return 0.75
+    tokens = set(needle.split())
+    haystack = set(" ".join(fields).split())
+    return len(tokens & haystack) / len(tokens) * 0.5 if tokens else 0.0
 
 
 def _delegatable(item: ActiveCapability) -> bool:

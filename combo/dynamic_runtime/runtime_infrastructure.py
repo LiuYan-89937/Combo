@@ -7,11 +7,7 @@ from threading import RLock
 from types import MappingProxyType
 from typing import Any
 
-from combo.dynamic_runtime.capability_definitions import (
-    MCPServerDefinition,
-    MCPToolDefinition,
-    ToolDefinition,
-)
+from combo.dynamic_runtime.capability_definitions import MCPToolDefinition, ToolDefinition
 from combo.dynamic_runtime.mcp_runtime import MCPRuntimePool
 from combo.dynamic_runtime.mcp_content_runtime import MCPBinaryContentMaterializer, MCPContentRuntime
 from combo.dynamic_runtime.image_generation_runtime import ImageGenerationRuntime
@@ -244,7 +240,7 @@ class ToolEntrypointResolver(SnapshotToolEntrypointResolver):
 
 
 class RevisionBoundMCPEntrypointResolver(SnapshotMCPEntrypointResolver):
-    """Bind every projected MCP tool to its frozen server revision."""
+    """Bind every projected MCP tool directly to its frozen gateway server digest."""
 
     def __init__(self, runtime: MCPRuntimePool, conversations: ConversationStore) -> None:
         self._runtime = runtime
@@ -258,19 +254,6 @@ class RevisionBoundMCPEntrypointResolver(SnapshotMCPEntrypointResolver):
         capability_snapshot: CapabilitySnapshot,
         runtime_instance: RuntimeInstance,
     ) -> ToolEntrypointLease:
-        servers = tuple(
-            item
-            for item in capability_snapshot.projections
-            if item.kind == "mcp_server" and item.capability_id == definition.server_capability_id
-        )
-        if len(servers) != 1:
-            raise RuntimeError(
-                f"MCP tool requires one frozen server projection: {definition.server_capability_id}"
-            )
-        server = servers[0]
-        if server.runtime_definition_schema != "mcp_server_definition.v1":
-            raise RuntimeError("MCP server projection uses an unsupported definition schema")
-        MCPServerDefinition.model_validate(server.runtime_definition)
         workspace_root = self._conversations.require_workspace_root(
             runtime_instance.request.workspace_id,
             runtime_instance.request.principal_id,
@@ -281,7 +264,7 @@ class RevisionBoundMCPEntrypointResolver(SnapshotMCPEntrypointResolver):
             if resources:
                 raise RuntimeError("MCP entrypoint received unexpected runtime resources")
             envelope = self._runtime.call_tool(
-                server.content_digest,
+                definition.server_content_digest,
                 definition.upstream_tool_name,
                 arguments,
             )
@@ -290,7 +273,7 @@ class RevisionBoundMCPEntrypointResolver(SnapshotMCPEntrypointResolver):
             if not isinstance(result, dict):
                 return envelope
             materialized = materializer.materialize_tool_result(
-                server_id=definition.server_capability_id,
+                server_id=definition.server_id,
                 tool_name=definition.upstream_tool_name,
                 result=result,
             )

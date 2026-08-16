@@ -69,11 +69,34 @@ class MCPContentRuntime:
         arguments: dict[str, str],
     ) -> dict[str, Any]:
         digest = self._runtime.server_digest(server_id)
-        return {
+        result = self._runtime.get_prompt(digest, name, arguments)
+        response: dict[str, Any] = {
             "server_id": server_id,
             "name": name,
-            "result": self._runtime.get_prompt(digest, name, arguments),
+            "result": result,
         }
+        materialized = MCPBinaryContentMaterializer(self._workspace_root).materialize_prompt_result(
+            server_id=server_id,
+            prompt_name=name,
+            result=result,
+        )
+        response["result"] = materialized.result
+        if materialized.assets:
+            response["assets"] = materialized.assets
+            image = next(
+                (
+                    item
+                    for item in materialized.assets
+                    if str(item.get("mime_type") or "").startswith("image/")
+                ),
+                None,
+            )
+            if image is not None:
+                response["model_image"] = {
+                    "path": image["path"],
+                    "mime_type": image["mime_type"],
+                }
+        return response
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +145,30 @@ class MCPBinaryContentMaterializer:
         )
         return MaterializedMCPContent(result=normalized, assets=assets)
 
+    def materialize_prompt_result(
+        self,
+        *,
+        server_id: str,
+        prompt_name: str,
+        result: dict[str, Any],
+    ) -> MaterializedMCPContent:
+        normalized = deepcopy(result)
+        assets: list[dict[str, Any]] = []
+        messages = normalized.get("messages")
+        if isinstance(messages, list):
+            for index, message in enumerate(messages, start=1):
+                if not isinstance(message, dict) or not isinstance(message.get("content"), dict):
+                    continue
+                assets.extend(
+                    self._materialize_content_list(
+                        [message["content"]],
+                        source_kind="mcp_prompt_result",
+                        source_identity=f"{server_id}\0{prompt_name}\0{index}",
+                        metadata={"server_id": server_id, "prompt_name": prompt_name},
+                    )
+                )
+        return MaterializedMCPContent(result=normalized, assets=assets)
+
     def _materialize_content_list(
         self,
         contents: Any,
@@ -168,8 +215,13 @@ class MCPBinaryContentMaterializer:
 
 
 def _binary_content(content: dict[str, Any]) -> tuple[str, str] | None:
-    if content.get("type") == "image" and isinstance(content.get("data"), str):
-        return content["data"], str(content.get("mime_type") or "image/png")
+    content_type = str(content.get("type") or "")
+    if (
+        content_type in {"image", "audio"}
+        and isinstance(content.get("data"), str)
+        and isinstance(content.get("mime_type"), str)
+    ):
+        return content["data"], content["mime_type"]
     if isinstance(content.get("blob"), str):
         return content["blob"], str(content.get("mime_type") or "application/octet-stream")
     resource = content.get("resource")

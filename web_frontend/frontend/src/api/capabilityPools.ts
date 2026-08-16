@@ -32,9 +32,10 @@ export interface CapabilityPoolSnapshot {
 }
 
 export interface MainAgentCapabilityProfile {
-  version: 'main_agent_capability_profile.v1'
+  version: 'main_agent_capability_profile.v2'
   revision: number
   capability_ids: string[]
+  mcp_server_ids: string[]
 }
 
 export interface McpProbeResult {
@@ -153,12 +154,13 @@ export interface ToolTranscriptionResult extends ToolPackageCreateInput {
 export const capabilityPoolsApi = {
   snapshot: () => requestJson<CapabilityPoolSnapshot>('/api/runtime/capabilities'),
   mainAgentProfile: () => requestJson<MainAgentCapabilityProfile>('/api/runtime/main-agent-capability-profile'),
-  updateMainAgentProfile: (profile: Pick<MainAgentCapabilityProfile, 'revision' | 'capability_ids'>) =>
+  updateMainAgentProfile: (profile: Pick<MainAgentCapabilityProfile, 'revision' | 'capability_ids' | 'mcp_server_ids'>) =>
     requestJson<MainAgentCapabilityProfile>('/api/runtime/main-agent-capability-profile', {
       method: 'PUT',
       body: JSON.stringify({
         expected_revision: profile.revision,
         capability_ids: profile.capability_ids,
+        mcp_server_ids: profile.mcp_server_ids,
       }),
     }),
   skillHubStatus: () => requestJson<SkillHubResult>('/api/runtime/capabilities/skillhub/status'),

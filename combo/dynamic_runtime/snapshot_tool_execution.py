@@ -34,6 +34,19 @@ from combo.tooling.spec import ToolLoopPolicyConfig, ToolOutputCompressionConfig
 ToolEntrypoint = Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
 ReleaseCallback = Callable[[], None]
 
+_MCP_TOOL_ENTRYPOINT_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "server_revision": {"type": "string"},
+        "tool": {"type": "string"},
+        "result": {"type": "object"},
+        "assets": {"type": "array", "items": {"type": "object"}},
+        "model_image": {"type": "object"},
+    },
+    "required": ["server_revision", "tool", "result"],
+    "additionalProperties": False,
+}
+
 
 @dataclass(frozen=True, slots=True)
 class ToolEntrypointLease:
@@ -335,9 +348,12 @@ def _compile_mcp_tool(
     spec = ToolSpec(
         id=definition.model_alias,
         description=definition.model_description,
-        entrypoint=f"mcp:{definition.server_capability_id}/{definition.upstream_tool_name}",
+        entrypoint=f"mcp:{definition.server_id}/{definition.upstream_tool_name}",
         input_schema=definition.input_schema.canonical_schema,
-        output_schema=definition.output_schema.canonical_schema,
+        # The SDK validates structuredContent against the upstream MCP output
+        # schema. Combo's entrypoint returns a richer wrapper around that result,
+        # so the gateway validates the wrapper contract instead.
+        output_schema=_MCP_TOOL_ENTRYPOINT_OUTPUT_SCHEMA,
         risk_level=definition.runtime_policy.risk_level,
         concurrent=definition.runtime_policy.allow_parallel_calls,
         max_parallel_calls=definition.runtime_policy.max_parallel_calls,

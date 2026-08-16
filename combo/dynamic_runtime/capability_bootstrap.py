@@ -94,7 +94,7 @@ class CapabilityBootstrapPublisher:
         validation = self._adapters.validate(draft)
         self._store.record_validation(validation)
         if validation.status != "passed":
-            diagnostics = "; ".join(str(item.get("message") or item) for item in validation.diagnostics)
+            diagnostics = "; ".join(_diagnostic_text(item) for item in validation.diagnostics)
             raise RuntimeError(f"build capability validation failed for {draft.capability_id}: {diagnostics}")
 
         latest = self._store.latest_revision(draft.capability_id)
@@ -312,3 +312,12 @@ class CapabilityBootstrapPublisher:
 def _digest(value: object) -> str:
     payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _diagnostic_text(item: dict[str, object]) -> str:
+    message = str(item.get("message") or item)
+    raw_path = item.get("path")
+    if not isinstance(raw_path, (list, tuple)) or not raw_path:
+        return message
+    path = ".".join(str(part) for part in raw_path)
+    return f"{path}: {message}"

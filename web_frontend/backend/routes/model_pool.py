@@ -25,6 +25,7 @@ from combo.model_pool import (
 from combo.model_pool.resolver import resolve_chat_model_profile
 from combo.model_pool.resolver import resolve_image_generation_model_profile
 from combo.models.image_generation import ImageGenerationRequest
+from combo.sensitive_data import redact_sensitive_text
 from combo.artifact_system import ArtifactStore
 from tempfile import TemporaryDirectory
 from combo.model_pool.schema import (
@@ -342,8 +343,7 @@ def _response_text(response: Any) -> str:
 
 
 def _probe_error_detail(exc: Exception) -> str:
-    message = f"{type(exc).__name__}: {exc}"
-    return re.sub(r"(?i)(api[_-]?key|authorization)\s*[:=]\s*[^\s,;]+", r"\1=[redacted]", message)
+    return redact_sensitive_text(f"{type(exc).__name__}: {exc}")
 
 
 def _slug(value: str) -> str:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import ClassVar, Generic, TypeVar
 
-from jsonschema import Draft7Validator, Draft201909Validator, Draft202012Validator
+from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 from pydantic import BaseModel, ValidationError
 
@@ -14,9 +14,6 @@ from combo.dynamic_runtime.capability_adapters import (
 )
 from combo.dynamic_runtime.capability_definitions import (
     DependencyDefinition,
-    MCPServerDefinition,
-    MCPSchemaEvidence,
-    MCPToolDefinition,
     SkillDefinition,
     ToolDefinition,
 )
@@ -180,85 +177,6 @@ class ToolCapabilityAdapter(TypedCapabilityAdapter[ToolDefinition]):
         )
 
 
-class MCPServerCapabilityAdapter(TypedCapabilityAdapter[MCPServerDefinition]):
-    kind = "mcp_server"
-    adapter_id = "dynamic_runtime.mcp_server"
-    definition_schema = "mcp_server_definition.v1"
-    definition_model = MCPServerDefinition
-
-    def _validate_definition(
-        self,
-        draft: CapabilityDraft,
-        definition: BaseModel,
-    ) -> tuple[CapabilityValidationDiagnostic, ...]:
-        server = _require_definition(definition, MCPServerDefinition)
-        return tuple(
-            _resource_binding_diagnostics(
-                bindings=(
-                    (item.resource_id, item.resource_revision, item.purpose)
-                    for item in server.resource_bindings
-                ),
-                draft=draft,
-                path=("content", "definition", "resource_bindings"),
-            )
-        )
-
-
-class MCPToolCapabilityAdapter(TypedCapabilityAdapter[MCPToolDefinition]):
-    kind = "mcp_tool"
-    adapter_id = "dynamic_runtime.mcp_tool"
-    adapter_revision = "2"
-    definition_schema = "mcp_tool_definition.v2"
-    definition_model = MCPToolDefinition
-
-    def _validate_definition(
-        self,
-        draft: CapabilityDraft,
-        definition: BaseModel,
-    ) -> tuple[CapabilityValidationDiagnostic, ...]:
-        tool = _require_definition(definition, MCPToolDefinition)
-        diagnostics: list[CapabilityValidationDiagnostic] = []
-        server_dependencies = [
-            item
-            for item in draft.content.dependencies
-            if item.kind == "mcp_server" and item.capability_id == tool.server_capability_id and item.required
-        ]
-        if len(server_dependencies) != 1:
-            diagnostics.append(
-                _diagnostic(
-                    code="mcp_server_dependency_missing",
-                    message="MCP tool requires exactly one required dependency on its server capability",
-                    path=("content", "dependencies"),
-                )
-            )
-        diagnostics.extend(
-            _mcp_schema_evidence_diagnostics(
-                tool.input_schema,
-                path=("content", "definition", "input_schema"),
-            )
-        )
-        diagnostics.extend(
-            _mcp_schema_evidence_diagnostics(
-                tool.output_schema,
-                path=("content", "definition", "output_schema"),
-            )
-        )
-        return tuple(diagnostics)
-
-    def _project_definition(
-        self,
-        revision: CapabilityRevision,
-        definition: BaseModel,
-    ) -> CapabilityRuntimeProjection:
-        tool = _require_definition(definition, MCPToolDefinition)
-        return _projection(
-            revision,
-            schema=self.definition_schema,
-            definition=tool,
-            model_tool_ids=(tool.model_alias,),
-        )
-
-
 class DependencyCapabilityAdapter(TypedCapabilityAdapter[DependencyDefinition]):
     kind = "dependency"
     adapter_id = "dynamic_runtime.dependency"
@@ -288,8 +206,6 @@ def default_capability_adapters() -> tuple[TypedCapabilityAdapter[BaseModel], ..
     return (
         SkillCapabilityAdapter(),
         ToolCapabilityAdapter(),
-        MCPServerCapabilityAdapter(),
-        MCPToolCapabilityAdapter(),
         DependencyCapabilityAdapter(),
     )
 
@@ -344,40 +260,6 @@ def _schema_diagnostics(
             ),
         )
     return ()
-
-
-def _mcp_schema_evidence_diagnostics(
-    evidence: MCPSchemaEvidence,
-    *,
-    path: tuple[str, ...],
-) -> tuple[CapabilityValidationDiagnostic, ...]:
-    diagnostics: list[CapabilityValidationDiagnostic] = []
-    validator = {
-        "draft_2020_12": Draft202012Validator,
-        "draft_2019_09": Draft201909Validator,
-        "draft_07": Draft7Validator,
-        "mcp_unspecified": None,
-    }[evidence.dialect]
-    if validator is not None:
-        try:
-            validator.check_schema(evidence.source_schema)
-        except SchemaError as exc:
-            diagnostics.append(
-                _diagnostic(
-                    code="invalid_mcp_source_schema",
-                    message=exc.message,
-                    path=(*path, "source_schema", *(str(item) for item in exc.absolute_schema_path)),
-                )
-            )
-    diagnostics.extend(_schema_diagnostics(evidence.canonical_schema, path=(*path, "canonical_schema")))
-    for index, projection in enumerate(evidence.provider_projections):
-        diagnostics.extend(
-            _schema_diagnostics(
-                projection.projected_schema,
-                path=(*path, "provider_projections", str(index), "projected_schema"),
-            )
-        )
-    return tuple(diagnostics)
 
 
 def _resource_binding_diagnostics(

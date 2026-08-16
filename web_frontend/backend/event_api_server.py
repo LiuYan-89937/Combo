@@ -25,6 +25,8 @@ from web_frontend.backend.routes.attachments import create_attachment_router
 
 
 logging.basicConfig(level=logging.INFO)
+logging.getLogger("httpx2").setLevel(logging.WARNING)
+logging.getLogger("httpcore2").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 

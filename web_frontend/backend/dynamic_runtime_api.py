@@ -14,6 +14,8 @@ from fastapi import APIRouter, File, Form, Header, HTTPException, Request, Uploa
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from combo.exception_details import exception_summary
+from combo.sensitive_data import redact_sensitive_text
 from combo.dynamic_runtime import (
     DynamicRuntimeApplication,
     DynamicRuntimeSupervisor,
@@ -47,6 +49,7 @@ class CapabilityPoolManager(Protocol):
         *,
         expected_revision: int,
         capability_ids: tuple[str, ...],
+        mcp_server_ids: tuple[str, ...],
     ) -> dict[str, object]:
         ...
 
@@ -234,8 +237,9 @@ class MainAgentCapabilityProfileWriteRequest(BaseModel):
 
     expected_revision: int = Field(ge=1)
     capability_ids: list[str]
+    mcp_server_ids: list[str]
 
-    @field_validator("capability_ids")
+    @field_validator("capability_ids", "mcp_server_ids")
     @classmethod
     def _capability_ids_are_unique(cls, values: list[str]) -> list[str]:
         normalized = [str(value or "").strip() for value in values]
@@ -444,29 +448,27 @@ class MCPServerCreateRequest(BaseModel):
     def registry_document(self) -> dict[str, Any]:
         return {
             "server_id": self.server_id,
-            "transport": self.transport,
-            "command": self.command,
-            "args": list(self.arguments),
-            "cwd": self.working_directory,
-            "env": _environment_references(self.environment_bindings),
-            "url": self.endpoint,
-            "headers": _environment_references(self.header_bindings),
-            "source": {
-                "kind": "local_user",
-                "name": self.display_name,
-                "description": self.description,
-            },
+            "display_name": self.display_name,
+            "description": self.description,
             "enabled": True,
-            "required": True,
-            "tool_id_prefix": None,
-            "risk_level_default": self.risk_level_default,
-            "concurrent_default": self.concurrent_default,
-            "timeout_seconds": self.request_timeout_seconds,
-            "connect_timeout_seconds": self.connect_timeout_seconds,
-            "max_parallel_requests": self.max_parallel_requests,
-            "tool_input_property_enums": {},
-            "tool_loop_policies": {},
-            "tool_description_contexts": {},
+            "connection": {
+                "transport": self.transport,
+                "command": self.command,
+                "args": list(self.arguments),
+                "cwd": self.working_directory,
+                "url": self.endpoint,
+                "env": _environment_references(self.environment_bindings),
+                "headers": _environment_references(self.header_bindings),
+                "connect_timeout_seconds": self.connect_timeout_seconds,
+                "request_timeout_seconds": self.request_timeout_seconds,
+                "max_parallel_requests": self.max_parallel_requests,
+            },
+            "defaults": {
+                "risk_level": self.risk_level_default,
+                "allow_parallel_calls": self.concurrent_default,
+                "tool_id_prefix": None,
+            },
+            "tools": {},
         }
 
 
@@ -660,6 +662,7 @@ def create_dynamic_runtime_router(
                 capability_pools.replace_main_agent_capability_profile,
                 expected_revision=payload.expected_revision,
                 capability_ids=tuple(payload.capability_ids),
+                mcp_server_ids=tuple(payload.mcp_server_ids),
             )
         except RuntimeError as exc:
             if str(exc) == "main_agent_capability_profile_revision_conflict":
@@ -1434,7 +1437,7 @@ def _tool_preparation_response(operation: ToolPreparationOperation) -> Streaming
         except Exception as exc:
             yield _ndjson_line({
                 "type": "failed",
-                "error": str(exc) or exc.__class__.__name__,
+                "error": redact_sensitive_text(exception_summary(exc)),
             })
             return
         yield _ndjson_line({"type": "completed", "result": snapshot})

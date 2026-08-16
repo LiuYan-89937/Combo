@@ -97,6 +97,9 @@ function normalizeMcpServer(
     url: url || undefined,
     headers: stringRecord(raw.headers),
     timeout_seconds: positiveNumber(raw.timeout_seconds || raw.timeout, 60),
+    connect_timeout_seconds: positiveNumber(raw.connect_timeout_seconds, 30),
+    max_parallel_requests: positiveInteger(raw.max_parallel_requests, 1),
+    concurrent_default: raw.concurrent_default !== false,
     enabled: raw.enabled !== false,
     risk_level_default: normalizeRisk(raw.risk_level_default),
     source: {
@@ -156,6 +159,11 @@ function normalizeRisk(value: unknown): 'low' | 'medium' | 'high' {
 function positiveNumber(value: unknown, fallback: number): number {
   const parsed = Number(value)
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
+function positiveInteger(value: unknown, fallback: number): number {
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback
 }
 
 function normalizeIdentifier(value: string): string {

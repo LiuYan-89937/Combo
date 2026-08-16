@@ -156,9 +156,13 @@
                 <n-empty v-if="!selectedMcpResources.length && !selectedMcpResourceTemplates.length" description="该服务没有暴露资源" />
               </div>
               <section v-if="mcpResourcePreview" class="mcp-resource-preview">
-                <img v-if="mcpResourcePreview.kind === 'image'" :src="mcpResourcePreview.content" :alt="mcpResourcePreview.name" />
-                <pre v-else-if="mcpResourcePreview.kind === 'text'">{{ mcpResourcePreview.content }}</pre>
-                <div v-else><strong>{{ mcpResourcePreview.name }}</strong><p>该资源是二进制内容，当前类型不支持内嵌预览。</p></div>
+                <strong>{{ mcpResourcePreview.name }}</strong>
+                <article v-for="(part, index) in mcpResourcePreview.parts" :key="index">
+                  <img v-if="part.kind === 'image'" :src="part.content" :alt="mcpResourcePreview.name" />
+                  <audio v-else-if="part.kind === 'audio'" :src="part.content" controls />
+                  <pre v-else-if="part.kind === 'text'">{{ part.content }}</pre>
+                  <div v-else><p>该资源是二进制内容，当前类型不支持内嵌预览。</p></div>
+                </article>
               </section>
             </n-tab-pane>
             <n-tab-pane v-if="selectedMcpPromptCount > 0" name="prompts" :tab="`Prompts ${selectedMcpPromptCount}`">
@@ -177,6 +181,7 @@
                 <article v-for="(part, index) in mcpPromptPreview.parts" :key="index">
                   <small>{{ part.role }}</small>
                   <img v-if="part.kind === 'image'" :src="part.content" :alt="mcpPromptPreview.name" />
+                  <audio v-else-if="part.kind === 'audio'" :src="part.content" controls />
                   <pre v-else>{{ part.content }}</pre>
                 </article>
               </section>
@@ -671,11 +676,12 @@ const selectedMcpResourceTemplates = computed<Array<Record<string, unknown>>>(()
 const selectedMcpPrompts = computed<Array<Record<string, unknown>>>(() => Array.isArray(selectedMcpDetails.value?.details.prompts) ? selectedMcpDetails.value!.details.prompts as Array<Record<string, unknown>> : [])
 const selectedMcpLogs = computed<Array<Record<string, unknown>>>(() => Array.isArray(selectedMcpDetails.value?.details.logs) ? selectedMcpDetails.value!.details.logs as Array<Record<string, unknown>> : [])
 const readingMcpResourceUri = ref('')
-const mcpResourcePreview = ref<{ kind: 'image' | 'text' | 'binary'; name: string; content: string } | null>(null)
+type McpPreviewPart = { kind: 'image' | 'audio' | 'text' | 'binary'; content: string }
+const mcpResourcePreview = ref<{ name: string; parts: McpPreviewPart[] } | null>(null)
 const mcpResourceTemplateArguments = reactive<Record<string, string>>({})
 const readingMcpPromptName = ref('')
 const mcpPromptArguments = reactive<Record<string, string>>({})
-const mcpPromptPreview = ref<{ name: string; parts: Array<{ role: string; kind: 'image' | 'text'; content: string }> } | null>(null)
+const mcpPromptPreview = ref<{ name: string; parts: Array<McpPreviewPart & { role: string }> } | null>(null)
 const selectedMcpToolCount = computed(() => Number(selectedMcpDetails.value?.details.tool_count ?? (selectedMcpDetails.value ? mcpToolCount(selectedMcpDetails.value.capability_id) : 0)))
 const selectedMcpResourceCount = computed(() => selectedMcpResources.value.length + selectedMcpResourceTemplates.value.length)
 const selectedMcpPromptCount = computed(() => selectedMcpPrompts.value.length)
@@ -746,7 +752,13 @@ function itemFacts(item: PoolItem) {
     ].filter(Boolean)
   }
   if (item.kind === 'skill') return [`${item.details.content_count || 1} 个文件`, formatBytes(Number(item.details.total_size_bytes || 0))]
-  return [item.details.system_available ? '主 Agent' : '按需装配', riskLabel(item.details.risk_level), item.details.allow_parallel_calls ? `${item.details.max_parallel_calls || 1} 并发` : '串行', outputLabel(item)]
+  return [
+    item.details.system_available ? '主 Agent' : '按需装配',
+    item.kind === 'mcp_tool' && item.details.schema_degraded ? 'Schema 已降级' : '',
+    riskLabel(item.details.risk_level),
+    item.details.allow_parallel_calls ? `${item.details.max_parallel_calls || 1} 并发` : '串行',
+    outputLabel(item),
+  ].filter(Boolean)
 }
 function itemModelAlias(item: CapabilityPoolItem) { return String(item.details.model_alias || item.details.upstream_tool_name || item.display_name) }
 function capabilityName(item: CapabilityPoolItem) {
@@ -756,8 +768,8 @@ function capabilityName(item: CapabilityPoolItem) {
   return presentation.labelKey ? t(presentation.labelKey as any) : item.display_name
 }
 function serverId(item: CapabilityPoolItem) { return item.capability_id.replace(/^mcp-server:\/\//, '') }
-function mcpToolCount(id: string) { return tools.value.filter(item => item.kind === 'mcp_tool' && item.details.server_capability_id === id).length }
-function mcpToolsFor(id: string) { return tools.value.filter(item => item.kind === 'mcp_tool' && item.details.server_capability_id === id) }
+function mcpToolCount(id: string) { const target = id.replace(/^mcp-server:\/\//, ''); return tools.value.filter(item => item.kind === 'mcp_tool' && item.details.server_id === target).length }
+function mcpToolsFor(id: string) { const target = id.replace(/^mcp-server:\/\//, ''); return tools.value.filter(item => item.kind === 'mcp_tool' && item.details.server_id === target) }
 function transportLabel(item: CapabilityPoolItem) { return ({ stdio: '本地进程', streamable_http: 'Streamable HTTP', sse: 'SSE' } as Record<string, string>)[String(item.details.transport)] || 'MCP' }
 function riskLabel(value: unknown) { return ({ low: '低风险', medium: '中风险', high: '高风险' } as Record<string, string>)[String(value)] || '风险未标注' }
 function outputLabel(item: CapabilityPoolItem) { return item.details.output_projection === 'passthrough' ? '原样输出' : `压缩至 ${Number(item.details.output_max_model_chars || 50000).toLocaleString()} 字符` }
@@ -832,12 +844,15 @@ async function readMcpPrompt(prompt: Record<string, unknown>) {
 }
 function mcpResourcePreviewFrom(result: Record<string, unknown>, name: string) {
   const contents = Array.isArray(result.contents) ? result.contents : []
-  const content = contents.find(item => item && typeof item === 'object') as Record<string, unknown> | undefined
-  if (!content) return { kind: 'binary' as const, name, content: '' }
-  return mcpPreviewContent(content, name)
+  const parts = contents.flatMap((content) => (
+    content && typeof content === 'object'
+      ? [mcpPreviewContent(content as Record<string, unknown>)]
+      : []
+  ))
+  return { name, parts: parts.length ? parts : [{ kind: 'binary' as const, content: '' }] }
 }
 function mcpPromptPreviewFrom(result: Record<string, unknown>, name: string) {
-  const parts: Array<{ role: string; kind: 'image' | 'text'; content: string }> = []
+  const parts: Array<McpPreviewPart & { role: string }> = []
   for (const messageItem of Array.isArray(result.messages) ? result.messages : []) {
     if (!messageItem || typeof messageItem !== 'object') continue
     const messageRecord = messageItem as Record<string, unknown>
@@ -846,27 +861,33 @@ function mcpPromptPreviewFrom(result: Record<string, unknown>, name: string) {
     for (const contentItem of contentItems) {
       if (!contentItem || typeof contentItem !== 'object') continue
       const content = contentItem as Record<string, unknown>
-      const preview = mcpPreviewContent(content, name)
-      if (preview.kind === 'image' || preview.kind === 'text') parts.push({ role, kind: preview.kind, content: preview.content })
+      const preview = mcpPreviewContent(content)
+      if (preview.kind !== 'binary') parts.push({ role, ...preview })
       else parts.push({ role, kind: 'text', content: JSON.stringify(content, null, 2) })
     }
   }
   if (!parts.length) parts.push({ role: 'result', kind: 'text', content: JSON.stringify(result, null, 2) })
   return { name, parts }
 }
-function mcpPreviewContent(content: Record<string, unknown>, name: string): { kind: 'image' | 'text' | 'binary'; name: string; content: string } {
+function mcpPreviewContent(content: Record<string, unknown>): McpPreviewPart {
   const nested = content.type === 'resource' && content.resource && typeof content.resource === 'object'
     ? content.resource as Record<string, unknown>
     : content
   const mimeType = String(nested.mime_type || '')
-  if (typeof nested.text === 'string' && nested.text) return { kind: 'text', name, content: nested.text }
+  if (typeof nested.text === 'string' && nested.text) return { kind: 'text', content: nested.text }
   if (typeof nested.blob === 'string' && mimeType.startsWith('image/')) {
-    return { kind: 'image', name, content: `data:${mimeType};base64,${nested.blob}` }
+    return { kind: 'image', content: `data:${mimeType};base64,${nested.blob}` }
+  }
+  if (typeof nested.blob === 'string' && mimeType.startsWith('audio/')) {
+    return { kind: 'audio', content: `data:${mimeType};base64,${nested.blob}` }
   }
   if (content.type === 'image' && typeof content.data === 'string' && mimeType.startsWith('image/')) {
-    return { kind: 'image', name, content: `data:${mimeType};base64,${content.data}` }
+    return { kind: 'image', content: `data:${mimeType};base64,${content.data}` }
   }
-  return { kind: 'binary', name, content: '' }
+  if (content.type === 'audio' && typeof content.data === 'string' && mimeType.startsWith('audio/')) {
+    return { kind: 'audio', content: `data:${mimeType};base64,${content.data}` }
+  }
+  return { kind: 'binary', content: '' }
 }
 
 async function loadAll() { loading.value = true; loadError.value = ''; try { snapshot.value = await capabilityPoolsApi.snapshot() } catch (error) { loadError.value = error instanceof Error ? error.message : String(error) } finally { loading.value = false } }
@@ -1350,7 +1371,7 @@ onBeforeUnmount(clearProbeNotice)
 .skillhub-preview footer > span { max-width: 390px; color: var(--app-text-muted); font-size: 10px; line-height: 1.6; }
 .mcp-detail-hero { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 18px; padding-bottom: 18px; border-bottom: 1px solid var(--app-border); }.mcp-detail-hero > div { display: flex; min-width: 0; align-items: center; gap: 10px; }.mcp-detail-hero h2 { margin: 0; overflow: hidden; font-size: 20px; text-overflow: ellipsis; white-space: nowrap; }.mcp-detail-hero p { grid-column: 1 / -1; margin: 0; color: var(--app-text-secondary); font-size: 12px; line-height: 1.6; }.mcp-connection-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; margin-top: 18px; overflow: hidden; border: 1px solid var(--app-border); border-radius: 12px; background: var(--app-border); }.mcp-connection-facts > div { display: grid; gap: 4px; padding: 13px; background: var(--app-surface); }.mcp-connection-facts small { color: var(--app-text-muted); font-size: 9px; }.mcp-connection-facts strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }.mcp-detail-tabs { margin-top: 18px; }.mcp-catalog-list { display: grid; gap: 8px; padding-top: 8px; }.mcp-catalog-list article { display: grid; gap: 5px; padding: 13px; border: 1px solid var(--app-border); border-radius: 11px; }.mcp-catalog-list strong { font-size: 12px; }.mcp-catalog-list p { margin: 0; color: var(--app-text-secondary); font-size: 10px; line-height: 1.55; }.mcp-catalog-list code { overflow-wrap: anywhere; color: var(--app-text-muted); font-size: 9px; }
 .mcp-log-list { display: grid; gap: 6px; padding-top: 8px; }.mcp-log-list > p { display: grid; grid-template-columns: 62px minmax(0, 1fr); gap: 10px; margin: 0; padding: 9px 11px; border: 1px solid var(--app-border); border-radius: 9px; }.mcp-log-list span { color: var(--app-text-muted); font-size: 9px; text-transform: uppercase; }.mcp-log-list code { overflow-wrap: anywhere; font-size: 9px; }
-.mcp-resource-row { grid-template-columns: minmax(0, 1fr) auto; }.mcp-resource-row > p,.mcp-resource-row > code { grid-column: 1; }.mcp-resource-row > .n-button { grid-column: 2; grid-row: 1 / span 3; align-self: center; }.mcp-resource-preview { margin-top: 12px; padding: 12px; overflow: auto; border: 1px solid var(--app-border); border-radius: 11px; }.mcp-resource-preview img { display: block; max-width: 100%; max-height: 460px; margin: auto; object-fit: contain; }.mcp-resource-preview pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
+.mcp-resource-row { grid-template-columns: minmax(0, 1fr) auto; }.mcp-resource-row > p,.mcp-resource-row > code { grid-column: 1; }.mcp-resource-row > .n-button { grid-column: 2; grid-row: 1 / span 3; align-self: center; }.mcp-resource-preview { margin-top: 12px; padding: 12px; overflow: auto; border: 1px solid var(--app-border); border-radius: 11px; }.mcp-resource-preview img { display: block; max-width: 100%; max-height: 460px; margin: auto; object-fit: contain; }.mcp-resource-preview audio { width: 100%; }.mcp-resource-preview pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
 .mcp-catalog-configurable { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 6px 12px; }.mcp-catalog-configurable > strong,.mcp-catalog-configurable > p,.mcp-catalog-configurable > code,.mcp-catalog-configurable > .mcp-argument-grid { grid-column: 1; }.mcp-catalog-configurable > .n-button { grid-column: 2; grid-row: 1 / span 4; align-self: center; }.mcp-argument-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-top: 4px; }.mcp-prompt-preview > strong { display: block; margin-bottom: 10px; }.mcp-prompt-preview article + article { margin-top: 12px; }.mcp-prompt-preview small { display: block; margin-bottom: 5px; color: var(--app-text-secondary); font-weight: 700; text-transform: uppercase; }
 @media (max-width: 920px) { .library-header { align-items: flex-start; flex-direction: column; }.header-tools,.search-input { width: 100%; }.pool-switcher { grid-template-columns: repeat(2, 1fr); }.resource-editor { grid-template-columns: 210px minmax(0, 1fr); }.creator-layout { grid-template-columns: 1fr; }.source-pane { position: static; }.parameter-fields { grid-template-columns: minmax(0, 1fr) 140px 82px; } }
 @media (max-width: 620px) { .library-page { padding: 20px 14px; }.pool-switcher { grid-template-columns: 1fr 1fr; }.pool-switch { padding: 13px; }.pool-switch small { display: none; }.pool-surface { padding: 15px; }.pool-heading { align-items: flex-start; flex-direction: column; }.card-grid { grid-template-columns: 1fr; }.resource-editor { grid-template-columns: 1fr; }.resource-editor aside { max-height: 160px; border-right: 0; border-bottom: 1px solid var(--app-border); }.form-section.two-column,.parameter-fields { grid-template-columns: 1fr; }.parameter-description { grid-column: auto; }.source-actions { flex-wrap: wrap; justify-content: flex-start; }.skillhub-panel,.skillhub-preview { padding: 22px 18px; }.skillhub-header { gap: 12px; }.skillhub-search { min-height: 52px; padding-left: 14px; }.skillhub-search button { min-width: 64px; height: 38px; padding: 0 13px; }.skillhub-results { grid-template-columns: 1fr; }.skillhub-results article { grid-template-columns: 38px minmax(0, 1fr); }.skillhub-result-mark { width: 38px; height: 38px; }.skillhub-result-actions { grid-column: 2; justify-self: start; }.skillhub-preview { grid-template-columns: 1fr; }.skillhub-preview-summary,.skillhub-preview dl,.skillhub-preview footer { grid-column: auto; grid-row: auto; }.skillhub-preview footer { align-items: flex-start; flex-direction: column; }.skillhub-preview dl > div { grid-template-columns: 86px minmax(0, 1fr); } }

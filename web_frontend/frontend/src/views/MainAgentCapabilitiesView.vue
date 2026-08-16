@@ -122,7 +122,7 @@ const selectedIds = ref(new Set<string>())
 
 const selectedCount = computed(() => selectedIds.value.size)
 const dirty = computed(() => {
-  const saved = new Set(profile.value?.capability_ids || [])
+  const saved = savedSelectedIds(profile.value)
   return saved.size !== selectedIds.value.size
     || [...saved].some(identifier => !selectedIds.value.has(identifier))
 })
@@ -156,7 +156,7 @@ async function loadProfile() {
     allPoolItems.value = snapshot.capabilities
     poolItems.value = snapshot.capabilities.filter(isProfileCapability)
     profile.value = nextProfile
-    selectedIds.value = new Set(nextProfile.capability_ids)
+    selectedIds.value = savedSelectedIds(nextProfile)
   } catch (error) {
     errorText.value = error instanceof Error ? error.message : String(error)
   } finally {
@@ -171,9 +171,13 @@ async function saveProfile() {
   try {
     profile.value = await capabilityPoolsApi.updateMainAgentProfile({
       revision: profile.value.revision,
-      capability_ids: [...selectedIds.value].sort(),
+      capability_ids: [...selectedIds.value].filter(value => !value.startsWith('mcp-server://')).sort(),
+      mcp_server_ids: [...selectedIds.value]
+        .filter(value => value.startsWith('mcp-server://'))
+        .map(value => value.replace(/^mcp-server:\/\//, ''))
+        .sort(),
     })
-    selectedIds.value = new Set(profile.value.capability_ids)
+    selectedIds.value = savedSelectedIds(profile.value)
     message.success(t('mainAgentProfile.saved'))
   } catch (error) {
     errorText.value = error instanceof Error ? error.message : String(error)
@@ -217,9 +221,18 @@ function kindMark(kind: CapabilityKind): string {
 }
 
 function mcpToolCount(serverCapabilityId: string): number {
+  const serverId = serverCapabilityId.replace(/^mcp-server:\/\//, '')
   return allPoolItems.value.filter(item => (
-    item.kind === 'mcp_tool' && item.details.server_capability_id === serverCapabilityId
+    item.kind === 'mcp_tool' && item.details.server_id === serverId
   )).length
+}
+
+function savedSelectedIds(value: MainAgentCapabilityProfile | null): Set<string> {
+  if (!value) return new Set()
+  return new Set([
+    ...value.capability_ids,
+    ...value.mcp_server_ids.map(serverId => `mcp-server://${serverId}`),
+  ])
 }
 </script>
 

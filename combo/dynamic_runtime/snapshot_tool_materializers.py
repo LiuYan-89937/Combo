@@ -106,7 +106,7 @@ class MCPToolProjectionMaterializer:
         capability_snapshot: CapabilitySnapshot,
         runtime_instance: RuntimeInstance,
     ) -> tuple[MaterializedSnapshotTool, ...]:
-        if projection.kind != self.kind or projection.runtime_definition_schema != "mcp_tool_definition.v2":
+        if projection.kind != self.kind or projection.runtime_definition_schema != "mcp_tool_definition.v3":
             raise ValueError("MCP tool materializer received a non-MCP-tool projection")
         definition = MCPToolDefinition.model_validate(projection.runtime_definition)
         _require_single_alias(projection, definition.model_alias)

@@ -9,10 +9,17 @@ from types import MappingProxyType
 from typing import Any, AsyncIterator, Callable, Mapping
 
 import httpx2
-from mcp import ClientSession, StdioServerParameters
+from mcp import StdioServerParameters
+from mcp.client import Client
+from mcp.client.subscriptions import ListenNotSupportedError
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
+from mcp.shared.subscriptions import (
+    PromptsListChanged,
+    ResourcesListChanged,
+    ToolsListChanged,
+)
 from mcp.types import (
     CallToolResult,
     GetPromptResult,
@@ -23,6 +30,8 @@ from mcp.types import (
     ToolListChangedNotification,
 )
 
+from combo.exception_details import exception_summary
+from combo.sensitive_data import redact_sensitive_text, redact_sensitive_value
 from combo.tooling.envelope import tool_envelope, tool_failure
 
 
@@ -76,10 +85,16 @@ class _PersistentConnection:
     binding: MCPServerRuntimeBinding
     ready: asyncio.Event
     stop: asyncio.Event
-    session: ClientSession | None = None
+    connection_failed: asyncio.Event
+    catalog_lock: asyncio.Lock
+    pending_catalog_changes: set[str]
+    client: Client | None = None
     catalog: MCPServerCatalog | None = None
+    catalog_loaded: bool = False
     error: BaseException | None = None
     task: asyncio.Task[None] | None = None
+    catalog_refresh_task: asyncio.Task[None] | None = None
+    catalog_subscription_task: asyncio.Task[None] | None = None
     logs: list[dict[str, Any]] | None = None
 
 
@@ -159,6 +174,9 @@ class MCPRuntimePool:
     def catalogs(self) -> dict[str, MCPServerCatalog]:
         return self._submit(self._catalogs(), timeout=5)
 
+    def cached_catalog(self, server_content_digest: str) -> MCPServerCatalog | None:
+        return self._submit(self._cached_catalog(server_content_digest), timeout=5)
+
     def logs(self, server_id: str) -> tuple[dict[str, Any], ...]:
         digest = self.server_digest(server_id)
         return self._submit(self._logs(digest), timeout=5)
@@ -175,7 +193,7 @@ class MCPRuntimePool:
         binding = self._binding(server_content_digest)
         result = self._submit(
             self._read_resource(server_content_digest, uri),
-            timeout=binding.request_timeout_seconds,
+            timeout=binding.connect_timeout_seconds + binding.request_timeout_seconds,
         )
         if not isinstance(result, ReadResourceResult):
             raise RuntimeError("MCP resource returned an unsupported result")
@@ -190,7 +208,7 @@ class MCPRuntimePool:
         binding = self._binding(server_content_digest)
         result = self._submit(
             self._get_prompt(server_content_digest, name, arguments),
-            timeout=binding.request_timeout_seconds,
+            timeout=binding.connect_timeout_seconds + binding.request_timeout_seconds,
         )
         if not isinstance(result, GetPromptResult):
             raise RuntimeError("MCP prompt returned an unsupported result")
@@ -265,35 +283,26 @@ class MCPRuntimePool:
         binding = self._binding(digest)
         async with self._request_lane(digest, binding):
             connection = await self._ready_connection(digest)
-            try:
-                return await connection.session.call_tool(
-                    name,
-                    arguments,
-                    read_timeout_seconds=binding.request_timeout_seconds,
-                )
-            except BaseException:
-                await self._restart_connection(digest, connection)
-                raise
+            await self._ensure_catalog(digest, connection)
+            return await connection.client.call_tool(
+                name,
+                arguments,
+                read_timeout_seconds=binding.request_timeout_seconds,
+            )
 
     async def _read_resource(self, digest: str, uri: str) -> Any:
         binding = self._binding(digest)
         async with self._request_lane(digest, binding):
             connection = await self._ready_connection(digest)
-            try:
-                return await connection.session.read_resource(uri)
-            except BaseException:
-                await self._restart_connection(digest, connection)
-                raise
+            await self._ensure_catalog(digest, connection)
+            return await connection.client.read_resource(uri)
 
     async def _get_prompt(self, digest: str, name: str, arguments: dict[str, str]) -> Any:
         binding = self._binding(digest)
         async with self._request_lane(digest, binding):
             connection = await self._ready_connection(digest)
-            try:
-                return await connection.session.get_prompt(name, arguments=arguments or None)
-            except BaseException:
-                await self._restart_connection(digest, connection)
-                raise
+            await self._ensure_catalog(digest, connection)
+            return await connection.client.get_prompt(name, arguments=arguments or None)
 
     @asynccontextmanager
     async def _request_lane(
@@ -335,7 +344,7 @@ class MCPRuntimePool:
                 async with streamable_http_client(
                     str(binding.endpoint),
                     http_client=client,
-                ) as (read_stream, write_stream, _):
+                ) as (read_stream, write_stream):
                     yield read_stream, write_stream
             return
         async with sse_client(
@@ -353,6 +362,9 @@ class MCPRuntimePool:
             binding=binding,
             ready=asyncio.Event(),
             stop=asyncio.Event(),
+            connection_failed=asyncio.Event(),
+            catalog_lock=asyncio.Lock(),
+            pending_catalog_changes=set(),
             logs=[],
         )
         self._connections[digest] = connection
@@ -361,32 +373,56 @@ class MCPRuntimePool:
     async def _connection_worker(self, digest: str, connection: _PersistentConnection) -> None:
         delay = 0.5
         while not connection.stop.is_set():
+            connection.ready.clear()
+            connection.connection_failed.clear()
             try:
-                async with self._transport(connection.binding) as (read_stream, write_stream):
-                    async with ClientSession(
-                        read_stream,
-                        write_stream,
-                        read_timeout_seconds=connection.binding.request_timeout_seconds,
-                        logging_callback=lambda params: self._handle_log(digest, params),
-                        message_handler=lambda message: self._handle_message(digest, message),
-                    ) as session:
-                        initialized = await asyncio.wait_for(
-                            session.initialize(),
-                            connection.binding.connect_timeout_seconds,
-                        )
-                        connection.session = session
-                        connection.catalog = _empty_catalog(initialized)
-                        connection.error = None
-                        connection.ready.set()
-                        delay = 0.5
-                        await connection.stop.wait()
+                client_context = Client(
+                    self._transport(connection.binding),
+                    mode="auto",
+                    read_timeout_seconds=connection.binding.request_timeout_seconds,
+                    logging_callback=lambda params: self._handle_log(digest, params),
+                    message_handler=lambda message: self._handle_message(digest, message),
+                )
+                client = await asyncio.wait_for(
+                    client_context.__aenter__(),
+                    connection.binding.connect_timeout_seconds,
+                )
+                try:
+                    connection.client = client
+                    connection.catalog = _empty_catalog(client)
+                    connection.catalog_loaded = not _catalog_capability_kinds(connection.catalog)
+                    connection.error = None
+                    connection.ready.set()
+                    delay = 0.5
+                    for changed in _catalog_capability_kinds(connection.catalog):
+                        self._queue_catalog_refresh(digest, changed)
+                    connection.catalog_subscription_task = asyncio.create_task(
+                        self._catalog_subscription_worker(digest, connection, client)
+                    )
+                    stop_waiter = asyncio.create_task(connection.stop.wait())
+                    failure_waiter = asyncio.create_task(connection.connection_failed.wait())
+                    _, pending = await asyncio.wait(
+                        (stop_waiter, failure_waiter),
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for waiter in pending:
+                        waiter.cancel()
+                    await asyncio.gather(*pending, return_exceptions=True)
+                finally:
+                    await _cancel_task(connection.catalog_subscription_task)
+                    connection.catalog_subscription_task = None
+                    await _cancel_task(connection.catalog_refresh_task)
+                    connection.catalog_refresh_task = None
+                    connection.pending_catalog_changes.clear()
+                    connection.client = None
+                    connection.catalog_loaded = False
+                    connection.ready.clear()
+                    await client_context.__aexit__(None, None, None)
             except asyncio.CancelledError:
                 raise
             except BaseException as exc:
                 connection.error = exc
                 connection.ready.set()
-            finally:
-                connection.session = None
             if not connection.stop.is_set():
                 try:
                     await asyncio.wait_for(connection.stop.wait(), timeout=delay)
@@ -401,43 +437,60 @@ class MCPRuntimePool:
             await self._start_connection(digest, binding)
             connection = self._connections[digest]
         await asyncio.wait_for(connection.ready.wait(), connection.binding.connect_timeout_seconds)
-        if connection.session is None:
+        if connection.client is None:
             error = connection.error or RuntimeError("MCP connection is unavailable")
             connection.ready.clear()
-            raise RuntimeError(str(error)) from error
+            raise RuntimeError(redact_sensitive_text(exception_summary(error))) from error
         return connection
+
+    async def _ensure_catalog(
+        self,
+        digest: str,
+        connection: _PersistentConnection,
+    ) -> MCPServerCatalog:
+        if connection.catalog_loaded and connection.catalog is not None:
+            return connection.catalog
+        return await self._refresh_catalog(digest, connection)
 
     async def _refresh_catalog(
         self,
         digest: str,
         connection: _PersistentConnection,
     ) -> MCPServerCatalog:
-        if connection.session is None or connection.catalog is None:
-            raise RuntimeError("MCP connection is unavailable")
-        capabilities = set(connection.catalog.capabilities)
-        tools = await _paged(connection.session.list_tools, "tools") if "tools" in capabilities else ()
-        resources = await _paged(connection.session.list_resources, "resources") if "resources" in capabilities else ()
-        templates = await _paged(connection.session.list_resource_templates, "resource_templates") if "resources" in capabilities else ()
-        prompts = await _paged(connection.session.list_prompts, "prompts") if "prompts" in capabilities else ()
-        catalog = MCPServerCatalog(
-            protocol_version=connection.catalog.protocol_version,
-            server_name=connection.catalog.server_name,
-            server_version=connection.catalog.server_version,
-            server_title=connection.catalog.server_title,
-            server_instructions=connection.catalog.server_instructions,
-            capabilities=connection.catalog.capabilities,
-            tools=tools,
-            resources=resources,
-            resource_templates=templates,
-            prompts=prompts,
-        )
-        connection.catalog = catalog
-        return catalog
+        async with connection.catalog_lock:
+            if connection.client is None or connection.catalog is None:
+                raise RuntimeError("MCP connection is unavailable")
+            capabilities = set(connection.catalog.capabilities)
+            tools = await _paged_refresh(connection.client.list_tools, "tools") if "tools" in capabilities else ()
+            resources = await _paged_refresh(connection.client.list_resources, "resources") if "resources" in capabilities else ()
+            templates = await _paged_refresh(connection.client.list_resource_templates, "resource_templates") if "resources" in capabilities else ()
+            prompts = await _paged_refresh(connection.client.list_prompts, "prompts") if "prompts" in capabilities else ()
+            catalog = MCPServerCatalog(
+                protocol_version=connection.catalog.protocol_version,
+                server_name=connection.catalog.server_name,
+                server_version=connection.catalog.server_version,
+                server_title=connection.catalog.server_title,
+                server_instructions=connection.catalog.server_instructions,
+                capabilities=connection.catalog.capabilities,
+                tools=tools,
+                resources=resources,
+                resource_templates=templates,
+                prompts=prompts,
+            )
+            connection.catalog = catalog
+            connection.catalog_loaded = True
+            return catalog
 
     async def _handle_message(self, digest: str, message: Any) -> None:
+        if isinstance(message, Exception):
+            connection = self._connections.get(digest)
+            if connection is not None:
+                connection.error = message
+                connection.ready.clear()
+                connection.connection_failed.set()
+            return
         root = getattr(message, "root", None)
         if isinstance(root, LoggingMessageNotification):
-            await self._handle_log(digest, root.params)
             return
         changed = (
             "tools" if isinstance(root, ToolListChangedNotification)
@@ -446,29 +499,111 @@ class MCPRuntimePool:
             else None
         )
         if changed is not None:
-            asyncio.create_task(self._refresh_after_notification(digest, changed))
+            self._queue_catalog_refresh(digest, changed)
 
-    async def _refresh_after_notification(self, digest: str, changed: str) -> None:
-        await asyncio.sleep(0)
+    def _queue_catalog_refresh(self, digest: str, changed: str) -> None:
         connection = self._connections.get(digest)
-        if connection is None or connection.session is None:
+        if connection is None:
             return
-        try:
-            binding = self._binding(digest)
-            async with self._request_lane(digest, binding):
-                await self._refresh_catalog(digest, connection)
-        except BaseException as exc:
-            connection.error = exc
+        connection.pending_catalog_changes.add(changed)
+        if connection.catalog_refresh_task is None or connection.catalog_refresh_task.done():
+            connection.catalog_refresh_task = asyncio.create_task(
+                self._refresh_after_notification(digest, connection)
+            )
+
+    async def _refresh_after_notification(
+        self,
+        digest: str,
+        connection: _PersistentConnection,
+    ) -> None:
+        await asyncio.sleep(0)
+        while connection.pending_catalog_changes:
+            changed = tuple(sorted(connection.pending_catalog_changes))
+            connection.pending_catalog_changes.clear()
+            if self._connections.get(digest) is not connection or connection.client is None:
+                return
+            try:
+                binding = self._binding(digest)
+                async with self._request_lane(digest, binding):
+                    await self._refresh_catalog(digest, connection)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                connection.error = exc
+                return
+            catalog_kinds = ",".join(changed)
+            for callback in tuple(self._catalog_changed_callbacks):
+                asyncio.get_running_loop().run_in_executor(
+                    None,
+                    callback,
+                    digest,
+                    catalog_kinds,
+                )
+
+    async def _catalog_subscription_worker(
+        self,
+        digest: str,
+        connection: _PersistentConnection,
+        client: Client,
+    ) -> None:
+        capabilities = client.server_capabilities
+        subscriptions = {
+            "tools_list_changed": bool(capabilities.tools and capabilities.tools.list_changed),
+            "prompts_list_changed": bool(capabilities.prompts and capabilities.prompts.list_changed),
+            "resources_list_changed": bool(capabilities.resources and capabilities.resources.list_changed),
+        }
+        if not any(subscriptions.values()):
             return
-        for callback in tuple(self._catalog_changed_callbacks):
-            asyncio.get_running_loop().run_in_executor(None, callback, digest, changed)
+        delay = 0.5
+        while (
+            not connection.stop.is_set()
+            and self._connections.get(digest) is connection
+            and connection.client is client
+        ):
+            try:
+                async with client.listen(**subscriptions) as subscription:
+                    delay = 0.5
+                    async for event in subscription:
+                        if self._connections.get(digest) is not connection:
+                            return
+                        changed = _subscription_catalog_kind(event)
+                        if changed is not None:
+                            self._queue_catalog_refresh(digest, changed)
+            except asyncio.CancelledError:
+                raise
+            except ListenNotSupportedError:
+                return
+            except Exception as exc:
+                if connection.stop.is_set() or connection.client is not client:
+                    return
+                connection.error = exc
+            for changed in _subscribed_catalog_kinds(subscriptions):
+                self._queue_catalog_refresh(digest, changed)
+            try:
+                await asyncio.wait_for(connection.stop.wait(), timeout=delay)
+            except TimeoutError:
+                delay = min(delay * 2, 10.0)
 
     async def _catalogs(self) -> dict[str, MCPServerCatalog]:
         return {
             connection.binding.server_id: connection.catalog
             for digest, connection in self._connections.items()
             if connection.catalog is not None
+            and connection.client is not None
+            and connection.ready.is_set()
+            and connection.catalog_loaded
         }
+
+    async def _cached_catalog(self, digest: str) -> MCPServerCatalog | None:
+        connection = self._connections.get(digest)
+        if (
+            connection is None
+            or connection.client is None
+            or not connection.ready.is_set()
+            or not connection.catalog_loaded
+        ):
+            return None
+        return connection.catalog
 
     async def _logs(self, digest: str) -> tuple[dict[str, Any], ...]:
         connection = self._connections.get(digest)
@@ -481,7 +616,7 @@ class MCPRuntimePool:
         connection.logs.append({
             "level": str(getattr(params, "level", "info")),
             "logger": str(getattr(params, "logger", "") or ""),
-            "data": getattr(params, "data", None),
+            "data": redact_sensitive_value(getattr(params, "data", None)),
         })
         del connection.logs[:-500]
 
@@ -492,13 +627,6 @@ class MCPRuntimePool:
         connection.stop.set()
         if connection.task is not None:
             await connection.task
-
-    async def _restart_connection(self, digest: str, connection: _PersistentConnection) -> None:
-        current = self._connections.get(digest)
-        if current is not connection:
-            return
-        await self._stop_connection(digest)
-        await self._start_connection(digest, connection.binding)
 
     async def _stop_all_connections(self) -> None:
         for digest in tuple(self._connections):
@@ -516,31 +644,9 @@ class MCPRuntimePool:
         self._loop.run_forever()
 
 
-def _report_initialized(
-    callback: Callable[[str, dict[str, Any]], None] | None,
-    initialized: Any,
-) -> None:
-    server = initialized.server_info
-    capabilities = initialized.capabilities
-    _report_progress(callback, "initialized", {
-        "protocol_version": initialized.protocol_version,
-        "server_name": server.name,
-        "server_version": server.version,
-        "server_title": server.title,
-        "server_instructions": initialized.instructions,
-        "capabilities": sorted(
-            key
-            for key, value in (
-                capabilities.model_dump(mode="python", exclude_none=True).items()
-            )
-            if value is not None
-        ),
-    })
-
-
-def _empty_catalog(initialized: Any) -> MCPServerCatalog:
-    server = initialized.server_info
-    capabilities = initialized.capabilities
+def _empty_catalog(client: Client) -> MCPServerCatalog:
+    server = client.server_info
+    capabilities = client.server_capabilities
     names = tuple(sorted(
         key
         for key, value in (
@@ -549,11 +655,11 @@ def _empty_catalog(initialized: Any) -> MCPServerCatalog:
         if value is not None
     ))
     return MCPServerCatalog(
-        protocol_version=initialized.protocol_version,
-        server_name=server.name,
-        server_version=server.version,
-        server_title=server.title,
-        server_instructions=initialized.instructions,
+        protocol_version=client.protocol_version,
+        server_name=server.name if server is not None else "",
+        server_version=server.version if server is not None else "",
+        server_title=server.title if server is not None else None,
+        server_instructions=client.instructions,
         capabilities=names,
         tools=(),
         resources=(),
@@ -573,15 +679,57 @@ def _catalog_identity(catalog: MCPServerCatalog) -> dict[str, Any]:
     }
 
 
-async def _paged(request: Callable[..., Any], collection_name: str) -> tuple[Any, ...]:
-    page = await request()
+def _catalog_capability_kinds(catalog: MCPServerCatalog) -> tuple[str, ...]:
+    capabilities = set(catalog.capabilities)
+    return tuple(
+        kind
+        for capability, kind in (
+            ("tools", "tools"),
+            ("resources", "resources"),
+            ("prompts", "prompts"),
+        )
+        if capability in capabilities
+    )
+
+
+async def _paged_refresh(request: Callable[..., Any], collection_name: str) -> tuple[Any, ...]:
+    page = await request(cache_mode="refresh")
     values = list(getattr(page, collection_name, ()) or ())
     cursor = page.next_cursor
     while cursor is not None:
-        page = await request(cursor=cursor)
+        page = await request(cursor=cursor, cache_mode="refresh")
         values.extend(getattr(page, collection_name, ()) or ())
         cursor = page.next_cursor
     return tuple(values)
+
+
+async def _cancel_task(task: asyncio.Task[Any] | None) -> None:
+    if task is None or task.done():
+        return
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+
+def _subscription_catalog_kind(event: Any) -> str | None:
+    if isinstance(event, ToolsListChanged):
+        return "tools"
+    if isinstance(event, ResourcesListChanged):
+        return "resources"
+    if isinstance(event, PromptsListChanged):
+        return "prompts"
+    return None
+
+
+def _subscribed_catalog_kinds(subscriptions: Mapping[str, bool]) -> tuple[str, ...]:
+    return tuple(
+        kind
+        for option, kind in (
+            ("tools_list_changed", "tools"),
+            ("resources_list_changed", "resources"),
+            ("prompts_list_changed", "prompts"),
+        )
+        if subscriptions.get(option, False)
+    )
 
 
 def _tool_error_message(payload: dict[str, Any]) -> str:

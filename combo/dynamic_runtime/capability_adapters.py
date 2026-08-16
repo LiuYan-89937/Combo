@@ -147,7 +147,7 @@ class CapabilityAdapterRegistry:
         return cls(_adapters=MappingProxyType(registered))
 
     def require_complete(self) -> None:
-        required: set[CapabilityKind] = {"skill", "tool", "mcp_server", "mcp_tool", "dependency"}
+        required: set[CapabilityKind] = {"skill", "tool", "dependency"}
         missing = required - set(self._adapters)
         if missing:
             raise RuntimeError("missing capability adapters: " + ", ".join(sorted(missing)))

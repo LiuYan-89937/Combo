@@ -12,6 +12,7 @@ from combo.dynamic_runtime.capability_store import ActiveCapability, CapabilityS
 from combo.dynamic_runtime.capability_definitions import ToolDefinition
 from combo.dynamic_runtime.delegation_policy import TEMPORARY_RUNTIME_ONLY_CAPABILITY_IDS
 from combo.dynamic_runtime.model_service import ResolvedRuntimePolicy
+from combo.dynamic_runtime.mcp_gateway import MCPGateway
 from combo.runtime_protocol import (
     CapabilityDependencyRef,
     CapabilityProjectionSnapshot,
@@ -133,7 +134,7 @@ class MainTurnCapabilityResolverProtocol(Protocol):
 
 
 class MainTurnCapabilityResolver:
-    """Resolve one immutable capability surface from published authorities only."""
+    """Resolve one immutable surface from published local capabilities and the external MCP gateway."""
 
     def __init__(
         self,
@@ -146,6 +147,8 @@ class MainTurnCapabilityResolver:
         dependency_environments: DependencyEnvironmentResolver,
         adapters: CapabilityAdapterRegistry,
         main_agent_capability_ids: Callable[[], tuple[str, ...]],
+        main_agent_mcp_server_ids: Callable[[], tuple[str, ...]],
+        mcp_gateway: MCPGateway,
     ) -> None:
         self._store = store
         self._search_index = search_index
@@ -155,6 +158,8 @@ class MainTurnCapabilityResolver:
         self._dependency_environments = dependency_environments
         self._adapters = adapters
         self._main_agent_capability_ids = main_agent_capability_ids
+        self._main_agent_mcp_server_ids = main_agent_mcp_server_ids
+        self._mcp_gateway = mcp_gateway
         self._adapters.require_complete()
 
     async def resolve(
@@ -171,6 +176,7 @@ class MainTurnCapabilityResolver:
             workspace_id=workspace_id,
             excluded_capability_ids=TEMPORARY_RUNTIME_ONLY_CAPABILITY_IDS,
             required_capability_ids=tuple(dict.fromkeys(self._main_agent_capability_ids())),
+            required_mcp_server_ids=tuple(dict.fromkeys(self._main_agent_mcp_server_ids())),
         )
 
     def resolve_requirements(
@@ -183,6 +189,7 @@ class MainTurnCapabilityResolver:
         include_system_capabilities: bool = True,
         excluded_capability_ids: frozenset[str] = frozenset(),
         required_capability_ids: tuple[str, ...] = (),
+        required_mcp_server_ids: tuple[str, ...] = (),
     ) -> CapabilitySnapshot:
         principal_id = _require_text(principal_id, "runtime principal_id")
         resolved_workspace_id = _require_text(workspace_id, "workspace_id")
@@ -201,6 +208,12 @@ class MainTurnCapabilityResolver:
                 or not _is_system_available_tool(item)
             )
         )
+        external_matches = self._mcp_gateway.exact_requirement_matches(requirements)
+        external_requirements = {requirement for requirement, _ in external_matches}
+        published_requirements = tuple(
+            requirement for requirement in requirements
+            if requirement not in external_requirements
+        )
         matches_by_requirement = tuple(
             (
                 requirement,
@@ -210,7 +223,7 @@ class MainTurnCapabilityResolver:
                     search_index=self._search_index,
                 ),
             )
-            for requirement in requirements
+            for requirement in published_requirements
         )
         unmatched_requirements = tuple(
             requirement
@@ -361,7 +374,7 @@ class MainTurnCapabilityResolver:
                 ):
                     accepted_roots.add(capability_id)
 
-        for capability_id in _expand_main_agent_capability_ids(active, required_capability_ids):
+        for capability_id in _active_main_agent_capability_ids(active, required_capability_ids):
             if capability_id not in active_by_id or not select(
                 capability_id,
                 score=None,
@@ -446,12 +459,17 @@ class MainTurnCapabilityResolver:
             for capability_id in sorted(rejected)
             if capability_id not in selected
         )
-        return CapabilitySnapshot(
+        published_snapshot = CapabilitySnapshot(
             selections=tuple(selections),
             projections=projection_snapshots,
             tool_ids=tool_ids,
             tool_aliases=tool_aliases,
             dependency_environment=environment,
+        )
+        return self._mcp_gateway.augment_snapshot(
+            published_snapshot,
+            server_ids=required_mcp_server_ids,
+            required_tools=tuple(tool for _, tool in external_matches),
         )
 
 
@@ -504,27 +522,14 @@ def _is_system_available_tool(item: ActiveCapability) -> bool:
     return ToolDefinition.model_validate(item.revision.content.definition).system_available
 
 
-def _expand_main_agent_capability_ids(
+def _active_main_agent_capability_ids(
     active: tuple[ActiveCapability, ...],
     configured_ids: tuple[str, ...],
 ) -> tuple[str, ...]:
-    active_by_id = {item.revision.capability_id: item for item in active}
-    expanded: list[str] = []
-    for capability_id in configured_ids:
-        if capability_id not in expanded:
-            expanded.append(capability_id)
-        item = active_by_id.get(capability_id)
-        if item is None or item.revision.kind != "mcp_server":
-            continue
-        for candidate in active:
-            if candidate.revision.kind != "mcp_tool":
-                continue
-            if any(
-                dependency.capability_id == capability_id and dependency.required
-                for dependency in candidate.revision.content.dependencies
-            ) and candidate.revision.capability_id not in expanded:
-                expanded.append(candidate.revision.capability_id)
-    return tuple(expanded)
+    active_ids = {item.revision.capability_id for item in active}
+    return tuple(dict.fromkeys(
+        capability_id for capability_id in configured_ids if capability_id in active_ids
+    ))
 
 
 def _reachable_selected_capabilities(
