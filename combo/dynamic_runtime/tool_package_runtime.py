@@ -16,6 +16,7 @@ from combo.dynamic_runtime.capability_definitions import ToolDefinition
 from combo.dynamic_runtime.repositories import ConversationStore
 from combo.dynamic_runtime.snapshot_tool_execution import ToolEntrypointLease
 from combo.environment_system import DependencyPoolService
+from combo.resource_system import ResourceDescriptor, ResourceIdentity, ResourceStore
 from combo.runtime_protocol import (
     CapabilityProjectionSnapshot,
     CapabilitySnapshot,
@@ -34,12 +35,14 @@ class ToolPackageRuntime:
         runtime_root: Path,
         dependency_pool: DependencyPoolService,
         conversations: ConversationStore,
+        resource_store: ResourceStore,
         base_environment: Mapping[str, str],
     ) -> None:
         self._blobs = blobs
         self._runtime_root = Path(runtime_root).expanduser().resolve()
         self._dependency_pool = dependency_pool
         self._conversations = conversations
+        self._resource_store = resource_store
         self._base_environment = dict(base_environment)
         self._lock = RLock()
 
@@ -90,6 +93,23 @@ class ToolPackageRuntime:
             "capability_id": projection.capability_id,
             "capability_revision": projection.revision,
         }
+        context_properties = definition.context_schema.get("properties")
+        required_context = {"package_path", "resources_path", "workspace_path"}
+        declared_context = (
+            {str(key) for key in context_properties}
+            if isinstance(context_properties, dict)
+            else set()
+        )
+        allowed_context = required_context | declared_context
+        context = {key: value for key, value in context.items() if key in allowed_context}
+        context.update(
+            self._configured_context(
+                capability_id=projection.capability_id,
+                capability_revision=projection.revision,
+                context_properties=context_properties,
+                reserved_keys=set(context),
+            )
+        )
 
         def invoke(*, arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
             if resources:
@@ -108,6 +128,46 @@ class ToolPackageRuntime:
             hard_risk_evaluator=None,
             release_callback=lambda: None,
         )
+
+    def _configured_context(
+        self,
+        *,
+        capability_id: str,
+        capability_revision: int,
+        context_properties: object,
+        reserved_keys: set[str],
+    ) -> dict[str, Any]:
+        """Load user-configured ToolPackage context values without exposing them in snapshots."""
+        if not isinstance(context_properties, dict):
+            return {}
+        descriptors = {
+            str(name): ResourceDescriptor(
+                identity=ResourceIdentity(
+                    owner_kind="tool",
+                    owner_id=capability_id,
+                    owner_revision=capability_revision,
+                    resource_id=str(name),
+                    resource_revision=1,
+                ),
+                purpose="tool_context",
+                required=False,
+                value_schema={"type": str(schema.get("type", "string"))}
+                if isinstance(schema, dict)
+                else {"type": "string"},
+            )
+            for name, schema in context_properties.items()
+            if str(name) not in reserved_keys
+        }
+        if not descriptors:
+            return {}
+        statuses = self._resource_store.status(list(descriptors.values()))
+        configured: dict[str, Any] = {}
+        for status in statuses:
+            if not bool(status.get("configured")):
+                continue
+            name = str(status["identity"]["resource_id"])
+            configured[name] = self._resource_store.resolve(descriptors[name])
+        return configured
 
     @staticmethod
     def _trusted_entrypoint(*, package_root: Path, package_digest: str, target: str):
@@ -145,7 +205,7 @@ class ToolPackageRuntime:
                 on_progress=on_progress,
             )
             python_paths = tuple(
-                (self._dependency_pool.root / str(entry["path"])).resolve()
+                self._dependency_pool.python_import_path(entry)
                 for entry in resolution.python_entries
             )
             if any(not path.is_dir() for path in python_paths):

@@ -81,6 +81,7 @@ class ToolPackageManifest(BaseModel):
     entrypoint: str = "main:run"
     schema_error_guidance: str = ""
     input_schema: dict[str, object]
+    context_schema: dict[str, object] = Field(default_factory=dict)
     output_schema: dict[str, object]
     permissions: ToolPackagePermissions = Field(default_factory=ToolPackagePermissions)
     execution: ToolPackageExecution = Field(default_factory=ToolPackageExecution)
@@ -245,6 +246,7 @@ class FileSystemToolCapabilitySource:
             model_description=manifest.description,
             schema_error_guidance=manifest.schema_error_guidance,
             input_schema=manifest.input_schema,
+            context_schema=manifest.context_schema,
             output_schema=manifest.output_schema,
             implementation=ToolImplementation(
                 kind="python_package",

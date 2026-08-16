@@ -270,6 +270,7 @@ class ToolDefinition(FrozenProtocolModel):
     model_description: str
     schema_error_guidance: str = ""
     input_schema: dict[str, JsonValue]
+    context_schema: dict[str, JsonValue] = Field(default_factory=dict)
     output_schema: dict[str, JsonValue]
     implementation: ToolImplementation
     runtime_policy: ToolRuntimePolicy = Field(default_factory=ToolRuntimePolicy)

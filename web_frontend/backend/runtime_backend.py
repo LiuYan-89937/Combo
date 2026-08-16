@@ -12,10 +12,11 @@ import shutil
 import sys
 import tempfile
 from threading import RLock
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 from uuid import uuid4
 from ruamel.yaml import YAML
 import uritemplate
+from jsonschema import Draft202012Validator
 
 from combo import __version__
 from combo.context_system.runtime import default_context_runtime
@@ -59,6 +60,7 @@ from combo.dynamic_runtime.capability_definitions import (
 )
 from combo.dynamic_runtime.capability_catalog_runtime import CapabilityCatalogRuntime
 from combo.dynamic_runtime.delegated_model_selector import DelegatedTaskModelSelector
+from combo.dynamic_runtime.delegation_policy import TEMPORARY_RUNTIME_ONLY_CAPABILITY_IDS
 from combo.dynamic_runtime.delegation_runtime import DelegationRuntimeCoordinator
 from combo.dynamic_runtime.scheduler_service import SchedulerService
 from combo.dynamic_runtime.capability_blob_store import CapabilityBlobStore
@@ -74,6 +76,7 @@ from combo.dynamic_runtime.tool_package_source import (
     ToolSourceRoot,
 )
 from combo.dynamic_runtime.tool_package_runtime import ToolPackageRuntime
+from combo.dynamic_runtime.tool_transcriber import ToolTranscriptionResult, transcribe_tool_source
 from combo.dynamic_runtime.mcp_content_runtime import MCPContentRuntime
 from combo.environment_system import DependencyPoolService
 from combo.dynamic_runtime.application import DynamicRuntimeStores
@@ -89,7 +92,7 @@ from combo.dynamic_runtime.runtime_infrastructure import (
 )
 from combo.model_pool import ModelPoolStore
 from combo.paths import combo_data_path, project_root
-from combo.resource_system import ResourceStore
+from combo.resource_system import ResourceDescriptor, ResourceIdentity, ResourceStore
 from combo.runtime_protocol import (
     CapabilityActivation,
     CommandEnvelope,
@@ -256,6 +259,8 @@ class RuntimeBackend:
         self._tool_package_lock = RLock()
         self._skill_package_lock = RLock()
         self._main_agent_profile_lock = RLock()
+        self._remove_main_agent_profile_capabilities(TEMPORARY_RUNTIME_ONLY_CAPABILITY_IDS)
+        self.resource_store = ResourceStore(config.resource_store_path)
         self.tool_package_runtime: ToolPackageRuntime | None = None
         try:
             self.application = self._open_application()
@@ -437,6 +442,8 @@ class RuntimeBackend:
         for item in self.application.stores.capabilities.active_capabilities():
             revision = item.revision
             if revision.kind not in counts:
+                continue
+            if revision.capability_id in TEMPORARY_RUNTIME_ONLY_CAPABILITY_IDS:
                 continue
             counts[revision.kind] += 1
             health = self.application.stores.capability_resolution_receipts.latest_health(
@@ -623,6 +630,9 @@ class RuntimeBackend:
         }
         invalid: list[str] = []
         for capability_id in capability_ids:
+            if capability_id in TEMPORARY_RUNTIME_ONLY_CAPABILITY_IDS:
+                invalid.append(capability_id)
+                continue
             item = active.get(capability_id)
             if item is None or item.revision.kind not in {"skill", "tool", "mcp_server"}:
                 invalid.append(capability_id)
@@ -1033,7 +1043,7 @@ class RuntimeBackend:
         self._remove_main_agent_profile_capabilities({capability_id})
         return self.capability_pool_snapshot()
 
-    def import_tool_folder(
+    def _publish_tool_folder(
         self,
         source_path: str,
         *,
@@ -1136,12 +1146,250 @@ class RuntimeBackend:
         payload: dict[str, Any],
         main_source: str,
         *,
+        resource_files: Mapping[str, bytes] | None = None,
         on_progress: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> dict[str, object]:
         """Assemble the internal package format from user-facing tool fields."""
 
+        package_name = str(payload["name"])
+        context_values = self._context_values_from_payload(payload)
+        self._ensure_context_store_ready(context_values)
+        staging_parent = Path(tempfile.mkdtemp(prefix="combo-tool-create-"))
+        source = staging_parent / package_name
+        source.mkdir()
+        try:
+            _report_tool_preparation(on_progress, "assembling_tool_package")
+            self._write_tool_package_draft(
+                source,
+                payload,
+                main_source,
+                resource_files=resource_files,
+            )
+            result = self._publish_tool_folder(str(source), on_progress=on_progress)
+            self._persist_published_context_values(
+                capability_id=f"tool://{self.config.tool_source_roots[0].root_id}/{package_name}",
+                values=context_values,
+            )
+            return result
+        finally:
+            shutil.rmtree(staging_parent, ignore_errors=True)
+
+    def validate_tool_package(
+        self,
+        payload: dict[str, Any],
+        main_source: str,
+        *,
+        resource_files: Mapping[str, bytes] | None = None,
+        on_progress: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> dict[str, object]:
+        """Validate format, importability, and dependencies without publishing or running the tool."""
+
         source_root = self.config.tool_source_roots[0]
         package_name = str(payload["name"])
+        self._context_values_from_payload(payload)
+        staging_parent = Path(tempfile.mkdtemp(prefix="combo-tool-validate-"))
+        source = staging_parent / package_name
+        source.mkdir()
+        try:
+            self._write_tool_package_draft(
+                source,
+                payload,
+                main_source,
+                resource_files=resource_files,
+            )
+            _report_tool_preparation(on_progress, "validating_tool_package")
+            validation_source = self._tool_capability_source((ToolSourceRoot(
+                root_id=source_root.root_id,
+                path=staging_parent,
+                trust_level=source_root.trust_level,
+            ),))
+            drafts = validation_source.drafts()
+            if len(drafts) != 1:
+                raise ValueError("ToolPackage draft must contain exactly one tool")
+            definition = ToolDefinition.model_validate(drafts[0].content.definition)
+            if self.tool_package_runtime is None:
+                raise RuntimeError("ToolPackage runtime is not initialized")
+            _report_tool_preparation(on_progress, "validating_tool_import")
+            self.tool_package_runtime.prepare(definition, on_progress=on_progress)
+            _report_tool_preparation(on_progress, "tool_package_validated")
+            return {
+                "valid": True,
+                "name": package_name,
+                "file_count": len(definition.implementation.package_files),
+                "dependencies": list(definition.implementation.python_requirements),
+                "message": "ToolPackage format and import validation passed; tool effects were not executed.",
+            }
+        finally:
+            shutil.rmtree(staging_parent, ignore_errors=True)
+
+    @staticmethod
+    def _context_value(name: str, value: object, value_type: str) -> object:
+        raw = str(value or "")
+        if not raw.strip():
+            raise ValueError(f"Context value must not be empty: {name}")
+        try:
+            if value_type == "string":
+                converted: object = raw
+            elif value_type == "integer":
+                converted = int(raw.strip())
+            elif value_type == "number":
+                converted = float(raw.strip())
+            elif value_type == "boolean":
+                normalized = raw.strip().lower()
+                if normalized not in {"true", "false"}:
+                    raise ValueError("expected true or false")
+                converted = normalized == "true"
+            elif value_type in {"object", "array"}:
+                converted = json.loads(raw)
+            else:
+                raise ValueError(f"unsupported type: {value_type}")
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError(f"invalid Context value for {name}: {exc}") from exc
+        errors = list(Draft202012Validator({"type": value_type}).iter_errors(converted))
+        if errors:
+            raise ValueError(f"invalid Context value for {name}: {errors[0].message}")
+        return converted
+
+    def _context_values_from_payload(self, payload: Mapping[str, Any]) -> dict[str, object]:
+        values: dict[str, object] = {}
+        for item in payload.get("context_parameters", []):
+            name = str(item["name"])
+            raw = str(item.get("value") or "")
+            if raw.strip():
+                values[name] = self._context_value(name, raw, str(item["type"]))
+        return values
+
+    def _ensure_context_store_ready(self, values: Mapping[str, object]) -> None:
+        if values and not self.resource_store.key_available:
+            raise ValueError("Context encryption is unavailable")
+
+    @staticmethod
+    def _validate_context_values_against_schema(
+        values: Mapping[str, object],
+        context_schema: object,
+    ) -> None:
+        properties = context_schema.get("properties", {}) if isinstance(context_schema, dict) else {}
+        if not isinstance(properties, dict):
+            raise ValueError("ToolPackage context_schema.properties must be an object")
+        for name, value in values.items():
+            schema = properties.get(name)
+            if not isinstance(schema, dict):
+                raise ValueError(f"Context field is not declared: {name}")
+            errors = list(Draft202012Validator(schema).iter_errors(value))
+            if errors:
+                raise ValueError(f"invalid Context value for {name}: {errors[0].message}")
+
+    @staticmethod
+    def _context_descriptor(
+        *,
+        capability_id: str,
+        revision: int,
+        name: str,
+        schema: object,
+    ) -> ResourceDescriptor:
+        value_type = str(schema.get("type", "string")) if isinstance(schema, dict) else "string"
+        return ResourceDescriptor(
+            identity=ResourceIdentity(
+                owner_kind="tool",
+                owner_id=capability_id,
+                owner_revision=revision,
+                resource_id=name,
+                resource_revision=1,
+            ),
+            purpose="tool_context",
+            required=False,
+            value_schema={"type": value_type},
+        )
+
+    def _active_tool_revision(self, capability_id: str):
+        return next(
+            (
+                item.revision
+                for item in self.application.stores.capabilities.active_capabilities()
+                if item.revision.capability_id == capability_id and item.revision.kind == "tool"
+            ),
+            None,
+        )
+
+    def _read_context_values(
+        self,
+        *,
+        capability_id: str,
+        revision: int,
+        context_schema: Mapping[str, Any],
+    ) -> dict[str, object]:
+        properties = context_schema.get("properties")
+        if not isinstance(properties, dict):
+            return {}
+        descriptors = {
+            name: self._context_descriptor(
+                capability_id=capability_id,
+                revision=revision,
+                name=name,
+                schema=schema,
+            )
+            for name, schema in properties.items()
+        }
+        if not descriptors:
+            return {}
+        values: dict[str, object] = {}
+        for status in self.resource_store.status(list(descriptors.values())):
+            if bool(status.get("configured")):
+                name = str(status["identity"]["resource_id"])
+                values[name] = self.resource_store.resolve(descriptors[name])
+        return values
+
+    def _persist_published_context_values(
+        self,
+        *,
+        capability_id: str,
+        values: Mapping[str, object],
+        previous_revision: int | None = None,
+        previous_context_schema: Mapping[str, Any] | None = None,
+    ) -> None:
+        active = self._active_tool_revision(capability_id)
+        if active is None:
+            raise RuntimeError(f"published ToolPackage capability not found: {capability_id}")
+        if values:
+            self._ensure_context_store_ready(values)
+        for name, value in values.items():
+            schema = active.content.definition.get("context_schema", {}).get("properties", {}).get(name, {})
+            self.resource_store.put(
+                self._context_descriptor(
+                    capability_id=capability_id,
+                    revision=active.revision,
+                    name=name,
+                    schema=schema,
+                ),
+                value,
+            )
+        if previous_revision is None or previous_context_schema is None:
+            return
+        properties = previous_context_schema.get("properties")
+        if isinstance(properties, dict):
+            for name, schema in properties.items():
+                if previous_revision == active.revision and str(name) in values:
+                    continue
+                self.resource_store.delete(
+                    self._context_descriptor(
+                        capability_id=capability_id,
+                        revision=previous_revision,
+                        name=str(name),
+                        schema=schema,
+                    ).identity
+                )
+
+    def transcribe_tool_source(self, source: str, *, filename: str) -> ToolTranscriptionResult:
+        return transcribe_tool_source(source, filename=filename, store=ModelPoolStore(setup=False))
+
+    def _write_tool_package_draft(
+        self,
+        source: Path,
+        payload: dict[str, Any],
+        main_source: str,
+        *,
+        resource_files: Mapping[str, bytes] | None = None,
+    ) -> None:
         input_properties = {
             str(item["name"]): {
                 "type": str(item["type"]),
@@ -1149,63 +1397,99 @@ class RuntimeBackend:
             }
             for item in payload["parameters"]
         }
-        required = [
-            str(item["name"])
-            for item in payload["parameters"]
-            if bool(item["required"])
-        ]
-        runtime_policy = dict(payload["runtime_policy"])
+        context_properties = {
+            str(item["name"]): {
+                "type": str(item["type"]),
+            }
+            for item in payload.get("context_parameters", [])
+        }
         manifest = {
             "schema_version": "tool_package.v1",
-            "name": package_name,
+            "name": str(payload["name"]),
             "model_alias": str(payload["model_alias"]),
             "display_name": str(payload["display_name"]),
             "description": str(payload["description"]),
-            "keywords": list(payload["keywords"]),
+            "keywords": list(payload.get("keywords", [])),
             "entrypoint": "main:run",
             "input_schema": {
                 "type": "object",
                 "properties": input_properties,
-                "required": required,
+                "required": [str(item["name"]) for item in payload["parameters"] if bool(item["required"])],
+                "additionalProperties": False,
+            },
+            "context_schema": {
+                "type": "object",
+                "properties": context_properties,
                 "additionalProperties": False,
             },
             "output_schema": {"type": "object"},
             "permissions": {
-                "approval": runtime_policy["approval"],
-                "risk_level": runtime_policy["risk_level"],
+                "approval": payload["runtime_policy"]["approval"],
+                "risk_level": payload["runtime_policy"]["risk_level"],
                 "effects": ["read"],
                 "read_only": True,
             },
             "execution": {
-                "allow_parallel_calls": runtime_policy["allow_parallel_calls"],
-                "max_parallel_calls": runtime_policy["max_parallel_calls"],
-                "timeout_seconds": runtime_policy["timeout_seconds"],
-                "output_projection": runtime_policy["output_projection"],
-                "output_max_model_chars": runtime_policy["output_max_model_chars"],
-                "retain_raw_output": runtime_policy["retain_raw_output"],
+                key: payload["runtime_policy"][key]
+                for key in (
+                    "allow_parallel_calls",
+                    "max_parallel_calls",
+                    "timeout_seconds",
+                    "output_projection",
+                    "output_max_model_chars",
+                    "retain_raw_output",
+                )
             },
         }
-        staging_parent = Path(tempfile.mkdtemp(prefix="combo-tool-create-"))
-        source = staging_parent / package_name
-        source.mkdir()
-        try:
-            _report_tool_preparation(on_progress, "assembling_tool_package")
-            yaml = YAML()
-            yaml.default_flow_style = False
-            stream = StringIO()
-            yaml.dump(manifest, stream)
-            (source / "TOOL.yaml").write_text(stream.getvalue(), encoding="utf-8")
-            (source / "main.py").write_text(str(main_source), encoding="utf-8")
-            dependencies = [str(value).strip() for value in payload["dependencies"] if str(value).strip()]
-            if dependencies:
-                (source / "requirements.txt").write_text("\n".join(dependencies) + "\n", encoding="utf-8")
-            return self.import_tool_folder(str(source), on_progress=on_progress)
-        finally:
-            shutil.rmtree(staging_parent, ignore_errors=True)
+        yaml = YAML()
+        yaml.default_flow_style = False
+        stream = StringIO()
+        yaml.dump(manifest, stream)
+        (source / "TOOL.yaml").write_text(stream.getvalue(), encoding="utf-8")
+        (source / "main.py").write_text(str(main_source), encoding="utf-8")
+        dependencies = [str(value).strip() for value in payload.get("dependencies", []) if str(value).strip()]
+        if dependencies:
+            (source / "requirements.txt").write_text("\n".join(dependencies) + "\n", encoding="utf-8")
+        for logical_path, content in (resource_files or {}).items():
+            normalized = _normalize_tool_package_path(logical_path)
+            if normalized in {"TOOL.yaml", "main.py", "requirements.txt"}:
+                raise ValueError(f"resource file cannot replace reserved ToolPackage file: {normalized}")
+            destination = source / normalized
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(bytes(content))
 
     def tool_package_editor_document(self, capability_id: str) -> dict[str, object]:
         active, _, target = self._editable_tool_package(capability_id)
         definition = ToolDefinition.model_validate(active.content.definition)
+        manifest_path = target / "TOOL.yaml"
+        manifest_document = YAML(typ="safe").load(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(manifest_document, dict):
+            raise ValueError("TOOL.yaml must contain a mapping")
+        definition_context = definition.context_schema
+        context_properties = definition_context.get("properties", {})
+        context_parameters: list[dict[str, object]] = []
+        if isinstance(context_properties, dict):
+            descriptors = {
+                str(name): self._context_descriptor(
+                    capability_id=capability_id,
+                    revision=active.revision,
+                    name=str(name),
+                    schema=schema,
+                )
+                for name, schema in context_properties.items()
+            }
+            statuses = {
+                str(status["identity"]["resource_id"]): bool(status.get("configured"))
+                for status in self.resource_store.status(list(descriptors.values()))
+            }
+            context_parameters = [
+                {
+                    "name": str(name),
+                    "type": str(schema.get("type", "string")) if isinstance(schema, dict) else "string",
+                    "configured": statuses.get(str(name), False),
+                }
+                for name, schema in context_properties.items()
+            ]
         files: list[dict[str, object]] = []
         for path in sorted(target.rglob("*"), key=lambda item: item.as_posix()):
             if path.is_dir():
@@ -1229,6 +1513,8 @@ class RuntimeBackend:
             "source_path": str(target),
             "entrypoint": definition.implementation.entrypoint,
             "python_requirements": list(definition.implementation.python_requirements),
+            "context_parameters": context_parameters,
+            "manifest": manifest_document,
             "files": files,
         }
 
@@ -1238,11 +1524,36 @@ class RuntimeBackend:
         capability_id: str,
         expected_content_digest: str,
         files: dict[str, str],
+        manifest: dict[str, Any] | None = None,
+        context_parameters: list[dict[str, Any]] | None = None,
     ) -> dict[str, object]:
         with self._tool_package_lock:
             active, source_root, target = self._editable_tool_package(capability_id)
             if active.content_digest != expected_content_digest:
                 raise RuntimeError("tool_revision_conflict")
+            previous_definition = ToolDefinition.model_validate(active.content.definition)
+            previous_context_schema = previous_definition.context_schema
+            context_values: dict[str, object] | None = None
+            if context_parameters is not None:
+                supplied = self._context_values_from_payload({"context_parameters": context_parameters})
+                previous_values = self._read_context_values(
+                    capability_id=capability_id,
+                    revision=active.revision,
+                    context_schema=previous_context_schema,
+                )
+                next_schema = (
+                    manifest.get("context_schema", {})
+                    if isinstance(manifest, dict)
+                    else previous_context_schema
+                )
+                next_properties = next_schema.get("properties", {}) if isinstance(next_schema, dict) else {}
+                context_values = {
+                    name: supplied.get(name, previous_values[name])
+                    for name in next_properties
+                    if name in supplied or name in previous_values
+                }
+                self._validate_context_values_against_schema(context_values, next_schema)
+                self._ensure_context_store_ready(context_values)
             existing = {
                 path.relative_to(target).as_posix(): path
                 for path in target.rglob("*")
@@ -1261,8 +1572,11 @@ class RuntimeBackend:
                 except UnicodeDecodeError as exc:
                     raise ValueError(f"ToolPackage editor cannot replace binary content: {portable}") from exc
                 normalized[portable] = str(content)
+            if manifest is not None:
+                manifest_text = _dump_yaml_document(manifest)
+                normalized["TOOL.yaml"] = manifest_text
             if not normalized:
-                raise ValueError("ToolPackage editor requires at least one text file")
+                raise ValueError("ToolPackage editor requires content changes")
 
             staging_root = Path(tempfile.mkdtemp(prefix=".tool-edit-", dir=source_root.path))
             staged = staging_root / target.name
@@ -1300,6 +1614,13 @@ class RuntimeBackend:
                     )
                     raise
                 shutil.rmtree(backup, ignore_errors=True)
+                if context_values is not None:
+                    self._persist_published_context_values(
+                        capability_id=capability_id,
+                        values=context_values,
+                        previous_revision=active.revision,
+                        previous_context_schema=previous_context_schema,
+                    )
             finally:
                 shutil.rmtree(staging_root, ignore_errors=True)
         return self.capability_pool_snapshot()
@@ -1664,7 +1985,7 @@ class RuntimeBackend:
             approvals = DatabaseSnapshotToolApprovalResolver(stores.capability_approval_grants)
             outputs = SharedToolOutputResolver(config.tool_output_root)
             resources = SnapshotRuntimeResourceProjector(
-                resource_store=ResourceStore(config.resource_store_path),
+                resource_store=self.resource_store,
                 runtime_resource_factories={
                     name: runtime_resource_factory(
                         stores.conversations,
@@ -1707,6 +2028,7 @@ class RuntimeBackend:
                 runtime_root=config.tool_package_runtime_root,
                 dependency_pool=DependencyPoolService(),
                 conversations=stores.conversations,
+                resource_store=self.resource_store,
                 base_environment=dict(config.process_environment),
             )
             self.tool_package_runtime = tool_package_runtime
@@ -2001,6 +2323,8 @@ def _capability_public_details(kind: str, raw_definition: dict[str, Any]) -> dic
             "output_max_model_chars": definition.runtime_policy.output_max_model_chars,
             "retain_raw_output": definition.runtime_policy.retain_raw_output,
             "read_only": definition.read_only,
+            "input_schema": definition.input_schema,
+            "context_schema": definition.context_schema,
             "system_available": definition.system_available,
             "effects": list(definition.effects),
             "implementation_kind": definition.implementation.kind,
@@ -2038,6 +2362,14 @@ def _capability_public_details(kind: str, raw_definition: dict[str, Any]) -> dic
             "output_schema_digest": definition.output_schema.canonical_digest,
         }
     return {}
+
+
+def _normalize_tool_package_path(value: str) -> str:
+    text = str(value or "").replace("\\", "/").strip()
+    path = Path(text)
+    if not text or path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        raise ValueError(f"ToolPackage resource path is invalid: {value}")
+    return path.as_posix()
 
 
 def _capability_adapters() -> CapabilityAdapterRegistry:
@@ -2175,6 +2507,15 @@ def _write_skill_manifest_document(
     stream = StringIO()
     yaml.dump(metadata, stream)
     path.write_text(f"---\n{stream.getvalue()}---\n\n{instructions.strip()}\n", encoding="utf-8")
+
+
+def _dump_yaml_document(document: dict[str, Any]) -> str:
+    yaml = YAML()
+    yaml.default_flow_style = False
+    yaml.allow_unicode = True
+    stream = StringIO()
+    yaml.dump(document, stream)
+    return stream.getvalue()
 
 
 def _host_platform() -> str:

@@ -82,21 +82,27 @@ class CapabilityPoolManager(Protocol):
     def import_skill_folder(self, source_path: str) -> dict[str, object]:
         ...
 
-    def import_tool_folder(
-        self,
-        source_path: str,
-        *,
-        on_progress: Callable[[str, dict[str, Any]], None] | None = None,
-    ) -> dict[str, object]:
-        ...
-
     def create_tool_package(
         self,
         payload: dict[str, Any],
         main_source: str,
         *,
+        resource_files: dict[str, bytes] | None = None,
         on_progress: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> dict[str, object]:
+        ...
+
+    def validate_tool_package(
+        self,
+        payload: dict[str, Any],
+        main_source: str,
+        *,
+        resource_files: dict[str, bytes] | None = None,
+        on_progress: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> dict[str, object]:
+        ...
+
+    def transcribe_tool_source(self, source: str, *, filename: str) -> dict[str, object]:
         ...
 
     def add_mcp_server(
@@ -162,6 +168,8 @@ class CapabilityPoolManager(Protocol):
         capability_id: str,
         expected_content_digest: str,
         files: dict[str, str],
+        manifest: dict[str, Any] | None = None,
+        context_parameters: list[dict[str, Any]] | None = None,
     ) -> dict[str, object]:
         ...
 
@@ -527,6 +535,14 @@ class ToolParameterWriteRequest(BaseModel):
         return text
 
 
+class ToolContextParameterWriteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    type: Literal["string", "integer", "number", "boolean", "object", "array"]
+    value: str = ""
+
+
 class ToolPackageCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(pattern=r"^[a-z][a-z0-9-]{1,127}$")
@@ -535,6 +551,7 @@ class ToolPackageCreateRequest(BaseModel):
     description: str
     keywords: list[str] = Field(default_factory=list)
     parameters: list[ToolParameterWriteRequest] = Field(default_factory=list)
+    context_parameters: list[ToolContextParameterWriteRequest] = Field(default_factory=list)
     dependencies: list[str] = Field(default_factory=list)
     runtime_policy: ToolRuntimePolicyWriteRequest
 
@@ -548,7 +565,7 @@ class ToolPackageCreateRequest(BaseModel):
 
     @model_validator(mode="after")
     def _unique_parameters(self) -> "ToolPackageCreateRequest":
-        names = [item.name for item in self.parameters]
+        names = [item.name for item in (*self.parameters, *self.context_parameters)]
         if len(names) != len(set(names)):
             raise ValueError("ToolPackage parameter names must be unique")
         return self
@@ -558,6 +575,8 @@ class ToolPackageContentWriteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_content_digest: str
     files: dict[str, str]
+    manifest: dict[str, Any] | None = None
+    context_parameters: list[ToolContextParameterWriteRequest] | None = None
 
     @field_validator("expected_content_digest")
     @classmethod
@@ -716,54 +735,13 @@ def create_dynamic_runtime_router(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    @router.post("/capabilities/tools/import", status_code=201)
-    async def import_tool_folder(
-        request: Request,
-        root_name: str = Form(...),
-        relative_paths: str = Form(...),
-        files: list[UploadFile] = File(...),
-    ) -> StreamingResponse:
-        principal_resolver.resolve(request)
-        temporary = Path(tempfile.mkdtemp(prefix="combo-tool-upload-"))
-        try:
-            paths = _folder_upload_paths(relative_paths, expected_count=len(files), capability="ToolPackage")
-            normalized_root = _portable_folder_root_name(root_name, capability="ToolPackage")
-            source = temporary / normalized_root
-            source.mkdir()
-            total_bytes = 0
-            for upload, relative_path in zip(files, paths, strict=True):
-                destination = source / relative_path
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                total_bytes += await _write_bounded_upload(
-                    upload,
-                    destination,
-                    maximum_file_bytes=config.maximum_tool_file_bytes,
-                    capability="ToolPackage",
-                )
-                if total_bytes > config.maximum_tool_bytes:
-                    raise ValueError("ToolPackage exceeds configured byte limit")
-
-            def run_import(report: Callable[[str, dict[str, Any]], None]) -> dict[str, object]:
-                try:
-                    return capability_pools.import_tool_folder(str(source), on_progress=report)
-                finally:
-                    shutil.rmtree(temporary, ignore_errors=True)
-
-            return _tool_preparation_response(run_import)
-        except RuntimeError as exc:
-            shutil.rmtree(temporary, ignore_errors=True)
-            if str(exc) == "tool_already_exists":
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
-        except ValueError as exc:
-            shutil.rmtree(temporary, ignore_errors=True)
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-
     @router.post("/capabilities/tools", status_code=201)
     async def create_tool_package(
         request: Request,
         specification: str = Form(...),
         main_file: UploadFile = File(...),
+        resource_paths: str = Form("[]"),
+        resource_files: list[UploadFile] = File(default=[]),
     ) -> StreamingResponse:
         principal_resolver.resolve(request)
         try:
@@ -780,12 +758,32 @@ def create_dynamic_runtime_router(
                     main_source = destination.read_text(encoding="utf-8")
                 except UnicodeDecodeError as exc:
                     raise ValueError("main.py must be UTF-8 text") from exc
+                paths = _folder_upload_paths(
+                    resource_paths,
+                    expected_count=len(resource_files),
+                    capability="ToolPackage resource",
+                )
+                resource_contents: dict[str, bytes] = {}
+                total_resource_bytes = 0
+                for upload, relative_path in zip(resource_files, paths, strict=True):
+                    content_path = Path(temporary) / "resources" / relative_path
+                    content_path.parent.mkdir(parents=True, exist_ok=True)
+                    total_resource_bytes += await _write_bounded_upload(
+                        upload,
+                        content_path,
+                        maximum_file_bytes=config.maximum_tool_file_bytes,
+                        capability="ToolPackage resource",
+                    )
+                    if total_resource_bytes > config.maximum_tool_bytes:
+                        raise ValueError("ToolPackage resources exceed configured byte limit")
+                    resource_contents[f"resources/{relative_path}"] = content_path.read_bytes()
             normalized_payload = payload.model_dump(mode="json")
 
             def run_create(report: Callable[[str, dict[str, Any]], None]) -> dict[str, object]:
                 return capability_pools.create_tool_package(
                     normalized_payload,
                     main_source,
+                    resource_files=resource_contents,
                     on_progress=report,
                 )
 
@@ -794,6 +792,82 @@ def create_dynamic_runtime_router(
             if str(exc) == "tool_already_exists":
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.post("/capabilities/tools/validate")
+    async def validate_tool_package(
+        request: Request,
+        specification: str = Form(...),
+        main_file: UploadFile = File(...),
+        resource_paths: str = Form("[]"),
+        resource_files: list[UploadFile] = File(default=[]),
+    ) -> dict[str, object]:
+        principal_resolver.resolve(request)
+        temporary = Path(tempfile.mkdtemp(prefix="combo-tool-validate-upload-"))
+        try:
+            payload = ToolPackageCreateRequest.model_validate_json(specification)
+            main_path = temporary / "main.py"
+            await _write_bounded_upload(
+                main_file,
+                main_path,
+                maximum_file_bytes=config.maximum_tool_file_bytes,
+                capability="ToolPackage main.py",
+            )
+            main_source = main_path.read_text(encoding="utf-8")
+            paths = _folder_upload_paths(
+                resource_paths,
+                expected_count=len(resource_files),
+                capability="ToolPackage resource",
+            )
+            resource_contents: dict[str, bytes] = {}
+            for upload, relative_path in zip(resource_files, paths, strict=True):
+                destination = temporary / "resources" / relative_path
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                await _write_bounded_upload(
+                    upload,
+                    destination,
+                    maximum_file_bytes=config.maximum_tool_file_bytes,
+                    capability="ToolPackage resource",
+                )
+                resource_contents[f"resources/{relative_path}"] = destination.read_bytes()
+            return await asyncio.to_thread(
+                capability_pools.validate_tool_package,
+                payload.model_dump(mode="json"),
+                main_source,
+                resource_files=resource_contents,
+            )
+        except UnicodeDecodeError as exc:
+            raise HTTPException(status_code=422, detail="main.py must be UTF-8 text") from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        finally:
+            shutil.rmtree(temporary, ignore_errors=True)
+
+    @router.post("/capabilities/tools/transcribe")
+    async def transcribe_tool_package(
+        request: Request,
+        script_file: UploadFile = File(...),
+    ) -> dict[str, object]:
+        principal_resolver.resolve(request)
+        try:
+            raw = await script_file.read()
+            if len(raw) > config.maximum_tool_file_bytes:
+                raise ValueError("Python script exceeds configured byte limit")
+            source = raw.decode("utf-8")
+            result = await asyncio.to_thread(
+                capability_pools.transcribe_tool_source,
+                source,
+                filename=str(script_file.filename or "script.py"),
+            )
+            return result.model_dump(mode="json") if hasattr(result, "model_dump") else dict(result)
+        except UnicodeDecodeError as exc:
+            raise HTTPException(status_code=422, detail="Python script must be UTF-8 text") from exc
+        except RuntimeError as exc:
+            status = 409 if str(exc) == "task_model_not_configured" else 502
+            raise HTTPException(status_code=status, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -1022,6 +1096,12 @@ def create_dynamic_runtime_router(
                 capability_id=capability_id,
                 expected_content_digest=payload.expected_content_digest,
                 files=payload.files,
+                manifest=payload.manifest,
+                context_parameters=(
+                    [item.model_dump(mode="json") for item in payload.context_parameters]
+                    if payload.context_parameters is not None
+                    else None
+                ),
             )
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc

@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import secrets
 import sqlite3
 from typing import Any, Iterator
 
@@ -18,7 +19,6 @@ from combo.resource_system.schema import ResourceDescriptor, ResourceIdentity
 from combo.sqlite_runtime import connect_sqlite, initialize_sqlite_store
 
 
-RESOURCE_MASTER_KEY_ENV = "COMBO_RESOURCE_MASTER_KEY"
 RESOURCE_STORE_PATH_ENV = "COMBO_RESOURCE_STORE_PATH"
 RESOURCE_STORE_READ_ONLY_ENV = "COMBO_RESOURCE_STORE_READ_ONLY"
 SQLITE_BUSY_TIMEOUT_MS = 10000
@@ -33,8 +33,12 @@ class ResourceStore:
 
     def __init__(self, path: str | Path | None = None, *, master_key: str | None = None) -> None:
         self.path = Path(path or resource_store_path()).expanduser().resolve()
-        self._master_key = master_key if master_key is not None else os.getenv(RESOURCE_MASTER_KEY_ENV, "")
         self.read_only = os.getenv(RESOURCE_STORE_READ_ONLY_ENV, "0") == "1"
+        self._master_key = (
+            str(master_key)
+            if master_key is not None
+            else self._load_or_create_master_key()
+        )
         if not self.read_only:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             initialize_sqlite_store(self.path, self._ensure_schema, timeout_ms=SQLITE_BUSY_TIMEOUT_MS, wal=True)
@@ -131,8 +135,43 @@ class ResourceStore:
 
     def _cipher(self) -> AESGCM:
         if not self.key_available:
-            raise ResourceStoreError(f"{RESOURCE_MASTER_KEY_ENV} is required for runtime resource values")
+            raise ResourceStoreError("resource store encryption key is unavailable")
         return AESGCM(hashlib.sha256(self._master_key.encode("utf-8")).digest())
+
+    def _load_or_create_master_key(self) -> str:
+        """Load the app-local key, creating it once for a writable store."""
+        key_path = self.path.with_name(f"{self.path.name}.key")
+        try:
+            value = key_path.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            value = ""
+        if value:
+            return value
+        if self.read_only:
+            return ""
+
+        # Keep one-time compatibility with installations that used the old
+        # environment variable, but never require or expose it going forward.
+        legacy_value = os.getenv("COMBO_RESOURCE_MASTER_KEY", "").strip()
+        value = legacy_value or secrets.token_urlsafe(48)
+        key_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            descriptor = os.open(
+                key_path,
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                0o600,
+            )
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(value + "\n")
+        except FileExistsError:
+            value = key_path.read_text(encoding="utf-8").strip()
+        if not value:
+            raise ResourceStoreError("resource store encryption key is empty")
+        try:
+            key_path.chmod(0o600)
+        except OSError:
+            pass
+        return value
 
     def _assert_writable(self) -> None:
         if self.read_only:

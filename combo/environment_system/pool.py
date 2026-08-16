@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
@@ -61,9 +62,40 @@ class DependencyPool:
                     return False
                 if key == "python_entries" and not self._entry_exists(entry.get("artifact_path")):
                     return False
+                if key == "python_entries":
+                    try:
+                        self.python_import_path(entry)
+                    except DependencyPoolError:
+                        return False
         npm_profile = payload.get("npm_profile")
         return npm_profile is None or (
             isinstance(npm_profile, dict) and self._entry_exists(npm_profile.get("path"))
+        )
+
+    def python_import_path(self, entry: Mapping[str, object]) -> Path:
+        """Resolve a stored Python artifact entry to its importable site-packages path.
+
+        Python wheels are stored below a content-addressed directory with a
+        ``site-packages`` child.  The entry path identifies that artifact
+        directory, while callers need the child on ``PYTHONPATH``.  The
+        fallback keeps profiles created by older pool layouts usable when the
+        entry already points directly at an import directory.
+        """
+        raw_path = entry.get("path")
+        if not isinstance(raw_path, str) or not raw_path:
+            raise DependencyPoolError("invalid_profile", "Python dependency entry has no path")
+        try:
+            artifact_root = self.root / _safe_relative_path(raw_path)
+        except ValueError as exc:
+            raise DependencyPoolError("invalid_profile", str(exc)) from exc
+        site_packages = artifact_root / "site-packages"
+        if site_packages.is_dir():
+            return site_packages.resolve()
+        if artifact_root.is_dir():
+            return artifact_root.resolve()
+        raise DependencyPoolError(
+            "missing_artifact",
+            f"Python dependency artifact is unavailable: {raw_path}",
         )
 
     def _store_wheel(self, wheel: Path) -> dict[str, str]:

@@ -90,6 +90,11 @@ export interface ToolPackageCreateInput {
     description: string
     required: boolean
   }>
+  context_parameters: Array<{
+    name: string
+    type: 'string' | 'integer' | 'number' | 'boolean' | 'object' | 'array'
+    value: string
+  }>
   dependencies: string[]
   runtime_policy: ToolRuntimePolicyInput
 }
@@ -136,7 +141,13 @@ export interface ToolPackageEditorDocument {
   source_path: string
   entrypoint: string
   python_requirements: string[]
+  context_parameters: Array<{ name: string; type: string; configured: boolean }>
+  manifest: Record<string, unknown>
   files: SkillEditorResource[]
+}
+
+export interface ToolTranscriptionResult extends ToolPackageCreateInput {
+  main_source: string
 }
 
 export const capabilityPoolsApi = {
@@ -166,34 +177,42 @@ export const capabilityPoolsApi = {
     files.forEach(item => formData.append('files', item.file, item.file.name))
     return requestFormJson<CapabilityPoolSnapshot>('/api/runtime/capabilities/skills/import', formData)
   },
-  importToolFolder: (
-    rootName: string,
-    files: Array<{ file: File; relativePath: string }>,
-    onProgress: (progress: OperationProgress) => void,
-  ) => {
-    const formData = new FormData()
-    formData.append('root_name', rootName)
-    formData.append('relative_paths', JSON.stringify(files.map(item => item.relativePath)))
-    files.forEach(item => formData.append('files', item.file, item.file.name))
-    return requestFormProgress<CapabilityPoolSnapshot>(
-      '/api/runtime/capabilities/tools/import',
-      formData,
-      onProgress,
-    )
-  },
   createToolPackage: (
     input: ToolPackageCreateInput,
     mainSource: string,
+    resourceFiles: Array<{ file: File; relativePath: string }>,
     onProgress: (progress: OperationProgress) => void,
   ) => {
     const formData = new FormData()
     formData.append('specification', JSON.stringify(input))
     formData.append('main_file', new File([mainSource], 'main.py', { type: 'text/x-python' }))
+    formData.append('resource_paths', JSON.stringify(resourceFiles.map(item => item.relativePath)))
+    resourceFiles.forEach(item => formData.append('resource_files', item.file, item.file.name))
     return requestFormProgress<CapabilityPoolSnapshot>(
       '/api/runtime/capabilities/tools',
       formData,
       onProgress,
     )
+  },
+  validateToolPackage: (
+    input: ToolPackageCreateInput,
+    mainSource: string,
+    resourceFiles: Array<{ file: File; relativePath: string }>,
+  ) => {
+    const formData = new FormData()
+    formData.append('specification', JSON.stringify(input))
+    formData.append('main_file', new File([mainSource], 'main.py', { type: 'text/x-python' }))
+    formData.append('resource_paths', JSON.stringify(resourceFiles.map(item => item.relativePath)))
+    resourceFiles.forEach(item => formData.append('resource_files', item.file, item.file.name))
+    return requestFormJson<{ valid: boolean; name: string; file_count: number; dependencies: string[]; message: string }>(
+      '/api/runtime/capabilities/tools/validate',
+      formData,
+    )
+  },
+  transcribeTool: (file: File) => {
+    const formData = new FormData()
+    formData.append('script_file', file, file.name)
+    return requestFormJson<ToolTranscriptionResult>('/api/runtime/capabilities/tools/transcribe', formData)
   },
   probeMcp: (capabilityId: string) => requestJson<McpProbeResult>('/api/runtime/capabilities/mcp/probe', {
     method: 'POST',
@@ -274,11 +293,18 @@ export const capabilityPoolsApi = {
   updateToolPackageContent: (
     document: ToolPackageEditorDocument,
     files: Record<string, string>,
+    manifest?: Record<string, unknown>,
+    contextParameters?: ToolPackageCreateInput['context_parameters'],
   ) => requestJson<CapabilityPoolSnapshot>(
     `/api/runtime/capabilities/tool-packages/${encodeURIComponent(document.capability_id)}/editor`,
     {
       method: 'PUT',
-      body: JSON.stringify({ expected_content_digest: document.content_digest, files }),
+      body: JSON.stringify({
+        expected_content_digest: document.content_digest,
+        files,
+        manifest: manifest || document.manifest,
+        context_parameters: contextParameters,
+      }),
     },
   ),
   skillEditor: (capabilityId: string) => requestJson<SkillEditorDocument>(

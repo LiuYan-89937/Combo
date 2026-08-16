@@ -23,4 +23,4 @@ MAIN_RUNTIME_EXCLUDED_CAPABILITY_IDS = (
 
 
 def capability_is_delegatable(capability_id: str) -> bool:
-    return str(capability_id or "").strip() not in MAIN_RUNTIME_ONLY_CAPABILITY_IDS
+    return str(capability_id or "").strip() not in MAIN_RUNTIME_EXCLUDED_CAPABILITY_IDS

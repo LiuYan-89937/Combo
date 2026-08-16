@@ -36,10 +36,6 @@
         </n-button>
         <template v-else-if="activePool === 'tools'">
           <n-space>
-            <input ref="toolFolderInput" class="hidden-folder-input" type="file" webkitdirectory directory multiple @change="importToolFolder" />
-            <n-button round :loading="importingTool" @click="toolFolderInput?.click()">
-              {{ t('toolPreparation.importFolder') }}
-            </n-button>
             <n-button type="primary" round @click="openToolCreator">
               <template #icon><n-icon><Add /></n-icon></template>
               新建工具
@@ -126,63 +122,6 @@
       </n-empty>
     </section>
 
-    <n-drawer v-model:show="showToolEditor" :width="600" placement="right">
-      <n-drawer-content title="工具配置" closable>
-        <template v-if="editingTool">
-          <div class="editor-intro">
-            <span class="type-pill">{{ editingTool.kind === 'mcp_tool' ? 'MCP TOOL' : 'TOOL' }}</span>
-            <p>这里的设置会进入下一次能力快照，并直接约束运行时执行。</p>
-            <n-button v-if="editingTool.trust_level === 'local_user' && editingTool.details.implementation_kind === 'python_package'" size="small" secondary @click="openToolPackageEditor(editingTool)">编辑源码、依赖与资源</n-button>
-          </div>
-          <n-form label-placement="top" class="editor-form">
-            <section class="form-section">
-              <div class="section-title"><strong>呈现给模型的信息</strong><span>名称用于识别，说明会进入模型上下文。</span></div>
-              <n-form-item label="显示名称"><n-input v-model:value="toolForm.display_name" /></n-form-item>
-              <n-form-item label="工具说明">
-                <n-input v-model:value="toolForm.description" type="textarea" :autosize="{ minRows: 4, maxRows: 9 }" />
-              </n-form-item>
-            </section>
-            <section class="form-section two-column">
-              <div class="section-title full"><strong>权限与风险</strong><span>对话的三档权限仍是上层规则，这里定义单个工具的边界。</span></div>
-              <n-form-item label="审批策略">
-                <n-select v-model:value="toolForm.approval" :options="approvalOptions" />
-              </n-form-item>
-              <n-form-item label="风险级别">
-                <n-select v-model:value="toolForm.risk_level" :options="riskOptions" />
-              </n-form-item>
-            </section>
-            <section class="form-section">
-              <div class="section-row">
-                <div class="section-title"><strong>并发调用</strong><span>允许同一工具同时处理多个请求。</span></div>
-                <n-switch v-model:value="toolForm.allow_parallel_calls" @update:value="normalizeParallel" />
-              </div>
-              <n-form-item v-if="toolForm.allow_parallel_calls" label="最大并发请求数">
-                <n-input-number v-model:value="toolForm.max_parallel_calls" :min="1" :max="128" />
-              </n-form-item>
-              <n-form-item label="单次调用超时（秒）">
-                <n-input-number v-model:value="toolForm.timeout_seconds" :min="1" :max="3600" />
-              </n-form-item>
-            </section>
-            <section class="form-section">
-              <div class="section-title"><strong>输出控制</strong><span>限制进入模型上下文的工具结果，原始结果可独立保留。</span></div>
-              <n-form-item label="输出处理">
-                <n-radio-group v-model:value="toolForm.output_projection">
-                  <n-space><n-radio value="compress">超限压缩</n-radio><n-radio value="passthrough">原样传递</n-radio></n-space>
-                </n-radio-group>
-              </n-form-item>
-              <n-form-item v-if="toolForm.output_projection === 'compress'" label="模型可见字符上限">
-                <n-input-number v-model:value="toolForm.output_max_model_chars" :min="1000" :max="1000000" :step="1000" />
-              </n-form-item>
-              <div class="switch-line"><span><strong>保留原始输出</strong><small>压缩前的完整结果仍可通过输出工具读取。</small></span><n-switch v-model:value="toolForm.retain_raw_output" /></div>
-            </section>
-          </n-form>
-        </template>
-        <template #footer>
-          <n-space justify="end"><n-button @click="showToolEditor = false">取消</n-button><n-button type="primary" :loading="savingTool" @click="saveTool">保存并发布</n-button></n-space>
-        </template>
-      </n-drawer-content>
-    </n-drawer>
-
     <n-drawer v-model:show="showMcpDetails" :width="620" placement="right">
       <n-drawer-content title="MCP 服务" closable>
         <template v-if="selectedMcpDetails">
@@ -251,8 +190,9 @@
       </n-drawer-content>
     </n-drawer>
 
-    <n-modal v-model:show="showToolCreator" preset="card" class="editor-modal-shell tool-creator" title="新建工具" :bordered="false">
-      <div class="creator-layout">
+    <n-modal v-model:show="showToolCreator" preset="card" class="editor-modal-shell tool-creator" :title="!editingTool ? '新建工具包' : isToolPackageEditor ? '编辑工具包' : '编辑工具'" :bordered="false">
+      <n-spin :show="loadingToolPackage">
+      <div v-if="!editingTool || isToolPackageEditor" class="creator-layout">
         <n-form label-placement="top" class="creator-form">
           <section class="form-section two-column">
             <div class="section-title full"><strong>基本信息</strong><span>系统会据此生成并校验 TOOL.yaml。</span></div>
@@ -283,17 +223,91 @@
             <n-empty v-if="!toolCreateForm.parameters.length" description="该工具没有输入参数" />
           </section>
           <section class="form-section">
+            <div class="section-row"><div class="section-title"><strong>Context 键值</strong><span>值会加密保存，运行时通过 context[键名] 读取；包内 resources/ 文件仍由 main.py 自己读取。</span></div><n-button size="small" @click="addContextParameter">添加字段</n-button></div>
+            <div v-for="(parameter, index) in toolCreateForm.context_parameters" :key="`context-${index}`" class="parameter-card">
+              <div class="parameter-head"><span>Context {{ index + 1 }}</span><n-button size="tiny" quaternary @click="toolCreateForm.context_parameters.splice(index, 1)">移除</n-button></div>
+              <div class="parameter-fields">
+                <n-form-item label="键"><n-input v-model:value="parameter.name" placeholder="例如 api_key" /></n-form-item>
+                <n-form-item label="值"><n-input v-model:value="parameter.value" type="password" show-password-on="mousedown" :placeholder="parameter.configured ? '已配置，留空则保留原值' : '填写要注入 context 的值'" /></n-form-item>
+                <n-form-item label="数据类型"><n-select v-model:value="parameter.type" :options="parameterTypeOptions" /></n-form-item>
+              </div>
+            </div>
+            <n-empty v-if="!toolCreateForm.context_parameters.length" description="暂无 Context 键值；工具仍可使用 resources_path 等运行时基础字段" />
+          </section>
+          <section class="form-section">
             <div class="section-title"><strong>Python 依赖</strong><span>每项使用标准 requirement 格式，例如 requests&gt;=2.32。</span></div>
             <n-dynamic-tags v-model:value="toolCreateForm.dependencies" />
           </section>
         </n-form>
         <section class="source-pane">
-          <div class="section-row"><div class="pane-note"><strong>main.py *</strong><span>必须定义同步函数 run(arguments, context)，并返回 JSON 对象。</span></div><label class="file-button">上传 main.py<input type="file" accept=".py,text/x-python" @change="loadToolMainFile" /></label></div>
+          <div class="section-row source-header"><div class="pane-note"><strong>main.py *</strong><span>参数来自左侧表单；context 由 Combo 注入；函数必须返回 JSON 对象。</span></div><div class="source-actions"><label class="file-button" :class="{ disabled: transcriptionStatus === 'running' }">上传 main.py<input type="file" accept=".py,text/x-python" :disabled="transcriptionStatus === 'running'" @change="loadToolMainFile" /></label><label class="file-button" :class="{ disabled: transcriptionStatus === 'running' }">一键转写<input type="file" accept=".py,text/x-python" :disabled="transcriptionStatus === 'running'" @change="transcribeTool" /></label></div></div>
+          <div class="source-workflow-hint">普通 Python 脚本 → 任务模型生成草稿 → 自动回填参数和 main.py → 你校验后发布</div>
+          <div v-if="transcriptionStatus !== 'idle'" class="transcription-progress" :class="`is-${transcriptionStatus}`" role="status" aria-live="polite">
+            <div class="transcription-progress-head">
+              <strong>{{ transcriptionStatus === 'running' ? '正在转写 Python 脚本' : transcriptionStatus === 'succeeded' ? '脚本转写完成' : '脚本转写失败' }}</strong>
+              <span>{{ transcriptionFileName }}</span>
+            </div>
+            <div class="transcription-progress-track"><span /></div>
+            <p v-if="transcriptionStatus === 'running'">正在调用任务模型分析脚本并生成 ToolPackage 草稿，请稍候…</p>
+            <p v-else-if="transcriptionError">{{ transcriptionError }}</p>
+            <p v-else>参数、依赖和 main.py 已回填，请检查后进行格式校验。</p>
+          </div>
           <CodeEditor v-model="toolCreateForm.main_source" language="python" :min-height="600" />
+          <div class="resource-upload">
+            <div class="section-row"><div class="pane-note"><strong>工具包资源文件</strong><span>可以上传 resource.yaml、模板、Schema 或其他文件，main.py 自己决定如何读取。</span></div><label class="file-button">添加资源<input type="file" multiple @change="addToolResourceFiles" /></label></div>
+            <div v-if="toolResourceFiles.length" class="resource-file-list"><span v-for="resource in toolResourceFiles" :key="resource.relativePath">resources/{{ resource.relativePath }}<button type="button" @click="removeToolResource(resource.relativePath)">×</button></span></div>
+            <n-empty v-else description="尚未添加资源文件" />
+          </div>
+          <div v-if="editingTool && toolPackageDocument" class="resource-upload">
+            <div class="pane-note"><strong>包内资源</strong><span>已有资源可直接在线编辑；二进制资源只展示文件信息。</span></div>
+            <div v-if="toolPackageResourceFiles.length" class="resource-file-list">
+              <button
+                v-for="file in toolPackageResourceFiles"
+                :key="file.path"
+                type="button"
+                :class="{ active: selectedToolResourcePath === file.path }"
+                @click="selectedToolResourcePath = file.path"
+              >{{ file.path }}<small>{{ file.editable ? '可编辑' : '只读' }}</small></button>
+            </div>
+            <n-empty v-else description="这个 ToolPackage 没有额外资源文件" />
+            <template v-if="selectedToolResource">
+              <CodeEditor v-if="selectedToolResource.editable" v-model="toolPackageFiles[selectedToolResource.path]" language="yaml" :min-height="260" />
+              <n-empty v-else description="该资源不是 UTF-8 文本，不能在线编辑" />
+            </template>
+          </div>
         </section>
       </div>
+      <div v-else class="simple-tool-editor">
+        <div class="editor-intro">
+          <span class="type-pill">{{ editingTool?.kind === 'mcp_tool' ? 'MCP TOOL' : 'TOOL' }}</span>
+          <p>编辑名称、说明与运行策略；保存后会重新生成能力快照。</p>
+        </div>
+        <n-form label-placement="top" class="editor-form">
+          <section class="form-section">
+            <div class="section-title"><strong>呈现给模型的信息</strong><span>名称与说明会进入模型上下文。</span></div>
+            <n-form-item label="显示名称"><n-input v-model:value="toolForm.display_name" /></n-form-item>
+            <n-form-item label="工具说明"><n-input v-model:value="toolForm.description" type="textarea" :autosize="{ minRows: 4, maxRows: 9 }" /></n-form-item>
+          </section>
+          <section class="form-section two-column">
+            <div class="section-title full"><strong>权限与风险</strong><span>这里定义单个工具的边界，对话级权限仍由输入框统一控制。</span></div>
+            <n-form-item label="审批策略"><n-select v-model:value="toolForm.approval" :options="approvalOptions" /></n-form-item>
+            <n-form-item label="风险级别"><n-select v-model:value="toolForm.risk_level" :options="riskOptions" /></n-form-item>
+          </section>
+          <section class="form-section">
+            <div class="section-row"><div class="section-title"><strong>并发调用</strong><span>允许同一工具同时处理多个请求。</span></div><n-switch v-model:value="toolForm.allow_parallel_calls" @update:value="normalizeParallel" /></div>
+            <n-form-item v-if="toolForm.allow_parallel_calls" label="最大并发请求数"><n-input-number v-model:value="toolForm.max_parallel_calls" :min="1" :max="128" /></n-form-item>
+            <n-form-item label="单次调用超时（秒）"><n-input-number v-model:value="toolForm.timeout_seconds" :min="1" :max="3600" /></n-form-item>
+          </section>
+          <section class="form-section">
+            <div class="section-title"><strong>输出控制</strong><span>限制进入模型上下文的工具结果，原始结果可独立保留。</span></div>
+            <n-form-item label="输出处理"><n-radio-group v-model:value="toolForm.output_projection"><n-space><n-radio value="compress">超限压缩</n-radio><n-radio value="passthrough">原样传递</n-radio></n-space></n-radio-group></n-form-item>
+            <n-form-item v-if="toolForm.output_projection === 'compress'" label="模型可见字符上限"><n-input-number v-model:value="toolForm.output_max_model_chars" :min="1000" :max="1000000" :step="1000" /></n-form-item>
+            <div class="switch-line"><span><strong>保留原始输出</strong><small>压缩前的完整结果仍可通过输出工具读取。</small></span><n-switch v-model:value="toolForm.retain_raw_output" /></div>
+          </section>
+        </n-form>
+      </div>
       <ToolDependencyProgress
-        v-if="toolPreparationOwner === 'create'"
+        v-if="toolPreparationOwner === 'create' && (!editingTool || isToolPackageEditor)"
         class="creator-progress"
         :status="toolPreparation.status"
         :stage="toolPreparation.stage"
@@ -301,73 +315,19 @@
         :requirements="toolPreparation.requirements"
         :error="toolPreparation.error"
       />
-      <template #footer>
-        <n-space justify="end">
-          <n-button :disabled="creatingTool" @click="showToolCreator = false">取消</n-button>
-          <n-button
-            v-if="toolPreparationOwner === 'create' && toolPreparation.status === 'succeeded'"
-            type="primary"
-            @click="showToolCreator = false"
-          >{{ t('toolPreparation.close') }}</n-button>
-          <n-button v-else type="primary" :loading="creatingTool" @click="createToolPackage">
-            {{ toolPreparationOwner === 'create' && toolPreparation.status === 'failed' ? t('toolPreparation.retry') : '校验并发布' }}
-          </n-button>
-        </n-space>
-      </template>
-    </n-modal>
-
-    <n-modal
-      v-model:show="showToolImportProgress"
-      preset="card"
-      :mask-closable="!importingTool"
-      :close-on-esc="!importingTool"
-      :closable="!importingTool"
-      :style="{ width: 'min(620px, calc(100vw - 32px))' }"
-      :title="t('toolPreparation.importFolder')"
-    >
-      <ToolDependencyProgress
-        :status="toolPreparation.status"
-        :stage="toolPreparation.stage"
-        :logs="toolPreparation.logs"
-        :requirements="toolPreparation.requirements"
-        :error="toolPreparation.error"
-      />
-      <template #footer>
-        <n-space justify="end">
-          <n-button :disabled="importingTool" @click="showToolImportProgress = false">
-            {{ t('toolPreparation.close') }}
-          </n-button>
-        </n-space>
-      </template>
-    </n-modal>
-
-    <n-modal v-model:show="showToolPackageEditor" preset="card" class="editor-modal-shell skill-editor" title="ToolPackage 编辑器" :bordered="false">
-      <n-spin :show="loadingToolPackage">
-        <template v-if="toolPackageDocument">
-          <div class="skill-editor-header">
-            <div><span class="type-pill">TOOL PACKAGE</span><strong>{{ toolPackageDocument.entrypoint }}</strong></div>
-            <span>{{ toolPackageDocument.source_path }}</span>
-          </div>
-          <div class="package-summary">
-            <span>{{ toolPackageDocument.files.length }} 个文件</span>
-            <span>{{ toolPackageDocument.python_requirements.length }} 项 Python 依赖</span>
-            <span>保存时重新校验、构建依赖并原子发布</span>
-          </div>
-          <div class="resource-editor">
-            <aside>
-              <button v-for="file in toolPackageDocument.files" :key="file.path" type="button" :class="{ active: selectedToolFilePath === file.path }" @click="selectedToolFilePath = file.path">
-                <span>{{ file.path }}</span><small>{{ formatBytes(file.size_bytes) }}{{ file.editable ? '' : ' · 只读' }}</small>
-              </button>
-            </aside>
-            <section v-if="selectedToolFile" class="resource-content">
-              <div class="pane-note"><strong>{{ selectedToolFile.path }}</strong><span>{{ selectedToolFile.editable ? 'UTF-8 文本；修改不会影响当前 revision，保存后才发布新 revision' : '二进制文件不能在线编辑' }}</span></div>
-              <n-input v-if="selectedToolFile.editable" v-model:value="toolPackageFiles[selectedToolFile.path]" type="textarea" class="code-editor" :autosize="{ minRows: 22, maxRows: 36 }" />
-              <n-empty v-else description="该文件只能通过重新上传 ToolPackage 更新" />
-            </section>
-          </div>
-        </template>
       </n-spin>
-      <template #footer><n-space justify="end"><n-button @click="showToolPackageEditor = false">取消</n-button><n-button type="primary" :loading="savingToolPackage" :disabled="!toolPackageDocument" @click="saveToolPackageContent">校验并发布</n-button></n-space></template>
+      <template #footer>
+        <n-space justify="end">
+          <n-button :disabled="creatingTool || validatingTool" @click="showToolCreator = false">取消</n-button>
+          <template v-if="!editingTool || isToolPackageEditor">
+            <n-button secondary :loading="validatingTool" @click="validateToolPackageDraft">格式校验</n-button>
+            <n-button type="primary" :loading="creatingTool" :disabled="validatingTool" @click="saveToolPackage">
+              {{ editingTool ? '保存并发布' : '发布工具包' }}
+            </n-button>
+          </template>
+          <n-button v-else type="primary" :loading="creatingTool" @click="saveToolConfiguration">保存配置</n-button>
+        </n-space>
+      </template>
     </n-modal>
 
     <n-modal v-model:show="showSkillEditor" preset="card" class="editor-modal-shell skill-editor" title="Skill 编辑器" :bordered="false">
@@ -599,9 +559,8 @@ const mcpInstallSession = ref<Record<string, unknown> | null>(null)
 const editingMcp = ref<CapabilityPoolItem | null>(null)
 const showMcpDetails = ref(false)
 const selectedMcpDetails = ref<CapabilityPoolItem | null>(null)
-const showToolEditor = ref(false)
-const savingTool = ref(false)
 const editingTool = ref<CapabilityPoolItem | null>(null)
+const loadingToolPackage = ref(false)
 const showSkillEditor = ref(false)
 const loadingSkill = ref(false)
 const savingSkill = ref(false)
@@ -620,10 +579,11 @@ const importingSkill = ref(false)
 const skillFolderInput = ref<HTMLInputElement | null>(null)
 const showToolCreator = ref(false)
 const creatingTool = ref(false)
-const importingTool = ref(false)
-const toolFolderInput = ref<HTMLInputElement | null>(null)
-const showToolImportProgress = ref(false)
-const toolPreparationOwner = ref<'create' | 'import' | null>(null)
+const validatingTool = ref(false)
+const transcriptionStatus = ref<'idle' | 'running' | 'succeeded' | 'failed'>('idle')
+const transcriptionFileName = ref('')
+const transcriptionError = ref('')
+const toolPreparationOwner = ref<'create' | null>(null)
 const toolPreparation = reactive<{
   status: 'running' | 'succeeded' | 'failed'
   stage: string
@@ -631,26 +591,59 @@ const toolPreparation = reactive<{
   requirements: string[]
   error: string
 }>({ status: 'running', stage: 'preparing', logs: [], requirements: [], error: '' })
-const showToolPackageEditor = ref(false)
-const loadingToolPackage = ref(false)
-const savingToolPackage = ref(false)
 const toolPackageDocument = ref<ToolPackageEditorDocument | null>(null)
-const selectedToolFilePath = ref('')
 const toolPackageFiles = reactive<Record<string, string>>({})
-const toolCreateForm = reactive<ToolPackageCreateInput & { main_source: string }>({
-  name: '', model_alias: '', display_name: '', description: '', keywords: [], parameters: [], dependencies: [],
-  main_source: 'def run(arguments, context):\n    return {"result": ""}\n',
+const selectedToolResourcePath = ref('')
+type ToolContextParameterDraft = ToolPackageCreateInput['context_parameters'][number] & { configured?: boolean }
+type ToolCreateDraft = Omit<ToolPackageCreateInput, 'context_parameters'> & { context_parameters: ToolContextParameterDraft[]; main_source: string }
+const DEFAULT_TOOL_MAIN_SOURCE = `"""Example: add two inputs, an encrypted Context value, and a package resource."""
+
+from pathlib import Path
+
+
+def load_resource_label(context):
+    # resources/ is part of the package. The tool decides how to read it.
+    resource_file = Path(context["resources_path"]) / "resource.yaml"
+    if not resource_file.is_file():
+        return "unknown"
+
+    # This example expects one simple line in resource.yaml: label: demo
+    for line in resource_file.read_text(encoding="utf-8").splitlines():
+        key, separator, value = line.partition(":")
+        if separator and key.strip() == "label":
+            return value.strip()
+    return "unknown"
+
+
+def run(arguments, context):
+    # arguments contains user input parameters; context contains encrypted Context values
+    # and runtime paths supplied by Combo.
+    left = int(arguments["left"])
+    right = int(arguments["right"])
+    offset = int(context["offset"])
+    return {
+        "sum": left + right + offset,
+        "inputs": {"left": left, "right": right},
+        "context_offset": offset,
+        "resource_label": load_resource_label(context),
+        "workspace_path": context["workspace_path"],
+    }
+`
+const toolCreateForm = reactive<ToolCreateDraft>({
+  name: '', model_alias: '', display_name: '', description: '', keywords: [], parameters: [{ name: 'left', type: 'integer', description: '第一个加数', required: true }, { name: 'right', type: 'integer', description: '第二个加数', required: true }], context_parameters: [{ name: 'offset', type: 'integer', value: '10' }], dependencies: [],
+  main_source: DEFAULT_TOOL_MAIN_SOURCE,
   runtime_policy: {
     approval: 'inherit', risk_level: 'low', allow_parallel_calls: true, max_parallel_calls: 1,
     timeout_seconds: 300, output_projection: 'compress', output_max_model_chars: 50000, retain_raw_output: true,
   },
 })
-const skillForm = reactive<{ metadata: Record<string, unknown>; instructions: string }>({ metadata: {}, instructions: '' })
+const toolResourceFiles = ref<Array<{ file: File; relativePath: string }>>([])
 const toolForm = reactive<ToolRuntimePolicyInput & { display_name: string; description: string }>({
   display_name: '', description: '', approval: 'inherit', risk_level: 'low', allow_parallel_calls: true,
   max_parallel_calls: 1, timeout_seconds: 300, output_projection: 'compress', output_max_model_chars: 50000,
   retain_raw_output: true,
 })
+const skillForm = reactive<{ metadata: Record<string, unknown>; instructions: string }>({ metadata: {}, instructions: '' })
 
 const mcpServers = computed(() => capabilitiesOf('mcp_server'))
 const tools = computed(() => (snapshot.value?.capabilities || []).filter(item => item.kind === 'tool' || item.kind === 'mcp_tool'))
@@ -665,6 +658,12 @@ const headings: Record<PoolName, { kicker: string; title: string; listTitle: str
   skills: { kicker: 'INSTRUCTIONS', title: 'Skill 池', listTitle: '已解析 Skill', description: '编辑 Skill 元信息、完整指令正文以及随附资源文件。', empty: '暂无 Skill' },
 }
 const activeHeading = computed(() => headings[activePool.value])
+const isToolPackageEditor = computed(() => Boolean(
+  editingTool.value
+  && editingTool.value.kind === 'tool'
+  && editingTool.value.trust_level === 'local_user'
+  && editingTool.value.details.implementation_kind === 'python_package',
+))
 const editingMcpConfig = computed(() => editingMcp.value?.details.registry_config as Record<string, unknown> | undefined || null)
 const editingMcpItem = computed<ExtensionItemView | null>(() => editingMcp.value ? ({ name: editingMcp.value.display_name, kind: 'mcp', enabled: true, payload: { ...(editingMcpConfig.value || {}), server_id: serverId(editingMcp.value), display_name: editingMcp.value.display_name, description: editingMcp.value.description } }) : null)
 const selectedMcpResources = computed<Array<Record<string, unknown>>>(() => Array.isArray(selectedMcpDetails.value?.details.resources) ? selectedMcpDetails.value!.details.resources as Array<Record<string, unknown>> : [])
@@ -694,13 +693,20 @@ const probeSummary = computed(() => {
   return [result.server_title || result.server_name || 'MCP', ...facts].join(' · ')
 })
 const selectedResource = computed<SkillEditorResource | null>(() => skillDocument.value?.resources.find(item => item.path === selectedResourcePath.value) || null)
-const selectedToolFile = computed<SkillEditorResource | null>(() => toolPackageDocument.value?.files.find(item => item.path === selectedToolFilePath.value) || null)
-const approvalOptions = [
-  { label: '跟随对话权限', value: 'inherit' }, { label: '自动放行', value: 'allow' },
-  { label: '每次确认', value: 'ask' }, { label: '禁止调用', value: 'deny' },
-]
-const riskOptions = [{ label: '低风险', value: 'low' }, { label: '中风险', value: 'medium' }, { label: '高风险', value: 'high' }]
+const toolPackageResourceFiles = computed(() => (toolPackageDocument.value?.files || []).filter(file => !['TOOL.yaml', 'main.py', 'requirements.txt'].includes(file.path)))
+const selectedToolResource = computed(() => toolPackageResourceFiles.value.find(file => file.path === selectedToolResourcePath.value) || null)
 const parameterTypeOptions = ['string', 'integer', 'number', 'boolean', 'object', 'array'].map(value => ({ label: value, value }))
+const approvalOptions = [
+  { label: '跟随对话权限', value: 'inherit' },
+  { label: '自动放行', value: 'allow' },
+  { label: '每次确认', value: 'ask' },
+  { label: '禁止调用', value: 'deny' },
+]
+const riskOptions = [
+  { label: '低风险', value: 'low' },
+  { label: '中风险', value: 'medium' },
+  { label: '高风险', value: 'high' },
+]
 const skillDisplayName = computed({ get: () => String(skillForm.metadata.display_name || ''), set: value => { if (value.trim()) skillForm.metadata.display_name = value; else delete skillForm.metadata.display_name } })
 const skillDescription = computed({ get: () => String(skillForm.metadata.description || ''), set: value => { skillForm.metadata.description = value } })
 const skillKeywords = computed<string[]>({
@@ -918,10 +924,35 @@ async function importSkillFolder(event: Event) {
   }
 }
 function openToolCreator() {
+  editingTool.value = null
+  toolPackageDocument.value = null
+  selectedToolResourcePath.value = ''
+  loadingToolPackage.value = false
+  resetToolDraft()
   toolPreparationOwner.value = null
   showToolCreator.value = true
 }
 function addToolParameter() { toolCreateForm.parameters.push({ name: '', type: 'string', description: '', required: true }) }
+function addContextParameter() { toolCreateForm.context_parameters.push({ name: '', type: 'string', value: '' }) }
+function resetToolDraft() {
+  transcriptionStatus.value = 'idle'
+  transcriptionFileName.value = ''
+  transcriptionError.value = ''
+  toolCreateForm.name = ''
+  toolCreateForm.model_alias = ''
+  toolCreateForm.display_name = ''
+  toolCreateForm.description = ''
+  toolCreateForm.keywords = []
+  toolCreateForm.parameters = [{ name: 'left', type: 'integer', description: '第一个加数', required: true }, { name: 'right', type: 'integer', description: '第二个加数', required: true }]
+  toolCreateForm.context_parameters = [{ name: 'offset', type: 'integer', value: '10' }]
+  toolCreateForm.dependencies = []
+  toolCreateForm.main_source = DEFAULT_TOOL_MAIN_SOURCE
+  toolResourceFiles.value = []
+  Object.assign(toolCreateForm.runtime_policy, {
+    approval: 'inherit', risk_level: 'low', allow_parallel_calls: true, max_parallel_calls: 1,
+    timeout_seconds: 300, output_projection: 'compress', output_max_model_chars: 50000, retain_raw_output: true,
+  })
+}
 async function loadToolMainFile(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
@@ -929,20 +960,109 @@ async function loadToolMainFile(event: Event) {
   if (!file) return
   toolCreateForm.main_source = await file.text()
 }
-async function createToolPackage() {
+async function transcribeTool(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  if (creatingTool.value || validatingTool.value || transcriptionStatus.value === 'running') return
+  transcriptionStatus.value = 'running'
+  transcriptionFileName.value = file.name
+  transcriptionError.value = ''
+  try {
+    const result = await capabilityPoolsApi.transcribeTool(file)
+    toolCreateForm.name = result.name
+    toolCreateForm.model_alias = result.model_alias
+    toolCreateForm.display_name = result.display_name
+    toolCreateForm.description = result.description
+    toolCreateForm.keywords = [...result.keywords]
+    toolCreateForm.parameters = result.parameters.map(parameter => ({
+      name: parameter.name,
+      type: parameter.type,
+      description: parameter.description,
+      required: parameter.required,
+    }))
+    toolCreateForm.context_parameters = result.context_parameters.map(parameter => ({
+      name: parameter.name,
+      type: parameter.type,
+      value: parameter.value,
+    }))
+    toolCreateForm.dependencies = [...result.dependencies]
+    Object.assign(toolCreateForm.runtime_policy, result.runtime_policy)
+    toolCreateForm.main_source = result.main_source
+    transcriptionStatus.value = 'succeeded'
+    message.success('Python 脚本已转写为 ToolPackage 草稿，请检查后校验')
+  } catch (error) {
+    transcriptionStatus.value = 'failed'
+    transcriptionError.value = error instanceof Error ? error.message : String(error)
+    message.error(transcriptionError.value)
+  }
+}
+function addToolResourceFiles(event: Event) {
+  const input = event.target as HTMLInputElement
+  const files = Array.from(input.files || [])
+  input.value = ''
+  for (const file of files) {
+    const relativePath = ((file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name).split('/').pop() || file.name
+    if (!toolResourceFiles.value.some(item => item.relativePath === relativePath)) {
+      toolResourceFiles.value.push({ file, relativePath })
+    }
+  }
+}
+function removeToolResource(path: string) {
+  toolResourceFiles.value = toolResourceFiles.value.filter(item => item.relativePath !== path)
+}
+function toolDraftInput(): ToolPackageCreateInput {
+  return {
+    name: toolCreateForm.name,
+    model_alias: toolCreateForm.model_alias,
+    display_name: toolCreateForm.display_name,
+    description: toolCreateForm.description,
+    keywords: [...toolCreateForm.keywords],
+    parameters: toolCreateForm.parameters.map(({ name, type, description, required }) => ({ name, type, description, required })),
+    context_parameters: toolCreateForm.context_parameters.map(({ name, type, value }) => ({ name, type, value })),
+    dependencies: [...toolCreateForm.dependencies],
+    runtime_policy: { ...toolCreateForm.runtime_policy },
+  }
+}
+async function validateToolPackageDraft() {
+  if (validatingTool.value || creatingTool.value) return
+  validatingTool.value = true
+  beginToolPreparation('create', toolCreateForm.dependencies)
+  try {
+    const result = await capabilityPoolsApi.validateToolPackage(toolDraftInput(), toolCreateForm.main_source, toolResourceFiles.value)
+    toolPreparation.status = 'succeeded'
+    toolPreparation.stage = 'tool_package_validated'
+    message.success(result.message)
+  } catch (error) {
+    toolPreparation.status = 'failed'
+    toolPreparation.error = error instanceof Error ? error.message : String(error)
+    message.error(toolPreparation.error)
+  } finally {
+    validatingTool.value = false
+  }
+}
+async function saveToolPackage() {
   if (creatingTool.value) return
   creatingTool.value = true
   beginToolPreparation('create', toolCreateForm.dependencies)
   try {
-    const { main_source, ...input } = toolCreateForm
-    snapshot.value = await capabilityPoolsApi.createToolPackage(
-      structuredClone(input),
-      main_source,
-      updateToolPreparation,
-    )
+    if (editingTool.value && toolPackageDocument.value) {
+      const manifest = buildManifestFromDraft(toolPackageDocument.value.manifest)
+      toolPackageFiles['main.py'] = toolCreateForm.main_source
+      snapshot.value = await capabilityPoolsApi.updateToolPackageContent(
+        toolPackageDocument.value,
+        { ...toolPackageFiles },
+        manifest,
+        toolCreateForm.context_parameters.map(({ name, type, value }) => ({ name, type, value })),
+      )
+    } else {
+      snapshot.value = await capabilityPoolsApi.createToolPackage(toolDraftInput(), toolCreateForm.main_source, toolResourceFiles.value, updateToolPreparation)
+    }
     toolPreparation.status = 'succeeded'
     toolPreparation.stage = 'tool_package_published'
-    message.success('工具已通过格式、入口与依赖校验并发布')
+    showToolCreator.value = false
+    message.success(editingTool.value ? 'ToolPackage 已重新校验并发布' : '工具已通过格式、入口与依赖校验并发布')
   } catch (error) {
     toolPreparation.status = 'failed'
     toolPreparation.error = error instanceof Error ? error.message : String(error)
@@ -951,43 +1071,54 @@ async function createToolPackage() {
     creatingTool.value = false
   }
 }
-async function importToolFolder(event: Event) {
-  const selection = selectedFolder(event)
-  if (!selection || importingTool.value) return
-  const { rootName, files } = selection
-  if (!files.some(item => item.relativePath === 'TOOL.yaml') || !files.some(item => item.relativePath === 'main.py')) {
-    message.error('请选择根目录包含 TOOL.yaml 和 main.py 的 ToolPackage 文件夹')
-    return
-  }
-  const requirementsFile = files.find(item => item.relativePath === 'requirements.txt')?.file
-  const requirements = requirementsFile
-    ? (await requirementsFile.text()).split(/\r?\n/).map(line => line.trim()).filter(line => line && !line.startsWith('#'))
-    : []
-  importingTool.value = true
-  showToolImportProgress.value = true
-  beginToolPreparation('import', requirements)
-  toolPreparation.stage = 'uploading_tool_package'
+async function saveToolConfiguration() {
+  if (!editingTool.value || creatingTool.value) return
+  creatingTool.value = true
   try {
-    snapshot.value = await capabilityPoolsApi.importToolFolder(
-      rootName,
-      files,
-      updateToolPreparation,
-    )
-    toolPreparation.status = 'succeeded'
-    toolPreparation.stage = 'tool_package_published'
-    message.success(`ToolPackage 已发布：${rootName}`)
+    snapshot.value = await capabilityPoolsApi.updateTool(editingTool.value, {
+      display_name: toolForm.display_name,
+      description: toolForm.description,
+      runtime_policy: {
+        approval: toolForm.approval,
+        risk_level: toolForm.risk_level,
+        allow_parallel_calls: toolForm.allow_parallel_calls,
+        max_parallel_calls: toolForm.max_parallel_calls,
+        timeout_seconds: toolForm.timeout_seconds,
+        output_projection: toolForm.output_projection,
+        output_max_model_chars: toolForm.output_max_model_chars,
+        retain_raw_output: toolForm.retain_raw_output,
+      },
+    })
+    showToolCreator.value = false
+    message.success('工具配置已保存')
   } catch (error) {
-    toolPreparation.status = 'failed'
-    toolPreparation.error = error instanceof Error ? error.message : String(error)
-    message.error(toolPreparation.error)
+    message.error(error instanceof Error ? error.message : String(error))
   } finally {
-    importingTool.value = false
+    creatingTool.value = false
   }
 }
-function beginToolPreparation(owner: 'create' | 'import', requirements: string[]) {
+function buildManifestFromDraft(base: Record<string, unknown>): Record<string, unknown> {
+  const inputProperties = Object.fromEntries(toolCreateForm.parameters.map(parameter => [parameter.name, { type: parameter.type, description: parameter.description }]))
+  const contextProperties = Object.fromEntries(toolCreateForm.context_parameters.map(parameter => [parameter.name, { type: parameter.type }]))
+  const previousPermissions = (base.permissions && typeof base.permissions === 'object' ? base.permissions : {}) as Record<string, unknown>
+  const previousExecution = (base.execution && typeof base.execution === 'object' ? base.execution : {}) as Record<string, unknown>
+  return {
+    ...base,
+    name: toolCreateForm.name,
+    model_alias: toolCreateForm.model_alias,
+    display_name: toolCreateForm.display_name,
+    description: toolCreateForm.description,
+    keywords: [...toolCreateForm.keywords],
+    input_schema: { type: 'object', properties: inputProperties, required: toolCreateForm.parameters.filter(parameter => parameter.required).map(parameter => parameter.name), additionalProperties: false },
+    context_schema: { type: 'object', properties: contextProperties, additionalProperties: false },
+    permissions: { ...previousPermissions, approval: toolCreateForm.runtime_policy.approval, risk_level: toolCreateForm.runtime_policy.risk_level },
+    execution: { ...previousExecution, ...toolCreateForm.runtime_policy },
+  }
+}
+function beginToolPreparation(owner: 'create', requirements: string[]) {
   toolPreparationOwner.value = owner
   toolPreparation.status = 'running'
-  toolPreparation.stage = owner === 'import' ? 'uploading_tool_package' : 'assembling_tool_package'
+  toolPreparation.stage = 'assembling_tool_package'
   toolPreparation.logs = []
   toolPreparation.requirements = [...requirements]
   toolPreparation.error = ''
@@ -1014,41 +1145,63 @@ function selectedFolder(event: Event): { rootName: string; files: Array<{ file: 
   return rootName ? { rootName, files } : null
 }
 function openItem(item: PoolItem) { if (item.kind === 'mcp_server') { selectedMcpDetails.value = item; showMcpDetails.value = true; return } editItem(item) }
-function editItem(item: PoolItem) { if (item.kind === 'mcp_server') { editingMcp.value = item; mcpInstallSession.value = null; showMcpModal.value = true; return } if (item.kind === 'skill') { void openSkillEditor(item); return } openToolEditor(item) }
-function openToolEditor(item: CapabilityPoolItem) { editingTool.value = item; Object.assign(toolForm, { display_name: item.display_name, description: item.description, approval: item.details.approval || 'inherit', risk_level: item.details.risk_level || 'low', allow_parallel_calls: item.details.allow_parallel_calls !== false, max_parallel_calls: Number(item.details.max_parallel_calls || 1), timeout_seconds: Number(item.details.timeout_seconds || 300), output_projection: item.details.output_projection || 'compress', output_max_model_chars: Number(item.details.output_max_model_chars || 50000), retain_raw_output: item.details.retain_raw_output !== false }); showToolEditor.value = true }
-function normalizeParallel(value: boolean) { if (!value) toolForm.max_parallel_calls = 1 }
-async function saveTool() { if (!editingTool.value) return; savingTool.value = true; try { snapshot.value = await capabilityPoolsApi.updateTool(editingTool.value, { display_name: toolForm.display_name.trim(), description: toolForm.description.trim(), runtime_policy: { approval: toolForm.approval, risk_level: toolForm.risk_level, allow_parallel_calls: toolForm.allow_parallel_calls, max_parallel_calls: toolForm.allow_parallel_calls ? toolForm.max_parallel_calls : 1, timeout_seconds: toolForm.timeout_seconds, output_projection: toolForm.output_projection, output_max_model_chars: toolForm.output_max_model_chars, retain_raw_output: toolForm.retain_raw_output } }); showToolEditor.value = false; message.success('工具配置已发布') } catch (error) { message.error(error instanceof Error ? error.message : String(error)) } finally { savingTool.value = false } }
-async function openToolPackageEditor(item: CapabilityPoolItem) {
-  showToolPackageEditor.value = true
-  loadingToolPackage.value = true
+function editItem(item: PoolItem) { if (item.kind === 'mcp_server') { editingMcp.value = item; mcpInstallSession.value = null; showMcpModal.value = true; return } if (item.kind === 'skill') { void openSkillEditor(item); return } void openToolEditor(item) }
+async function openToolEditor(item: CapabilityPoolItem) {
+  editingTool.value = item
+  showToolCreator.value = true
   toolPackageDocument.value = null
+  loadingToolPackage.value = isToolPackageEditor.value
+  if (!isToolPackageEditor.value) {
+    Object.assign(toolForm, {
+      display_name: item.display_name,
+      description: item.description,
+      approval: item.details.approval || 'inherit',
+      risk_level: item.details.risk_level || 'low',
+      allow_parallel_calls: item.details.allow_parallel_calls !== false,
+      max_parallel_calls: Number(item.details.max_parallel_calls || 1),
+      timeout_seconds: Number(item.details.timeout_seconds || 300),
+      output_projection: item.details.output_projection || 'compress',
+      output_max_model_chars: Number(item.details.output_max_model_chars || 50000),
+      retain_raw_output: item.details.retain_raw_output !== false,
+    })
+    loadingToolPackage.value = false
+    return
+  }
   try {
     const document = await capabilityPoolsApi.toolPackageEditor(item.capability_id)
     toolPackageDocument.value = document
+    const manifest = document.manifest
+    const inputSchema = (manifest.input_schema && typeof manifest.input_schema === 'object' ? manifest.input_schema : {}) as Record<string, unknown>
+    const contextSchema = (manifest.context_schema && typeof manifest.context_schema === 'object' ? manifest.context_schema : {}) as Record<string, unknown>
+    const parametersFromSchema = (schema: Record<string, unknown>) => Object.entries((schema.properties && typeof schema.properties === 'object' ? schema.properties : {}) as Record<string, unknown>).map(([name, value]) => ({ name, type: String((value as Record<string, unknown>)?.type || 'string') as ToolPackageCreateInput['parameters'][number]['type'], description: String((value as Record<string, unknown>)?.description || ''), required: Array.isArray(schema.required) && schema.required.includes(name) }))
+    const contextParametersFromSchema = (schema: Record<string, unknown>) => {
+      const configured = new Map((document.context_parameters || []).map(parameter => [parameter.name, parameter.configured]))
+      return Object.entries((schema.properties && typeof schema.properties === 'object' ? schema.properties : {}) as Record<string, unknown>).map(([name, value]) => ({
+        name,
+        type: String((value as Record<string, unknown>)?.type || 'string') as ToolPackageCreateInput['context_parameters'][number]['type'],
+        value: '',
+        configured: configured.get(name) === true,
+      }))
+    }
+    Object.assign(toolCreateForm, {
+      name: String(manifest.name || ''), model_alias: String(manifest.model_alias || ''), display_name: String(manifest.display_name || item.display_name), description: String(manifest.description || item.description), keywords: Array.isArray(manifest.keywords) ? manifest.keywords.map(String) : [], parameters: parametersFromSchema(inputSchema), context_parameters: contextParametersFromSchema(contextSchema), dependencies: [...document.python_requirements], main_source: document.files.find(file => file.path === 'main.py')?.content || '',
+    })
+    const permissions = (manifest.permissions && typeof manifest.permissions === 'object' ? manifest.permissions : {}) as Record<string, unknown>
+    const execution = (manifest.execution && typeof manifest.execution === 'object' ? manifest.execution : {}) as Record<string, unknown>
+    Object.assign(toolCreateForm.runtime_policy, {
+      approval: permissions.approval || 'inherit', risk_level: permissions.risk_level || 'low', allow_parallel_calls: execution.allow_parallel_calls !== false, max_parallel_calls: Number(execution.max_parallel_calls || 1), timeout_seconds: Number(execution.timeout_seconds || 300), output_projection: execution.output_projection || 'compress', output_max_model_chars: Number(execution.output_max_model_chars || 50000), retain_raw_output: execution.retain_raw_output !== false,
+    })
     for (const key of Object.keys(toolPackageFiles)) delete toolPackageFiles[key]
     document.files.filter(file => file.editable).forEach(file => { toolPackageFiles[file.path] = file.content || '' })
-    selectedToolFilePath.value = document.files.find(file => file.path === 'main.py')?.path || document.files[0]?.path || ''
+    selectedToolResourcePath.value = document.files.find(file => !['TOOL.yaml', 'main.py', 'requirements.txt'].includes(file.path))?.path || ''
   } catch (error) {
-    showToolPackageEditor.value = false
+    showToolCreator.value = false
     message.error(error instanceof Error ? error.message : String(error))
   } finally {
     loadingToolPackage.value = false
   }
 }
-async function saveToolPackageContent() {
-  if (!toolPackageDocument.value) return
-  savingToolPackage.value = true
-  try {
-    snapshot.value = await capabilityPoolsApi.updateToolPackageContent(toolPackageDocument.value, { ...toolPackageFiles })
-    showToolPackageEditor.value = false
-    showToolEditor.value = false
-    message.success('ToolPackage 已重新校验并发布')
-  } catch (error) {
-    message.error(error instanceof Error ? error.message : String(error))
-  } finally {
-    savingToolPackage.value = false
-  }
-}
+function normalizeParallel(value: boolean) { if (!value) toolForm.max_parallel_calls = 1 }
 async function openSkillEditor(item: CapabilityPoolItem) { showSkillEditor.value = true; loadingSkill.value = true; skillDocument.value = null; skillTab.value = 'metadata'; try { const document = await capabilityPoolsApi.skillEditor(item.capability_id); skillDocument.value = document; skillForm.metadata = structuredClone(document.metadata); skillForm.instructions = document.instructions; for (const key of Object.keys(skillResources)) delete skillResources[key]; document.resources.filter(resource => resource.editable).forEach(resource => { skillResources[resource.path] = resource.content || '' }); selectedResourcePath.value = document.resources[0]?.path || '' } catch (error) { showSkillEditor.value = false; message.error(error instanceof Error ? error.message : String(error)) } finally { loadingSkill.value = false } }
 async function saveSkillContent() { if (!skillDocument.value) return; savingSkill.value = true; try { snapshot.value = await capabilityPoolsApi.updateSkillContent(skillDocument.value, { metadata: skillForm.metadata, instructions: skillForm.instructions, resources: { ...skillResources } }); showSkillEditor.value = false; message.success('Skill 已校验并发布') } catch (error) { message.error(error instanceof Error ? error.message : String(error)) } finally { savingSkill.value = false } }
 async function saveMcpServers(servers: McpServerConfig[]) {
@@ -1127,8 +1280,22 @@ onBeforeUnmount(clearProbeNotice)
 .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; padding-top: 18px; }.pool-card { display: flex; min-height: 214px; flex-direction: column; padding: 17px 18px 14px; border: 1px solid var(--app-border); border-radius: 15px; background: var(--app-surface); cursor: pointer; transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease; }.pool-card:hover,.pool-card:focus-visible { transform: translateY(-3px); border-color: var(--app-border-focus); box-shadow: 0 14px 30px color-mix(in srgb, var(--app-text) 7%, transparent); outline: none; }.card-header,.card-footer,.card-statuses,.status,.card-buttons,.skill-editor-header,.skill-editor-header > div,.section-row,.switch-line,.card-title-line { display: flex; align-items: center; }.card-header,.card-footer,.section-row,.switch-line { justify-content: space-between; }.card-statuses { gap: 10px; }.type-pill { display: inline-flex; width: fit-content; padding: 4px 7px; border-radius: 6px; background: var(--app-text); color: var(--app-text-inverse); font-size: 9px; font-weight: 800; letter-spacing: .08em; }.status { gap: 6px; color: var(--app-text-muted); font-size: 10px; }.status i { width: 6px; height: 6px; border-radius: 50%; background: var(--app-success); }.status.indexed i { background: var(--app-text); box-shadow: none; }.status.muted i { background: var(--app-text-muted); }.card-body { flex: 1; padding: 22px 0 14px; }.card-title-line { min-width: 0; gap: 9px; }.card-tool-icon { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; width: 30px; height: 30px; border: 1px solid var(--app-border); border-radius: 9px; background: color-mix(in srgb, var(--app-text) 4%, transparent); color: var(--app-text); }.card-body h3 { margin: 0; overflow: hidden; font-size: 16px; letter-spacing: -.01em; text-overflow: ellipsis; white-space: nowrap; }.card-body p { display: -webkit-box; margin: 8px 0 0; overflow: hidden; color: var(--app-text-secondary); font-size: 12px; line-height: 1.6; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }.card-facts { display: flex; min-height: 24px; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }.card-facts span { padding: 3px 7px; border-radius: 6px; background: color-mix(in srgb, var(--app-text) 5%, transparent); color: var(--app-text-muted); font-size: 9px; }.card-footer { min-height: 30px; padding-top: 11px; border-top: 1px solid var(--app-border); color: var(--app-text-muted); font-size: 10px; }.card-buttons { gap: 1px; }.empty-state { padding: 90px 0; }
 .editor-intro { padding: 2px 0 22px; border-bottom: 1px solid var(--app-border); }.editor-intro p { margin: 12px 0 0; color: var(--app-text-muted); font-size: 12px; line-height: 1.6; }.editor-form { display: grid; gap: 14px; padding-top: 18px; }.form-section { padding: 17px; border: 1px solid var(--app-border); border-radius: 13px; }.form-section.two-column { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }.section-title { display: grid; gap: 3px; margin-bottom: 15px; }.section-title.full { grid-column: 1 / -1; }.section-title strong,.switch-line strong { font-size: 13px; }.section-title span,.switch-line small { color: var(--app-text-muted); font-size: 11px; line-height: 1.5; }.section-row .section-title { margin-bottom: 10px; }.switch-line > span { display: grid; gap: 3px; }
 .editor-intro .n-button { margin-top: 14px; }.package-summary { display: flex; flex-wrap: wrap; gap: 8px; padding: 14px 0 0; }.package-summary span { padding: 5px 8px; border: 1px solid var(--app-border); border-radius: 7px; color: var(--app-text-secondary); font-size: 10px; }
-.creator-layout { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(0, .92fr); align-items: start; gap: 18px; max-height: 76vh; overflow: auto; }.creator-form { display: grid; min-width: 0; align-content: start; gap: 14px; }.creator-form .form-section,.source-pane { box-sizing: border-box; min-width: 0; }.parameter-card { margin-top: 10px; padding: 14px; border: 1px solid var(--app-border); border-radius: 11px; background: var(--app-surface-subtle, color-mix(in srgb, var(--app-text) 2%, transparent)); }.parameter-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 11px; }.parameter-head > span { color: var(--app-text-secondary); font-size: 11px; font-weight: 700; }.parameter-fields { display: grid; grid-template-columns: minmax(0, 1fr) 140px 82px; gap: 0 10px; }.parameter-fields :deep(.n-form-item) { min-width: 0; margin-bottom: 10px; }.parameter-description { grid-column: 1 / -1; }.required-field :deep(.n-form-item-blank) { align-items: center; }.source-pane { position: sticky; top: 0; padding: 17px; border: 1px solid var(--app-border); border-radius: 13px; }.file-button { position: relative; flex: none; padding: 6px 10px; border: 1px solid var(--app-border); border-radius: 8px; font-size: 11px; cursor: pointer; }.file-button input { position: absolute; width: 1px; height: 1px; opacity: 0; }.full { grid-column: 1 / -1; }
+.creator-layout { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(0, .92fr); align-items: start; gap: 18px; }.creator-form { display: grid; min-width: 0; align-content: start; gap: 14px; }.creator-form .form-section,.source-pane { box-sizing: border-box; min-width: 0; }.parameter-card { margin-top: 10px; padding: 14px; border: 1px solid var(--app-border); border-radius: 11px; background: var(--app-surface-subtle, color-mix(in srgb, var(--app-text) 2%, transparent)); }.parameter-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 11px; }.parameter-head > span { color: var(--app-text-secondary); font-size: 11px; font-weight: 700; }.parameter-fields { display: grid; grid-template-columns: minmax(0, 1fr) 140px 82px; gap: 0 10px; }.parameter-fields :deep(.n-form-item) { min-width: 0; margin-bottom: 10px; }.parameter-description { grid-column: 1 / -1; }.required-field :deep(.n-form-item-blank) { align-items: center; }.source-pane { padding: 17px; border: 1px solid var(--app-border); border-radius: 13px; }.source-header { align-items: flex-start; gap: 14px; }.source-header .pane-note { min-width: 0; flex: 1; }.source-actions { display: flex; flex: none; flex-wrap: nowrap; justify-content: flex-end; gap: 8px; }.source-workflow-hint { margin: -2px 0 12px; color: var(--app-text-muted); font-size: 10px; line-height: 1.5; }.file-button { position: relative; display: inline-flex; min-height: 32px; align-items: center; justify-content: center; box-sizing: border-box; padding: 6px 11px; border: 1px solid var(--app-border); border-radius: 8px; color: var(--app-text); font-size: 11px; line-height: 1; white-space: nowrap; cursor: pointer; }.file-button:hover { border-color: var(--app-text); }.file-button input { position: absolute; width: 1px; height: 1px; opacity: 0; }.full { grid-column: 1 / -1; }
 .creator-progress { margin-top: 16px; }
+.transcription-progress { display: grid; gap: 7px; margin: -2px 0 12px; padding: 10px 12px; border: 1px solid var(--app-border); border-radius: 10px; color: var(--app-text-secondary); background: var(--app-surface-subtle, color-mix(in srgb, var(--app-text) 3%, transparent)); }
+.transcription-progress-head { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 12px; }
+.transcription-progress-head strong { color: var(--app-text); font-size: 11px; }
+.transcription-progress-head span { overflow: hidden; color: var(--app-text-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.transcription-progress-track { height: 3px; overflow: hidden; border-radius: 999px; background: var(--app-divider); }
+.transcription-progress-track span { display: block; width: 46%; height: 100%; border-radius: inherit; background: var(--app-text); }
+.transcription-progress.is-running .transcription-progress-track span { animation: transcription-progress-slide 1.25s ease-in-out infinite; }
+.transcription-progress.is-succeeded .transcription-progress-track span { width: 100%; }
+.transcription-progress.is-failed .transcription-progress-track span { width: 100%; background: var(--app-danger, var(--app-text)); }
+.transcription-progress p { margin: 0; color: var(--app-text-muted); font-size: 10px; line-height: 1.5; }
+@keyframes transcription-progress-slide { 0% { transform: translateX(-115%); } 100% { transform: translateX(230%); } }
+.file-button.disabled { color: var(--app-text-muted); cursor: not-allowed; opacity: .65; }
+.file-button.disabled:hover { border-color: var(--app-border); }
+.resource-upload { display: grid; gap: 10px; margin-top: 16px; padding-top: 15px; border-top: 1px solid var(--app-border); }.resource-file-list { display: flex; flex-wrap: wrap; gap: 7px; }.resource-file-list span { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 5px 8px; border: 1px solid var(--app-border); border-radius: 7px; color: var(--app-text-secondary); font-size: 10px; }.resource-file-list button { padding: 0; color: var(--app-text-muted); border: 0; background: transparent; cursor: pointer; font-size: 15px; line-height: 1; }.resource-file-list > button { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 6px 9px; color: var(--app-text-secondary); border: 1px solid var(--app-border); border-radius: 7px; background: var(--app-surface); cursor: pointer; font-size: 10px; }.resource-file-list > button.active { color: var(--app-text); border-color: var(--app-text); }.resource-file-list > button small { color: var(--app-text-muted); font-size: 9px; }
 .tool-creator { --editor-modal-width: 1240px; }
 .skill-editor { --editor-modal-width: 1080px; }
 .skillhub-modal { --editor-modal-width: 1040px; }
@@ -1186,5 +1353,5 @@ onBeforeUnmount(clearProbeNotice)
 .mcp-resource-row { grid-template-columns: minmax(0, 1fr) auto; }.mcp-resource-row > p,.mcp-resource-row > code { grid-column: 1; }.mcp-resource-row > .n-button { grid-column: 2; grid-row: 1 / span 3; align-self: center; }.mcp-resource-preview { margin-top: 12px; padding: 12px; overflow: auto; border: 1px solid var(--app-border); border-radius: 11px; }.mcp-resource-preview img { display: block; max-width: 100%; max-height: 460px; margin: auto; object-fit: contain; }.mcp-resource-preview pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
 .mcp-catalog-configurable { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 6px 12px; }.mcp-catalog-configurable > strong,.mcp-catalog-configurable > p,.mcp-catalog-configurable > code,.mcp-catalog-configurable > .mcp-argument-grid { grid-column: 1; }.mcp-catalog-configurable > .n-button { grid-column: 2; grid-row: 1 / span 4; align-self: center; }.mcp-argument-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-top: 4px; }.mcp-prompt-preview > strong { display: block; margin-bottom: 10px; }.mcp-prompt-preview article + article { margin-top: 12px; }.mcp-prompt-preview small { display: block; margin-bottom: 5px; color: var(--app-text-secondary); font-weight: 700; text-transform: uppercase; }
 @media (max-width: 920px) { .library-header { align-items: flex-start; flex-direction: column; }.header-tools,.search-input { width: 100%; }.pool-switcher { grid-template-columns: repeat(2, 1fr); }.resource-editor { grid-template-columns: 210px minmax(0, 1fr); }.creator-layout { grid-template-columns: 1fr; }.source-pane { position: static; }.parameter-fields { grid-template-columns: minmax(0, 1fr) 140px 82px; } }
-@media (max-width: 620px) { .library-page { padding: 20px 14px; }.pool-switcher { grid-template-columns: 1fr 1fr; }.pool-switch { padding: 13px; }.pool-switch small { display: none; }.pool-surface { padding: 15px; }.pool-heading { align-items: flex-start; flex-direction: column; }.card-grid { grid-template-columns: 1fr; }.resource-editor { grid-template-columns: 1fr; }.resource-editor aside { max-height: 160px; border-right: 0; border-bottom: 1px solid var(--app-border); }.form-section.two-column,.parameter-fields { grid-template-columns: 1fr; }.parameter-description { grid-column: auto; }.skillhub-panel,.skillhub-preview { padding: 22px 18px; }.skillhub-header { gap: 12px; }.skillhub-search { min-height: 52px; padding-left: 14px; }.skillhub-search button { min-width: 64px; height: 38px; padding: 0 13px; }.skillhub-results { grid-template-columns: 1fr; }.skillhub-results article { grid-template-columns: 38px minmax(0, 1fr); }.skillhub-result-mark { width: 38px; height: 38px; }.skillhub-result-actions { grid-column: 2; justify-self: start; }.skillhub-preview { grid-template-columns: 1fr; }.skillhub-preview-summary,.skillhub-preview dl,.skillhub-preview footer { grid-column: auto; grid-row: auto; }.skillhub-preview footer { align-items: flex-start; flex-direction: column; }.skillhub-preview dl > div { grid-template-columns: 86px minmax(0, 1fr); } }
+@media (max-width: 620px) { .library-page { padding: 20px 14px; }.pool-switcher { grid-template-columns: 1fr 1fr; }.pool-switch { padding: 13px; }.pool-switch small { display: none; }.pool-surface { padding: 15px; }.pool-heading { align-items: flex-start; flex-direction: column; }.card-grid { grid-template-columns: 1fr; }.resource-editor { grid-template-columns: 1fr; }.resource-editor aside { max-height: 160px; border-right: 0; border-bottom: 1px solid var(--app-border); }.form-section.two-column,.parameter-fields { grid-template-columns: 1fr; }.parameter-description { grid-column: auto; }.source-actions { flex-wrap: wrap; justify-content: flex-start; }.skillhub-panel,.skillhub-preview { padding: 22px 18px; }.skillhub-header { gap: 12px; }.skillhub-search { min-height: 52px; padding-left: 14px; }.skillhub-search button { min-width: 64px; height: 38px; padding: 0 13px; }.skillhub-results { grid-template-columns: 1fr; }.skillhub-results article { grid-template-columns: 38px minmax(0, 1fr); }.skillhub-result-mark { width: 38px; height: 38px; }.skillhub-result-actions { grid-column: 2; justify-self: start; }.skillhub-preview { grid-template-columns: 1fr; }.skillhub-preview-summary,.skillhub-preview dl,.skillhub-preview footer { grid-column: auto; grid-row: auto; }.skillhub-preview footer { align-items: flex-start; flex-direction: column; }.skillhub-preview dl > div { grid-template-columns: 86px minmax(0, 1fr); } }
 </style>
