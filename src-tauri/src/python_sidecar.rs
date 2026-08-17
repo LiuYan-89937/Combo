@@ -1,7 +1,7 @@
 use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io;
-use std::net::TcpListener;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -17,6 +17,7 @@ use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
 const BACKEND_LOG_TAIL_BYTES: usize = 12_000;
 const BACKEND_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(8);
+const BACKEND_CONNECTION_PROBE_TIMEOUT: Duration = Duration::from_millis(250);
 const RETAINED_BACKEND_LOGS: usize = 5;
 
 /// Python backend sidecar process manager.
@@ -218,6 +219,18 @@ impl PythonSidecar {
                 false
             }
         }
+    }
+
+    /// Check both process liveness and whether the backend still owns its
+    /// advertised loopback listener. A live process without that listener is
+    /// not a usable desktop backend and must not retain the application
+    /// instance on a subsequent launch.
+    pub fn is_available(&mut self) -> bool {
+        if !self.is_running() {
+            return false;
+        }
+        let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), self.port);
+        TcpStream::connect_timeout(&address, BACKEND_CONNECTION_PROBE_TIMEOUT).is_ok()
     }
 
     /// Get the backend port.

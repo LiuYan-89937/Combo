@@ -102,15 +102,36 @@ fn desktop_platform() -> &'static str {
     std::env::consts::OS
 }
 
+fn activate_or_replace_existing_instance(app: &tauri::AppHandle) {
+    let backend_available = {
+        let state = app.state::<AppState>();
+        let mut sidecar = state.sidecar.lock().unwrap();
+        sidecar
+            .as_mut()
+            .map(PythonSidecar::is_available)
+            .unwrap_or(false)
+    };
+
+    if !backend_available {
+        // A second launch must replace an unusable desktop process instead of
+        // reviving its window. Tauri releases the single-instance resources
+        // during cleanup before launching the fresh process.
+        app.request_restart();
+        return;
+    }
+
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(
             |app, _arguments, _working_directory| {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.unminimize();
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
+                activate_or_replace_existing_instance(app);
             },
         ))
         .plugin(tauri_plugin_notification::init())
