@@ -15,12 +15,14 @@ from typing import Any
 
 from combo.tooling.skillhub.search_query import normalize_skillhub_search_query
 from combo.tooling.skillhub.distribution import install_skillhub_cli
+from combo.dynamic_runtime.capability_definitions import SKILL_NAME_PATTERN
 from combo.dynamic_runtime.skill_source import normalize_staged_skill_package
 
 
 SKILLHUB_COMMAND = "skillhub"
 SKILLHUB_SKIP_SELF_UPGRADE_ENV = "SKILLHUB_SKIP_SELF_UPGRADE"
 _SKILL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+_SKILL_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.+-]{0,127}$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,7 +95,7 @@ class SkillHubService:
         }
 
     def install(self, skill: str, *, timeout_seconds: int = 240) -> dict[str, Any]:
-        requested = _required_skill_name(skill)
+        requested = _required_skillhub_reference(skill)
         cli_path = self._require_cli()
         self.skills_dir.parent.mkdir(parents=True, exist_ok=True)
         with self._lock, tempfile.TemporaryDirectory(
@@ -142,7 +144,7 @@ class SkillHubService:
         }
 
     def remove(self, skill: str) -> dict[str, Any]:
-        skill_name = _required_skill_name(skill)
+        skill_name = _required_local_skill_name(skill)
         target = (self.skills_dir / skill_name).resolve()
         if target.parent != self.skills_dir:
             raise ValueError("SkillHub skill path escapes the managed Skill directory")
@@ -299,11 +301,43 @@ def _require_regular_skill_tree(root: Path) -> None:
             raise ValueError(f"SkillHub Skill contains an unsupported filesystem entry: {path.relative_to(root)}")
 
 
-def _required_skill_name(value: str) -> str:
-    skill = str(value or "").strip().split()[0] if str(value or "").strip() else ""
-    if not _SKILL_NAME.fullmatch(skill):
-        raise ValueError("SkillHub skill name is invalid")
+def _required_skillhub_reference(value: str) -> str:
+    reference = str(value or "").strip()
+    org: str | None = None
+    skill_and_version = reference
+    if reference.startswith("@"):
+        organization_and_skill = reference[1:].split("/", 1)
+        if len(organization_and_skill) != 2:
+            raise ValueError("SkillHub enterprise Skill must use @org/slug")
+        org, skill_and_version = organization_and_skill
+
+    if "@" in skill_and_version:
+        skill, version = skill_and_version.rsplit("@", 1)
+    else:
+        skill, version = skill_and_version, None
+
+    if (
+        not _SKILL_NAME.fullmatch(skill)
+        or (org is not None and not _SKILL_NAME.fullmatch(org))
+        or (version is not None and not _SKILL_VERSION.fullmatch(version))
+    ):
+        raise ValueError(f"Invalid SkillHub Skill reference: {reference or '<empty>'}")
+    return reference
+
+
+def _required_local_skill_name(value: str) -> str:
+    skill = str(value or "").strip()
+    if not SKILL_NAME_PATTERN.fullmatch(skill):
+        raise ValueError(f"Invalid installed Skill identity: {skill or '<empty>'}")
     return skill
+
+
+def _is_skillhub_reference(value: str) -> bool:
+    try:
+        _required_skillhub_reference(value)
+    except ValueError:
+        return False
+    return True
 
 
 def _search_items(output: str) -> list[dict[str, Any]]:
@@ -332,7 +366,7 @@ def _search_items(output: str) -> list[dict[str, Any]]:
     for line in output.splitlines():
         text = line.strip().lstrip("-*0123456789. ")
         token = text.split(maxsplit=1)[0] if text else ""
-        if not _SKILL_NAME.fullmatch(token) or token.casefold() in {"search", "version", "description"}:
+        if not _is_skillhub_reference(token) or token.casefold() in {"search", "version", "description"}:
             continue
         items.append({
             "name": token,
