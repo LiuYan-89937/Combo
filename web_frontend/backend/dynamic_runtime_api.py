@@ -79,6 +79,9 @@ class CapabilityPoolManager(Protocol):
     def search_skillhub(self, query: str) -> dict[str, Any]:
         ...
 
+    def install_skillhub_cli(self) -> dict[str, Any]:
+        ...
+
     def install_skillhub_skill(self, skill: str) -> dict[str, object]:
         ...
 
@@ -688,6 +691,14 @@ def create_dynamic_runtime_router(
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.post("/capabilities/skillhub/cli/install")
+    async def install_skillhub_cli(request: Request) -> dict[str, Any]:
+        principal_resolver.resolve(request)
+        try:
+            return await asyncio.to_thread(capability_pools.install_skillhub_cli)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @router.post("/capabilities/skillhub/install")
     async def install_skillhub_skill(

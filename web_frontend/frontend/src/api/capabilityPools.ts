@@ -117,7 +117,7 @@ export interface SkillEditorDocument {
 }
 
 export interface SkillHubResult {
-  action: 'status' | 'search' | 'install'
+  action: 'status' | 'search' | 'install' | 'cli_install'
   status: string
   message: string
   cli_available: boolean
@@ -164,6 +164,9 @@ export const capabilityPoolsApi = {
       }),
     }),
   skillHubStatus: () => requestJson<SkillHubResult>('/api/runtime/capabilities/skillhub/status'),
+  installSkillHubCli: () => requestJson<SkillHubResult>('/api/runtime/capabilities/skillhub/cli/install', {
+    method: 'POST',
+  }),
   searchSkillHub: (query: string) => requestJson<SkillHubResult>('/api/runtime/capabilities/skillhub/search', {
     method: 'POST',
     body: JSON.stringify({ query }),

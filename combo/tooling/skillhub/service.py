@@ -14,6 +14,7 @@ from threading import RLock
 from typing import Any
 
 from combo.tooling.skillhub.search_query import normalize_skillhub_search_query
+from combo.tooling.skillhub.distribution import install_skillhub_cli
 from combo.dynamic_runtime.skill_source import normalize_staged_skill_package
 
 
@@ -78,6 +79,17 @@ class SkillHubService:
             "message": f"SkillHub search completed with {len(items)} result(s).",
             "items": items,
             "raw_output": result.output[:4000],
+        }
+
+    def install_cli(self) -> dict[str, Any]:
+        with self._lock:
+            installation = install_skillhub_cli()
+        return {
+            **self.status(),
+            "action": "cli_install",
+            "message": "SkillHub CLI installed.",
+            "installed": True,
+            **installation,
         }
 
     def install(self, skill: str, *, timeout_seconds: int = 240) -> dict[str, Any]:

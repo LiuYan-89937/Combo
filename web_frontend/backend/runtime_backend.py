@@ -862,6 +862,9 @@ class RuntimeBackend:
     def search_skillhub(self, query: str) -> dict[str, Any]:
         return self.skillhub_runtime.search(query)
 
+    def install_skillhub_cli(self) -> dict[str, Any]:
+        return self.skillhub_runtime.install_cli()
+
     def install_skillhub_skill(self, skill: str) -> dict[str, object]:
         result = self.skillhub_runtime.install(skill)
         return {

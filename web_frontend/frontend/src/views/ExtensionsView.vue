@@ -417,9 +417,18 @@
             {{ searchingSkillHub ? '搜索中' : '搜索' }}
           </button>
         </div>
-        <p v-if="!skillHubResult?.cli_available" class="skillhub-unavailable">
-          {{ skillHubResult?.cli_version || skillHubResult?.message || '正在检查本机 SkillHub CLI' }}
-        </p>
+        <div v-if="skillHubResult && !skillHubResult.cli_available" class="skillhub-unavailable">
+          <span>{{ skillHubResult.cli_version || skillHubResult.message || t('extensions.skillHubMissing') }}</span>
+          <n-button
+            size="small"
+            type="primary"
+            round
+            :loading="installingSkillHubCli"
+            @click="installSkillHubCli"
+          >
+            {{ installingSkillHubCli ? t('extensions.installingSkillHubCli') : t('extensions.installSkillHubCli') }}
+          </n-button>
+        </div>
         <div v-if="skillHubResult?.items?.length" class="skillhub-results">
           <div class="skillhub-results-head">
             <strong>搜索结果</strong>
@@ -579,6 +588,7 @@ const skillHubResult = ref<SkillHubResult | null>(null)
 const showSkillHubPreview = ref(false)
 const selectedSkillHubItem = ref<SkillHubResult['items'][number] | null>(null)
 const searchingSkillHub = ref(false)
+const installingSkillHubCli = ref(false)
 const installingSkill = ref('')
 const importingSkill = ref(false)
 const skillFolderInput = ref<HTMLInputElement | null>(null)
@@ -922,6 +932,7 @@ async function deleteItem(item: PoolItem) {
 }
 function openAddMcp() { editingMcp.value = null; mcpInstallSession.value = null; showMcpModal.value = true }
 async function openSkillHub() { showSkillHub.value = true; try { skillHubResult.value = await capabilityPoolsApi.skillHubStatus() } catch (error) { message.error(error instanceof Error ? error.message : String(error)) } }
+async function installSkillHubCli() { if (installingSkillHubCli.value) return; installingSkillHubCli.value = true; try { skillHubResult.value = await capabilityPoolsApi.installSkillHubCli(); message.success(t('extensions.skillHubCliInstalled')) } catch (error) { message.error(error instanceof Error ? error.message : String(error)) } finally { installingSkillHubCli.value = false } }
 async function searchSkillHub() { const query = skillHubQuery.value.trim(); if (!query || searchingSkillHub.value) return; searchingSkillHub.value = true; try { skillHubResult.value = await capabilityPoolsApi.searchSkillHub(query) } catch (error) { message.error(error instanceof Error ? error.message : String(error)) } finally { searchingSkillHub.value = false } }
 function previewSkillHub(item: SkillHubResult['items'][number]) { selectedSkillHubItem.value = item; showSkillHubPreview.value = true }
 function skillHubSourceLabel(source: string) { return source.startsWith('@') ? `企业源 ${source}` : 'SkillHub 社区' }
@@ -1337,7 +1348,7 @@ onBeforeUnmount(clearProbeNotice)
 .skillhub-search input::placeholder { color: var(--app-text-placeholder); }
 .skillhub-search button { min-width: 78px; height: 42px; padding: 0 18px; color: var(--app-text-inverse); border: 1px solid var(--app-text); border-radius: 13px; background: var(--app-text); font-size: 12px; font-weight: 750; cursor: pointer; }
 .skillhub-search button:disabled { color: var(--app-text-muted); background: var(--app-surface); cursor: default; }
-.skillhub-unavailable { margin: -8px 2px 0; color: var(--app-text-muted); font-size: 10px; }
+.skillhub-unavailable { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: -8px 2px 0; color: var(--app-text-muted); font-size: 10px; }
 .skillhub-results { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-content: start; gap: 10px; max-height: 500px; padding-right: 3px; overflow-y: auto; }
 .skillhub-results-head { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; padding: 0 2px 4px; }
 .skillhub-results-head strong { color: var(--app-text); font-size: 11px; }.skillhub-results-head span { color: var(--app-text-muted); font-size: 11px; }
