@@ -1,4 +1,5 @@
-from combo.runtime_kernel.observability.emitter import ObservabilityManager
-from combo.runtime_kernel.observability.schema import RuntimeObservationEvent
+"""Runtime observability components.
 
-__all__ = ["ObservabilityManager", "RuntimeObservationEvent"]
+Concrete types are imported from their defining submodules to keep schema
+imports independent from runtime service initialization.
+"""
