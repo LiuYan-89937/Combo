@@ -8,7 +8,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any, Callable
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 from langchain_core.messages import HumanMessage
 from combo.models import resolve_embedding_model_profile, reset_embedding_model
 
@@ -45,14 +45,17 @@ def create_model_pool_router(
 ) -> APIRouter:
     router = APIRouter(prefix="/api/model-pool")
 
-    def embedding_configuration_changed() -> None:
-        reset_embedding_model()
-        if on_embedding_configuration_changed is not None:
-            on_embedding_configuration_changed()
-
-    def image_generation_configuration_changed() -> None:
-        if on_image_generation_configuration_changed is not None:
-            on_image_generation_configuration_changed()
+    def schedule_configuration_changes(
+        background_tasks: BackgroundTasks,
+        kinds: set[str] | frozenset[str],
+    ) -> None:
+        affected = frozenset(kinds) & {"embedding", "image_generation"}
+        if "embedding" in affected:
+            reset_embedding_model()
+            if on_embedding_configuration_changed is not None:
+                background_tasks.add_task(on_embedding_configuration_changed)
+        if "image_generation" in affected and on_image_generation_configuration_changed is not None:
+            background_tasks.add_task(on_image_generation_configuration_changed)
 
     @router.get("/providers")
     def list_providers():
@@ -68,19 +71,23 @@ def create_model_pool_router(
         store = ModelPoolStore()
         try:
             credential = store.create_credential(_credential_from_payload(payload, store=store))
-            embedding_configuration_changed()
-            image_generation_configuration_changed()
         except Exception as exc:
             raise _http_error(exc) from exc
         return {"credential": credential.to_public().model_dump(mode="json")}
 
     @router.patch("/credentials/{credential_id}")
-    def patch_credential(credential_id: str, payload: dict[str, Any]):
+    def patch_credential(
+        credential_id: str,
+        payload: dict[str, Any],
+        background_tasks: BackgroundTasks,
+    ):
         store = ModelPoolStore()
         try:
+            affected_kinds = {
+                profile.kind for profile in store.list_profiles(credential_id=credential_id)
+            }
             credential = store.patch_credential(credential_id, payload)
-            embedding_configuration_changed()
-            image_generation_configuration_changed()
+            schedule_configuration_changes(background_tasks, affected_kinds)
         except Exception as exc:
             raise _http_error(exc) from exc
         return {"credential": credential.to_public().model_dump(mode="json")}
@@ -90,9 +97,6 @@ def create_model_pool_router(
         store = ModelPoolStore()
         try:
             deleted = store.delete_credential(credential_id)
-            if deleted:
-                embedding_configuration_changed()
-                image_generation_configuration_changed()
             return {"deleted": deleted}
         except Exception as exc:
             raise _http_error(exc) from exc
@@ -123,7 +127,7 @@ def create_model_pool_router(
         }
 
     @router.put("/infrastructure-bindings")
-    def save_infrastructure_bindings(payload: dict[str, Any]):
+    def save_infrastructure_bindings(payload: dict[str, Any], background_tasks: BackgroundTasks):
         raw_bindings = payload.get("bindings")
         if not isinstance(raw_bindings, dict):
             raise HTTPException(status_code=422, detail="bindings must be an object")
@@ -132,9 +136,18 @@ def create_model_pool_router(
             for role, profile_id in raw_bindings.items()
         }
         try:
-            saved = ModelPoolStore().save_infrastructure_bindings(bindings)
-            embedding_configuration_changed()
-            image_generation_configuration_changed()
+            store = ModelPoolStore()
+            previous = store.infrastructure_bindings()
+            saved = store.save_infrastructure_bindings(bindings)
+            changed_kinds = {
+                kind
+                for role, kind in {
+                    "embedding": "embedding",
+                    "image_generation": "image_generation",
+                }.items()
+                if previous.get(role) != saved.get(role)
+            }
+            schedule_configuration_changes(background_tasks, changed_kinds)
         except Exception as exc:
             raise _http_error(exc) from exc
         return {"bindings": saved}
@@ -157,36 +170,43 @@ def create_model_pool_router(
         return usage_store.summary(group_by=value, days=days)
 
     @router.post("/profiles")
-    def create_profile(payload: dict[str, Any]):
+    def create_profile(payload: dict[str, Any], background_tasks: BackgroundTasks):
         store = ModelPoolStore()
         try:
             profile = store.create_profile(_profile_from_payload(payload, store=store))
             credential = store.get_credential(profile.credential_id)
-            embedding_configuration_changed()
-            image_generation_configuration_changed()
+            schedule_configuration_changes(background_tasks, {profile.kind})
         except Exception as exc:
             raise _http_error(exc) from exc
         return {"profile": profile.to_public(credential).model_dump(mode="json")}
 
     @router.patch("/profiles/{profile_id}")
-    def patch_profile(profile_id: str, payload: dict[str, Any]):
+    def patch_profile(
+        profile_id: str,
+        payload: dict[str, Any],
+        background_tasks: BackgroundTasks,
+    ):
         store = ModelPoolStore()
         try:
+            previous_kind = store.require_profile(profile_id).kind
             profile = store.patch_profile(profile_id, payload)
             credential = store.get_credential(profile.credential_id)
-            embedding_configuration_changed()
-            image_generation_configuration_changed()
+            schedule_configuration_changes(background_tasks, {previous_kind, profile.kind})
         except Exception as exc:
             raise _http_error(exc) from exc
         return {"profile": profile.to_public(credential).model_dump(mode="json")}
 
     @router.delete("/profiles/{profile_id}")
-    def delete_profile(profile_id: str):
+    def delete_profile(profile_id: str, background_tasks: BackgroundTasks):
+        store = ModelPoolStore()
         try:
-            deleted = ModelPoolStore().delete_profile(profile_id)
+            profile = store.get_profile(profile_id)
+            deleted = store.delete_profile(profile_id)
             if deleted:
-                embedding_configuration_changed()
-                image_generation_configuration_changed()
+                schedule_configuration_changes(
+                    background_tasks,
+                    {profile.kind} if profile is not None else set(),
+                )
             return {"deleted": deleted}
         except Exception as exc:
             raise _http_error(exc) from exc
@@ -207,14 +227,21 @@ def create_model_pool_router(
         return result
 
     @router.post("/profiles/delete")
-    def delete_profiles(payload: dict[str, Any]):
+    def delete_profiles(payload: dict[str, Any], background_tasks: BackgroundTasks):
         ids = [str(item).strip() for item in payload.get("profile_ids", []) if str(item).strip()]
         store = ModelPoolStore()
-        deleted = {profile_id: store.delete_profile(profile_id) for profile_id in ids}
-        if any(deleted.values()):
-            embedding_configuration_changed()
-            image_generation_configuration_changed()
-        return {"deleted": deleted}
+        try:
+            profiles = {profile_id: store.get_profile(profile_id) for profile_id in ids}
+            deleted = {profile_id: store.delete_profile(profile_id) for profile_id in ids}
+            affected_kinds = {
+                profile.kind
+                for profile_id, profile in profiles.items()
+                if deleted.get(profile_id) and profile is not None
+            }
+            schedule_configuration_changes(background_tasks, affected_kinds)
+            return {"deleted": deleted}
+        except Exception as exc:
+            raise _http_error(exc) from exc
 
     @router.post("/select")
     def select_models(payload: dict[str, Any]):

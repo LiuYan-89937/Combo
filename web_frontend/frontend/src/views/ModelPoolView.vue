@@ -68,7 +68,13 @@
                       {{ t('modelPool.testConnection') }}
                     </n-button>
                     <n-button size="small" @click="openProfile(profile)">{{ t('common.edit') }}</n-button>
-                    <n-button size="small" tertiary type="error" @click="confirmDeleteProfile(profile)">
+                    <n-button
+                      size="small"
+                      tertiary
+                      type="error"
+                      :loading="deletingProfileId === profile.profile_id"
+                      @click="confirmDeleteProfile(profile)"
+                    >
                       {{ t('common.delete') }}
                     </n-button>
                   </n-space>
@@ -142,7 +148,13 @@
                   <n-space>
                     <n-switch :value="credential.enabled" @update:value="(value) => setCredentialEnabled(credential, value)" />
                     <n-button size="small" @click="openCredential(credential)">{{ t('common.edit') }}</n-button>
-                    <n-button size="small" tertiary type="error" @click="confirmDeleteCredential(credential)">
+                    <n-button
+                      size="small"
+                      tertiary
+                      type="error"
+                      :loading="deletingCredentialId === credential.credential_id"
+                      @click="confirmDeleteCredential(credential)"
+                    >
                       {{ t('common.delete') }}
                     </n-button>
                   </n-space>
@@ -510,6 +522,8 @@ const infrastructureBindingsPanel = ref<HTMLElement | null>(null)
 const embeddingSetupRequested = computed(() => route.query.setup === 'embedding')
 const saving = ref(false)
 const savingBindings = ref(false)
+const deletingCredentialId = ref<string | null>(null)
+const deletingProfileId = ref<string | null>(null)
 const testingProfileId = ref<string | null>(null)
 const imageTestPreview = ref<{ url: string; model: string } | null>(null)
 const providers = ref<ModelProviderProfile[]>([])
@@ -745,6 +759,23 @@ async function refresh(): Promise<void> {
   }
 }
 
+function upsertCredential(credential: ModelPoolCredential): void {
+  const index = credentials.value.findIndex(item => item.credential_id === credential.credential_id)
+  if (index < 0) credentials.value.unshift(credential)
+  else credentials.value.splice(index, 1, credential)
+  profiles.value = profiles.value.map(profile => (
+    profile.credential_id === credential.credential_id
+      ? { ...profile, credential }
+      : profile
+  ))
+}
+
+function upsertProfile(profile: ModelPoolProfile): void {
+  const index = profiles.value.findIndex(item => item.profile_id === profile.profile_id)
+  if (index < 0) profiles.value.unshift(profile)
+  else profiles.value.splice(index, 1, profile)
+}
+
 async function loadUsage(): Promise<void> {
   usageLoading.value = true
   try {
@@ -798,12 +829,14 @@ async function saveCredential(): Promise<void> {
     if (credentialForm.api_key.trim()) payload.api_key = credentialForm.api_key.trim()
     if (credentialEditing.value) {
       payload.expected_revision = credentialEditing.value.revision
-      await modelPoolApi.patchCredential(credentialEditing.value.credential_id, payload)
+      const response = await modelPoolApi.patchCredential(credentialEditing.value.credential_id, payload)
+      upsertCredential(response.credential)
     } else {
-      await modelPoolApi.saveCredential(payload)
+      const response = await modelPoolApi.saveCredential(payload)
+      upsertCredential(response.credential)
     }
     credentialModalOpen.value = false
-    await refresh()
+    message.success(t('modelPool.credentialSaved'))
   } catch (error) {
     message.error(error instanceof Error ? error.message : t('common.requestFailed'))
   } finally {
@@ -918,12 +951,14 @@ async function saveProfile(): Promise<void> {
     }
     if (profileEditing.value) {
       Object.assign(payload, { expected_revision: profileEditing.value.revision })
-      await modelPoolApi.patchProfile(profileEditing.value.profile_id, payload)
+      const response = await modelPoolApi.patchProfile(profileEditing.value.profile_id, payload)
+      upsertProfile(response.profile)
     } else {
-      await modelPoolApi.saveProfile(payload)
+      const response = await modelPoolApi.saveProfile(payload)
+      upsertProfile(response.profile)
     }
     profileModalOpen.value = false
-    await refresh()
+    message.success(t('modelPool.profileSaved'))
   } catch (error) {
     message.error(error instanceof Error ? error.message : t('common.requestFailed'))
   } finally {
@@ -933,8 +968,11 @@ async function saveProfile(): Promise<void> {
 
 async function setCredentialEnabled(item: ModelPoolCredential, enabled: boolean): Promise<void> {
   try {
-    await modelPoolApi.patchCredential(item.credential_id, { enabled, expected_revision: item.revision })
-    await refresh()
+    const response = await modelPoolApi.patchCredential(item.credential_id, {
+      enabled,
+      expected_revision: item.revision,
+    })
+    upsertCredential(response.credential)
   } catch (error) {
     message.error(error instanceof Error ? error.message : t('common.requestFailed'))
   }
@@ -942,8 +980,11 @@ async function setCredentialEnabled(item: ModelPoolCredential, enabled: boolean)
 
 async function setProfileEnabled(item: ModelPoolProfile, enabled: boolean): Promise<void> {
   try {
-    await modelPoolApi.patchProfile(item.profile_id, { enabled, expected_revision: item.revision })
-    await refresh()
+    const response = await modelPoolApi.patchProfile(item.profile_id, {
+      enabled,
+      expected_revision: item.revision,
+    })
+    upsertProfile(response.profile)
   } catch (error) {
     message.error(error instanceof Error ? error.message : t('common.requestFailed'))
   }
@@ -978,8 +1019,22 @@ function confirmDeleteCredential(item: ModelPoolCredential): void {
     positiveText: t('common.delete'),
     negativeText: t('common.cancel'),
     onPositiveClick: async () => {
-      await modelPoolApi.deleteCredential(item.credential_id)
-      await refresh()
+      deletingCredentialId.value = item.credential_id
+      try {
+        const response = await modelPoolApi.deleteCredential(item.credential_id)
+        if (response.deleted) {
+          credentials.value = credentials.value.filter(
+            credential => credential.credential_id !== item.credential_id,
+          )
+        }
+        message.success(t('modelPool.credentialDeleted'))
+      } catch (error) {
+        message.error(error instanceof Error ? error.message : t('common.requestFailed'))
+        return false
+      } finally {
+        deletingCredentialId.value = null
+      }
+      return true
     },
   })
 }
@@ -991,8 +1046,20 @@ function confirmDeleteProfile(item: ModelPoolProfile): void {
     positiveText: t('common.delete'),
     negativeText: t('common.cancel'),
     onPositiveClick: async () => {
-      await modelPoolApi.deleteProfile(item.profile_id)
-      await refresh()
+      deletingProfileId.value = item.profile_id
+      try {
+        const response = await modelPoolApi.deleteProfile(item.profile_id)
+        if (response.deleted) {
+          profiles.value = profiles.value.filter(profile => profile.profile_id !== item.profile_id)
+        }
+        message.success(t('modelPool.profileDeleted'))
+      } catch (error) {
+        message.error(error instanceof Error ? error.message : t('common.requestFailed'))
+        return false
+      } finally {
+        deletingProfileId.value = null
+      }
+      return true
     },
   })
 }

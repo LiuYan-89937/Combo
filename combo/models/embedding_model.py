@@ -104,6 +104,7 @@ def _create_embedding_model(settings: EmbeddingModelSettings) -> Embeddings | No
         "api_key": settings.api_key,
         "base_url": settings.base_url,
         "dimensions": settings.dims,
+        "model_kwargs": {"encoding_format": "float"},
         "tiktoken_enabled": False,
         "check_embedding_ctx_length": False,
     }
