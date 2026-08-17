@@ -22,6 +22,7 @@ export function applyRuntimeActivityEvent(
 ) {
   state.runtimeActivity = {
     status: String(event.payload?.status || 'active'),
+    requestId: event.request_id || null,
     eventType: event.event_type,
     payload: {
       ...event.payload,
@@ -33,21 +34,28 @@ export function applyRuntimeActivityEvent(
 export function applyContextActivityEvent(state: ActivityMutationState, event: RuntimeFrontendEvent) {
   const type = event.event_type
   if (type === 'context_prepare_started') {
-    state.contextActivity = { status: 'idle' }
+    state.contextActivity = {
+      status: 'idle',
+      requestId: event.request_id || null,
+    }
   } else if (type === 'context_compression_started') {
     state.contextActivity.status = 'running'
+    state.contextActivity.requestId = event.request_id || null
     state.contextActivity.eventType = type
     state.contextActivity.payload = event.payload
   } else if (type === 'context_compression_completed') {
     state.contextActivity.status = 'completed'
+    state.contextActivity.requestId = event.request_id || null
     state.contextActivity.eventType = type
     state.contextActivity.payload = event.payload
   } else if (type === 'context_compression_failed') {
     state.contextActivity.status = 'failed'
+    state.contextActivity.requestId = event.request_id || null
     state.contextActivity.eventType = type
     state.contextActivity.payload = event.payload
   } else if (type === 'context_compression_skipped') {
     state.contextActivity.status = 'skipped'
+    state.contextActivity.requestId = event.request_id || null
     state.contextActivity.eventType = type
     state.contextActivity.payload = event.payload
   }

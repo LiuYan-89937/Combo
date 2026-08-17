@@ -140,7 +140,13 @@ function conversationFromTurns(rawTurns: any[], context: TurnRestoreContext) {
     }
   })
   return {
-    transcript,
+    transcript: transcript
+      .map((message, index) => ({ message, index }))
+      .sort((left, right) => (
+        Date.parse(left.message.timestamp) - Date.parse(right.message.timestamp)
+        || left.index - right.index
+      ))
+      .map(item => item.message),
     conversationTurns,
     activeTurn: activeTurnFrom(conversationTurns),
   }

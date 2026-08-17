@@ -90,6 +90,7 @@ export function useConversationMessageProjection() {
     const displayStatus = activeRuntimeDisplayStatus(
       runtimeStore.runtimeActivity,
       runtimeStore.contextActivity,
+      activeTurn.requestId,
       t,
       toolActivityHint.value,
     )
@@ -145,17 +146,25 @@ export function useConversationMessageProjection() {
 function activeRuntimeDisplayStatus(
   runtimeActivity: ReturnType<typeof useRuntimeStore>['runtimeActivity'],
   contextActivity: ReturnType<typeof useRuntimeStore>['contextActivity'],
+  activeRequestId: string | null,
   t: ReturnType<typeof useI18n>['t'],
   toolActivityHint: string,
 ): { text: string; role: 'assistant' | 'system' } {
   if (
-    contextActivity.status === 'running'
+    activeRequestId
+    && contextActivity.requestId === activeRequestId
+    && contextActivity.status === 'running'
     && contextActivity.eventType === 'context_compression_started'
   ) {
     return { text: t('context.context_compression_started'), role: 'system' }
   }
   const activitySummary = String(runtimeActivity.payload?.summary || '').trim()
-  if (runtimeActivity.status === 'active' && activitySummary) {
+  if (
+    activeRequestId
+    && runtimeActivity.requestId === activeRequestId
+    && runtimeActivity.status === 'active'
+    && activitySummary
+  ) {
     return { text: activitySummary, role: 'assistant' }
   }
   return { text: toolActivityHint || t('roles.assistantThinking'), role: 'assistant' }

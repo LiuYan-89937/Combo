@@ -354,6 +354,7 @@ class DynamicRuntimeService:
                 request_id=claimed_instance.request.request_id,
                 task_revision=claimed_instance.request.task_revision,
                 capability_snapshot=snapshot,
+                message_created_at=_model_message_created_at(state.observability.events),
             )
             projected_messages = (
                 []
@@ -416,6 +417,7 @@ class DynamicRuntimeService:
                     request_id=claimed_instance.request.request_id,
                     task_revision=claimed_instance.request.task_revision,
                     capability_snapshot=snapshot,
+                    message_created_at=_model_message_created_at(state.observability.events),
                 )
                 projected_messages = (
                     []
@@ -823,6 +825,21 @@ def _tool_event_times(observations: list[dict[str, Any]]) -> dict[str, dict[str,
         else:
             times["completed_at"] = created_at
     return event_times
+
+
+def _model_message_created_at(observations: list[dict[str, Any]]) -> dict[str, str]:
+    timestamps: dict[str, str] = {}
+    for observation in observations:
+        if str(observation.get("event_type") or "") != "model_call_started":
+            continue
+        payload = observation.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        stream_id = str(payload.get("stream_id") or "").strip()
+        created_at = str(observation.get("created_at") or "").strip()
+        if stream_id and created_at:
+            timestamps.setdefault(stream_id, created_at)
+    return timestamps
 
 
 def _drain_runtime_observations(manager: Any, *, state: RuntimeState) -> list[dict[str, Any]]:

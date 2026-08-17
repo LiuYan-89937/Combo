@@ -49,7 +49,10 @@
           <b>+{{ changes.additions }}</b>
           <i>-{{ changes.deletions }}</i>
         </span>
-        <div class="review-file-pills" role="tablist" :aria-label="t('git.changedFilesLabel')">
+      </header>
+
+      <div class="git-review-workspace">
+        <aside class="review-file-list" role="tablist" :aria-label="t('git.changedFilesLabel')">
           <button
             v-for="file in changes.files"
             :key="file.path"
@@ -59,15 +62,20 @@
             :class="{ active: selectedPath === file.path }"
             @click="selectFile(file.path)"
           >
-            <span>{{ changeCode(file.change_type) }}</span>
-            {{ basename(file.path) }}
+            <span class="review-file-state">{{ changeCode(file.change_type) }}</span>
+            <span class="review-file-copy">
+              <strong>{{ basename(file.path) }}</strong>
+              <small>{{ file.path }}</small>
+            </span>
+            <span class="file-lines"><b>+{{ file.additions }}</b><i>-{{ file.deletions }}</i></span>
           </button>
-        </div>
-      </header>
+        </aside>
 
-      <div class="git-review-path" :title="selectedPath">{{ selectedPath }}</div>
-
-      <GitDiffViewer :diff="selectedDiff" :loading="diffLoading" :error="diffError" />
+        <section class="git-review-content">
+          <div class="git-review-path" :title="selectedPath">{{ selectedPath }}</div>
+          <GitDiffViewer :diff="selectedDiff" :loading="diffLoading" :error="diffError" />
+        </section>
+      </div>
     </div>
   </n-modal>
 </template>
@@ -180,15 +188,25 @@ function changeCode(type: GitChangeType): string {
 .git-change-files button:last-child { border-bottom: 0; }.git-change-files button:hover { background: var(--app-surface-hover); }
 .file-state { font: 11px/1 var(--app-font-mono); color: var(--app-text-muted); }.file-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px/1.5 var(--app-font-mono); }
 .git-change-capsule.reverted { opacity: .7; }
-:global(.git-review-modal) { width: min(1400px, calc(100vw - 40px)); max-width: calc(100vw - 40px); height: min(880px, calc(100vh - 40px)); max-height: calc(100vh - 40px); display: flex; flex-direction: column; overflow: hidden; border-radius: 28px; }
+:global(.git-review-modal) { width: min(1400px, calc(100vw - 40px)); max-width: calc(100vw - 40px); max-height: calc(100vh - 40px); display: flex; flex-direction: column; overflow: hidden; border-radius: 28px; }
 :global(.git-review-modal .n-card-header) { flex: 0 0 auto; }
 :global(.git-review-modal .n-card__content) { min-width: 0; min-height: 0; flex: 1 1 auto; overflow: hidden; padding: 0 20px 20px; }
-.git-review-shell { width: 100%; height: 100%; min-width: 0; min-height: 0; display: grid; grid-template-rows: auto auto minmax(0, 1fr); gap: 12px; overflow: hidden; }
-.git-review-toolbar { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.git-review-shell { width: 100%; min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 12px; overflow: hidden; }
+.git-review-toolbar { display: flex; align-items: center; min-width: 0; }
 .review-total { flex: 0 0 auto; padding: 9px 13px; border: 1px solid var(--app-border); border-radius: 999px; color: var(--app-text-secondary); }
-.review-file-pills { min-width: 0; display: flex; gap: 7px; overflow-x: auto; scrollbar-width: none; }
-.review-file-pills button { display: inline-flex; align-items: center; gap: 7px; flex: 0 0 auto; padding: 9px 13px; border: 1px solid var(--app-border); border-radius: 999px; background: var(--app-surface); color: var(--app-text-secondary); cursor: pointer; }
-.review-file-pills button span { font: 10px/1 var(--app-font-mono); }.review-file-pills button.active { border-color: var(--app-text); background: var(--app-text); color: var(--app-text-inverse); }
-.git-review-path { overflow: hidden; padding: 0 5px; color: var(--app-text-muted); font: 11px/1.4 var(--app-font-mono); text-overflow: ellipsis; white-space: nowrap; }
-@media (max-width: 720px) { .git-change-summary { align-items: flex-start; flex-wrap: wrap; }.git-change-actions { width: 100%; margin-left: 60px; }.git-review-toolbar { align-items: flex-start; flex-direction: column; }.review-file-pills { width: 100%; } }
+.git-review-workspace { height: clamp(360px, 65vh, 680px); max-height: calc(100vh - 190px); min-width: 0; min-height: 0; display: grid; grid-template-columns: minmax(210px, 260px) minmax(0, 1fr); align-items: stretch; gap: 12px; overflow: hidden; }
+.review-file-list { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 4px; padding: 5px; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--app-border); border-radius: 18px; background: var(--app-surface-muted); }
+.review-file-list button { min-width: 0; flex: 0 0 auto; display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 10px 9px; border: 0; border-radius: 13px; background: transparent; color: var(--app-text-secondary); text-align: left; cursor: pointer; }
+.review-file-list button:hover { background: var(--app-surface-hover); }
+.review-file-list button.active { background: var(--app-surface); color: var(--app-text-strong); }
+.review-file-state { color: var(--app-text-muted); font: 10px/1 var(--app-font-mono); text-align: center; }
+.review-file-copy { min-width: 0; display: grid; gap: 3px; }
+.review-file-copy strong, .review-file-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.review-file-copy strong { font: 11px/1.35 var(--app-font-mono); }
+.review-file-copy small { color: var(--app-text-muted); font: 9px/1.35 var(--app-font-mono); }
+.review-file-list .file-lines { gap: 4px; font-size: 9px; }
+.git-review-content { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; border: 1px solid var(--app-border); border-radius: 18px; background: var(--app-surface); }
+.git-review-path { overflow: hidden; padding: 11px 14px; border-bottom: 1px solid var(--app-border); color: var(--app-text-muted); font: 11px/1.4 var(--app-font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.git-review-content :deep(.git-diff-viewer) { border: 0; border-radius: 0; }
+@media (max-width: 820px) { .git-change-summary { align-items: flex-start; flex-wrap: wrap; }.git-change-actions { width: 100%; margin-left: 60px; }.git-review-workspace { grid-template-columns: 1fr; grid-template-rows: minmax(110px, 26%) minmax(0, 1fr); }.review-file-list { display: grid; grid-auto-rows: min-content; } }
 </style>

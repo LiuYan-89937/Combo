@@ -28,7 +28,7 @@ defineProps<{
 <style scoped>
 .current-activity-summary {
   display: inline-flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 7px;
   max-width: min(72vw, 720px);
   min-height: 24px;
@@ -39,8 +39,8 @@ defineProps<{
 }
 
 .current-activity-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 </style>

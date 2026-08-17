@@ -258,6 +258,7 @@ def _interrupted_model_messages(
             additional_kwargs["reasoning_content"] = reasoning_content
         messages.append(
             AIMessage(
+                id=interruption.stream_id or None,
                 content=partial_text,
                 **({"tool_calls": partial_tool_calls} if partial_tool_calls else {}),
                 additional_kwargs=additional_kwargs,

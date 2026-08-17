@@ -2520,6 +2520,9 @@ def _process_environment() -> tuple[tuple[str, str], ...]:
 def _browser_runtime_config() -> BrowserRuntimeConfig:
     return BrowserRuntimeConfig(
         headless=_environment_bool("COMBO_BROWSER_HEADLESS", True),
+        allow_loopback_hosts=_environment_bool(
+            "COMBO_BROWSER_ALLOW_LOOPBACK_HOSTS", True
+        ),
         allow_private_hosts=_environment_bool("COMBO_BROWSER_ALLOW_PRIVATE_HOSTS", False),
         default_timeout_ms=_environment_int("COMBO_BROWSER_TIMEOUT_MS", 30_000, minimum=1_000),
         navigation_timeout_ms=_environment_int(

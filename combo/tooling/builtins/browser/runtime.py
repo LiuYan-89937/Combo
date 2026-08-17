@@ -34,6 +34,7 @@ def browser_session_key(
 @dataclass(frozen=True, slots=True)
 class BrowserRuntimeConfig:
     headless: bool = True
+    allow_loopback_hosts: bool = True
     allow_private_hosts: bool = False
     default_timeout_ms: int = 30_000
     navigation_timeout_ms: int = 45_000
@@ -945,7 +946,11 @@ class BrowserRuntime:
         now = time.monotonic()
         if self._safe_hosts.get(cache_key, 0) > now:
             return parsed.geturl()
-        await _assert_global_host(hostname, port)
+        await _assert_allowed_host(
+            hostname,
+            port,
+            allow_loopback_hosts=self.config.allow_loopback_hosts,
+        )
         self._safe_hosts[cache_key] = now + self.config.host_validation_ttl_seconds
         return parsed.geturl()
 
@@ -975,17 +980,31 @@ def _validated_network_url(url: str):
     return parsed
 
 
-async def _assert_global_host(hostname: str, port: int) -> None:
+async def _assert_allowed_host(
+    hostname: str,
+    port: int,
+    *,
+    allow_loopback_hosts: bool,
+) -> None:
     if hostname == "localhost" or hostname.endswith(".localhost"):
-        raise ValueError("private or local browser hosts are not allowed")
+        if allow_loopback_hosts:
+            return
+        raise ValueError("local browser hosts are not allowed")
     try:
         addresses = [ipaddress.ip_address(hostname)]
     except ValueError:
         loop = asyncio.get_running_loop()
         records = await loop.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
         addresses = list({ipaddress.ip_address(record[4][0]) for record in records})
-    if not addresses or any(not address.is_global for address in addresses):
-        raise ValueError(f"private or non-global browser host is not allowed: {hostname}")
+    if addresses and all(address.is_global for address in addresses):
+        return
+    if (
+        allow_loopback_hosts
+        and addresses
+        and all(address.is_loopback for address in addresses)
+    ):
+        return
+    raise ValueError(f"private or non-global browser host is not allowed: {hostname}")
 
 
 def _non_network_url(url: str) -> bool:

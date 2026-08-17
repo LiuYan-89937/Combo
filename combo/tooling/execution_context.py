@@ -60,6 +60,7 @@ class RuntimeModelGenerationInterrupted(RuntimeError):
         partial_text: str = "",
         reasoning_content: str = "",
         partial_tool_calls: tuple[dict[str, Any], ...] = (),
+        stream_id: str = "",
     ) -> None:
         super().__init__(message)
         self.partial_text = str(partial_text or "")
@@ -69,6 +70,7 @@ class RuntimeModelGenerationInterrupted(RuntimeError):
             for call in (partial_tool_calls or ())
             if isinstance(call, dict)
         )
+        self.stream_id = str(stream_id or "").strip()
 
 
 class ToolCancellationScope:

@@ -539,6 +539,7 @@ export interface ToolPermissionsView {
 
 export interface RuntimeActivityView {
   status: string
+  requestId?: string | null
   eventType?: string
   payload?: Record<string, any>
 }

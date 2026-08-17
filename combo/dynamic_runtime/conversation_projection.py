@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
@@ -83,6 +84,7 @@ def graph_messages_to_conversation(
     request_id: str,
     task_revision: int,
     capability_snapshot: CapabilitySnapshot,
+    message_created_at: Mapping[str, str] | None = None,
 ) -> list[ConversationMessage]:
     boundary = _current_turn_boundary(graph_messages, current_user_message_id)
     aliases = {
@@ -130,6 +132,7 @@ def graph_messages_to_conversation(
                         runtime_instance_id=runtime_instance_id,
                         request_id=request_id,
                         task_revision=task_revision,
+                        created_at=_message_created_at(message, message_created_at),
                         completion_reason=_completion_reason(message),
                     )
                 )
@@ -148,6 +151,7 @@ def graph_messages_to_conversation(
                     runtime_instance_id=runtime_instance_id,
                     request_id=request_id,
                     task_revision=task_revision,
+                    created_at=_message_created_at(message, message_created_at),
                 )
             )
     return projected
@@ -163,6 +167,7 @@ def _runtime_message(
     runtime_instance_id: str,
     request_id: str,
     task_revision: int,
+    created_at: str | None = None,
     completion_reason: str | None = None,
 ) -> ConversationMessage:
     payload: dict[str, Any] = {
@@ -175,10 +180,22 @@ def _runtime_message(
         "source_task_revision": task_revision,
         "completion_reason": completion_reason,
     }
+    if created_at:
+        payload["created_at"] = created_at
     value = str(message_id or "").strip()
     if value:
         payload["message_id"] = value
     return ConversationMessage.model_validate(payload)
+
+
+def _message_created_at(
+    message: BaseMessage,
+    timestamps: Mapping[str, str] | None,
+) -> str | None:
+    message_id = str(getattr(message, "id", "") or "").strip()
+    if not message_id or not timestamps:
+        return None
+    return str(timestamps.get(message_id) or "").strip() or None
 
 
 def _completion_reason(message: BaseMessage) -> str | None:

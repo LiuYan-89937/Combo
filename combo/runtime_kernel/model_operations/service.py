@@ -203,10 +203,18 @@ class ModelInvocationOperations:
                     "completion_reason": "user_interrupted",
                 },
             )
-            raise
+            raise RuntimeModelGenerationInterrupted(
+                str(exc),
+                partial_text=exc.partial_text,
+                reasoning_content=exc.reasoning_content,
+                partial_tool_calls=exc.partial_tool_calls,
+                stream_id=stream_id,
+            ) from exc
         except Exception as exc:
             _emit(emit_event, "model_call_failed", {"operation": "tool_bound_chat", "error": str(exc)})
             raise
+        if isinstance(response, BaseMessage):
+            response = response.model_copy(update={"id": stream_id})
         text = strip_internal_snapshot_blocks(content_to_text(getattr(response, "content", response))).strip()
         reasoning_content = reasoning_content_from_message(response)
         tool_calls = tool_calls_from_response(response)
