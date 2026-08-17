@@ -216,11 +216,6 @@ $env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $PythonResourcesDir "playwright-browse
 if ($LASTEXITCODE -ne 0) {
     throw "Playwright Chromium installation failed with exit code $LASTEXITCODE."
 }
-Write-Host "Precompiling bundled Python runtime..."
-& $PythonExecutable (Join-Path $ProjectRoot "scripts\precompile_python_resources.py") --include-runtime
-if ($LASTEXITCODE -ne 0) {
-    throw "Python runtime precompilation failed with exit code $LASTEXITCODE."
-}
 & $PythonExecutable (Join-Path $ProjectRoot "scripts\generate_icons.py")
 if ($LASTEXITCODE -ne 0) {
     throw "Application icon generation failed with exit code $LASTEXITCODE."

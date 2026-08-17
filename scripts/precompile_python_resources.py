@@ -6,22 +6,7 @@ from __future__ import annotations
 import argparse
 import compileall
 import py_compile
-import sysconfig
 from pathlib import Path
-
-
-def _runtime_roots() -> list[Path]:
-    candidates = {
-        Path(value).resolve()
-        for key in ("stdlib", "platstdlib", "purelib", "platlib")
-        if (value := sysconfig.get_path(key))
-    }
-    return [
-        candidate
-        for candidate in sorted(candidates, key=lambda path: len(path.parts))
-        if candidate.is_dir()
-        and not any(parent == candidate or parent in candidate.parents for parent in candidates if parent != candidate)
-    ]
 
 
 def _compile(root: Path) -> bool:
@@ -36,12 +21,10 @@ def _compile(root: Path) -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--include-runtime", action="store_true")
     parser.add_argument("--source", action="append", default=[], type=Path)
     args = parser.parse_args()
 
-    roots = _runtime_roots() if args.include_runtime else []
-    roots.extend(path.resolve() for path in args.source)
+    roots = [path.resolve() for path in args.source]
     if not roots:
         parser.error("at least one compilation root is required")
 
