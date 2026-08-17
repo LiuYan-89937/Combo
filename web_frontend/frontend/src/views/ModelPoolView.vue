@@ -1051,6 +1051,9 @@ function confirmDeleteProfile(item: ModelPoolProfile): void {
         const response = await modelPoolApi.deleteProfile(item.profile_id)
         if (response.deleted) {
           profiles.value = profiles.value.filter(profile => profile.profile_id !== item.profile_id)
+          if (taskModelBinding.value === item.profile_id) taskModelBinding.value = null
+          if (embeddingBinding.value === item.profile_id) embeddingBinding.value = null
+          if (imageGenerationBinding.value === item.profile_id) imageGenerationBinding.value = null
         }
         message.success(t('modelPool.profileDeleted'))
       } catch (error) {

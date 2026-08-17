@@ -409,15 +409,14 @@ class ModelPoolStore:
         return [ModelPoolProfile.model_validate_json(str(row["payload_json"])) for row in rows]
 
     def delete_profile(self, profile_id: str) -> bool:
-        assigned_roles = self.roles_for_profile(profile_id)
-        if assigned_roles:
-            raise ModelPoolStoreError(
-                f"model profile is assigned to roles {', '.join(assigned_roles)}: {profile_id}"
-            )
         with self._connect(write=True) as conn:
             existing = _profile_from_connection(conn, profile_id)
             if existing is None:
                 return False
+            conn.execute(
+                "delete from model_role_bindings where profile_id = ?",
+                (profile_id,),
+            )
             conn.execute(
                 """
                 insert into model_profile_tombstones(profile_id, last_revision, deleted_at)
