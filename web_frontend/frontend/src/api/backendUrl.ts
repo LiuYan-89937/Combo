@@ -2,7 +2,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core'
 
 let backendBaseUrl: Promise<string> | null = null
 let resolvedBackendBaseUrl: string | null = null
-const BACKEND_READINESS_TIMEOUT_MS = 30_000
+const BACKEND_READINESS_TIMEOUT_MS = 60_000
 const BACKEND_READINESS_POLL_INTERVAL_MS = 200
 
 interface BackendStatus {
