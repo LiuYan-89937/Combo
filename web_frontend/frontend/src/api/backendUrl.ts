@@ -12,6 +12,14 @@ interface BackendStatus {
   log_tail?: string | null
 }
 
+interface BackendHealth {
+  status?: 'starting' | 'ready' | 'failed'
+  phase?: string
+  error?: string
+}
+
+class BackendInitializationError extends Error {}
+
 export function backendUrl(path: string): Promise<string> {
   if (!isTauri()) return Promise.resolve(path)
 
@@ -47,9 +55,14 @@ export async function waitForBackendReady(): Promise<void> {
   while (Date.now() < deadline) {
     try {
       const response = await fetch(healthUrl, { cache: 'no-store' })
-      if (response.ok) return
-      lastFailure = `HTTP ${response.status}`
+      const health = await backendHealth(response)
+      if (response.ok && health.status === 'ready') return
+      if (health.status === 'failed') {
+        throw new BackendInitializationError(health.error || 'Backend initialization failed')
+      }
+      lastFailure = health.phase || `HTTP ${response.status}`
     } catch (error) {
+      if (error instanceof BackendInitializationError) throw error
       lastFailure = error instanceof Error ? error.message : String(error)
       const processFailure = await backendProcessFailure()
       if (processFailure) {
@@ -60,6 +73,14 @@ export async function waitForBackendReady(): Promise<void> {
   }
 
   throw new Error(`Backend initialization timed out${lastFailure ? `: ${lastFailure}` : ''}`)
+}
+
+async function backendHealth(response: Response): Promise<BackendHealth> {
+  try {
+    return await response.json() as BackendHealth
+  } catch {
+    return {}
+  }
 }
 
 async function backendProcessFailure(): Promise<string | null> {

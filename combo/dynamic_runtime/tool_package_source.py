@@ -22,12 +22,17 @@ from combo.dynamic_runtime.capability_definitions import (
     RuntimeResourceName,
 )
 from combo.dynamic_runtime.content_media import media_type_for_path
+from combo.dynamic_runtime.filesystem_source_cache import (
+    CapabilityDraftSource,
+    FileSystemCapabilityDraftCache,
+)
 from combo.environment_system.python_requirements import normalize_python_requirements
 from combo.runtime_protocol import CapabilityContent, CapabilityDraft, CapabilityTrustLevel
 
 
 _PACKAGE_NAME = re.compile(r"^[a-z][a-z0-9-]{1,127}$")
 _MODEL_ALIAS = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+TOOL_DRAFT_CACHE_NAMESPACE = "filesystem-tool.v1"
 
 
 class ToolPackagePermissions(BaseModel):
@@ -172,13 +177,19 @@ class FileSystemToolSourceConfig:
 class FileSystemToolCapabilitySource:
     """Load one immutable, model-callable ToolPackage from each child directory."""
 
-    def __init__(self, *, config: FileSystemToolSourceConfig, blobs: CapabilityBlobStore) -> None:
+    def __init__(
+        self,
+        *,
+        config: FileSystemToolSourceConfig,
+        blobs: CapabilityBlobStore,
+        cache: FileSystemCapabilityDraftCache | None = None,
+    ) -> None:
         self._config = config
         self._blobs = blobs
+        self._cache = cache
 
     def drafts(self) -> tuple[CapabilityDraft, ...]:
-        drafts: list[CapabilityDraft] = []
-        identities: set[str] = set()
+        sources: list[CapabilityDraftSource] = []
         for source_root in self._config.roots:
             if not source_root.path.is_dir():
                 raise FileNotFoundError(f"configured tool source root is unavailable: {source_root.path}")
@@ -188,12 +199,30 @@ class FileSystemToolCapabilitySource:
                 manifest_path = directory / "TOOL.yaml"
                 if not manifest_path.is_file() or manifest_path.is_symlink():
                     continue
-                draft = self._draft(source_root, directory, manifest_path)
-                if draft.capability_id in identities:
-                    raise ValueError(f"duplicate tool capability identity: {draft.capability_id}")
-                identities.add(draft.capability_id)
-                drafts.append(draft)
-        return tuple(drafts)
+                sources.append(CapabilityDraftSource(
+                    cache_key=(
+                        f"{self._config.source_prefix}|{source_root.root_id}|"
+                        f"{source_root.trust_level}|{directory.name}"
+                    ),
+                    directory=directory,
+                    build=lambda root=source_root, folder=directory, path=manifest_path: self._draft(
+                        root,
+                        folder,
+                        path,
+                    ),
+                ))
+        drafts = self._cache.resolve(tuple(sources)) if self._cache is not None else tuple(
+            source.build() for source in sources
+        )
+        identities = [draft.capability_id for draft in drafts]
+        if len(identities) != len(set(identities)):
+            raise ValueError("duplicate tool capability identity")
+        return tuple(
+            draft.model_copy(
+                update={"updated_by_principal_id": self._config.publisher_principal_id}
+            )
+            for draft in drafts
+        )
 
     def _draft(self, source_root: ToolSourceRoot, directory: Path, manifest_path: Path) -> CapabilityDraft:
         manifest_bytes = self._read_bounded(manifest_path)

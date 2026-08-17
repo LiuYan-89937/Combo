@@ -7,6 +7,7 @@ import json
 from combo.dynamic_runtime.capability_adapters import CapabilityAdapterRegistry
 from combo.dynamic_runtime.capability_resolution_store import CapabilityResolutionReceiptStore
 from combo.dynamic_runtime.capability_store import (
+    ActiveCapability,
     CapabilityConflictError,
     CapabilityNotFoundError,
     CapabilityStore,
@@ -57,15 +58,31 @@ class CapabilityBootstrapPublisher:
         deactivate_removed_sources: bool = True,
     ) -> tuple[CapabilityRevision, ...]:
         self._validate_source_set(drafts)
-        published = tuple(self._synchronize_draft(draft) for draft in drafts)
+        active_by_id = {
+            item.revision.capability_id: item
+            for item in self._store.active_capabilities()
+        }
+        published = tuple(
+            self._synchronize_draft(draft, active_by_id=active_by_id)
+            for draft in drafts
+        )
         if deactivate_removed_sources:
             self._deactivate_removed_sources(frozenset(draft.capability_id for draft in drafts))
         return published
 
-    def _synchronize_draft(self, desired: CapabilityDraft) -> CapabilityRevision:
+    def _synchronize_draft(
+        self,
+        desired: CapabilityDraft,
+        *,
+        active_by_id: dict[str, ActiveCapability],
+    ) -> CapabilityRevision:
         draft = self._upsert_draft(desired)
-        current_activation = self._activation_or_none(draft.capability_id)
-        active = self._active_or_none(draft.capability_id)
+        active = active_by_id.get(draft.capability_id)
+        current_activation = (
+            active.activation
+            if active is not None
+            else self._activation_or_none(draft.capability_id)
+        )
         if (
             active is not None
             and active.revision.content_digest == draft.content_digest
@@ -232,26 +249,6 @@ class CapabilityBootstrapPublisher:
             replacement,
             expected_draft_revision=current.draft_revision,
         )
-
-    def _active_or_none(self, capability_id: str):
-        activation = self._activation_or_none(capability_id)
-        if activation is None:
-            return None
-        if activation.status != "active":
-            return None
-        active = next(
-            (
-                item
-                for item in self._store.active_capabilities()
-                if item.revision.capability_id == capability_id
-            ),
-            None,
-        )
-        if active is None:
-            raise CapabilityConflictError(
-                "active capability pointer has no matching revision and index projection"
-            )
-        return active
 
     def _activation_or_none(self, capability_id: str) -> CapabilityActivation | None:
         try:

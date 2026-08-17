@@ -190,7 +190,7 @@
             >
               <ComboPngIcon
                 name="plan"
-                :size="42"
+                :size="36"
               />
             </n-button>
         </ControlHint>
@@ -231,7 +231,7 @@
                   :aria-label="t('chat.approvalLabel')"
                 >
                   <span class="permission-icon-slot">
-                    <ComboPngIcon name="permission" :size="42" />
+                    <ComboPngIcon name="permission" :size="36" />
                   </span>
                   <span>{{ approvalLabel }}</span>
                   <n-icon size="12" class="reasoning-caret"><CaretDown /></n-icon>
@@ -289,7 +289,7 @@
                 @click="handlePrimaryAction"
               >
                 <n-icon v-if="primaryAction === 'cancel'" :size="19"><Stop /></n-icon>
-                <ComboPngIcon v-else name="send" :size="40" />
+                <ComboPngIcon v-else name="send" :size="36" />
               </n-button>
           </ControlHint>
           <span v-if="queuedCount > 0" class="queued-count" aria-hidden="true">
@@ -368,8 +368,8 @@ const props = withDefaults(
     queuedCount: 0,
     queuedMessages: () => [],
     runningMessageMode: 'queue',
-    rows: 3,
-    maxRows: 10,
+    rows: 1,
+    maxRows: 6,
     attachmentsEnabled: true,
     modelSelectorEnabled: false,
     modelOptions: () => [],
@@ -723,8 +723,8 @@ defineExpose({
   display: flex;
   flex-direction: column;
   min-inline-size: 720px;
-  gap: var(--app-space-md);
-  padding: var(--app-space-md);
+  gap: var(--app-space-sm);
+  padding: 12px 14px;
   border: 1px solid color-mix(in srgb, var(--app-text) 14%, transparent);
   border-radius: var(--app-radius-xl);
   background: var(--app-surface);
@@ -931,12 +931,19 @@ defineExpose({
   --n-border-hover: none !important;
   --n-border-focus: none !important;
   --n-box-shadow-focus: none !important;
+  border-radius: 0 !important;
   background: transparent;
+  box-shadow: none !important;
+}
+
+.input-wrapper :deep(.n-input__border),
+.input-wrapper :deep(.n-input__state-border) {
+  display: none;
 }
 
 .input-wrapper :deep(.n-input .n-input__textarea-el) {
   color: var(--app-text);
-  padding: var(--app-space-xs) 0;
+  padding: 4px 0;
   font-size: var(--app-font-lg);
   line-height: var(--app-leading-normal);
 }
@@ -1012,14 +1019,14 @@ defineExpose({
 .compact-icon-action,
 .plan-mode-button,
 .collaboration-mode-button {
-  width: 48px;
-  min-width: 48px;
-  height: 48px;
+  width: 42px;
+  min-width: 42px;
+  height: 42px;
   justify-content: center;
 }
 
 .reasoning-button:not(.plan-mode-button) {
-  min-height: 48px;
+  min-height: 42px;
 }
 
 .reasoning-button :deep(.n-button__content) {
@@ -1037,9 +1044,9 @@ defineExpose({
 
 .permission-icon-slot {
   display: grid;
-  width: 46px;
-  height: 46px;
-  flex: 0 0 46px;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
   place-items: center;
   overflow: visible !important;
 }
@@ -1164,8 +1171,8 @@ defineExpose({
 }
 
 .send-button {
-  width: 50px;
-  height: 50px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   padding: 0;
 }

@@ -20,7 +20,14 @@ from combo.dynamic_runtime.capability_definitions import (
     SkillContentRef,
     SkillDefinition,
 )
+from combo.dynamic_runtime.filesystem_source_cache import (
+    CapabilityDraftSource,
+    FileSystemCapabilityDraftCache,
+)
 from combo.runtime_protocol import CapabilityContent, CapabilityDraft, CapabilityTrustLevel
+
+
+SKILL_DRAFT_CACHE_NAMESPACE = "filesystem-skill.v1"
 
 
 def normalize_staged_skill_package(directory: str | Path) -> Path:
@@ -152,13 +159,14 @@ class FileSystemSkillCapabilitySource:
         *,
         config: FileSystemSkillSourceConfig,
         blobs: CapabilityBlobStore,
+        cache: FileSystemCapabilityDraftCache | None = None,
     ) -> None:
         self._config = config
         self._blobs = blobs
+        self._cache = cache
 
     def drafts(self) -> tuple[CapabilityDraft, ...]:
-        drafts: list[CapabilityDraft] = []
-        identities: set[str] = set()
+        sources: list[CapabilityDraftSource] = []
         for source_root in self._config.roots:
             if not source_root.path.is_dir():
                 raise FileNotFoundError(f"configured skill source root is unavailable: {source_root.path}")
@@ -168,12 +176,30 @@ class FileSystemSkillCapabilitySource:
                 manifest = directory / "SKILL.md"
                 if not manifest.is_file() or manifest.is_symlink():
                     continue
-                draft = self._draft(source_root, directory, manifest)
-                if draft.capability_id in identities:
-                    raise ValueError(f"duplicate skill capability identity: {draft.capability_id}")
-                identities.add(draft.capability_id)
-                drafts.append(draft)
-        return tuple(drafts)
+                sources.append(CapabilityDraftSource(
+                    cache_key=(
+                        f"{self._config.source_prefix}|{source_root.root_id}|"
+                        f"{source_root.trust_level}|{directory.name}"
+                    ),
+                    directory=directory,
+                    build=lambda root=source_root, folder=directory, path=manifest: self._draft(
+                        root,
+                        folder,
+                        path,
+                    ),
+                ))
+        drafts = self._cache.resolve(tuple(sources)) if self._cache is not None else tuple(
+            source.build() for source in sources
+        )
+        identities = [draft.capability_id for draft in drafts]
+        if len(identities) != len(set(identities)):
+            raise ValueError("duplicate skill capability identity")
+        return tuple(
+            draft.model_copy(
+                update={"updated_by_principal_id": self._config.publisher_principal_id}
+            )
+            for draft in drafts
+        )
 
     def _draft(
         self,

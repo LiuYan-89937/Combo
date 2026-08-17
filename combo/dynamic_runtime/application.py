@@ -352,7 +352,6 @@ def _embedding_runtime_resolver(
             "model": resolved.settings.model,
             "base_url": resolved.settings.base_url,
             "dimensions": dimensions,
-            "batch_size": resolved.settings.batch_size,
             "credential_digest": sha256(
                 str(resolved.settings.api_key or "").encode("utf-8")
             ).hexdigest(),

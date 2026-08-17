@@ -4,7 +4,7 @@ use std::io;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 use wait_timeout::ChildExt;
 
@@ -17,6 +17,7 @@ use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
 const BACKEND_LOG_TAIL_BYTES: usize = 12_000;
 const BACKEND_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(8);
+const RETAINED_BACKEND_LOGS: usize = 5;
 
 /// Python backend sidecar process manager.
 pub struct PythonSidecar {
@@ -57,10 +58,7 @@ impl PythonSidecar {
             std::fs::create_dir_all(data_root.join(".combo"))?;
             (resource_dir.clone(), data_root)
         };
-        let log_path = data_root
-            .join(".combo")
-            .join("logs")
-            .join("backend.log");
+        let log_path = data_root.join(".combo").join("logs").join("backend.log");
         let (stdout_log, stderr_log) = Self::open_backend_log(&log_path)?;
 
         // Launch Python backend
@@ -113,6 +111,7 @@ impl PythonSidecar {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
+        Self::rotate_backend_log(path);
         let stdout = OpenOptions::new()
             .create(true)
             .write(true)
@@ -120,6 +119,44 @@ impl PythonSidecar {
             .open(path)?;
         let stderr = stdout.try_clone()?;
         Ok((stdout, stderr))
+    }
+
+    fn rotate_backend_log(path: &Path) {
+        let Some(parent) = path.parent() else {
+            return;
+        };
+        if path.metadata().map(|metadata| metadata.len()).unwrap_or(0) > 0 {
+            let timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|value| value.as_millis())
+                .unwrap_or(0);
+            let archived = parent.join(format!("backend-{timestamp}-{}.log", std::process::id(),));
+            let _ = fs::rename(path, archived);
+        }
+        let Ok(entries) = fs::read_dir(parent) else {
+            return;
+        };
+        let mut archived = entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|candidate| {
+                candidate
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|name| name.starts_with("backend-") && name.ends_with(".log"))
+                    .unwrap_or(false)
+            })
+            .collect::<Vec<_>>();
+        archived.sort_by_key(|candidate| {
+            candidate
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .unwrap_or(UNIX_EPOCH)
+        });
+        let remove_count = archived.len().saturating_sub(RETAINED_BACKEND_LOGS);
+        for stale in archived.into_iter().take(remove_count) {
+            let _ = fs::remove_file(stale);
+        }
     }
 
     fn allocate_loopback_port() -> std::io::Result<u16> {

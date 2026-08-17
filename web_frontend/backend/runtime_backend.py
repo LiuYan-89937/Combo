@@ -12,6 +12,7 @@ import shutil
 import sys
 import tempfile
 from threading import RLock
+from time import perf_counter
 from typing import Any, Callable, Mapping
 from urllib.parse import quote
 from uuid import uuid4
@@ -67,12 +68,15 @@ from combo.dynamic_runtime.capability_blob_store import CapabilityBlobStore
 from combo.dynamic_runtime.skill_source import (
     FileSystemSkillCapabilitySource,
     FileSystemSkillSourceConfig,
+    SKILL_DRAFT_CACHE_NAMESPACE,
     SkillSourceRoot,
     normalize_staged_skill_package,
 )
+from combo.dynamic_runtime.filesystem_source_cache import FileSystemCapabilityDraftCache
 from combo.dynamic_runtime.tool_package_source import (
     FileSystemToolCapabilitySource,
     FileSystemToolSourceConfig,
+    TOOL_DRAFT_CACHE_NAMESPACE,
     ToolSourceRoot,
 )
 from combo.dynamic_runtime.tool_package_runtime import ToolPackageRuntime
@@ -131,6 +135,7 @@ from web_frontend.backend.frontend_event_bridge import FrontendEventBridge, Runt
 from web_frontend.backend.attachment_upload_store import StagedAttachmentLaunchResolver
 from web_frontend.backend.attachment_upload_store import attachment_upload_store
 from web_frontend.backend.conversation_lifecycle import ConversationLifecycleService
+from web_frontend.backend.frontend_origins import allowed_frontend_origins
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,6 +155,7 @@ class RuntimeBackendConfig:
     main_agent_capability_profile_path: Path
     skill_capability_source_prefix: str
     capability_blob_root: Path
+    capability_source_cache_root: Path
     skill_source_roots: tuple[SkillSourceRoot, ...]
     maximum_skill_file_bytes: int
     maximum_skill_bytes: int
@@ -198,6 +204,7 @@ class RuntimeBackendConfig:
             ),
             skill_capability_source_prefix="filesystem-skill://",
             capability_blob_root=combo_data_path("capability_blobs"),
+            capability_source_cache_root=combo_data_path("capability_blobs", "source_cache"),
             skill_source_roots=(
                 SkillSourceRoot(
                     root_id="local-skills",
@@ -223,7 +230,7 @@ class RuntimeBackendConfig:
             ),
             browser_runtime=_browser_runtime_config(),
             process_environment=_process_environment(),
-            allowed_frontend_origins=_allowed_frontend_origins(),
+            allowed_frontend_origins=allowed_frontend_origins(),
             conversation_delete_quiesce_timeout_seconds=float(
                 _environment_int(
                     "COMBO_CONVERSATION_DELETE_QUIESCE_TIMEOUT_SECONDS",
@@ -235,14 +242,24 @@ class RuntimeBackendConfig:
 
 
 class RuntimeBackend:
-    def __init__(self, config: RuntimeBackendConfig, logger: logging.Logger) -> None:
+    def __init__(
+        self,
+        config: RuntimeBackendConfig,
+        logger: logging.Logger,
+        startup_phase_sink: Callable[[str], None] | None = None,
+    ) -> None:
         self.config = config
         self.logger = logger
+        self._startup_phase_sink = startup_phase_sink
+        self._startup_phase_name: str | None = None
+        self._startup_phase_started_at = perf_counter()
+        self._advance_startup_phase("capability_storage")
         _initialize_capability_storage(config)
         self.main_agent_capability_profiles = MainAgentCapabilityProfileStore(
             config.main_agent_capability_profile_path
         )
         self.main_agent_capability_profiles.ensure()
+        self._advance_startup_phase("runtime_resources")
         self.frontend_events = FrontendEventBridge(
             queue_capacity=config.subscriber_queue_capacity,
         )
@@ -275,6 +292,7 @@ class RuntimeBackend:
             ),
         )
         self.mcp_runtime.on_catalog_changed(self._mcp_catalog_changed)
+        self._advance_startup_phase("mcp_registry")
         self.mcp_gateway.synchronize()
         self.skillhub_runtime = SkillHubService(
             skills_dir=config.skill_source_roots[0].path,
@@ -286,6 +304,7 @@ class RuntimeBackend:
         self.resource_store = ResourceStore(config.resource_store_path)
         self.tool_package_runtime: ToolPackageRuntime | None = None
         try:
+            self._advance_startup_phase("runtime_application")
             self.application = self._open_application()
             self.frontend_events.bind_request_id_resolver(self._frontend_request_id)
             self.frontend_events.bind_active_request_resolver(self._active_frontend_requests)
@@ -298,6 +317,7 @@ class RuntimeBackend:
             self.filesystem_resources.close()
             self.mcp_runtime.close()
             raise
+        self._advance_startup_phase("runtime_services")
         dispatcher = self.application.main_command_dispatcher(
             delegated_model_selector=self.delegated_model_selector,
         )
@@ -346,6 +366,32 @@ class RuntimeBackend:
             commands=self.application.stores.commands,
             notify_commands=self.supervisor.notify_commands,
         )
+        self._finish_startup_timeline()
+
+    def _advance_startup_phase(self, phase: str) -> None:
+        now = perf_counter()
+        if self._startup_phase_name is not None:
+            self.logger.info(
+                "Startup phase %s completed in %.1f ms",
+                self._startup_phase_name,
+                (now - self._startup_phase_started_at) * 1000,
+            )
+        self._startup_phase_name = phase
+        self._startup_phase_started_at = now
+        if self._startup_phase_sink is not None:
+            self._startup_phase_sink(phase)
+
+    def _finish_startup_timeline(self) -> None:
+        now = perf_counter()
+        if self._startup_phase_name is not None:
+            self.logger.info(
+                "Startup phase %s completed in %.1f ms",
+                self._startup_phase_name,
+                (now - self._startup_phase_started_at) * 1000,
+            )
+        self._startup_phase_name = None
+        if self._startup_phase_sink is not None:
+            self._startup_phase_sink("runtime_constructed")
 
     def _frontend_request_id(self, runtime_instance_id: str, fallback: str) -> str:
         with self.application.database.connection(query_only=True) as connection:
@@ -1891,6 +1937,7 @@ class RuntimeBackend:
 
     def _open_application(self) -> DynamicRuntimeApplication:
         config = self.config
+        self._advance_startup_phase("database_migration")
         migration_registry = DynamicRuntimeMigrationRegistry()
         migration = migration_registry.prepare(DynamicRuntimeDatabase(config.database_path))
         if migration.initialization_required:
@@ -1903,6 +1950,7 @@ class RuntimeBackend:
                 )
         delegation_runtime = DelegationRuntimeCoordinator()
         capability_blobs = CapabilityBlobStore(config.capability_blob_root)
+        self._advance_startup_phase("runtime_persistence")
         checkpointer = LangGraphCheckpointerFactory().build(
             LangGraphCheckpointerConfig(backend="sqlite", path=config.checkpoint_path)
         ).saver
@@ -2015,6 +2063,7 @@ class RuntimeBackend:
 
         model_pool_store = ModelPoolStore()
         self.delegated_model_selector = DelegatedTaskModelSelector(model_pool_store)
+        self._advance_startup_phase("capability_bootstrap")
         application = DynamicRuntimeApplication.open(
             config=DynamicRuntimeApplicationConfig(
                 database_path=config.database_path,
@@ -2056,6 +2105,7 @@ class RuntimeBackend:
                 _capability_adapters(),
             )
         )
+        self._advance_startup_phase("runtime_application_ready")
         return application
 
     def _publish_runtime_observation(self, instance, chunk) -> None:
@@ -2126,6 +2176,10 @@ class RuntimeBackend:
                 maximum_skill_bytes=config.maximum_skill_bytes,
             ),
             blobs=CapabilityBlobStore(config.capability_blob_root),
+            cache=FileSystemCapabilityDraftCache(
+                path=config.capability_source_cache_root / "skills.json",
+                namespace=SKILL_DRAFT_CACHE_NAMESPACE,
+            ),
         )
 
     def _tool_capability_source(
@@ -2142,6 +2196,10 @@ class RuntimeBackend:
                 maximum_tool_bytes=config.maximum_tool_bytes,
             ),
             blobs=CapabilityBlobStore(config.capability_blob_root),
+            cache=FileSystemCapabilityDraftCache(
+                path=config.capability_source_cache_root / "tools.json",
+                namespace=TOOL_DRAFT_CACHE_NAMESPACE,
+            ),
         )
 
     def _synchronize_tool_package_capabilities(self, stores, adapters) -> None:
@@ -2548,17 +2606,6 @@ def _browser_runtime_config() -> BrowserRuntimeConfig:
 def _environment_optional(name: str) -> str | None:
     value = str(os.environ.get(name) or "").strip()
     return value or None
-
-
-def _allowed_frontend_origins() -> tuple[str, ...]:
-    configured = os.getenv("COMBO_FRONTEND_ORIGINS")
-    if configured is not None:
-        return tuple(origin.strip() for origin in configured.split(",") if origin.strip())
-    return (
-        "tauri://localhost",
-        "http://tauri.localhost",
-        "https://tauri.localhost",
-    )
 
 
 def _environment_bool(name: str, default: bool) -> bool:
