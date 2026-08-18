@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
     <aside
-      v-if="visible"
+      v-if="visible && props.active"
       ref="panelRef"
       class="browser-panel"
       :class="{ minimized, dragging }"
@@ -101,6 +101,11 @@ interface BrowserTarget {
 
 const runtimeStore = useRuntimeStore()
 const { t } = useI18n()
+const props = withDefaults(defineProps<{
+  active?: boolean
+}>(), {
+  active: true,
+})
 const visible = ref(false)
 const minimized = ref(false)
 const interactive = ref(false)
@@ -241,9 +246,18 @@ watch(currentTarget, (target, previous) => {
     sourceWidth.value = 1440
     sourceHeight.value = 900
   }
-  if (pageChanged || !socket) {
+  if (props.active && (pageChanged || !socket)) {
     void connect(target)
   }
+})
+
+watch(() => props.active, (active) => {
+  if (!active) {
+    disconnectViewSocket()
+    return
+  }
+  const target = currentTarget.value
+  if (target) void connect(target)
 })
 
 watch(() => browserTargets.value.length, () => {
@@ -567,15 +581,19 @@ function clampPanelPosition() {
 function closePanel() {
   visible.value = false
   interactive.value = false
-  socket?.close()
-  socket = null
-  pendingFrameMetadata = null
+  disconnectViewSocket()
   agentOperation.value = ''
 }
 
-onBeforeUnmount(() => {
+function disconnectViewSocket() {
   connectionGeneration += 1
   socket?.close()
+  socket = null
+  pendingFrameMetadata = null
+}
+
+onBeforeUnmount(() => {
+  disconnectViewSocket()
   window.removeEventListener('resize', clampPanelPosition)
   window.removeEventListener('pointermove', movePanel)
   window.removeEventListener('pointerup', endPanelDrag)

@@ -21,11 +21,13 @@ export const routes: RouteRecordRaw[] = [
     path: '/chat/new',
     name: 'ChatNew',
     component: () => import('@/views/ConversationView.vue'),
+    meta: { conversationOverlay: true },
   },
   {
     path: '/chat/:sessionId',
     name: 'ChatSession',
     component: () => import('@/views/ConversationView.vue'),
+    meta: { conversationOverlay: true },
   },
   {
     path: '/knowledge',

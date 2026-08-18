@@ -26,5 +26,5 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("capability installer runtime is not configured")
     if not isinstance(identity, RuntimeExecutionIdentity) or identity.runtime_role != "main":
         raise PermissionError("MCP installation is available only to the main Agent")
-    output = service.install_mcp(arguments.get("config"))
+    output = service.install_mcp(arguments.get("server_config"))
     return tool_envelope(output, summary=str(output["message"]))

@@ -19,7 +19,7 @@
             </transition>
           </router-view>
         </main>
-        <BrowserPanel />
+        <BrowserPanel :active="conversationOverlayActive" />
       </div>
     </div>
 
@@ -49,7 +49,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { isTauri } from '@tauri-apps/api/core'
 import { useRoute } from 'vue-router'
 import { useUiStore } from '@/stores/ui'
@@ -82,6 +82,7 @@ const { openMostRecentAgentSession } = useAgentSessionNavigation()
 const guideResolved = ref(hasCompletedFirstRunGuide())
 const guideOpen = ref(false)
 const navigationReady = ref(!props.runtimeServicesEnabled || !isTauri())
+const conversationOverlayActive = computed(() => route.meta.conversationOverlay === true)
 
 onMounted(async () => {
   if (props.runtimeServicesEnabled && !guideResolved.value) guideOpen.value = true

@@ -16,14 +16,14 @@ def get_mcp_installer_tool_specs() -> list[ToolSpec]:
                 "from an authoritative source. JSON/YAML text and decoded configuration objects are accepted. "
                 "Few-shot: Official documentation provides "
                 "{\"mcpServers\":{\"amap\":{\"url\":\"https://example.com/mcp\"}}} -> pass the complete "
-                "document as config. Only a service name is known -> do not guess a command, URL, headers, "
+                "document as server_config. Only a service name is known -> do not guess a command, URL, headers, "
                 "or environment values; find the official executable configuration first."
             ),
             entrypoint="combo.tooling.builtins.mcp_installer.tool:run",
             input_schema={
                 "type": "object",
                 "properties": {
-                    "config": {
+                    "server_config": {
                         "description": "完整 MCP 配置对象，或包含该对象的 JSON/YAML 文本。",
                         "oneOf": [
                             {"type": "object"},
@@ -31,7 +31,7 @@ def get_mcp_installer_tool_specs() -> list[ToolSpec]:
                         ],
                     }
                 },
-                "required": ["config"],
+                "required": ["server_config"],
                 "additionalProperties": False,
             },
             output_schema={"type": "object"},
@@ -45,7 +45,7 @@ def get_mcp_installer_tool_specs() -> list[ToolSpec]:
             ),
             concurrent=False,
             max_parallel_calls=1,
-            sensitive_argument_paths=["/config"],
+            sensitive_argument_paths=["/server_config"],
             effects=["write", "network", "process", "credential", "external_side_effect"],
             system_available=True,
         )
