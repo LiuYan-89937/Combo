@@ -2113,11 +2113,6 @@ class RuntimeBackend:
                 capability_resolution=CapabilityResolutionConfig(
                     search=CapabilitySearchConfig(
                         maximum_results=24,
-                        minimum_score=0.05,
-                        reciprocal_rank_constant=60,
-                        lexical_weight=0.55,
-                        vector_weight=0.45,
-                        exact_match_bonus=0.2,
                         receipt_retention_limit=10_000,
                     ),
                     host_platform=_host_platform(),

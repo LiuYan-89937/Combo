@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import isfinite
 from typing import Literal
 
 
 CapabilitySearchScope = Literal["capability_catalog", "mcp_catalog"]
+CapabilityRetrievalChannel = Literal["exact", "lexical", "semantic"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,18 +46,27 @@ class CapabilitySearchCandidate:
 
 
 @dataclass(frozen=True, slots=True)
-class CapabilitySearchMatch:
+class CapabilitySearchResult:
     capability_id: str
-    score: float
+    retrieval_channels: tuple[CapabilityRetrievalChannel, ...]
+    matched_fields: tuple[str, ...]
     reason: str
     evidence_id: str | None = None
 
     def __post_init__(self) -> None:
         if not str(self.capability_id or "").strip():
-            raise ValueError("capability search match capability_id must not be empty")
-        if not isfinite(self.score):
-            raise ValueError("capability search match score must be finite")
+            raise ValueError("capability search result capability_id must not be empty")
+        channels = tuple(dict.fromkeys(self.retrieval_channels))
+        if not channels:
+            raise ValueError("capability search result requires retrieval channels")
+        if any(value not in {"exact", "lexical", "semantic"} for value in channels):
+            raise ValueError("capability search result contains an unsupported retrieval channel")
+        fields = tuple(dict.fromkeys(str(value or "").strip() for value in self.matched_fields))
+        if any(not value for value in fields):
+            raise ValueError("capability search result matched fields must not be empty")
+        object.__setattr__(self, "retrieval_channels", channels)
+        object.__setattr__(self, "matched_fields", fields)
         if not str(self.reason or "").strip():
-            raise ValueError("capability search match reason must not be empty")
+            raise ValueError("capability search result reason must not be empty")
         if self.evidence_id is not None and not str(self.evidence_id or "").strip():
-            raise ValueError("capability search match evidence_id must not be empty")
+            raise ValueError("capability search result evidence_id must not be empty")

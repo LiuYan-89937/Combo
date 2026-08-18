@@ -27,65 +27,6 @@
           </div>
         </section>
 
-        <section class="settings-group">
-          <header class="group-header">
-            <div class="group-icon" aria-hidden="true">
-              <n-icon size="18"><ServerOutline /></n-icon>
-            </div>
-            <div class="group-title-block">
-              <div class="group-title">{{ t('settings.groupKnowledgeRetrieval') }}</div>
-              <div class="group-desc">{{ t('settings.groupKnowledgeRetrievalDesc') }}</div>
-            </div>
-          </header>
-
-          <div v-if="knowledgeSettings" class="group-body">
-            <div class="field-block">
-              <label class="field-label">{{ t('settings.knowledgeResultLimit') }}</label>
-              <n-input-number v-model:value="knowledgeSettings.result_limit" class="field-input" :min="1" :max="50" :precision="0" />
-              <p class="field-hint">{{ t('settings.knowledgeResultLimitHint') }}</p>
-            </div>
-            <div class="field-divider" aria-hidden="true"></div>
-            <div class="field-block retrieval-pair">
-              <div>
-                <label class="field-label">{{ t('settings.knowledgeLexicalLimit') }}</label>
-                <n-input-number v-model:value="knowledgeSettings.lexical_limit" class="field-input" :min="1" :max="200" :precision="0" />
-              </div>
-              <div>
-                <label class="field-label">{{ t('settings.knowledgeVectorLimit') }}</label>
-                <n-input-number v-model:value="knowledgeSettings.vector_limit" class="field-input" :min="1" :max="200" :precision="0" />
-              </div>
-            </div>
-            <div class="field-divider" aria-hidden="true"></div>
-            <div class="field-block retrieval-pair">
-              <div>
-                <label class="field-label">{{ t('settings.knowledgeRrfK') }}</label>
-                <n-input-number v-model:value="knowledgeSettings.rrf_k" class="field-input" :min="1" :max="1000" :precision="0" />
-              </div>
-              <div>
-                <label class="field-label">{{ t('settings.knowledgeVectorThreshold') }}</label>
-                <n-input-number v-model:value="knowledgeSettings.vector_minimum_similarity" class="field-input" :min="-1" :max="1" :step="0.05" :precision="2" />
-              </div>
-            </div>
-            <div class="field-divider" aria-hidden="true"></div>
-            <div class="field-block retrieval-pair">
-              <div>
-                <label class="field-label">{{ t('settings.knowledgeLexicalWeight') }}</label>
-                <n-input-number v-model:value="knowledgeSettings.lexical_weight" class="field-input" :min="0.1" :max="10" :step="0.1" :precision="1" />
-              </div>
-              <div>
-                <label class="field-label">{{ t('settings.knowledgeVectorWeight') }}</label>
-                <n-input-number v-model:value="knowledgeSettings.vector_weight" class="field-input" :min="0.1" :max="10" :step="0.1" :precision="1" />
-              </div>
-            </div>
-            <p v-if="knowledgeSettingsError" class="field-error">{{ knowledgeSettingsError }}</p>
-            <div class="settings-action-row">
-              <n-button secondary :loading="savingKnowledgeSettings" @click="saveKnowledgeRetrievalSettings">
-                {{ t('common.save') }}
-              </n-button>
-            </div>
-          </div>
-        </section>
-
         <!-- 分组：外观与语言 -->
         <section class="settings-group">
           <header class="group-header">
@@ -126,6 +67,46 @@
                 </n-radio-button>
               </n-radio-group>
             </div>
+          </div>
+        </section>
+
+        <section class="settings-group">
+          <header class="group-header">
+            <div class="group-icon" aria-hidden="true">
+              <n-icon size="18"><NotificationsOutline /></n-icon>
+            </div>
+            <div class="group-title-block">
+              <div class="group-title">{{ t('settings.groupNotifications') }}</div>
+              <div class="group-desc">{{ t('settings.groupNotificationsDesc') }}</div>
+            </div>
+          </header>
+
+          <div class="group-body">
+            <div class="field-row">
+              <div class="field-copy">
+                <label class="field-label">{{ t('settings.taskNotifications') }}</label>
+                <p class="field-hint">{{ t('settings.taskNotificationsHint') }}</p>
+              </div>
+              <n-switch
+                :value="taskNotificationPreferences.enabled"
+                @update:value="setTaskNotificationsEnabled"
+              />
+            </div>
+
+            <template v-if="taskNotificationPreferences.enabled">
+              <div class="field-divider" aria-hidden="true"></div>
+              <div
+                v-for="option in taskNotificationCategoryOptions"
+                :key="option.category"
+                class="field-row"
+              >
+                <label class="field-label">{{ option.label }}</label>
+                <n-switch
+                  :value="taskNotificationPreferences.categories[option.category]"
+                  @update:value="taskNotificationPreferences.setCategoryEnabled(option.category, $event)"
+                />
+              </div>
+            </template>
           </div>
         </section>
 
@@ -313,40 +294,26 @@
         <section class="settings-group">
           <header class="group-header">
             <div class="group-icon" aria-hidden="true">
-              <n-icon size="18"><NotificationsOutline /></n-icon>
+              <n-icon size="18"><ServerOutline /></n-icon>
             </div>
             <div class="group-title-block">
-              <div class="group-title">{{ t('settings.groupNotifications') }}</div>
-              <div class="group-desc">{{ t('settings.groupNotificationsDesc') }}</div>
+              <div class="group-title">{{ t('settings.groupKnowledgeRetrieval') }}</div>
+              <div class="group-desc">{{ t('settings.groupKnowledgeRetrievalDesc') }}</div>
             </div>
           </header>
 
-          <div class="group-body">
-            <div class="field-row">
-              <div class="field-copy">
-                <label class="field-label">{{ t('settings.taskNotifications') }}</label>
-                <p class="field-hint">{{ t('settings.taskNotificationsHint') }}</p>
-              </div>
-              <n-switch
-                :value="taskNotificationPreferences.enabled"
-                @update:value="setTaskNotificationsEnabled"
-              />
+          <div v-if="knowledgeSettings" class="group-body">
+            <div class="field-block">
+              <label class="field-label">{{ t('settings.knowledgeResultLimit') }}</label>
+              <n-input-number v-model:value="knowledgeSettings.result_limit" class="field-input" :min="1" :max="50" :precision="0" />
+              <p class="field-hint">{{ t('settings.knowledgeResultLimitHint') }}</p>
             </div>
-
-            <template v-if="taskNotificationPreferences.enabled">
-              <div class="field-divider" aria-hidden="true"></div>
-              <div
-                v-for="option in taskNotificationCategoryOptions"
-                :key="option.category"
-                class="field-row"
-              >
-                <label class="field-label">{{ option.label }}</label>
-                <n-switch
-                  :value="taskNotificationPreferences.categories[option.category]"
-                  @update:value="taskNotificationPreferences.setCategoryEnabled(option.category, $event)"
-                />
-              </div>
-            </template>
+            <p v-if="knowledgeSettingsError" class="field-error">{{ knowledgeSettingsError }}</p>
+            <div class="settings-action-row">
+              <n-button secondary :loading="savingKnowledgeSettings" @click="saveKnowledgeRetrievalSettings">
+                {{ t('common.save') }}
+              </n-button>
+            </div>
           </div>
         </section>
 
@@ -898,18 +865,6 @@ function formatBytes(value: number): string {
   margin-top: var(--app-space-xxs);
 }
 
-.retrieval-pair {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--app-space-md);
-}
-
-.retrieval-pair > div {
-  display: grid;
-  min-width: 0;
-  gap: var(--app-space-sm);
-}
-
 .settings-action-row {
   display: flex;
   justify-content: flex-end;
@@ -982,9 +937,6 @@ function formatBytes(value: number): string {
   }
   .group-header {
     padding: var(--app-space-sm) var(--app-space-md);
-  }
-  .retrieval-pair {
-    grid-template-columns: 1fr;
   }
 }
 

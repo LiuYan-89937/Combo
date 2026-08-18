@@ -19,7 +19,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     elif action == "search":
         output = {
             "action": action,
-            "capabilities": catalog.search(
+            "candidates": catalog.search(
                 str(arguments.get("query") or ""),
                 limit=int(arguments.get("limit", 10)),
             ),
@@ -30,7 +30,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("kinds must be an array")
         output = {
             "action": action,
-            "items": catalog.search_mcp(
+            "candidates": catalog.search_mcp(
                 str(arguments.get("server_name") or ""),
                 str(arguments.get("query") or ""),
                 kinds=tuple(str(value) for value in raw_kinds),

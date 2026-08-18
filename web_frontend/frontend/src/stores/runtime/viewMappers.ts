@@ -106,7 +106,7 @@ export function knowledgeDocumentView(document: any): KnowledgeDocumentView {
 export function knowledgeSearchResultView(result: any): KnowledgeSearchResultView {
   return {
     title: String(result.title || ''),
-    content: String(result.content || ''),
+    content: String(result.snippet || result.content || ''),
     score: typeof result.score === 'number' ? result.score : null,
     payload: result || {},
   }

@@ -83,13 +83,7 @@ class KnowledgeRetrievalSettingsWrite(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     expected_revision: int = Field(ge=0)
-    lexical_limit: int = Field(ge=1, le=200)
-    vector_limit: int = Field(ge=1, le=200)
     result_limit: int = Field(ge=1, le=50)
-    rrf_k: int = Field(ge=1, le=1000)
-    vector_minimum_similarity: float = Field(ge=-1, le=1)
-    lexical_weight: float = Field(gt=0, le=10)
-    vector_weight: float = Field(gt=0, le=10)
 
 
 class KnowledgeChunkingWrite(BaseModel):

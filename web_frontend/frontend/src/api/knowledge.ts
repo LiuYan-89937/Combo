@@ -4,13 +4,7 @@ import { packageResourceContextPayload } from './resourceContext'
 
 export interface KnowledgeRetrievalSettings {
   revision: number
-  lexical_limit: number
-  vector_limit: number
   result_limit: number
-  rrf_k: number
-  vector_minimum_similarity: number
-  lexical_weight: number
-  vector_weight: number
   updated_at: string | null
 }
 

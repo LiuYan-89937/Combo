@@ -12,9 +12,11 @@ def get_capability_tool_specs() -> list[ToolSpec]:
                 "Discover active Tool, MCP Server, and Skill capabilities when the visible tools do not reliably "
                 "cover the request or capability availability is uncertain. Use search for the top-level catalog. "
                 "When an MCP Server is relevant, use search_mcp with that server name to search its Tool, Resource, "
-                "Resource Template, and Prompt directory. Search results are summaries only: before first use, call "
-                "describe for every exact target separately and follow its returned definition. Results expose "
-                "public names rather than internal runtime IDs."
+                "Resource Template, and Prompt directory. Search returns ranked discovery candidates, not confirmed "
+                "matches or confidence scores. Judge each candidate from its name, summary, kind, and retrieval "
+                "evidence, and reject all candidates when none actually fits. Before first use, call describe for "
+                "every selected exact target separately and follow its returned definition. Results expose public "
+                "names rather than internal runtime IDs."
             ),
             entrypoint="combo.tooling.builtins.capability.tool:run",
             input_schema={

@@ -17,9 +17,10 @@ def get_delegation_tool_specs() -> list[ToolSpec]:
             description=(
                 "Start one non-blocking temporary agent task. Give the child a concise user-facing role name, "
                 "then describe its role and objective and select its execution graph. Delegate independent work "
-                "even when capability search returns no optional match; in that case pass an empty capabilities "
-                "array and the child receives its stable built-in runtime tools. When search does return useful "
-                "Tool, MCP Server, or Skill matches, pass only their exact public names. Selecting an MCP "
+                "even when capability search returns no genuinely relevant candidate; in that case pass an empty "
+                "capabilities array and the child receives its stable built-in runtime tools. When search does "
+                "return useful Tool, MCP Server, or Skill candidates, pass only their exact public names. "
+                "Selecting an MCP "
                 "Server makes its complete Tool catalog available to the child. Runtime policy "
                 "supplies the shared workspace scope, selects and freezes a suitable enabled model-pool profile, "
                 "and owns approvals and internal identities. Once accepted, "

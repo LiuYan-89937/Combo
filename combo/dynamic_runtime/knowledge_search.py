@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from hashlib import sha256
 import json
 from math import sqrt
-import re
 from threading import Lock
 from typing import Any, Callable
 from uuid import uuid4
@@ -14,35 +13,30 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from combo.dynamic_runtime.capability_search import CapabilityEmbeddingRuntime
 from combo.dynamic_runtime.database import DynamicRuntimeDatabase
+from combo.dynamic_runtime.hybrid_retrieval import (
+    FusedRetrievalCandidate,
+    RankedRetrievalCandidate,
+    fuse_hybrid_rankings,
+    lexical_coverage,
+    lexical_tokens,
+)
 from combo.dynamic_runtime.repositories import utc_now_text
 
 
 DEFAULT_KNOWLEDGE_LEXICAL_LIMIT = 30
 DEFAULT_KNOWLEDGE_VECTOR_LIMIT = 30
 DEFAULT_KNOWLEDGE_RESULT_LIMIT = 10
-DEFAULT_KNOWLEDGE_RRF_K = 60
 DEFAULT_KNOWLEDGE_VECTOR_MINIMUM_SIMILARITY = 0.15
-DEFAULT_KNOWLEDGE_LEXICAL_WEIGHT = 1.0
-DEFAULT_KNOWLEDGE_VECTOR_WEIGHT = 1.0
 DEFAULT_KNOWLEDGE_CHUNK_SIZE = 800
 DEFAULT_KNOWLEDGE_CHUNK_OVERLAP = 120
+KNOWLEDGE_SEARCH_SCHEMA_REVISION = 2
 
 
 class KnowledgeRetrievalSettings(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     revision: int = Field(default=0, ge=0)
-    lexical_limit: int = Field(default=DEFAULT_KNOWLEDGE_LEXICAL_LIMIT, ge=1, le=200)
-    vector_limit: int = Field(default=DEFAULT_KNOWLEDGE_VECTOR_LIMIT, ge=1, le=200)
     result_limit: int = Field(default=DEFAULT_KNOWLEDGE_RESULT_LIMIT, ge=1, le=50)
-    rrf_k: int = Field(default=DEFAULT_KNOWLEDGE_RRF_K, ge=1, le=1000)
-    vector_minimum_similarity: float = Field(
-        default=DEFAULT_KNOWLEDGE_VECTOR_MINIMUM_SIMILARITY,
-        ge=-1,
-        le=1,
-    )
-    lexical_weight: float = Field(default=DEFAULT_KNOWLEDGE_LEXICAL_WEIGHT, gt=0, le=10)
-    vector_weight: float = Field(default=DEFAULT_KNOWLEDGE_VECTOR_WEIGHT, gt=0, le=10)
     updated_at: str | None = None
 
 
@@ -62,7 +56,7 @@ EmbeddingRuntimeResolver = Callable[[], CapabilityEmbeddingRuntime | None]
 
 
 class HybridKnowledgeSearchIndex:
-    """Generation-based FTS5 and embedding retrieval fused with weighted RRF."""
+    """Generation-based knowledge retrieval using the shared hybrid ranking core."""
 
     def __init__(
         self,
@@ -157,27 +151,21 @@ class HybridKnowledgeSearchIndex:
         lexical = self._lexical_ranking(
             generation_id,
             normalized_query,
-            limit=settings.lexical_limit,
+            limit=DEFAULT_KNOWLEDGE_LEXICAL_LIMIT,
             source_id=source_id,
         )
-        vector: list[tuple[str, float]] = []
+        vector: tuple[RankedRetrievalCandidate, ...] = ()
         if mode == "hybrid" and embedding_fingerprint:
             vector = self._vector_ranking(
                 generation_id,
                 normalized_query,
                 embedding_fingerprint=embedding_fingerprint,
-                limit=settings.vector_limit,
-                minimum_similarity=settings.vector_minimum_similarity,
+                limit=DEFAULT_KNOWLEDGE_VECTOR_LIMIT,
+                minimum_similarity=DEFAULT_KNOWLEDGE_VECTOR_MINIMUM_SIMILARITY,
                 source_id=source_id,
             )
-        ranked_ids = _weighted_rrf(
-            lexical=lexical,
-            vector=vector,
-            k=settings.rrf_k,
-            lexical_weight=settings.lexical_weight,
-            vector_weight=settings.vector_weight,
-        )[:result_limit]
-        return self._results(generation_id, ranked_ids, lexical=lexical, vector=vector)
+        ranked = fuse_hybrid_rankings({"lexical": lexical, "semantic": vector})[:result_limit]
+        return self._results(generation_id, ranked)
 
     def _after_rebuild(self, _future: Future[None]) -> None:
         with self._lock:
@@ -354,7 +342,12 @@ class HybridKnowledgeSearchIndex:
                 )
                 connection.execute(
                     "insert into knowledge_search_fts(generation_id, chunk_id, title, content) values (?, ?, ?, ?)",
-                    (generation_id, chunk.chunk_id, chunk.title, chunk.content),
+                    (
+                        generation_id,
+                        chunk.chunk_id,
+                        " ".join(lexical_tokens(chunk.title)),
+                        " ".join(lexical_tokens(chunk.content)),
+                    ),
                 )
             connection.execute(
                 "update knowledge_search_generations set status = 'retired' where status = 'active'"
@@ -416,10 +409,10 @@ class HybridKnowledgeSearchIndex:
         *,
         limit: int,
         source_id: str | None,
-    ) -> list[tuple[str, float]]:
+    ) -> tuple[RankedRetrievalCandidate, ...]:
         expression = _fts_query(query)
         if not expression:
-            return []
+            return ()
         source_clause = "and chunk.source_id = ?" if source_id else ""
         parameters: list[Any] = [generation_id, expression]
         if source_id:
@@ -428,7 +421,8 @@ class HybridKnowledgeSearchIndex:
         with self._database.connection(query_only=True) as connection:
             rows = connection.execute(
                 f"""
-                select fts.chunk_id, bm25(knowledge_search_fts) as score
+                select fts.chunk_id, chunk.title, chunk.content,
+                       bm25(knowledge_search_fts) as score
                 from knowledge_search_fts fts
                 join knowledge_search_chunks chunk
                   on chunk.generation_id = fts.generation_id and chunk.chunk_id = fts.chunk_id
@@ -438,7 +432,16 @@ class HybridKnowledgeSearchIndex:
                 """,
                 tuple(parameters),
             ).fetchall()
-        return [(str(row["chunk_id"]), float(row["score"])) for row in rows]
+        return tuple(
+            RankedRetrievalCandidate(
+                item_id=str(row["chunk_id"]),
+                evidence_strength=lexical_coverage(
+                    query,
+                    f"{row['title']}\n{row['content']}",
+                ),
+            )
+            for row in rows
+        )
 
     def _vector_ranking(
         self,
@@ -449,10 +452,10 @@ class HybridKnowledgeSearchIndex:
         limit: int,
         minimum_similarity: float,
         source_id: str | None,
-    ) -> list[tuple[str, float]]:
+    ) -> tuple[RankedRetrievalCandidate, ...]:
         runtime = self._resolve_embedding_runtime()
         if runtime is None or runtime.fingerprint != embedding_fingerprint:
-            return []
+            return ()
         query_vector = _validated_vector(runtime.embed_query(query), runtime.dimensions)
         source_clause = "and source_id = ?" if source_id else ""
         parameters: tuple[Any, ...] = (generation_id, source_id) if source_id else (generation_id,)
@@ -468,22 +471,23 @@ class HybridKnowledgeSearchIndex:
             (str(row["chunk_id"]), _cosine(query_vector, [float(value) for value in json.loads(str(row["embedding_json"]))]))
             for row in rows
         ]
-        return sorted(
+        ranked = sorted(
             (item for item in scored if item[1] >= minimum_similarity),
             key=lambda item: (-item[1], item[0]),
         )[:limit]
+        return tuple(
+            RankedRetrievalCandidate(item_id=chunk_id, evidence_strength=similarity)
+            for chunk_id, similarity in ranked
+        )
 
     def _results(
         self,
         generation_id: str,
-        ranked: list[tuple[str, float]],
-        *,
-        lexical: list[tuple[str, float]],
-        vector: list[tuple[str, float]],
+        ranked: tuple[FusedRetrievalCandidate, ...],
     ) -> list[dict[str, Any]]:
         if not ranked:
             return []
-        ids = [chunk_id for chunk_id, _score in ranked]
+        ids = [item.item_id for item in ranked]
         placeholders = ",".join("?" for _item in ids)
         with self._database.connection(query_only=True) as connection:
             rows = connection.execute(
@@ -495,24 +499,18 @@ class HybridKnowledgeSearchIndex:
                 (generation_id, *ids),
             ).fetchall()
         by_id = {str(row["chunk_id"]): row for row in rows}
-        lexical_rank = {chunk_id: index for index, (chunk_id, _score) in enumerate(lexical, start=1)}
-        vector_rank = {chunk_id: index for index, (chunk_id, _score) in enumerate(vector, start=1)}
-        vector_score = dict(vector)
         return [
             {
-                "chunk_id": chunk_id,
-                "document_id": str(by_id[chunk_id]["document_id"]),
-                "source_id": str(by_id[chunk_id]["source_id"]),
-                "chunk_index": int(by_id[chunk_id]["chunk_index"]),
-                "title": str(by_id[chunk_id]["title"]),
-                "snippet": str(by_id[chunk_id]["content"]),
-                "score": score,
-                "lexical_rank": lexical_rank.get(chunk_id),
-                "vector_rank": vector_rank.get(chunk_id),
-                "vector_similarity": vector_score.get(chunk_id),
+                "chunk_id": item.item_id,
+                "document_id": str(by_id[item.item_id]["document_id"]),
+                "source_id": str(by_id[item.item_id]["source_id"]),
+                "chunk_index": int(by_id[item.item_id]["chunk_index"]),
+                "title": str(by_id[item.item_id]["title"]),
+                "snippet": str(by_id[item.item_id]["content"]),
+                "retrieval": {"channels": list(item.channels)},
             }
-            for chunk_id, score in ranked
-            if chunk_id in by_id
+            for item in ranked
+            if item.item_id in by_id
         ]
 
 
@@ -530,10 +528,20 @@ def _document_chunks(content: str, source: dict[str, Any]) -> list[str]:
 
 
 def _dataset_digest(chunks: tuple[KnowledgeChunkProjection, ...]) -> str:
-    payload = [
-        (item.chunk_id, item.source_id, item.document_id, item.chunk_index, item.content_digest, item.vector_enabled)
-        for item in chunks
-    ]
+    payload = {
+        "search_schema_revision": KNOWLEDGE_SEARCH_SCHEMA_REVISION,
+        "chunks": [
+            (
+                item.chunk_id,
+                item.source_id,
+                item.document_id,
+                item.chunk_index,
+                item.content_digest,
+                item.vector_enabled,
+            )
+            for item in chunks
+        ],
+    }
     return sha256(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
@@ -554,21 +562,5 @@ def _cosine(left: list[float], right: list[float]) -> float:
 
 
 def _fts_query(query: str) -> str:
-    tokens = [token for token in re.findall(r"[\w]+", query, flags=re.UNICODE) if token]
+    tokens = lexical_tokens(query)
     return " OR ".join(f'"{token.replace(chr(34), chr(34) * 2)}"' for token in tokens)
-
-
-def _weighted_rrf(
-    *,
-    lexical: list[tuple[str, float]],
-    vector: list[tuple[str, float]],
-    k: int,
-    lexical_weight: float,
-    vector_weight: float,
-) -> list[tuple[str, float]]:
-    scores: dict[str, float] = {}
-    for rank, (chunk_id, _score) in enumerate(lexical, start=1):
-        scores[chunk_id] = scores.get(chunk_id, 0.0) + lexical_weight / (k + rank)
-    for rank, (chunk_id, _score) in enumerate(vector, start=1):
-        scores[chunk_id] = scores.get(chunk_id, 0.0) + vector_weight / (k + rank)
-    return sorted(scores.items(), key=lambda item: (-item[1], item[0]))

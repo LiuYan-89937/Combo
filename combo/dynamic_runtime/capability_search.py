@@ -6,18 +6,23 @@ from datetime import UTC, datetime
 from hashlib import sha256
 import json
 from math import sqrt
-import re
 from threading import Lock
 from typing import Callable, Iterable
-import unicodedata
 from uuid import uuid4
 
 from combo.dynamic_runtime.capability_resolution_services import CapabilitySearchConfig
 from combo.dynamic_runtime.capability_search_contracts import (
     CapabilitySearchCandidate,
-    CapabilitySearchMatch,
+    CapabilitySearchResult,
 )
 from combo.dynamic_runtime.database import DynamicRuntimeDatabase
+from combo.dynamic_runtime.hybrid_retrieval import (
+    FusedRetrievalCandidate,
+    RankedRetrievalCandidate,
+    fuse_hybrid_rankings,
+    lexical_coverage,
+    lexical_tokens,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,7 +85,7 @@ class HybridCapabilitySearchIndex:
         *,
         requirements: tuple[str, ...],
         candidates: tuple[CapabilitySearchCandidate, ...],
-    ) -> tuple[CapabilitySearchMatch, ...]:
+    ) -> tuple[CapabilitySearchResult, ...]:
         query = " ".join(str(value or "").strip() for value in requirements if str(value or "").strip())
         if not query:
             return ()
@@ -95,11 +100,11 @@ class HybridCapabilitySearchIndex:
         lexical = self._lexical_ranking(
             generation[0],
             query,
-            candidate_ids,
+            documents={item.capability_id: item for item in documents},
             search_scope=search_scope,
             parent_capability_id=parent_capability_id,
         )
-        vector: tuple[str, ...] = ()
+        vector: tuple[RankedRetrievalCandidate, ...] = ()
         mode = generation[2]
         if mode == "hybrid":
             vector = self._vector_ranking(
@@ -112,29 +117,28 @@ class HybridCapabilitySearchIndex:
         ranked = _fuse_rankings(
             lexical=lexical,
             vector=vector,
-            documents={item.capability_id: item for item in documents},
-            query=query,
-            config=self._config,
         )
-        filtered = tuple(
-            (capability_id, score)
-            for capability_id, score in ranked
-            if score >= self._config.minimum_score
-        )[: self._config.maximum_results]
+        selected = ranked[: self._config.maximum_results]
         receipt_id = self._record_receipt(
             generation_id=generation[0],
             query=query,
             candidate_ids=candidate_ids,
-            results=filtered,
+            results=selected,
+            documents={item.capability_id: item for item in documents},
         )
+        documents_by_id = {item.capability_id: item for item in documents}
         return tuple(
-            CapabilitySearchMatch(
-                capability_id=capability_id,
-                score=score,
-                reason=f"matched {mode} capability search generation {generation[0]}",
+            CapabilitySearchResult(
+                capability_id=item.item_id,
+                retrieval_channels=item.channels,
+                matched_fields=_matched_fields(query, documents_by_id[item.item_id]),
+                reason=(
+                    "retrieved as a capability candidate through "
+                    + " and ".join(item.channels)
+                ),
                 evidence_id=f"capability-search-receipt:{receipt_id}",
             )
-            for capability_id, score in filtered
+            for item in selected
         )
 
     def refresh(self, candidates: tuple[CapabilitySearchCandidate, ...]) -> None:
@@ -381,12 +385,12 @@ class HybridCapabilitySearchIndex:
         self,
         generation_id: str,
         query: str,
-        candidate_ids: frozenset[str],
+        documents: dict[str, CapabilitySearchDocumentProjection],
         *,
         search_scope: str,
         parent_capability_id: str | None,
-    ) -> tuple[str, ...]:
-        tokens = _lexical_tokens(query)
+    ) -> tuple[RankedRetrievalCandidate, ...]:
+        tokens = lexical_tokens(query)
         if not tokens:
             return ()
         expression = " OR ".join(f'"{token.replace(chr(34), chr(34) * 2)}"' for token in tokens)
@@ -407,7 +411,14 @@ class HybridCapabilitySearchIndex:
                 """,
                 (expression, generation_id, search_scope, parent_capability_id),
             ).fetchall()
-        return tuple(str(row["capability_id"]) for row in rows if str(row["capability_id"]) in candidate_ids)
+        return tuple(
+            RankedRetrievalCandidate(
+                item_id=capability_id,
+                evidence_strength=_lexical_coverage(query, documents[capability_id]),
+            )
+            for row in rows
+            if (capability_id := str(row["capability_id"])) in documents
+        )
 
     def _vector_ranking(
         self,
@@ -417,7 +428,7 @@ class HybridCapabilitySearchIndex:
         *,
         search_scope: str,
         parent_capability_id: str | None,
-    ) -> tuple[str, ...]:
+    ) -> tuple[RankedRetrievalCandidate, ...]:
         if self._embedding_runtime is None:
             return ()
         try:
@@ -453,7 +464,13 @@ class HybridCapabilitySearchIndex:
             vector = tuple(float(value) for value in json.loads(str(row["embedding_json"])))
             scored.append((_cosine(query_vector, vector), capability_id))
         scored.sort(key=lambda item: (-item[0], item[1]))
-        return tuple(capability_id for _, capability_id in scored)
+        return tuple(
+            RankedRetrievalCandidate(
+                item_id=capability_id,
+                evidence_strength=max(0.0, similarity),
+            )
+            for similarity, capability_id in scored
+        )
 
     def _record_receipt(
         self,
@@ -461,7 +478,8 @@ class HybridCapabilitySearchIndex:
         generation_id: str,
         query: str,
         candidate_ids: frozenset[str],
-        results: tuple[tuple[str, float], ...],
+        results: tuple[FusedRetrievalCandidate, ...],
+        documents: dict[str, CapabilitySearchDocumentProjection],
     ) -> str:
         receipt_id = uuid4().hex
         with self._database.transaction() as conn:
@@ -476,7 +494,26 @@ class HybridCapabilitySearchIndex:
                     generation_id,
                     _digest(query),
                     _digest(sorted(candidate_ids)),
-                    json.dumps(results, ensure_ascii=False, separators=(",", ":")),
+                    json.dumps(
+                        [
+                            {
+                                "capability_id": item.item_id,
+                                "retrieval_channels": item.channels,
+                                "channel_evidence": [
+                                    (evidence.channel, evidence.rank, evidence.evidence_strength)
+                                    for evidence in item.evidence
+                                ],
+                                "fusion_score": item.fusion_score,
+                                "matched_fields": _matched_fields(
+                                    query,
+                                    documents[item.item_id],
+                                ),
+                            }
+                            for item in results
+                        ],
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
                     _utc_now_text(),
                 ),
             )
@@ -499,7 +536,6 @@ def _project_document(candidate: CapabilitySearchCandidate) -> CapabilitySearchD
             candidate.display_name,
             candidate.description,
             " ".join(candidate.keywords),
-            candidate.parameter_text,
         ) if value
     )
     return CapabilitySearchDocumentProjection(
@@ -513,7 +549,7 @@ def _project_document(candidate: CapabilitySearchCandidate) -> CapabilitySearchD
         keywords=candidate.keywords,
         parameter_text=candidate.parameter_text,
         embedding_text=embedding_text,
-        lexical_text=" ".join(_lexical_tokens(embedding_text)),
+        lexical_text=" ".join(lexical_tokens(embedding_text)),
     )
 
 
@@ -569,54 +605,43 @@ def _dataset_digest(documents: Iterable[CapabilitySearchDocumentProjection]) -> 
             "search_scope": item.search_scope,
             "parent_capability_id": item.parent_capability_id,
             "embedding_text": item.embedding_text,
+            "lexical_text": item.lexical_text,
         }
         for item in sorted(documents, key=lambda value: value.capability_id)
     ])
 
 
-def _fuse_rankings(*, lexical: tuple[str, ...], vector: tuple[str, ...], documents: dict[str, CapabilitySearchDocumentProjection], query: str, config: CapabilitySearchConfig) -> tuple[tuple[str, float], ...]:
-    configured = tuple(
-        (ranking, weight)
-        for ranking, weight in (
-            (lexical, config.lexical_weight),
-            (vector, config.vector_weight),
-        )
-        if ranking
+def _fuse_rankings(
+    *,
+    lexical: tuple[RankedRetrievalCandidate, ...],
+    vector: tuple[RankedRetrievalCandidate, ...],
+) -> tuple[FusedRetrievalCandidate, ...]:
+    return fuse_hybrid_rankings(
+        {
+            "lexical": lexical,
+            "semantic": vector,
+        }
     )
-    if not configured:
+
+
+def _matched_fields(query: str, document: CapabilitySearchDocumentProjection) -> tuple[str, ...]:
+    query_tokens = frozenset(lexical_tokens(query))
+    if not query_tokens:
         return ()
-    scores: dict[str, float] = {}
-    total_weight = sum(weight for _, weight in configured)
-    normalizer = 1.0 / (config.reciprocal_rank_constant + 1)
-    for ranking, configured_weight in configured:
-        weight = configured_weight / total_weight
-        for rank, capability_id in enumerate(ranking, start=1):
-            reciprocal = 1.0 / (config.reciprocal_rank_constant + rank)
-            scores[capability_id] = scores.get(capability_id, 0.0) + weight * (reciprocal / normalizer)
-    normalized_query = _normalize(query)
-    for capability_id, document in documents.items():
-        if capability_id not in scores:
-            continue
-        if normalized_query in {_normalize(document.display_name), _normalize(capability_id)}:
-            scores[capability_id] = min(1.0, scores[capability_id] + config.exact_match_bonus)
-    return tuple(sorted(scores.items(), key=lambda item: (-item[1], item[0])))
+    fields = (
+        ("display_name", document.display_name),
+        ("keywords", " ".join(document.keywords)),
+        ("description", document.description),
+    )
+    return tuple(
+        field_name
+        for field_name, value in fields
+        if query_tokens.intersection(lexical_tokens(value))
+    )
 
 
-def _lexical_tokens(value: str) -> tuple[str, ...]:
-    normalized = _normalize(value)
-    tokens: list[str] = []
-    for segment in re.findall(r"[a-z0-9]+|[\u3400-\u4dbf\u4e00-\u9fff]+", normalized):
-        if re.fullmatch(r"[\u3400-\u4dbf\u4e00-\u9fff]+", segment):
-            tokens.extend(segment[index:index + 2] for index in range(max(1, len(segment) - 1)))
-        else:
-            tokens.append(segment)
-    return tuple(dict.fromkeys(tokens))
-
-
-def _normalize(value: object) -> str:
-    normalized = unicodedata.normalize("NFKC", str(value or "")).casefold()
-    normalized = re.sub(r"[_./:\\-]+", " ", normalized)
-    return " ".join(normalized.split())
+def _lexical_coverage(query: str, document: CapabilitySearchDocumentProjection) -> float:
+    return lexical_coverage(query, document.lexical_text)
 
 
 def _validated_vector(values: Iterable[float], dimensions: int) -> tuple[float, ...]:

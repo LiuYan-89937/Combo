@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
 import json
-from math import isfinite
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import InvalidVersion, Version
 
@@ -38,27 +37,13 @@ from combo.runtime_protocol import (
 @dataclass(frozen=True, slots=True)
 class CapabilitySearchConfig:
     maximum_results: int
-    minimum_score: float
-    reciprocal_rank_constant: int
-    lexical_weight: float
-    vector_weight: float
-    exact_match_bonus: float
     receipt_retention_limit: int
 
     def __post_init__(self) -> None:
         if self.maximum_results < 1:
             raise ValueError("capability search maximum_results must be positive")
-        if self.reciprocal_rank_constant < 1:
-            raise ValueError("capability search reciprocal_rank_constant must be positive")
         if self.receipt_retention_limit < 1:
             raise ValueError("capability search receipt_retention_limit must be positive")
-        numeric = (self.minimum_score, self.lexical_weight, self.vector_weight, self.exact_match_bonus)
-        if any(not isfinite(value) or value < 0 for value in numeric):
-            raise ValueError("capability search scores and weights must be finite and non-negative")
-        if self.minimum_score > 1:
-            raise ValueError("capability search minimum_score cannot exceed 1")
-        if self.lexical_weight <= 0 or self.vector_weight <= 0:
-            raise ValueError("capability search lexical and vector weights must be positive")
 
 
 @dataclass(frozen=True, slots=True)

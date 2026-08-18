@@ -49,7 +49,7 @@ from combo.dynamic_runtime.capability_kind_adapters import (
     ToolCapabilityAdapter,
     default_capability_adapters,
 )
-from combo.dynamic_runtime.capability_search_contracts import CapabilitySearchMatch
+from combo.dynamic_runtime.capability_search_contracts import CapabilitySearchResult
 from combo.dynamic_runtime.capability_resolver import (
     CapabilityCompatibilityResolver,
     CapabilityHealthResolver,
@@ -197,7 +197,7 @@ __all__ = [
     "CapabilityToolProjectionMaterializer",
     "CapabilitySearchIndex",
     "CapabilitySearchConfig",
-    "CapabilitySearchMatch",
+    "CapabilitySearchResult",
     "ActiveCapabilityPolicyEvaluator",
     "CommandInbox",
     "CancelRuntimeCommandHandler",

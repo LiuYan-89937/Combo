@@ -84,7 +84,10 @@ class CapabilityCatalogRuntime:
                 continue
             results.append({
                 **summary,
-                "score": match.score,
+                "retrieval": {
+                    "channels": list(match.retrieval_channels),
+                    "matched_fields": list(match.matched_fields),
+                },
             })
         return results
 
@@ -118,7 +121,10 @@ class CapabilityCatalogRuntime:
                 continue
             results.append({
                 **self._mcp_entry_summary(server, entry),
-                "score": match.score,
+                "retrieval": {
+                    "channels": list(match.retrieval_channels),
+                    "matched_fields": list(match.matched_fields),
+                },
             })
         return results
 
@@ -331,6 +337,7 @@ class CapabilityCatalogRuntime:
             "name": revision.content.display_name,
             "kind": revision.kind,
             "description": revision.content.description,
+            "keywords": list(item.index_revision.document.keywords),
         }
 
     @staticmethod
@@ -339,6 +346,15 @@ class CapabilityCatalogRuntime:
             "name": str(server.raw_config.get("display_name") or server.server_id),
             "kind": "mcp_server",
             "description": str(server.raw_config.get("description") or ""),
+            "keywords": list(dict.fromkeys(
+                value
+                for value in (
+                    str(server.catalog.server_name or "").strip(),
+                    str(server.catalog.server_title or "").strip(),
+                    *(str(item or "").strip() for item in server.catalog.capabilities),
+                )
+                if value
+            )),
         }
 
     @staticmethod
@@ -350,6 +366,7 @@ class CapabilityCatalogRuntime:
             "name": entry.display_name,
             "kind": entry.kind,
             "description": entry.description,
+            "keywords": list(entry.keywords),
             "server_name": str(server.raw_config.get("display_name") or server.server_id),
         }
 

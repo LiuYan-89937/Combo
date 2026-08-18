@@ -11,7 +11,7 @@ from combo.dynamic_runtime.capability_store import ActiveCapability, CapabilityS
 from combo.dynamic_runtime.capability_definitions import ToolDefinition
 from combo.dynamic_runtime.capability_search_contracts import (
     CapabilitySearchCandidate,
-    CapabilitySearchMatch,
+    CapabilitySearchResult,
 )
 from combo.dynamic_runtime.capability_search_documents import (
     search_candidates_from_active_capabilities,
@@ -60,7 +60,7 @@ class CapabilitySearchIndex(Protocol):
         *,
         requirements: tuple[str, ...],
         candidates: tuple[CapabilitySearchCandidate, ...],
-    ) -> tuple[CapabilitySearchMatch, ...]:
+    ) -> tuple[CapabilitySearchResult, ...]:
         ...
 
 
@@ -393,7 +393,7 @@ class MainTurnCapabilityResolver:
                     evidence_ids.setdefault(match.capability_id, set()).add(match.evidence_id)
                 if select(
                     match.capability_id,
-                    score=match.score,
+                    score=None,
                     reason=f"{match.reason}; required by {requirement}",
                 ):
                     accepted_roots.add(match.capability_id)
@@ -479,25 +479,21 @@ def _ordered_requirement_matches(
     requirement: str,
     candidates: tuple[CapabilitySearchCandidate, ...],
     search_index: CapabilitySearchIndex,
-) -> tuple[CapabilitySearchMatch, ...]:
+) -> tuple[CapabilitySearchResult, ...]:
     normalized = _normalized_public_name(requirement)
     exact = tuple(
-        CapabilitySearchMatch(
+        CapabilitySearchResult(
             capability_id=item.capability_id,
-            score=1.0,
-            reason="matched exact public capability name",
+            retrieval_channels=("exact",),
+            matched_fields=("display_name",),
+            reason="retrieved by exact public capability name",
         )
         for item in candidates
         if _normalized_public_name(item.display_name) == normalized
     )
     if exact:
         return tuple(sorted(exact, key=lambda item: item.capability_id))
-    return tuple(
-        sorted(
-            search_index.search(requirements=(requirement,), candidates=candidates),
-            key=lambda item: (-item.score, item.capability_id),
-        )
-    )
+    return search_index.search(requirements=(requirement,), candidates=candidates)
 
 
 def _normalized_public_name(value: str) -> str:
