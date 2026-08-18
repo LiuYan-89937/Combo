@@ -9,10 +9,12 @@ def get_capability_tool_specs() -> list[ToolSpec]:
         ToolSpec(
             id="capability",
             description=(
-                "Search the active Tool, MCP Server, and Skill catalog on demand. Use search for the top-level "
-                "catalog. When an MCP Server is relevant, use search_mcp with that server name to search its "
-                "Tool, Resource, Resource Template, and Prompt directory. Use describe only for an exact result "
-                "before invoking or loading it. Results expose public names rather than internal runtime IDs."
+                "Discover active Tool, MCP Server, and Skill capabilities when the visible tools do not reliably "
+                "cover the request or capability availability is uncertain. Use search for the top-level catalog. "
+                "When an MCP Server is relevant, use search_mcp with that server name to search its Tool, Resource, "
+                "Resource Template, and Prompt directory. Search results are summaries only: before first use, call "
+                "describe for every exact target separately and follow its returned definition. Results expose "
+                "public names rather than internal runtime IDs."
             ),
             entrypoint="combo.tooling.builtins.capability.tool:run",
             input_schema={
@@ -30,11 +32,11 @@ def get_capability_tool_specs() -> list[ToolSpec]:
                         "type": "string",
                         "description": "一级结果中的 MCP Server 名称；用于限定二级检索或描述范围。",
                     },
-                    "name": {"type": "string", "description": "describe 使用的准确公开名称。"},
+                    "name": {"type": "string", "description": "describe 使用的准确公开名称；必须与检索结果中的目标一致。"},
                     "kind": {
                         "type": "string",
                         "enum": ["tool", "skill", "mcp_server", "mcp_tool", "mcp_resource", "mcp_resource_template", "mcp_prompt"],
-                        "description": "describe 的可选类型限定。",
+                        "description": "describe 的目标类型限定；描述 MCP 二级对象时必须与 server_name 一起提供。",
                     },
                     "kinds": {
                         "type": "array",

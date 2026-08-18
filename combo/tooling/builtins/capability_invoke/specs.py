@@ -11,10 +11,12 @@ def get_capability_invoke_tool_specs() -> list[ToolSpec]:
         ToolSpec(
             id="capability_invoke",
             description=(
-                "Invoke one exact Tool or MCP Tool returned by capability search. Search the top-level "
-                "catalog first, search inside an MCP Server when needed, and inspect the exact target schema "
-                "before calling. The selected target retains its own validation, approval, concurrency, "
-                "timeout, resource, and output policies."
+                "Invoke one exact Tool or MCP Tool returned by capability search. Do not call this gateway unless "
+                "capability describe output for this same public name, kind, and MCP Server is already present in "
+                "the current context. A search summary or another target's description is insufficient. Construct "
+                "arguments strictly from that target's input schema, including exact names, required fields, and "
+                "types; never guess parameters or probe them through validation failures. The selected target "
+                "retains its own validation, approval, concurrency, timeout, resource, and output policies."
             ),
             entrypoint="combo.tooling.builtins.capability_invoke.tool:run",
             input_schema={
@@ -30,7 +32,7 @@ def get_capability_invoke_tool_specs() -> list[ToolSpec]:
                     },
                     "arguments": {
                         "type": "object",
-                        "description": "Arguments validated by the selected target Tool schema.",
+                        "description": "Arguments copied from the exact target input schema returned by capability describe.",
                     },
                 },
                 "required": ["kind", "name", "arguments"],

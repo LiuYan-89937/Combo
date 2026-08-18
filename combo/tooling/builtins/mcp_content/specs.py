@@ -13,7 +13,9 @@ def get_mcp_content_tool_specs() -> list[ToolSpec]:
             description=(
                 "Load an exact Resource or Prompt returned by the capability catalog for an enabled MCP "
                 "server. MCP content is never injected automatically. Search the selected server's second-level "
-                "catalog first, inspect the exact result, then read its URI or expand its Prompt arguments."
+                "catalog first, then call capability describe for this exact Resource or Prompt before use. Read "
+                "only the returned URI or expand the Prompt with exactly its declared arguments; another MCP "
+                "object's description is not interchangeable."
             ),
             entrypoint="combo.tooling.builtins.mcp_content.tool:run",
             input_schema={
