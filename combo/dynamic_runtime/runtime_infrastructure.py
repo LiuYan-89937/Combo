@@ -47,6 +47,7 @@ from combo.tooling.builtins.browser.runtime import BrowserRuntime
 from combo.tooling.builtins.process.manager import ProcessManager, ProcessRuntimeResource
 from combo.tooling.builtins.process.runtime import resolve_shell_runtime
 from combo.tooling.skillhub.service import SkillHubService
+from combo.tooling.installers.service import CapabilityInstallerService
 from combo.tooling.builtins.filesystem.common import FilesystemRuntimeResource
 from combo.tooling.builtins.filesystem.file_locks import WorkspaceFileLockManager
 from combo.tooling.builtins.filesystem.staged_write import StagedWriteStore
@@ -403,6 +404,7 @@ def runtime_resource_factory(
     knowledge_store: GlobalKnowledgeStore,
     scheduler_store: WorkspaceSchedulerStore,
     skillhub_runtime: SkillHubService,
+    capability_installer_runtime: CapabilityInstallerService,
     capability_blobs: CapabilityBlobStore,
     runtime_instances,
     process_resources: RuntimeProcessResourcePool,
@@ -421,6 +423,7 @@ def runtime_resource_factory(
         "knowledge_runtime",
         "scheduler_runtime",
         "skillhub_runtime",
+        "capability_installer_runtime",
         "skill_runtime",
         "mcp_content_runtime",
         "image_generation_runtime",
@@ -466,13 +469,19 @@ def runtime_resource_factory(
                     blobs=capability_blobs,
                 )
             )
-        if resource_name in {"knowledge_runtime", "scheduler_runtime", "skillhub_runtime"}:
+        if resource_name in {
+            "knowledge_runtime",
+            "scheduler_runtime",
+            "skillhub_runtime",
+            "capability_installer_runtime",
+        }:
             if instance.request.runtime_role != "main":
                 raise PermissionError(f"{resource_name} is available only to the main runtime")
             control_plane_resources = {
                 "knowledge_runtime": knowledge_store,
                 "scheduler_runtime": scheduler_store,
                 "skillhub_runtime": skillhub_runtime,
+                "capability_installer_runtime": capability_installer_runtime,
             }
             return ProjectedRuntimeResource(value=control_plane_resources[resource_name])
         workspace_root = Path(conversations.require_workspace_root(

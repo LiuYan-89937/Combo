@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 import json
 import os
@@ -16,7 +15,7 @@ from typing import Any
 from combo.tooling.skillhub.search_query import normalize_skillhub_search_query
 from combo.tooling.skillhub.distribution import install_skillhub_cli
 from combo.dynamic_runtime.capability_definitions import SKILL_NAME_PATTERN
-from combo.dynamic_runtime.skill_source import normalize_staged_skill_package
+from combo.tooling.installers.service import SkillPackageInstaller
 
 
 SKILLHUB_COMMAND = "skillhub"
@@ -39,16 +38,17 @@ class SkillHubCommandResult:
 class SkillHubService:
     """External SkillHub source adapter publishing into the unified Skill pool."""
 
-    def __init__(self, *, skills_dir: str | Path, command: str = SKILLHUB_COMMAND) -> None:
+    def __init__(
+        self,
+        *,
+        skills_dir: str | Path,
+        package_installer: SkillPackageInstaller,
+        command: str = SKILLHUB_COMMAND,
+    ) -> None:
         self.skills_dir = Path(skills_dir).expanduser().resolve()
+        self._package_installer = package_installer
         self.command = command
-        self._publish: Callable[[], None] | None = None
         self._lock = RLock()
-
-    def bind_publisher(self, publish: Callable[[], None]) -> None:
-        if self._publish is not None:
-            raise RuntimeError("SkillHub publisher is already bound")
-        self._publish = publish
 
     def status(self) -> dict[str, Any]:
         cli_path = resolve_skillhub_cli(self.command)
@@ -110,25 +110,12 @@ class SkillHubService:
             )
             if result.returncode != 0:
                 raise RuntimeError(result.output or f"SkillHub install failed: {requested}")
-            source = normalize_staged_skill_package(_installed_skill_root(staging))
-            target = self.skills_dir / source.name
-            backup = self.skills_dir.parent / f".{source.name}.skillhub-backup"
-            if backup.exists():
-                raise RuntimeError(f"stale SkillHub installation backup exists: {backup}")
-            self.skills_dir.mkdir(parents=True, exist_ok=True)
-            _require_regular_skill_tree(source)
-            if target.exists():
-                os.replace(target, backup)
-            try:
-                shutil.copytree(source, target, symlinks=False)
-                self._publish_changes()
-            except BaseException:
-                shutil.rmtree(target, ignore_errors=True)
-                if backup.exists():
-                    os.replace(backup, target)
-                self._publish_changes()
-                raise
-            shutil.rmtree(backup, ignore_errors=True)
+            installed = self._package_installer.install_directory(
+                _installed_skill_root(staging),
+                source_name="skillhub",
+                replace_existing=True,
+            )
+            target = self.skills_dir / str(installed["installed_skill"]["skill_id"])
         return {
             **self.status(),
             "action": "install",
@@ -189,9 +176,7 @@ class SkillHubService:
         return cli_path
 
     def _publish_changes(self) -> None:
-        if self._publish is None:
-            raise RuntimeError("SkillHub capability publisher is not bound")
-        self._publish()
+        self._package_installer.publish_changes()
 
 
 def ensure_global_skillhub_cli() -> dict[str, Any]:
@@ -291,14 +276,6 @@ def _installed_skill_root(staging: Path) -> Path:
     if len(roots) != 1:
         raise RuntimeError("SkillHub installation must contain exactly one top-level SKILL.md")
     return roots[0]
-
-
-def _require_regular_skill_tree(root: Path) -> None:
-    for path in root.rglob("*"):
-        if path.is_symlink():
-            raise ValueError(f"SkillHub Skill contains a symbolic link: {path.relative_to(root)}")
-        if not path.is_file() and not path.is_dir():
-            raise ValueError(f"SkillHub Skill contains an unsupported filesystem entry: {path.relative_to(root)}")
 
 
 def _required_skillhub_reference(value: str) -> str:

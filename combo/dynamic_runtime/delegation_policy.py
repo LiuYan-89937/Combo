@@ -9,7 +9,9 @@ MAIN_RUNTIME_ONLY_CAPABILITY_IDS = frozenset(
         "tool://builtin/delegation_status",
         "tool://builtin/knowledge",
         "tool://builtin/memory",
+        "tool://builtin/mcp_installer",
         "tool://builtin/scheduler",
+        "tool://builtin/skill_installer",
         "tool://builtin/skillhub",
     }
 )

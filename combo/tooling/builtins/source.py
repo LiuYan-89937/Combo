@@ -23,11 +23,13 @@ from combo.tooling.builtins.filesystem.specs import get_filesystem_tool_specs
 from combo.tooling.builtins.knowledge.specs import get_knowledge_tool_specs
 from combo.tooling.builtins.image_generation.specs import get_image_generation_tool_specs
 from combo.tooling.builtins.memory.specs import get_memory_tool_specs
+from combo.tooling.builtins.mcp_installer.specs import get_mcp_installer_tool_specs
 from combo.tooling.builtins.mcp_content.specs import get_mcp_content_tool_specs
 from combo.tooling.builtins.process.specs import get_process_tool_specs
 from combo.tooling.builtins.scheduler.specs import get_scheduler_tool_specs
 from combo.tooling.builtins.skillhub.specs import get_skillhub_tool_specs
 from combo.tooling.builtins.skill.specs import get_skill_tool_specs
+from combo.tooling.builtins.skill_installer.specs import get_skill_installer_tool_specs
 from combo.tooling.builtins.tool_output.specs import get_tool_output_tool_specs
 from combo.tooling.builtins.presentations import presentations_for_builtin
 from combo.tooling.output_store import TOOL_OUTPUT_STORE_RESOURCE
@@ -73,6 +75,8 @@ class BuiltinToolCapabilitySource:
             *get_knowledge_tool_specs(),
             *get_scheduler_tool_specs(),
             *get_skillhub_tool_specs(),
+            *get_skill_installer_tool_specs(),
+            *get_mcp_installer_tool_specs(),
             *get_skill_tool_specs(),
             *get_browser_tool_specs(),
             *(get_image_generation_tool_specs() if self._config.image_generation_enabled else ()),

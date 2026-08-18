@@ -123,6 +123,7 @@ from combo.tooling.builtins.source import (
 )
 from combo.tooling.builtins.browser.runtime import BrowserRuntime, BrowserRuntimeConfig
 from combo.tooling.skillhub.service import SkillHubService
+from combo.tooling.installers.service import CapabilityInstallerService, SkillPackageInstaller
 from combo.dynamic_runtime.mcp_runtime import MCPRuntimePool
 from combo.dynamic_runtime.mcp_gateway import (
     MCPGateway,
@@ -300,8 +301,17 @@ class RuntimeBackend:
         self.mcp_runtime.on_catalog_changed(self._mcp_catalog_changed)
         self._advance_startup_phase("mcp_registry")
         self.mcp_gateway.synchronize()
+        self.skill_package_installer = SkillPackageInstaller(
+            skills_dir=config.skill_source_roots[0].path,
+        )
         self.skillhub_runtime = SkillHubService(
             skills_dir=config.skill_source_roots[0].path,
+            package_installer=self.skill_package_installer,
+        )
+        self.capability_installer_runtime = CapabilityInstallerService(
+            skill_packages=self.skill_package_installer,
+            mcp_gateway=self.mcp_gateway,
+            refresh_capability_search=self._refresh_capability_search_if_ready,
         )
         self._tool_package_lock = RLock()
         self._skill_package_lock = RLock()
@@ -2023,6 +2033,7 @@ class RuntimeBackend:
                         knowledge_store=stores.knowledge,
                         scheduler_store=stores.scheduler,
                         skillhub_runtime=self.skillhub_runtime,
+                        capability_installer_runtime=self.capability_installer_runtime,
                         capability_blobs=capability_blobs,
                         runtime_instances=stores.runtime_instances,
                         process_resources=self.process_resources,
@@ -2041,6 +2052,7 @@ class RuntimeBackend:
                         "knowledge_runtime",
                         "scheduler_runtime",
                         "skillhub_runtime",
+                        "capability_installer_runtime",
                         "skill_runtime",
                         "mcp_content_runtime",
                         "image_generation_runtime",
@@ -2143,11 +2155,12 @@ class RuntimeBackend:
             model_selector=self.delegated_model_selector,
             capability_resolver=application.capability_resolver,
         )
-        self.skillhub_runtime.bind_publisher(
-            lambda: self._synchronize_skill_capabilities(
+        self.skill_package_installer.bind(
+            validator=self._validate_staged_skill_root,
+            publisher=lambda: self._synchronize_skill_capabilities(
                 application.stores,
                 _capability_adapters(),
-            )
+            ),
         )
         self._advance_startup_phase("runtime_application_ready")
         return application
@@ -2225,6 +2238,25 @@ class RuntimeBackend:
                 namespace=SKILL_DRAFT_CACHE_NAMESPACE,
             ),
         )
+
+    def _validate_staged_skill_root(self, root: Path) -> None:
+        configured = self.config.skill_source_roots[0]
+        source = FileSystemSkillCapabilitySource(
+            config=FileSystemSkillSourceConfig(
+                roots=(SkillSourceRoot(
+                    root_id=configured.root_id,
+                    path=root,
+                    trust_level=configured.trust_level,
+                ),),
+                publisher_principal_id=self.config.capability_publisher_principal_id,
+                source_prefix=self.config.skill_capability_source_prefix,
+                maximum_file_bytes=self.config.maximum_skill_file_bytes,
+                maximum_skill_bytes=self.config.maximum_skill_bytes,
+            ),
+            blobs=CapabilityBlobStore(self.config.capability_blob_root),
+        )
+        if len(source.drafts()) != 1:
+            raise ValueError("Skill package must contain exactly one Skill")
 
     def _tool_capability_source(
         self,

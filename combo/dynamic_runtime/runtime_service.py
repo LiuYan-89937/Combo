@@ -1474,15 +1474,17 @@ def _run_graph_with_control(
                     graph_input,
                     config=config,
                     stream_mode=["values", "custom"],
-                    durability="sync",
+                    durability="exit",
                 ):
                     if mode == "values" and isinstance(chunk, dict):
                         outcome["raw"] = chunk
-                        control.acknowledge_checkpointed_inputs(
-                            list(chunk.get("messages") or [])
-                        )
                     elif mode == "custom" and on_observation is not None:
                         on_observation(chunk)
+                final_state = outcome.get("raw")
+                if isinstance(final_state, dict):
+                    control.acknowledge_checkpointed_inputs(
+                        list(final_state.get("messages") or [])
+                    )
         except BaseException as exc:
             control.restore_uncheckpointed_inputs()
             outcome["error"] = exc

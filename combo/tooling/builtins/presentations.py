@@ -70,6 +70,14 @@ BUILTIN_TOOL_COPY: dict[str, BuiltinToolCopy] = {
     "knowledge": _copy("搜索、查看、添加和移除共享知识库来源。回答内部文档问题前先搜索。仅主 Agent 可用。", "Search, inspect, add, and remove shared knowledge sources. Search before answering from internal documents. Available only to the main Agent."),
     "scheduler": _copy("创建和管理绑定当前主 Agent 工作区的定时任务。仅主 Agent 可用。", "Create and manage scheduled tasks bound to the main Agent's current workspace. Available only to the main Agent."),
     "skillhub": _copy("在 SkillHub 中搜索、安装或移除 Skill，并同步到统一 Skill 池。仅主 Agent 可用。", "Search, install, or remove Skills through SkillHub and synchronize them into the unified Skill pool. Available only to the main Agent."),
+    "skill_installer": _copy(
+        "安装一个已经取得全部文件的完整 Skill 包。示例：用户要求安装网页中的 Skill，并且你已经取得 SKILL.md 与 references/guide.md，此时把两个文件都放入 package.files 后调用。反例：只有仓库 URL、尚未读取包内容时不要调用；应先获取并整理完整文件，禁止猜测缺失内容。仅主 Agent 可用。",
+        "Install one complete Skill package after obtaining all of its files. Example: the user asks to install a Skill shown on a web page and you have collected SKILL.md plus references/guide.md; call with both files in package.files. Counterexample: when only a repository URL is known and its files have not been read, do not call yet; retrieve and assemble the complete package first. Never invent missing content. Available only to the main Agent.",
+    ),
+    "mcp_installer": _copy(
+        "从权威来源取得完整配置后安装一个 MCP Server，config 接受配置对象或 JSON/YAML 文本，每次调用只提交一个 Server。示例：官方文档给出 {\"mcpServers\":{\"amap\":{\"url\":\"https://example.com/mcp\"}}}，将整份配置传入。反例：只知道服务名称时，不要猜 command、URL、请求头或环境变量；应先找到官方可执行配置。仅主 Agent 可用。",
+        "Install one MCP server after obtaining a complete configuration from an authoritative source. config accepts a decoded object or JSON/YAML text, with one server per call. Example: official docs provide {\"mcpServers\":{\"amap\":{\"url\":\"https://example.com/mcp\"}}}; pass the whole document. Counterexample: when only a service name is known, do not guess command, URL, headers, or environment values; find the official executable configuration first. Available only to the main Agent.",
+    ),
     "skill": _copy("按需加载当前运行时可用的 Skill。先 describe，再加载 SKILL.md；只读取 describe 或 load 返回目录中列出的资源。", "Load a Skill available to the current runtime on demand. Describe it first, then load SKILL.md, and read only resources listed by describe or load."),
     "browser_open": _copy("在隔离浏览器中打开 HTTP 或 HTTPS 地址。默认复用活动页面；仅在确实需要并行页面时创建新标签，并返回后续操作使用的 page_id。", "Open an HTTP or HTTPS URL in the isolated browser. Reuse the active page by default; create a new tab only when simultaneous pages are intentional. Returns a page_id for later operations."),
     "browser_snapshot": _copy("读取当前页面的结构化文本和可选链接。页面状态不确定时先使用此工具。", "Read structured text and optional links from the current page. Use this first when page state is uncertain."),
