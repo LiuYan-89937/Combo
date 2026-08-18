@@ -27,7 +27,7 @@
               <MessageItem
                 :message="item.message"
                 :messages="item.messages"
-                :streaming="isMessageStreaming(item.message.streamId)"
+                :streaming="isTimelineItemStreaming(item)"
                 quoteable
                 :workspace-context="messageWorkspaceContext"
                 :git-changes="gitChangesStore.changesFor(item.message.metadata?.request_id)"
@@ -225,7 +225,7 @@ const {
   hasActiveStreams,
   hasApprovalRequests,
   hasUserQuestionInterrupt,
-  isMessageStreaming,
+  isTimelineItemStreaming,
   timelineItems,
 } = useConversationMessageProjection()
 

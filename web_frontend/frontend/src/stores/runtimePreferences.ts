@@ -1,7 +1,12 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { REASONING_INTENSITY_MAX } from '@/utils/reasoning'
-import { runtimePreferencesApi, type RuntimePreferences, type RuntimePreferencesPatch } from '@/api/runtimePreferences'
+import {
+  runtimePreferencesApi,
+  type ContextCompressionDetail,
+  type RuntimePreferences,
+  type RuntimePreferencesPatch,
+} from '@/api/runtimePreferences'
 import type { ApprovalMode, ExecutionPreference } from '@/api/dynamicRuntime'
 
 export const DEFAULT_RUNTIME_REQUEST_TIMEOUT_SECONDS = 300
@@ -9,6 +14,8 @@ export const DEFAULT_BROWSER_OPERATION_TIMEOUT_MS = 30_000
 export const DEFAULT_BROWSER_NAVIGATION_TIMEOUT_MS = 45_000
 export const DEFAULT_RUNTIME_MAX_RETRIES = 5
 export const DEFAULT_MAX_PARALLEL_SUB_AGENTS = 5
+export const DEFAULT_CONTEXT_COMPRESSION_DETAIL: ContextCompressionDetail = 'standard'
+export const DEFAULT_CONTEXT_COMPRESSION_KEEP_RECENT_MESSAGES = 12
 export const DEFAULT_APPROVAL_MODE: ApprovalMode = 'ask'
 export const DEFAULT_EXECUTION_PREFERENCE: ExecutionPreference = 'react'
 export const DEFAULT_MEMORY_WRITE_INTERVAL_TURNS = 3
@@ -37,6 +44,8 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
   const browserNavigationTimeoutMs = ref(DEFAULT_BROWSER_NAVIGATION_TIMEOUT_MS)
   const maxRetries = ref(readStoredInteger(STORAGE_KEYS.maxRetries, DEFAULT_RUNTIME_MAX_RETRIES, 0))
   const maxParallelSubAgents = ref(readStoredInteger(STORAGE_KEYS.maxParallelSubAgents, DEFAULT_MAX_PARALLEL_SUB_AGENTS, 1))
+  const contextCompressionDetail = ref<ContextCompressionDetail>(DEFAULT_CONTEXT_COMPRESSION_DETAIL)
+  const contextCompressionKeepRecentMessages = ref(DEFAULT_CONTEXT_COMPRESSION_KEEP_RECENT_MESSAGES)
   const approvalMode = ref<ApprovalMode>(readStoredApprovalMode())
   const executionPreference = ref<ExecutionPreference>(readStoredExecutionPreference())
   const forceCollaboration = ref(readStoredBoolean(STORAGE_KEYS.forceCollaboration))
@@ -91,6 +100,18 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     maxParallelSubAgents.value = Math.max(1, Math.round(value))
     writeStoredValue(STORAGE_KEYS.maxParallelSubAgents, String(maxParallelSubAgents.value))
     enqueue({ max_parallel_sub_agents: maxParallelSubAgents.value })
+  }
+
+  function setContextCompressionKeepRecentMessages(value: number): void {
+    contextCompressionKeepRecentMessages.value = Math.max(0, Math.min(128, Math.round(value)))
+    enqueue({
+      context_compression_keep_recent_messages: contextCompressionKeepRecentMessages.value,
+    })
+  }
+
+  function setContextCompressionDetail(value: ContextCompressionDetail): void {
+    contextCompressionDetail.value = value
+    enqueue({ context_compression_detail: value })
   }
 
   function setApprovalMode(value: ApprovalMode): void {
@@ -185,6 +206,8 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     browserNavigationTimeoutMs.value = value.browser_navigation_timeout_ms
     maxRetries.value = value.max_retries
     maxParallelSubAgents.value = value.max_parallel_sub_agents
+    contextCompressionDetail.value = value.context_compression_detail
+    contextCompressionKeepRecentMessages.value = value.context_compression_keep_recent_messages
     memoryAutoWriteEnabled.value = value.memory_auto_write_enabled
     memoryWriteIntervalTurns.value = value.memory_write_interval_turns
     memoryAgentWriteEnabled.value = value.memory_agent_write_enabled
@@ -209,6 +232,8 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     browserNavigationTimeoutMs,
     maxRetries,
     maxParallelSubAgents,
+    contextCompressionDetail,
+    contextCompressionKeepRecentMessages,
     approvalMode,
     executionPreference,
     forceCollaboration,
@@ -226,6 +251,8 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     setBrowserNavigationTimeoutMs,
     setMaxRetries,
     setMaxParallelSubAgents,
+    setContextCompressionDetail,
+    setContextCompressionKeepRecentMessages,
     setApprovalMode,
     setExecutionPreference,
     setForceCollaboration,

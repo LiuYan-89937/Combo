@@ -290,6 +290,7 @@ def _configure_cors(application: FastAPI, origins: tuple[str, ...]) -> None:
             "X-Combo-Protocol",
             "X-Combo-Schema",
             "X-Combo-Timezone",
+            "X-Combo-Locale",
         ],
     )
 

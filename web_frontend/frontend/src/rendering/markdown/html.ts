@@ -10,6 +10,7 @@ import rehypeSanitize from 'rehype-sanitize'
 import rehypeStringify from 'rehype-stringify'
 import { rehypeMermaid } from './plugins/rehypeMermaid'
 import { rehypeImageSources } from './plugins/rehypeImageSources'
+import { rehypeCodeBlockControls } from './plugins/rehypeCodeBlockControls'
 import { markdownSanitizeSchema } from './sanitize'
 import { prepareMarkdownSource } from './source'
 import type { MarkdownRenderOptions, MarkdownRenderResult } from './types'
@@ -27,6 +28,7 @@ const processor = unified()
   .use(rehypeMermaid)
   .use(rehypeKatex)
   .use(rehypeHighlight, { detect: false })
+  .use(rehypeCodeBlockControls)
   .use(rehypeSanitize, markdownSanitizeSchema())
   .use(rehypeStringify)
 
@@ -67,7 +69,7 @@ export function escapeHtml(text: string): string {
 function sanitizeMarkdownHtml(html: string): string {
   return DOMPurify.sanitize(html, {
     USE_PROFILES: { html: true, svg: true, mathMl: true },
-    ADD_ATTR: ['target', 'rel', 'class'],
+    ADD_ATTR: ['target', 'rel', 'class', 'type', 'title', 'aria-label', 'aria-hidden', 'data-markdown-copy'],
     ALLOWED_URI_REGEXP: SAFE_MARKDOWN_URI,
   })
 }

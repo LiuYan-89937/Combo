@@ -204,7 +204,7 @@ function toolArgumentPresentation(
     return { summary: '', summaryKey: 'tool.location.workspaceRoot' }
   }
   if (toolName === 'shell') return summary(compact(args.command))
-  if (toolName === 'grep') return summary(compact(args.pattern, args.base_path))
+  if (toolName === 'grep') return summary(compact(args.pattern, args.path || args.base_path))
   if (toolName === 'glob') return summary(compact(args.pattern, args.base_path))
   if (toolName === 'edit') {
     const operations = Array.isArray(args.operations) ? args.operations : []

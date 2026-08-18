@@ -105,6 +105,8 @@
         :autosize="{ minRows: rows, maxRows: maxRows }"
         @update:value="handleTextUpdate"
         @keydown="handleKeyDown"
+        @compositionstart="handleCompositionStart"
+        @compositionend="handleCompositionEnd"
         @paste="handlePaste"
       />
     </div>
@@ -405,6 +407,9 @@ const attachmentFileInputRef = ref<HTMLInputElement | null>(null)
 const inputText = ref('')
 const attachments = ref<RuntimeAttachmentInput[]>([])
 const approvalPopoverVisible = ref(false)
+const inputMethodComposing = ref(false)
+let suppressCompositionConfirmEnter = false
+let compositionFrame: number | undefined
 const normalizedReferenceScope = computed(() => String(props.referenceScope || '').trim() || 'global')
 const normalizedDraftScope = computed(() => (
   String(props.draftScope || '').trim() || normalizedReferenceScope.value
@@ -461,9 +466,36 @@ const canUsePrimaryAction = computed(() => (
 ))
 
 function handleKeyDown(e: KeyboardEvent) {
-  if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return
+  if (e.key !== 'Enter' || e.shiftKey) return
+  if (inputMethodComposing.value || e.isComposing || e.keyCode === 229) return
+  if (suppressCompositionConfirmEnter) {
+    e.preventDefault()
+    return
+  }
   e.preventDefault()
   handleSend()
+}
+
+function handleCompositionStart() {
+  inputMethodComposing.value = true
+  suppressCompositionConfirmEnter = false
+  cancelCompositionFrame()
+}
+
+function handleCompositionEnd() {
+  inputMethodComposing.value = false
+  suppressCompositionConfirmEnter = true
+  cancelCompositionFrame()
+  compositionFrame = window.requestAnimationFrame(() => {
+    suppressCompositionConfirmEnter = false
+    compositionFrame = undefined
+  })
+}
+
+function cancelCompositionFrame() {
+  if (compositionFrame === undefined) return
+  window.cancelAnimationFrame(compositionFrame)
+  compositionFrame = undefined
 }
 
 function handleTextUpdate(value: string) {
@@ -706,6 +738,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  cancelCompositionFrame()
   saveConversationDraft(normalizedDraftScope.value, inputText.value)
 })
 

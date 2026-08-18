@@ -168,7 +168,7 @@ const currentTitle = computed(() => localize(interaction.value?.title) || status
 const currentDescription = computed(() => (
   interaction.value?.message
   || (projectedTask.value.status === 'failed' ? projectedTask.value.error?.message : '')
-  || projectedTask.value.activity_summary
+  || backgroundTaskActivityText(projectedTask.value.activity_summary, t)
   || view.value.latestSummary
   || t(`backgroundTask.description.${projectedTask.value.status}` as any)
 ))

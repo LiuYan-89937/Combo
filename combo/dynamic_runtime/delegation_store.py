@@ -753,7 +753,21 @@ def _delegated_observation_activities(chunk: Any) -> tuple[dict[str, Any], ...]:
                 }
             )
         return tuple(activities)
-    if chunk_type != "node_event" or str(payload.get("event_type") or "") != "runtime_activity_updated":
+    if chunk_type != "node_event":
+        return ()
+    event_type = str(payload.get("event_type") or "")
+    if event_type == "model_call_started":
+        return (
+            {
+                "summary": "thinking",
+                "status": "active",
+                "source": "model",
+                "source_event_id": str(payload.get("event_id") or "") or None,
+                "created_at": str(payload.get("created_at") or "") or utc_now_text(),
+                "details": _json_record(payload.get("payload") if isinstance(payload.get("payload"), dict) else {}),
+            },
+        )
+    if event_type != "runtime_activity_updated":
         return ()
     body = payload.get("payload")
     details = _json_record(body if isinstance(body, dict) else {})

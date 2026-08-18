@@ -284,7 +284,11 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
             "type": "object",
             "properties": {
                 "pattern": {"type": "string", "description": "搜索文本或正则。"},
-                "base_path": {"type": "string", "default": ".", "description": _BASE_PATH_DESCRIPTION},
+                "path": {
+                    "type": "string",
+                    "default": ".",
+                    "description": f"要搜索的文件或目录路径。{_PATH_BOUNDARY_DESCRIPTION}",
+                },
                 "include": {
                     "oneOf": [
                         {"type": "string"},

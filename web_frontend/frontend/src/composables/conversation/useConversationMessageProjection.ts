@@ -119,6 +119,10 @@ export function useConversationMessageProjection() {
     return Boolean(stream?.active && requestOwnsActivePresentation(stream.requestId))
   }
 
+  function isTimelineItemStreaming(item: ConversationTimelineItem): boolean {
+    return item.messages.some(message => isMessageStreaming(message.streamId))
+  }
+
   function requestOwnsActivePresentation(requestId?: string | null): boolean {
     if (!runtimeStore.hasActiveRun || !runtimeStore.activeRequestId) return false
     if (requestId && requestId !== runtimeStore.activeRequestId) return false
@@ -137,6 +141,7 @@ export function useConversationMessageProjection() {
     hasApprovalRequests,
     hasUserQuestionInterrupt,
     isMessageStreaming,
+    isTimelineItemStreaming,
     currentActivity,
     timelineItems,
     toolActivityHint,

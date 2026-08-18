@@ -9,7 +9,7 @@ import logging
 import threading
 from typing import Any, Literal, Protocol
 
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, messages_from_dict, messages_to_dict
 from langgraph.types import Command
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -17,18 +17,24 @@ from combo.dynamic_runtime.conversation_projection import (
     conversation_to_graph_messages,
     graph_messages_to_conversation,
 )
+from combo.dynamic_runtime.context_snapshot_store import (
+    ConversationContextSnapshot,
+    ConversationContextSnapshotStore,
+)
 from combo.dynamic_runtime.execution_commits import (
     RuntimeCancellationRequested,
     RuntimeExecutionCommitStore,
 )
 from combo.dynamic_runtime.delegation_store import DelegatedTaskClaim, DelegationStore
 from combo.dynamic_runtime.model_service import RuntimeModelResolver, register_runtime_model_handle
+from combo.dynamic_runtime.policy_repositories import UserRuntimePolicyStore
 from combo.dynamic_runtime.repositories import ConversationStore, RuntimeInstanceStore
 from combo.dynamic_runtime.run_control import RuntimeRunControl, RuntimeRunControlRegistry
 from combo.dynamic_runtime.services import DynamicRuntimeServiceSet
 from combo.dynamic_runtime.snapshot_tool_registry import SnapshotToolRegistryLease
 from combo.runtime_kernel.capability_state import bind_capability_snapshot
 from combo.runtime_kernel.state import (
+    ContextState,
     ConversationState,
     ExecutionState,
     RunState,
@@ -53,6 +59,10 @@ from combo.runtime_protocol.messages import (
     close_incomplete_tool_call_messages,
     incomplete_tool_call_ids,
 )
+from combo.context_system.compression import is_context_summary_message, maybe_compress_messages
+from combo.context_system.token_counter import context_window_payload
+from combo.context_system.token_estimation import estimate_messages_tokens
+from combo.runtime_i18n import RuntimeLocale
 from combo.tooling.execution_context import (
     runtime_run_control_context,
     tool_output_session_context,
@@ -69,6 +79,7 @@ class RuntimeLaunchContext(BaseModel):
 
     system_prompt: str
     temporal_context: str
+    locale: RuntimeLocale = "zh-CN"
     capability_instructions: str = ""
     turn_directives: tuple[str, ...] = ()
     workspace_root_alias: str = "/workdir"
@@ -115,7 +126,9 @@ class DynamicRuntimeService:
         *,
         service_set: DynamicRuntimeServiceSet,
         runtime_instances: RuntimeInstanceStore,
+        runtime_policies: UserRuntimePolicyStore,
         conversations: ConversationStore,
+        context_snapshots: ConversationContextSnapshotStore,
         execution_commits: RuntimeExecutionCommitStore,
         run_controls: RuntimeRunControlRegistry,
         model_resolver: RuntimeModelResolver,
@@ -125,7 +138,9 @@ class DynamicRuntimeService:
     ) -> None:
         self._service_set = service_set
         self._runtime_instances = runtime_instances
+        self._runtime_policies = runtime_policies
         self._conversations = conversations
+        self._context_snapshots = context_snapshots
         self._execution_commits = execution_commits
         self._run_controls = run_controls
         self._model_resolver = model_resolver
@@ -193,7 +208,10 @@ class DynamicRuntimeService:
         raw_runtime = values.get("runtime") if isinstance(values, dict) else None
         if not isinstance(raw_runtime, dict):
             return None
-        context_window = _latest_context_window(RuntimeState.model_validate(raw_runtime))
+        context_window = _latest_context_window(
+            RuntimeState.model_validate(raw_runtime),
+            graph_messages=list(values.get("messages") or []),
+        )
         if context_window is None:
             return None
         limits = self._model_resolver.context_limits_for_snapshot(
@@ -206,6 +224,133 @@ class DynamicRuntimeService:
                 for key, value in context_window.items()
                 if value is not None
             },
+        }
+
+    def compress_main_context(
+        self,
+        *,
+        session_id: str,
+        principal_id: str,
+    ) -> dict[str, Any]:
+        identity = self._conversations.require_identity(session_id)
+        if identity.principal_id != principal_id:
+            raise PermissionError("conversation principal does not own the context snapshot")
+        through_task_revision = self._conversations.compactable_task_revision(session_id)
+        if through_task_revision is None:
+            return {"status": "skipped", "reason": "no_completed_turns"}
+
+        latest_runtime = self._runtime_instances.latest_completed_main(
+            session_id=session_id,
+            principal_id=principal_id,
+        )
+        if latest_runtime is None:
+            return {"status": "skipped", "reason": "no_completed_runtime"}
+        model_role = latest_runtime.request.policy_snapshot.model.operation
+
+        try:
+            current_policy = self._runtime_policies.require_for_principal(principal_id)
+            compression_detail = current_policy.context_compression_detail
+            keep_recent_messages = current_policy.context_compression_keep_recent_messages
+        except LookupError:
+            compression_detail = latest_runtime.request.policy_snapshot.context_compression_detail
+            keep_recent_messages = (
+                latest_runtime.request.policy_snapshot.context_compression_keep_recent_messages
+            )
+
+        graph_messages = self._session_context_messages(
+            session_id=session_id,
+            through_task_revision=through_task_revision,
+        )
+        if incomplete_tool_call_ids(graph_messages):
+            raise RuntimeError("conversation context contains incomplete tool call history")
+
+        limits = self._model_resolver.context_limits_for_snapshot(
+            latest_runtime.request.policy_snapshot.model
+        )
+        latest_snapshot = self._context_snapshots.latest(session_id)
+        if (
+            latest_snapshot is not None
+            and latest_snapshot.through_task_revision == through_task_revision
+            and sum(not is_context_summary_message(message) for message in graph_messages)
+            <= keep_recent_messages
+        ):
+            message_tokens = estimate_messages_tokens(graph_messages)
+            window = _manual_compression_context_window(
+                messages=graph_messages,
+                limits=limits,
+                model_role=model_role,
+            )
+            snapshot_updated_at = latest_snapshot.created_at
+            if _non_negative_int(latest_snapshot.context_window.get("token_count")) != message_tokens:
+                corrected_snapshot = ConversationContextSnapshot(
+                    session_id=session_id,
+                    principal_id=principal_id,
+                    through_task_revision=through_task_revision,
+                    graph_messages=tuple(messages_to_dict(graph_messages)),
+                    context_window=window,
+                    compression_report={
+                        "status": "skipped",
+                        "reason": "no_compressible_history",
+                        "original_message_count": len(graph_messages),
+                        "compressed_message_count": len(graph_messages),
+                        "compacted_message_count": 0,
+                        "token_estimate_before": message_tokens,
+                        "token_estimate_after": message_tokens,
+                    },
+                )
+                self._context_snapshots.append(corrected_snapshot)
+                snapshot_updated_at = corrected_snapshot.created_at
+            return {
+                "status": "skipped",
+                "reason": "no_compressible_history",
+                "original_message_count": len(graph_messages),
+                "compressed_message_count": len(graph_messages),
+                "compacted_message_count": 0,
+                "token_estimate_before": message_tokens,
+                "token_estimate_after": message_tokens,
+                "context_window": {**window, "updated_at": snapshot_updated_at},
+            }
+
+        context_runtime = self._service_set.services.context_system
+        compression_policy = context_runtime.config.default_policy.compression.model_copy(
+            update={
+                "enabled": True,
+                "trigger_token_threshold": limits.get("compression_threshold_tokens"),
+                "detail": compression_detail,
+                "keep_recent_messages": keep_recent_messages,
+            }
+        )
+
+        compressed_messages, report = maybe_compress_messages(
+            messages=graph_messages,
+            policy=compression_policy,
+            node_id="manual_context_compression",
+            force=True,
+        )
+        report_payload = report.model_dump(mode="json")
+        if report.status == "failed":
+            raise RuntimeError(report.error or "manual context compression failed")
+        if report.status != "completed":
+            return {**report_payload, "reason": "no_compressible_history"}
+
+        window = _manual_compression_context_window(
+            messages=compressed_messages,
+            limits=limits,
+            model_role=model_role,
+        )
+        snapshot = ConversationContextSnapshot(
+            session_id=session_id,
+            principal_id=principal_id,
+            through_task_revision=through_task_revision,
+            graph_messages=tuple(messages_to_dict(compressed_messages)),
+            context_window=window,
+            compression_report=report_payload,
+        )
+        self._context_snapshots.append(snapshot)
+        return {
+            **report_payload,
+            "snapshot_id": snapshot.snapshot_id,
+            "context_window": {**window, "updated_at": snapshot.created_at},
         }
 
     def _run(
@@ -279,12 +424,18 @@ class DynamicRuntimeService:
                 }
             }
             if resume_payload is None:
-                graph_messages = conversation_to_graph_messages(canonical_messages)
+                graph_messages = self._session_context_messages(
+                    session_id=claimed_instance.request.session_id,
+                    through_task_revision=claimed_instance.request.task_revision,
+                    canonical_messages=canonical_messages,
+                    runtime_role=claimed_instance.request.runtime_role,
+                )
                 state = _initial_state(
                     instance=claimed_instance,
                     snapshot=snapshot,
                     current_user_message=current_user_message,
                     launch_context=launch_context,
+                    inherited_context_window=self._inherited_context_window(claimed_instance),
                 )
                 graph_input: Any = {
                     "messages": graph_messages,
@@ -480,6 +631,56 @@ class DynamicRuntimeService:
                 release_runtime_leases()
             self._run_controls.release(claimed_instance.runtime_instance_id, run_control)
 
+    def _inherited_context_window(self, instance: RuntimeInstance) -> dict[str, Any] | None:
+        if instance.request.runtime_role != "main":
+            return None
+        context_snapshot = self._context_snapshots.latest(instance.request.session_id)
+        if (
+            context_snapshot is not None
+            and context_snapshot.through_task_revision < instance.request.task_revision
+        ):
+            return dict(context_snapshot.context_window)
+        previous = self._runtime_instances.latest_completed_main_before(
+            session_id=instance.request.session_id,
+            principal_id=instance.request.principal_id,
+            created_at=instance.created_at,
+        )
+        if previous is None:
+            return None
+        try:
+            return self.current_context_window(previous.runtime_instance_id)
+        except (LookupError, RuntimeError, ValueError):
+            return None
+
+    def _session_context_messages(
+        self,
+        *,
+        session_id: str,
+        through_task_revision: int,
+        canonical_messages: list[ConversationMessage] | None = None,
+        runtime_role: str = "main",
+    ) -> list[BaseMessage]:
+        if runtime_role != "main":
+            return conversation_to_graph_messages(list(canonical_messages or []))
+        snapshot = self._context_snapshots.latest(session_id)
+        if snapshot is None or snapshot.through_task_revision > through_task_revision:
+            source_messages = canonical_messages
+            if source_messages is None:
+                source_messages = self._conversations.messages_through_task_revision(
+                    session_id=session_id,
+                    task_revision=through_task_revision,
+                )
+            return conversation_to_graph_messages(source_messages)
+        delta = self._conversations.messages_between_task_revisions(
+            session_id=session_id,
+            after_task_revision=snapshot.through_task_revision,
+            through_task_revision=through_task_revision,
+        )
+        return [
+            *messages_from_dict(list(snapshot.graph_messages)),
+            *conversation_to_graph_messages(delta),
+        ]
+
     def _runtime_input(
         self,
         instance: RuntimeInstance,
@@ -516,6 +717,7 @@ def _initial_state(
     snapshot: CapabilitySnapshot,
     current_user_message: ConversationMessage,
     launch_context: RuntimeLaunchContext,
+    inherited_context_window: dict[str, Any] | None = None,
 ) -> RuntimeState:
     state = RuntimeState(
         run=RunState(
@@ -528,6 +730,7 @@ def _initial_state(
         runtime_config=RuntimeConfigState(
             system_prompt=launch_context.system_prompt,
             temporal_context=launch_context.temporal_context,
+            locale=launch_context.locale,
             capability_instructions=launch_context.capability_instructions,
             turn_directives=list(launch_context.turn_directives),
             attachments=[dict(item) for item in launch_context.attachments],
@@ -538,6 +741,9 @@ def _initial_state(
         conversation=ConversationState(
             current_user_input=_message_text(current_user_message),
             current_user_input_id=current_user_message.message_id,
+        ),
+        context=ContextState(
+            token_budget=_inherited_token_budget(inherited_context_window),
         ),
         execution=ExecutionState(
             max_retries=instance.request.policy_snapshot.max_model_attempts - 1,
@@ -550,6 +756,57 @@ def _initial_state(
         snapshot,
         runtime_instance_id=instance.runtime_instance_id,
     )
+
+
+def _inherited_token_budget(context_window: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(context_window, dict):
+        return {}
+    token_count = context_window.get("token_count")
+    if isinstance(token_count, bool) or not isinstance(token_count, (int, float)):
+        return {}
+    normalized_count = int(token_count)
+    if normalized_count < 0:
+        return {}
+    method = str(context_window.get("token_count_method") or "provider_usage")
+    source = str(context_window.get("source") or f"model_operation.{method}")
+    model_role = context_window.get("model_role")
+    node_id = context_window.get("node_id")
+    return {
+        "token_count": normalized_count,
+        "token_count_method": method,
+        "source": source,
+        "effective_context_tokens": normalized_count,
+        "effective_context_source": method,
+        "last_provider_context_tokens_after_call": normalized_count,
+        "last_provider_token_count_method": method,
+        "last_provider_model_role": model_role,
+        "last_provider_node_id": node_id,
+        "last_provider_message_tokens_after_call": context_window.get(
+            "current_message_token_estimate"
+        ),
+        "context_window_tokens": context_window.get("context_window_tokens"),
+        "compression_threshold_tokens": context_window.get("compression_threshold_tokens"),
+    }
+
+
+def _manual_compression_context_window(
+    *,
+    messages: list[Any],
+    limits: dict[str, Any],
+    model_role: str,
+) -> dict[str, Any]:
+    message_tokens = estimate_messages_tokens(messages)
+    window = context_window_payload(
+        node_id="manual_context_compression",
+        token_count=message_tokens,
+        token_count_method="text_estimation",
+        compression_threshold_tokens=limits.get("compression_threshold_tokens"),
+        context_window_tokens=limits.get("context_window_tokens"),
+        model_role=model_role,
+        source="context_system.manual_compression",
+    )
+    window["current_message_token_estimate"] = message_tokens
+    return window
 
 
 def _current_user_message(
@@ -993,8 +1250,12 @@ def _event_payload(
     return {"kind": status, "error": error.model_dump(mode="json")}
 
 
-def _latest_context_window(state: RuntimeState) -> dict[str, Any] | None:
-    persisted = _context_window_from_token_budget(state)
+def _latest_context_window(
+    state: RuntimeState,
+    *,
+    graph_messages: list[Any] | None = None,
+) -> dict[str, Any] | None:
+    persisted = _context_window_from_token_budget(state, graph_messages=graph_messages)
     observed = _latest_observed_context_window(state)
     if persisted is not None:
         return {
@@ -1044,7 +1305,11 @@ def _latest_compression_status(state: RuntimeState) -> str | None:
     return None
 
 
-def _context_window_from_token_budget(state: RuntimeState) -> dict[str, Any] | None:
+def _context_window_from_token_budget(
+    state: RuntimeState,
+    *,
+    graph_messages: list[Any] | None = None,
+) -> dict[str, Any] | None:
     token_budget = dict(getattr(state.context, "token_budget", {}) or {})
     token_count = token_budget.get("token_count")
     if token_count is None:
@@ -1052,19 +1317,41 @@ def _context_window_from_token_budget(state: RuntimeState) -> dict[str, Any] | N
             token_budget.get("effective_context_tokens")
             or token_budget.get("last_provider_context_tokens_after_call")
         )
-    if token_count is not None:
+    token_count_method = (
+        token_budget.get("token_count_method")
+        or token_budget.get("last_provider_token_count_method")
+    )
+    source = (
+        token_budget.get("source")
+        or token_budget.get("effective_context_source")
+    )
+    baseline_message_tokens = _non_negative_int(
+        token_budget.get("last_provider_message_tokens_after_call")
+    )
+    normalized_token_count = _non_negative_int(token_count)
+    current_message_tokens = (
+        estimate_messages_tokens(graph_messages)
+        if graph_messages is not None
+        else None
+    )
+    if (
+        normalized_token_count is not None
+        and baseline_message_tokens is not None
+        and graph_messages is not None
+    ):
+        normalized_token_count = max(
+            0,
+            normalized_token_count + current_message_tokens - baseline_message_tokens,
+        )
+        token_count_method = f"{token_count_method or 'provider_usage'}_current_context"
+        source = "runtime_checkpoint.current_context"
+    if normalized_token_count is not None:
         return {
-            "token_count": _json_safe(token_count),
+            "token_count": normalized_token_count,
             "context_window_tokens": _json_safe(token_budget.get("context_window_tokens")),
             "compression_threshold_tokens": _json_safe(token_budget.get("compression_threshold_tokens")),
-            "token_count_method": _json_safe(
-                token_budget.get("token_count_method")
-                or token_budget.get("last_provider_token_count_method")
-            ),
-            "source": _json_safe(
-                token_budget.get("source")
-                or token_budget.get("effective_context_source")
-            ),
+            "token_count_method": _json_safe(token_count_method),
+            "source": _json_safe(source),
             "model_role": _json_safe(
                 token_budget.get("model_role")
                 or token_budget.get("last_provider_model_role")
@@ -1073,6 +1360,7 @@ def _context_window_from_token_budget(state: RuntimeState) -> dict[str, Any] | N
                 token_budget.get("node_id")
                 or token_budget.get("last_provider_node_id")
             ),
+            "current_message_token_estimate": current_message_tokens,
         }
     return None
 
@@ -1146,6 +1434,16 @@ def _exception_error(instance: RuntimeInstance, exc: Exception) -> RuntimeErrorE
 
 def _json_safe(value: Any) -> Any:
     return json.loads(json.dumps(value, ensure_ascii=False, default=str))
+
+
+def _non_negative_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
 
 
 def _run_graph_with_control(

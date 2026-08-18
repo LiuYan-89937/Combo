@@ -16,24 +16,19 @@ from combo.runtime_attachments import (
     image_attachment_content_parts,
     image_attachment_count,
 )
-from combo.runtime_defaults import (
-    DEFAULT_BUILTIN_ALLOW_EXTERNAL_PATHS,
-    DEFAULT_BUILTIN_WORKSPACE_ROOT,
-)
+from combo.runtime_defaults import DEFAULT_BUILTIN_WORKSPACE_ROOT
 from combo.runtime_kernel.tool_governance import tool_governance_prompt
-from combo.tooling.builtins.filesystem.guidance import WRITE_STRATEGY_GUIDANCE
+from combo.runtime_i18n import LocalizedText, RuntimeLocale, normalize_runtime_locale
 
-RUNTIME_REACT_PROTOCOL = (
-    "Runtime ReAct protocol: use the conversation history as the source of truth. "
-    "When tools are available and useful, call them with the model's native tool_call mechanism only. "
-    "After a ToolMessage observation, continue from that observation and do not invent hidden tool results. "
-    "When inspecting workspace files, if read reports a missing file or the path is uncertain, call ls on "
-    "the parent or nearby directory before retrying read with the exact file name/path."
-)
-EXECUTOR_TOOL_POLICY = "Executor tool policy: execute the current plan step using only the frozen tools available to this runtime."
-DYNAMIC_EVIDENCE_HEADER = (
-    "Internal runtime evidence for this turn. Use it only when it is directly relevant. "
-    "Do not quote, restate, or expose this evidence to the user unless the user explicitly asks for the underlying context:"
+DYNAMIC_EVIDENCE_HEADER = LocalizedText(
+    zh_cn=(
+        "本轮运行时内部证据。仅在与当前任务直接相关时使用；除非用户明确询问其底层上下文，"
+        "否则不要引用、复述或暴露这些内容："
+    ),
+    en_us=(
+        "Internal runtime evidence for this turn. Use it only when directly relevant. Do not quote, restate, "
+        "or expose it unless the user explicitly asks for the underlying context:"
+    ),
 )
 PLAN_EVIDENCE_MAX_STEPS = 12
 PLAN_RESULT_SUMMARY_MAX_CHARS = 900
@@ -110,7 +105,7 @@ def build_runtime_model_input(
     if dynamic_evidence:
         system_messages.append(
             SystemMessage(
-                content=f"{DYNAMIC_EVIDENCE_HEADER}\n{dynamic_evidence}",
+                content=f"{DYNAMIC_EVIDENCE_HEADER.resolve(_runtime_locale(state))}\n{dynamic_evidence}",
                 additional_kwargs={
                     "kind": "runtime_dynamic_evidence",
                     "source": "runtime_context",
@@ -139,11 +134,7 @@ def _stable_system_prompt(*, system_prompt: str, state: Any, node_id: str | None
     template = str(system_prompt or "").strip()
     if not template:
         raise ValueError("runtime model input requires an explicit system_prompt")
-    parts = [template]
-    if node_id == PLAN_EXECUTE_EXECUTOR_NODE_ID:
-        parts.append(_executor_tool_policy(state))
-    parts.append(RUNTIME_REACT_PROTOCOL)
-    return "\n\n".join(parts)
+    return template
 
 
 def _runtime_context_sections(state: Any) -> list[tuple[str, str]]:
@@ -170,70 +161,31 @@ def _runtime_context_sections(state: Any) -> list[tuple[str, str]]:
     return sections
 
 
-def _executor_tool_policy(state: Any) -> str:
-    workspace_root = _builtin_workspace_root(state)
-    allow_external = _builtin_allow_external_paths(state)
-    boundary = (
-        "Shell starts in the current session workspace root, so shell commands should use relative paths without "
-        "changing directories first. External absolute paths are enabled, but prefer workspace paths unless the task "
-        "explicitly needs an external path."
-        if allow_external
-        else (
-            f"Filesystem tools accept relative paths or the logical workspace alias {workspace_root}. "
-            "Shell starts in the current session workspace root and should use relative paths without changing "
-            f"directories first; do not place the logical alias {workspace_root} inside shell commands. "
-            "Do not use /tmp, host paths, or arbitrary absolute paths."
-        )
-    )
-    return (
-        f"{EXECUTOR_TOOL_POLICY} "
-        "glob, ls, and read may be used to inspect workspace files. "
-        "If read reports a missing file or the path is uncertain, inspect the parent or nearby directory with ls "
-        "before retrying read with the exact file name/path. "
-        "Call shell only when no dedicated available tool can accomplish the current plan step and the active policy permits it. "
-        f"{WRITE_STRATEGY_GUIDANCE} "
-        "For a complete single-file replacement, call write with action=write_once, path, and content. "
-        "For staged writing, call action=start first, use the returned write_id for ordered action=append calls, "
-        "then call action=commit once; call action=abort if the staged write is abandoned. "
-        "Use edit for every multi-file change and for structured create, replace, move, copy, or delete operations. "
-        "edit is transactional: first call action=preview with the complete operations array, inspect the returned "
-        "affected_files diff, then call action=commit with the exact transaction_id returned by that preview. "
-        "Never invent or reuse a transaction_id, and never use shell as a fallback for file creation, movement, "
-        "copying, or deletion when edit is available. "
-        f"{boundary} Filesystem-tool outputs should be written under the workspace root, for example "
-        f"report.md or {workspace_root.rstrip('/')}/report.md."
-    )
-
-
-def _builtin_workspace_root(state: Any) -> str:
-    runtime_config = getattr(state, "runtime_config", None)
-    value = str(getattr(runtime_config, "workspace_root_alias", "") or DEFAULT_BUILTIN_WORKSPACE_ROOT).strip()
-    return value or DEFAULT_BUILTIN_WORKSPACE_ROOT
-
-
-def _builtin_allow_external_paths(state: Any) -> bool:
-    runtime_config = getattr(state, "runtime_config", None)
-    return bool(getattr(runtime_config, "allow_external_paths", DEFAULT_BUILTIN_ALLOW_EXTERNAL_PATHS))
-
-
 def _workspace_mount_guidance(state: Any) -> str:
     runtime_config = getattr(state, "runtime_config", None)
     mounts = getattr(runtime_config, "workspace_mounts", None)
     if not isinstance(mounts, list):
         return ""
     paths = [
-        f"{DEFAULT_BUILTIN_WORKSPACE_ROOT.rstrip('/')}/{name}"
+        f"{str(getattr(runtime_config, 'workspace_root_alias', '') or DEFAULT_BUILTIN_WORKSPACE_ROOT).rstrip('/')}/{name}"
         for item in mounts
         if isinstance(item, dict)
         and (name := str(item.get("name") or "").strip())
     ]
     if not paths:
         return ""
+    joined_paths = ", ".join(paths)
+    if _runtime_locale(state) == "zh-CN":
+        return f"用户已将这些本地目录挂载到当前工作区：{joined_paths}。它们实时指向原始文件，仅在任务确实需要时读写。"
     return (
-        "The user mounted these local directories into the current workspace: "
-        + ", ".join(paths)
-        + ". They are live links to the user's original files. Read and modify them only when the task requires it."
+        f"The user mounted these local directories into the current workspace: {joined_paths}. "
+        "They are live links to the original files. Read and modify them only when the task requires it."
     )
+
+
+def _runtime_locale(state: Any) -> RuntimeLocale:
+    runtime_config = getattr(state, "runtime_config", None)
+    return normalize_runtime_locale(getattr(runtime_config, "locale", None))
 
 
 def _history_messages(

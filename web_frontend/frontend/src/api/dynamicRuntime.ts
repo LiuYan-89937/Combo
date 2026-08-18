@@ -1,4 +1,5 @@
 import { backendUrl } from './backendUrl'
+import { runtimeLocale } from '@/i18n'
 import { runtimeClientInstanceId, runtimePrincipalId } from './runtimeIdentity'
 
 export const RUNTIME_PROTOCOL_VERSION = 'dynamic_runtime.v14'
@@ -76,6 +77,7 @@ export interface RuntimePolicy {
   max_parallel_temporary_agents: number
   max_temporary_delegation_depth: number
   delegation_grant_ttl_seconds: number
+  locale: 'zh-CN' | 'en-US'
   timezone: string
 }
 
@@ -185,6 +187,7 @@ async function rawRequest<T>(path: string, init: RequestInit = {}, principalId?:
     headers: {
       'Content-Type': 'application/json',
       ...(principalId ? { 'X-Combo-Principal': principalId } : {}),
+      'X-Combo-Locale': runtimeLocale(),
       ...(init.headers || {}),
     },
   })

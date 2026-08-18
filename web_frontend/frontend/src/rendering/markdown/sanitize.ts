@@ -11,6 +11,7 @@ export function markdownSanitizeSchema() {
       'ariaHidden',
       'ariaLabel',
       'role',
+      'title',
     ],
     a: [
       ...(schema.attributes?.a || []),
@@ -32,11 +33,19 @@ export function markdownSanitizeSchema() {
       'className',
       'style',
     ],
+    button: [
+      ...(schema.attributes?.button || []),
+      'type',
+      'title',
+      'ariaLabel',
+      'dataMarkdownCopy',
+    ],
   }
   schema.tagNames = Array.from(new Set([
     ...(schema.tagNames || []),
     'div',
     'span',
+    'button',
     'math',
     'semantics',
     'mrow',

@@ -9,7 +9,7 @@ import sqlite3
 from combo.sqlite_runtime import DEFAULT_SQLITE_BUSY_TIMEOUT_MS, connect_sqlite
 
 
-DYNAMIC_RUNTIME_DATABASE_SCHEMA = "dynamic_runtime_database.v25"
+DYNAMIC_RUNTIME_DATABASE_SCHEMA = "dynamic_runtime_database.v26"
 DYNAMIC_RUNTIME_SCHEMA_EPOCH = 3
 
 
@@ -1311,6 +1311,26 @@ def _default_migrations() -> tuple[MigrationStep, ...]:
                 """,
             ),
         ),
+        MigrationStep(
+            version=26,
+            name="conversation_context_snapshots",
+            statements=(
+                """
+                create table conversation_context_snapshots (
+                  snapshot_id text primary key,
+                  session_id text not null references conversations(session_id),
+                  principal_id text not null references principals(principal_id),
+                  through_task_revision integer not null check (through_task_revision >= 1),
+                  payload_json text not null,
+                  created_at text not null
+                )
+                """,
+                """
+                create index idx_conversation_context_snapshots_session
+                on conversation_context_snapshots(session_id, created_at)
+                """,
+            ),
+        ),
     )
 
 
@@ -1335,6 +1355,8 @@ def _schema_allowlist() -> set[tuple[str, str]]:
         ("index", "idx_conversation_turns_session"),
         ("table", "conversation_messages"),
         ("index", "idx_conversation_messages_turn"),
+        ("table", "conversation_context_snapshots"),
+        ("index", "idx_conversation_context_snapshots_session"),
         ("table", "capability_snapshots"),
         ("table", "runtime_instances"),
         ("index", "idx_runtime_instances_session"),

@@ -300,12 +300,15 @@ def _compile_tool(
     expected_resources = (*definition.runtime_resources, *(item.name for item in definition.resource_bindings))
     if set(resources) != set(expected_resources):
         raise ValueError("materialized Tool resources differ from the immutable resource bindings")
+    presentation = definition.presentations.get(runtime_instance.request.policy_snapshot.locale)
     spec = ToolSpec(
         id=definition.model_alias,
-        description=definition.model_description,
-        schema_error_guidance=definition.schema_error_guidance,
+        description=presentation.description if presentation is not None else definition.model_description,
+        schema_error_guidance=(
+            presentation.schema_error_guidance if presentation is not None else definition.schema_error_guidance
+        ),
         entrypoint=definition.implementation.entrypoint,
-        input_schema=definition.input_schema,
+        input_schema=presentation.input_schema if presentation is not None else definition.input_schema,
         output_schema=definition.output_schema,
         resources={name: name for name in expected_resources},
         risk_level=definition.runtime_policy.risk_level,

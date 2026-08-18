@@ -127,6 +127,7 @@ def _context_token_budget_patch(metadata: dict[str, Any] | None, node_id: str) -
         usage_source=str(usage_observation.get("usage_source") or "local_estimation"),
         node_id=node_id,
         model_role=str(data.get("model_role") or ""),
+        retained_message_tokens_after_call=data.get("retained_message_tokens_after_call"),
     )
     if not token_budget:
         return {}

@@ -60,6 +60,14 @@
         <i v-if="isCompressing"></i>
         <span>{{ compressionText }}</span>
       </div>
+      <button
+        class="manual-compress-button"
+        type="button"
+        :disabled="!canCompress"
+        @click="compressContext"
+      >
+        {{ isCompressing ? t('status.contextCompressing') : t('status.compressContextNow') }}
+      </button>
     </div>
   </n-popover>
 </template>
@@ -67,6 +75,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { NPopover } from 'naive-ui'
+import { contextCompressionApi } from '@/api/contextCompression'
 import ComboFrameAnimation from '@/components/brand/ComboFrameAnimation.vue'
 import ComboPngIcon from '@/components/icons/ComboPngIcon.vue'
 import { useI18n } from '@/composables/useI18n'
@@ -83,6 +92,9 @@ import {
 const runtimeStore = useRuntimeStore()
 const { t } = useI18n()
 const contextWindow = computed(() => runtimeStore.contextWindow)
+const activeSessionId = computed(() => (
+  runtimeStore.activeAgentSessionId || runtimeStore.activeMainSessionId
+))
 const usagePercent = computed(() => contextWindow.value ? contextWindowUsagePercent(contextWindow.value) : null)
 const thresholdPercent = computed(() => contextWindow.value ? contextWindowThresholdPercent(contextWindow.value) : null)
 const meterWidth = computed(() => `${usagePercent.value ?? 0}%`)
@@ -105,6 +117,12 @@ const thresholdText = computed(() => contextWindow.value
   })
   : t('status.compressionThreshold', { tokens: '-' }))
 const isCompressing = computed(() => runtimeStore.contextActivity.status === 'running')
+const canCompress = computed(() => Boolean(
+  activeSessionId.value
+  && !isCompressing.value
+  && runtimeStore.queuedRequestCount === 0
+  && !['running', 'stopping', 'interrupted', 'waiting_for_workers'].includes(runtimeStore.runStatus),
+))
 const compressionText = computed(() => {
   const activity = runtimeStore.contextActivity
   const payload = activity.payload || {}
@@ -126,8 +144,37 @@ const compressionText = computed(() => {
   if (activity.status === 'failed') {
     return t('status.contextCompressionFailed', { reason: String(payload.error || t('common.unknown')) })
   }
+  if (activity.status === 'skipped') {
+    return t('status.contextCompressionSkipped')
+  }
   return ''
 })
+
+async function compressContext() {
+  const sessionId = activeSessionId.value
+  if (!sessionId || !canCompress.value) return
+  runtimeStore.setContextCompressionActivity('running', {
+    token_estimate_before: contextWindow.value?.tokenCount,
+  })
+  try {
+    const { result } = await contextCompressionApi.compress(sessionId)
+    if (result.context_window) {
+      runtimeStore.applyContextWindowSnapshot({
+        ...result.context_window,
+        compression_status: result.status,
+      })
+    }
+    if (result.status === 'completed') {
+      runtimeStore.setContextCompressionActivity('completed', result as unknown as Record<string, unknown>)
+      return
+    }
+    runtimeStore.setContextCompressionActivity('skipped', result as unknown as Record<string, unknown>)
+  } catch (error) {
+    runtimeStore.setContextCompressionActivity('failed', {
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
 
 function optionalNumber(value: unknown): number | null {
   const parsed = Number(value)
@@ -218,6 +265,20 @@ function optionalNumber(value: unknown): number | null {
   filter: drop-shadow(0 1px 1px rgb(0 0 0 / 9%));
 }
 .compression-copy { display: flex; align-items: flex-start; gap: 7px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--app-divider); font-size: 11px; line-height: 1.45; }
+.manual-compress-button {
+  width: 100%;
+  margin-top: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--app-divider);
+  border-radius: 9px;
+  background: var(--app-surface);
+  color: var(--app-text);
+  font-size: 11px;
+  cursor: pointer;
+  transition: border-color .16s ease, background .16s ease;
+}
+.manual-compress-button:hover:not(:disabled) { border-color: var(--app-text-muted); background: var(--app-surface-muted); }
+.manual-compress-button:disabled { cursor: not-allowed; opacity: .45; }
 .compression-copy i { width: 6px; height: 6px; flex: 0 0 auto; margin-top: 5px; border-radius: 50%; background: currentColor; animation: context-dot-pulse 1s ease-in-out infinite; }
 .compression-copy.failed { color: var(--app-error); }
 .compression-copy.completed { color: var(--app-success); }

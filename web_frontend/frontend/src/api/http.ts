@@ -1,6 +1,7 @@
 import type { RuntimeFrontendCommand, RuntimeFrontendEvent } from '@/types/protocol'
 import { backendUrl } from './backendUrl'
 import { runtimeClientInstanceId, runtimePrincipalId } from './runtimeIdentity'
+import { runtimeLocale } from '@/i18n'
 
 interface EventResponse {
   event: RuntimeFrontendEvent
@@ -71,6 +72,7 @@ export function requestFormEvent(
     request.setRequestHeader('X-Combo-Principal', runtimePrincipalId())
     request.setRequestHeader('X-Combo-Client', runtimeClientInstanceId())
     request.setRequestHeader('X-Combo-Timezone', Intl.DateTimeFormat().resolvedOptions().timeZone)
+    request.setRequestHeader('X-Combo-Locale', runtimeLocale())
     request.upload.addEventListener('progress', (event) => {
       if (!event.lengthComputable || event.total <= 0) return
       onUploadProgress?.(Math.round((event.loaded / event.total) * 100))
@@ -100,6 +102,7 @@ export async function requestBlob(url: string, init: RequestInit = {}): Promise<
       'X-Combo-Principal': runtimePrincipalId(),
       'X-Combo-Client': runtimeClientInstanceId(),
       'X-Combo-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
+      'X-Combo-Locale': runtimeLocale(),
       ...(init.headers || {}),
     },
   })
@@ -120,6 +123,7 @@ export async function requestJson<T>(url: string, init: RequestInit = {}): Promi
       'X-Combo-Principal': runtimePrincipalId(),
       'X-Combo-Client': runtimeClientInstanceId(),
       'X-Combo-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
+      'X-Combo-Locale': runtimeLocale(),
       ...(init.headers || {}),
     },
   })
@@ -136,6 +140,7 @@ export async function requestFormJson<T>(url: string, formData: FormData): Promi
       'X-Combo-Principal': runtimePrincipalId(),
       'X-Combo-Client': runtimeClientInstanceId(),
       'X-Combo-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
+      'X-Combo-Locale': runtimeLocale(),
     },
     body: formData,
   })
@@ -174,6 +179,7 @@ async function requestProgress<T>(
       'X-Combo-Principal': runtimePrincipalId(),
       'X-Combo-Client': runtimeClientInstanceId(),
       'X-Combo-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
+      'X-Combo-Locale': runtimeLocale(),
       ...(init.headers || {}),
     },
   })

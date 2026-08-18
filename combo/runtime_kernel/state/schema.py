@@ -163,6 +163,7 @@ class RuntimeConfigState(BaseModel):
 
     system_prompt: str = ""
     temporal_context: str = ""
+    locale: Literal["zh-CN", "en-US"] = "zh-CN"
     capability_instructions: str = ""
     turn_directives: list[str] = Field(default_factory=list)
     attachments: list[dict[str, Any]] = Field(default_factory=list)

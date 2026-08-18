@@ -9,6 +9,7 @@ const STATUS_KEYS: Record<string, I18nKey> = {
   proposed: 'backgroundTask.toolStatus.proposed',
   waiting_approval: 'backgroundTask.toolStatus.waiting_approval',
   running: 'backgroundTask.description.running',
+  thinking: 'backgroundTask.capsule.thinking',
   cancelling: 'backgroundTask.description.cancelling',
   cancelled: 'backgroundTask.description.cancelled',
   completed: 'backgroundTask.description.succeeded',

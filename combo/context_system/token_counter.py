@@ -211,6 +211,7 @@ def provider_token_budget_payload(
     provider_input_tokens: Any = None,
     fallback_output_tokens: Any = None,
     usage_source: str = "provider_usage",
+    retained_message_tokens_after_call: Any = None,
 ) -> dict[str, Any]:
     usage = normalize_usage_metadata(usage_metadata)
     input_tokens = _token_int(provider_input_tokens)
@@ -225,6 +226,7 @@ def provider_token_budget_payload(
     context_tokens_after_call = context_token_count_after_call(usage_metadata)
     if context_tokens_after_call is None:
         context_tokens_after_call = int(input_tokens) + int(output_tokens or 0)
+    retained_tokens = _token_int(retained_message_tokens_after_call)
     return {
         "token_count": context_tokens_after_call,
         "token_count_method": usage_source,
@@ -239,6 +241,11 @@ def provider_token_budget_payload(
         "last_provider_node_id": node_id,
         "last_provider_model_role": model_role,
         "last_provider_usage_metadata": usage_metadata if isinstance(usage_metadata, dict) else {},
+        **(
+            {"last_provider_message_tokens_after_call": retained_tokens}
+            if retained_tokens is not None
+            else {}
+        ),
     }
 
 

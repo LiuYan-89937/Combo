@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 ContextCandidateKind = Literal["memory"]
 ContextEventStatus = Literal["started", "completed", "failed", "skipped"]
+CompressionDetail = Literal["concise", "standard", "detailed"]
 
 
 class CompressionPolicy(BaseModel):
@@ -18,7 +19,8 @@ class CompressionPolicy(BaseModel):
         ge=1000,
         description="Optional Agent override. Null follows the active model profile.",
     )
-    keep_recent_messages: int = Field(default=12, ge=2, le=128)
+    detail: CompressionDetail = "standard"
+    keep_recent_messages: int = Field(default=12, ge=0, le=128)
 
 
 class CrossSessionMemoryPolicy(BaseModel):
@@ -143,6 +145,9 @@ class ContextCompressionReport(BaseModel):
     token_count_method: str | None = None
     token_count_error: str | None = None
     summary_token_estimate: int = 0
+    conversation_summary_token_estimate: int = 0
+    tool_summary_token_estimate: int = 0
+    summary_output_token_limit: int = 0
     error: str | None = None
     duration_ms: int = 0
 

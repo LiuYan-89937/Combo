@@ -21,12 +21,13 @@ from combo.context_system.schema import (
 from combo.context_system.sources import ContextSource, ContextSourceRuntime, default_context_sources
 from combo.context_system.token_counter import (
     ModelContextLimits,
+    TokenCountResult,
     count_messages_tokens,
     context_window_payload,
     context_limits_with_overrides,
     model_context_limits as resolve_model_context_limits,
 )
-from combo.context_system.token_estimation import estimate_text_tokens
+from combo.context_system.token_estimation import estimate_messages_tokens, estimate_text_tokens
 
 
 class ContextPreparationResult(BaseModel):
@@ -71,10 +72,11 @@ class ContextSystemRuntime:
                 injection_report=injection_report,
             )
         policy = _effective_context_policy(self.config.default_policy, resources)
+        model_role = _runtime_model_operation(services, state=state)
         active_limits = self.model_context_limits(
             services=services,
             state=state,
-            model_role=_runtime_model_operation(services),
+            model_role=model_role,
         )
         compression_policy = policy.compression.model_copy(
             update={"trigger_token_threshold": active_limits.compression_trigger_tokens}
@@ -82,28 +84,17 @@ class ContextSystemRuntime:
         working_messages = list(messages)
         working_state = state
         measured_count = count_messages_tokens(working_messages, services=services)
-        effective_count = measured_count
-        if not _has_completed_model_usage(working_state):
-            emit_context_event(
-                services=services,
-                state=working_state,
-                event_type="context_window_updated",
-                node_id=node_id,
-                payload=context_window_payload(
-                    node_id=node_id,
-                    token_count=effective_count.token_count,
-                    token_count_method=effective_count.method,
-                    compression_threshold_tokens=active_limits.compression_trigger_tokens,
-                    context_window_tokens=active_limits.context_window_tokens,
-                    model_role="main",
-                    source="context_system.pre_model",
-                ),
-            )
+        effective_count = _effective_compression_count(
+            state=working_state,
+            measured_count=measured_count,
+            model_role=model_role,
+        )
+        compression_result_counter = _compression_result_counter(services=services)
         compression_messages, compression_report = maybe_compress_messages(
             messages=working_messages,
             policy=compression_policy,
             node_id=node_id,
-            token_counter=lambda items: count_messages_tokens(items, services=services),
+            token_counter=compression_result_counter,
             trigger_count=effective_count,
             on_start=lambda report: emit_context_event(
                 services=services,
@@ -129,6 +120,7 @@ class ContextSystemRuntime:
             working_state = _state_with_compressed_token_budget(
                 state=working_state,
                 compression_report=compression_report,
+                messages=compression_messages,
             )
             emit_context_event(
                 services=services,
@@ -143,7 +135,7 @@ class ContextSystemRuntime:
                     ),
                     compression_threshold_tokens=active_limits.compression_trigger_tokens,
                     context_window_tokens=active_limits.context_window_tokens,
-                    model_role="main",
+                    model_role=model_role,
                     source="context_system.compression",
                 ),
             )
@@ -375,8 +367,11 @@ def default_context_runtime(
     )
 
 
-def _runtime_model_operation(services: Any) -> str:
+def _runtime_model_operation(services: Any, *, state: Any) -> str:
     service = getattr(services, "model_operation_service", None)
+    resolver = getattr(service, "operation_for_state", None)
+    if callable(resolver):
+        return str(resolver(state))
     return "main_turn" if bool(getattr(service, "authoritative_runtime_model", False)) else "main"
 
 
@@ -421,32 +416,120 @@ def _effective_context_policy(
     resources: Mapping[str, Any] | None,
 ) -> ContextPolicy:
     identity = (resources or {}).get("runtime_identity")
+    compression = default.compression.model_copy(
+        update={
+            "detail": str(
+                getattr(
+                    identity,
+                    "context_compression_detail",
+                    default.compression.detail,
+                )
+            ),
+            "keep_recent_messages": int(
+                getattr(
+                    identity,
+                    "context_compression_keep_recent_messages",
+                    default.compression.keep_recent_messages,
+                )
+            )
+        }
+    )
     snapshot = getattr(identity, "memory_policy", None)
     if not isinstance(snapshot, dict):
-        return default
+        return default.model_copy(update={"compression": compression})
     memory = default.cross_session_memory.model_copy(
         update={
             "max_items": int(snapshot["max_items"]),
             "max_tokens": int(snapshot["max_tokens"]),
         }
     )
-    return default.model_copy(update={"cross_session_memory": memory})
+    return default.model_copy(update={
+        "compression": compression,
+        "cross_session_memory": memory,
+    })
 
-def _has_completed_model_usage(state: Any) -> bool:
+def _effective_compression_count(
+    *,
+    state: Any,
+    measured_count: TokenCountResult,
+    model_role: str,
+) -> TokenCountResult:
     budget = dict(getattr(getattr(state, "context", None), "token_budget", {}) or {})
     source = str(budget.get("source") or budget.get("effective_context_source") or "")
-    return source.startswith("model_operation.provider_usage")
+    observed_role = str(
+        budget.get("model_role")
+        or budget.get("last_provider_model_role")
+        or ""
+    )
+    observed_count = _positive_token_count(
+        budget.get("token_count")
+        or budget.get("effective_context_tokens")
+        or budget.get("last_provider_context_tokens_after_call")
+    )
+    baseline_message_count = _positive_token_count(
+        budget.get("last_provider_message_tokens_after_call")
+    )
+    if (
+        observed_count is not None
+        and baseline_message_count is not None
+        and measured_count.token_count is not None
+    ):
+        observed_count = max(
+            0,
+            observed_count + measured_count.token_count - baseline_message_count,
+        )
+    if (
+        observed_count is not None
+        and (
+            source.startswith("model_operation.provider_usage")
+            or source == "runtime_checkpoint.current_context"
+            or source in {
+                "context_system.compression",
+                "context_system.manual_compression",
+            }
+        )
+        and (not observed_role or observed_role == model_role)
+        and (measured_count.token_count is None or observed_count > measured_count.token_count)
+    ):
+        return TokenCountResult(
+            token_count=observed_count,
+            method="provider_usage_calibrated",
+            model_role=model_role,
+        )
+    return measured_count
+
+
+def _compression_result_counter(*, services: Any):
+    def count(items: list[Any]) -> TokenCountResult:
+        return count_messages_tokens(items, services=services)
+
+    return count
+
+
+def _positive_token_count(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
 
 
 def _state_with_compressed_token_budget(
     *,
     state: Any,
     compression_report: ContextCompressionReport,
+    messages: list[Any],
 ) -> Any:
     updated = state.model_copy(deep=True)
     updated.context.token_budget = {
         **dict(getattr(updated.context, "token_budget", {}) or {}),
+        "token_count": compression_report.token_estimate_after,
+        "token_count_method": compression_report.token_count_method or "compression_estimate",
+        "source": "context_system.compression",
         "effective_context_tokens": compression_report.token_estimate_after,
         "effective_context_source": compression_report.token_count_method or "compression_estimate",
+        "last_provider_message_tokens_after_call": estimate_messages_tokens(messages),
     }
     return updated

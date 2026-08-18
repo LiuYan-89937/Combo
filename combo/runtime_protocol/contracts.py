@@ -9,12 +9,14 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
 from combo.runtime_protocol.errors import RuntimeErrorEnvelope
+from combo.runtime_i18n import RuntimeLocale, normalize_runtime_locale
 
 
 ExecutionPreference = Literal["react", "plan_and_execute"]
 ExecutionStrategy = Literal["react", "plan_and_execute"]
 PolicyValueSource = Literal["user_policy", "command"]
 ApprovalMode = Literal["ask", "auto", "always_approval"]
+ContextCompressionDetail = Literal["concise", "standard", "detailed"]
 RuntimeRole = Literal["main", "temporary"]
 ModelOperationKind = Literal[
     "main_turn",
@@ -67,6 +69,8 @@ class UserRuntimePolicy(ProtocolModel):
     browser_navigation_timeout_ms: int = Field(default=45_000, ge=1_000)
     max_model_attempts: int = Field(default=1, ge=1)
     max_parallel_temporary_agents: int = Field(default=5, ge=1)
+    context_compression_detail: ContextCompressionDetail = "standard"
+    context_compression_keep_recent_messages: int = Field(default=12, ge=0, le=128)
     memory_auto_write_enabled: bool = True
     memory_write_interval_turns: int = Field(default=3, ge=1, le=1000)
     memory_agent_write_enabled: bool = True
@@ -74,6 +78,7 @@ class UserRuntimePolicy(ProtocolModel):
     memory_max_injected_tokens: int = Field(default=1200, ge=100, le=32000)
     max_temporary_delegation_depth: int = Field(default=0, ge=0)
     delegation_grant_ttl_seconds: int = Field(default=900, ge=1)
+    locale: RuntimeLocale = "zh-CN"
     timezone: str
     updated_at: str = Field(default_factory=utc_now_text)
 
@@ -86,6 +91,11 @@ class UserRuntimePolicy(ProtocolModel):
     @classmethod
     def _optional_profile_id(cls, value: str | None) -> str | None:
         return _optional_text(value)
+
+    @field_validator("locale", mode="before")
+    @classmethod
+    def _locale_is_supported(cls, value: object) -> RuntimeLocale:
+        return normalize_runtime_locale(value)
 
 
 class ModelSelectionSnapshot(FrozenProtocolModel):
@@ -126,6 +136,8 @@ class RuntimePolicySnapshot(FrozenProtocolModel):
     browser_navigation_timeout_ms: int = Field(default=45_000, ge=1_000)
     max_model_attempts: int = Field(ge=1)
     max_parallel_temporary_agents: int = Field(ge=1)
+    context_compression_detail: ContextCompressionDetail = "standard"
+    context_compression_keep_recent_messages: int = Field(default=12, ge=0, le=128)
     memory_auto_write_enabled: bool
     memory_write_interval_turns: int = Field(ge=1, le=1000)
     memory_agent_write_enabled: bool
@@ -133,6 +145,7 @@ class RuntimePolicySnapshot(FrozenProtocolModel):
     memory_max_injected_tokens: int = Field(ge=100, le=32000)
     max_temporary_delegation_depth: int = Field(ge=0)
     delegation_grant_ttl_seconds: int = Field(ge=1)
+    locale: RuntimeLocale = "zh-CN"
     timezone: str
     created_at: str = Field(default_factory=utc_now_text)
 
@@ -140,6 +153,11 @@ class RuntimePolicySnapshot(FrozenProtocolModel):
     @classmethod
     def _required_policy_text(cls, value: str, info: Any) -> str:
         return _required_text(value, info.field_name)
+
+    @field_validator("locale", mode="before")
+    @classmethod
+    def _snapshot_locale_is_supported(cls, value: object) -> RuntimeLocale:
+        return normalize_runtime_locale(value)
 
 
 class CapabilityRevisionRef(FrozenProtocolModel):
@@ -504,6 +522,8 @@ class RuntimeExecutionIdentity(FrozenProtocolModel):
     task_revision: int = Field(ge=1)
     browser_operation_timeout_ms: int = Field(ge=1_000)
     browser_navigation_timeout_ms: int = Field(ge=1_000)
+    context_compression_detail: ContextCompressionDetail = "standard"
+    context_compression_keep_recent_messages: int = Field(default=12, ge=0, le=128)
     memory_agent_write_enabled: bool = True
     memory_policy: dict[str, JsonValue] = Field(default_factory=dict)
 

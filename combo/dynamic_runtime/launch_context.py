@@ -19,7 +19,7 @@ from combo.runtime_protocol import (
     RuntimeInstance,
 )
 from combo.dynamic_runtime.delegation_store import DelegationStore
-from combo.dynamic_runtime.prompt_policies import EVIDENCE_FIRST_POLICY
+from combo.runtime_i18n import RuntimeLocale, normalize_runtime_locale
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,14 +108,14 @@ class AttachmentLaunchResolver(Protocol):
 
 
 class CapabilityInstructionRenderer(Protocol):
-    def render(self, snapshot: CapabilitySnapshot) -> str:
+    def render(self, snapshot: CapabilitySnapshot, *, locale: RuntimeLocale) -> str:
         ...
 
 
 class SnapshotCapabilityInstructionRenderer:
     """Render only the frozen short catalog; Skill bodies are tool-loaded."""
 
-    def render(self, snapshot: CapabilitySnapshot) -> str:
+    def render(self, snapshot: CapabilitySnapshot, *, locale: RuntimeLocale) -> str:
         entries: list[str] = []
         for projection in snapshot.projections:
             fragments = [
@@ -126,17 +126,24 @@ class SnapshotCapabilityInstructionRenderer:
             entries.extend(f"- {fragment}" for fragment in fragments)
         if not entries:
             return ""
-        return "Selected capability catalog (bodies are not injected):\n" + "\n".join(entries)
+        heading = (
+            "已选择的能力目录（正文不会自动注入）："
+            if locale == "zh-CN"
+            else "Selected capability catalog (bodies are not injected):"
+        )
+        return heading + "\n" + "\n".join(entries)
 
 
 class FileSystemPromptProvider:
     def __init__(self, path: str | Path) -> None:
         self._path = Path(path).expanduser().resolve()
 
-    def load(self) -> str:
-        prompt = self._path.read_text(encoding="utf-8").strip()
+    def load(self, *, locale: RuntimeLocale) -> str:
+        localized_path = self._path.with_name(f"{self._path.stem}.{locale}{self._path.suffix}")
+        path = localized_path if localized_path.is_file() else self._path
+        prompt = path.read_text(encoding="utf-8").strip()
         if not prompt:
-            raise ValueError(f"system prompt is empty: {self._path}")
+            raise ValueError(f"system prompt is empty: {path}")
         return prompt
 
 
@@ -168,6 +175,7 @@ class ComposedRuntimeLaunchContextResolver(RuntimeLaunchContextResolver):
         capability_snapshot: CapabilitySnapshot,
     ) -> RuntimeLaunchContext:
         request = instance.request
+        locale = normalize_runtime_locale(request.policy_snapshot.locale)
         clock = self._clock.snapshot(
             principal_id=request.principal_id,
             timezone=request.policy_snapshot.timezone,
@@ -191,26 +199,28 @@ class ComposedRuntimeLaunchContextResolver(RuntimeLaunchContextResolver):
             delegated_prompt = self._delegations.for_runtime(instance.runtime_instance_id).envelope.system_prompt
             if delegated_prompt is None:
                 raise RuntimeError("temporary runtime task has no delegated system prompt")
-            base_prompt = self._child_prompt_provider.load()
+            base_prompt = self._child_prompt_provider.load(locale=locale)
             delegated_directives = (delegated_prompt,)
         else:
-            base_prompt = self._prompt_provider.load()
+            base_prompt = self._prompt_provider.load(locale=locale)
             delegated_directives = ()
             notification_event_ids = _notification_event_ids(messages, turn_id=request.turn_id)
             self._delegations.claim_completion_notifications(
                 instance,
                 event_ids=notification_event_ids,
             )
-        capability_instructions = self._capability_instructions.render(capability_snapshot)
-        system_prompt = _render_system_prompt(base=base_prompt)
+        capability_instructions = self._capability_instructions.render(capability_snapshot, locale=locale)
+        system_prompt = base_prompt
         turn_directives = _turn_directives(
             delegated=delegated_directives,
             force_collaboration=request.runtime_role == "main" and request.force_collaboration,
             scheduled_run=request.scheduler_run_id is not None,
+            locale=locale,
         )
         return RuntimeLaunchContext(
             system_prompt=system_prompt,
-            temporal_context=_temporal_context(clock),
+            temporal_context=_temporal_context(clock, locale=locale),
+            locale=locale,
             capability_instructions=capability_instructions,
             turn_directives=turn_directives,
             workspace_root_alias=workspace.root_alias,
@@ -258,20 +268,20 @@ def _notification_event_ids(
     )
 
 
-def _render_system_prompt(
-    *,
-    base: str,
-) -> str:
-    return "\n\n".join((base.strip(), EVIDENCE_FIRST_POLICY))
-
-
-def _temporal_context(clock: ClockSnapshot) -> str:
+def _temporal_context(clock: ClockSnapshot, *, locale: RuntimeLocale) -> str:
+    if locale == "zh-CN":
+        return (
+            "运行时日期上下文：\n"
+            f"- 当前日期：{clock.local_date}\n"
+            f"- 时区：{clock.timezone}\n"
+            "相对日期应以本轮冻结日期为准；当精确当前时间会实质影响任务时，应查询权威时间来源。"
+        )
     return (
         "Runtime calendar context:\n"
         f"- Current date: {clock.local_date}\n"
         f"- Timezone: {clock.timezone}\n"
-        "Resolve relative calendar dates against this frozen turn date. Retrieve an authoritative time source "
-        "when the exact current time materially affects the task."
+        "Resolve relative dates against this frozen turn date. Retrieve an authoritative time source when the exact "
+        "current time materially affects the task."
     )
 
 
@@ -280,21 +290,28 @@ def _turn_directives(
     delegated: tuple[str, ...] = (),
     force_collaboration: bool = False,
     scheduled_run: bool = False,
+    locale: RuntimeLocale,
 ) -> tuple[str, ...]:
     sections = [item.strip() for item in delegated if item.strip()]
     if force_collaboration:
-        sections.append(
+        sections.append((
+            "本轮已显式开启合奏模式。请把任务拆成有价值且相互独立的工作流，并在本轮结束前至少委派一个实质性任务。"
+            "不要委派礼节性、空洞或重复工作；若信息不足以形成实质性子任务，应先询问必要信息。"
+        ) if locale == "zh-CN" else (
             "Collaboration mode is explicitly enabled for this turn. Decompose the user task into useful "
             "independent workstreams and delegate at least one substantive workstream to a child Agent before "
             "finishing the turn. Do not delegate ceremonial, empty, or duplicate work. If the request lacks "
             "enough information to define a substantive child objective, ask the necessary clarification instead."
-        )
+        ))
     if scheduled_run:
-        sections.append(
+        sections.append((
+            "这是一次自动定时任务执行。只处理绑定工作区中的定时目标，不要委派子 Agent；最终交付应自包含，并说明已核验结果、"
+            "生成文件和仍未解决的阻塞。"
+        ) if locale == "zh-CN" else (
             "This is an autonomous scheduled task execution. Work only on the scheduled objective in the bound "
             "workspace, do not delegate to child Agents, and finish with a self-contained delivery that reports "
             "verified results, produced files, and any unresolved blockers."
-        )
+        ))
     return tuple(sections)
 
 

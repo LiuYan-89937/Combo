@@ -29,6 +29,10 @@ def runtime_execution_identity(instance: RuntimeInstance) -> RuntimeExecutionIde
         task_revision=request.task_revision,
         browser_operation_timeout_ms=request.policy_snapshot.browser_operation_timeout_ms,
         browser_navigation_timeout_ms=request.policy_snapshot.browser_navigation_timeout_ms,
+        context_compression_detail=request.policy_snapshot.context_compression_detail,
+        context_compression_keep_recent_messages=(
+            request.policy_snapshot.context_compression_keep_recent_messages
+        ),
         memory_agent_write_enabled=request.policy_snapshot.memory_agent_write_enabled,
         memory_policy={
             "max_items": request.policy_snapshot.memory_max_injected_items,

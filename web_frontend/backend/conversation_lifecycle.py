@@ -325,6 +325,10 @@ class ConversationLifecycleService:
                 f"delete from conversation_messages where session_id in ({session_placeholders})",
                 plan.session_ids,
             )
+            conn.execute(
+                f"delete from conversation_context_snapshots where session_id in ({session_placeholders})",
+                plan.session_ids,
+            )
             if plan.runtime_instance_ids:
                 conn.execute(
                     f"delete from runtime_instances where runtime_instance_id in ({runtime_placeholders})",

@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import Field, JsonValue, field_validator, model_validator
 
 from combo.runtime_protocol.contracts import FrozenProtocolModel
+from combo.runtime_i18n import RuntimeLocale
 
 
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -265,12 +266,24 @@ class ToolResourceBinding(FrozenProtocolModel):
         return _required_text(value, getattr(info, "field_name", "value"))
 
 
+class ToolModelPresentation(FrozenProtocolModel):
+    description: str
+    schema_error_guidance: str = ""
+    input_schema: dict[str, JsonValue]
+
+    @field_validator("description")
+    @classmethod
+    def _description_is_present(cls, value: str) -> str:
+        return _required_text(value, "tool presentation description")
+
+
 class ToolDefinition(FrozenProtocolModel):
     schema_version: Literal["tool_definition.v2"] = "tool_definition.v2"
     model_alias: str
     model_description: str
     schema_error_guidance: str = ""
     input_schema: dict[str, JsonValue]
+    presentations: dict[RuntimeLocale, ToolModelPresentation] = Field(default_factory=dict)
     context_schema: dict[str, JsonValue] = Field(default_factory=dict)
     output_schema: dict[str, JsonValue]
     execution_mode: Literal["managed", "delegated"] = "managed"
@@ -318,6 +331,16 @@ class ToolDefinition(FrozenProtocolModel):
     def _runtime_resources_are_unique(cls, values: tuple[str, ...]) -> tuple[str, ...]:
         if len(values) != len(set(values)):
             raise ValueError("runtime_resources must be unique")
+        return values
+
+    @field_validator("presentations")
+    @classmethod
+    def _presentation_locales_are_complete(
+        cls,
+        values: dict[RuntimeLocale, ToolModelPresentation],
+    ) -> dict[RuntimeLocale, ToolModelPresentation]:
+        if values and set(values) != {"zh-CN", "en-US"}:
+            raise ValueError("localized tool presentations require both zh-CN and en-US")
         return values
 
     @field_validator("sensitive_argument_paths")

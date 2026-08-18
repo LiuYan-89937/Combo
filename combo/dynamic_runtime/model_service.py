@@ -164,6 +164,8 @@ class RuntimeModelResolver:
             browser_navigation_timeout_ms=policy.browser_navigation_timeout_ms,
             max_model_attempts=policy.max_model_attempts,
             max_parallel_temporary_agents=policy.max_parallel_temporary_agents,
+            context_compression_detail=policy.context_compression_detail,
+            context_compression_keep_recent_messages=policy.context_compression_keep_recent_messages,
             memory_auto_write_enabled=policy.memory_auto_write_enabled,
             memory_write_interval_turns=policy.memory_write_interval_turns,
             memory_agent_write_enabled=policy.memory_agent_write_enabled,
@@ -171,6 +173,7 @@ class RuntimeModelResolver:
             memory_max_injected_tokens=policy.memory_max_injected_tokens,
             max_temporary_delegation_depth=policy.max_temporary_delegation_depth,
             delegation_grant_ttl_seconds=policy.delegation_grant_ttl_seconds,
+            locale=policy.locale,
             timezone=policy.timezone,
         )
         return ResolvedRuntimePolicy(snapshot=snapshot, chat_model=resolved)

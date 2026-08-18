@@ -37,6 +37,7 @@ from combo.dynamic_runtime.cancellation import (
 )
 from combo.dynamic_runtime.command_control import CancelCommandRequestHandler
 from combo.dynamic_runtime.control_plane_store import GlobalKnowledgeStore, WorkspaceSchedulerStore
+from combo.dynamic_runtime.context_snapshot_store import ConversationContextSnapshotStore
 from combo.dynamic_runtime.knowledge_search import HybridKnowledgeSearchIndex
 from combo.dynamic_runtime.dispatcher import (
     CommandDispatcher,
@@ -103,6 +104,7 @@ class DynamicRuntimeStores:
     capability_approval_grants: CapabilityApprovalGrantStore
     capability_resolution_receipts: CapabilityResolutionReceiptStore
     conversations: ConversationStore
+    context_snapshots: ConversationContextSnapshotStore
     commands: CommandInbox
     runtime_instances: RuntimeInstanceStore
     runtime_events: RuntimeEventStore
@@ -225,7 +227,9 @@ class DynamicRuntimeApplication:
             runtime_service = DynamicRuntimeService(
                 service_set=service_set,
                 runtime_instances=stores.runtime_instances,
+                runtime_policies=stores.runtime_policies,
                 conversations=stores.conversations,
+                context_snapshots=stores.context_snapshots,
                 execution_commits=stores.execution_commits,
                 run_controls=stores.run_controls,
                 model_resolver=model_resolver,
@@ -322,6 +326,7 @@ def _stores(
         capability_approval_grants=CapabilityApprovalGrantStore(database),
         capability_resolution_receipts=CapabilityResolutionReceiptStore(database),
         conversations=ConversationStore(database),
+        context_snapshots=ConversationContextSnapshotStore(database),
         commands=CommandInbox(database),
         runtime_instances=RuntimeInstanceStore(database),
         runtime_events=RuntimeEventStore(database),

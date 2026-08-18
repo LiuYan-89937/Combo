@@ -1339,6 +1339,32 @@ export const useRuntimeStore = defineStore('runtime', {
       }
     },
 
+    applyContextWindowSnapshot(payload: Record<string, unknown>) {
+      this.contextWindow = {
+        tokenCount: optionalNumber(payload.token_count),
+        contextWindowTokens: optionalNumber(payload.context_window_tokens),
+        compressionThresholdTokens: optionalNumber(payload.compression_threshold_tokens),
+        tokenCountMethod: optionalString(payload.token_count_method),
+        source: optionalString(payload.source),
+        modelRole: optionalString(payload.model_role),
+        nodeId: optionalString(payload.node_id),
+        compressionStatus: optionalString(payload.compression_status) || 'completed',
+        updatedAt: optionalString(payload.updated_at) || new Date().toISOString(),
+        payload: { ...payload },
+      }
+    },
+
+    setContextCompressionActivity(
+      status: RuntimeViewState['contextActivity']['status'],
+      payload: Record<string, unknown> = {},
+    ) {
+      this.contextActivity = {
+        status,
+        eventType: `context_compression_${status}`,
+        payload: { ...payload },
+      }
+    },
+
     expectAgentPackageSelection(packageId: string, purpose: 'run') {
       this.agentPackageSelectionIntent = {
         packageId: String(packageId || '').trim() || null,
@@ -1805,6 +1831,16 @@ function optionalPositiveInteger(value: unknown): number | null {
     }
   }
   return null
+}
+
+function optionalNumber(value: unknown): number | null {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function optionalString(value: unknown): string | null {
+  const text = String(value ?? '').trim()
+  return text || null
 }
 
 function activeRequestViewFromPayload(value: unknown): ActiveRequestView | null {

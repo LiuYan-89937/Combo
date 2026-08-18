@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -74,8 +74,23 @@ def get_task_model() -> BaseChatModel | None:
     return _available_model("task")
 
 
-def get_compression_model() -> BaseChatModel | None:
-    return _available_model("compression")
+def get_compression_model(*, max_output_tokens: int | None = None) -> BaseChatModel | None:
+    from combo.model_pool.resolver import resolve_available_chat_model
+
+    resolved = resolve_available_chat_model("compression")
+    if resolved is None:
+        return None
+    if max_output_tokens is None:
+        return resolved.model
+    configured_limit = resolved.settings.max_output_tokens
+    effective_limit = (
+        min(max_output_tokens, configured_limit)
+        if configured_limit is not None
+        else max_output_tokens
+    )
+    return create_chat_model_from_settings(
+        replace(resolved.settings, max_output_tokens=effective_limit)
+    )
 
 
 def create_chat_model_from_settings(settings: ChatModelSettings) -> BaseChatModel | None:

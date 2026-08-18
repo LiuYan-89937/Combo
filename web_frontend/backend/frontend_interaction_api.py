@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections import defaultdict
 import base64
 from ipaddress import ip_address
@@ -23,6 +24,7 @@ from combo.runtime_protocol import (
     ToolCallRecord,
     UserRuntimePolicy,
 )
+from combo.runtime_i18n import normalize_runtime_locale
 from combo.runtime_protocol.chat_parts import build_chat_turn_messages
 from combo.workspace_directories import WorkspaceDirectoryBrowser
 from web_frontend.backend.frontend_event_bridge import project_runtime_event
@@ -66,6 +68,8 @@ class RuntimePreferencesWrite(BaseModel):
     browser_navigation_timeout_ms: int | None = Field(default=None, ge=1_000, le=600_000)
     max_retries: int | None = None
     max_parallel_sub_agents: int | None = None
+    context_compression_detail: Literal["concise", "standard", "detailed"] | None = None
+    context_compression_keep_recent_messages: int | None = Field(default=None, ge=0, le=128)
     memory_auto_write_enabled: bool | None = None
     memory_write_interval_turns: int | None = Field(default=None, ge=1, le=1000)
     memory_agent_write_enabled: bool | None = None
@@ -140,12 +144,14 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
         x_combo_principal: str = Header(alias="X-Combo-Principal"),
         x_combo_client: str = Header(alias="X-Combo-Client"),
         x_combo_timezone: str = Header(alias="X-Combo-Timezone"),
+        x_combo_locale: str = Header(default="zh-CN", alias="X-Combo-Locale"),
     ) -> dict[str, Any]:
         command = body.command
         command_type = _required_text(command.get("type"), "command.type")
         principal_id = _required_text(x_combo_principal, "principal header")
         client_id = _required_text(x_combo_client, "client header")
         timezone = _required_text(x_combo_timezone, "timezone header")
+        locale = normalize_runtime_locale(x_combo_locale)
         backend.application.stores.conversations.create_principal(principal_id)
 
         if command_type in {"send_message", "run_agent_package", "send_agent_package_message"}:
@@ -163,6 +169,7 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
                 backend,
                 principal_id=principal_id,
                 timezone=timezone,
+                locale=locale,
                 command_payload=payload,
             )
             envelope = CommandEnvelope(
@@ -328,6 +335,28 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
             )
         }
 
+    @router.post("/api/agent-packages/{package_id}/sessions/{session_id}/context/compress")
+    async def compress_agent_package_session_context(
+        request: Request,
+        package_id: str,
+        session_id: str,
+    ) -> dict[str, Any]:
+        _require_system_package(package_id)
+        principal_id = _principal(request)
+        try:
+            result = await asyncio.to_thread(
+                backend.application.runtime_service.compress_main_context,
+                session_id=session_id,
+                principal_id=principal_id,
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="conversation not found") from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=404, detail="conversation not found") from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"result": result}
+
     @router.delete("/api/agent-packages/{package_id}/sessions/{session_id}")
     async def delete_agent_package_session(request: Request, package_id: str, session_id: str) -> dict[str, Any]:
         _require_system_package(package_id)
@@ -388,6 +417,7 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
         principal_id = _principal(request)
         backend.application.stores.conversations.create_principal(principal_id)
         timezone = _required_text(request.headers.get("X-Combo-Timezone"), "timezone header")
+        locale = normalize_runtime_locale(request.headers.get("X-Combo-Locale"))
         current = _policy_or_none(backend, principal_id)
         if current is not None and payload.expected_revision != current.revision:
             raise HTTPException(status_code=409, detail="runtime policy revision conflict")
@@ -413,6 +443,16 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
             browser_navigation_timeout_ms=payload.browser_navigation_timeout_ms if payload.browser_navigation_timeout_ms is not None else current.browser_navigation_timeout_ms if current else 45_000,
             max_model_attempts=(payload.max_retries + 1) if payload.max_retries is not None else current.max_model_attempts if current else 6,
             max_parallel_temporary_agents=payload.max_parallel_sub_agents if payload.max_parallel_sub_agents is not None else current.max_parallel_temporary_agents if current else 5,
+            context_compression_detail=(
+                payload.context_compression_detail
+                if payload.context_compression_detail is not None
+                else current.context_compression_detail if current else "standard"
+            ),
+            context_compression_keep_recent_messages=(
+                payload.context_compression_keep_recent_messages
+                if payload.context_compression_keep_recent_messages is not None
+                else current.context_compression_keep_recent_messages if current else 12
+            ),
             memory_auto_write_enabled=payload.memory_auto_write_enabled if payload.memory_auto_write_enabled is not None else current.memory_auto_write_enabled if current else True,
             memory_write_interval_turns=payload.memory_write_interval_turns if payload.memory_write_interval_turns is not None else current.memory_write_interval_turns if current else 3,
             memory_agent_write_enabled=payload.memory_agent_write_enabled if payload.memory_agent_write_enabled is not None else current.memory_agent_write_enabled if current else True,
@@ -420,6 +460,7 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
             memory_max_injected_tokens=payload.memory_max_injected_tokens if payload.memory_max_injected_tokens is not None else current.memory_max_injected_tokens if current else 1200,
             max_temporary_delegation_depth=current.max_temporary_delegation_depth if current else 0,
             delegation_grant_ttl_seconds=current.delegation_grant_ttl_seconds if current else 900,
+            locale=locale,
             timezone=timezone,
             updated_at=now,
         )
@@ -437,6 +478,7 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
     ) -> dict[str, Any]:
         principal_id = _principal(request)
         timezone = _required_text(request.headers.get("X-Combo-Timezone"), "timezone header")
+        locale = normalize_runtime_locale(request.headers.get("X-Combo-Locale"))
         current = _policy_or_none(backend, principal_id)
         if current is None:
             policy = UserRuntimePolicy(
@@ -444,6 +486,7 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
                 policy_id=uuid4().hex,
                 model_profile_id=None,
                 max_parallel_temporary_agents=max(1, payload.max_parallel_sub_agents),
+                locale=locale,
                 timezone=timezone,
             )
             saved = backend.application.stores.runtime_policies.create(policy, created_at=policy.updated_at)
@@ -454,6 +497,7 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
                 current.model_copy(update={
                     "revision": current.revision + 1,
                     "max_parallel_temporary_agents": max(1, payload.max_parallel_sub_agents),
+                    "locale": locale,
                     "updated_at": utc_now_text(),
                 }),
                 expected_revision=current.revision,
@@ -1264,6 +1308,7 @@ def _synchronize_policy(
     *,
     principal_id: str,
     timezone: str,
+    locale: str,
     command_payload: dict[str, Any],
 ) -> UserRuntimePolicy:
     user_config = command_payload.get("user_config")
@@ -1311,6 +1356,12 @@ def _synchronize_policy(
             else current.max_model_attempts if current else 2
         ),
         max_parallel_temporary_agents=int(config.get("max_parallel_sub_agents") or (current.max_parallel_temporary_agents if current else 4)),
+        context_compression_detail=(
+            current.context_compression_detail if current else "standard"
+        ),
+        context_compression_keep_recent_messages=(
+            current.context_compression_keep_recent_messages if current else 12
+        ),
         memory_auto_write_enabled=current.memory_auto_write_enabled if current else True,
         memory_write_interval_turns=current.memory_write_interval_turns if current else 3,
         memory_agent_write_enabled=current.memory_agent_write_enabled if current else True,
@@ -1318,6 +1369,7 @@ def _synchronize_policy(
         memory_max_injected_tokens=current.memory_max_injected_tokens if current else 1200,
         max_temporary_delegation_depth=current.max_temporary_delegation_depth if current else 0,
         delegation_grant_ttl_seconds=current.delegation_grant_ttl_seconds if current else 900,
+        locale=normalize_runtime_locale(locale),
         timezone=timezone,
         updated_at=now,
     )
@@ -1596,6 +1648,7 @@ def _session_snapshot(backend: Any, principal_id: str, session_id: str) -> dict[
 
 
 def _session_context_window(backend: Any, session_id: str) -> dict[str, Any] | None:
+    context_snapshot = backend.application.stores.context_snapshots.latest(session_id)
     with backend.application.database.connection(query_only=True) as connection:
         row = connection.execute(
             """
@@ -1612,7 +1665,15 @@ def _session_context_window(backend: Any, session_id: str) -> dict[str, Any] | N
         payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
         context_window = payload.get("context_window")
         if isinstance(context_window, dict):
-            return {**context_window, "updated_at": str(row["created_at"])}
+            runtime_window = {**context_window, "updated_at": str(row["created_at"])}
+            if context_snapshot is None or context_snapshot.created_at <= str(row["created_at"]):
+                return runtime_window
+    if context_snapshot is not None:
+        return {
+            **context_snapshot.context_window,
+            "compression_status": "completed",
+            "updated_at": context_snapshot.created_at,
+        }
     return None
 
 
@@ -1888,6 +1949,10 @@ def _runtime_preferences_view(policy: UserRuntimePolicy | None) -> dict[str, Any
         "browser_navigation_timeout_ms": policy.browser_navigation_timeout_ms if policy else 45_000,
         "max_retries": max(0, policy.max_model_attempts - 1) if policy else 5,
         "max_parallel_sub_agents": policy.max_parallel_temporary_agents if policy else 5,
+        "context_compression_detail": policy.context_compression_detail if policy else "standard",
+        "context_compression_keep_recent_messages": (
+            policy.context_compression_keep_recent_messages if policy else 12
+        ),
         "memory_auto_write_enabled": policy.memory_auto_write_enabled if policy else True,
         "memory_write_interval_turns": policy.memory_write_interval_turns if policy else 3,
         "memory_agent_write_enabled": policy.memory_agent_write_enabled if policy else True,

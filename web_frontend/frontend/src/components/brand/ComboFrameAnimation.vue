@@ -27,6 +27,7 @@ import {
   type ComboAnimationAction,
   type ComboCharacter,
 } from './comboMascotAssets'
+import { preloadComboMascotFrame } from './comboMascotFrameLoader'
 
 const props = withDefaults(defineProps<{
   character: ComboCharacter
@@ -49,19 +50,31 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{ complete: [] }>()
 
 const animation = computed(() => getComboAnimation(props.character, props.action))
+const initialFrameIndex = ((props.phaseOffset % animation.value.frameCount) + animation.value.frameCount)
+  % animation.value.frameCount
 const rootElement = ref<HTMLElement | null>(null)
-const frameIndex = ref(0)
+const frameIndex = ref(initialFrameIndex)
+const displayedFrameSource = ref(getComboMascotFrameSource(
+  props.character,
+  props.action,
+  initialFrameIndex,
+))
+const framesReady = ref(false)
 const reducedMotion = ref(false)
 const inViewport = ref(true)
 const pageVisible = ref(true)
+let mounted = false
+let preparationVersion = 0
+let playbackCompleted = false
 let animationTimer: number | undefined
 let visibilityObserver: IntersectionObserver | undefined
+let reducedMotionQuery: MediaQueryList | undefined
 
-const frameSource = computed(() => getComboMascotFrameSource(
-  props.character,
-  props.action,
-  frameIndex.value,
+const frameSources = computed(() => Array.from(
+  { length: animation.value.frameCount },
+  (_, index) => getComboMascotFrameSource(props.character, props.action, index),
 ))
+const frameSource = computed(() => displayedFrameSource.value)
 
 function stopAnimation() {
   if (animationTimer !== undefined) {
@@ -70,49 +83,112 @@ function stopAnimation() {
   }
 }
 
-function startAnimation() {
+function normalizedInitialFrame(): number {
+  const frameCount = animation.value.frameCount
+  return ((props.phaseOffset % frameCount) + frameCount) % frameCount
+}
+
+function canPlay(): boolean {
+  return framesReady.value
+    && !playbackCompleted
+    && !props.paused
+    && !reducedMotion.value
+    && inViewport.value
+    && pageVisible.value
+}
+
+function synchronizePlayback(restartTimer = false) {
+  if (!canPlay()) {
+    stopAnimation()
+    return
+  }
+  if (animationTimer !== undefined && !restartTimer) return
+
   stopAnimation()
-  frameIndex.value = props.phaseOffset % animation.value.frameCount
-  if (props.paused || reducedMotion.value || !inViewport.value || !pageVisible.value) return
 
   const fps = props.fps > 0 ? props.fps : animation.value.defaultFps
   animationTimer = window.setInterval(() => {
     const nextFrame = frameIndex.value + 1
     if (!props.loop && nextFrame >= animation.value.frameCount) {
       stopAnimation()
+      playbackCompleted = true
       emit('complete')
       return
     }
     frameIndex.value = nextFrame % animation.value.frameCount
+    displayedFrameSource.value = frameSources.value[frameIndex.value]
   }, Math.round(1000 / fps))
 }
 
+async function prepareAnimation() {
+  const version = ++preparationVersion
+  stopAnimation()
+  framesReady.value = false
+  playbackCompleted = false
+
+  const sources = frameSources.value
+  const initialFrame = normalizedInitialFrame()
+  const preloadTasks = sources.map(preloadComboMascotFrame)
+  const initialFrameReady = await preloadTasks[initialFrame]
+  if (version !== preparationVersion) return
+
+  frameIndex.value = initialFrame
+  if (initialFrameReady) displayedFrameSource.value = sources[initialFrame]
+
+  const loadedFrames = await Promise.all(preloadTasks)
+  if (version !== preparationVersion) return
+  framesReady.value = loadedFrames.every(Boolean)
+  synchronizePlayback()
+}
+
 watch(
-  () => [props.character, props.action, props.paused, props.fps, props.phaseOffset, props.loop] as const,
-  startAnimation,
+  () => [props.character, props.action, props.phaseOffset] as const,
+  () => {
+    if (mounted) void prepareAnimation()
+  },
+)
+
+watch(
+  () => [props.paused, props.fps, props.loop] as const,
+  ([, , loop], previous) => {
+    if (!mounted) return
+    if (loop && previous && !previous[2]) playbackCompleted = false
+    synchronizePlayback(Boolean(previous && props.fps !== previous[1]))
+  },
 )
 
 onMounted(() => {
-  reducedMotion.value = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  mounted = true
+  reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
+  reducedMotion.value = reducedMotionQuery.matches
   pageVisible.value = document.visibilityState === 'visible'
   visibilityObserver = new IntersectionObserver(([entry]) => {
     inViewport.value = entry?.isIntersecting ?? true
-    startAnimation()
+    synchronizePlayback()
   })
   if (rootElement.value) visibilityObserver.observe(rootElement.value)
   document.addEventListener('visibilitychange', handlePageVisibility)
-  startAnimation()
+  reducedMotionQuery.addEventListener('change', handleReducedMotionChange)
+  void prepareAnimation()
 })
 
 onBeforeUnmount(() => {
+  mounted = false
+  preparationVersion += 1
   stopAnimation()
   visibilityObserver?.disconnect()
   document.removeEventListener('visibilitychange', handlePageVisibility)
+  reducedMotionQuery?.removeEventListener('change', handleReducedMotionChange)
 })
 
 function handlePageVisibility() {
   pageVisible.value = document.visibilityState === 'visible'
-  startAnimation()
+  synchronizePlayback()
+}
+
+function handleReducedMotionChange(event: MediaQueryListEvent) {
+  reducedMotion.value = event.matches
+  synchronizePlayback()
 }
 </script>
 

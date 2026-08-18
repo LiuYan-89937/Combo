@@ -29,6 +29,7 @@ from combo.tooling.builtins.scheduler.specs import get_scheduler_tool_specs
 from combo.tooling.builtins.skillhub.specs import get_skillhub_tool_specs
 from combo.tooling.builtins.skill.specs import get_skill_tool_specs
 from combo.tooling.builtins.tool_output.specs import get_tool_output_tool_specs
+from combo.tooling.builtins.presentations import presentations_for_builtin
 from combo.tooling.output_store import TOOL_OUTPUT_STORE_RESOURCE
 from combo.tooling.spec import ToolSpec
 
@@ -117,6 +118,7 @@ class BuiltinToolCapabilitySource:
             model_description=description,
             schema_error_guidance=spec.schema_error_guidance,
             input_schema=spec.input_schema,
+            presentations=presentations_for_builtin(spec),
             output_schema=spec.output_schema,
             execution_mode=spec.execution_mode,
             implementation=ToolImplementation(

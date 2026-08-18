@@ -241,6 +241,10 @@ class ModelInvocationOperations:
             model_role=effective_model_role,
             usage_metadata=usage_metadata,
             usage_observation=usage_observation,
+            retained_message_tokens_after_call=estimate_messages_tokens([
+                *envelope.messages,
+                response,
+            ]),
         )
         _emit(
             emit_event,
@@ -270,6 +274,10 @@ class ModelInvocationOperations:
                 "tool_count": len(tool_list),
                 "usage_metadata": usage_metadata,
                 "usage_observation": usage_observation,
+                "retained_message_tokens_after_call": estimate_messages_tokens([
+                    *envelope.messages,
+                    response,
+                ]),
                 "provider_input_tokens": token_count_from_usage_metadata(usage_metadata),
                 "reasoning_content": reasoning_content,
                 **envelope.diagnostics(),
@@ -360,6 +368,7 @@ class ModelInvocationOperations:
                     model_role=effective_model_role,
                     usage_metadata=usage_metadata,
                     usage_observation=usage_observation,
+                    retained_message_tokens_after_call=estimate_messages_tokens(request_messages),
                 )
                 _emit(
                     emit_event,
@@ -481,6 +490,10 @@ class ModelOperationService(ModelInvocationOperations):
             "compression_trigger_tokens": metadata.get("compression_trigger_tokens"),
         }
 
+    def operation_for_state(self, state: Any) -> str:
+        _model, metadata = self._resolve_model(state=state)
+        return str(metadata["model_operation"])
+
 
 def _emit(emit_event, event_type: str, payload: dict[str, Any]) -> None:
     if emit_event is None:
@@ -495,6 +508,7 @@ def _record_model_token_budget(
     model_role: str,
     usage_metadata: Any,
     usage_observation: dict[str, Any],
+    retained_message_tokens_after_call: int | None = None,
 ) -> None:
     if state is None or node_id is None:
         return
@@ -508,6 +522,7 @@ def _record_model_token_budget(
         provider_input_tokens=usage_observation.get("input_tokens"),
         fallback_output_tokens=usage_observation.get("output_tokens"),
         usage_source=str(usage_observation.get("usage_source") or "local_estimation"),
+        retained_message_tokens_after_call=retained_message_tokens_after_call,
     )
     if not payload:
         return

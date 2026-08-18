@@ -66,7 +66,6 @@
               v-for="part in block.parts"
               :key="part.id"
               :part="part"
-              :streaming="streaming"
               :highlight-mentions="isGroupUserMessage"
               :mention-names="mentionNames"
               :workspace-context="workspaceContext"

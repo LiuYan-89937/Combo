@@ -593,6 +593,61 @@ class ConversationStore:
             ).fetchall()
         return [ConversationMessage.model_validate_json(str(row["payload_json"])) for row in rows]
 
+    def messages_between_task_revisions(
+        self,
+        *,
+        session_id: str,
+        after_task_revision: int,
+        through_task_revision: int,
+    ) -> list[ConversationMessage]:
+        if after_task_revision < 0:
+            raise ValueError("after_task_revision must be non-negative")
+        if through_task_revision <= after_task_revision:
+            return []
+        with self._database.connection(query_only=True) as conn:
+            rows = conn.execute(
+                """
+                select message.payload_json
+                from conversation_messages as message
+                join conversation_turns as turn on turn.turn_id = message.turn_id
+                where message.session_id = ?
+                  and turn.task_revision > ?
+                  and turn.task_revision <= ?
+                order by turn.task_revision, message.created_at, message.rowid
+                """,
+                (
+                    _required_text(session_id, "session_id"),
+                    after_task_revision,
+                    through_task_revision,
+                ),
+            ).fetchall()
+        return [ConversationMessage.model_validate_json(str(row["payload_json"])) for row in rows]
+
+    def compactable_task_revision(self, session_id: str) -> int | None:
+        value = _required_text(session_id, "session_id")
+        with self._database.connection(query_only=True) as conn:
+            active = conn.execute(
+                """
+                select 1 from conversation_turns
+                where session_id = ?
+                  and status in ('queued', 'running', 'waiting_approval', 'waiting_external')
+                limit 1
+                """,
+                (value,),
+            ).fetchone()
+            if active is not None:
+                raise RuntimeError("conversation context cannot be compressed while a turn is active")
+            row = conn.execute(
+                """
+                select max(task_revision) as task_revision
+                from conversation_turns
+                where session_id = ? and status = 'completed'
+                """,
+                (value,),
+            ).fetchone()
+        revision = row["task_revision"] if row is not None else None
+        return int(revision) if revision is not None else None
+
 
 class CommandInbox:
     def __init__(self, database: DynamicRuntimeDatabase) -> None:
@@ -1120,6 +1175,59 @@ class RuntimeInstanceStore:
             ).fetchone()
         if row is None:
             raise LookupError(f"active runtime not found for session: {session_id}")
+        return RuntimeInstance.model_validate_json(str(row["payload_json"]))
+
+    def latest_completed_main_before(
+        self,
+        *,
+        session_id: str,
+        principal_id: str,
+        created_at: str,
+    ) -> RuntimeInstance | None:
+        with self._database.connection(query_only=True) as conn:
+            row = conn.execute(
+                """
+                select payload_json from runtime_instances
+                where session_id = ?
+                  and json_extract(payload_json, '$.request.principal_id') = ?
+                  and json_extract(payload_json, '$.request.runtime_role') = 'main'
+                  and status = 'completed'
+                  and created_at < ?
+                order by created_at desc, rowid desc limit 1
+                """,
+                (
+                    _required_text(session_id, "session_id"),
+                    _required_text(principal_id, "principal_id"),
+                    _required_text(created_at, "created_at"),
+                ),
+            ).fetchone()
+        if row is None:
+            return None
+        return RuntimeInstance.model_validate_json(str(row["payload_json"]))
+
+    def latest_completed_main(
+        self,
+        *,
+        session_id: str,
+        principal_id: str,
+    ) -> RuntimeInstance | None:
+        with self._database.connection(query_only=True) as conn:
+            row = conn.execute(
+                """
+                select payload_json from runtime_instances
+                where session_id = ?
+                  and json_extract(payload_json, '$.request.principal_id') = ?
+                  and json_extract(payload_json, '$.request.runtime_role') = 'main'
+                  and status = 'completed'
+                order by created_at desc, rowid desc limit 1
+                """,
+                (
+                    _required_text(session_id, "session_id"),
+                    _required_text(principal_id, "principal_id"),
+                ),
+            ).fetchone()
+        if row is None:
+            return None
         return RuntimeInstance.model_validate_json(str(row["payload_json"]))
 
     def capability_snapshot(self, snapshot_id: str) -> CapabilitySnapshot:

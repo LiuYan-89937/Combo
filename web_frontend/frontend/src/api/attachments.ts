@@ -1,6 +1,7 @@
 import { backendUrl } from './backendUrl'
 import { runtimeClientInstanceId, runtimePrincipalId } from './runtimeIdentity'
 import type { RuntimeAttachmentInput } from '@/types/protocol'
+import { runtimeLocale } from '@/i18n'
 
 interface AttachmentUploadResponse {
   attachment: RuntimeAttachmentInput
@@ -15,6 +16,7 @@ export async function uploadRuntimeAttachment(file: File): Promise<RuntimeAttach
       'X-Combo-Principal': runtimePrincipalId(),
       'X-Combo-Client': runtimeClientInstanceId(),
       'X-Combo-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
+      'X-Combo-Locale': runtimeLocale(),
     },
     body: formData,
   })

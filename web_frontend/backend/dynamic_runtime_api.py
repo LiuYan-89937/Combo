@@ -30,6 +30,7 @@ from combo.runtime_protocol import (
     RuntimeProtocolHandshakeResult,
     UserRuntimePolicy,
 )
+from combo.runtime_i18n import normalize_runtime_locale
 
 
 class RequestPrincipalResolver(Protocol):
@@ -266,6 +267,8 @@ class RuntimePolicyWriteRequest(BaseModel):
     browser_navigation_timeout_ms: int = Field(default=45_000, ge=1_000, le=600_000)
     max_model_attempts: int = Field(ge=1)
     max_parallel_temporary_agents: int = Field(ge=1)
+    context_compression_detail: Literal["concise", "standard", "detailed"] = "standard"
+    context_compression_keep_recent_messages: int = Field(default=12, ge=0, le=128)
     memory_auto_write_enabled: bool = True
     memory_write_interval_turns: int = Field(default=3, ge=1, le=1000)
     memory_agent_write_enabled: bool = True
@@ -1253,6 +1256,8 @@ def create_dynamic_runtime_router(
             browser_navigation_timeout_ms=payload.browser_navigation_timeout_ms,
             max_model_attempts=payload.max_model_attempts,
             max_parallel_temporary_agents=payload.max_parallel_temporary_agents,
+            context_compression_detail=payload.context_compression_detail,
+            context_compression_keep_recent_messages=payload.context_compression_keep_recent_messages,
             memory_auto_write_enabled=payload.memory_auto_write_enabled,
             memory_write_interval_turns=payload.memory_write_interval_turns,
             memory_agent_write_enabled=payload.memory_agent_write_enabled,
@@ -1260,6 +1265,7 @@ def create_dynamic_runtime_router(
             memory_max_injected_tokens=payload.memory_max_injected_tokens,
             max_temporary_delegation_depth=payload.max_temporary_delegation_depth,
             delegation_grant_ttl_seconds=payload.delegation_grant_ttl_seconds,
+            locale=normalize_runtime_locale(request.headers.get("X-Combo-Locale")),
             timezone=payload.timezone,
             updated_at=now,
         )

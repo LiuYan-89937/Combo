@@ -58,6 +58,55 @@
   word-break: break-word;
 }
 
+.markdown-content .markdown-code-block {
+  max-width: 100%;
+  margin: 0 0 16px;
+  overflow: hidden;
+  background-color: var(--app-code-background);
+  border: 1px solid var(--app-code-border);
+  border-radius: var(--app-radius-md);
+}
+
+.markdown-content .markdown-code-toolbar {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px 0 12px;
+  border-bottom: 1px solid var(--app-code-border);
+  color: var(--app-text-muted);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.markdown-content .markdown-code-copy {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--app-text-muted);
+  cursor: pointer;
+  font: inherit;
+  transition: color var(--app-transition-fast), background var(--app-transition-fast), transform var(--app-transition-fast);
+}
+
+.markdown-content .markdown-code-copy:hover {
+  color: var(--app-text);
+  background: var(--app-surface-muted);
+}
+
+.markdown-content .markdown-code-copy:active {
+  transform: scale(.92);
+}
+
+.markdown-content .markdown-code-copy.is-copied {
+  color: var(--app-success);
+}
+
 .markdown-content pre {
   max-width: 100%;
   padding: 14px 16px;
@@ -65,9 +114,9 @@
   font-size: 88%;
   line-height: 1.55;
   background-color: var(--app-code-background);
-  border: 1px solid var(--app-code-border);
-  border-radius: var(--app-radius-md);
-  margin-bottom: 16px;
+  border: 0;
+  border-radius: 0;
+  margin: 0;
   white-space: pre;
 }
 

@@ -218,6 +218,14 @@ const zhCN = {
   'settings.runningMessageModeHint': '排队会等待当前任务结束；立即转向会停止当前回复并把新消息接入同一任务。工具执行期间会等待工具闭合。',
   'settings.runningMessageQueue': '排队',
   'settings.runningMessageSteer': '立即转向',
+  'settings.contextCompressionDetail': '压缩详细程度',
+  'settings.contextCompressionDetailHint': '控制快照保留信息的密度；压缩输出总量最多为压缩阈值的 40%。',
+  'settings.contextCompressionConcise': '精简',
+  'settings.contextCompressionStandard': '标准',
+  'settings.contextCompressionDetailed': '详细',
+  'settings.contextCompressionKeepRecent': '压缩时保留最近消息',
+  'settings.contextCompressionKeepRecentHint': '最近消息保留原文；设为 0 时只保留压缩快照。',
+  'settings.messages': '条',
   'settings.requestTimeout': '请求无响应超时',
   'settings.requestTimeoutHint': '默认 300 秒；模型输出、工具或节点产生有效进展后会重新计时。设置为 0 表示关闭，修改后从下一次请求生效。',
   'settings.browserOperationTimeout': '浏览器操作超时',
@@ -490,6 +498,7 @@ const zhCN = {
   'backgroundTask.capsule.approval': '待批准',
   'backgroundTask.capsule.answer': '等待回答',
   'backgroundTask.capsule.queued': '排队中',
+  'backgroundTask.capsule.thinking': '思考中',
   'backgroundTask.capsule.completed': '已完成',
   'backgroundTask.capsule.failed': '执行失败',
   'backgroundTask.capsule.stopping': '正在停止',
@@ -1187,6 +1196,11 @@ const zhCN = {
   'status.contextCompressionRunning': '正在压缩上下文（压缩前 {before} tokens）',
   'status.contextCompressionCompleted': '上下文已从 {before} 压缩至 {after} tokens，收束 {count} 条历史消息',
   'status.contextCompressionFailed': '上下文压缩失败：{reason}',
+  'status.contextCompressionSkipped': '当前没有可继续压缩的历史消息',
+  'status.compressContextNow': '立即压缩',
+  'status.contextCompressing': '正在压缩…',
+  'markdown.copyCode': '复制代码',
+  'markdown.codeCopied': '已复制',
   'browser.panelTitle': '浏览器',
   'browser.expand': '展开',
   'browser.minimize': '收起',
@@ -1682,6 +1696,14 @@ const enUS: Record<MessageKey, string> = {
   'settings.runningMessageModeHint': 'Queue waits for the current task to finish. Redirect stops the current reply and injects the message into the same task after any active tool call closes.',
   'settings.runningMessageQueue': 'Queue',
   'settings.runningMessageSteer': 'Redirect',
+  'settings.contextCompressionDetail': 'Compression detail',
+  'settings.contextCompressionDetailHint': 'Controls snapshot information density. Compressed output is capped at 40% of the compression threshold.',
+  'settings.contextCompressionConcise': 'Concise',
+  'settings.contextCompressionStandard': 'Standard',
+  'settings.contextCompressionDetailed': 'Detailed',
+  'settings.contextCompressionKeepRecent': 'Recent messages kept during compression',
+  'settings.contextCompressionKeepRecentHint': 'Recent messages remain verbatim. Set to 0 to retain only the compressed snapshot.',
+  'settings.messages': 'messages',
   'settings.requestTimeout': 'Request timeout',
   'settings.requestTimeoutHint': 'Defaults to 300 seconds and resets whenever model output, tool activity, or node progress is received. Set to 0 to disable it; changes apply to the next request.',
   'settings.browserOperationTimeout': 'Browser operation timeout',
@@ -1954,6 +1976,7 @@ const enUS: Record<MessageKey, string> = {
   'backgroundTask.capsule.approval': 'Approval required',
   'backgroundTask.capsule.answer': 'Waiting for answer',
   'backgroundTask.capsule.queued': 'Queued',
+  'backgroundTask.capsule.thinking': 'Thinking',
   'backgroundTask.capsule.completed': 'Completed',
   'backgroundTask.capsule.failed': 'Failed',
   'backgroundTask.capsule.stopping': 'Stopping',
@@ -2651,6 +2674,11 @@ const enUS: Record<MessageKey, string> = {
   'status.contextCompressionRunning': 'Compressing context ({before} tokens before compression)',
   'status.contextCompressionCompleted': 'Context compressed from {before} to {after} tokens; condensed {count} historical messages',
   'status.contextCompressionFailed': 'Context compression failed: {reason}',
+  'status.contextCompressionSkipped': 'There is no compressible history right now',
+  'status.compressContextNow': 'Compress now',
+  'status.contextCompressing': 'Compressing…',
+  'markdown.copyCode': 'Copy code',
+  'markdown.codeCopied': 'Copied',
   'browser.panelTitle': 'Browser',
   'browser.expand': 'Expand',
   'browser.minimize': 'Minimize',
@@ -2952,6 +2980,11 @@ export function normalizeLocale(value: string | null | undefined): Locale {
 export function detectBrowserLocale(): Locale {
   if (typeof navigator === 'undefined') return 'zh-CN'
   return normalizeLocale(navigator.language)
+}
+
+export function runtimeLocale(): Locale {
+  if (typeof localStorage === 'undefined') return detectBrowserLocale()
+  return normalizeLocale(localStorage.getItem(localeStorageKey) || detectBrowserLocale())
 }
 
 export function translate(

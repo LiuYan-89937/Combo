@@ -26,7 +26,7 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
     return path_risk_result(
         arguments,
         context,
-        path_key="base_path",
+        path_key="path",
         default_action="allow",
         sensitive_action="ask",
     )
@@ -34,7 +34,7 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     pattern = required_string(arguments, "pattern")
-    base_path = str(arguments.get("base_path") or ".")
+    search_path = str(arguments.get("path") or ".")
     include = string_list(arguments.get("include"), key="include")
     exclude = string_list(arguments.get("exclude"), key="exclude")
     case_sensitive = bool(arguments.get("case_sensitive", True))
@@ -50,7 +50,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     matcher = _compile_matcher(pattern=pattern, case_sensitive=case_sensitive, use_regex=use_regex)
     root, allow_external = filesystem_boundary(resources)
     target = resolve_path(
-        path=base_path,
+        path=search_path,
         root=root,
         allow_external=allow_external,
         allowed_roots=filesystem_allowed_roots(resources),

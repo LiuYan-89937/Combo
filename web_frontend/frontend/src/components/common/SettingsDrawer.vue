@@ -24,6 +24,7 @@
                 <n-radio-button value="steer">{{ t('settings.runningMessageSteer') }}</n-radio-button>
               </n-radio-group>
             </div>
+
           </div>
         </section>
 
@@ -192,6 +193,36 @@
                 <p class="field-hint">{{ t('settings.mainAgentCapabilitiesHint') }}</p>
               </div>
               <n-button secondary @click="openMainAgentCapabilities">{{ t('settings.manageCapabilities') }}</n-button>
+            </div>
+
+            <div class="field-divider" aria-hidden="true"></div>
+
+            <div class="field-row">
+              <div class="field-copy">
+                <label class="field-label">{{ t('settings.contextCompressionDetail') }}</label>
+                <p class="field-hint">{{ t('settings.contextCompressionDetailHint') }}</p>
+              </div>
+              <n-radio-group v-model:value="contextCompressionDetail" size="small" class="field-control soft-segmented-control">
+                <n-radio-button value="concise">{{ t('settings.contextCompressionConcise') }}</n-radio-button>
+                <n-radio-button value="standard">{{ t('settings.contextCompressionStandard') }}</n-radio-button>
+                <n-radio-button value="detailed">{{ t('settings.contextCompressionDetailed') }}</n-radio-button>
+              </n-radio-group>
+            </div>
+
+            <div class="field-divider" aria-hidden="true"></div>
+
+            <div class="field-block">
+              <label class="field-label">{{ t('settings.contextCompressionKeepRecent') }}</label>
+              <n-input-number
+                v-model:value="contextCompressionKeepRecentMessages"
+                class="field-input"
+                :min="0"
+                :max="128"
+                :precision="0"
+              >
+                <template #suffix>{{ t('settings.messages') }}</template>
+              </n-input-number>
+              <p class="field-hint">{{ t('settings.contextCompressionKeepRecentHint') }}</p>
             </div>
 
             <div class="field-divider" aria-hidden="true"></div>
@@ -536,6 +567,20 @@ const runningMessageMode = computed({
   get: () => runtimePreferences.runningMessageMode,
   set: (value: import('@/stores/runtimePreferences').RunningMessageMode) => {
     runtimePreferences.setRunningMessageMode(value)
+  },
+})
+
+const contextCompressionKeepRecentMessages = computed({
+  get: () => runtimePreferences.contextCompressionKeepRecentMessages,
+  set: (value: number | null) => {
+    if (value !== null) runtimePreferences.setContextCompressionKeepRecentMessages(value)
+  },
+})
+
+const contextCompressionDetail = computed({
+  get: () => runtimePreferences.contextCompressionDetail,
+  set: (value: import('@/api/runtimePreferences').ContextCompressionDetail) => {
+    runtimePreferences.setContextCompressionDetail(value)
   },
 })
 
