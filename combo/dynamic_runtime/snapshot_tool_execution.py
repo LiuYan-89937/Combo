@@ -315,13 +315,14 @@ def _compile_tool(
             max_model_chars=definition.runtime_policy.output_max_model_chars,
         ),
         output_projection=definition.runtime_policy.output_projection,
+        execution_mode=definition.execution_mode,
         sensitive_argument_paths=list(definition.sensitive_argument_paths),
         loop_policy=ToolLoopPolicyConfig.model_validate(definition.loop_policy.model_dump(mode="json")),
         effects=list(definition.effects),
         read_only=definition.read_only,
         system_available=definition.system_available,
     )
-    return _compiler(
+    compiler = _compiler(
         spec=spec,
         runtime_policy=definition.runtime_policy,
         runtime_instance=runtime_instance,
@@ -329,7 +330,12 @@ def _compile_tool(
         output=output,
         approval=approval,
         maximum_argument_revisions=maximum_argument_revisions,
-    ).compile_resolved(
+    )
+    if definition.execution_mode == "delegated":
+        if hard_risk_evaluator is not None:
+            raise ValueError("delegated execution cannot declare an outer risk evaluator")
+        return compiler.compile_delegated_resolved(spec, entrypoint=entrypoint)
+    return compiler.compile_resolved(
         spec,
         entrypoint=entrypoint,
         hard_risk_evaluator=hard_risk_evaluator,

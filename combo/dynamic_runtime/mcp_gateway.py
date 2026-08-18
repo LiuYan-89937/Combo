@@ -19,6 +19,8 @@ from combo.dynamic_runtime.capability_definitions import (
     MCPToolDefinition,
     ToolRuntimePolicy,
 )
+from combo.dynamic_runtime.capability_search_contracts import CapabilitySearchCandidate
+from combo.dynamic_runtime.capability_search_documents import parameter_text_from_definition
 from combo.dynamic_runtime.mcp_runtime import (
     MCPRuntimePool,
     MCPServerCatalog,
@@ -106,6 +108,66 @@ class MCPGatewayServer:
     server_digest: str
     catalog: MCPServerCatalog
     tools: tuple[MCPGatewayTool, ...]
+
+    @property
+    def capability_id(self) -> str:
+        return f"mcp-server://{self.server_id}"
+
+    def projection(self) -> CapabilityProjectionSnapshot:
+        return CapabilityProjectionSnapshot(
+            capability_id=self.capability_id,
+            kind="mcp_server",
+            revision=self.revision,
+            content_digest=self.server_digest,
+            adapter_id=MCP_GATEWAY_ADAPTER_ID,
+            adapter_revision=MCP_GATEWAY_ADAPTER_REVISION,
+            runtime_definition_schema="mcp_server_definition.v1",
+            runtime_definition={"server_id": self.server_id},
+            model_tool_ids=(),
+        )
+
+    def selection(self) -> CapabilitySelection:
+        return CapabilitySelection(
+            capability_id=self.capability_id,
+            kind="mcp_server",
+            status="selected",
+            reason="selected as one complete MCP Server",
+            evidence_ids=(f"mcp-gateway:{self.server_digest}",),
+            resolved=CapabilityRevisionRef(
+                capability_id=self.capability_id,
+                kind="mcp_server",
+                resolved_version=self.server_digest,
+                revision=self.revision,
+                content_digest=self.server_digest,
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class MCPGatewayCatalogEntry:
+    capability_id: str
+    server_id: str
+    kind: str
+    display_name: str
+    description: str
+    operation_name: str
+    index_revision_id: str
+    keywords: tuple[str, ...]
+    parameter_text: str
+    descriptor: dict[str, Any]
+
+    def search_candidate(self) -> CapabilitySearchCandidate:
+        return CapabilitySearchCandidate(
+            capability_id=self.capability_id,
+            index_revision_id=self.index_revision_id,
+            kind=self.kind,
+            search_scope="mcp_catalog",
+            parent_capability_id=f"mcp-server://{self.server_id}",
+            display_name=self.display_name,
+            description=self.description,
+            keywords=self.keywords,
+            parameter_text=self.parameter_text,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -294,6 +356,25 @@ class MCPGateway:
             raise LookupError(f"connected MCP server not found: {server_id}")
         return server
 
+    def resolve_server(self, public_name: str) -> MCPGatewayServer:
+        requested = str(public_name or "").strip()
+        if not requested:
+            raise ValueError("MCP server name must not be empty")
+        normalized = requested.casefold()
+        matches = tuple(
+            server
+            for server in self.servers()
+            if normalized in {
+                server.server_id.casefold(),
+                str(server.raw_config.get("display_name") or server.server_id).strip().casefold(),
+            }
+        )
+        if not matches:
+            raise LookupError(f"connected MCP server not found: {public_name}")
+        if len(matches) > 1:
+            raise LookupError(f"MCP server name is ambiguous: {public_name}")
+        return next(iter(matches))
+
     def connected_server(self, server_id: str) -> MCPGatewayServer | None:
         with self._lock:
             return self._servers.get(str(server_id or "").strip())
@@ -305,43 +386,73 @@ class MCPGateway:
     def tools(self) -> tuple[MCPGatewayTool, ...]:
         return tuple(tool for server in self.servers() for tool in server.tools)
 
+    def server_search_candidates(self) -> tuple[CapabilitySearchCandidate, ...]:
+        """Project one top-level search document per connected MCP server."""
+        return tuple(_mcp_server_search_candidate(server) for server in self.servers())
+
+    def catalog_entries(self, server_id: str | None = None) -> tuple[MCPGatewayCatalogEntry, ...]:
+        servers = self.servers() if server_id is None else (self.server(server_id),)
+        return tuple(entry for server in servers for entry in _mcp_catalog_entries(server))
+
+    def mcp_catalog_search_candidates(
+        self,
+        server_id: str,
+    ) -> tuple[CapabilitySearchCandidate, ...]:
+        return tuple(entry.search_candidate() for entry in self.catalog_entries(server_id))
+
+    def search_candidates(self) -> tuple[CapabilitySearchCandidate, ...]:
+        """Project the complete hierarchical MCP catalog into the unified index.
+
+        Top-level search callers use ``server_search_candidates``. MCP-scoped
+        callers use ``mcp_catalog_search_candidates`` with a concrete parent.
+        """
+        return (
+            *self.server_search_candidates(),
+            *(entry.search_candidate() for entry in self.catalog_entries()),
+        )
+
     def tools_for_servers(self, server_ids: tuple[str, ...]) -> tuple[MCPGatewayTool, ...]:
         requested = tuple(dict.fromkeys(str(value or "").strip() for value in server_ids))
         if any(not value for value in requested):
             raise ValueError("MCP server IDs must not be empty")
         return tuple(tool for server_id in requested for tool in self.server(server_id).tools)
 
-    def exact_requirement_matches(
-        self,
-        requirements: tuple[str, ...],
-    ) -> tuple[tuple[str, MCPGatewayTool], ...]:
-        tools = self.tools()
-        matches: list[tuple[str, MCPGatewayTool]] = []
-        for requirement in requirements:
-            normalized = _normalized_name(requirement)
-            candidates = [
-                tool for tool in tools
-                if normalized in {
-                    _normalized_name(tool.display_name),
-                    _normalized_name(tool.definition.upstream_tool_name),
-                    _normalized_name(tool.definition.model_alias),
-                }
-            ]
-            if len(candidates) == 1:
-                matches.append((requirement, candidates[0]))
-        return tuple(matches)
-
     def augment_snapshot(
         self,
         base: CapabilitySnapshot,
         *,
         server_ids: tuple[str, ...] = (),
-        required_tools: tuple[MCPGatewayTool, ...] = (),
     ) -> CapabilitySnapshot:
+        servers = tuple(self.server(server_id) for server_id in dict.fromkeys(server_ids))
+        base = self._augment_snapshot_with_mcp_servers(base, servers)
         unique_tools: dict[str, MCPGatewayTool] = {}
-        for tool in (*self.tools_for_servers(server_ids), *required_tools):
+        for tool in (tool for server in servers for tool in server.tools):
             unique_tools.setdefault(tool.capability_id, tool)
-        tools = tuple(unique_tools.values())
+        return self._augment_snapshot_with_mcp_tools(base, tuple(unique_tools.values()))
+
+    def augment_snapshot_tools(
+        self,
+        base: CapabilitySnapshot,
+        *,
+        capability_ids: tuple[str, ...],
+    ) -> CapabilitySnapshot:
+        requested = tuple(dict.fromkeys(str(value or "").strip() for value in capability_ids))
+        if not requested or any(not value for value in requested):
+            raise ValueError("MCP tool capability IDs must not be empty")
+        available = {tool.capability_id: tool for tool in self.tools()}
+        missing = tuple(value for value in requested if value not in available)
+        if missing:
+            raise LookupError("connected MCP Tool not found: " + ", ".join(missing))
+        return self._augment_snapshot_with_mcp_tools(
+            base,
+            tuple(available[value] for value in requested),
+        )
+
+    def _augment_snapshot_with_mcp_tools(
+        self,
+        base: CapabilitySnapshot,
+        tools: tuple[MCPGatewayTool, ...],
+    ) -> CapabilitySnapshot:
         if not tools:
             return base
         existing_capability_ids = {item.capability_id for item in base.selections}
@@ -373,6 +484,22 @@ class MCPGateway:
             dependency_environment=base.dependency_environment,
         )
 
+    def _augment_snapshot_with_mcp_servers(
+        self,
+        base: CapabilitySnapshot,
+        servers: tuple[MCPGatewayServer, ...],
+    ) -> CapabilitySnapshot:
+        existing = {item.capability_id for item in base.selections}
+        additions = tuple(server for server in servers if server.capability_id not in existing)
+        if not additions:
+            return base
+        return CapabilitySnapshot(
+            selections=(*base.selections, *(server.selection() for server in additions)),
+            projections=(*base.projections, *(server.projection() for server in additions)),
+            tool_ids=base.tool_ids,
+            tool_aliases=base.tool_aliases,
+            dependency_environment=base.dependency_environment,
+        )
     def _prepare(
         self,
         raw: dict[str, Any],
@@ -767,8 +894,178 @@ def _optional_path(value: Any) -> Path | None:
     return None if text is None else Path(text).expanduser().resolve()
 
 
-def _normalized_name(value: str) -> str:
-    return " ".join(str(value or "").casefold().split())
+def _mcp_server_search_candidate(server: MCPGatewayServer) -> CapabilitySearchCandidate:
+    raw = server.raw_config
+    display_name = str(raw.get("display_name") or server.server_id).strip()
+    description = str(raw.get("description") or "").strip()
+    raw_connection = raw.get("connection")
+    connection = raw_connection if isinstance(raw_connection, dict) else {}
+    keywords = tuple(dict.fromkeys(
+        value
+        for value in (
+            "mcp",
+            server.server_id,
+            str(connection.get("transport") or "").strip(),
+            str(server.catalog.server_name or "").strip(),
+            str(server.catalog.server_title or "").strip(),
+            *(str(value).strip() for value in server.catalog.capabilities),
+        )
+        if value
+    ))
+    index_document = {
+        "capability_id": f"mcp-server://{server.server_id}",
+        "display_name": display_name,
+        "description": description,
+        "keywords": keywords,
+    }
+    return CapabilitySearchCandidate(
+        capability_id=str(index_document["capability_id"]),
+        index_revision_id=f"mcp-server-index:{_digest(index_document)}",
+        kind="mcp_server",
+        search_scope="capability_catalog",
+        parent_capability_id=None,
+        display_name=display_name,
+        description=description,
+        keywords=keywords,
+    )
+
+
+def _mcp_catalog_entries(server: MCPGatewayServer) -> tuple[MCPGatewayCatalogEntry, ...]:
+    parent_keywords = ("mcp", server.server_id)
+    entries: list[MCPGatewayCatalogEntry] = []
+    for tool in server.tools:
+        definition = tool.definition
+        descriptor = {
+            "kind": "mcp_tool",
+            "name": tool.display_name,
+            "description": tool.description,
+            "server_name": str(server.raw_config.get("display_name") or server.server_id),
+            "operation": definition.upstream_tool_name,
+            "input_schema": definition.input_schema.canonical_schema,
+            "output_schema": definition.output_schema.canonical_schema,
+        }
+        entries.append(MCPGatewayCatalogEntry(
+            capability_id=tool.capability_id,
+            server_id=server.server_id,
+            kind="mcp_tool",
+            display_name=tool.display_name,
+            description=tool.description,
+            operation_name=definition.upstream_tool_name,
+            index_revision_id=f"mcp-catalog-index:{_digest(descriptor)}",
+            keywords=(*parent_keywords, definition.upstream_tool_name, definition.model_alias),
+            parameter_text=parameter_text_from_definition({"input_schema": definition.input_schema.canonical_schema}),
+            descriptor=descriptor,
+        ))
+    for resource in server.catalog.resources:
+        uri = str(getattr(resource, "uri", "") or "").strip()
+        name = str(getattr(resource, "name", "") or "").strip()
+        title = str(getattr(resource, "title", "") or "").strip()
+        display_name = title or name or uri
+        descriptor = {
+            "kind": "mcp_resource",
+            "name": display_name,
+            "description": str(getattr(resource, "description", "") or "").strip(),
+            "server_name": str(server.raw_config.get("display_name") or server.server_id),
+            "uri": uri,
+            "mime_type": str(getattr(resource, "mime_type", "") or "").strip(),
+        }
+        entries.append(_mcp_content_entry(
+            server=server,
+            kind="mcp_resource",
+            identity=uri or name or display_name,
+            display_name=display_name,
+            operation_name=uri,
+            descriptor=descriptor,
+            keywords=(*parent_keywords, name, descriptor["mime_type"]),
+        ))
+    for template in server.catalog.resource_templates:
+        uri_template = str(getattr(template, "uri_template", "") or "").strip()
+        name = str(getattr(template, "name", "") or "").strip()
+        title = str(getattr(template, "title", "") or "").strip()
+        display_name = title or name or uri_template
+        descriptor = {
+            "kind": "mcp_resource_template",
+            "name": display_name,
+            "description": str(getattr(template, "description", "") or "").strip(),
+            "server_name": str(server.raw_config.get("display_name") or server.server_id),
+            "uri_template": uri_template,
+            "mime_type": str(getattr(template, "mime_type", "") or "").strip(),
+        }
+        entries.append(_mcp_content_entry(
+            server=server,
+            kind="mcp_resource_template",
+            identity=uri_template or name or display_name,
+            display_name=display_name,
+            operation_name=uri_template,
+            descriptor=descriptor,
+            keywords=(*parent_keywords, name, descriptor["mime_type"]),
+        ))
+    for prompt in server.catalog.prompts:
+        name = str(getattr(prompt, "name", "") or "").strip()
+        title = str(getattr(prompt, "title", "") or "").strip()
+        display_name = title or name
+        arguments = tuple(getattr(prompt, "arguments", ()) or ())
+        argument_descriptors = [
+            {
+                "name": str(getattr(argument, "name", "") or "").strip(),
+                "description": str(getattr(argument, "description", "") or "").strip(),
+                "required": bool(getattr(argument, "required", False)),
+            }
+            for argument in arguments
+        ]
+        descriptor = {
+            "kind": "mcp_prompt",
+            "name": display_name,
+            "description": str(getattr(prompt, "description", "") or "").strip(),
+            "server_name": str(server.raw_config.get("display_name") or server.server_id),
+            "operation": name,
+            "arguments": argument_descriptors,
+        }
+        parameter_text = " ".join(
+            value
+            for argument in argument_descriptors
+            for value in (str(argument["name"]), str(argument["description"]))
+            if value
+        )
+        entries.append(MCPGatewayCatalogEntry(
+            capability_id=f"mcp-prompt://{server.server_id}/{quote(name, safe='')}",
+            server_id=server.server_id,
+            kind="mcp_prompt",
+            display_name=display_name,
+            description=str(descriptor["description"]),
+            operation_name=name,
+            index_revision_id=f"mcp-catalog-index:{_digest(descriptor)}",
+            keywords=tuple(value for value in (*parent_keywords, name) if value),
+            parameter_text=parameter_text,
+            descriptor=descriptor,
+        ))
+    return tuple(entries)
+
+
+def _mcp_content_entry(
+    *,
+    server: MCPGatewayServer,
+    kind: str,
+    identity: str,
+    display_name: str,
+    operation_name: str,
+    descriptor: dict[str, Any],
+    keywords: tuple[str, ...],
+) -> MCPGatewayCatalogEntry:
+    identity_digest = sha256(identity.encode("utf-8")).hexdigest()
+    scheme = kind.replace("_", "-")
+    return MCPGatewayCatalogEntry(
+        capability_id=f"{scheme}://{server.server_id}/{identity_digest}",
+        server_id=server.server_id,
+        kind=kind,
+        display_name=display_name,
+        description=str(descriptor.get("description") or ""),
+        operation_name=operation_name,
+        index_revision_id=f"mcp-catalog-index:{_digest(descriptor)}",
+        keywords=tuple(value for value in keywords if value),
+        parameter_text="",
+        descriptor=descriptor,
+    )
 
 
 def _digest(value: Any) -> str:

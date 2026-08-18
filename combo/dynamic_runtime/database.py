@@ -1292,6 +1292,25 @@ def _default_migrations() -> tuple[MigrationStep, ...]:
                 """,
             ),
         ),
+        MigrationStep(
+            version=25,
+            name="scoped_capability_search",
+            statements=(
+                """
+                alter table capability_search_documents
+                add column search_scope text not null default 'capability_catalog'
+                  check (search_scope in ('capability_catalog','mcp_catalog'))
+                """,
+                """
+                alter table capability_search_documents
+                add column parent_capability_id text
+                """,
+                """
+                create index idx_capability_search_document_scope
+                on capability_search_documents(generation_id, search_scope, parent_capability_id)
+                """,
+            ),
+        ),
     )
 
 
@@ -1413,6 +1432,7 @@ def _schema_allowlist() -> set[tuple[str, str]]:
         ("index", "idx_capability_search_generation_status"),
         ("table", "capability_search_documents"),
         ("index", "idx_capability_search_document_capability"),
+        ("index", "idx_capability_search_document_scope"),
         ("table", "capability_search_active_generation"),
         ("table", "capability_search_receipts"),
         ("index", "idx_capability_search_receipt_generation"),

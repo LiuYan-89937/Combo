@@ -49,6 +49,7 @@ from combo.dynamic_runtime.capability_kind_adapters import (
     ToolCapabilityAdapter,
     default_capability_adapters,
 )
+from combo.dynamic_runtime.capability_search_contracts import CapabilitySearchMatch
 from combo.dynamic_runtime.capability_resolver import (
     CapabilityCompatibilityResolver,
     CapabilityHealthResolver,
@@ -56,7 +57,6 @@ from combo.dynamic_runtime.capability_resolver import (
     CapabilityResolutionDecision,
     CapabilityResolutionError,
     CapabilitySearchIndex,
-    CapabilitySearchMatch,
     DependencyEnvironmentResolver,
     MainTurnCapabilityResolver,
     MainTurnCapabilityResolverProtocol,

@@ -4,6 +4,7 @@ from __future__ import annotations
 MAIN_RUNTIME_ONLY_CAPABILITY_IDS = frozenset(
     {
         "tool://builtin/capability",
+        "tool://builtin/capability_invoke",
         "tool://builtin/delegate",
         "tool://builtin/delegation_status",
         "tool://builtin/knowledge",

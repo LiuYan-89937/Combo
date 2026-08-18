@@ -771,6 +771,7 @@ def _tool_call_records(
                     "capability_id": part.capability_id,
                     "capability_revision": part.capability_revision,
                     "model_alias": part.model_alias,
+                    "display_alias": observed.get("display_alias") or part.model_alias,
                     "arguments": dict(part.arguments),
                     "status": initial_status,
                     "created_at": observed.get("requested_at") or message.created_at,
@@ -818,6 +819,9 @@ def _tool_event_times(observations: list[dict[str, Any]]) -> dict[str, dict[str,
         if not tool_call_id or not created_at:
             continue
         times = event_times.setdefault(tool_call_id, {})
+        observed_tool_id = str(payload.get("tool_id") or payload.get("tool_name") or "").strip()
+        if observed_tool_id:
+            times["display_alias"] = observed_tool_id
         if event_type == "tool_proposed":
             times.setdefault("requested_at", created_at)
         elif event_type == "tool_started":

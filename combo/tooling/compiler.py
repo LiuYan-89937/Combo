@@ -134,6 +134,66 @@ class ToolCompiler:
             ),
         )
 
+    def compile_delegated_resolved(
+        self,
+        spec: ToolSpec,
+        *,
+        entrypoint: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]],
+    ) -> BaseTool:
+        """Compile a dispatcher whose selected target owns execution policy."""
+        if not callable(entrypoint):
+            raise ToolCompileError(f"cannot compile delegated tool {spec.id}: entrypoint is not callable")
+        try:
+            input_schema = compile_json_schema(schema=spec.input_schema, model_name=f"{spec.id}_args")
+        except Exception as exc:
+            raise ToolCompileError(f"cannot compile delegated tool {spec.id}: {exc}") from exc
+
+        def invoke_tool(**kwargs: Any) -> dict[str, Any]:
+            arguments = _strip_unset_none_values(
+                _normalize_tool_arguments(dict(kwargs)),
+                schema=spec.input_schema,
+            )
+            result = entrypoint(arguments, dict(self.resources))
+            if not isinstance(result, dict) or result.get("type") != "tool_observation":
+                raise ToolCompileError(
+                    f"delegated tool {spec.id} must return a target tool observation"
+                )
+            return result
+
+        return StructuredTool.from_function(
+            func=invoke_tool,
+            name=spec.id,
+            description=spec.description,
+            args_schema=input_schema.schema,
+            infer_schema=False,
+            metadata={
+                "combo": {
+                    "tool_id": spec.id,
+                    "concurrent": spec.concurrent,
+                    "max_parallel_calls": spec.max_parallel_calls,
+                    "risk_level": spec.risk_level,
+                    "approval_request": None,
+                    "trust_tool": None,
+                    "loop_policy": spec.loop_policy.model_dump(mode="json", exclude_none=True),
+                    "sensitive_argument_paths": list(spec.sensitive_argument_paths),
+                    "base_description": spec.description,
+                    "description_context": spec.description_context.model_dump(mode="json"),
+                    "delegated_execution": True,
+                }
+            },
+            handle_validation_error=lambda error: json.dumps(
+                {
+                    "type": "tool_observation",
+                    "status": "invalid_arguments",
+                    "tool_id": spec.id,
+                    "message": "Tool arguments failed transport validation.",
+                    "retryable": True,
+                    "errors": [str(error)],
+                },
+                ensure_ascii=False,
+            ),
+        )
+
 def _normalize_tool_arguments(value: Any) -> Any:
     if isinstance(value, BaseModel):
         return _normalize_tool_arguments(value.model_dump(mode="json"))

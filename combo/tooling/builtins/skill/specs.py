@@ -11,10 +11,10 @@ def get_skill_tool_specs() -> list[ToolSpec]:
         ToolSpec(
             id="skill",
             description=(
-                "Progressively load Skills already selected for this runtime. The system prompt contains only "
-                "a short Skill catalog. Use list or describe for metadata, load only the relevant SKILL.md, and "
-                "read_resource only for a resource listed by describe or load. Skill loading affects this "
-                "runtime only."
+                "Progressively load Skills available to this runtime. The main Agent may load an active Skill "
+                "returned by capability search; temporary Agents may load only Skills selected in their immutable "
+                "snapshot. Use list or describe for metadata, load only the relevant SKILL.md, and read_resource "
+                "only for a resource listed by describe or load. Skill loading affects this runtime only."
             ),
             entrypoint="combo.tooling.builtins.skill.tool:run",
             input_schema={

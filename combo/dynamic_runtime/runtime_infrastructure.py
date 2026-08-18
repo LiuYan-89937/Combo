@@ -12,9 +12,10 @@ from combo.dynamic_runtime.mcp_runtime import MCPRuntimePool
 from combo.dynamic_runtime.mcp_content_runtime import MCPBinaryContentMaterializer, MCPContentRuntime
 from combo.dynamic_runtime.image_generation_runtime import ImageGenerationRuntime
 from combo.dynamic_runtime.capability_catalog_runtime import CapabilityCatalogRuntime
+from combo.dynamic_runtime.capability_invocation_runtime import CapabilityInvocationRuntime
 from combo.dynamic_runtime.control_plane_store import GlobalKnowledgeStore, WorkspaceSchedulerStore
 from combo.dynamic_runtime.memory_store import ScopedMemoryStore
-from combo.dynamic_runtime.skill_runtime import SnapshotSkillRuntime
+from combo.dynamic_runtime.skill_runtime import MainSkillRuntime, SnapshotSkillRuntime
 from combo.dynamic_runtime.delegation_store import DelegationStore
 from combo.dynamic_runtime.delegation_runtime import DelegationRuntimeCoordinator
 from combo.dynamic_runtime.runtime_identity import runtime_execution_identity
@@ -394,6 +395,7 @@ def runtime_resource_factory(
     *,
     browser_runtime: BrowserRuntime,
     capability_catalog: CapabilityCatalogRuntime,
+    capability_invocation_runtime: CapabilityInvocationRuntime,
     mcp_content_runtime: MCPContentRuntime,
     memory_store: ScopedMemoryStore,
     delegations: DelegationStore,
@@ -413,6 +415,7 @@ def runtime_resource_factory(
         "runtime_identity",
         "browser_runtime",
         "capability_catalog",
+        "capability_invocation_runtime",
         "memory_store",
         "delegation_runtime",
         "knowledge_runtime",
@@ -435,6 +438,10 @@ def runtime_resource_factory(
             )
         if resource_name == "capability_catalog":
             return ProjectedRuntimeResource(value=capability_catalog)
+        if resource_name == "capability_invocation_runtime":
+            return ProjectedRuntimeResource(
+                value=capability_invocation_runtime.for_runtime(instance)
+            )
         if resource_name == "memory_store":
             return ProjectedRuntimeResource(value=memory_store)
         if resource_name == "runtime_identity":
@@ -444,9 +451,18 @@ def runtime_resource_factory(
                 raise PermissionError("delegation runtime is available only to the main runtime")
             return ProjectedRuntimeResource(value=delegation_runtime.for_parent(instance))
         if resource_name == "skill_runtime":
+            snapshot = runtime_instances.capability_snapshot(instance.capability_snapshot_id)
+            if instance.request.runtime_role == "main":
+                return ProjectedRuntimeResource(
+                    value=MainSkillRuntime(
+                        snapshot=snapshot,
+                        active_skills=capability_catalog.active_skills(),
+                        blobs=capability_blobs,
+                    )
+                )
             return ProjectedRuntimeResource(
                 value=SnapshotSkillRuntime(
-                    snapshot=runtime_instances.capability_snapshot(instance.capability_snapshot_id),
+                    snapshot=snapshot,
                     blobs=capability_blobs,
                 )
             )
@@ -464,8 +480,20 @@ def runtime_resource_factory(
             instance.request.principal_id,
         ))
         if resource_name == "mcp_content_runtime":
+            allowed_server_ids = None
+            if instance.request.runtime_role == "temporary":
+                snapshot = runtime_instances.capability_snapshot(instance.capability_snapshot_id)
+                allowed_server_ids = frozenset(
+                    str(projection.runtime_definition.get("server_id") or "").strip()
+                    for projection in snapshot.projections
+                    if projection.kind == "mcp_server"
+                    and projection.runtime_definition_schema == "mcp_server_definition.v1"
+                )
             return ProjectedRuntimeResource(
-                value=mcp_content_runtime.for_workspace(workspace_root)
+                value=mcp_content_runtime.for_workspace(
+                    workspace_root,
+                    allowed_server_ids=allowed_server_ids,
+                )
             )
         if resource_name == "image_generation_runtime":
             return ProjectedRuntimeResource(value=ImageGenerationRuntime(workspace_root))

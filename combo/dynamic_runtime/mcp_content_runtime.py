@@ -11,17 +11,37 @@ from typing import Any
 from combo.artifact_system import ArtifactStore
 
 from combo.dynamic_runtime.mcp_runtime import MCPRuntimePool
+from combo.dynamic_runtime.mcp_gateway import MCPGateway
 
 
 class MCPContentRuntime:
     """Stable model-facing directory for MCP Resources and Prompts."""
 
-    def __init__(self, runtime: MCPRuntimePool, *, workspace_root: Path | None = None) -> None:
+    def __init__(
+        self,
+        runtime: MCPRuntimePool,
+        gateway: MCPGateway,
+        *,
+        workspace_root: Path | None = None,
+        allowed_server_ids: frozenset[str] | None = None,
+    ) -> None:
         self._runtime = runtime
+        self._gateway = gateway
         self._workspace_root = workspace_root.expanduser().resolve() if workspace_root is not None else None
+        self._allowed_server_ids = allowed_server_ids
 
-    def for_workspace(self, workspace_root: Path) -> "MCPContentRuntime":
-        return MCPContentRuntime(self._runtime, workspace_root=workspace_root)
+    def for_workspace(
+        self,
+        workspace_root: Path,
+        *,
+        allowed_server_ids: frozenset[str] | None = None,
+    ) -> "MCPContentRuntime":
+        return MCPContentRuntime(
+            self._runtime,
+            self._gateway,
+            workspace_root=workspace_root,
+            allowed_server_ids=allowed_server_ids,
+        )
 
     def search(self, query: str, *, limit: int = 20) -> list[dict[str, Any]]:
         needle = " ".join(str(query or "").casefold().split())
@@ -35,16 +55,21 @@ class MCPContentRuntime:
     def list(self) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
         for server_id, catalog in sorted(self._runtime.catalogs().items()):
+            if not self._server_is_allowed(server_id):
+                continue
             items.extend(_resource_summary(server_id, item) for item in catalog.resources)
             items.extend(_template_summary(server_id, item) for item in catalog.resource_templates)
             items.extend(_prompt_summary(server_id, item) for item in catalog.prompts)
         return items
 
-    def read_resource(self, server_id: str, uri: str) -> dict[str, Any]:
+    def read_resource(self, server_name: str, uri: str) -> dict[str, Any]:
+        server = self._gateway.resolve_server(server_name)
+        self._require_server_allowed(server.server_id)
+        server_id = server.server_id
         digest = self._runtime.server_digest(server_id)
         result = self._runtime.read_resource(digest, uri)
         response: dict[str, Any] = {
-            "server_id": server_id,
+            "server_name": str(server.raw_config.get("display_name") or server.server_id),
             "uri": uri,
             "result": result,
         }
@@ -64,14 +89,17 @@ class MCPContentRuntime:
 
     def get_prompt(
         self,
-        server_id: str,
+        server_name: str,
         name: str,
         arguments: dict[str, str],
     ) -> dict[str, Any]:
+        server = self._gateway.resolve_server(server_name)
+        self._require_server_allowed(server.server_id)
+        server_id = server.server_id
         digest = self._runtime.server_digest(server_id)
         result = self._runtime.get_prompt(digest, name, arguments)
         response: dict[str, Any] = {
-            "server_id": server_id,
+            "server_name": str(server.raw_config.get("display_name") or server.server_id),
             "name": name,
             "result": result,
         }
@@ -97,6 +125,13 @@ class MCPContentRuntime:
                     "mime_type": image["mime_type"],
                 }
         return response
+
+    def _server_is_allowed(self, server_id: str) -> bool:
+        return self._allowed_server_ids is None or server_id in self._allowed_server_ids
+
+    def _require_server_allowed(self, server_id: str) -> None:
+        if not self._server_is_allowed(server_id):
+            raise PermissionError(f"MCP server is not assigned to this runtime: {server_id}")
 
 
 @dataclass(frozen=True, slots=True)

@@ -29,6 +29,7 @@ class ToolCallRecord(BaseModel):
     capability_id: str
     capability_revision: int = Field(ge=1)
     model_alias: str
+    display_alias: str | None = None
     arguments: dict[str, Any] = Field(default_factory=dict)
     status: ToolCallStatus = "proposed"
     result: dict[str, Any] | None = None
@@ -59,6 +60,12 @@ class ToolCallRecord(BaseModel):
     @field_validator("error_code")
     @classmethod
     def _optional_text(cls, value: str | None) -> str | None:
+        text = str(value or "").strip()
+        return text or None
+
+    @field_validator("display_alias")
+    @classmethod
+    def _optional_display_alias(cls, value: str | None) -> str | None:
         text = str(value or "").strip()
         return text or None
 

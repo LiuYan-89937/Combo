@@ -29,6 +29,7 @@ ToolRiskAction = Literal["inherit", "allow", "ask", "deny", "uncertain"]
 ToolLLMRiskMode = Literal["disabled", "on_uncertain", "always"]
 ToolOutputCompressionMode = Literal["structured_json", "deterministic"]
 ToolOutputProjectionMode = Literal["compress", "passthrough"]
+ToolExecutionMode = Literal["managed", "delegated"]
 
 ToolEventType = Literal[
     "tool_call_proposed",
@@ -200,6 +201,7 @@ class ToolSpec(BaseModel):
     max_parallel_calls: int = Field(ge=1)
     output_compression: ToolOutputCompressionConfig = Field(default_factory=ToolOutputCompressionConfig)
     output_projection: ToolOutputProjectionMode = "compress"
+    execution_mode: ToolExecutionMode = "managed"
     loop_policy: ToolLoopPolicyConfig = Field(default_factory=ToolLoopPolicyConfig)
     sensitive_argument_paths: list[str] = Field(default_factory=list)
     effects: list[ToolEffect]
@@ -274,6 +276,8 @@ class ToolSpec(BaseModel):
             raise ValueError("read-only tool cannot declare mutating effects")
         if not self.concurrent and self.max_parallel_calls != 1:
             raise ValueError("non-concurrent tool must use max_parallel_calls=1")
+        if self.execution_mode == "delegated" and not self.system_available:
+            raise ValueError("delegated execution is reserved for system-available tools")
         return self
 
 

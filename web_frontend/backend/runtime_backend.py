@@ -60,6 +60,12 @@ from combo.dynamic_runtime.capability_definitions import (
     ToolDefinition,
 )
 from combo.dynamic_runtime.capability_catalog_runtime import CapabilityCatalogRuntime
+from combo.dynamic_runtime.capability_invocation_runtime import CapabilityInvocationRuntime
+from combo.dynamic_runtime.capability_search_documents import (
+    search_candidates_from_active_capabilities,
+)
+from combo.dynamic_runtime.capability_search_contracts import CapabilitySearchCandidate
+from combo.dynamic_runtime.capability_search import ActiveVectorIndexStatus
 from combo.dynamic_runtime.delegated_model_selector import DelegatedTaskModelSelector
 from combo.dynamic_runtime.delegation_policy import TEMPORARY_RUNTIME_ONLY_CAPABILITY_IDS
 from combo.dynamic_runtime.delegation_runtime import DelegationRuntimeCoordinator
@@ -574,7 +580,7 @@ class RuntimeBackend:
                             **dict(capabilities[-1]["details"]),
                             "source_path": str(source_root.path / tool_parts[1]),
                         }
-        gateway_items = self._mcp_gateway_capability_items()
+        gateway_items = self._mcp_gateway_capability_items(vector_index)
         capabilities.extend(gateway_items)
         counts["mcp_server"] = sum(item["kind"] == "mcp_server" for item in gateway_items)
         counts["mcp_tool"] = sum(item["kind"] == "mcp_tool" for item in gateway_items)
@@ -585,7 +591,10 @@ class RuntimeBackend:
             "mcp_registry_digest": self.mcp_gateway.registry_digest(),
         }
 
-    def _mcp_gateway_capability_items(self) -> list[dict[str, object]]:
+    def _mcp_gateway_capability_items(
+        self,
+        vector_index: ActiveVectorIndexStatus | None,
+    ) -> list[dict[str, object]]:
         items: list[dict[str, object]] = []
         connected_ids = {server.server_id for server in self.mcp_gateway.servers()}
         for raw in self.mcp_gateway.registry()["servers"]:
@@ -637,7 +646,18 @@ class RuntimeBackend:
                 "source_uri": f"mcp-gateway://{server.server_id}",
                 "trust_level": "local_user",
                 "health": "healthy",
-                "indexing": {"vector": False, "generation_id": None, "embedding_profile_id": None},
+                "indexing": {
+                    "vector": (
+                        vector_index is not None
+                        and f"mcp-server://{server.server_id}" in vector_index.capability_ids
+                    ),
+                    "generation_id": (
+                        vector_index.generation_id if vector_index is not None else None
+                    ),
+                    "embedding_profile_id": (
+                        vector_index.profile_id if vector_index is not None else None
+                    ),
+                },
                 "definition_schema": "mcp_gateway_server.v1",
                 "details": {
                     "registry_config": _mcp_server_editor_config(server.raw_config),
@@ -778,9 +798,7 @@ class RuntimeBackend:
         }
 
     def refresh_capability_search_embeddings(self) -> None:
-        self.application.capability_search.refresh(
-            self.application.stores.capabilities.active_capabilities()
-        )
+        self.application.capability_search.refresh(self._capability_search_candidates())
         self.application.stores.knowledge.refresh_index()
 
     def refresh_model_bound_capabilities(self) -> None:
@@ -792,9 +810,15 @@ class RuntimeBackend:
     def _refresh_capability_search_if_ready(self) -> None:
         application = getattr(self, "application", None)
         if application is not None:
-            application.capability_search.refresh(
-                application.stores.capabilities.active_capabilities()
-            )
+            application.capability_search.refresh(self._capability_search_candidates())
+
+    def _capability_search_candidates(self) -> tuple[CapabilitySearchCandidate, ...]:
+        return (
+            *search_candidates_from_active_capabilities(
+                self.application.stores.capabilities.active_capabilities()
+            ),
+            *self.mcp_gateway.search_candidates(),
+        )
 
     def probe_mcp_server(self, capability_id: str) -> dict[str, object]:
         server_id = str(capability_id or "").removeprefix("mcp-server://")
@@ -885,6 +909,7 @@ class RuntimeBackend:
                 expected_registry_digest=expected_registry_digest,
                 on_progress=on_progress,
             )
+        self._refresh_capability_search_if_ready()
         return self.capability_pool_snapshot()
 
     def replace_mcp_server(
@@ -902,6 +927,7 @@ class RuntimeBackend:
                 expected_registry_digest=expected_registry_digest,
                 on_progress=on_progress,
             )
+        self._refresh_capability_search_if_ready()
         return self.capability_pool_snapshot()
 
     def delete_mcp_server(
@@ -916,6 +942,7 @@ class RuntimeBackend:
                 normalized_id,
                 expected_registry_digest=expected_registry_digest,
             )
+        self._refresh_capability_search_if_ready()
         self._remove_main_agent_profile_mcp_servers({normalized_id})
         return self.capability_pool_snapshot()
 
@@ -1960,7 +1987,11 @@ class RuntimeBackend:
         graph_store = LangGraphStoreFactory().build(
             LangGraphStoreConfig(backend="sqlite", path=config.graph_store_path)
         ).store
+        capability_invocation_runtime: CapabilityInvocationRuntime | None = None
+        capability_invocation_registry: SnapshotToolRegistryFactory | None = None
+
         def services(stores: DynamicRuntimeStores, capability_search) -> DynamicRuntimeServicesFactory:
+            nonlocal capability_invocation_runtime, capability_invocation_registry
             context_system = default_context_runtime(memory_store=stores.memories)
             capability_catalog = CapabilityCatalogRuntime(
                 store=stores.capabilities,
@@ -1968,6 +1999,11 @@ class RuntimeBackend:
                 allowed_trust_levels=("builtin", "local_user", "verified_external"),
                 search_index=capability_search,
                 mcp_gateway=self.mcp_gateway,
+            )
+            capability_invocation_runtime = CapabilityInvocationRuntime(
+                catalog=capability_catalog,
+                mcp_gateway=self.mcp_gateway,
+                runtime_instances=stores.runtime_instances,
             )
             approvals = DatabaseSnapshotToolApprovalResolver(stores.capability_approval_grants)
             outputs = SharedToolOutputResolver(config.tool_output_root)
@@ -1979,7 +2015,8 @@ class RuntimeBackend:
                         name,
                         browser_runtime=self.browser_runtime,
                         capability_catalog=capability_catalog,
-                        mcp_content_runtime=MCPContentRuntime(self.mcp_runtime),
+                        capability_invocation_runtime=capability_invocation_runtime,
+                        mcp_content_runtime=MCPContentRuntime(self.mcp_runtime, self.mcp_gateway),
                         memory_store=stores.memories,
                         delegations=stores.delegations,
                         delegation_runtime=delegation_runtime,
@@ -1998,6 +2035,7 @@ class RuntimeBackend:
                         "runtime_identity",
                         "browser_runtime",
                         "capability_catalog",
+                        "capability_invocation_runtime",
                         "memory_store",
                         "delegation_runtime",
                         "knowledge_runtime",
@@ -2038,6 +2076,7 @@ class RuntimeBackend:
                     MCPToolProjectionMaterializer(mcp_adapter),
                 )
             )
+            capability_invocation_registry = registry_factory
             return DynamicRuntimeServicesFactory(
                 snapshot_tool_registries=registry_factory,
                 checkpointer=checkpointer,
@@ -2095,6 +2134,13 @@ class RuntimeBackend:
             mcp_gateway=self.mcp_gateway,
             observation_sink=self._publish_runtime_observation,
             migration_registry=migration_registry,
+        )
+        if capability_invocation_runtime is None or capability_invocation_registry is None:
+            raise RuntimeError("capability invocation runtime was not initialized")
+        capability_invocation_runtime.bind_execution(
+            capability_resolver=application.capability_resolver,
+            model_resolver=application.model_resolver,
+            registry_factory=capability_invocation_registry,
         )
         delegation_runtime.bind(
             delegations=application.stores.delegations,
@@ -2259,6 +2305,7 @@ class RuntimeBackend:
         try:
             with self._mcp_registry_lock:
                 self.mcp_gateway.synchronize()
+            self._refresh_capability_search_if_ready()
             self.logger.info(
                 "MCP %s catalog changed for %s; capability pool refreshed",
                 catalog_kind,

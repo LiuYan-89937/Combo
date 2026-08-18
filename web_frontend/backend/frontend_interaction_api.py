@@ -1536,6 +1536,10 @@ def _session_snapshot(backend: Any, principal_id: str, session_id: str) -> dict[
             _tool_activity_view(backend, record)
             for record in tool_calls_by_turn.get(turn.turn_id, [])
         ]
+        tool_display_names = {
+            record.tool_call_id: record.display_alias or record.model_alias
+            for record in tool_calls_by_turn.get(turn.turn_id, [])
+        }
         persisted_tool_call_ids = {
             tool_call_id
             for message in grouped.get(turn.turn_id, [])
@@ -1551,6 +1555,7 @@ def _session_snapshot(backend: Any, principal_id: str, session_id: str) -> dict[
                     message,
                     request_id=frontend_request_id,
                     turn_status=turn.status,
+                    tool_display_names=tool_display_names,
                 )
             ) is not None
         ]
@@ -1655,6 +1660,7 @@ def _message_view(
     *,
     request_id: str | None,
     turn_status: str,
+    tool_display_names: dict[str, str] | None = None,
 ) -> dict[str, Any] | None:
     if message.visibility == "internal":
         return _delegated_delivery_message_view(backend, message, request_id=request_id)
@@ -1667,6 +1673,7 @@ def _message_view(
                 part_id=f"{message.message_id}:{len(parts)}",
                 kind=kind,
                 value=value,
+                tool_display_names=tool_display_names,
             )
         )
     if not parts:
@@ -1749,6 +1756,7 @@ def _frontend_message_part(
     part_id: str,
     kind: str,
     value: dict[str, Any],
+    tool_display_names: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     if kind == "text":
         return {
@@ -1759,19 +1767,21 @@ def _frontend_message_part(
             "status": "completed",
         }
     if kind == "tool_call":
+        call_id = str(value.get("tool_call_id") or "").strip()
         return {
             "id": part_id,
             "type": kind,
-            "toolName": value.get("model_alias") or value.get("capability_id") or "tool_call",
+            "toolName": (tool_display_names or {}).get(call_id) or value.get("model_alias") or value.get("capability_id") or "tool_call",
             "callId": value.get("tool_call_id"),
             "arguments": value.get("arguments") or {},
             "status": "completed",
         }
     if kind == "tool_result":
+        call_id = str(value.get("tool_call_id") or "").strip()
         return {
             "id": part_id,
             "type": kind,
-            "toolName": value.get("model_alias") or value.get("capability_id") or "tool_call",
+            "toolName": (tool_display_names or {}).get(call_id) or value.get("model_alias") or value.get("capability_id") or "tool_call",
             "callId": value.get("tool_call_id"),
             "output": value.get("output"),
             "error": value.get("error_code"),
@@ -1805,12 +1815,12 @@ def _tool_activity_view(backend: Any, record: ToolCallRecord) -> dict[str, Any]:
         "stageId": None,
         "nodeId": None,
         "toolCallId": record.tool_call_id,
-        "toolName": record.model_alias,
+        "toolName": record.display_alias or record.model_alias,
         "status": status,
         "approvalState": "pending" if status == "approval" else None,
         "payload": {
             "tool_call_id": record.tool_call_id,
-            "tool_name": record.model_alias,
+            "tool_name": record.display_alias or record.model_alias,
             "capability_id": record.capability_id,
             "arguments": record.arguments,
             "output": record.result,
@@ -2142,7 +2152,7 @@ def _tool_activity_payload(record: ToolCallRecord) -> dict[str, Any]:
     return {
         "phase_id": f"tool:{record.tool_call_id}",
         "category": "tool",
-        "title": record.model_alias,
+        "title": record.display_alias or record.model_alias,
         "summary_key": f"backgroundTask.toolStatus.{record.status}",
         "summary": record.status,
         "status": record.status,

@@ -11,21 +11,19 @@ def get_mcp_content_tool_specs() -> list[ToolSpec]:
         ToolSpec(
             id="mcp_content",
             description=(
-                "Search and load Resources or Prompts exposed by enabled MCP servers. MCP content is not "
-                "injected automatically: search the short directory for the current task, then read an exact "
-                "resource URI or load an exact prompt with its declared arguments."
+                "Load an exact Resource or Prompt returned by the capability catalog for an enabled MCP "
+                "server. MCP content is never injected automatically. Search the selected server's second-level "
+                "catalog first, inspect the exact result, then read its URI or expand its Prompt arguments."
             ),
             entrypoint="combo.tooling.builtins.mcp_content.tool:run",
             input_schema={
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "action": {"type": "string", "enum": ["search", "list", "read_resource", "get_prompt"]},
-                    "query": {"type": "string", "description": "Task-oriented query for MCP Resources and Prompts."},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
-                    "server_id": {"type": "string", "description": "Exact server_id returned by search or list."},
-                    "uri": {"type": "string", "description": "Exact resource URI returned by search or list."},
-                    "name": {"type": "string", "description": "Exact prompt name returned by search or list."},
+                    "action": {"type": "string", "enum": ["read_resource", "get_prompt"]},
+                    "server_name": {"type": "string", "description": "Exact public MCP Server name returned by capability search."},
+                    "uri": {"type": "string", "description": "Exact Resource URI returned by capability describe."},
+                    "name": {"type": "string", "description": "Exact Prompt name returned by capability describe."},
                     "arguments": {
                         "type": "object",
                         "additionalProperties": {"type": "string"},
@@ -33,6 +31,16 @@ def get_mcp_content_tool_specs() -> list[ToolSpec]:
                     },
                 },
                 "required": ["action"],
+                "allOf": [
+                    {
+                        "if": {"properties": {"action": {"const": "read_resource"}}, "required": ["action"]},
+                        "then": {"required": ["server_name", "uri"]},
+                    },
+                    {
+                        "if": {"properties": {"action": {"const": "get_prompt"}}, "required": ["action"]},
+                        "then": {"required": ["server_name", "name"]},
+                    },
+                ],
             },
             output_schema={"type": "object"},
             resources={MCP_CONTENT_RUNTIME_RESOURCE: MCP_CONTENT_RUNTIME_RESOURCE},

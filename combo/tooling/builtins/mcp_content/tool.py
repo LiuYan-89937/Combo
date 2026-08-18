@@ -12,23 +12,19 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(runtime, MCPContentRuntime):
         raise RuntimeError("MCP content runtime is not configured")
     action = str(arguments.get("action") or "").strip()
-    if action == "search":
-        output = {"action": action, "items": runtime.search(_required(arguments, "query"), limit=int(arguments.get("limit", 20)))}
-    elif action == "list":
-        output = {"action": action, "items": runtime.list()}
-    elif action == "read_resource":
-        output = runtime.read_resource(_required(arguments, "server_id"), _required(arguments, "uri"))
+    if action == "read_resource":
+        output = runtime.read_resource(_required(arguments, "server_name"), _required(arguments, "uri"))
     elif action == "get_prompt":
         raw_arguments = arguments.get("arguments") or {}
         if not isinstance(raw_arguments, dict):
             raise ValueError("prompt arguments must be an object")
         output = runtime.get_prompt(
-            _required(arguments, "server_id"),
+            _required(arguments, "server_name"),
             _required(arguments, "name"),
             {str(key): str(value) for key, value in raw_arguments.items()},
         )
     else:
-        raise ValueError("MCP content action must be search, list, read_resource, or get_prompt")
+        raise ValueError("MCP content action must be read_resource or get_prompt")
     return tool_envelope(output, summary=f"MCP content {action} completed")
 
 

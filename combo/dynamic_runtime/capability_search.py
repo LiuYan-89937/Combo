@@ -13,8 +13,10 @@ import unicodedata
 from uuid import uuid4
 
 from combo.dynamic_runtime.capability_resolution_services import CapabilitySearchConfig
-from combo.dynamic_runtime.capability_resolver import CapabilitySearchMatch
-from combo.dynamic_runtime.capability_store import ActiveCapability
+from combo.dynamic_runtime.capability_search_contracts import (
+    CapabilitySearchCandidate,
+    CapabilitySearchMatch,
+)
 from combo.dynamic_runtime.database import DynamicRuntimeDatabase
 
 
@@ -23,6 +25,8 @@ class CapabilitySearchDocumentProjection:
     capability_id: str
     index_revision_id: str
     kind: str
+    search_scope: str
+    parent_capability_id: str | None
     display_name: str
     description: str
     keywords: tuple[str, ...]
@@ -75,20 +79,36 @@ class HybridCapabilitySearchIndex:
         self,
         *,
         requirements: tuple[str, ...],
-        candidates: tuple[ActiveCapability, ...],
+        candidates: tuple[CapabilitySearchCandidate, ...],
     ) -> tuple[CapabilitySearchMatch, ...]:
         query = " ".join(str(value or "").strip() for value in requirements if str(value or "").strip())
         if not query:
             return ()
         documents = tuple(_project_document(item) for item in candidates)
-        generation = self._ensure_lexical_generation(documents)
-        self._schedule_embedding_generation(generation[1], documents)
+        if not documents:
+            return ()
+        search_scope, parent_capability_id = _search_boundary(documents)
+        generation = self._active_generation()
+        if generation is None:
+            return ()
         candidate_ids = frozenset(item.capability_id for item in documents)
-        lexical = self._lexical_ranking(generation[0], query, candidate_ids)
+        lexical = self._lexical_ranking(
+            generation[0],
+            query,
+            candidate_ids,
+            search_scope=search_scope,
+            parent_capability_id=parent_capability_id,
+        )
         vector: tuple[str, ...] = ()
         mode = generation[2]
         if mode == "hybrid":
-            vector = self._vector_ranking(generation[0], query, candidate_ids)
+            vector = self._vector_ranking(
+                generation[0],
+                query,
+                candidate_ids,
+                search_scope=search_scope,
+                parent_capability_id=parent_capability_id,
+            )
         ranked = _fuse_rankings(
             lexical=lexical,
             vector=vector,
@@ -117,7 +137,7 @@ class HybridCapabilitySearchIndex:
             for capability_id, score in filtered
         )
 
-    def refresh(self, candidates: tuple[ActiveCapability, ...]) -> None:
+    def refresh(self, candidates: tuple[CapabilitySearchCandidate, ...]) -> None:
         documents = tuple(_project_document(item) for item in candidates)
         _, dataset_digest, _ = self._ensure_lexical_generation(documents)
         self._schedule_embedding_generation(dataset_digest, documents)
@@ -362,6 +382,9 @@ class HybridCapabilitySearchIndex:
         generation_id: str,
         query: str,
         candidate_ids: frozenset[str],
+        *,
+        search_scope: str,
+        parent_capability_id: str | None,
     ) -> tuple[str, ...]:
         tokens = _lexical_tokens(query)
         if not tokens:
@@ -370,12 +393,19 @@ class HybridCapabilitySearchIndex:
         with self._database.connection(query_only=True) as conn:
             rows = conn.execute(
                 """
-                select capability_id, bm25(capability_search_fts) as rank
+                select capability_search_fts.capability_id,
+                       bm25(capability_search_fts) as rank
                 from capability_search_fts
-                where capability_search_fts match ? and generation_id = ?
-                order by rank, capability_id
+                join capability_search_documents documents
+                  on documents.generation_id = capability_search_fts.generation_id
+                 and documents.capability_id = capability_search_fts.capability_id
+                where capability_search_fts match ?
+                  and capability_search_fts.generation_id = ?
+                  and documents.search_scope = ?
+                  and documents.parent_capability_id is ?
+                order by rank, capability_search_fts.capability_id
                 """,
-                (expression, generation_id),
+                (expression, generation_id, search_scope, parent_capability_id),
             ).fetchall()
         return tuple(str(row["capability_id"]) for row in rows if str(row["capability_id"]) in candidate_ids)
 
@@ -384,6 +414,9 @@ class HybridCapabilitySearchIndex:
         generation_id: str,
         query: str,
         candidate_ids: frozenset[str],
+        *,
+        search_scope: str,
+        parent_capability_id: str | None,
     ) -> tuple[str, ...]:
         if self._embedding_runtime is None:
             return ()
@@ -405,8 +438,9 @@ class HybridCapabilitySearchIndex:
                     """
                     select capability_id, embedding_json from capability_search_documents
                     where generation_id = ? and embedding_json is not null
+                      and search_scope = ? and parent_capability_id is ?
                     """,
-                    (generation_id,),
+                    (generation_id, search_scope, parent_capability_id),
                 ).fetchall()
             query_vector = _validated_vector(runtime.embed_query(query), runtime.dimensions)
         except Exception:
@@ -459,66 +493,40 @@ class HybridCapabilitySearchIndex:
         return receipt_id
 
 
-def _project_document(capability: ActiveCapability) -> CapabilitySearchDocumentProjection:
-    revision = capability.revision
-    document = capability.index_revision.document
-    parameter_text = _parameter_text(revision.content.definition)
+def _project_document(candidate: CapabilitySearchCandidate) -> CapabilitySearchDocumentProjection:
     embedding_text = "\n".join(
         value for value in (
-            document.display_name,
-            document.description,
-            " ".join(document.keywords),
-            parameter_text,
+            candidate.display_name,
+            candidate.description,
+            " ".join(candidate.keywords),
+            candidate.parameter_text,
         ) if value
     )
     return CapabilitySearchDocumentProjection(
-        capability_id=revision.capability_id,
-        index_revision_id=capability.index_revision.index_revision_id,
-        kind=revision.kind,
-        display_name=document.display_name,
-        description=document.description,
-        keywords=document.keywords,
-        parameter_text=parameter_text,
+        capability_id=candidate.capability_id,
+        index_revision_id=candidate.index_revision_id,
+        kind=candidate.kind,
+        search_scope=candidate.search_scope,
+        parent_capability_id=candidate.parent_capability_id,
+        display_name=candidate.display_name,
+        description=candidate.description,
+        keywords=candidate.keywords,
+        parameter_text=candidate.parameter_text,
         embedding_text=embedding_text,
         lexical_text=" ".join(_lexical_tokens(embedding_text)),
     )
 
 
-def _parameter_text(definition: dict[str, object]) -> str:
-    schema: object = definition.get("input_schema")
-    if isinstance(schema, dict) and isinstance(schema.get("canonical_schema"), dict):
-        schema = schema["canonical_schema"]
-    if not isinstance(schema, dict):
-        return ""
-    values: list[str] = []
-
-    def visit(node: object, path: str) -> None:
-        if not isinstance(node, dict):
-            return
-        for key in ("title", "description"):
-            value = str(node.get(key) or "").strip()
-            if value:
-                values.append(value)
-        enum = node.get("enum")
-        if isinstance(enum, list):
-            values.extend(str(value) for value in enum if isinstance(value, (str, int, float, bool)))
-        properties = node.get("properties")
-        if isinstance(properties, dict):
-            for name, child in properties.items():
-                child_path = f"{path}.{name}" if path else str(name)
-                values.append(child_path)
-                visit(child, child_path)
-        items = node.get("items")
-        if isinstance(items, dict):
-            visit(items, f"{path}[]" if path else "items")
-        for branch_name in ("oneOf", "anyOf", "allOf"):
-            branches = node.get(branch_name)
-            if isinstance(branches, list):
-                for branch in branches:
-                    visit(branch, path)
-
-    visit(schema, "")
-    return " ".join(dict.fromkeys(value for value in values if value))
+def _search_boundary(
+    documents: tuple[CapabilitySearchDocumentProjection, ...],
+) -> tuple[str, str | None]:
+    boundaries = {
+        (document.search_scope, document.parent_capability_id)
+        for document in documents
+    }
+    if len(boundaries) != 1:
+        raise ValueError("capability search candidates must share one catalog boundary")
+    return next(iter(boundaries))
 
 
 def _insert_documents(conn: object, generation_id: str, documents: tuple[CapabilitySearchDocumentProjection, ...], *, embeddings: tuple[tuple[float, ...], ...] | None) -> None:
@@ -527,15 +535,18 @@ def _insert_documents(conn: object, generation_id: str, documents: tuple[Capabil
         conn.execute(
             """
             insert into capability_search_documents(
-              generation_id, capability_id, index_revision_id, kind, display_name,
+              generation_id, capability_id, index_revision_id, kind, search_scope,
+              parent_capability_id, display_name,
               description, keywords_json, parameter_text, searchable_text, embedding_json
-            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 generation_id,
                 document.capability_id,
                 document.index_revision_id,
                 document.kind,
+                document.search_scope,
+                document.parent_capability_id,
                 document.display_name,
                 document.description,
                 json.dumps(document.keywords, ensure_ascii=False, separators=(",", ":")),
@@ -555,6 +566,8 @@ def _dataset_digest(documents: Iterable[CapabilitySearchDocumentProjection]) -> 
         {
             "capability_id": item.capability_id,
             "index_revision_id": item.index_revision_id,
+            "search_scope": item.search_scope,
+            "parent_capability_id": item.parent_capability_id,
             "embedding_text": item.embedding_text,
         }
         for item in sorted(documents, key=lambda value: value.capability_id)

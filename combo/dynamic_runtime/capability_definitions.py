@@ -24,6 +24,7 @@ RuntimeResourceName = Literal[
     "runtime_identity",
     "browser_runtime",
     "capability_catalog",
+    "capability_invocation_runtime",
     "memory_store",
     "delegation_runtime",
     "knowledge_runtime",
@@ -272,6 +273,7 @@ class ToolDefinition(FrozenProtocolModel):
     input_schema: dict[str, JsonValue]
     context_schema: dict[str, JsonValue] = Field(default_factory=dict)
     output_schema: dict[str, JsonValue]
+    execution_mode: Literal["managed", "delegated"] = "managed"
     implementation: ToolImplementation
     runtime_policy: ToolRuntimePolicy = Field(default_factory=ToolRuntimePolicy)
     loop_policy: ToolLoopPolicy = Field(default_factory=ToolLoopPolicy)
@@ -330,6 +332,8 @@ class ToolDefinition(FrozenProtocolModel):
         mutating = {"write", "delete", "process", "network", "credential", "external_side_effect"}
         if self.read_only and mutating.intersection(self.effects):
             raise ValueError("read-only tool cannot declare mutating effects")
+        if self.execution_mode == "delegated" and not self.system_available:
+            raise ValueError("delegated execution is reserved for system-available tools")
         binding_names = [item.name for item in self.resource_bindings]
         if len(binding_names) != len(set(binding_names)):
             raise ValueError("tool resource binding names must be unique")

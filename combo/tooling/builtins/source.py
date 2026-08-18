@@ -17,6 +17,7 @@ from combo.runtime_protocol import CapabilityContent, CapabilityDraft
 from combo.tooling.builtins.browser.specs import get_browser_tool_specs
 from combo.tooling.builtins.ask_usr.specs import get_ask_usr_tool_specs
 from combo.tooling.builtins.capability.specs import get_capability_tool_specs
+from combo.tooling.builtins.capability_invoke.specs import get_capability_invoke_tool_specs
 from combo.tooling.builtins.delegation.specs import get_delegation_tool_specs
 from combo.tooling.builtins.filesystem.specs import get_filesystem_tool_specs
 from combo.tooling.builtins.knowledge.specs import get_knowledge_tool_specs
@@ -64,6 +65,7 @@ class BuiltinToolCapabilitySource:
             *get_process_tool_specs(),
             *get_tool_output_tool_specs(),
             *get_capability_tool_specs(),
+            *get_capability_invoke_tool_specs(),
             *get_delegation_tool_specs(),
             *get_memory_tool_specs(),
             *get_mcp_content_tool_specs(),
@@ -116,6 +118,7 @@ class BuiltinToolCapabilitySource:
             schema_error_guidance=spec.schema_error_guidance,
             input_schema=spec.input_schema,
             output_schema=spec.output_schema,
+            execution_mode=spec.execution_mode,
             implementation=ToolImplementation(
                 kind="python_package",
                 entrypoint="main:run",

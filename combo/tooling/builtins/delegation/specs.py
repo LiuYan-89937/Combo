@@ -19,7 +19,8 @@ def get_delegation_tool_specs() -> list[ToolSpec]:
                 "then describe its role and objective and select its execution graph. Delegate independent work "
                 "even when capability search returns no optional match; in that case pass an empty capabilities "
                 "array and the child receives its stable built-in runtime tools. When search does return useful "
-                "Tool, MCP, or Skill matches, pass only their exact public names. Runtime policy "
+                "Tool, MCP Server, or Skill matches, pass only their exact public names. Selecting an MCP "
+                "Server makes its complete Tool catalog available to the child. Runtime policy "
                 "supplies the shared workspace scope, selects and freezes a suitable enabled model-pool profile, "
                 "and owns approvals and internal identities. Once accepted, "
                 "do not immediately inspect status, sleep, wait, or poll; task events report subsequent changes."
@@ -51,7 +52,7 @@ def get_delegation_tool_specs() -> list[ToolSpec]:
                             "type": "string",
                             "minLength": 1,
                             "description": (
-                                "An exact public Tool, MCP, or Skill name returned by capability search. "
+                                "An exact public Tool, MCP Server, or Skill name returned by capability search. "
                                 "Never provide IDs, revisions, digests, evidence, or generated handles."
                             ),
                         },

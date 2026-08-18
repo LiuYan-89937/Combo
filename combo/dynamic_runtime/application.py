@@ -27,6 +27,9 @@ from combo.dynamic_runtime.capability_search import (
     CapabilityEmbeddingRuntime,
     HybridCapabilitySearchIndex,
 )
+from combo.dynamic_runtime.capability_search_documents import (
+    search_candidates_from_active_capabilities,
+)
 from combo.dynamic_runtime.mcp_gateway import MCPGateway
 from combo.dynamic_runtime.cancellation import (
     CancelRuntimeCommandHandler,
@@ -190,7 +193,12 @@ class DynamicRuntimeApplication:
             adapters = CapabilityAdapterRegistry.build(default_capability_adapters())
             adapters.require_complete()
             capability_bootstrap(stores, adapters)
-            capability_search.refresh(stores.capabilities.active_capabilities())
+            capability_search.refresh((
+                *search_candidates_from_active_capabilities(
+                    stores.capabilities.active_capabilities()
+                ),
+                *mcp_gateway.search_candidates(),
+            ))
             stores.knowledge.refresh_index()
             resolution_config = config.capability_resolution
             capability_resolver = MainTurnCapabilityResolver(

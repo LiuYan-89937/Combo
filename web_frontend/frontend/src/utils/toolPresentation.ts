@@ -224,6 +224,9 @@ function toolArgumentPresentation(
   if (toolName === 'knowledge') return summary(compact(args.action, args.query))
   if (toolName === 'scheduler') return summary(compact(args.action, args.job_id))
   if (toolName === 'skillhub') return summary(compact(args.action, args.query || args.slug))
+  if (toolName === 'skill') {
+    return String(args.action || '') === 'load' ? summary(compact(args.name)) : { summary: '' }
+  }
   if (toolName === 'capability') return summary(compact(args.action, args.query))
   if (toolName === 'memory') return summary(compact(args.action, args.query || args.kind))
   if (toolName === 'delegate') return summary(compact(args.agent_name, args.objective))

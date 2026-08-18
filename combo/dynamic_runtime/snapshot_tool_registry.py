@@ -99,6 +99,21 @@ class ImmutableSnapshotToolRegistry:
             if alias in selected
         ]
 
+    def tool_for_capability(self, capability_id: str) -> BaseTool:
+        requested = str(capability_id or "").strip()
+        if not requested:
+            raise ValueError("capability_id must not be empty")
+        matches = tuple(
+            item.tool
+            for item in self._tools.values()
+            if item.capability_id == requested
+        )
+        if not matches:
+            raise SnapshotToolRegistryError(f"snapshot has no Tool for capability: {requested}")
+        if len(matches) > 1:
+            raise SnapshotToolRegistryError(f"snapshot has ambiguous Tool aliases for capability: {requested}")
+        return next(iter(matches))
+
 
 @dataclass(slots=True)
 class SnapshotToolRegistryLease:
@@ -312,6 +327,7 @@ def _apply_runtime_policy_metadata(item: MaterializedSnapshotTool) -> Materializ
             "approval": policy.approval,
             "risk_level": policy.risk_level,
             "concurrent": policy.allow_parallel_calls,
+            "max_parallel_calls": policy.max_parallel_calls,
             "serialization_key": policy.serialization_key,
             "timeout_seconds": policy.timeout_seconds,
             "output_projection": policy.output_projection,

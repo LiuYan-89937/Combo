@@ -1132,6 +1132,11 @@ class RuntimeInstanceStore:
             raise LookupError(f"capability snapshot not found: {snapshot_id}")
         return CapabilitySnapshot.model_validate_json(str(row["payload_json"]))
 
+    def retain_capability_snapshot(self, snapshot: CapabilitySnapshot) -> None:
+        """Retain an immutable execution snapshot not associated with a new runtime instance."""
+        with self._database.transaction() as conn:
+            upsert_capability_snapshot(conn, snapshot)
+
     def replace(
         self,
         *,

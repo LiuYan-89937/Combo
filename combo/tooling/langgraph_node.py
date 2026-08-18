@@ -76,6 +76,9 @@ class ComboToolNode:
         self._sensitive_argument_paths_by_name = {
             tool.name: _tool_sensitive_argument_paths(tool) for tool in tools
         }
+        self._delegated_execution_by_name = {
+            tool.name: _tool_delegated_execution(tool) for tool in tools
+        }
         self._tool_node = ToolNode(
             list(tools),
             name=name or node_id,
@@ -292,15 +295,17 @@ class ComboToolNode:
                 }
             )
             return _tool_message(tool_id=tool_id, tool_call_id=tool_call_id, payload=payload, status="error")
-        self._emit(
-            {
-                "event_type": "tool_proposed",
-                "tool_id": tool_id,
-                "tool_call_id": tool_call_id,
-                "arguments": public_arguments,
-                "status": "proposed",
-            }
-        )
+        delegated_execution = self._delegated_execution_by_name.get(tool_id, False)
+        if not delegated_execution:
+            self._emit(
+                {
+                    "event_type": "tool_proposed",
+                    "tool_id": tool_id,
+                    "tool_call_id": tool_call_id,
+                    "arguments": public_arguments,
+                    "status": "proposed",
+                }
+            )
         started_at = datetime.now(timezone.utc).isoformat()
         with tool_call_context(
             tool_id=tool_id,
@@ -320,10 +325,15 @@ class ComboToolNode:
             )
             event_type = _tool_event_type(normalized)
             public_normalized = _public_tool_observation(normalized)
+            event_tool_id = (
+                str(normalized.get("tool_id") or tool_id)
+                if delegated_execution
+                else tool_id
+            )
             self._emit(
                 {
                     "event_type": event_type,
-                    "tool_id": tool_id,
+                    "tool_id": event_tool_id,
                     "tool_call_id": tool_call_id,
                     "arguments": public_arguments,
                     "status": "completed" if event_type in {"tool_completed", "tool_contract_invalid"} else "failed",
@@ -429,6 +439,14 @@ def _tool_sensitive_argument_paths(tool: BaseTool) -> list[str]:
         return []
     paths = combo.get("sensitive_argument_paths")
     return [str(item) for item in paths] if isinstance(paths, list) else []
+
+
+def _tool_delegated_execution(tool: BaseTool) -> bool:
+    metadata = getattr(tool, "metadata", None)
+    if not isinstance(metadata, dict):
+        return False
+    combo = metadata.get("combo")
+    return bool(combo.get("delegated_execution")) if isinstance(combo, dict) else False
 
 
 def _batch_approval_payload(requests: Sequence[dict[str, Any]]) -> dict[str, Any]:

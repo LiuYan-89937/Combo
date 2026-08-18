@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import isfinite
 from typing import Callable, Protocol
 
 from combo.dynamic_runtime.capability_adapters import (
@@ -10,6 +9,13 @@ from combo.dynamic_runtime.capability_adapters import (
 )
 from combo.dynamic_runtime.capability_store import ActiveCapability, CapabilityStore
 from combo.dynamic_runtime.capability_definitions import ToolDefinition
+from combo.dynamic_runtime.capability_search_contracts import (
+    CapabilitySearchCandidate,
+    CapabilitySearchMatch,
+)
+from combo.dynamic_runtime.capability_search_documents import (
+    search_candidates_from_active_capabilities,
+)
 from combo.dynamic_runtime.delegation_policy import TEMPORARY_RUNTIME_ONLY_CAPABILITY_IDS
 from combo.dynamic_runtime.model_service import ResolvedRuntimePolicy
 from combo.dynamic_runtime.mcp_gateway import MCPGateway
@@ -28,22 +34,6 @@ from combo.runtime_protocol import (
 
 class CapabilityResolutionError(RuntimeError):
     pass
-
-
-@dataclass(frozen=True, slots=True)
-class CapabilitySearchMatch:
-    capability_id: str
-    score: float
-    reason: str
-    evidence_id: str | None = None
-
-    def __post_init__(self) -> None:
-        _require_text(self.capability_id, "capability search match capability_id")
-        if not isfinite(self.score):
-            raise ValueError("capability search match score must be finite")
-        _require_text(self.reason, "capability search match reason")
-        if self.evidence_id is not None:
-            _require_text(self.evidence_id, "capability search match evidence_id")
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,7 +59,7 @@ class CapabilitySearchIndex(Protocol):
         self,
         *,
         requirements: tuple[str, ...],
-        candidates: tuple[ActiveCapability, ...],
+        candidates: tuple[CapabilitySearchCandidate, ...],
     ) -> tuple[CapabilitySearchMatch, ...]:
         ...
 
@@ -208,22 +198,27 @@ class MainTurnCapabilityResolver:
                 or not _is_system_available_tool(item)
             )
         )
-        external_matches = self._mcp_gateway.exact_requirement_matches(requirements)
-        external_requirements = {requirement for requirement, _ in external_matches}
-        published_requirements = tuple(
-            requirement for requirement in requirements
-            if requirement not in external_requirements
+        search_candidates = (
+            *search_candidates_from_active_capabilities(searchable),
+            *self._mcp_gateway.server_search_candidates(),
         )
+        candidate_ids = [item.capability_id for item in search_candidates]
+        if len(candidate_ids) != len(set(candidate_ids)):
+            raise CapabilityResolutionError("capability search corpus returned duplicate capability IDs")
+        mcp_servers_by_capability_id = {
+            f"mcp-server://{server.server_id}": server
+            for server in self._mcp_gateway.servers()
+        }
         matches_by_requirement = tuple(
             (
                 requirement,
                 _ordered_requirement_matches(
                     requirement=requirement,
-                    candidates=searchable,
+                    candidates=search_candidates,
                     search_index=self._search_index,
                 ),
             )
-            for requirement in published_requirements
+            for requirement in requirements
         )
         unmatched_requirements = tuple(
             requirement
@@ -243,6 +238,7 @@ class MainTurnCapabilityResolver:
         evidence_ids: dict[str, set[str]] = {}
         visiting: list[str] = []
         accepted_roots: set[str] = set()
+        selected_mcp_server_ids: list[str] = []
 
         def select(capability_id: str, *, score: float | None, reason: str) -> bool:
             if capability_id in selected:
@@ -387,6 +383,12 @@ class MainTurnCapabilityResolver:
         for requirement, matches in matches_by_requirement:
             accepted = False
             for match in matches:
+                mcp_server = mcp_servers_by_capability_id.get(match.capability_id)
+                if mcp_server is not None:
+                    if mcp_server.server_id not in selected_mcp_server_ids:
+                        selected_mcp_server_ids.append(mcp_server.server_id)
+                    accepted = True
+                    break
                 if match.evidence_id is not None:
                     evidence_ids.setdefault(match.capability_id, set()).add(match.evidence_id)
                 if select(
@@ -468,26 +470,25 @@ class MainTurnCapabilityResolver:
         )
         return self._mcp_gateway.augment_snapshot(
             published_snapshot,
-            server_ids=required_mcp_server_ids,
-            required_tools=tuple(tool for _, tool in external_matches),
+            server_ids=tuple(sorted(set((*required_mcp_server_ids, *selected_mcp_server_ids)))),
         )
 
 
 def _ordered_requirement_matches(
     *,
     requirement: str,
-    candidates: tuple[ActiveCapability, ...],
+    candidates: tuple[CapabilitySearchCandidate, ...],
     search_index: CapabilitySearchIndex,
 ) -> tuple[CapabilitySearchMatch, ...]:
     normalized = _normalized_public_name(requirement)
     exact = tuple(
         CapabilitySearchMatch(
-            capability_id=item.revision.capability_id,
+            capability_id=item.capability_id,
             score=1.0,
             reason="matched exact public capability name",
         )
         for item in candidates
-        if _normalized_public_name(item.revision.content.display_name) == normalized
+        if _normalized_public_name(item.display_name) == normalized
     )
     if exact:
         return tuple(sorted(exact, key=lambda item: item.capability_id))
