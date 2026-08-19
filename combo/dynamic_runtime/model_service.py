@@ -4,7 +4,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from combo.model_pool.store import ModelPoolStore
-from combo.models import ChatModelSettings, resolve_provider_profile
+from combo.model_pool.runtime_profile import resolve_model_pool_provider_profile
+from combo.models import ChatModelSettings
 from combo.models.chat_model import create_chat_model_from_settings
 from combo.models.protocol import ModelReasoningSettings
 from combo.models.reasoning import apply_reasoning_intensity
@@ -79,7 +80,10 @@ class RuntimeModelResolver:
         settings = ChatModelSettings(
             role=operation,
             provider=profile.provider,
-            profile=resolve_provider_profile(profile.provider),
+            profile=resolve_model_pool_provider_profile(
+                profile.provider,
+                profile.capabilities,
+            ),
             model=profile.model_name,
             api_key=credential.api_key,
             base_url=credential.base_url,
@@ -94,7 +98,7 @@ class RuntimeModelResolver:
             reasoning=ModelReasoningSettings(),
             structured_output_method=None,
         )
-        if reasoning_intensity is not None:
+        if reasoning_intensity is not None and settings.profile.capabilities.supports_reasoning():
             settings = apply_reasoning_intensity(settings, reasoning_intensity)
         model = create_chat_model_from_settings(settings)
         if model is None:

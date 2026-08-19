@@ -9,7 +9,7 @@ import sqlite3
 from combo.sqlite_runtime import DEFAULT_SQLITE_BUSY_TIMEOUT_MS, connect_sqlite
 
 
-DYNAMIC_RUNTIME_DATABASE_SCHEMA = "dynamic_runtime_database.v26"
+DYNAMIC_RUNTIME_DATABASE_SCHEMA = "dynamic_runtime_database.v27"
 DYNAMIC_RUNTIME_SCHEMA_EPOCH = 3
 
 
@@ -1328,6 +1328,18 @@ def _default_migrations() -> tuple[MigrationStep, ...]:
                 """
                 create index idx_conversation_context_snapshots_session
                 on conversation_context_snapshots(session_id, created_at)
+                """,
+            ),
+        ),
+        MigrationStep(
+            version=27,
+            name="three_level_reasoning_intensity",
+            statements=(
+                """
+                update user_runtime_policies
+                set payload_json = json_set(payload_json, '$.reasoning_intensity', 2)
+                where json_type(payload_json, '$.reasoning_intensity') is null
+                   or json_extract(payload_json, '$.reasoning_intensity') not in (1, 2, 3)
                 """,
             ),
         ),

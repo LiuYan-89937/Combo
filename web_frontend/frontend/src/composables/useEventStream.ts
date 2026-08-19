@@ -28,6 +28,15 @@ const BATCHED_STREAM_EVENTS = new Set([
   'model_reasoning_delta',
   'model_stream_delta',
 ])
+const BACKGROUND_TASK_TOOL_EVENTS = new Set([
+  'tool_call_proposed',
+  'tool_call_started',
+  'tool_call_output_delta',
+  'tool_call_completed',
+  'tool_call_failed',
+  'tool_contract_invalid',
+  'tool_observation_available',
+])
 let pendingStreamEvents: RuntimeFrontendEvent[] = []
 let streamFlushTimer: number | null = null
 
@@ -46,6 +55,14 @@ function applyRuntimeEventImmediately(event: RuntimeFrontendEvent): void {
   }
   if (event.event_type === 'background_task_updated' && typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('combo:background-task-updated', { detail: event }))
+  }
+  if (
+    typeof window !== 'undefined'
+    && event.payload?.runtime_role === 'temporary'
+    && event.payload?.source_task_id
+    && BACKGROUND_TASK_TOOL_EVENTS.has(event.event_type)
+  ) {
+    window.dispatchEvent(new CustomEvent('combo:background-task-runtime-event', { detail: event }))
   }
   const notificationContext = captureTaskNotificationEventContext(event)
   if (event.payload?.group_id && event.payload?.group_run_id) {

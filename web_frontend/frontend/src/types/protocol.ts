@@ -38,6 +38,9 @@ export interface ContextReferenceInput extends RuntimeAttachmentInput {
 export interface TranscriptAttachmentView {
   kind: RuntimeAttachmentKind
   name: string
+  attachment_id?: string
+  revision?: number
+  content_digest?: string
   source_kind?: string
   mime_type?: string
   workspace_scope?: WorkspaceScope

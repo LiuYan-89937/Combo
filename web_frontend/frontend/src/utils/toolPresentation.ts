@@ -44,6 +44,8 @@ const TOOL_PRESENTATIONS: Record<string, Pick<ToolPresentation, 'category' | 'la
   shell_stop: { category: 'process', labelKey: 'tool.names.shellStop', icon: 'close' },
   capability: { category: 'extension', labelKey: 'tool.names.capability', icon: 'catalog' },
   delegate: { category: 'agent', labelKey: 'tool.names.delegate', icon: 'agent', activeLabelKey: 'tool.status.selectingModel' },
+  delegate_continue: { category: 'agent', labelKey: 'tool.names.delegateContinue', icon: 'agent', activeLabelKey: 'tool.status.selectingModel' },
+  delegate_message: { category: 'agent', labelKey: 'tool.names.delegateMessage', icon: 'agent' },
   delegation_status: { category: 'agent', labelKey: 'tool.names.delegationStatus', icon: 'task' },
   memory: { category: 'knowledge', labelKey: 'tool.names.memory', icon: 'memory' },
   knowledge: { category: 'knowledge', labelKey: 'tool.names.knowledge', icon: 'folder' },
@@ -230,6 +232,8 @@ function toolArgumentPresentation(
   if (toolName === 'capability') return summary(compact(args.action, args.query))
   if (toolName === 'memory') return summary(compact(args.action, args.query || args.kind))
   if (toolName === 'delegate') return summary(compact(args.agent_name, args.objective))
+  if (toolName === 'delegate_continue') return summary(compact(args.instruction))
+  if (toolName === 'delegate_message') return summary(compact(args.message))
   if (toolName === 'delegation_status') return { summary: '' }
   if (toolName.startsWith('browser_')) {
     return summary(compact(args.url, args.path, args.key, args.format, args.milliseconds))

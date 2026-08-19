@@ -74,7 +74,7 @@ const modelProfile = {
   display_name: '主对话模型',
   description: 'Showcase',
   kind: 'chat',
-  provider: 'openai_compatible',
+  provider: 'openai_chat_completions',
   credential_id: 'showcase',
   model_name: 'combo-main',
   enabled: true,
@@ -102,7 +102,7 @@ const modelProfile = {
   credential: {
     credential_id: 'showcase',
     display_name: 'Showcase',
-    provider: 'openai_compatible',
+    provider: 'openai_chat_completions',
     base_url: 'https://example.local/v1',
     api_key_masked: '••••••••',
     api_key_fingerprint: 'showcase',

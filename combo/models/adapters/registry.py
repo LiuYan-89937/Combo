@@ -11,6 +11,7 @@ from combo.models.adapters.openai_chat import (
     GenericOpenAICompatibleChatAdapter,
     OpenAIChatAdapter,
 )
+from combo.models.adapters.openai_responses import GenericOpenAIResponsesAdapter
 from combo.models.adapters.qwen import QwenChatAdapter
 from combo.models.adapters.zhipu import ZhipuChatAdapter
 from combo.models.capabilities import ProviderProfile
@@ -26,6 +27,7 @@ def adapter_for_profile(profile: ProviderProfile) -> ChatModelAdapter:
 _ADAPTERS = {
     "openai_chat": OpenAIChatAdapter,
     "openai_compatible_chat": GenericOpenAICompatibleChatAdapter,
+    "openai_responses": GenericOpenAIResponsesAdapter,
     "anthropic": AnthropicChatAdapter,
     "deepseek": DeepSeekChatAdapter,
     "qwen": QwenChatAdapter,

@@ -139,7 +139,11 @@ import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
 import { backgroundTasksApi } from '@/api/backgroundTasks'
 import SubAgentMascot from '@/components/brand/SubAgentMascot.vue'
 import ToolExecutionCard from '@/components/chat/ToolExecutionCard.vue'
-import type { ChatMessagePartStatus, ToolExecutionMessagePart } from '@/types/protocol'
+import type {
+  ChatMessagePartStatus,
+  RuntimeFrontendEvent,
+  ToolExecutionMessagePart,
+} from '@/types/protocol'
 import { backgroundTaskActivityText } from '@/utils/backgroundTaskActivity'
 
 const props = defineProps<{
@@ -157,11 +161,16 @@ const cancelling = ref(false)
 const actionError = ref('')
 const task = ref<BackgroundTask>(props.task)
 const events = ref<BackgroundTaskEvent[]>([])
+const liveToolEvents = ref<Record<string, BackgroundTaskEvent>>({})
 let pollTimer: ReturnType<typeof setTimeout> | null = null
 
 const projectedTask = computed(() => taskController().project?.(task.value, events.value) || task.value)
 const interaction = computed(() => projectedTask.value.pending_interaction || null)
-const view = computed(() => buildView(projectedTask.value, events.value, props.fallbackTitle || t('backgroundTask.title')))
+const view = computed(() => buildView(
+  projectedTask.value,
+  [...events.value, ...Object.values(liveToolEvents.value)],
+  props.fallbackTitle || t('backgroundTask.title'),
+))
 const terminal = computed(() => ['succeeded', 'failed', 'cancelled'].includes(view.value.status))
 const statusLabel = computed(() => t(`backgroundTask.status.${view.value.status}` as any))
 const currentTitle = computed(() => localize(interaction.value?.title) || statusLabel.value)
@@ -176,13 +185,74 @@ const renderedDelivery = computed(() => renderMarkdown(view.value.delivery, {
   surface: 'chat_message',
 }))
 
-onMounted(loadEvents)
-onBeforeUnmount(stopPolling)
+onMounted(() => {
+  window.addEventListener('combo:background-task-runtime-event', handleRuntimeToolEvent)
+  void loadEvents()
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('combo:background-task-runtime-event', handleRuntimeToolEvent)
+  stopPolling()
+})
 watch(() => props.task, value => { task.value = value }, { deep: true })
 watch(() => props.task.task_id, () => {
   events.value = []
+  liveToolEvents.value = {}
   void loadEvents()
 })
+
+function handleRuntimeToolEvent(event: Event) {
+  const runtimeEvent = (event as CustomEvent<RuntimeFrontendEvent>).detail
+  const payload = recordValue(runtimeEvent?.payload)
+  if (!payload || String(payload.source_task_id || '') !== task.value.task_id) return
+  const toolCallId = String(payload.tool_call_id || '').trim()
+  if (!toolCallId) return
+  const previous = liveToolEvents.value[toolCallId]
+  const occurredAt = String(runtimeEvent.timestamp || previous?.created_at || '').trim()
+  const status = runtimeToolStatus(runtimeEvent.event_type, payload.status)
+  const toolName = String(
+    payload.tool_name
+    || payload.tool_id
+    || recordValue(previous?.payload.details)?.tool_name
+    || '',
+  ).trim()
+  if (!toolName) return
+  const previousDetails = recordValue(previous?.payload.details) || {}
+  const details = {
+    ...previousDetails,
+    ...payload,
+    started_at: previousDetails.started_at
+      || (runtimeEvent.event_type === 'tool_call_started' ? occurredAt : null),
+    updated_at: occurredAt,
+  }
+  liveToolEvents.value = {
+    ...liveToolEvents.value,
+    [toolCallId]: {
+      seq: previous?.seq || 0,
+      event_id: String(runtimeEvent.event_id || `${task.value.task_id}:${toolCallId}:${runtimeEvent.event_type}`),
+      event_type: 'background_task_activity',
+      created_at: occurredAt,
+      request_id: runtimeEvent.request_id,
+      task_id: task.value.task_id,
+      session_id: task.value.session_id,
+      payload: {
+        phase_id: `tool:${toolCallId}`,
+        category: 'tool',
+        title: toolName,
+        summary: `${toolName} ${status}`,
+        status,
+        details,
+      },
+    },
+  }
+}
+
+function runtimeToolStatus(eventType: string, value: unknown): string {
+  if (eventType === 'tool_call_failed' || eventType === 'tool_contract_invalid') return 'failed'
+  if (eventType === 'tool_call_completed' || eventType === 'tool_observation_available') return 'completed'
+  const status = String(value || '').trim()
+  if (status) return status
+  return 'running'
+}
 
 async function loadEvents() {
   if (!task.value.task_id) return

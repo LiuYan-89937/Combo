@@ -164,6 +164,31 @@ class AttachmentUploadStore:
             content_digest=str(metadata.get("content_digest") or "").strip(),
         )
 
+    def retain(
+        self,
+        attachment_id: str,
+        *,
+        principal_id: str,
+        content_digest: str | None = None,
+    ) -> StagedAttachment:
+        staged = self.resolve(attachment_id)
+        if staged.principal_id != _required_principal(principal_id):
+            raise PermissionError("attachment does not belong to the runtime principal")
+        expected_digest = str(content_digest or "").strip()
+        if expected_digest and staged.content_digest != expected_digest:
+            raise AttachmentUploadError("attachment content digest does not match")
+        metadata_path = staged.path.parent / "metadata.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        if metadata.get("retained") is not True:
+            metadata["retained"] = True
+            temporary_path = metadata_path.with_suffix(".json.tmp")
+            temporary_path.write_text(
+                json.dumps(metadata, ensure_ascii=False, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            temporary_path.replace(metadata_path)
+        return staged
+
     def resolve_command_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         resolved = dict(payload)
         attachments = resolved.get("attachments")
@@ -188,6 +213,12 @@ class AttachmentUploadStore:
             try:
                 modified_at = entry.stat().st_mtime
             except OSError:
+                continue
+            try:
+                metadata = json.loads((entry / "metadata.json").read_text(encoding="utf-8"))
+            except (FileNotFoundError, json.JSONDecodeError, OSError):
+                metadata = {}
+            if metadata.get("retained") is True:
                 continue
             if modified_at < threshold:
                 shutil.rmtree(entry, ignore_errors=True)
@@ -224,11 +255,11 @@ class StagedAttachmentLaunchResolver:
     def resolve(self, *, principal_id: str, reference: AttachmentRevisionRef) -> dict[str, Any]:
         if reference.revision != 1:
             raise AttachmentUploadError("staged attachment revision must be 1")
-        staged = attachment_upload_store().resolve(reference.attachment_id)
-        if staged.principal_id != principal_id:
-            raise PermissionError("attachment does not belong to the runtime principal")
-        if staged.content_digest != reference.content_digest:
-            raise AttachmentUploadError("attachment content digest does not match")
+        staged = attachment_upload_store().retain(
+            reference.attachment_id,
+            principal_id=principal_id,
+            content_digest=reference.content_digest,
+        )
         return {
             "kind": "file",
             "name": staged.name,

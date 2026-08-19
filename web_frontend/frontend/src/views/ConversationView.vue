@@ -1,6 +1,9 @@
 <template>
   <div class="conversation-view">
-    <div class="chat-container">
+    <div
+      class="chat-container"
+      :style="{ '--composer-occlusion': `${composerOcclusion}px` }"
+    >
       <!-- 消息列表 -->
       <div class="messages-section">
         <n-scrollbar
@@ -57,52 +60,53 @@
         </n-button>
       </div>
 
-      <QuestionInterruptPanel
-        v-if="hasUserQuestionInterrupt"
-        class="approval-section"
-      />
-      <ToolApprovalPanel
-        v-else-if="hasApprovalRequests"
-        class="approval-section"
-      />
+      <div ref="composerDockRef" class="conversation-bottom-dock">
+        <QuestionInterruptPanel
+          v-if="hasUserQuestionInterrupt"
+          class="approval-section"
+        />
+        <ToolApprovalPanel
+          v-else-if="hasApprovalRequests"
+          class="approval-section"
+        />
 
-      <!-- 输入区 -->
-      <div class="input-section">
-        <MessageInput
-          ref="inputRef"
-          :placeholder="inputPlaceholder"
-          :disabled="inputDisabled"
-          :disabled-hint="modelConfigurationMissing ? t('chat.configureModelLink') : ''"
-          :disabled-hint-route="{ name: 'ModelPool' }"
-          :is-running="runtimeStore.hasActiveRun"
-          :queued-count="runtimeStore.queuedRequestCount"
-          :queued-messages="runtimeStore.queuedMessages"
-          :running-message-mode="runningMessageMode"
-          attachments-enabled
-          model-selector-enabled
-          :model-options="runtimeMainModelOptions"
-          :selected-model-profile-id="selectedMainModelProfileId"
-          reasoning-control-enabled
-          :reasoning-intensity="reasoningIntensity"
-          execution-control-enabled
-          :execution-preference="executionPreference"
-          :force-collaboration="forceCollaboration"
-          approval-control-enabled
-          :approval-mode="approvalMode"
-          :reference-scope="referenceScope"
-          :draft-scope="referenceScope"
-          @update:selected-model-profile-id="setSelectedMainModelProfileId"
-          @update:reasoning-intensity="setReasoningIntensity"
-          @update:execution-preference="setExecutionPreference"
-          @update:force-collaboration="setForceCollaboration"
-          @update:approval-mode="setApprovalMode"
-          @send="handleSend"
-          @cancel="handleCancel"
-          @steer="handleSteer"
-          @cancel-queued="handleCancelQueued"
-        >
-          <template #before-send><ContextProgressControl /></template>
-        </MessageInput>
+        <div class="input-section">
+          <MessageInput
+            ref="inputRef"
+            :placeholder="inputPlaceholder"
+            :disabled="inputDisabled"
+            :disabled-hint="modelConfigurationMissing ? t('chat.configureModelLink') : ''"
+            :disabled-hint-route="{ name: 'ModelPool' }"
+            :is-running="runtimeStore.hasActiveRun"
+            :queued-count="runtimeStore.queuedRequestCount"
+            :queued-messages="runtimeStore.queuedMessages"
+            :running-message-mode="runningMessageMode"
+            attachments-enabled
+            model-selector-enabled
+            :model-options="runtimeMainModelOptions"
+            :selected-model-profile-id="selectedMainModelProfileId"
+            reasoning-control-enabled
+            :reasoning-intensity="reasoningIntensity"
+            execution-control-enabled
+            :execution-preference="executionPreference"
+            :force-collaboration="forceCollaboration"
+            approval-control-enabled
+            :approval-mode="approvalMode"
+            :reference-scope="referenceScope"
+            :draft-scope="referenceScope"
+            @update:selected-model-profile-id="setSelectedMainModelProfileId"
+            @update:reasoning-intensity="setReasoningIntensity"
+            @update:execution-preference="setExecutionPreference"
+            @update:force-collaboration="setForceCollaboration"
+            @update:approval-mode="setApprovalMode"
+            @send="handleSend"
+            @cancel="handleCancel"
+            @steer="handleSteer"
+            @cancel-queued="handleCancelQueued"
+          >
+            <template #before-send><ContextProgressControl /></template>
+          </MessageInput>
+        </div>
       </div>
     </div>
     <ConversationFloatingDock
@@ -163,6 +167,8 @@ const router = useRouter()
 const { t } = useI18n()
 const scrollbarRef = ref()
 const messagesListRef = ref<HTMLElement | null>(null)
+const composerDockRef = ref<HTMLElement | null>(null)
+const composerOcclusion = ref(88)
 const inputRef = ref()
 const referenceStore = useContextReferenceStore()
 const resourceContext = useResourceContext()
@@ -170,6 +176,7 @@ const { startNewAgentSession } = useAgentSessionNavigation()
 let followBottomFrame: number | null = null
 let followBottomScheduled = false
 let messagesResizeObserver: ResizeObserver | null = null
+let composerResizeObserver: ResizeObserver | null = null
 const followsLatestMessage = ref(true)
 const showScrollToLatest = computed(() => (
   !followsLatestMessage.value && runtimeStore.transcript.length > 0
@@ -419,12 +426,28 @@ function observeMessagesSize() {
   messagesResizeObserver.observe(target)
 }
 
+function observeComposerSize() {
+  composerResizeObserver?.disconnect()
+  composerResizeObserver = null
+  const target = composerDockRef.value
+  if (!target || typeof ResizeObserver === 'undefined') return
+  const update = () => {
+    composerOcclusion.value = Math.ceil(target.getBoundingClientRect().height)
+    followBottomIfNeeded()
+  }
+  composerResizeObserver = new ResizeObserver(update)
+  composerResizeObserver.observe(target)
+  update()
+}
+
 onBeforeUnmount(() => {
   if (followBottomFrame !== null) window.cancelAnimationFrame(followBottomFrame)
   followBottomFrame = null
   followBottomScheduled = false
   messagesResizeObserver?.disconnect()
   messagesResizeObserver = null
+  composerResizeObserver?.disconnect()
+  composerResizeObserver = null
 })
 
 watch(
@@ -467,6 +490,7 @@ watch(
 )
 
 watch(messagesListRef, observeMessagesSize, { flush: 'post' })
+watch(composerDockRef, observeComposerSize, { flush: 'post' })
 
 let routeActivationVersion = 0
 
@@ -476,6 +500,7 @@ onMounted(async () => {
   await activateCurrentRoute()
   await nextTick()
   observeMessagesSize()
+  observeComposerSize()
 
   if (!route.meta.showcaseMode) {
     nextTick(() => {
@@ -589,12 +614,15 @@ function routeParamText(value: unknown): string | null {
 }
 
 .chat-container {
+  --chat-horizontal-gutter: clamp(54px, 6vw, 80px);
   flex: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  padding: var(--app-space-xl) clamp(54px, 6vw, 80px) var(--app-space-lg);
+  position: relative;
+  box-sizing: border-box;
+  padding: var(--app-space-xl) var(--chat-horizontal-gutter) var(--app-space-lg);
   max-width: var(--app-chat-max-width);
   margin: 0 auto;
   width: min(100%, var(--app-chat-max-width));
@@ -613,13 +641,17 @@ function routeParamText(value: unknown): string | null {
 }
 
 .messages-list {
-  padding: var(--app-space-lg) var(--app-space-lg) var(--app-space-xxl);
+  --conversation-tail-room: clamp(180px, 34vh, 360px);
+  padding:
+    var(--app-space-lg)
+    var(--app-space-lg)
+    calc(var(--composer-occlusion, 88px) + var(--conversation-tail-room) + 24px);
 }
 
 .scroll-latest-button {
   position: absolute;
-  right: var(--app-space-lg);
-  bottom: var(--app-space-lg);
+  right: 18px;
+  bottom: calc(var(--composer-occlusion, 88px) + 26px);
   z-index: 4;
   border: 1px solid var(--app-border);
   background: var(--app-surface-elevated);
@@ -646,19 +678,33 @@ function routeParamText(value: unknown): string | null {
 }
 
 .approval-section {
-  margin-top: var(--app-space-md);
+  margin: 0 8px;
+}
+
+.conversation-bottom-dock {
+  position: absolute;
+  right: var(--chat-horizontal-gutter);
+  bottom: var(--app-space-lg);
+  left: var(--chat-horizontal-gutter);
+  z-index: 6;
+  display: grid;
+  gap: 8px;
 }
 
 .input-section {
-  margin-top: var(--app-space-lg);
-  padding-top: var(--app-space-sm);
+  min-width: 0;
 }
 
 
 /* 窄屏适配 */
 @media (max-width: 768px) {
   .chat-container {
+    --chat-horizontal-gutter: var(--app-space-md);
     padding: var(--app-space-md);
+  }
+
+  .conversation-bottom-dock {
+    bottom: var(--app-space-md);
   }
 }
 

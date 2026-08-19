@@ -19,8 +19,8 @@
 .markdown-content h4,
 .markdown-content h5,
 .markdown-content h6 {
-  margin-top: 18px;
-  margin-bottom: 8px;
+  margin-top: 14px;
+  margin-bottom: 6px;
   font-weight: 580;
   line-height: var(--app-leading-tight);
   color: var(--app-text-strong);
@@ -44,7 +44,7 @@
 }
 
 .markdown-content p {
-  margin: 0 0 10px;
+  margin: 0 0 8px;
 }
 
 .markdown-content code {
@@ -60,7 +60,7 @@
 
 .markdown-content .markdown-code-block {
   max-width: 100%;
-  margin: 0 0 16px;
+  margin: 0 0 12px;
   overflow: hidden;
   background-color: var(--app-code-background);
   border: 1px solid var(--app-code-border);

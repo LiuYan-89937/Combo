@@ -13,7 +13,7 @@
           :style="{ '--context-progress': `${usagePercent ?? 0}%` }"
           aria-hidden="true"
         >
-          <ComboPngIcon name="context" :size="28" />
+          <ComboPngIcon name="context" :size="24" />
           <i
             v-if="thresholdPercent !== null"
             class="ring-threshold"
@@ -185,8 +185,8 @@ function optionalNumber(value: unknown): number | null {
 <style scoped>
 .context-progress-trigger {
   position: relative;
-  width: 38px;
-  height: 38px;
+  width: 34px;
+  height: 34px;
   flex: 0 0 auto;
   padding: 0;
   border: 0;
@@ -223,7 +223,7 @@ function optionalNumber(value: unknown): number | null {
   height: 5px;
   border-radius: 2px;
   background: var(--app-warning);
-  transform-origin: 1px 17px;
+  transform-origin: 1px 15px;
 }
 .ring-label { position: relative; z-index: 3; padding-top: 1px; font-size: 8px; font-weight: 750; }
 .is-compressing .context-progress-ring { animation: context-ring-spin 1.1s linear infinite; }

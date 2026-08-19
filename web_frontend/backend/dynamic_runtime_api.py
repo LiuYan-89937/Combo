@@ -25,6 +25,7 @@ from combo.dynamic_runtime.repositories import utc_now_text
 from combo.runtime_protocol import (
     CommandEnvelope,
     CommandReceipt,
+    DEFAULT_REASONING_INTENSITY,
     RuntimeProtocolDescriptor,
     RuntimeProtocolHandshake,
     RuntimeProtocolHandshakeResult,
@@ -261,7 +262,7 @@ class RuntimePolicyWriteRequest(BaseModel):
     execution_preference: str
     approval_mode: str
     model_profile_id: str
-    reasoning_intensity: int | None = Field(default=None, ge=0)
+    reasoning_intensity: int = Field(default=DEFAULT_REASONING_INTENSITY, ge=1, le=3)
     request_timeout_seconds: int = Field(ge=1)
     browser_operation_timeout_ms: int = Field(default=30_000, ge=1_000, le=600_000)
     browser_navigation_timeout_ms: int = Field(default=45_000, ge=1_000, le=600_000)

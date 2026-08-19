@@ -4,6 +4,8 @@ from typing import Any, cast
 
 from combo.dynamic_runtime.delegation_runtime import (
     BoundDelegationRuntime,
+    DelegationContinuationRequest,
+    DelegationMessageRequest,
     DelegationRequest,
 )
 from combo.runtime_protocol import ExecutionStrategy
@@ -35,6 +37,33 @@ def status(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, An
     del arguments
     result = runtime.status()
     return tool_envelope(result, summary=f"inspected {len(result['tasks'])} delegated task(s)")
+
+
+def continue_task(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
+    runtime = resources.get(DELEGATION_RUNTIME_RESOURCE)
+    if not isinstance(runtime, BoundDelegationRuntime):
+        raise RuntimeError("delegate continuation requires a bound delegation runtime")
+    result = runtime.continue_task(
+        DelegationContinuationRequest(
+            task_ref=_required_text(arguments.get("task_ref"), "task_ref"),
+            instruction=_required_text(arguments.get("instruction"), "instruction"),
+            acceptance_criteria=_text_tuple(arguments.get("acceptance_criteria")),
+        )
+    )
+    return tool_envelope(result, summary=f"continued delegated task revision {result['task_revision']}")
+
+
+def message_task(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
+    runtime = resources.get(DELEGATION_RUNTIME_RESOURCE)
+    if not isinstance(runtime, BoundDelegationRuntime):
+        raise RuntimeError("delegate messaging requires a bound delegation runtime")
+    result = runtime.message_task(
+        DelegationMessageRequest(
+            task_ref=_required_text(arguments.get("task_ref"), "task_ref"),
+            message=_required_text(arguments.get("message"), "message"),
+        )
+    )
+    return tool_envelope(result, summary="message inserted into delegated task")
 
 
 def _text_tuple(value: Any) -> tuple[str, ...]:

@@ -208,6 +208,37 @@ class DelegationStore:
             status=str(row["status"]),
         )
 
+    def latest_for_session(
+        self,
+        *,
+        principal_id: str,
+        session_id: str,
+        task_id: str,
+    ) -> DelegatedTaskRecord:
+        records = self.list_for_session(
+            principal_id=principal_id,
+            session_id=session_id,
+            task_id=task_id,
+        )
+        if not records:
+            raise LookupError("delegated task not found in the current session")
+        return records[0]
+
+    def previous_revision(
+        self,
+        *,
+        principal_id: str,
+        task_id: str,
+        task_revision: int,
+    ) -> DelegatedTaskRecord:
+        if task_revision <= 1:
+            raise LookupError("delegated task has no previous revision")
+        return self.get(
+            principal_id=principal_id,
+            task_id=task_id,
+            task_revision=task_revision - 1,
+        )
+
     def for_runtime(self, runtime_instance_id: str) -> DelegatedTaskRecord:
         with self._database.connection(query_only=True) as conn:
             row = conn.execute(
@@ -398,7 +429,12 @@ class DelegationStore:
                   on runtime.runtime_instance_id = task.child_runtime_instance_id
                 where task.principal_id = ? and runtime.session_id = ?
                   and (? is null or task.task_id = ?)
-                order by task.created_at, task.task_revision
+                  and task.task_revision = (
+                    select max(latest.task_revision)
+                    from delegated_task_revisions as latest
+                    where latest.task_id = task.task_id
+                  )
+                order by task.created_at, task.task_id
                 """,
                 (principal_id, session_id, task_id, task_id),
             ).fetchall()
@@ -742,14 +778,16 @@ def _delegated_observation_activities(chunk: Any) -> tuple[dict[str, Any], ...]:
             tool_call_id = str(raw_event.get("tool_call_id") or "").strip()
             if not tool_call_id:
                 continue
+            details = _json_record(raw_event)
+            status = str(raw_event.get("status") or "running").strip() or "running"
             activities.append(
                 {
-                    "summary": str(raw_event.get("message") or raw_event.get("status") or event_type),
-                    "status": str(raw_event.get("status") or "running"),
+                    "summary": _delegated_tool_activity_summary(details, status=status),
+                    "status": status,
                     "source": "tool",
                     "source_event_id": f"tool:{tool_call_id}:{event_type}",
                     "created_at": utc_now_text(),
-                    "details": _json_record(raw_event),
+                    "details": details,
                 }
             )
         return tuple(activities)
@@ -788,3 +826,10 @@ def _delegated_observation_activities(chunk: Any) -> tuple[dict[str, Any], ...]:
 
 def _json_record(value: dict[str, Any]) -> dict[str, Any]:
     return json.loads(json.dumps(value, ensure_ascii=False, default=str))
+
+
+def _delegated_tool_activity_summary(details: dict[str, Any], *, status: str) -> str:
+    tool_name = str(details.get("tool_name") or details.get("tool_id") or "").strip()
+    if tool_name:
+        return f"{tool_name} {status}"
+    return str(details.get("message") or status).strip()

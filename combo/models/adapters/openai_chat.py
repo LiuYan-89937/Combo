@@ -1,11 +1,18 @@
 from __future__ import annotations
 
-from combo.models.adapters.base import OpenAIChatCompletionsAdapter
+from typing import Any
+
+from combo.models.adapters.base import (
+    OpenAIChatCompletionsAdapter,
+    reasoning_effort,
+)
 
 
 class GenericOpenAICompatibleChatAdapter(OpenAIChatCompletionsAdapter):
-    pass
+    def request_parameters(self, settings: Any) -> dict[str, Any]:
+        effort = reasoning_effort(settings)
+        return {"reasoning_effort": effort} if effort else {}
 
 
-class OpenAIChatAdapter(OpenAIChatCompletionsAdapter):
+class OpenAIChatAdapter(GenericOpenAICompatibleChatAdapter):
     pass

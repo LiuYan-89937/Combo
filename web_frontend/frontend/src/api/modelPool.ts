@@ -87,6 +87,8 @@ export interface ModelPoolProfile {
     image_edit_unit_price?: number | null
   }
   notes: string
+  created_at: string
+  updated_at: string
   credential?: ModelPoolCredential | null
 }
 

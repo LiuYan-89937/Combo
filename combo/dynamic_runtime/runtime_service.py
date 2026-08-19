@@ -33,6 +33,7 @@ from combo.dynamic_runtime.run_control import RuntimeRunControl, RuntimeRunContr
 from combo.dynamic_runtime.services import DynamicRuntimeServiceSet
 from combo.dynamic_runtime.snapshot_tool_registry import SnapshotToolRegistryLease
 from combo.runtime_kernel.capability_state import bind_capability_snapshot
+from combo.runtime_kernel.persistence import delete_checkpoint_thread
 from combo.runtime_kernel.state import (
     ContextState,
     ConversationState,
@@ -423,6 +424,7 @@ class DynamicRuntimeService:
                     "thread_id": claimed_instance.runtime_instance_id,
                 }
             }
+            superseded_checkpoint_thread_id: str | None = None
             if resume_payload is None:
                 graph_messages = self._session_context_messages(
                     session_id=claimed_instance.request.session_id,
@@ -430,6 +432,13 @@ class DynamicRuntimeService:
                     canonical_messages=canonical_messages,
                     runtime_role=claimed_instance.request.runtime_role,
                 )
+                continuation = self._delegated_continuation_messages(
+                    instance=claimed_instance,
+                    graph=graph,
+                    current_messages=graph_messages,
+                )
+                if continuation is not None:
+                    graph_messages, superseded_checkpoint_thread_id = continuation
                 state = _initial_state(
                     instance=claimed_instance,
                     snapshot=snapshot,
@@ -604,6 +613,8 @@ class DynamicRuntimeService:
                     model_usage=_model_usage_records(claimed_instance, state.observability.events),
                     error=error,
                 )
+            if superseded_checkpoint_thread_id is not None:
+                self._delete_superseded_checkpoint(superseded_checkpoint_thread_id)
             return RuntimeExecutionResult(
                 runtime_instance=committed_instance,
                 capability_snapshot=snapshot,
@@ -630,6 +641,57 @@ class DynamicRuntimeService:
             if not runtime_leases_owned_by_worker:
                 release_runtime_leases()
             self._run_controls.release(claimed_instance.runtime_instance_id, run_control)
+
+    def _delegated_continuation_messages(
+        self,
+        *,
+        instance: RuntimeInstance,
+        graph: Any,
+        current_messages: list[BaseMessage],
+    ) -> tuple[list[BaseMessage], str] | None:
+        if instance.request.runtime_role != "temporary" or instance.request.task_revision <= 1:
+            return None
+        task_id = str(instance.request.task_id or "").strip()
+        if not task_id:
+            raise RuntimeError("delegated task continuation requires a task identity")
+        previous = self._delegations.previous_revision(
+            principal_id=instance.request.principal_id,
+            task_id=task_id,
+            task_revision=instance.request.task_revision,
+        )
+        if previous.child_runtime.request.session_id != instance.request.session_id:
+            raise RuntimeError("delegated task continuation changed conversation identity")
+        if previous.child_runtime.request.strategy != instance.request.strategy:
+            raise RuntimeError("delegated task continuation changed execution strategy")
+        previous_thread_id = previous.child_runtime.runtime_instance_id
+        previous_checkpoint = graph.graph_app.get_state(
+            {"configurable": {"thread_id": previous_thread_id}}
+        )
+        previous_values = getattr(previous_checkpoint, "values", None) or {}
+        previous_messages = list(previous_values.get("messages") or [])
+        if not previous_messages:
+            raise RuntimeError("delegated task continuation checkpoint is unavailable")
+        return (
+            [
+                *_close_terminal_tool_calls(previous_messages, status=previous.status),
+                *current_messages,
+            ],
+            previous_thread_id,
+        )
+
+    def _delete_superseded_checkpoint(self, thread_id: str) -> None:
+        try:
+            deleted = delete_checkpoint_thread(self._service_set.services.checkpointer, thread_id)
+            if not deleted:
+                logger.warning(
+                    "Checkpoint backend cannot delete superseded delegated task thread: thread_id=%s",
+                    thread_id,
+                )
+        except Exception:
+            logger.exception(
+                "Failed to delete superseded delegated task checkpoint: thread_id=%s",
+                thread_id,
+            )
 
     def _inherited_context_window(self, instance: RuntimeInstance) -> dict[str, Any] | None:
         if instance.request.runtime_role != "main":

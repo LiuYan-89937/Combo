@@ -27,3 +27,19 @@ export async function uploadRuntimeAttachment(file: File): Promise<RuntimeAttach
   const payload = await response.json() as AttachmentUploadResponse
   return payload.attachment
 }
+
+export async function readRuntimeAttachment(attachmentId: string): Promise<Blob> {
+  const response = await fetch(await backendUrl(`/api/attachments/${encodeURIComponent(attachmentId)}`), {
+    headers: {
+      'X-Combo-Principal': runtimePrincipalId(),
+      'X-Combo-Client': runtimeClientInstanceId(),
+      'X-Combo-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
+      'X-Combo-Locale': runtimeLocale(),
+    },
+  })
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null)
+    throw new Error(String(payload?.detail || `Attachment read failed with HTTP ${response.status}`))
+  }
+  return response.blob()
+}

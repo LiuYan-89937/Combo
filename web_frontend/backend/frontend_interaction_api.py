@@ -20,6 +20,7 @@ from combo.native_directory_picker import NativeDirectoryPicker, NativeDirectory
 from combo.runtime_protocol import (
     CommandEnvelope,
     CommandReceipt,
+    DEFAULT_REASONING_INTENSITY,
     RuntimeProtocolDescriptor,
     ToolCallRecord,
     UserRuntimePolicy,
@@ -61,7 +62,7 @@ class RuntimePreferencesWrite(BaseModel):
     expected_revision: int | None = None
     execution_preference: str | None = None
     model_profile_id: str | None = None
-    reasoning_intensity: int | None = None
+    reasoning_intensity: int | None = Field(default=None, ge=1, le=3)
     approval_mode: str | None = None
     request_timeout_seconds: int | None = None
     browser_operation_timeout_ms: int | None = Field(default=None, ge=1_000, le=600_000)
@@ -437,7 +438,11 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
             execution_preference=execution_preference,
             approval_mode=approval_mode,
             model_profile_id=payload.model_profile_id if "model_profile_id" in payload.model_fields_set else current.model_profile_id if current else None,
-            reasoning_intensity=payload.reasoning_intensity if "reasoning_intensity" in payload.model_fields_set else current.reasoning_intensity if current else None,
+            reasoning_intensity=(
+                payload.reasoning_intensity
+                if payload.reasoning_intensity is not None
+                else current.reasoning_intensity if current else DEFAULT_REASONING_INTENSITY
+            ),
             request_timeout_seconds=payload.request_timeout_seconds if payload.request_timeout_seconds is not None else current.request_timeout_seconds if current else 300,
             browser_operation_timeout_ms=payload.browser_operation_timeout_ms if payload.browser_operation_timeout_ms is not None else current.browser_operation_timeout_ms if current else 30_000,
             browser_navigation_timeout_ms=payload.browser_navigation_timeout_ms if payload.browser_navigation_timeout_ms is not None else current.browser_navigation_timeout_ms if current else 45_000,
@@ -1345,7 +1350,7 @@ def _synchronize_policy(
         reasoning_intensity=(
             int(config["reasoning_intensity"])
             if config.get("reasoning_intensity") is not None
-            else current.reasoning_intensity if current is not None else None
+            else current.reasoning_intensity if current is not None else DEFAULT_REASONING_INTENSITY
         ),
         request_timeout_seconds=int(runtime_request.get("timeout_seconds") or (current.request_timeout_seconds if current else 300)),
         browser_operation_timeout_ms=current.browser_operation_timeout_ms if current else 30_000,
@@ -1845,6 +1850,32 @@ def _frontend_message_part(
             "completedAt": value.get("completed_at"),
             "updatedAt": value.get("completed_at"),
         }
+    if kind == "attachment":
+        reference = value.get("attachment") if isinstance(value.get("attachment"), dict) else {}
+        attachment_id = str(reference.get("attachment_id") or "").strip()
+        attachment = {
+            "kind": "file",
+            "name": attachment_id,
+            **reference,
+        }
+        if attachment_id:
+            try:
+                staged = attachment_upload_store().resolve(attachment_id)
+            except AttachmentUploadError:
+                pass
+            else:
+                attachment.update({
+                    "name": staged.name,
+                    "mime_type": staged.mime_type,
+                    "size_bytes": staged.size_bytes,
+                    "source_kind": "uploaded_file",
+                })
+        return {
+            "id": part_id,
+            "type": "attachment",
+            "attachment": attachment,
+            "status": "completed",
+        }
     return {"id": part_id, "type": kind, **value}
 
 
@@ -1942,7 +1973,7 @@ def _runtime_preferences_view(policy: UserRuntimePolicy | None) -> dict[str, Any
         "revision": policy.revision if policy else 0,
         "execution_preference": policy.execution_preference if policy else "react",
         "model_profile_id": policy.model_profile_id if policy else None,
-        "reasoning_intensity": policy.reasoning_intensity if policy else None,
+        "reasoning_intensity": policy.reasoning_intensity if policy else DEFAULT_REASONING_INTENSITY,
         "approval_mode": policy.approval_mode if policy else "ask",
         "request_timeout_seconds": policy.request_timeout_seconds if policy else 300,
         "browser_operation_timeout_ms": policy.browser_operation_timeout_ms if policy else 30_000,
@@ -2005,6 +2036,11 @@ def _delegated_task_rows(
             where task.principal_id = ?
               and (? is null or runtime.session_id = ?)
               and (? is null or task.task_id = ?)
+              and task.task_revision = (
+                select max(latest.task_revision)
+                from delegated_task_revisions as latest
+                where latest.task_id = task.task_id
+              )
             order by task.updated_at desc
             """,
             (principal_id, session_id, session_id, task_id, task_id),
@@ -2506,9 +2542,11 @@ def _attachment_references(principal_id: str, value: Any) -> list[dict[str, Any]
         attachment_id = str(raw.get("attachment_id") or "").strip()
         try:
             if attachment_id:
-                staged = store.resolve(attachment_id)
-                if staged.principal_id != principal_id:
-                    raise PermissionError("attachment does not belong to the runtime principal")
+                staged = store.retain(
+                    attachment_id,
+                    principal_id=principal_id,
+                    content_digest=str(raw.get("content_digest") or "").strip() or None,
+                )
             else:
                 content = raw.get("content")
                 if not isinstance(content, str):

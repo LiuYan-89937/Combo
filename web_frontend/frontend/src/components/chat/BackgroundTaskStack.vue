@@ -43,6 +43,7 @@
           <span class="task-capsule-meta">
             <strong>{{ taskAgentName(task) }}</strong>
             <small v-if="taskModelName(task)" class="task-capsule-model">{{ taskModelName(task) }}</small>
+            <small v-if="task.revision > 1">{{ t('backgroundTask.revision', { count: task.revision }) }}</small>
             <small>{{ taskElapsedLabel(task) }}</small>
           </span>
           <span class="task-capsule-summary">{{ taskActivitySummary(task) }}</span>
@@ -469,11 +470,34 @@ function scheduleRefresh(version: number, delay: number) {
 }
 
 function handleTaskEvent(event: Event) {
+  const payload = (event as CustomEvent<{
+    session_id?: string | null
+    payload?: {
+      session_id?: string | null
+      task_id?: string | null
+      activity_summary?: string | null
+      activity_updated_at?: string | null
+    }
+  }>).detail?.payload
   const updatedSessionId = String(
-    (event as CustomEvent<{ session_id?: string | null }>).detail?.session_id || '',
+    (event as CustomEvent<{ session_id?: string | null }>).detail?.session_id
+      || payload?.session_id
+      || '',
   ).trim()
   const activeSessionId = String(props.sessionId || '').trim()
   if (updatedSessionId && updatedSessionId !== activeSessionId) return
+  const taskId = String(payload?.task_id || '').trim()
+  const activitySummary = String(payload?.activity_summary || '').trim()
+  if (taskId && activitySummary) {
+    const index = tasks.value.findIndex(task => task.task_id === taskId)
+    if (index >= 0) {
+      tasks.value.splice(index, 1, {
+        ...tasks.value[index],
+        activity_summary: activitySummary,
+        activity_updated_at: String(payload?.activity_updated_at || '').trim() || tasks.value[index].activity_updated_at,
+      })
+    }
+  }
   scheduleRefresh(requestVersion, 50)
 }
 

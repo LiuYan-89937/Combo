@@ -35,9 +35,9 @@ class ModelPoolProviderProfile:
 
 
 IMAGE_GENERATION_PROVIDERS: dict[str, ModelPoolProviderProfile] = {
-    "openai": ModelPoolProviderProfile(
-        provider_id="openai",
-        display_name="OpenAI 兼容协议",
+    "openai_chat_completions": ModelPoolProviderProfile(
+        provider_id="openai_chat_completions",
+        display_name="OpenAI Chat Completions",
         kind="image_generation",
         adapter_id="openai_image",
         transport="openai_images",
@@ -74,24 +74,33 @@ _IMAGE_GENERATION_PROVIDER_ALIASES = {
     "dashscope_wanx": "dashscope",
     "wanx": "dashscope",
     "aliyun_wanx": "dashscope",
-    "openai_image": "openai",
-    "volcengine_seedream": "openai",
+    "openai": "openai_chat_completions",
+    "openai_image": "openai_chat_completions",
+    "volcengine_seedream": "openai_chat_completions",
 }
 
 
 def list_model_pool_provider_profiles() -> list[dict[str, Any]]:
     chat_by_id = {str(item["provider_id"]): dict(item) for item in list_supported_chat_model_profiles()}
     result: list[dict[str, Any]] = []
-    for provider_id in ("dashscope", "openai", "anthropic"):
+    for provider_id in (
+        "dashscope",
+        "openai_chat_completions",
+        "openai_responses",
+        "anthropic",
+    ):
         payload = chat_by_id[provider_id]
         payload["kind"] = "chat"
         payload["supported_kinds"] = ["chat"]
-        if provider_id != "anthropic":
+        if provider_id in {"dashscope", "openai_chat_completions"}:
             payload["supported_kinds"].extend(("embedding", "image_generation"))
             payload["capabilities"] = dict(IMAGE_GENERATION_PROVIDERS[provider_id].capabilities or {})
             payload["default_base_url"] = IMAGE_GENERATION_PROVIDERS[provider_id].default_base_url
-        else:
+        elif provider_id == "anthropic":
             payload["default_base_url"] = "https://api.anthropic.com"
+            payload["capabilities"] = {}
+        else:
+            payload["default_base_url"] = "https://api.openai.com/v1"
             payload["capabilities"] = {}
         result.append(payload)
     return result

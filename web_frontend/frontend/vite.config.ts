@@ -21,6 +21,10 @@ export default defineConfig({
     strictPort: true, // Fail if port is already in use
     host: '127.0.0.1', // Bind to localhost for security
     proxy: {
+      '/health': {
+        target: backendTarget,
+        changeOrigin: true,
+      },
       '/events': {
         target: backendTarget,
         changeOrigin: true,

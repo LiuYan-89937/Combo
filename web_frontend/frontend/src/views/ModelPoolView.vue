@@ -259,7 +259,12 @@
             <n-input v-model:value="credentialForm.display_name" :placeholder="t('modelPool.credentialNamePlaceholder')" />
           </n-form-item>
           <n-form-item :label="t('modelPool.provider')" path="provider">
-            <n-select v-model:value="credentialForm.provider" :options="providerOptions" :placeholder="t('modelPool.providerPlaceholder')" />
+            <n-select
+              v-model:value="credentialForm.provider"
+              :options="providerOptions"
+              :to="true"
+              :placeholder="t('modelPool.providerPlaceholder')"
+            />
           </n-form-item>
         </section>
         <section class="model-editor-pane">
@@ -734,6 +739,16 @@ watch(
   },
 )
 
+watch(
+  () => credentialForm.provider,
+  (providerId, previousProviderId) => {
+    const previousDefault = providerDefaultBaseUrl(previousProviderId)
+    if (!credentialForm.base_url || credentialForm.base_url === previousDefault) {
+      credentialForm.base_url = providerDefaultBaseUrl(providerId)
+    }
+  },
+)
+
 async function refresh(): Promise<void> {
   loading.value = true
   try {
@@ -766,6 +781,20 @@ function upsertCredential(credential: ModelPoolCredential): void {
   profiles.value = profiles.value.map(profile => (
     profile.credential_id === credential.credential_id
       ? { ...profile, credential }
+      : profile
+  ))
+}
+
+function rebindProfilesToCredential(credential: ModelPoolCredential): void {
+  profiles.value = profiles.value.map(profile => (
+    profile.credential_id === credential.credential_id
+      ? {
+          ...profile,
+          provider: credential.provider,
+          revision: profile.revision + 1,
+          updated_at: credential.updated_at,
+          credential,
+        }
       : profile
   ))
 }
@@ -810,7 +839,7 @@ function openCredential(item?: ModelPoolCredential): void {
   credentialEditing.value = item || null
   credentialForm.display_name = item?.display_name || ''
   credentialForm.provider = item?.provider || providers.value[0]?.provider_id || ''
-  credentialForm.base_url = item?.base_url || ''
+  credentialForm.base_url = item?.base_url || providerDefaultBaseUrl(credentialForm.provider)
   credentialForm.api_key = ''
   credentialModalOpen.value = true
   void nextTick(() => credentialFormRef.value?.restoreValidation())
@@ -828,9 +857,13 @@ async function saveCredential(): Promise<void> {
     }
     if (credentialForm.api_key.trim()) payload.api_key = credentialForm.api_key.trim()
     if (credentialEditing.value) {
+      const protocolChanged = credentialEditing.value.provider !== credentialForm.provider
       payload.expected_revision = credentialEditing.value.revision
       const response = await modelPoolApi.patchCredential(credentialEditing.value.credential_id, payload)
       upsertCredential(response.credential)
+      if (protocolChanged) {
+        rebindProfilesToCredential(response.credential)
+      }
     } else {
       const response = await modelPoolApi.saveCredential(payload)
       upsertCredential(response.credential)
@@ -1069,6 +1102,10 @@ function confirmDeleteProfile(item: ModelPoolProfile): void {
 
 function providerLabel(providerId: string): string {
   return providers.value.find((item) => item.provider_id === providerId)?.display_name || providerId
+}
+
+function providerDefaultBaseUrl(providerId: string | undefined): string {
+  return providers.value.find((item) => item.provider_id === providerId)?.default_base_url || ''
 }
 
 function providerSupportsKind(providerId: string, kind: 'chat' | 'embedding' | 'image_generation'): boolean {

@@ -29,6 +29,7 @@ SQLITE_BUSY_TIMEOUT_MS = 10000
 MODEL_POOL_SCHEMA_MIGRATIONS = (
     "2026-08-13.remove-model-capability-async-job",
     "2026-08-13.consolidate-provider-protocols",
+    "2026-08-19.split-openai-chat-and-responses",
 )
 INFRASTRUCTURE_MODEL_ROLE_KINDS = {
     "task": "chat",
@@ -154,7 +155,73 @@ class ModelPoolStore:
                 """,
                 _credential_row(credential),
             )
+            if existing is not None and credential.provider != existing.provider:
+                self._rebind_credential_profiles(
+                    conn,
+                    credential=credential,
+                    updated_at=now,
+                )
         return credential
+
+    @staticmethod
+    def _rebind_credential_profiles(
+        conn: sqlite3.Connection,
+        *,
+        credential: ModelPoolCredential,
+        updated_at: str,
+    ) -> None:
+        rows = conn.execute(
+            "select payload_json from model_pool_profiles where credential_id = ?",
+            (credential.credential_id,),
+        ).fetchall()
+        rebound_profiles: list[ModelPoolProfile] = []
+        for row in rows:
+            current = ModelPoolProfile.model_validate_json(str(row["payload_json"]))
+            try:
+                rebound = ModelPoolProfile.model_validate(
+                    {
+                        **current.model_dump(mode="json"),
+                        "provider": credential.provider,
+                        "revision": current.revision + 1,
+                        "updated_at": updated_at,
+                    }
+                )
+            except ValueError as exc:
+                raise ModelPoolStoreError(
+                    f"message API format {credential.provider!r} does not support "
+                    f"linked {current.kind} profile {current.profile_id!r}"
+                ) from exc
+            rebound_profiles.append(rebound)
+
+        for profile in rebound_profiles:
+            payload_json = profile.model_dump_json()
+            conn.execute(
+                """
+                insert into model_profile_revisions(
+                  profile_id, revision, credential_id, payload_json, created_at
+                ) values (?, ?, ?, ?, ?)
+                """,
+                (
+                    profile.profile_id,
+                    profile.revision,
+                    profile.credential_id,
+                    payload_json,
+                    updated_at,
+                ),
+            )
+            conn.execute(
+                """
+                update model_pool_profiles
+                   set provider = ?, payload_json = ?, updated_at = ?
+                 where profile_id = ?
+                """,
+                (
+                    profile.provider,
+                    payload_json,
+                    updated_at,
+                    profile.profile_id,
+                ),
+            )
 
     def patch_credential(self, credential_id: str, payload: dict[str, Any]) -> ModelPoolCredential:
         existing = self.require_credential(credential_id)
@@ -679,6 +746,8 @@ class ModelPoolStore:
                 ModelPoolStore._remove_retired_async_job_capability(conn)
             elif migration_id == "2026-08-13.consolidate-provider-protocols":
                 ModelPoolStore._consolidate_provider_protocols(conn)
+            elif migration_id == "2026-08-19.split-openai-chat-and-responses":
+                ModelPoolStore._split_openai_chat_and_responses(conn)
             else:
                 raise RuntimeError(f"unknown model pool schema migration: {migration_id}")
             conn.execute(
@@ -745,6 +814,40 @@ class ModelPoolStore:
             )
         conn.execute(
             "update model_pool_profiles set provider = json_extract(payload_json, '$.provider')"
+        )
+
+    @staticmethod
+    def _split_openai_chat_and_responses(conn: sqlite3.Connection) -> None:
+        for table in (
+            "model_credentials",
+            "model_credential_revisions",
+            "model_pool_profiles",
+            "model_profile_revisions",
+        ):
+            conn.execute(
+                f"""
+                update {table}
+                   set payload_json = json_set(
+                     payload_json,
+                     '$.provider',
+                     'openai_chat_completions'
+                   )
+                 where lower(json_extract(payload_json, '$.provider')) = 'openai'
+                """
+            )
+        conn.execute(
+            """
+            update model_credentials
+               set provider = 'openai_chat_completions'
+             where lower(provider) = 'openai'
+            """
+        )
+        conn.execute(
+            """
+            update model_pool_profiles
+               set provider = 'openai_chat_completions'
+             where lower(provider) = 'openai'
+            """
         )
 
     @staticmethod

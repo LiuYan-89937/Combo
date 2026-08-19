@@ -13,6 +13,10 @@ from combo.tooling.builtins.ask_usr.specs import ASK_USR_CAPABILITY_ID
 from combo.dynamic_runtime.delegation_store import DelegationStore
 from combo.dynamic_runtime.delegated_model_selector import DelegatedTaskModelSelector
 from combo.dynamic_runtime.model_service import ResolvedRuntimePolicy, RuntimeModelResolver
+from combo.dynamic_runtime.run_control import (
+    RuntimeInputInjection,
+    RuntimeRunControlRegistry,
+)
 from combo.runtime_protocol import (
     DelegationGrant,
     ExecutionStrategy,
@@ -33,6 +37,19 @@ class DelegationRequest:
     acceptance_criteria: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class DelegationContinuationRequest:
+    task_ref: str
+    instruction: str
+    acceptance_criteria: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class DelegationMessageRequest:
+    task_ref: str
+    message: str
+
+
 SHARED_WORKSPACE_WRITE_SCOPE = "."
 
 
@@ -42,6 +59,7 @@ class _BoundServices:
     model_resolver: RuntimeModelResolver
     model_selector: DelegatedTaskModelSelector
     capability_resolver: MainTurnCapabilityResolver
+    run_controls: RuntimeRunControlRegistry
 
 
 class DelegationRuntimeCoordinator:
@@ -58,12 +76,14 @@ class DelegationRuntimeCoordinator:
         model_resolver: RuntimeModelResolver,
         model_selector: DelegatedTaskModelSelector,
         capability_resolver: MainTurnCapabilityResolver,
+        run_controls: RuntimeRunControlRegistry,
     ) -> None:
         services = _BoundServices(
             delegations=delegations,
             model_resolver=model_resolver,
             model_selector=model_selector,
             capability_resolver=capability_resolver,
+            run_controls=run_controls,
         )
         with self._lock:
             if self._services is not None:
@@ -84,35 +104,111 @@ class BoundDelegationRuntime:
     services: _BoundServices
 
     def delegate(self, request: DelegationRequest) -> dict[str, Any]:
+        self._require_active_parent()
+        return self._spawn(request, task_id=uuid4().hex, task_revision=1)
+
+    def continue_task(self, request: DelegationContinuationRequest) -> dict[str, Any]:
+        self._require_active_parent()
+        previous = self.services.delegations.latest_for_session(
+            principal_id=self.parent.request.principal_id,
+            session_id=self.parent.request.session_id,
+            task_id=request.task_ref,
+        )
+        if previous.status not in {"completed", "failed", "cancelled"}:
+            raise RuntimeError("only a terminal delegated task can start a continuation revision")
+        envelope = previous.envelope
+        strategy = envelope.strategy or previous.child_runtime.request.strategy
+        continuation = DelegationRequest(
+            strategy=strategy,
+            agent_name=str(envelope.agent_name or "").strip(),
+            system_prompt=str(envelope.system_prompt or "").strip(),
+            objective=request.instruction,
+            capability_names=envelope.capability_requirements,
+            acceptance_criteria=request.acceptance_criteria or envelope.acceptance_criteria,
+        )
+        if not continuation.agent_name or not continuation.system_prompt:
+            raise RuntimeError("delegated task continuation metadata is incomplete")
+        return self._spawn(
+            continuation,
+            task_id=envelope.task_id,
+            task_revision=envelope.task_revision + 1,
+            continued_model_profile_id=envelope.selected_model_profile_id,
+        )
+
+    def message_task(self, request: DelegationMessageRequest) -> dict[str, Any]:
+        self._require_active_parent()
+        current = self.services.delegations.latest_for_session(
+            principal_id=self.parent.request.principal_id,
+            session_id=self.parent.request.session_id,
+            task_id=request.task_ref,
+        )
+        if current.status != "running":
+            raise RuntimeError("direct child-agent messages require a running delegated task")
+        injection = RuntimeInputInjection(
+            injection_id=f"delegated-input:{current.envelope.task_id}:{uuid4().hex}",
+            role="user",
+            content=request.message,
+        )
+        accepted = self.services.run_controls.submit_input(
+            runtime_instance_id=current.child_runtime.runtime_instance_id,
+            injection=injection,
+        )
+        if not accepted:
+            raise RuntimeError("delegated task is no longer accepting direct messages")
+        return {
+            "status": "accepted",
+            "task_ref": current.envelope.task_id,
+            "task_revision": current.envelope.task_revision,
+            "agent_name": current.envelope.agent_name,
+            "message": request.message,
+        }
+
+    def _require_active_parent(self) -> None:
         parent = self.parent
         if parent.request.runtime_role != "main":
             raise PermissionError("only the main runtime may create temporary agents")
         if parent.status != "running" or parent.attempt_id is None:
             raise RuntimeError("delegation requires an actively running parent runtime")
 
+    def _spawn(
+        self,
+        request: DelegationRequest,
+        *,
+        task_id: str,
+        task_revision: int,
+        continued_model_profile_id: str | None = None,
+    ) -> dict[str, Any]:
+        parent = self.parent
         now_value = datetime.now(UTC)
         now = now_value.isoformat()
-        task_id = uuid4().hex
         grant_id = uuid4().hex
         child_runtime_id = uuid4().hex
         parent_policy = parent.request.policy_snapshot
         parent_model = parent_policy.model
-        selected_model = self.services.model_selector.select(
-            task_description=_delegated_task_description(request),
-            strategy=request.strategy,
-            fallback_profile_id=parent_model.profile_id,
-        )
+        if continued_model_profile_id:
+            selected_profile_id = continued_model_profile_id
+            selection_source = "continued"
+            selection_reason = "Reused the model profile selected for the previous task revision."
+        else:
+            selected_model = self.services.model_selector.select(
+                task_description=_delegated_task_description(request),
+                strategy=request.strategy,
+                fallback_profile_id=parent_model.profile_id,
+            )
+            selected_profile_id = selected_model.profile_id
+            selection_source = selected_model.source
+            selection_reason = selected_model.reason
         child_model = self.services.model_resolver.resolve_chat_model(
             operation="temporary_turn",
-            profile_id=selected_model.profile_id,
+            profile_id=selected_profile_id,
             expected_profile_revision=(
                 parent_model.profile_revision
-                if selected_model.source == "inherited"
+                if selection_source == "inherited"
                 else None
             ),
             expected_credential_revision=(
                 parent_model.credential_revision
-                if selected_model.source == "inherited"
+                if selection_source == "inherited"
                 else None
             ),
             reasoning_intensity=parent_policy.reasoning_intensity,
@@ -161,7 +257,7 @@ class BoundDelegationRuntime:
             policy_snapshot=child_policy,
             capability_snapshot_id=child_snapshot.snapshot_id,
             approval_mode=parent.request.approval_mode,
-            task_revision=1,
+            task_revision=task_revision,
             parent_runtime_instance_id=parent.runtime_instance_id,
             task_id=task_id,
             delegation_grant_id=grant_id,
@@ -183,7 +279,7 @@ class BoundDelegationRuntime:
             parent_runtime_instance_id=parent.runtime_instance_id,
             delegation_grant_id=grant_id,
             capability_snapshot_id=child_snapshot.snapshot_id,
-            task_revision=1,
+            task_revision=task_revision,
             parent_task_revision=parent.request.task_revision,
             strategy=request.strategy,
             agent_name=request.agent_name,
@@ -195,8 +291,8 @@ class BoundDelegationRuntime:
             allowed_write_roots=(SHARED_WORKSPACE_WRITE_SCOPE,),
             capability_requirements=request.capability_names,
             selected_model_profile_id=child_model.snapshot.profile_id,
-            model_selection_source=selected_model.source,
-            model_selection_reason=selected_model.reason,
+            model_selection_source=selection_source,
+            model_selection_reason=selection_reason,
             approval_mode=parent.request.approval_mode,
             created_at=now,
         )
@@ -206,7 +302,7 @@ class BoundDelegationRuntime:
             parent_runtime_instance_id=parent.runtime_instance_id,
             child_runtime_instance_id=child_runtime_id,
             task_id=task_id,
-            task_revision=1,
+            task_revision=task_revision,
             parent_task_revision=parent.request.task_revision,
             parent_capability_snapshot_id=parent.capability_snapshot_id,
             child_capability_snapshot_id=child_snapshot.snapshot_id,
@@ -230,6 +326,8 @@ class BoundDelegationRuntime:
         )
         return {
             "status": "queued",
+            "task_ref": task_id,
+            "task_revision": task_revision,
             "agent_name": request.agent_name,
             "objective": request.objective,
             "strategy": request.strategy,
@@ -238,8 +336,8 @@ class BoundDelegationRuntime:
                 "profile_id": child_model.snapshot.profile_id,
                 "provider": child_model.snapshot.provider,
                 "model_name": child_model.snapshot.model_name,
-                "selection_source": selected_model.source,
-                "reason": selected_model.reason,
+                "selection_source": selection_source,
+                "reason": selection_reason,
             },
             "message": (
                 "Temporary agent task accepted and its task capsule is available. "
@@ -256,6 +354,8 @@ class BoundDelegationRuntime:
         return {
             "tasks": [
                 {
+                    "task_ref": record.envelope.task_id,
+                    "task_revision": record.envelope.task_revision,
                     "agent_name": record.envelope.agent_name,
                     "objective": record.envelope.objective,
                     "strategy": record.envelope.strategy or record.child_runtime.request.strategy,

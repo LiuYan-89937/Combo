@@ -229,6 +229,14 @@ def project_delegated_task_record(record: OutboxRecord) -> dict[str, Any]:
         "delegated_task_failed": "failed",
         "delegated_task_cancelled": "cancelled",
     }.get(event_kind)
+    current_activity = (
+        {
+            "activity_summary": str(event_payload.get("summary") or "").strip(),
+            "activity_updated_at": str(payload.get("created_at") or record.created_at),
+        }
+        if event_kind == "delegated_task_activity"
+        else {}
+    )
     return _frontend_event(
         event_type="delegated_task_terminal" if terminal_status else "background_task_updated",
         request_id=None,
@@ -244,6 +252,7 @@ def project_delegated_task_record(record: OutboxRecord) -> dict[str, Any]:
             "task_id": payload.get("task_id") or task.get("task_id") or record.aggregate_id,
             "session_id": session_id,
             "event_kind": record.event_kind,
+            **current_activity,
             **({
                 "terminal_status": terminal_status,
                 "task_name": event_payload.get("agent_name") or payload.get("agent_name"),

@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 
 RUNTIME_PROTOCOL_VERSION = "dynamic_runtime.v14"
-RUNTIME_SCHEMA_VERSION = "dynamic_runtime_schema.v13"
+RUNTIME_SCHEMA_VERSION = "dynamic_runtime_schema.v14"
 
 
 class RuntimeProtocolDescriptor(BaseModel):

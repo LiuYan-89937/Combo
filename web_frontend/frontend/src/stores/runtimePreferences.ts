@@ -1,6 +1,9 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { REASONING_INTENSITY_MAX } from '@/utils/reasoning'
+import {
+  REASONING_INTENSITY_DEFAULT,
+  normalizeReasoningIntensity,
+} from '@/utils/reasoning'
 import {
   runtimePreferencesApi,
   type ContextCompressionDetail,
@@ -38,7 +41,7 @@ const STORAGE_KEYS = {
 
 export const useRuntimePreferencesStore = defineStore('runtimePreferences', () => {
   const mainModelProfileId = ref(readStoredText(STORAGE_KEYS.mainModelProfileId))
-  const reasoningIntensity = ref<number | null>(readStoredReasoningIntensity())
+  const reasoningIntensity = ref(readStoredReasoningIntensity())
   const requestTimeoutSeconds = ref(readStoredInteger(STORAGE_KEYS.requestTimeoutSeconds, DEFAULT_RUNTIME_REQUEST_TIMEOUT_SECONDS, 0))
   const browserOperationTimeoutMs = ref(DEFAULT_BROWSER_OPERATION_TIMEOUT_MS)
   const browserNavigationTimeoutMs = ref(DEFAULT_BROWSER_NAVIGATION_TIMEOUT_MS)
@@ -66,11 +69,9 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     enqueue({ model_profile_id: mainModelProfileId.value || null })
   }
 
-  function setReasoningIntensity(value: number | null): void {
-    reasoningIntensity.value = value === null
-      ? null
-      : Math.max(0, Math.min(REASONING_INTENSITY_MAX, Math.round(value)))
-    writeNullableNumber(STORAGE_KEYS.reasoningIntensity, reasoningIntensity.value)
+  function setReasoningIntensity(value: number): void {
+    reasoningIntensity.value = normalizeReasoningIntensity(value)
+    writeStoredValue(STORAGE_KEYS.reasoningIntensity, String(reasoningIntensity.value))
     enqueue({ reasoning_intensity: reasoningIntensity.value })
   }
 
@@ -198,7 +199,7 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
   function apply(value: RuntimePreferences): void {
     revision.value = value.revision
     mainModelProfileId.value = value.model_profile_id || ''
-    reasoningIntensity.value = value.reasoning_intensity
+    reasoningIntensity.value = normalizeReasoningIntensity(value.reasoning_intensity)
     approvalMode.value = value.approval_mode
     executionPreference.value = value.execution_preference
     requestTimeoutSeconds.value = value.request_timeout_seconds
@@ -214,7 +215,7 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     memoryMaxInjectedItems.value = value.memory_max_injected_items
     memoryMaxInjectedTokens.value = value.memory_max_injected_tokens
     writeOrRemove(STORAGE_KEYS.mainModelProfileId, mainModelProfileId.value)
-    writeNullableNumber(STORAGE_KEYS.reasoningIntensity, reasoningIntensity.value)
+    writeStoredValue(STORAGE_KEYS.reasoningIntensity, String(reasoningIntensity.value))
     writeStoredValue(STORAGE_KEYS.approvalMode, approvalMode.value)
     writeStoredValue(STORAGE_KEYS.executionPreference, executionPreference.value)
     writeStoredValue(STORAGE_KEYS.requestTimeoutSeconds, String(requestTimeoutSeconds.value))
@@ -271,10 +272,9 @@ function readStoredText(key: string): string {
   if (typeof window === 'undefined') return ''
   return String(window.localStorage.getItem(key) || '').trim()
 }
-function readStoredReasoningIntensity(): number | null {
+function readStoredReasoningIntensity(): number {
   const stored = readStoredText(STORAGE_KEYS.reasoningIntensity)
-  const value = Number(stored)
-  return stored && Number.isInteger(value) && value >= 0 && value <= REASONING_INTENSITY_MAX ? value : null
+  return stored ? normalizeReasoningIntensity(stored) : REASONING_INTENSITY_DEFAULT
 }
 
 function readStoredRunningMessageMode(): RunningMessageMode {
@@ -294,10 +294,6 @@ function readStoredExecutionPreference(): ExecutionPreference {
 }
 function readStoredBoolean(key: string): boolean {
   return readStoredText(key) === 'true'
-}
-function writeNullableNumber(key: string, value: number | null): void {
-  if (value === null) removeStoredValue(key)
-  else writeStoredValue(key, String(value))
 }
 function writeOrRemove(key: string, value: string): void {
   if (value) writeStoredValue(key, value)

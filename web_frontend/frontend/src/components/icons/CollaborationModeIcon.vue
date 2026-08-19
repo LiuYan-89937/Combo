@@ -1,5 +1,5 @@
 <template>
-  <ComboPngIcon class="collaboration-mode-icon" name="collaboration" :size="42" />
+  <ComboPngIcon class="collaboration-mode-icon" name="collaboration" :size="28" />
 </template>
 
 <script setup lang="ts">

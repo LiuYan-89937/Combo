@@ -11,7 +11,8 @@ REASONING_CONTENT_BLOCK_TYPES = frozenset(
         "thinking",
     }
 )
-RUNTIME_REASONING_INTENSITY_MAX = 4
+RUNTIME_REASONING_INTENSITY_MIN = 1
+RUNTIME_REASONING_INTENSITY_MAX = 3
 
 
 def is_reasoning_content_block(value: Any) -> bool:
@@ -72,6 +73,7 @@ def reasoning_content_from_blocks(content: Any) -> str | None:
             or block.get("thinking")
             or block.get("text")
             or block.get("content")
+            or coerce_reasoning_content(block.get("summary"))
         )
         if text:
             parts.append(str(text))
@@ -97,18 +99,12 @@ def coerce_reasoning_content(value: Any) -> str | None:
 
 
 def apply_reasoning_intensity(settings: Any, intensity: int) -> Any:
-    level = max(0, min(RUNTIME_REASONING_INTENSITY_MAX, int(intensity)))
+    level = _validated_reasoning_intensity(intensity)
     current = getattr(settings, "reasoning", None)
     if current is None:
         from combo.models.protocol import ModelReasoningSettings
 
         current = ModelReasoningSettings()
-    if level == 0:
-        return replace(
-            settings,
-            reasoning=replace(current, enabled=False, effort=None, budget_tokens=None),
-        )
-
     profile = getattr(settings, "profile", None)
     capabilities = getattr(profile, "capabilities", None)
     if capabilities is None or not capabilities.supports_reasoning():
@@ -157,3 +153,10 @@ def _budget_for_intensity(
 
 def _mapping_value(value: Any, key: str) -> Any:
     return value.get(key) if isinstance(value, dict) else None
+
+
+def _validated_reasoning_intensity(value: int) -> int:
+    level = int(value)
+    if level < RUNTIME_REASONING_INTENSITY_MIN or level > RUNTIME_REASONING_INTENSITY_MAX:
+        raise ValueError("reasoning intensity must be low (1), medium (2), or high (3)")
+    return level

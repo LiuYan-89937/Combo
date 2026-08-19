@@ -19,12 +19,22 @@ class ChatModelAdapter(Protocol):
         ...
 
 
-class OpenAIChatCompletionsAdapter:
+class OpenAICompatibleAdapter:
     def __init__(self, profile: ProviderProfile) -> None:
         self.profile = profile
 
-    def create_chat_model(self, settings: Any) -> BaseChatModel:
-        self._validate_reasoning(settings)
+    def _validate_reasoning(self, settings: Any) -> None:
+        reasoning = getattr(settings, "reasoning", None)
+        if getattr(reasoning, "enabled", None) is not True:
+            return
+        if not self.profile.capabilities.supports_reasoning():
+            raise ProviderAdapterError(
+                f"{self.profile.provider_id} does not advertise reasoning support; "
+                "choose a reasoning-capable provider profile or disable reasoning."
+            )
+
+    @staticmethod
+    def _common_model_parameters(settings: Any) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
             "model": settings.model,
             "api_key": settings.api_key,
@@ -38,6 +48,16 @@ class OpenAIChatCompletionsAdapter:
             kwargs["timeout"] = settings.timeout_seconds
         if getattr(settings, "max_output_tokens", None) is not None:
             kwargs["max_tokens"] = settings.max_output_tokens
+        return kwargs
+
+
+class OpenAIChatCompletionsAdapter(OpenAICompatibleAdapter):
+
+    def create_chat_model(self, settings: Any) -> BaseChatModel:
+        self._validate_reasoning(settings)
+        kwargs = self._common_model_parameters(settings)
+
+        kwargs.update(self.request_parameters(settings))
 
         extra_body = self.extra_body(settings)
         if extra_body:
@@ -49,15 +69,8 @@ class OpenAIChatCompletionsAdapter:
     def extra_body(self, settings: Any) -> dict[str, Any]:
         return {}
 
-    def _validate_reasoning(self, settings: Any) -> None:
-        reasoning = getattr(settings, "reasoning", None)
-        if getattr(reasoning, "enabled", None) is not True:
-            return
-        if not self.profile.capabilities.supports_reasoning():
-            raise ProviderAdapterError(
-                f"{self.profile.provider_id} does not advertise reasoning support; "
-                "choose a reasoning-capable provider profile or disable reasoning."
-            )
+    def request_parameters(self, settings: Any) -> dict[str, Any]:
+        return {}
 
     def _should_preserve_reasoning_content(self, settings: Any) -> bool:
         reasoning = getattr(settings, "reasoning", None)
@@ -66,6 +79,32 @@ class OpenAIChatCompletionsAdapter:
         if getattr(reasoning, "send_history", None) is False:
             return False
         return self.profile.capabilities.send_reasoning_history != "unsupported"
+
+
+class OpenAIResponsesAdapter(OpenAICompatibleAdapter):
+    def create_chat_model(self, settings: Any) -> BaseChatModel:
+        self._validate_reasoning(settings)
+        kwargs = {
+            **self._common_model_parameters(settings),
+            "use_responses_api": True,
+            "output_version": "responses/v1",
+        }
+        reasoning = self._reasoning_parameters(settings)
+        if reasoning:
+            kwargs["reasoning"] = reasoning
+            kwargs["include"] = ["reasoning.encrypted_content"]
+        return ThinkingCompatibleChatOpenAI(**kwargs)
+
+    def _reasoning_parameters(self, settings: Any) -> dict[str, str]:
+        reasoning = getattr(settings, "reasoning", None)
+        if getattr(reasoning, "enabled", None) is not True:
+            return {}
+        effort = reasoning_effort(settings)
+        summary = reasoning_summary(settings) or "auto"
+        return {
+            **({"effort": effort} if effort else {}),
+            "summary": summary,
+        }
 
 
 def reasoning_enabled(settings: Any) -> bool | None:

@@ -20,7 +20,7 @@
       <ComboFrameAnimation
         :character="message.role === 'user' ? 'lead' : 'companion'"
         action="idle"
-        :size="message.role === 'user' ? 40 : 34"
+        :size="message.role === 'user' ? 32 : 30"
         paused
       />
     </div>
@@ -40,7 +40,7 @@
           {{ dispatchStatusLabel }}
         </n-tag>
         <n-button
-          v-if="quoteable"
+          v-if="quoteable && message.role !== 'user'"
           class="quote-button"
           quaternary
           circle
@@ -236,19 +236,19 @@ function formatTime(timestamp: string): string {
 .message-item {
   position: relative;
   display: flex;
-  gap: var(--app-space-md);
-  padding: var(--app-space-lg) var(--app-space-md);
-  border-radius: var(--app-radius-lg);
-  transition: background-color var(--app-transition-base), transform var(--app-transition-spring), box-shadow var(--app-transition-base);
+  gap: 10px;
+  padding: 10px 8px;
+  border-radius: 12px;
+  transition: background-color var(--app-transition-base);
 }
 
 .message-item:has(.delegated-delivery-message) { padding-block: var(--app-space-xs); }
 .delegated-delivery-message { min-width: 0; }
 
 .message-item.role-assistant {
-  background: var(--app-surface-elevated);
+  background: transparent;
   border: none;
-  box-shadow: var(--app-shadow-sm);
+  box-shadow: none;
 }
 
 .message-item.streaming {
@@ -275,23 +275,21 @@ function formatTime(timestamp: string): string {
 }
 
 .message-item:hover {
-  background-color: var(--app-surface-hover);
-  transform: translateX(2px);
+  background-color: color-mix(in srgb, var(--app-text) 2.5%, transparent);
 }
 
 .message-item.role-assistant:hover {
-  box-shadow: var(--app-shadow-md);
-  transform: translateX(4px) translateY(-1px);
+  box-shadow: none;
 }
 
 .message-item + .message-item {
-  margin-top: var(--app-space-md);
+  margin-top: 6px;
 }
 
 .message-avatar {
   display: grid;
   flex-shrink: 0;
-  min-width: 40px;
+  min-width: 34px;
   padding-top: 0;
   place-items: start center;
 }
@@ -304,21 +302,21 @@ function formatTime(timestamp: string): string {
 .message-header {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
-  gap: var(--app-space-sm);
-  margin-bottom: var(--app-space-sm);
+  justify-content: flex-start;
+  gap: 7px;
+  margin-bottom: 5px;
 }
 
 .message-author {
   color: var(--app-text);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
   line-height: 1.2;
 }
 
 .combo-wordmark {
   font-family: 'Avenir Next', 'SF Pro Display', 'Arial Rounded MT Bold', sans-serif;
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 780;
   letter-spacing: -.055em;
 }
@@ -334,12 +332,6 @@ function formatTime(timestamp: string): string {
   justify-content: flex-end;
 }
 
-.role-user .quote-button {
-  order: -1;
-  margin-right: auto;
-  margin-left: 0;
-}
-
 .role-user .message-body {
   display: grid;
   justify-items: end;
@@ -352,7 +344,15 @@ function formatTime(timestamp: string): string {
 .message-body {
   position: relative;
   font-size: var(--app-font-lg);
-  line-height: var(--app-leading-relaxed);
+  line-height: 1.6;
+}
+
+.role-user :deep(.message-image-card) {
+  max-width: min(360px, 100%);
+}
+
+.role-user :deep(.message-image-card img) {
+  max-height: 280px;
 }
 
 @media (max-width: 680px) {

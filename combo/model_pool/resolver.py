@@ -10,13 +10,14 @@ from combo.model_pool.schema import (
     ModelSelectionRequirement,
     ModelToolBinding,
 )
+from combo.model_pool.runtime_profile import resolve_model_pool_provider_profile
 from combo.model_pool.selector import ModelPoolSelector
 from combo.model_pool.store import ModelPoolStore
 from combo.models.image_generation import (
     ImageGenerationService,
     ImageGenerationSettings,
 )
-from combo.models import ChatModelSettings, resolve_provider_profile
+from combo.models import ChatModelSettings
 from combo.models.chat_model import create_chat_model_from_settings
 
 
@@ -67,7 +68,10 @@ def resolve_chat_model_profile(
     if not credential.api_key:
         raise ValueError(f"model credential has no API key: {credential.credential_id}")
     overrides = binding.overrides
-    provider_profile = resolve_provider_profile(profile.provider)
+    provider_profile = resolve_model_pool_provider_profile(
+        profile.provider,
+        profile.capabilities,
+    )
     settings = ChatModelSettings(
         role=role,
         provider=profile.provider,

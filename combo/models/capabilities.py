@@ -57,6 +57,23 @@ GENERIC_OPENAI_COMPATIBLE_CHAT_CAPABILITIES = ModelProviderCapabilities(
     transport="openai_chat_completions",
     structured_output_methods=("json_mode", "function_calling"),
     default_structured_output_method="json_mode",
+    reasoning_efforts=("low", "medium", "high"),
+)
+
+OPENAI_RESPONSES_CAPABILITIES = ModelProviderCapabilities(
+    transport="openai_responses",
+    image_input="model_specific",
+    tool_calling="adapter",
+    streaming_tool_calls="adapter",
+    strict_tool_schema="model_specific",
+    structured_output_methods=("json_mode", "json_schema", "function_calling"),
+    default_structured_output_method="json_schema",
+    reasoning="model_specific",
+    reasoning_efforts=("low", "medium", "high"),
+    reasoning_summaries=("auto", "concise", "detailed"),
+    reasoning_content="adapter",
+    send_reasoning_history="adapter",
+    cache_usage="model_specific",
 )
 
 ANTHROPIC_CAPABILITIES = ModelProviderCapabilities(
@@ -83,7 +100,7 @@ DEEPSEEK_CAPABILITIES = ModelProviderCapabilities(
     structured_output_methods=("json_mode", "function_calling"),
     default_structured_output_method="json_mode",
     reasoning="model_specific",
-    reasoning_efforts=("high", "max"),
+    reasoning_efforts=("low", "high", "max"),
     reasoning_content="model_specific",
     send_reasoning_history="model_specific",
     cache_usage="adapter",
@@ -161,17 +178,24 @@ HUNYUAN_CAPABILITIES = ModelProviderCapabilities(
 )
 
 PROVIDER_PROFILES: dict[str, ProviderProfile] = {
-    "openai": ProviderProfile(
-        provider_id="openai",
-        display_name="OpenAI 兼容协议",
+    "openai_chat_completions": ProviderProfile(
+        provider_id="openai_chat_completions",
+        display_name="OpenAI Chat Completions",
         adapter_id="openai_compatible_chat",
         capabilities=GENERIC_OPENAI_COMPATIBLE_CHAT_CAPABILITIES,
         aliases=(
-            "openai_chat", "openai_compatible_chat", "openai_compatible", "generic_openai_chat",
+            "openai", "openai_chat", "openai_compatible_chat", "openai_compatible", "generic_openai_chat",
             "generic", "deepseek", "deepseek_chat", "zhipu", "zai", "bigmodel", "glm",
             "kimi", "moonshot", "minimax", "mini_max", "mimo", "xiaomi_mimo", "xiaomi",
             "hunyuan", "tencent_hunyuan", "tencent", "openai_image", "volcengine_seedream",
         ),
+    ),
+    "openai_responses": ProviderProfile(
+        provider_id="openai_responses",
+        display_name="OpenAI Responses",
+        adapter_id="openai_responses",
+        capabilities=OPENAI_RESPONSES_CAPABILITIES,
+        aliases=("openai_response", "responses", "responses_api"),
     ),
     "dashscope": ProviderProfile(
         provider_id="dashscope",
@@ -198,7 +222,7 @@ _PROFILE_ALIASES: dict[str, str] = {
 
 
 def resolve_provider_profile(provider: str | None) -> ProviderProfile:
-    key = (provider or "openai").strip().lower()
+    key = (provider or "openai_chat_completions").strip().lower()
     provider_id = _PROFILE_ALIASES.get(key)
     if provider_id is None:
         supported = ", ".join(sorted(PROVIDER_PROFILES))

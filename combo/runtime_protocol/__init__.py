@@ -5,6 +5,7 @@ from combo.runtime_protocol.observations import (
     looks_like_internal_observation_text,
 )
 from combo.runtime_protocol.contracts import (
+    DEFAULT_REASONING_INTENSITY,
     ApprovalMode,
     AttachmentRevisionRef,
     CapabilityKind,
@@ -90,6 +91,7 @@ from combo.runtime_protocol.versioning import (
 )
 
 __all__ = [
+    "DEFAULT_REASONING_INTENSITY",
     "has_complete_tool_call_history",
     "incomplete_tool_call_ids",
     "looks_like_internal_observation_payload",

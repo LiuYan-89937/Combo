@@ -190,7 +190,7 @@ class VolcengineSeedreamImageAdapter:
 
 def adapter_for_image_provider(settings: ImageGenerationSettings) -> ImageGenerationAdapter:
     provider = settings.provider.strip().lower()
-    if provider == "openai":
+    if provider == "openai_chat_completions":
         return OpenAIImageAdapter(settings)
     if provider == "dashscope":
         return DashScopeWanxImageAdapter(settings)

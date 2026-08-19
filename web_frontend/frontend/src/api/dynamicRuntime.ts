@@ -3,7 +3,7 @@ import { runtimeLocale } from '@/i18n'
 import { runtimeClientInstanceId, runtimePrincipalId } from './runtimeIdentity'
 
 export const RUNTIME_PROTOCOL_VERSION = 'dynamic_runtime.v14'
-export const RUNTIME_SCHEMA_VERSION = 'dynamic_runtime_schema.v13'
+export const RUNTIME_SCHEMA_VERSION = 'dynamic_runtime_schema.v14'
 
 export type ExecutionPreference = 'react' | 'plan_and_execute'
 export type ApprovalMode = 'ask' | 'auto' | 'always_approval'
@@ -71,7 +71,7 @@ export interface RuntimePolicy {
   execution_preference: ExecutionPreference
   approval_mode: ApprovalMode
   model_profile_id: string | null
-  reasoning_intensity: number | null
+  reasoning_intensity: number
   request_timeout_seconds: number
   max_model_attempts: number
   max_parallel_temporary_agents: number

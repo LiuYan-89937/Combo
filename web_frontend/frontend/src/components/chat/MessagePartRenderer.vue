@@ -147,6 +147,7 @@ import { useI18n } from '@/composables/useI18n'
 import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
 import { useWorkspaceFileOpener } from '@/composables/useWorkspaceFileOpener'
 import { useWorkspaceResourceUrls } from '@/composables/useWorkspaceResourceUrls'
+import { useRuntimeAttachmentObjectUrl } from '@/composables/useRuntimeAttachmentObjectUrl'
 import type { ChatMessagePart, TranscriptAttachmentView } from '@/types/protocol'
 import type { WorkspaceRequestContext } from '@/api/resourceTypes'
 import { toolPresentation } from '@/utils/toolPresentation'
@@ -174,6 +175,13 @@ const protectedResourceSources = computed(() => {
   return []
 })
 const protectedResources = useWorkspaceResourceUrls(protectedResourceSources, workspaceContext)
+const uploadedImageAttachmentId = computed(() => {
+  if (props.part.type !== 'attachment') return null
+  const attachment = props.part.attachment
+  if (!isImageResource(attachment.name, attachment.mime_type)) return null
+  return attachment.attachment_id || null
+})
+const { url: uploadedAttachmentUrl } = useRuntimeAttachmentObjectUrl(uploadedImageAttachmentId)
 
 const isStreaming = computed(() => props.streaming || props.part.status === 'streaming')
 const renderedText = computed(() => (
@@ -197,12 +205,16 @@ const renderedReasoning = computed(() => (
 const attachmentImageUrl = computed(() => {
   if (props.part.type !== 'attachment') return ''
   const attachment = props.part.attachment
-  if (!attachment.path || !isImageResource(attachment.name, attachment.mime_type)) return ''
-  return resolveMessageImageUrl(attachment.path) || ''
+  if (!isImageResource(attachment.name, attachment.mime_type)) return ''
+  if (attachment.path) return resolveMessageImageUrl(attachment.path) || uploadedAttachmentUrl.value
+  return uploadedAttachmentUrl.value
 })
 const attachmentOpenable = computed(() => (
   props.part.type === 'attachment'
-  && Boolean(props.part.attachment.path && props.workspaceContext)
+  && Boolean(
+    (props.part.attachment.path && props.workspaceContext)
+    || attachmentImageUrl.value
+  )
 ))
 const artifactImageUrl = computed(() => {
   if (props.part.type !== 'artifact' || !props.part.path) return ''
@@ -282,12 +294,18 @@ function attachmentKindLabel(attachment: TranscriptAttachmentView): string {
 }
 
 async function openAttachment(): Promise<void> {
-  if (props.part.type !== 'attachment' || !props.part.attachment.path) return
-  await openWorkspaceFile(
-    props.part.attachment.path,
-    props.workspaceContext,
-    props.part.attachment.workspace_scope || 'workdir',
-  )
+  if (props.part.type !== 'attachment') return
+  if (props.part.attachment.path && props.workspaceContext) {
+    await openWorkspaceFile(
+      props.part.attachment.path,
+      props.workspaceContext,
+      props.part.attachment.workspace_scope || 'workdir',
+    )
+    return
+  }
+  if (attachmentImageUrl.value) {
+    window.open(attachmentImageUrl.value, '_blank', 'noopener,noreferrer')
+  }
 }
 
 function resolveMessageImageUrl(source: string): string | null {
@@ -344,7 +362,7 @@ function escapeRegExp(value: string): string {
 .delegated-delivery-chevron { color: var(--app-text-muted); }
 
 .message-part + .message-part {
-  margin-top: var(--app-space-sm);
+  margin-top: 6px;
 }
 
 .message-part :deep(.markdown-content > :first-child) {

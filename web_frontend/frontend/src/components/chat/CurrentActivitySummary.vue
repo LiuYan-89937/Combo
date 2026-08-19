@@ -32,7 +32,7 @@ defineProps<{
   gap: 7px;
   max-width: min(72vw, 720px);
   min-height: 24px;
-  padding: 2px var(--app-space-md);
+  padding: 3px 8px 5px 52px;
   color: var(--app-text-tertiary);
   font-size: 12px;
   line-height: 18px;

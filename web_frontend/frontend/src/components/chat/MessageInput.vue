@@ -77,12 +77,7 @@
         :key="index"
         class="attachment-item"
       >
-        <ResourceIcon
-          :name="attachment.name"
-          :mime-type="attachment.mime_type"
-          :kind="attachment.kind"
-          :size="18"
-        />
+        <UploadedAttachmentThumbnail :attachment="attachment" />
         <span class="attachment-name">{{ attachment.name }}</span>
         <n-button text size="small" @click="removeAttachment(index)">
           <n-icon><Close /></n-icon>
@@ -99,7 +94,8 @@
         ref="inputRef"
         v-model:value="inputText"
         type="textarea"
-        :placeholder="placeholder"
+        placeholder=""
+        :aria-label="placeholder"
         :disabled="disabled"
         :rows="rows"
         :autosize="{ minRows: rows, maxRows: maxRows }"
@@ -192,7 +188,7 @@
             >
               <ComboPngIcon
                 name="plan"
-                :size="36"
+                :size="28"
               />
             </n-button>
         </ControlHint>
@@ -233,7 +229,7 @@
                   :aria-label="t('chat.approvalLabel')"
                 >
                   <span class="permission-icon-slot">
-                    <ComboPngIcon name="permission" :size="36" />
+                    <ComboPngIcon name="permission" :size="28" />
                   </span>
                   <span>{{ approvalLabel }}</span>
                   <n-icon size="12" class="reasoning-caret"><CaretDown /></n-icon>
@@ -291,7 +287,7 @@
                 @click="handlePrimaryAction"
               >
                 <n-icon v-if="primaryAction === 'cancel'" :size="19"><Stop /></n-icon>
-                <ComboPngIcon v-else name="send" :size="36" />
+                <ComboPngIcon v-else name="send" :size="28" />
               </n-button>
           </ControlHint>
           <span v-if="queuedCount > 0" class="queued-count" aria-hidden="true">
@@ -315,6 +311,7 @@ import ComboPngIcon from '@/components/icons/ComboPngIcon.vue'
 import CollaborationModeIcon from '@/components/icons/CollaborationModeIcon.vue'
 import ControlHint from '@/components/common/ControlHint.vue'
 import ResourceIcon from '@/components/common/ResourceIcon.vue'
+import UploadedAttachmentThumbnail from '@/components/chat/UploadedAttachmentThumbnail.vue'
 import { useI18n } from '@/composables/useI18n'
 import { useFileCapabilities } from '@/composables/useFileCapabilities'
 import { MAX_RUNTIME_ATTACHMENTS, extensionFromMimeType, pastedImageFiles, runtimeFileAttachmentFromFile } from '@/utils/attachments'
@@ -326,6 +323,7 @@ import {
   loadConversationDraft,
   saveConversationDraft,
 } from '@/utils/conversationDrafts'
+import { REASONING_INTENSITY_DEFAULT } from '@/utils/reasoning'
 
 const { t } = useI18n()
 const messageApi = useMessage()
@@ -352,7 +350,7 @@ const props = withDefaults(
     modelOptions?: Array<{ label: string; value: string; disabled?: boolean }>
     selectedModelProfileId?: string | null
     reasoningControlEnabled?: boolean
-    reasoningIntensity?: number | null
+    reasoningIntensity?: number
     executionControlEnabled?: boolean
     executionPreference?: ExecutionPreference
     forceCollaboration?: boolean
@@ -377,7 +375,7 @@ const props = withDefaults(
     modelOptions: () => [],
     selectedModelProfileId: '',
     reasoningControlEnabled: false,
-    reasoningIntensity: null,
+    reasoningIntensity: REASONING_INTENSITY_DEFAULT,
     executionControlEnabled: false,
     executionPreference: 'react',
     forceCollaboration: false,
@@ -396,7 +394,7 @@ const emit = defineEmits<{
   cancelQueued: [message: QueuedMessageView]
   input: [value: string]
   'update:selectedModelProfileId': [value: string]
-  'update:reasoningIntensity': [value: number | null]
+  'update:reasoningIntensity': [value: number]
   'update:executionPreference': [value: ExecutionPreference]
   'update:forceCollaboration': [value: boolean]
   'update:approvalMode': [value: ApprovalMode]
@@ -417,14 +415,11 @@ const normalizedDraftScope = computed(() => (
 const contextReferences = computed(() => referenceStore.references(normalizedReferenceScope.value))
 const placeholder = computed(() => props.placeholder || t('chat.inputPlaceholder'))
 const reasoningOptions = computed(() => [
-  { label: t('chat.reasoningDefault'), value: -1 },
-  { label: t('chat.reasoningOff'), value: 0 },
   { label: t('chat.reasoningLow'), value: 1 },
   { label: t('chat.reasoningMedium'), value: 2 },
   { label: t('chat.reasoningHigh'), value: 3 },
-  { label: t('chat.reasoningMaximum'), value: 4 },
 ])
-const reasoningSelectionValue = computed(() => props.reasoningIntensity ?? -1)
+const reasoningSelectionValue = computed(() => props.reasoningIntensity)
 const reasoningLabel = computed(() => (
   reasoningOptions.value.find((option) => option.value === reasoningSelectionValue.value)?.label
   || reasoningOptions.value[0].label
@@ -552,8 +547,7 @@ function handleModelSelect(value: string) {
 }
 
 function handleReasoningSelect(value: string | number) {
-  const intensity = Number(value)
-  emit('update:reasoningIntensity', intensity < 0 ? null : intensity)
+  emit('update:reasoningIntensity', Number(value))
 }
 
 function handleApprovalSelect(value: string | number) {
@@ -755,18 +749,18 @@ defineExpose({
   position: relative;
   display: flex;
   flex-direction: column;
-  min-inline-size: 720px;
-  gap: var(--app-space-sm);
-  padding: 12px 14px;
+  min-inline-size: 0;
+  gap: var(--app-space-xxs);
+  padding: var(--app-space-xs) var(--app-space-sm);
   border: 1px solid color-mix(in srgb, var(--app-text) 14%, transparent);
-  border-radius: var(--app-radius-xl);
+  border-radius: var(--app-radius-lg);
   background: var(--app-surface);
-  transition: border-color var(--app-transition-base), box-shadow var(--app-transition-base);
+  transition: border-color var(--app-transition-base);
 }
 
 .message-input-container:focus-within {
   border-color: var(--app-border-focus);
-  box-shadow: 0 0 0 4px var(--app-focus-shadow);
+  box-shadow: none;
 }
 
 .input-disabled-guidance {
@@ -908,8 +902,8 @@ defineExpose({
 .attachments-preview {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--app-space-sm);
-  padding: var(--app-space-sm) var(--app-space-md);
+  gap: 7px;
+  padding: 7px 9px;
   background: var(--app-surface-muted);
   border-radius: var(--app-radius-md);
   animation: app-fade-in 0.2s ease both;
@@ -976,7 +970,7 @@ defineExpose({
 
 .input-wrapper :deep(.n-input .n-input__textarea-el) {
   color: var(--app-text);
-  padding: 4px 0;
+  padding: var(--app-space-xxs) var(--app-space-xs);
   font-size: var(--app-font-lg);
   line-height: var(--app-leading-normal);
 }
@@ -990,7 +984,7 @@ defineExpose({
   align-items: center;
   justify-content: space-between;
   flex-wrap: nowrap;
-  gap: var(--app-space-sm);
+  gap: 6px;
 }
 
 .left-actions,
@@ -998,7 +992,7 @@ defineExpose({
   display: flex;
   align-items: center;
   flex-wrap: nowrap;
-  gap: var(--app-space-sm);
+  gap: 5px;
   min-width: 0;
 }
 
@@ -1052,14 +1046,14 @@ defineExpose({
 .compact-icon-action,
 .plan-mode-button,
 .collaboration-mode-button {
-  width: 42px;
-  min-width: 42px;
-  height: 42px;
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
   justify-content: center;
 }
 
 .reasoning-button:not(.plan-mode-button) {
-  min-height: 42px;
+  min-height: 34px;
 }
 
 .reasoning-button :deep(.n-button__content) {
@@ -1072,14 +1066,14 @@ defineExpose({
 }
 
 .permission-mode-button {
-  padding: 0 12px 0 4px;
+  padding: 0 var(--app-space-xs) 0 2px;
 }
 
 .permission-icon-slot {
   display: grid;
-  width: 40px;
-  height: 40px;
-  flex: 0 0 40px;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
   place-items: center;
   overflow: visible !important;
 }
@@ -1204,8 +1198,8 @@ defineExpose({
 }
 
 .send-button {
-  width: 44px;
-  height: 44px;
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
   padding: 0;
 }

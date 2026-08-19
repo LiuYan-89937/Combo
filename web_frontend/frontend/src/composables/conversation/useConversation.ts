@@ -97,9 +97,6 @@ export function useConversation() {
         profile.limits.compression_trigger_tokens,
       )
     }
-    if (profile?.capabilities.reasoning_supported === false) {
-      runtimePreferences.setReasoningIntensity(null)
-    }
   }
 
   function runtimeModelOptions() {
@@ -107,7 +104,7 @@ export function useConversation() {
     return {
       executionPreference: executionPreference.value,
       ...(profileId ? { mainModelProfileId: profileId } : {}),
-      ...(reasoningIntensity.value !== null ? { reasoningIntensity: reasoningIntensity.value } : {}),
+      reasoningIntensity: reasoningIntensity.value,
       requestTimeoutSeconds: runtimePreferences.requestTimeoutSeconds,
       maxRetries: runtimePreferences.maxRetries,
       userConfig: {
@@ -118,7 +115,7 @@ export function useConversation() {
     }
   }
 
-  function setReasoningIntensity(value: number | null) {
+  function setReasoningIntensity(value: number) {
     runtimePreferences.setReasoningIntensity(value)
   }
 
@@ -205,7 +202,7 @@ export function useConversation() {
     const profileId = selectedMainModelProfileId.value.trim()
     return {
       ...(profileId ? { model_profile_id: profileId } : {}),
-      ...(reasoningIntensity.value !== null ? { reasoning_intensity: reasoningIntensity.value } : {}),
+      reasoning_intensity: reasoningIntensity.value,
     }
   }
 
@@ -259,6 +256,9 @@ function attachmentViews(attachments: RuntimeAttachmentInput[]): TranscriptAttac
   return attachments.map((attachment) => ({
     kind: attachment.kind,
     name: attachment.name,
+    attachment_id: attachment.attachment_id,
+    revision: attachment.revision,
+    content_digest: attachment.content_digest,
     source_kind: attachment.source_kind,
     mime_type: attachment.mime_type,
   }))

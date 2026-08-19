@@ -42,6 +42,9 @@ RuntimeInstanceStatus = Literal[
 CapabilityKind = Literal["skill", "tool", "mcp_server", "mcp_tool", "dependency"]
 CapabilitySelectionStatus = Literal["selected", "rejected"]
 TaskRevisionAction = Literal["created", "continued", "revised", "cancelled", "superseded"]
+MIN_REASONING_INTENSITY = 1
+DEFAULT_REASONING_INTENSITY = 2
+MAX_REASONING_INTENSITY = 3
 
 
 def utc_now_text() -> str:
@@ -63,7 +66,11 @@ class UserRuntimePolicy(ProtocolModel):
     execution_preference: ExecutionPreference = "react"
     approval_mode: ApprovalMode = "ask"
     model_profile_id: str | None = None
-    reasoning_intensity: int | None = Field(default=None, ge=0)
+    reasoning_intensity: int = Field(
+        default=DEFAULT_REASONING_INTENSITY,
+        ge=MIN_REASONING_INTENSITY,
+        le=MAX_REASONING_INTENSITY,
+    )
     request_timeout_seconds: int = Field(default=300, ge=1)
     browser_operation_timeout_ms: int = Field(default=30_000, ge=1_000)
     browser_navigation_timeout_ms: int = Field(default=45_000, ge=1_000)
@@ -91,6 +98,11 @@ class UserRuntimePolicy(ProtocolModel):
     @classmethod
     def _optional_profile_id(cls, value: str | None) -> str | None:
         return _optional_text(value)
+
+    @field_validator("reasoning_intensity", mode="before")
+    @classmethod
+    def _restore_legacy_reasoning_intensity(cls, value: object) -> int:
+        return _normalized_reasoning_intensity(value)
 
     @field_validator("locale", mode="before")
     @classmethod
@@ -130,7 +142,16 @@ class RuntimePolicySnapshot(FrozenProtocolModel):
     approval_mode: ApprovalMode
     approval_mode_source: PolicyValueSource
     model: ModelSelectionSnapshot
-    reasoning_intensity: int | None = Field(default=None, ge=0)
+    reasoning_intensity: int = Field(
+        default=DEFAULT_REASONING_INTENSITY,
+        ge=MIN_REASONING_INTENSITY,
+        le=MAX_REASONING_INTENSITY,
+    )
+
+    @field_validator("reasoning_intensity", mode="before")
+    @classmethod
+    def _restore_legacy_reasoning_intensity(cls, value: object) -> int:
+        return _normalized_reasoning_intensity(value)
     request_timeout_seconds: int = Field(ge=1)
     browser_operation_timeout_ms: int = Field(default=30_000, ge=1_000)
     browser_navigation_timeout_ms: int = Field(default=45_000, ge=1_000)
@@ -714,6 +735,16 @@ def _required_text(value: Any, field_name: str) -> str:
 def _optional_text(value: Any) -> str | None:
     text = str(value or "").strip()
     return text or None
+
+
+def _normalized_reasoning_intensity(value: object) -> int:
+    try:
+        intensity = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return DEFAULT_REASONING_INTENSITY
+    if MIN_REASONING_INTENSITY <= intensity <= MAX_REASONING_INTENSITY:
+        return intensity
+    return DEFAULT_REASONING_INTENSITY
 
 
 def _unique_text_tuple(values: tuple[str, ...]) -> tuple[str, ...]:

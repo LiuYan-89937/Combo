@@ -68,7 +68,7 @@ const formattedTime = computed(() => new Date(props.timestamp || Date.now()).toL
 }
 
 .tool-trace-message.embedded {
-  padding: 0 0 12px;
+  padding: 0 0 6px;
 }
 
 .assistant-avatar {

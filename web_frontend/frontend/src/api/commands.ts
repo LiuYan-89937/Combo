@@ -95,7 +95,7 @@ export interface SendMessageOptions {
 export interface RuntimeMainModelOptions {
   executionPreference?: ExecutionPreference
   mainModelProfileId?: string | null
-  reasoningIntensity?: number | null
+  reasoningIntensity?: number
   requestTimeoutSeconds?: number | null
   maxRetries?: number | null
   userConfig?: Record<string, unknown> | null

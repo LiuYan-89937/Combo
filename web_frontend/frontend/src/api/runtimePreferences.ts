@@ -7,7 +7,7 @@ export interface RuntimePreferences {
   revision: number
   execution_preference: ExecutionPreference
   model_profile_id: string | null
-  reasoning_intensity: number | null
+  reasoning_intensity: number
   approval_mode: ApprovalMode
   request_timeout_seconds: number
   browser_operation_timeout_ms: number

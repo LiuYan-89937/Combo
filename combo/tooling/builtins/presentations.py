@@ -64,6 +64,14 @@ BUILTIN_TOOL_COPY: dict[str, BuiltinToolCopy] = {
         "非阻塞地启动一个边界明确的子 Agent 任务。提供面向用户的角色名、执行策略、目标、验收条件和最小充分能力；没有可选能力时传空数组。接受成功不代表任务已经完成，禁止立即轮询。",
         "Start one bounded child-Agent task without blocking. Provide a user-facing role name, execution strategy, objective, acceptance criteria, and the smallest sufficient capability set; use an empty array when none is needed. Acceptance is not completion; do not poll immediately.",
     ),
+    "delegate_continue": _copy(
+        "继续一个已经结束的子 Agent 任务。沿用该子 Agent 的 checkpoint、角色、模型与能力上下文，创建新的任务修订并执行补充、纠正或升级要求。",
+        "Continue a terminal child-Agent task. Reuse its checkpoint, role, model, and capability context while starting a new task revision for an improvement, correction, or follow-up.",
+    ),
+    "delegate_message": _copy(
+        "向正在运行的子 Agent 直接插入一条用户消息。消息在下一个安全执行边界被读取，不取消当前工具，也不使用主会话引导流程。",
+        "Insert a user message directly into a running child Agent. It is consumed at the next safe execution boundary without cancelling the current tool or using main-conversation steering.",
+    ),
     "delegation_status": _copy("查看当前会话中所有子 Agent 任务的权威状态。仅在用户明确询问进度或完成通知需要读取交付详情时使用，不要轮询。", "Inspect authoritative status for all child-Agent tasks in the current conversation. Use only for an explicit progress request or to retrieve delivery details after a terminal notification; do not poll."),
     "memory": _copy("保存本轮形成的、可跨会话复用的用户偏好、约束、决定、事实或产物信息。跨会话检索由上下文系统自动完成，不要用此工具搜索记忆。", "Persist a reusable user preference, constraint, decision, fact, or artifact established in this turn. Cross-session retrieval is automatic; do not use this tool to search memories."),
     "mcp_content": _copy("读取 capability 目录中已确认的 MCP Resource，或按声明参数展开 MCP Prompt。必须先搜索并 describe 精确对象，不得复用其他对象的定义。", "Read a confirmed MCP Resource or expand an MCP Prompt with its declared arguments. Search and describe the exact object first; another object's definition is not interchangeable."),
