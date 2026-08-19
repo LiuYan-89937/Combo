@@ -182,7 +182,8 @@ const showScrollToLatest = computed(() => (
   !followsLatestMessage.value && runtimeStore.transcript.length > 0
 ))
 const latestScrollTop = ref<number | null>(null)
-const bottomDistanceThreshold = 48
+const bottomLockEpsilonPx = 1
+const upwardScrollEpsilonPx = 0.5
 let userScrollIntentUntil = 0
 type PendingWorkspaceAction = {
   kind: 'new_session'
@@ -335,10 +336,10 @@ function scrollContainer(): HTMLElement | null {
     || null
 }
 
-function isNearBottom(): boolean {
+function isAtBottom(): boolean {
   const container = scrollContainer()
   if (!container) return true
-  return container.scrollHeight - container.scrollTop - container.clientHeight < bottomDistanceThreshold
+  return container.scrollHeight - container.scrollTop - container.clientHeight <= bottomLockEpsilonPx
 }
 
 function handleMessagesScroll() {
@@ -349,16 +350,19 @@ function handleMessagesScroll() {
   const previousScrollTop = latestScrollTop.value
   latestScrollTop.value = currentScrollTop
   const userInitiated = Date.now() <= userScrollIntentUntil
+  const movedUp = previousScrollTop !== null
+    && currentScrollTop < previousScrollTop - upwardScrollEpsilonPx
 
   // Content growth and layout changes can emit scroll events without user input.
-  // Only an actual upward movement detaches the view; reaching the bottom always
-  // re-attaches it. This keeps reasoning,正文,工具和图片共用同一条规则。
-  if (isNearBottom()) {
-    followsLatestMessage.value = true
+  // A real upward movement wins immediately, even inside the former bottom
+  // tolerance area. Following resumes only after the viewport truly reaches
+  // the bottom again.
+  if (movedUp && (userInitiated || followsLatestMessage.value)) {
+    followsLatestMessage.value = false
     return
   }
-  if (userInitiated || (previousScrollTop !== null && currentScrollTop < previousScrollTop - 1)) {
-    followsLatestMessage.value = false
+  if (isAtBottom()) {
+    followsLatestMessage.value = true
   }
 }
 
@@ -368,6 +372,13 @@ function markUserScrollIntent(event: Event) {
   if (event.type === 'keydown') {
     const key = (event as KeyboardEvent).key
     if (!['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(key)) return
+    if (['ArrowUp', 'PageUp', 'Home'].includes(key) || (key === ' ' && (event as KeyboardEvent).shiftKey)) {
+      followsLatestMessage.value = false
+    }
+  } else if (event instanceof WheelEvent && event.deltaY < 0) {
+    // Detach before the next animation frame so an already-scheduled stream
+    // follow cannot override a small upward wheel or trackpad gesture.
+    followsLatestMessage.value = false
   }
   userScrollIntentUntil = Date.now() + 500
 }
