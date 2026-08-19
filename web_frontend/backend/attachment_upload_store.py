@@ -14,7 +14,13 @@ from uuid import uuid4
 from fastapi import UploadFile
 
 from combo.paths import combo_data_path
-from combo.runtime_attachments import AttachmentImportPolicy
+from combo.runtime_attachments import (
+    AttachmentContentAnalysis,
+    AttachmentImportPolicy,
+    analyze_attachment_file,
+    attachment_content_analysis_from_payload,
+    resolve_attachment_mime_type,
+)
 from combo.runtime_protocol import AttachmentRevisionRef
 
 
@@ -36,6 +42,7 @@ class StagedAttachment:
     path: Path
     principal_id: str
     content_digest: str
+    analysis: AttachmentContentAnalysis
 
     def frontend_payload(self) -> dict[str, Any]:
         return {
@@ -46,6 +53,17 @@ class StagedAttachment:
             "size_bytes": self.size_bytes,
             "revision": 1,
             "content_digest": self.content_digest,
+            **self.analysis.payload(include_text=False),
+        }
+
+    def runtime_payload(self, *, source_kind: str = "uploaded_file") -> dict[str, Any]:
+        return {
+            "kind": "file",
+            "name": self.name,
+            "content": str(self.path),
+            "mime_type": self.mime_type,
+            "source_kind": source_kind,
+            **self.analysis.payload(),
         }
 
 
@@ -69,6 +87,7 @@ class AttachmentUploadStore:
         entry.mkdir(parents=True, exist_ok=False)
         size_bytes = 0
         digest = sha256()
+        mime_type = resolve_attachment_mime_type(name, upload.content_type)
         try:
             with target.open("xb") as handle:
                 while chunk := await upload.read(1024 * 1024):
@@ -83,11 +102,16 @@ class AttachmentUploadStore:
             metadata = {
                 "attachment_id": attachment_id,
                 "name": name,
-                "mime_type": str(upload.content_type or "").strip() or None,
+                "mime_type": mime_type,
                 "size_bytes": size_bytes,
                 "created_at": time.time(),
                 "principal_id": _required_principal(principal_id),
                 "content_digest": digest.hexdigest(),
+                "analysis": analyze_attachment_file(
+                    target,
+                    mime_type=mime_type,
+                    policy=policy,
+                ).payload(),
             }
             (entry / "metadata.json").write_text(
                 json.dumps(metadata, ensure_ascii=False, separators=(",", ":")),
@@ -99,11 +123,12 @@ class AttachmentUploadStore:
         return StagedAttachment(
             attachment_id=attachment_id,
             name=name,
-            mime_type=str(upload.content_type or "").strip() or None,
+            mime_type=mime_type,
             size_bytes=size_bytes,
             path=target,
             principal_id=_required_principal(principal_id),
             content_digest=digest.hexdigest(),
+            analysis=_required_attachment_analysis(metadata.get("analysis")),
         )
 
     def stage_bytes(
@@ -117,6 +142,7 @@ class AttachmentUploadStore:
         self.cleanup_expired()
         attachment_id = uuid4().hex
         safe_name = _safe_upload_name(name)
+        resolved_mime_type = resolve_attachment_mime_type(safe_name, mime_type)
         entry = self.root / attachment_id
         target = entry / safe_name
         policy = AttachmentImportPolicy.from_env()
@@ -126,19 +152,37 @@ class AttachmentUploadStore:
         digest = sha256(content).hexdigest()
         try:
             target.write_bytes(content)
-            (entry / "metadata.json").write_text(json.dumps({
+            metadata = {
                 "attachment_id": attachment_id,
                 "name": safe_name,
-                "mime_type": str(mime_type or "").strip() or None,
+                "mime_type": resolved_mime_type,
                 "size_bytes": len(content),
                 "created_at": time.time(),
                 "principal_id": _required_principal(principal_id),
                 "content_digest": digest,
-            }, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+                "analysis": analyze_attachment_file(
+                    target,
+                    mime_type=resolved_mime_type,
+                    policy=policy,
+                ).payload(),
+            }
+            (entry / "metadata.json").write_text(
+                json.dumps(metadata, ensure_ascii=False, separators=(",", ":")),
+                encoding="utf-8",
+            )
         except Exception:
             shutil.rmtree(entry, ignore_errors=True)
             raise
-        return StagedAttachment(attachment_id, safe_name, str(mime_type or "").strip() or None, len(content), target, _required_principal(principal_id), digest)
+        return StagedAttachment(
+            attachment_id=attachment_id,
+            name=safe_name,
+            mime_type=resolved_mime_type,
+            size_bytes=len(content),
+            path=target,
+            principal_id=_required_principal(principal_id),
+            content_digest=digest,
+            analysis=_required_attachment_analysis(metadata.get("analysis")),
+        )
 
     def resolve(self, attachment_id: str) -> StagedAttachment:
         normalized = str(attachment_id or "").strip().lower()
@@ -162,6 +206,7 @@ class AttachmentUploadStore:
             path=target,
             principal_id=_required_principal(metadata.get("principal_id")),
             content_digest=str(metadata.get("content_digest") or "").strip(),
+            analysis=_required_attachment_analysis(metadata.get("analysis")),
         )
 
     def retain(
@@ -242,13 +287,9 @@ class AttachmentUploadStore:
         if not attachment_id or item.get("content") is not None or item.get("path") is not None:
             return dict(item)
         staged = self.resolve(attachment_id)
-        return {
-            "kind": "file",
-            "name": staged.name,
-            "content": str(staged.path),
-            "mime_type": staged.mime_type,
-            "source_kind": str(item.get("source_kind") or "uploaded_file"),
-        }
+        return staged.runtime_payload(
+            source_kind=str(item.get("source_kind") or "uploaded_file"),
+        )
 
 
 class StagedAttachmentLaunchResolver:
@@ -260,13 +301,7 @@ class StagedAttachmentLaunchResolver:
             principal_id=principal_id,
             content_digest=reference.content_digest,
         )
-        return {
-            "kind": "file",
-            "name": staged.name,
-            "content": str(staged.path),
-            "mime_type": staged.mime_type,
-            "source_kind": "uploaded_file",
-        }
+        return staged.runtime_payload()
 
 
 _DEFAULT_ATTACHMENT_UPLOAD_STORE: AttachmentUploadStore | None = None
@@ -291,6 +326,13 @@ def _required_principal(value: Any) -> str:
     if not principal:
         raise AttachmentUploadError("attachment principal must not be empty")
     return principal
+
+
+def _required_attachment_analysis(value: Any) -> AttachmentContentAnalysis:
+    analysis = attachment_content_analysis_from_payload(value if isinstance(value, dict) else {})
+    if analysis is None:
+        raise AttachmentUploadError("attachment content analysis is unavailable")
+    return analysis
 
 
 def _positive_int_env(name: str, default: int) -> int:

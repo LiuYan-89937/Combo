@@ -26,6 +26,8 @@ export interface RuntimeAttachmentInput {
   source_kind?: string
   mime_type?: string
   size_bytes?: number
+  content_kind?: 'image' | 'text' | 'binary'
+  extracted_text_available?: boolean
 }
 
 export type ContextReferenceKind = 'message_reference' | 'workspace_file' | 'text_selection'

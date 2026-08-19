@@ -65,6 +65,7 @@ const zhCN = {
   'header.manageRuntimeResources': '管理扩展与自动化',
 
   'chat.inputPlaceholder': '输入消息...',
+  'chat.inputRequired': '输入不能为空',
   'chat.modelSelectorPlaceholder': '主模型',
   'chat.modelPoolEmptyPlaceholder': '请至模型池添加模型',
   'chat.defaultMainModel': '默认模型',
@@ -1543,6 +1544,7 @@ const enUS: Record<MessageKey, string> = {
   'header.manageRuntimeResources': 'Manage extensions and automation',
 
   'chat.inputPlaceholder': 'Enter a message...',
+  'chat.inputRequired': 'Enter a message',
   'chat.modelSelectorPlaceholder': 'Main model',
   'chat.modelPoolEmptyPlaceholder': 'Add a model in the model pool',
   'chat.defaultMainModel': 'Default model',

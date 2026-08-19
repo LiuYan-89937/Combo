@@ -16,6 +16,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from combo.dynamic_runtime.repositories import utc_now_text
 from combo.dynamic_runtime.knowledge_search import KnowledgeRetrievalSettings
+from combo.model_pool import ModelPoolStore
+from combo.model_pool.store import ModelPoolStoreError
 from combo.native_directory_picker import NativeDirectoryPicker, NativeDirectoryPickerUnavailableError
 from combo.runtime_protocol import (
     CommandEnvelope,
@@ -29,7 +31,11 @@ from combo.runtime_i18n import normalize_runtime_locale
 from combo.runtime_protocol.chat_parts import build_chat_turn_messages
 from combo.workspace_directories import WorkspaceDirectoryBrowser
 from web_frontend.backend.frontend_event_bridge import project_runtime_event
-from web_frontend.backend.attachment_upload_store import AttachmentUploadError, attachment_upload_store
+from web_frontend.backend.attachment_upload_store import (
+    AttachmentUploadError,
+    StagedAttachment,
+    attachment_upload_store,
+)
 
 
 SYSTEM_CHAT_PACKAGE_ID = "main_chat"
@@ -164,8 +170,6 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
                 requested_workspace_id=payload.get("workspace_id"),
             )
             content = str(command.get("message") or payload.get("message") or "").strip()
-            if not content:
-                raise HTTPException(status_code=422, detail="message must not be empty")
             turn_policy = _synchronize_policy(
                 backend,
                 principal_id=principal_id,
@@ -173,6 +177,15 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
                 locale=locale,
                 command_payload=payload,
             )
+            attachment_references, staged_attachments = _attachment_references(
+                principal_id,
+                payload.get("attachments"),
+            )
+            if not content and not _attachments_can_form_message(
+                staged_attachments,
+                model_profile_id=turn_policy.model_profile_id,
+            ):
+                raise HTTPException(status_code=422, detail="message content is required")
             envelope = CommandEnvelope(
                 protocol_version=RuntimeProtocolDescriptor(
                     build_revision=backend.config.build_revision
@@ -185,7 +198,7 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
                     "kind": "send_message",
                     "message_id": uuid4().hex,
                     "content": content,
-                    "attachments": _attachment_references(principal_id, payload.get("attachments")),
+                    "attachments": attachment_references,
                     "execution_preference": turn_policy.execution_preference,
                     "approval_mode": turn_policy.approval_mode,
                     "force_collaboration": bool(payload.get("force_collaboration", False)),
@@ -2529,12 +2542,16 @@ def _knowledge_source_payload(value: Any) -> dict[str, Any]:
     return source.model_dump(mode="json", exclude_none=True)
 
 
-def _attachment_references(principal_id: str, value: Any) -> list[dict[str, Any]]:
+def _attachment_references(
+    principal_id: str,
+    value: Any,
+) -> tuple[list[dict[str, Any]], list[StagedAttachment]]:
     if value is None:
-        return []
+        return [], []
     if not isinstance(value, list):
         raise HTTPException(status_code=422, detail="attachments must be an array")
     references: list[dict[str, Any]] = []
+    staged_attachments: list[StagedAttachment] = []
     store = attachment_upload_store()
     for index, raw in enumerate(value):
         if not isinstance(raw, dict):
@@ -2573,7 +2590,30 @@ def _attachment_references(principal_id: str, value: Any) -> list[dict[str, Any]
             "revision": 1,
             "content_digest": staged.content_digest,
         })
-    return references
+        staged_attachments.append(staged)
+    return references, staged_attachments
+
+
+def _attachments_can_form_message(
+    attachments: list[StagedAttachment],
+    *,
+    model_profile_id: str | None,
+) -> bool:
+    if any(attachment.analysis.extracted_text_available for attachment in attachments):
+        return True
+    if not any(attachment.analysis.content_kind == "image" for attachment in attachments):
+        return False
+    profile_id = str(model_profile_id or "").strip()
+    if not profile_id:
+        return False
+    try:
+        profile = ModelPoolStore(setup=False).require_profile(profile_id)
+    except ModelPoolStoreError:
+        return False
+    return "image" in {
+        str(modality or "").strip().lower()
+        for modality in profile.capabilities.input_modalities
+    }
 
 
 def _command_id(command: dict[str, Any]) -> str:

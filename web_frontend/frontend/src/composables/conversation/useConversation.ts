@@ -45,6 +45,9 @@ export function useConversation() {
     chatModelProfiles.value.map((profile) => ({
       label: profile.display_name || profile.model_name || profile.profile_id,
       value: profile.profile_id,
+      supportsImageInput: profile.capabilities.input_modalities.some(
+        modality => String(modality || '').trim().toLowerCase() === 'image',
+      ),
     }))
   ))
   const inputPlaceholder = computed(() => (

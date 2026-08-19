@@ -40,7 +40,7 @@ class SendMessagePayload(FrozenProtocolModel):
     notification_event_ids: tuple[str, ...] = ()
     scheduler_run_id: str | None = None
 
-    @field_validator("message_id", "content")
+    @field_validator("message_id")
     @classmethod
     def _required_message_text(cls, value: str, info: object) -> str:
         text = str(value or "").strip()
@@ -48,6 +48,17 @@ class SendMessagePayload(FrozenProtocolModel):
             field_name = getattr(info, "field_name", "value")
             raise ValueError(f"{field_name} must not be empty")
         return text
+
+    @field_validator("content")
+    @classmethod
+    def _normalized_message_content(cls, value: str) -> str:
+        return str(value or "").strip()
+
+    @model_validator(mode="after")
+    def _message_has_content(self) -> "SendMessagePayload":
+        if not self.content and not self.attachments:
+            raise ValueError("message content or attachments are required")
+        return self
 
     @field_validator("notification_event_ids")
     @classmethod

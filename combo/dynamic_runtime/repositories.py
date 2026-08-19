@@ -1601,7 +1601,7 @@ def _insert_send_message_intake(conn: Any, envelope: CommandEnvelope) -> None:
         role="user",
         status="committed",
         parts=(
-            TextPart(text=payload.content),
+            *((TextPart(text=payload.content),) if payload.content else ()),
             *(AttachmentPart(attachment=attachment) for attachment in payload.attachments),
         ),
         created_at=envelope.submitted_at,
@@ -1623,7 +1623,7 @@ def _insert_send_message_intake(conn: Any, envelope: CommandEnvelope) -> None:
                 (envelope.session_id, payload.message_id),
             ).fetchone()[0]
         )
-        if prior_public_user_messages == 0:
+        if prior_public_user_messages == 0 and payload.content:
             conn.execute(
                 "update conversations set title = ? where session_id = ?",
                 (_conversation_title(payload.content), envelope.session_id),

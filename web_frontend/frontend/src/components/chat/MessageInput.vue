@@ -347,7 +347,12 @@ const props = withDefaults(
     maxRows?: number
     attachmentsEnabled?: boolean
     modelSelectorEnabled?: boolean
-    modelOptions?: Array<{ label: string; value: string; disabled?: boolean }>
+    modelOptions?: Array<{
+      label: string
+      value: string
+      disabled?: boolean
+      supportsImageInput?: boolean
+    }>
     selectedModelProfileId?: string | null
     reasoningControlEnabled?: boolean
     reasoningIntensity?: number
@@ -441,24 +446,43 @@ const approvalLabel = computed(() => (
 ))
 const maxAttachments = MAX_RUNTIME_ATTACHMENTS
 const remainingAttachmentSlots = computed(() => Math.max(0, maxAttachments - attachments.value.length - contextReferences.value.length))
+const selectedModelSupportsImageInput = computed(() => (
+  props.modelOptions.find(option => option.value === props.selectedModelProfileId)?.supportsImageInput === true
+))
 
 const hasDraft = computed(() => {
   const hasText = inputText.value.trim().length > 0
   const hasAttachments = props.attachmentsEnabled && attachments.value.length > 0
   return hasText || hasAttachments || contextReferences.value.length > 0
 })
-const canSend = computed(() => hasDraft.value && !props.disabled)
+const attachmentsCanFormMessage = computed(() => (
+  [...contextReferences.value, ...(props.attachmentsEnabled ? attachments.value : [])]
+    .some(attachmentCanFormMessage)
+))
+const hasMessageContent = computed(() => (
+  inputText.value.trim().length > 0 || attachmentsCanFormMessage.value
+))
+const canSend = computed(() => hasMessageContent.value && !props.disabled)
 const primaryAction = computed<'send' | 'cancel'>(() => (
   props.isRunning && !hasDraft.value ? 'cancel' : 'send'
 ))
 const primaryActionLabel = computed(() => {
   if (primaryAction.value === 'cancel') return t('common.stop')
+  if (!hasMessageContent.value) return t('chat.inputRequired')
   if (!props.isRunning) return t('common.send')
   return props.runningMessageMode === 'steer' ? t('chat.steerSend') : t('chat.queueSend')
 })
 const canUsePrimaryAction = computed(() => (
   primaryAction.value === 'cancel' || canSend.value
 ))
+
+function attachmentCanFormMessage(attachment: RuntimeAttachmentInput): boolean {
+  if (attachment.extracted_text_available === true) return true
+  if (attachment.kind === 'text' && String(attachment.content || '').trim()) return true
+  const isImage = attachment.content_kind === 'image'
+    || String(attachment.mime_type || '').trim().toLowerCase().startsWith('image/')
+  return isImage && selectedModelSupportsImageInput.value
+}
 
 function handleKeyDown(e: KeyboardEvent) {
   if (e.key !== 'Enter' || e.shiftKey) return

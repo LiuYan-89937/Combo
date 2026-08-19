@@ -9,9 +9,9 @@ import mimetypes
 import os
 from pathlib import Path, PurePosixPath
 import shutil
-from typing import Any
+from typing import Any, Literal
 
-from combo.document_processing import parse_file, parse_url
+from combo.document_processing import parse_file, parse_url, read_text_file
 from combo.file_capabilities import accepted_attachment_extensions
 from combo.file_utils import file_sha256
 from combo.model_image_inputs import local_image_content_block
@@ -118,12 +118,36 @@ class _ImportedLocalAttachment:
 
 
 @dataclass(frozen=True, slots=True)
-class _AttachmentText:
+class AttachmentTextExtraction:
     content: str
     original_chars: int
     truncated: bool
     parser: str | None
     warnings: tuple[str, ...]
+
+
+AttachmentContentKind = Literal["image", "text", "binary"]
+
+
+@dataclass(frozen=True, slots=True)
+class AttachmentContentAnalysis:
+    content_kind: AttachmentContentKind
+    text: AttachmentTextExtraction
+
+    @property
+    def extracted_text_available(self) -> bool:
+        return bool(self.text.content.strip())
+
+    def payload(self, *, include_text: bool = True) -> dict[str, Any]:
+        return {
+            "content_kind": self.content_kind,
+            "extracted_text_available": self.extracted_text_available,
+            **({"extracted_text": self.text.content} if include_text and self.text.content else {}),
+            "extracted_char_count": self.text.original_chars,
+            "extracted_text_truncated": self.text.truncated,
+            **({"parser": self.text.parser} if self.text.parser else {}),
+            **({"parse_warnings": list(self.text.warnings)} if self.text.warnings else {}),
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,6 +179,44 @@ def import_runtime_attachments(
         message=message,
         attachments=payload_attachments,
     )
+
+
+def analyze_attachment_file(
+    path: Path,
+    *,
+    mime_type: str | None = None,
+    policy: AttachmentImportPolicy | None = None,
+) -> AttachmentContentAnalysis:
+    resolved_mime_type = resolve_attachment_mime_type(path.name, mime_type)
+    if _is_image_mime_type(resolved_mime_type or ""):
+        return AttachmentContentAnalysis(
+            content_kind="image",
+            text=AttachmentTextExtraction("", 0, False, None, ()),
+        )
+    if _is_textual_mime_type(resolved_mime_type or ""):
+        extracted = _bounded_attachment_text(
+            read_text_file(path),
+            parser="plain_text",
+            warnings=(),
+            policy=policy or AttachmentImportPolicy.from_env(),
+        )
+        return AttachmentContentAnalysis(
+            content_kind="text" if extracted.content else "binary",
+            text=extracted,
+        )
+    extracted = _extract_file_text(path, policy=policy or AttachmentImportPolicy.from_env())
+    return AttachmentContentAnalysis(
+        content_kind="text" if extracted.content else "binary",
+        text=extracted,
+    )
+
+
+def resolve_attachment_mime_type(filename: str, declared_mime_type: str | None) -> str | None:
+    declared = str(declared_mime_type or "").split(";", 1)[0].strip().lower()
+    guessed, _ = mimetypes.guess_type(filename)
+    if declared and declared != "application/octet-stream":
+        return declared
+    return guessed or declared or None
 
 
 def workspace_attachment_root(workdir_root: Path) -> Path:
@@ -249,6 +311,7 @@ def _import_local_attachment_item(
     policy: AttachmentImportPolicy,
     source_kind: str = "local_path",
     mime_type: str | None = None,
+    analysis: AttachmentContentAnalysis | None = None,
 ) -> _ImportedLocalAttachment:
     prepared = _prepare_local_attachment_source(raw_path, base_dir=base_dir)
     _enforce_import_policy([prepared], policy=policy)
@@ -260,6 +323,7 @@ def _import_local_attachment_item(
         policy=policy,
         source_kind=source_kind,
         mime_type=mime_type,
+        analysis=analysis,
     )
 
 
@@ -272,6 +336,7 @@ def _copy_prepared_local_attachment(
     policy: AttachmentImportPolicy,
     source_kind: str,
     mime_type: str | None,
+    analysis: AttachmentContentAnalysis | None = None,
 ) -> _ImportedLocalAttachment:
     safe_name = _safe_filename(prepared.source.name)
     _validate_attachment_filename(safe_name)
@@ -291,10 +356,13 @@ def _copy_prepared_local_attachment(
         runtime_path_root=runtime_path_root,
         filename=target.name,
     )
-    resolved_mime_type = mime_type
-    if not resolved_mime_type:
-        resolved_mime_type, _ = mimetypes.guess_type(safe_name)
-    extracted = _extract_file_text(target, policy=policy)
+    resolved_mime_type = resolve_attachment_mime_type(safe_name, mime_type)
+    resolved_analysis = analysis or analyze_attachment_file(
+        target,
+        mime_type=resolved_mime_type,
+        policy=policy,
+    )
+    extracted = resolved_analysis.text
     return _ImportedLocalAttachment(
         ref=RuntimeAttachmentRef(
             attachment_id=_attachment_id_for(runtime_path=runtime_path, digest=digest),
@@ -396,6 +464,7 @@ def _import_payload_attachment(
                     policy=policy,
                     source_kind=declared_source_kind or "uploaded_file",
                     mime_type=mime_type,
+                    analysis=attachment_content_analysis_from_payload(item),
                 )
         if raw:
             data = _decode_base64_payload(raw)
@@ -430,7 +499,7 @@ def _write_runtime_attachment(
     runtime_path_root: str,
     scope: str,
     policy: AttachmentImportPolicy | None = None,
-    extracted: _AttachmentText | None = None,
+    extracted: AttachmentTextExtraction | None = None,
     source_url: str | None = None,
 ) -> _ImportedLocalAttachment:
     safe_name = _safe_filename(display_name)
@@ -448,19 +517,23 @@ def _write_runtime_attachment(
             path=safe_name,
         ) from exc
     resolved_policy = policy or AttachmentImportPolicy.from_env()
-    text = extracted if extracted is not None else _extract_file_text(target, policy=resolved_policy)
+    text = extracted if extracted is not None else analyze_attachment_file(
+        target,
+        mime_type=mime_type,
+        policy=resolved_policy,
+    ).text
     runtime_path = _runtime_attachment_path(
         runtime_path_root=runtime_path_root,
         filename=target.name,
     )
-    guessed_mime, _ = mimetypes.guess_type(safe_name)
+    resolved_mime_type = resolve_attachment_mime_type(safe_name, mime_type)
     return _ImportedLocalAttachment(
         ref=RuntimeAttachmentRef(
             attachment_id=_attachment_id_for(runtime_path=runtime_path, digest=digest),
             display_name=target.name,
             source_kind=source_kind,
             runtime_path=runtime_path,
-            mime_type=mime_type or guessed_mime,
+            mime_type=resolved_mime_type,
             size_bytes=size_bytes,
             sha256=digest,
             scope=scope,
@@ -689,6 +762,17 @@ def _is_image_mime_type(mime_type: str) -> bool:
     return mime_type.lower().startswith("image/")
 
 
+def _is_textual_mime_type(mime_type: str) -> bool:
+    normalized = mime_type.split(";", 1)[0].strip().lower()
+    return normalized.startswith("text/") or normalized in {
+        "application/json",
+        "application/ld+json",
+        "application/xml",
+        "application/yaml",
+        "application/x-yaml",
+    }
+
+
 def _validated_image_path(path: Path) -> Path:
     if not path.is_file():
         raise AttachmentImportError(
@@ -790,7 +874,7 @@ def _enforce_import_policy(
             )
 
 
-def _extract_file_text(path: Path, *, policy: AttachmentImportPolicy) -> _AttachmentText:
+def _extract_file_text(path: Path, *, policy: AttachmentImportPolicy) -> AttachmentTextExtraction:
     parsed = parse_file(path, root=path.parent)
     content = "\n\n".join(document.content for document in parsed.documents).strip()
     return _bounded_attachment_text(
@@ -807,7 +891,7 @@ def _bounded_attachment_text(
     parser: str | None,
     warnings: tuple[str, ...],
     policy: AttachmentImportPolicy,
-) -> _AttachmentText:
+) -> AttachmentTextExtraction:
     text = str(content or "").strip()
     original_chars = len(text)
     limit = policy.max_model_chars
@@ -816,12 +900,33 @@ def _bounded_attachment_text(
         truncated = True
     else:
         truncated = False
-    return _AttachmentText(
+    return AttachmentTextExtraction(
         content=text,
         original_chars=original_chars,
         truncated=truncated,
         parser=parser,
         warnings=warnings,
+    )
+
+
+def attachment_content_analysis_from_payload(item: dict[str, Any]) -> AttachmentContentAnalysis | None:
+    content_kind = str(item.get("content_kind") or "").strip()
+    if content_kind not in {"image", "text", "binary"}:
+        return None
+    warnings = item.get("parse_warnings")
+    return AttachmentContentAnalysis(
+        content_kind=content_kind,
+        text=AttachmentTextExtraction(
+            content=str(item.get("extracted_text") or "").strip(),
+            original_chars=max(0, int(item.get("extracted_char_count") or 0)),
+            truncated=bool(item.get("extracted_text_truncated")),
+            parser=str(item.get("parser") or "").strip() or None,
+            warnings=tuple(
+                str(warning).strip()
+                for warning in warnings
+                if str(warning).strip()
+            ) if isinstance(warnings, list) else (),
+        ),
     )
 
 

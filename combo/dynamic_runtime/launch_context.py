@@ -11,6 +11,11 @@ from combo.dynamic_runtime.runtime_service import (
     RuntimeLaunchContext,
     RuntimeLaunchContextResolver,
 )
+from combo.runtime_attachments import (
+    import_runtime_attachments,
+    workspace_attachment_root,
+    workspace_attachment_runtime_root,
+)
 from combo.runtime_protocol import (
     AttachmentPart,
     AttachmentRevisionRef,
@@ -188,12 +193,12 @@ class ComposedRuntimeLaunchContextResolver(RuntimeLaunchContextResolver):
         if workspace.workspace_id != request.workspace_id:
             raise ValueError("workspace launch projection identity differs from runtime request")
         attachment_refs = _turn_attachment_refs(messages, turn_id=request.turn_id)
-        resolved_attachments = tuple(
-            self._attachments.resolve(
-                principal_id=request.principal_id,
-                reference=reference,
-            )
-            for reference in attachment_refs
+        resolved_attachments = _resolve_runtime_attachments(
+            resolver=self._attachments,
+            principal_id=request.principal_id,
+            references=attachment_refs,
+            workspace=workspace,
+            runtime_instance_id=instance.runtime_instance_id,
         )
         if request.runtime_role == "temporary":
             delegated_prompt = self._delegations.for_runtime(instance.runtime_instance_id).envelope.system_prompt
@@ -253,6 +258,33 @@ def _turn_attachment_refs(
             seen.add(key)
             references.append(part.attachment)
     return tuple(references)
+
+
+def _resolve_runtime_attachments(
+    *,
+    resolver: AttachmentLaunchResolver,
+    principal_id: str,
+    references: tuple[AttachmentRevisionRef, ...],
+    workspace: WorkspaceLaunchProjection,
+    runtime_instance_id: str,
+) -> tuple[dict[str, Any], ...]:
+    if not references:
+        return ()
+    attachment_inputs = [
+        resolver.resolve(principal_id=principal_id, reference=reference)
+        for reference in references
+    ]
+    scope = str(runtime_instance_id or "").strip()
+    if not scope:
+        raise ValueError("runtime attachment scope requires runtime_instance_id")
+    imported = import_runtime_attachments(
+        "",
+        attachment_inputs,
+        storage_root=workspace_attachment_root(Path(workspace.root_path)) / scope,
+        runtime_path_root=workspace_attachment_runtime_root(workspace.root_alias, scope),
+        scope=scope,
+    )
+    return tuple(dict(item) for item in imported.attachments)
 
 
 def _notification_event_ids(

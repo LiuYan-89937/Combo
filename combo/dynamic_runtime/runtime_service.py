@@ -406,11 +406,6 @@ class DynamicRuntimeService:
                 runtime_instance=claimed_instance,
             )
             canonical_messages, current_user_message = self._runtime_input(claimed_instance)
-            launch_context = self._launch_context_resolver.resolve(
-                instance=claimed_instance,
-                messages=canonical_messages,
-                capability_snapshot=snapshot,
-            )
             graph = self._service_set.graph_for(claimed_instance.request.strategy)
             resolved_model = self._resolve_frozen_model(claimed_instance)
             register_runtime_model_handle(
@@ -426,6 +421,11 @@ class DynamicRuntimeService:
             }
             superseded_checkpoint_thread_id: str | None = None
             if resume_payload is None:
+                launch_context = self._launch_context_resolver.resolve(
+                    instance=claimed_instance,
+                    messages=canonical_messages,
+                    capability_snapshot=snapshot,
+                )
                 graph_messages = self._session_context_messages(
                     session_id=claimed_instance.request.session_id,
                     through_task_revision=claimed_instance.request.task_revision,
@@ -928,10 +928,7 @@ def _delegated_task_message(
 
 def _message_text(message: ConversationMessage) -> str:
     chunks = [str(getattr(part, "text", "") or "").strip() for part in message.parts]
-    text = "\n".join(item for item in chunks if item)
-    if not text:
-        raise ValueError("runtime user message contains no text instruction")
-    return text
+    return "\n".join(item for item in chunks if item)
 
 
 def _validate_invocation_status(instance: RuntimeInstance, *, resuming: bool) -> None:
