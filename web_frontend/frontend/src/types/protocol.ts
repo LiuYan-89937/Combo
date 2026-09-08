@@ -361,7 +361,8 @@ export interface ComputerUseOperationView {
   action?: string | null
   errorCode?: string | null
   valueVerified: boolean
-  inputVerification?: string
+  inputVerification?: string | null
+  inputMode?: string | null
 }
 
 export interface ComputerUseActivityView {

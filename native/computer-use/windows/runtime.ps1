@@ -23,9 +23,43 @@ Add-Type -AssemblyName System.Drawing
 
 Add-Type -TypeDefinition @"
 using System;
+using System.Text;
 using System.Runtime.InteropServices;
 
 public static class OCUWin32 {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct INPUT {
+        public uint type;
+        public INPUTUNION data;
+    }
+
+    [StructLayout(LayoutKind.Explicit)]
+    public struct INPUTUNION {
+        [FieldOffset(0)] public MOUSEINPUT mouse;
+        [FieldOffset(0)] public KEYBDINPUT keyboard;
+        [FieldOffset(0)] public HARDWAREINPUT hardware;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MOUSEINPUT {
+        public int dx, dy;
+        public uint mouseData, flags, time;
+        public UIntPtr extraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct KEYBDINPUT {
+        public ushort virtualKey, scanCode;
+        public uint flags, time;
+        public UIntPtr extraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct HARDWAREINPUT {
+        public uint message;
+        public ushort paramLow, paramHigh;
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     public struct RECT {
         public int Left;
@@ -55,19 +89,34 @@ public static class OCUWin32 {
     public static extern bool GetGUIThreadInfo(uint threadId, ref GUITHREADINFO info);
 
     [DllImport("user32.dll")]
-    public static extern IntPtr GetForegroundWindow();
-
-    [DllImport("user32.dll")]
-    public static extern bool SetForegroundWindow(IntPtr hwnd);
+    public static extern IntPtr ChildWindowFromPointEx(IntPtr parent, POINT point, uint flags);
 
     [DllImport("user32.dll")]
     public static extern bool IsChild(IntPtr parent, IntPtr child);
 
     [DllImport("user32.dll")]
-    public static extern IntPtr WindowFromPoint(POINT point);
+    public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
 
     [DllImport("user32.dll")]
-    public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+    public static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern bool IsWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern bool IsIconic(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindowAsync(IntPtr hWnd, int command);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern uint SendInput(uint count, INPUT[] inputs, int size);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool PrintWindow(IntPtr hwnd, IntPtr hdc, uint flags);
 
     [DllImport("user32.dll")]
     public static extern bool ScreenToClient(IntPtr hWnd, ref POINT point);
@@ -78,15 +127,58 @@ public static class OCUWin32 {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     public static extern IntPtr SendMessage(IntPtr hWnd, UInt32 msg, IntPtr wParam, IntPtr lParam);
 
+    [DllImport("user32.dll", EntryPoint = "SendMessageW")]
+    public static extern IntPtr ReadEditSelection(IntPtr hWnd, UInt32 msg, out uint start, out uint end);
+
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     public static extern IntPtr SendMessage(IntPtr hWnd, UInt32 msg, IntPtr wParam, string lParam);
 
-    [DllImport("user32.dll", EntryPoint = "SendMessageW")]
-    public static extern IntPtr GetEditSelection(IntPtr hWnd, UInt32 msg, out int start, out int end);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SendMessageW")]
+    public static extern IntPtr SendMessageText(IntPtr hWnd, UInt32 msg, IntPtr wParam, StringBuilder lParam);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetClassName(IntPtr hwnd, StringBuilder name, int capacity);
+
+    [DllImport("user32.dll")]
+    public static extern uint MapVirtualKey(uint code, uint mapType);
+
+    public static bool SendUnicodeUnit(ushort codeUnit, bool released) {
+        var input = new INPUT {
+            type = 1,
+            data = new INPUTUNION {
+                keyboard = new KEYBDINPUT {
+                    virtualKey = 0,
+                    scanCode = codeUnit,
+                    flags = released ? 0x0006u : 0x0004u
+                }
+            }
+        };
+        return SendInput(1, new[] { input }, Marshal.SizeOf(typeof(INPUT))) == 1;
+    }
+
+    public static bool SendVirtualKey(ushort virtualKey, bool released) {
+        var input = new INPUT {
+            type = 1,
+            data = new INPUTUNION {
+                keyboard = new KEYBDINPUT {
+                    virtualKey = virtualKey,
+                    flags = released ? 0x0002u : 0u
+                }
+            }
+        };
+        return SendInput(1, new[] { input }, Marshal.SizeOf(typeof(INPUT))) == 1;
+    }
+
+    public static IntPtr KeyLParam(uint key, bool released) {
+        uint scan = MapVirtualKey(key, 4); // MAPVK_VK_TO_VSC_EX
+        uint bits = 1 | ((scan & 0xff) << 16);
+        if ((scan & 0xff00) == 0xe000) bits |= 1u << 24;
+        if (released) bits |= (1u << 30) | (1u << 31);
+        return new IntPtr(unchecked((int)bits));
+    }
 }
 "@
 
-$WM_SETTEXT = 0x000C
 $WM_MOUSEMOVE = 0x0200
 $WM_LBUTTONDOWN = 0x0201
 $WM_LBUTTONUP = 0x0202
@@ -99,8 +191,26 @@ $WM_MOUSEHWHEEL = 0x020E
 $WM_KEYDOWN = 0x0100
 $WM_KEYUP = 0x0101
 $WM_CHAR = 0x0102
-$EM_GETSEL = 0x00B0
 $EM_SETSEL = 0x00B1
+function Assert-ForegroundKeyboardInput([bool]$sent) {
+    if (-not $sent) {
+        throw "[input.write_failed] Foreground keyboard injection failed or was blocked by UIPI"
+    }
+}
+
+function Send-ForegroundText([string]$text, [scriptblock]$validateTarget) {
+    foreach ($char in $text.Replace("`r`n", "`r").Replace("`n", "`r").ToCharArray()) {
+        if ($null -ne $validateTarget) { & $validateTarget }
+        Assert-ForegroundKeyboardInput ([OCUWin32]::SendUnicodeUnit([uint16][char]$char, $false))
+        Assert-ForegroundKeyboardInput ([OCUWin32]::SendUnicodeUnit([uint16][char]$char, $true))
+    }
+}
+
+function Send-ForegroundKey([string]$key) {
+    $virtualKey = [uint16](Get-VirtualKey $key)
+    Assert-ForegroundKeyboardInput ([OCUWin32]::SendVirtualKey($virtualKey, $false))
+    Assert-ForegroundKeyboardInput ([OCUWin32]::SendVirtualKey($virtualKey, $true))
+}
 
 function Test-EnvFlagEnabled([string]$name) {
     $value = [Environment]::GetEnvironmentVariable($name)
@@ -166,6 +276,33 @@ function Get-ScreenPoint($localFrame, $windowBounds) {
     }
 }
 
+function Get-WindowPointerHandle([IntPtr]$window, [int]$screenX, [int]$screenY) {
+    # Search only the target hierarchy; desktop hit-testing would select a covering app.
+    $receiver = $window
+    while ($true) {
+        $point = New-Object OCUWin32+POINT
+        $point.X = $screenX
+        $point.Y = $screenY
+        if (-not [OCUWin32]::ScreenToClient($receiver, [ref]$point)) { throw "[click.target_invalid] Target window disappeared" }
+        $child = [OCUWin32]::ChildWindowFromPointEx($receiver, $point, 7)
+        if ($child -eq [IntPtr]::Zero -or $child -eq $receiver) { return $receiver }
+        $receiver = $child
+    }
+}
+
+function Send-WindowMessage([IntPtr]$hwnd, [uint32]$message, [IntPtr]$wParam, [IntPtr]$lParam) {
+    Assert-ObservedWindow $process $operation
+    [uint32]$owner = 0
+    [void][OCUWin32]::GetWindowThreadProcessId($hwnd, [ref]$owner)
+    $window = [IntPtr]$operation.window_handle
+    if ($owner -ne $operation.target_pid -or ($hwnd -ne $window -and -not [OCUWin32]::IsChild($window, $hwnd))) {
+        throw "[input.target_invalid] Message receiver is outside the observed window"
+    }
+    if (-not [OCUWin32]::PostMessage($hwnd, $message, $wParam, $lParam)) {
+        throw "[input.write_failed] Window message delivery failed; earlier events may have been delivered"
+    }
+}
+
 function Send-MouseClick([IntPtr]$hwnd, [int]$screenX, [int]$screenY, [string]$button, [int]$count) {
     $point = New-Object OCUWin32+POINT
     $point.X = $screenX
@@ -188,15 +325,23 @@ function Send-MouseClick([IntPtr]$hwnd, [int]$screenX, [int]$screenY, [string]$b
 
     $repeat = [math]::Max(1, $count)
     for ($i = 0; $i -lt $repeat; $i++) {
-        [void][OCUWin32]::PostMessage($hwnd, $WM_MOUSEMOVE, [IntPtr]::Zero, $lParam)
-        [void][OCUWin32]::PostMessage($hwnd, $down, [IntPtr]$downFlag, $lParam)
+        Send-WindowMessage ($hwnd) ($WM_MOUSEMOVE) ([IntPtr]::Zero) ($lParam)
+        Send-WindowMessage ($hwnd) ($down) ([IntPtr]$downFlag) ($lParam)
         Start-Sleep -Milliseconds 35
-        [void][OCUWin32]::PostMessage($hwnd, $up, [IntPtr]::Zero, $lParam)
+        Send-WindowMessage ($hwnd) ($up) ([IntPtr]::Zero) ($lParam)
         Start-Sleep -Milliseconds 50
     }
 }
 
 function Send-Drag([IntPtr]$hwnd, [int]$fromX, [int]$fromY, [int]$toX, [int]$toY) {
+    $bounds = $operation.windowBounds
+    foreach ($point in @(@{x=$fromX; y=$fromY}, @{x=$toX; y=$toY})) {
+        if ($point.x -lt $bounds.x -or $point.x -ge ($bounds.x + $bounds.width) -or
+            $point.y -lt $bounds.y -or $point.y -ge ($bounds.y + $bounds.height)) {
+            throw "[click.target_invalid] Drag endpoints must be inside the bound window"
+        }
+    }
+    $hwnd = Get-WindowPointerHandle $hwnd $fromX $fromY
     $start = New-Object OCUWin32+POINT
     $start.X = $fromX
     $start.Y = $fromY
@@ -208,38 +353,38 @@ function Send-Drag([IntPtr]$hwnd, [int]$fromX, [int]$fromY, [int]$toX, [int]$toY
 
     $steps = 12
     $startParam = ConvertTo-LParam $start.X $start.Y
-    [void][OCUWin32]::PostMessage($hwnd, $WM_MOUSEMOVE, [IntPtr]::Zero, $startParam)
-    [void][OCUWin32]::PostMessage($hwnd, $WM_LBUTTONDOWN, [IntPtr]1, $startParam)
+    Send-WindowMessage ($hwnd) ($WM_MOUSEMOVE) ([IntPtr]::Zero) ($startParam)
+    Send-WindowMessage ($hwnd) ($WM_LBUTTONDOWN) ([IntPtr]1) ($startParam)
     for ($i = 1; $i -le $steps; $i++) {
         $x = [int][math]::Round($start.X + (($end.X - $start.X) * $i / $steps))
         $y = [int][math]::Round($start.Y + (($end.Y - $start.Y) * $i / $steps))
-        [void][OCUWin32]::PostMessage($hwnd, $WM_MOUSEMOVE, [IntPtr]1, (ConvertTo-LParam $x $y))
+        Send-WindowMessage ($hwnd) ($WM_MOUSEMOVE) ([IntPtr]1) ((ConvertTo-LParam $x $y))
         Start-Sleep -Milliseconds 20
     }
-    [void][OCUWin32]::PostMessage($hwnd, $WM_LBUTTONUP, [IntPtr]::Zero, (ConvertTo-LParam $end.X $end.Y))
+    Send-WindowMessage ($hwnd) ($WM_LBUTTONUP) ([IntPtr]::Zero) ((ConvertTo-LParam $end.X $end.Y))
 }
 
 function Send-Scroll([IntPtr]$hwnd, [int]$screenX, [int]$screenY, [string]$direction, [double]$pages) {
-    $point = New-Object OCUWin32+POINT
-    $point.X = $screenX
-    $point.Y = $screenY
-    [void][OCUWin32]::ScreenToClient($hwnd, [ref]$point)
-    $lParam = ConvertTo-LParam $point.X $point.Y
+    $hwnd = Get-WindowPointerHandle $hwnd $screenX $screenY
+    # Wheel messages take screen coordinates, unlike button messages.
+    $lParam = ConvertTo-LParam $screenX $screenY
     $delta = [int][math]::Round(120 * $pages)
     $message = $WM_MOUSEWHEEL
-    if ($direction -eq "down" -or $direction -eq "right") {
+    if ($direction -eq "down" -or $direction -eq "left") {
         $delta = -1 * $delta
     }
     if ($direction -eq "left" -or $direction -eq "right") {
         $message = $WM_MOUSEHWHEEL
     }
-    [void][OCUWin32]::PostMessage($hwnd, $message, (ConvertTo-WheelWParam $delta), $lParam)
+    $script:Diagnostics.Add("scroll dispatch=window_messages hwnd=$hwnd screen_x=$screenX screen_y=$screenY")
+    Send-WindowMessage ($hwnd) ($message) ((ConvertTo-WheelWParam $delta)) ($lParam)
 }
 
 function Send-Text([IntPtr]$hwnd, [string]$text, [scriptblock]$validateTarget) {
-    foreach ($char in $text.ToCharArray()) {
+    # WM_CHAR uses carriage return for Enter, including multiline edit controls.
+    foreach ($char in $text.Replace("`r`n", "`r").Replace("`n", "`r").ToCharArray()) {
         if ($null -ne $validateTarget) { & $validateTarget }
-        if (-not [OCUWin32]::PostMessage($hwnd, $WM_CHAR, [IntPtr][int][char]$char, [IntPtr]::Zero)) { throw "Character delivery failed; earlier characters may have been delivered" }
+        Send-WindowMessage $hwnd $WM_CHAR ([IntPtr][int][char]$char) ([IntPtr]1)
         Start-Sleep -Milliseconds 8
     }
 }
@@ -275,12 +420,9 @@ function Send-Key([IntPtr]$hwnd, [string]$key) {
         throw "[input.background_unsupported] Independent modifier state is unavailable"
     }
     $vk = Get-VirtualKey $key
-    if (-not [OCUWin32]::PostMessage($hwnd, $WM_KEYDOWN, [IntPtr]$vk, [IntPtr]::Zero)) {
-        throw "[input.write_failed] Key-down delivery failed; observe before further input"
-    }
-    if (-not [OCUWin32]::PostMessage($hwnd, $WM_KEYUP, [IntPtr]$vk, [IntPtr]::Zero)) {
-        throw "[input.write_failed] Key-up delivery failed; delivery may be partial"
-    }
+    Send-WindowMessage $hwnd $WM_KEYDOWN ([IntPtr]$vk) ([OCUWin32]::KeyLParam($vk, $false))
+    Send-WindowMessage $hwnd $WM_KEYUP ([IntPtr]$vk) ([OCUWin32]::KeyLParam($vk, $true))
+
 }
 
 function Resolve-App([string]$query) {
@@ -558,23 +700,40 @@ function Render-Tree($element, $windowBounds, $TextLimit = $script:DefaultTextLi
     }
 }
 
-function Capture-WindowPngBase64($bounds) {
+function Capture-WindowPngBase64([IntPtr]$hwnd, $bounds) {
     if ($null -eq $bounds -or $bounds.width -le 0 -or $bounds.height -le 0) {
         return $null
     }
+    $bitmap = $null
+    $graphics = $null
+    $stream = $null
     try {
+        if ([OCUWin32]::IsIconic($hwnd)) { throw "Target window is minimized" }
         $bitmap = New-Object System.Drawing.Bitmap ([int][math]::Round($bounds.width)), ([int][math]::Round($bounds.height))
         $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-        $graphics.CopyFromScreen([int][math]::Round($bounds.x), [int][math]::Round($bounds.y), 0, 0, $bitmap.Size)
+        $hdc = $graphics.GetHdc()
+        try {
+            # PW_RENDERFULLCONTENT: capture this HWND, never the covering desktop.
+            if (-not [OCUWin32]::PrintWindow($hwnd, $hdc, 0x00000002)) {
+                throw "PrintWindow failed: $([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
+            }
+        } finally { $graphics.ReleaseHdc($hdc) }
+        $current = Get-WindowRectFrame $hwnd
+        if ($null -eq $current) { throw "Target window disappeared during capture" }
+        foreach ($field in @("x", "y", "width", "height")) {
+            if ($current.$field -ne $bounds.$field) { throw "Window geometry changed during capture" }
+        }
         $stream = New-Object System.IO.MemoryStream
         $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
-        $graphics.Dispose()
-        $bitmap.Dispose()
         $bytes = $stream.ToArray()
-        $stream.Dispose()
         return [Convert]::ToBase64String($bytes)
     } catch {
+        $script:Diagnostics.Add("capture unavailable hwnd=$hwnd reason=$($_.Exception.Message)")
         return $null
+    } finally {
+        if ($null -ne $stream) { $stream.Dispose() }
+        if ($null -ne $graphics) { $graphics.Dispose() }
+        if ($null -ne $bitmap) { $bitmap.Dispose() }
     }
 }
 
@@ -626,7 +785,7 @@ function Build-Snapshot([string]$query, $TextLimit = $script:DefaultTextLimit, [
         }
         windowTitle = Limit-Text $process.MainWindowTitle $TextLimit
         windowBounds = $bounds
-        screenshotPngBase64 = Capture-WindowPngBase64 $bounds
+        screenshotPngBase64 = Capture-WindowPngBase64 ([IntPtr]$process.MainWindowHandle) $bounds
         treeLines = @($rendered.lines)
         focusedSummary = Get-FocusedSummary $process.Id $TextLimit
         selectedText = Get-SelectedText $process.Id $TextLimit
@@ -800,20 +959,25 @@ function Get-BackgroundInputHandle($process, $target) {
 
 function Assert-KeyboardControl($process, $element) {
     Assert-ElementWindow $process $element
-    $type = $element.Current.ControlType
-    if (-not $element.Current.IsEnabled -or
-        ($type -ne [Windows.Automation.ControlType]::Edit -and $type -ne [Windows.Automation.ControlType]::Document)) {
-        throw "[input.unsupported] The target is not an enabled editable control"
-    }
-    if ($element.Current.ClassName -ne "Edit" -and $element.Current.ClassName -notlike "RichEdit*") {
-        throw "[input.background_unsupported] The target does not expose the native edit message protocol"
+    if (-not $element.Current.IsEnabled) {
+        throw "[input.unsupported] The requested input target is disabled"
     }
     return Get-BackgroundInputHandle $process $element
 }
 
+function Assert-ReplacementProtocol([IntPtr]$handle) {
+    # EM_SETSEL is an Edit/RichEdit protocol, not a generic HWND operation.
+    $name = New-Object System.Text.StringBuilder 256
+    if ([OCUWin32]::GetClassName($handle, $name, $name.Capacity) -eq 0) {
+        throw "[input.target_invalid] Cannot identify the native input control"
+    }
+    if ($name.ToString() -ne "Edit" -and $name.ToString() -notlike "RichEdit*") {
+        throw "[input.replacement_unsupported] The receiver does not expose native selection; use type_text at an explicitly selected position. No keys were sent."
+    }
+}
+
 function Get-WindowKeyboardHandle($process) {
     $window = [IntPtr]$process.MainWindowHandle
-    if ([OCUWin32]::GetForegroundWindow() -ne $window) { return [IntPtr]::Zero }
     [uint32]$owner = 0
     $thread = [OCUWin32]::GetWindowThreadProcessId($window, [ref]$owner)
     $info = New-Object OCUWin32+GUITHREADINFO
@@ -828,8 +992,10 @@ function Get-WindowKeyboardHandle($process) {
 }
 
 function Get-InputHandle($process, $element) {
+    Assert-ObservedWindow $process $operation
     if ($script:InputTarget.scope -ne "window") { return Assert-KeyboardControl $process $element }
     $target = $script:InputTarget
+    if ($null -ne $element) { [void](Resolve-PointerPoint $process $operation $element "input") }
     $current = Get-WindowBounds $process (Get-MainElement $process)
     if ($target.pid -ne $process.Id -or $target.window_handle -ne [long]$process.MainWindowHandle) {
         throw "[input.target_invalid] The bound window identity changed"
@@ -838,36 +1004,142 @@ function Get-InputHandle($process, $element) {
         if ($current.$field -ne $target.bounds.$field) { throw "[input.target_invalid] Window geometry changed; bind the position again" }
     }
     $handle = Get-WindowKeyboardHandle $process
-    if ($handle -eq [IntPtr]::Zero -or [long]$handle -ne $target.keyboard_handle) {
+    if ($handle -eq [IntPtr]::Zero) {
+        throw "[input.receiver_unconfirmed] Window focus changed; bind the input position again"
+    }
+    if ([long]$target.keyboard_handle -eq 0) {
+        $target.keyboard_handle = [long]$handle
+    } elseif ([long]$handle -ne $target.keyboard_handle) {
         throw "[input.receiver_unconfirmed] Window focus changed; bind the input position again"
     }
     return $handle
 }
 
+function Enter-ForegroundInputLease($process) {
+    $target = [IntPtr]$process.MainWindowHandle
+    $previous = [OCUWin32]::GetForegroundWindow()
+    $wasMinimized = [OCUWin32]::IsIconic($target)
+    $lease = [pscustomobject]@{ target = [long]$target; previous = [long]$previous; target_was_minimized = $wasMinimized }
+    try {
+        if ($wasMinimized) { [void][OCUWin32]::ShowWindowAsync($target, 9) }
+        [void][OCUWin32]::SetForegroundWindow($target)
+        $clock = [Diagnostics.Stopwatch]::StartNew()
+        do {
+            Start-Sleep -Milliseconds $KeyboardReceiverPollMS
+        } while ([OCUWin32]::GetForegroundWindow() -ne $target -and $clock.ElapsedMilliseconds -lt $KeyboardReceiverTimeoutMS)
+        if ([OCUWin32]::GetForegroundWindow() -ne $target) {
+            throw "[input.activation_failed] The target application did not become active"
+        }
+        $script:Diagnostics.Add("focus lease acquire target_hwnd=$target previous_hwnd=$previous")
+        return $lease
+    } catch {
+        Exit-ForegroundInputLease $lease
+        throw
+    }
+}
+
+function Exit-ForegroundInputLease($lease) {
+    if ($null -eq $lease) { return }
+    $target = [IntPtr][long]$lease.target
+    if ([OCUWin32]::GetForegroundWindow() -ne $target) {
+        $script:Diagnostics.Add("focus lease restore skipped because foreground ownership changed")
+    } else {
+        $previous = [IntPtr][long]$lease.previous
+        if ($previous -ne [IntPtr]::Zero -and [OCUWin32]::IsWindow($previous)) {
+            $restored = [OCUWin32]::SetForegroundWindow($previous)
+            $script:Diagnostics.Add("focus lease restore previous_hwnd=$previous requested=$restored")
+        }
+    }
+    if ($lease.target_was_minimized -and [OCUWin32]::IsWindow($target)) {
+        [void][OCUWin32]::ShowWindowAsync($target, 6)
+    }
+}
+
+function Reestablish-LeasedInputTarget($process, $element) {
+    if ([OCUWin32]::GetForegroundWindow() -ne [IntPtr]$process.MainWindowHandle) {
+        throw "[input.interrupted_by_user] Foreground ownership changed before input"
+    }
+    if ($script:InputTarget.scope -eq "element") {
+        $element.SetFocus()
+    } else {
+        $point = [pscustomobject]@{ x = [int]$script:InputTarget.point_x; y = [int]$script:InputTarget.point_y }
+        $receiver = Get-WindowPointerHandle ([IntPtr]$process.MainWindowHandle) $point.x $point.y
+        Send-MouseClick $receiver $point.x $point.y "left" 1
+    }
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    do {
+        Start-Sleep -Milliseconds $KeyboardReceiverPollMS
+        try { return Get-InputHandle $process $element } catch { $lastError = $_ }
+    } while ($clock.ElapsedMilliseconds -lt $KeyboardReceiverTimeoutMS)
+    throw $lastError
+}
+
+function Assert-ForegroundInputLease($process) {
+    if ([OCUWin32]::GetForegroundWindow() -ne [IntPtr]$process.MainWindowHandle) {
+        throw "[input.interrupted_by_user] Foreground ownership changed during input"
+    }
+}
+
+function Get-InputCapability($process, $element) {
+    try {
+        return [pscustomobject]@{ handle = (Get-InputHandle $process $element); mode = "directed_background"; lease = $null }
+    } catch {
+        if ($_.Exception.Message -notmatch '^\[input\.(receiver_unconfirmed|background_unsupported)\]') { throw }
+    }
+    $script:InputResult.input_mode = "foreground_lease"
+    $lease = Enter-ForegroundInputLease $process
+    try {
+        $handle = Reestablish-LeasedInputTarget $process $element
+        return [pscustomobject]@{ handle = $handle; mode = "foreground_lease"; lease = $lease }
+    } catch {
+        Exit-ForegroundInputLease $lease
+        throw
+    }
+}
+
+function Read-NativeEditText([IntPtr]$handle) {
+    $length = [OCUWin32]::SendMessage($handle, 0x000E, [IntPtr]::Zero, [IntPtr]::Zero).ToInt32()
+    if ($length -lt 0) { return $null }
+    $buffer = New-Object System.Text.StringBuilder ($length + 1)
+    [void][OCUWin32]::SendMessageText($handle, 0x000D, [IntPtr]($length + 1), $buffer)
+    return $buffer.ToString()
+}
+
+function Confirm-NativeEditValue([IntPtr]$handle, [string]$expected, $process, $lease) {
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    do {
+        if ($null -ne $lease) { Assert-ForegroundInputLease $process }
+        $actual = Read-NativeEditText $handle
+        if ($null -ne $actual -and $actual -ceq $expected) {
+            $script:Diagnostics.Add("input readback matched length=$($actual.Length)")
+            return $true
+        }
+        Start-Sleep -Milliseconds $KeyboardReceiverPollMS
+    } while ($clock.ElapsedMilliseconds -lt $KeyboardReceiverTimeoutMS)
+    $script:Diagnostics.Add("input readback unavailable_or_mismatch expected_length=$($expected.Length)")
+    return $false
+}
+
 function New-InputTarget($process, $element) {
     if ($null -ne $element) {
-        [void](Assert-KeyboardControl $process $element)
-        return [pscustomobject]@{ pid = $process.Id; window_handle = [long]$process.MainWindowHandle;
-            element = $operation.element; scope = "element" }
+        Assert-ElementWindow $process $element
+        if (-not $element.Current.IsEnabled) { throw "[input.unsupported] The requested input target is disabled" }
+        $textPattern = Get-CurrentPatternOrNull $element ([Windows.Automation.TextPattern]::Pattern)
+        $valuePattern = Get-CurrentPatternOrNull $element ([Windows.Automation.ValuePattern]::Pattern)
+        if ($element.Current.NativeWindowHandle -ne 0 -and ($null -ne $textPattern -or $null -ne $valuePattern)) {
+            [void](Assert-KeyboardControl $process $element)
+            return [pscustomobject]@{ pid = $process.Id; window_handle = [long]$process.MainWindowHandle;
+                element = $operation.element; scope = "element" }
+        }
     }
-    if ($operation.tool -ne "set_input_target" -or $null -eq $operation.x -or $null -eq $operation.y) {
+    if ($null -eq $element -and ($operation.tool -ne "set_input_target" -or $null -eq $operation.x -or $null -eq $operation.y)) {
         throw "[input.target_required] Provide an editable element or bind a screenshot position with set_input_target"
     }
-    $point = Get-ClickPoint $process $operation $null
+    $point = Resolve-PointerPoint $process $operation $element "input"
     $window = [IntPtr]$process.MainWindowHandle
-    [void][OCUWin32]::SetForegroundWindow($window)
     $clock = [Diagnostics.Stopwatch]::StartNew()
-    while ([OCUWin32]::GetForegroundWindow() -ne $window -and $clock.ElapsedMilliseconds -lt $KeyboardReceiverTimeoutMS) {
-        Start-Sleep -Milliseconds $KeyboardReceiverPollMS
-    }
     Assert-ObservedWindow $process $operation
-    if ([OCUWin32]::GetForegroundWindow() -ne $window) {
-        throw "[input.receiver_unconfirmed] The target window could not be activated"
-    }
-    $screenPoint = New-Object OCUWin32+POINT
-    $screenPoint.X = $point.x
-    $screenPoint.Y = $point.y
-    $pointerHandle = [OCUWin32]::WindowFromPoint($screenPoint)
+    $pointerHandle = Get-WindowPointerHandle $window $point.x $point.y
     [uint32]$pointerOwner = 0
     [void][OCUWin32]::GetWindowThreadProcessId($pointerHandle, [ref]$pointerOwner)
     if ($pointerOwner -ne $process.Id -or
@@ -880,10 +1152,10 @@ function New-InputTarget($process, $element) {
         Start-Sleep -Milliseconds $KeyboardReceiverPollMS
         $handle = Get-WindowKeyboardHandle $process
     } while ($handle -eq [IntPtr]::Zero -and $clock.ElapsedMilliseconds -lt $KeyboardReceiverTimeoutMS)
-    if ($handle -eq [IntPtr]::Zero) { throw "[input.receiver_unconfirmed] No native keyboard receiver in the target window" }
+    if ($handle -eq [IntPtr]::Zero) { $handle = [IntPtr]::Zero }
     $script:Diagnostics.Add("input scope=window window=$window keyboard_handle=$handle editable_receiver=unobservable")
-    return [pscustomobject]@{ pid = $process.Id; window_handle = [long]$window; element = $null;
-        scope = "window"; keyboard_handle = [long]$handle; bounds = $operation.windowBounds }
+    return [pscustomobject]@{ pid = $process.Id; window_handle = [long]$window; element = $operation.element;
+        scope = "window"; keyboard_handle = [long]$handle; point_x = $point.x; point_y = $point.y; bounds = $operation.windowBounds }
 }
 
 function Assert-ObservedWindow($process, $request) {
@@ -898,16 +1170,16 @@ function Assert-ObservedWindow($process, $request) {
     }
 }
 
-function Get-ClickPoint($process, $request, $element) {
+function Resolve-PointerPoint($process, $request, $element, [string]$action) {
     Assert-ObservedWindow $process $request
     $bounds = $request.windowBounds
     if ($null -ne $request.element) {
         Assert-ElementWindow $process $element
         $rect = $element.Current.BoundingRectangle
         $saved = $request.element.frame
-        if ($null -eq $saved -or $rect.IsEmpty -or $rect.Width -le 0 -or $rect.Height -le 0 -or $element.Current.IsOffscreen -or
-            ($rect.X - $bounds.x) -ne $saved.x -or ($rect.Y - $bounds.y) -ne $saved.y -or $rect.Width -ne $saved.width -or $rect.Height -ne $saved.height) {
-            throw "[observation.stale] The requested element has no unchanged visible pointer location"
+        $script:Diagnostics.Add("pointer geometry observed=$($saved | ConvertTo-Json -Compress) current=$rect")
+        if ($rect.IsEmpty -or $rect.Width -le 0 -or $rect.Height -le 0 -or $element.Current.IsOffscreen) {
+            throw "[$action.position_unavailable] The identified control has no usable current position inside this window"
         }
         $x = $rect.X + $rect.Width / 2
         $y = $rect.Y + $rect.Height / 2
@@ -917,34 +1189,66 @@ function Get-ClickPoint($process, $request, $element) {
     }
     if ([double]::IsNaN($x) -or [double]::IsInfinity($x) -or [double]::IsNaN($y) -or [double]::IsInfinity($y) -or
         $x -lt $bounds.x -or $x -ge ($bounds.x + $bounds.width) -or $y -lt $bounds.y -or $y -ge ($bounds.y + $bounds.height)) {
-        throw "[click.target_invalid] The pointer location is outside the observed window"
+        throw "[$action.target_invalid] The pointer location is outside the observed window"
     }
     return [pscustomobject]@{ x = [int][math]::Round($x); y = [int][math]::Round($y) }
 }
 
 function Invoke-TypeText($process, $element, [string]$text, [bool]$replace = $false) {
-    $handle = Get-InputHandle $process $element
-    if ($replace -and $script:InputTarget.scope -eq "window") {
-        throw "[input.unsupported] Whole replacement requires the native edit protocol on Windows; use type_text at the explicitly selected position"
-    }
-    $script:Diagnostics.Add("input target_pid=$($process.Id) scope=$($script:InputTarget.scope) hwnd=$handle replace=$replace submitted_length=$($text.Length) method=targeted_keyboard")
-    $script:InputResult = @{ delivery = "unknown"; verification = "unconfirmed" }
+    $capability = $null
+    $lease = $null
+    $script:InputResult = @{ delivery = "not_sent"; verification = "unconfirmed"; reason = "input_setup_failed" }
+    $deliveryStarted = $false
     try {
+        $capability = Get-InputCapability $process $element
+        $handle = $capability.handle
+        $lease = $capability.lease
+        $script:InputResult.input_mode = $capability.mode
+        $script:Diagnostics.Add("input target_pid=$($process.Id) scope=$($script:InputTarget.scope) hwnd=$handle replace=$replace submitted_length=$($text.Length) mode=$($capability.mode)")
+        if ($replace) { Assert-ReplacementProtocol $handle }
         if ($replace) {
             # Native edit protocol selects all independently of UIA's document proxy.
             [void][OCUWin32]::SendMessage($handle, $EM_SETSEL, [IntPtr]::Zero, [IntPtr](-1))
+            [uint32]$selectionStart = 0
+            [uint32]$selectionEnd = 0
+            # EM_GETSEL uses pointer outputs to avoid its 16-bit packed return limit.
+            [void][OCUWin32]::ReadEditSelection($handle, 0x00B0, [ref]$selectionStart, [ref]$selectionEnd)
+            $length = [OCUWin32]::SendMessage($handle, 0x000E, [IntPtr]::Zero, [IntPtr]::Zero).ToInt64()
+            $script:Diagnostics.Add("input replacement length=$length selection_start=$selectionStart selection_end=$selectionEnd")
+            if ($selectionStart -ne 0 -or $selectionEnd -ne $length) {
+                throw "[input.selection_unconfirmed] Native Select All was not confirmed. No replacement text was sent. Do not retry by inserting text."
+            }
         }
         [void](Get-InputHandle $process $element)
+        if ($null -ne $lease) { Assert-ForegroundInputLease $process }
+        $deliveryStarted = $true
         if ($replace -and $text.Length -eq 0) {
-            Send-Key $handle "BackSpace"
+            if ($null -ne $lease) { Send-ForegroundKey "BackSpace" } else { Send-Key $handle "BackSpace" }
         } elseif ($text.Length -gt 0) {
-            Send-Text $handle $text { [void](Get-InputHandle $process $element) }
+            if ($null -ne $lease) {
+                Send-ForegroundText $text { Assert-ForegroundInputLease $process; [void](Get-InputHandle $process $element) }
+            } else {
+                Send-Text $handle $text { [void](Get-InputHandle $process $element) }
+            }
         }
+        $verification = if ($replace -and (Confirm-NativeEditValue $handle $text $process $lease)) { "value_verified" } else { "unconfirmed" }
     } catch {
         $script:InputTarget = $null
-        throw "[input.delivery_interrupted] Keyboard delivery may be partial; observe before any further action."
+        if (-not $deliveryStarted -or $_.Exception.Message.StartsWith("[input.selection_unconfirmed]")) {
+            $inputMode = if ($null -ne $capability) { $capability.mode } else { $script:InputResult.input_mode }
+            $reason = if ($replace -and $_.Exception.Message.StartsWith("[input.selection_unconfirmed]")) { "replacement_precondition_failed" } else { "input_setup_failed" }
+            $script:InputResult = @{ delivery = "not_sent"; verification = "unconfirmed"; reason = $reason }
+            if (-not [string]::IsNullOrWhiteSpace($inputMode)) { $script:InputResult.input_mode = $inputMode }
+            throw
+        }
+        $script:InputResult = @{ delivery = "unknown"; verification = "unconfirmed"; reason = "dispatch_interrupted" }
+        if ($null -ne $capability) { $script:InputResult.input_mode = $capability.mode }
+        throw "[input.delivery_interrupted] Keyboard delivery may be partial; observe before any further action. Cause: $($_.Exception.Message)"
+    } finally {
+        Exit-ForegroundInputLease $lease
     }
-    $script:InputResult = @{ delivery = "posted"; verification = "unconfirmed"; reason = "keyboard_consumption_unobservable"; target_scope = $script:InputTarget.scope }
+    $reason = if ($verification -eq "value_verified") { "value_readback_matched" } else { "keyboard_consumption_unobservable" }
+    $script:InputResult = @{ delivery = "posted"; verification = $verification; reason = $reason; target_scope = $script:InputTarget.scope; input_mode = $capability.mode }
 }
 
 # Chinese text passed to set_value/type_text.
@@ -978,6 +1282,7 @@ try {
             }
         } else {
             $element = Find-Element $process $operation.element
+            if ($null -ne $element) { Assert-ElementWindow $process $element }
         }
 
         switch ($operation.tool) {
@@ -995,8 +1300,8 @@ try {
                 }
                 if (-not $handled) {
                     if ($clickMethod -eq "accessibility") { throw "[click.unsupported] The requested element does not support this click" }
-                    $point = Get-ClickPoint $process $operation $element
-                    $receiver = $hwnd
+                    $point = Resolve-PointerPoint $process $operation $element "click"
+                    $receiver = Get-WindowPointerHandle $hwnd $point.x $point.y
                     if ($null -ne $element -and $element.Current.NativeWindowHandle -ne 0) { $receiver = [IntPtr]$element.Current.NativeWindowHandle }
                     $script:Diagnostics.Add("click dispatch=window_messages hwnd=$receiver screen_x=$($point.x) screen_y=$($point.y)")
                     Send-MouseClick $receiver $point.x $point.y $operation.mouse_button ([int]$operation.click_count)
@@ -1013,8 +1318,10 @@ try {
                 if ($null -ne $element) {
                     $handled = Invoke-Scroll $element $operation.direction ([double]$operation.pages)
                 }
-                if (-not $handled) {
-                    $point = Get-ScreenPoint $operation.element.frame $windowBounds
+                if ($handled) {
+                    $script:Diagnostics.Add("scroll dispatch=UIA requested_element_only")
+                } else {
+                    $point = Resolve-PointerPoint $process $operation $element "scroll"
                     Send-Scroll $hwnd $point.x $point.y $operation.direction ([double]$operation.pages)
                 }
             }
@@ -1030,12 +1337,31 @@ try {
             }
             "press_key" {
                 if (([string]$operation.key).Contains("+")) {
-                    throw "[input.background_unsupported] Window messages cannot establish independent modifier-key state; use a semantic action"
+                    throw "[input.unsupported] Modifier chords are not supported by the Windows input contract"
                 }
-                $receiver = Get-InputHandle $process $element
-                $script:InputResult = @{ delivery = "unknown"; verification = "unconfirmed"; reason = "key_consumption_unobservable" }
-                Send-Key $receiver $operation.key
-                $script:InputResult.delivery = "posted"
+                $capability = $null
+                $script:InputResult = @{ delivery = "not_sent"; verification = "unconfirmed"; reason = "input_setup_failed" }
+                try {
+                    $capability = Get-InputCapability $process $element
+                    $script:InputResult.input_mode = $capability.mode
+                    $script:InputResult.delivery = "unknown"
+                    $script:InputResult.reason = "dispatch_started"
+                    if ($null -ne $capability.lease) {
+                        Assert-ForegroundInputLease $process
+                        Send-ForegroundKey $operation.key
+                    } else {
+                        Send-Key $capability.handle $operation.key
+                    }
+                    $script:InputResult.delivery = "posted"
+                    $script:InputResult.reason = "key_consumption_unobservable"
+                } catch {
+                    if ($script:InputResult.delivery -eq "unknown") {
+                        $script:InputResult.reason = "dispatch_interrupted"
+                    }
+                    throw
+                } finally {
+                    if ($null -ne $capability) { Exit-ForegroundInputLease $capability.lease }
+                }
             }
             "set_value" {
                 Invoke-TypeText $process $element ([string]$operation.value) $true
@@ -1046,9 +1372,16 @@ try {
         }
 
         Start-Sleep -Milliseconds 120
-        $response = [pscustomobject]@{ ok = $true; snapshot = (Build-Snapshot $operation.app) }
+        try {
+            $response = [pscustomobject]@{ ok = $true; snapshot = (Build-Snapshot $operation.app) }
+        } catch {
+            throw "[observation.after_action] The action was dispatched, but the updated window could not be read. Check the window before further action; do not replay automatically. Cause: $($_.Exception.Message)"
+        }
     }
 } catch {
+    if ($operation.tool -in @("set_input_target", "type_text", "set_value", "press_key")) {
+        $script:InputTarget = $null
+    }
     $message = $_.Exception.Message
     if (-not [string]::IsNullOrWhiteSpace($_.ScriptStackTrace)) {
         $message = "$message at $($_.ScriptStackTrace)"

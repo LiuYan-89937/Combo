@@ -1,6 +1,9 @@
 package main
 
 import (
+    "bytes"
+    "encoding/base64"
+    "image/png"
 	"context"
 	_ "embed"
 	"encoding/json"
@@ -19,12 +22,12 @@ import (
 
 var version = "0.3.3"
 
-var clickMethodValues = []string{"auto", "accessibility", "app_post", "sky_click", "global"}
+var clickMethodValues = []string{"auto", "accessibility", "app_post"}
 
 //go:embed runtime.ps1
 var windowsRuntimeScript string
 
-const serverInstructions = "Computer Use tools operate Windows apps through observations and actions. Begin with get_app_state. Every action consumes the latest observation_id, even on failure; use the next returned observation before acting again. Coordinates are screenshot pixels. Prefer the exact observed element; clicks do not substitute other controls. set_input_target binds either an editable element_index or explicit x/y in the latest screenshot. Use x/y for an editor with no UIA node. Coordinate binding activates and clicks the target window, then records its native keyboard handle without claiming an editable control. Inspect the screenshot before typing; rebind after focus/window or pointer changes. type_text inserts at the receiver's actual selection. set_value selects all via the native edit protocol and then sends text, or Backspace for an empty value. Element-scope text uses directed messages to a native Edit/RichEdit HWND verified by PID and Runtime ID. Window-scope text targets the recorded native keyboard handle verified against the focused target window and PID; no UIA editor is required. UIA text is not used to assign text or determine input success. Unsupported handles and modifier chords are rejected, without global input or clipboard fallback. Whole replacement is unavailable for opaque window-scope targets on Windows; use type_text at an explicitly selected position. Posted events return verification=unconfirmed and a fresh observation. Inspect the effect; this status alone is not a failure and must not trigger replay. Interrupted input may be partial. Observe before any further action. Ask the user before destructive or externally visible actions when not already authorized."
+const serverInstructions = "Computer Use tools operate Windows apps through observations and actions. Begin with get_app_state. Every action consumes the latest observation_id, even on failure; use the next returned observation before acting again. Coordinates are screenshot pixels. Prefer the exact observed element; clicks do not substitute other controls. Use scroll for moving through a page, list, conversation, document, or other content. Target an observed scrollable element when available; otherwise provide x/y inside the intended scroll region and the executor sends a window-targeted wheel message without holding a mouse button. Never use drag to imitate ordinary scrolling. Use drag only when the task explicitly requires holding the primary mouse button to move an object, handle, slider, selection, or other draggable control. set_input_target binds either an editable element_index or explicit x/y in the latest screenshot. The local executor uses directed background messages when the native receiver is available. If an inactive application has no confirmed receiver, it automatically obtains a short foreground focus lease, restores the same bound element or position, sends one input transaction through the system keyboard queue, and restores the previous foreground window. The model must not use Raise, repeated clicks, or repeated text to prepare or retry input. set_value requires a native Edit/RichEdit receiver, selects all through its native protocol, and confirms the full range before sending text or Backspace. Other receivers reject replacement before input; type_text is insertion only. Modifier chords remain unsupported. Foreground ownership changes abort delivery. Posted or interrupted input is never permission to replay. Inspect the fresh observation before further external action."
 
 type toolDefinition struct {
 	Name        string         `json:"name"`
@@ -113,6 +116,11 @@ func (s *appSnapshot) renderedText() string {
         fmt.Sprintf("Observation: %s. Use this observation_id for the next action.", s.ObservationID),
 		fmt.Sprintf("Window: %q, App: %s.", title, s.App.Name),
 	}
+    if width, height, err := s.screenshotSize(); err == nil {
+        lines = append(lines, fmt.Sprintf("Screenshot: %dx%d pixels. Origin is top-left; x increases right, y increases down. Valid coordinates: 0 <= x < %d, 0 <= y < %d. Use screenshot pixels, not desktop or window dimensions.", width, height, width, height))
+    } else {
+        lines = append(lines, "Screenshot unavailable. Do not infer coordinates from an older image; refresh the observation or use an exposed element.")
+    }
 	lines = append(lines, s.TreeLines...)
 	if strings.TrimSpace(s.SelectedText) != "" {
 		lines = append(lines, "", fmt.Sprintf("Selected text: [%s]", s.SelectedText))
@@ -120,6 +128,24 @@ func (s *appSnapshot) renderedText() string {
 		lines = append(lines, "", fmt.Sprintf("The focused UI element is %s.", s.FocusedSummary))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (s *appSnapshot) screenshotSize() (int, int, error) {
+    data, err := base64.StdEncoding.DecodeString(s.ScreenshotPNGBase64)
+    if err != nil { return 0, 0, err }
+    config, err := png.DecodeConfig(bytes.NewReader(data))
+    if err != nil { return 0, 0, err }
+    return config.Width, config.Height, nil
+}
+
+func (s *appSnapshot) validateScreenshotPoint(x, y *float64) error {
+    width, height, err := s.screenshotSize()
+    if err != nil { return fmt.Errorf("[observation.unavailable] Coordinate actions require the current screenshot") }
+    if x == nil || y == nil { return fmt.Errorf("[coordinates.out_of_bounds] Both x and y are required") }
+    if math.IsNaN(*x) || math.IsInf(*x, 0) || math.IsNaN(*y) || math.IsInf(*y, 0) || *x < 0 || *y < 0 || *x >= float64(width) || *y >= float64(height) {
+        return fmt.Errorf("[coordinates.out_of_bounds] Received (%g, %g); screenshot %dx%d, valid range 0 <= x < %d, 0 <= y < %d", *x, *y, width, height, width, height)
+    }
+    return nil
 }
 
 func (s *appSnapshot) result() toolCallResult {
@@ -143,6 +169,8 @@ type inputTarget struct {
     PID int `json:"pid"`
     WindowHandle int64 `json:"window_handle"`
     Element *elementRecord `json:"element"`
+    PointX int `json:"point_x,omitempty"`
+    PointY int `json:"point_y,omitempty"`
 }
 
 type psRequest struct {
@@ -212,6 +240,13 @@ func (s *service) callTool(name string, args map[string]any) toolCallResult {
         if snapshot == nil || requiredString(args, "observation_id") == "" || snapshot.ObservationID != requiredString(args, "observation_id") {
             return textResult("[observation.stale] Run get_app_state and use the latest observation_id before acting.", true)
         }
+        defer s.retireObservation(snapshot.ObservationID)
+        if name == "click" || name == "scroll" || name == "drag" || name == "perform_secondary_action" {
+            if saved := s.inputTargets[snapshot.App.PID]; saved != nil && saved.Scope == "window" {
+                delete(s.inputTargets, snapshot.App.PID)
+            }
+        }
+        break
     }
     switch name {
 	case "list_apps":
@@ -254,7 +289,9 @@ func (s *service) callTool(name string, args map[string]any) toolCallResult {
 		return s.scroll(
 			requiredString(args, "app"),
 			requiredString(args, "direction"),
-			requiredElementIndex(args),
+			optionalElementIndex(args),
+			optionalFloat(args, "x"),
+			optionalFloat(args, "y"),
 			floatValue(optionalFloat(args, "pages"), 1),
 		)
 	case "drag":
@@ -386,29 +423,35 @@ func (s *service) performSecondaryAction(app, elementIndex, action string) toolC
 	return s.actionResult(app, psRequest{Tool: "perform_secondary_action", App: app, Element: record, Action: action})
 }
 
-func (s *service) scroll(app, direction, elementIndex string, pages float64) toolCallResult {
+func (s *service) scroll(app, direction, elementIndex string, x, y *float64, pages float64) toolCallResult {
 	if app == "" {
 		return textResult("Missing required argument: app", true)
-	}
-	if elementIndex == "" {
-		return textResult("Missing required argument: element_index", true)
 	}
 	normalized := strings.ToLower(direction)
 	if normalized != "up" && normalized != "down" && normalized != "left" && normalized != "right" {
 		return textResult("Invalid scroll direction: "+direction, true)
 	}
-	if pages <= 0 {
+	if math.IsNaN(pages) || math.IsInf(pages, 0) || pages <= 0 {
 		return textResult("pages must be > 0", true)
 	}
 	snapshot := s.currentSnapshot(app)
 	if snapshot == nil {
 		return textResult("No app state is available for "+app+". Run get_app_state before action tools.", true)
 	}
-	record, err := lookupElement(snapshot, elementIndex)
-	if err != nil {
-		return textResult(err.Error(), true)
+	hasElement := elementIndex != ""
+	hasPoint := x != nil || y != nil
+	if hasElement == hasPoint || (hasPoint && (x == nil || y == nil)) {
+		return textResult("scroll requires exactly one target: element_index or both screenshot coordinates x and y", true)
 	}
-	return s.actionResult(app, psRequest{Tool: "scroll", App: app, Element: record, Direction: normalized, Pages: pages})
+	request := psRequest{Tool: "scroll", App: app, X: x, Y: y, Direction: normalized, Pages: pages}
+	if hasElement {
+		record, err := lookupElement(snapshot, elementIndex)
+		if err != nil {
+			return textResult(err.Error(), true)
+		}
+		request.Element = record
+	}
+	return s.actionResult(app, request)
 }
 
 func (s *service) drag(app string, fromX, fromY, toX, toY *float64) toolCallResult {
@@ -487,8 +530,13 @@ func (s *service) setValue(app, elementIndex, value string) toolCallResult {
 func (s *service) actionResult(app string, request psRequest) toolCallResult {
     observed := s.currentSnapshot(app)
     if observed == nil { return textResult("[observation.required] Run get_app_state before acting.", true) }
-    if request.Tool == "click" || request.Tool == "scroll" || request.Tool == "drag" || request.Tool == "perform_secondary_action" {
-        if saved := s.inputTargets[observed.App.PID]; saved != nil && saved.Scope == "window" { delete(s.inputTargets, observed.App.PID) }
+	var points [][2]*float64
+	if request.Tool == "drag" { points = append(points, [2]*float64{request.FromX, request.FromY}, [2]*float64{request.ToX, request.ToY}) }
+	if (request.Tool == "click" || request.Tool == "scroll" || request.Tool == "set_input_target") && request.Element == nil {
+        points = append(points, [2]*float64{request.X, request.Y})
+    }
+    for _, point := range points {
+        if err := observed.validateScreenshotPoint(point[0], point[1]); err != nil { return textResult(err.Error(), true) }
     }
     if request.Tool == "set_input_target" { delete(s.inputTargets, observed.App.PID) }
     if request.Tool == "type_text" || request.Tool == "press_key" || request.Tool == "set_value" {
@@ -507,15 +555,11 @@ func (s *service) actionResult(app string, request psRequest) toolCallResult {
     request.ObservationID = observed.ObservationID
     request.WindowHandle = observed.WindowHandle
     request.WindowBounds = observed.WindowBounds
-    // Failed/partial delivery must not leave the old target map available for replay.
-    for key, cached := range s.snapshots {
-        if cached.ObservationID == observed.ObservationID { delete(s.snapshots, key) }
-    }
     snapshot, result := s.refreshSnapshot(app, request)
     if result.IsError { return result }
     state := snapshot.result()
     if request.Tool == "set_input_target" {
-        state.Content = append(state.Content, contentItem{Type: "text", Text: "CU target bound. Coordinate binding activates and clicks the observed window; inspect the screenshot to confirm the input position. Window scope does not prove an editable control. Rebind after focus or pointer changes."})
+        state.Content = append(state.Content, contentItem{Type: "text", Text: "CU target bound. Coordinate binding sends a message click to the observed window; inspect the screenshot to confirm the input position. Window scope does not prove an editable control. Rebind after focus or pointer changes."})
     }
     if request.Tool == "press_key" {
         state.Content = append(state.Content, contentItem{Type: "text", Text: "Key events posted to the bound control; consumption is unconfirmed. Observe the effect."})
@@ -532,13 +576,28 @@ func (s *service) currentSnapshot(app string) *appSnapshot {
 	return s.snapshots[strings.ToLower(app)]
 }
 
+func (s *service) retireObservation(observationID string) {
+    for key, cached := range s.snapshots {
+        if cached.ObservationID == observationID { delete(s.snapshots, key) }
+    }
+}
+
 func (s *service) refreshSnapshot(app string, request psRequest) (*appSnapshot, toolCallResult) {
+    // A native input call must explicitly return a surviving binding. Transport
+    // failures and rejected targets cannot leave a previous receiver cached.
+    inputCall := request.Tool == "set_input_target" || request.Tool == "type_text" || request.Tool == "set_value" || request.Tool == "press_key"
+    if inputCall { delete(s.inputTargets, request.TargetPID) }
 	response, err := runPowerShell(request)
 	if err != nil {
-		return nil, textResult(err.Error(), true)
+        failure := textResult(err.Error(), true)
+        if inputCall {
+            failure.InputResult = map[string]string{"delivery": "unknown", "verification": "unconfirmed", "reason": "native_transport_failed"}
+            failure.Content = append(failure.Content, contentItem{Type: "text", Text: "Native input outcome is unknown and the binding has been cleared. Observe and rebind before further input; do not automatically replay."})
+        }
+        return nil, failure
 	}
     // Editing state is private to this native session, including on verification/snapshot failure.
-    if response.InputTarget != nil && response.InputTarget.PID == request.TargetPID &&
+    if inputCall && response.InputTarget != nil && response.InputTarget.PID == request.TargetPID &&
         response.InputTarget.WindowHandle == request.WindowHandle {
         s.inputTargets[response.InputTarget.PID] = response.InputTarget
     }
@@ -809,19 +868,19 @@ func toolDefinitions() []toolDefinition {
 			Name:        "click",
 			Description: "Click an element by index or pixel coordinates from screenshot. This tool is part of plugin `Computer Use`.",
 			Annotations: defaultAnnotations(),
-			InputSchema: objectSchema(map[string]any{
+			InputSchema: elementOrPointObjectSchema(map[string]any{
 				"app":           stringProperty("App name or bundle identifier"),
 				"element_index": stringProperty("Element index to click"),
 				"x":             numberProperty("X coordinate in screenshot pixel coordinates"),
 				"y":             numberProperty("Y coordinate in screenshot pixel coordinates"),
 				"click_count":   integerProperty("Number of clicks. Defaults to 1"),
 				"mouse_button":  enumStringProperty("Mouse button to click. Defaults to left.", []string{"left", "right", "middle"}),
-				"click_method":  enumStringProperty("Click implementation: auto (default), accessibility, app_post, sky_click, or global. Accessibility requires element_index. Windows supports app_post through HWND messages and does not currently support sky_click or global.", clickMethodValues),
+				"click_method":  enumStringProperty("Click implementation: auto (default), accessibility, or app_post through HWND messages. Accessibility requires element_index.", clickMethodValues),
 			}, []string{"app"}),
 		},
 		{
 			Name:        "drag",
-			Description: "Drag from one point to another using pixel coordinates. This tool is part of plugin `Computer Use`.",
+			Description: "Press and hold the primary mouse button while moving an object, handle, slider, or other explicitly draggable control between screenshot coordinates. Never use drag to scroll a page, list, conversation, document, or other content; use scroll with x/y when no accessibility element is exposed. This tool is part of plugin `Computer Use`.",
 			Annotations: defaultAnnotations(),
 			InputSchema: objectSchema(map[string]any{
 				"app":    stringProperty("App name or bundle identifier"),
@@ -858,9 +917,9 @@ func toolDefinitions() []toolDefinition {
 				"action":        stringProperty("Secondary accessibility action name"),
 			}, []string{"app", "element_index", "action"}),
 		},
-		{
-			Name:        "press_key",
-			Description: "Post an unmodified key to the exact native handle of the CU target, without system focus or activation. Modifier chords are unsupported. Delivery does not prove consumption; observe the returned state.",
+			{
+				Name:        "press_key",
+				Description: "Post an unmodified key to the bound receiver. The executor uses directed background delivery when confirmed and otherwise obtains and restores a short foreground focus lease. Modifier chords are unsupported. Delivery does not prove consumption; observe the returned state.",
 			Annotations: defaultAnnotations(),
 			InputSchema: objectSchema(map[string]any{
 				"app": stringProperty("App name or bundle identifier"),
@@ -870,18 +929,20 @@ func toolDefinitions() []toolDefinition {
 		},
 		{
 			Name:        "scroll",
-			Description: "Scroll an element in a direction by a number of pages. This tool is part of plugin `Computer Use`.",
+			Description: "Scroll page, list, conversation, document, or other content without pressing a mouse button. Target either an observed element_index or x/y inside the intended scroll region when accessibility does not expose one. Never emulate ordinary scrolling with drag. This tool is part of plugin `Computer Use`.",
 			Annotations: defaultAnnotations(),
-			InputSchema: objectSchema(map[string]any{
+			InputSchema: elementOrPointObjectSchema(map[string]any{
 				"app":           stringProperty("App name or bundle identifier"),
 				"direction":     stringProperty("Scroll direction: up, down, left, or right"),
-				"element_index": stringProperty("Element identifier"),
+				"element_index": stringProperty("Observed scroll target; provide this or x/y"),
+				"x":             numberProperty("X coordinate inside the intended scroll region in screenshot pixels; provide with y instead of element_index"),
+				"y":             numberProperty("Y coordinate inside the intended scroll region in screenshot pixels; provide with x instead of element_index"),
 				"pages":         numberProperty("Number of pages to scroll. Fractional values are supported. Defaults to 1"),
-			}, []string{"app", "element_index", "direction"}),
+			}, []string{"app", "direction"}),
 		},
 		{
 			Name:        "set_value",
-			Description: "Replace a bound native editable control using Select All and directed character messages. Opaque window-scope targets do not support replacement; use type_text at an explicitly selected position. Inspect the returned state.",
+			Description: "Replace through a native Edit/RichEdit receiver after confirming the complete selection. The executor chooses directed background delivery or a short foreground lease and restores the previous window. Never prepare or retry with Raise, click, or type_text.",
 			Annotations: defaultAnnotations(),
 			InputSchema: objectSchema(map[string]any{
 				"app":           stringProperty("App name or bundle identifier"),
@@ -891,9 +952,9 @@ func toolDefinitions() []toolDefinition {
 		},
         {
             Name: "set_input_target",
-            Description: "Bind either element_index or x/y in the latest screenshot. Coordinate binding activates and clicks the window, then records its native keyboard handle without requiring a UIA editor. Choose exactly one targeting form. Inspect the result before typing.",
+            Description: "Bind either element_index or x/y in the latest screenshot. The executor retains this identity and automatically reestablishes it inside a short foreground lease when background focus is unavailable. Choose exactly one targeting form.",
             Annotations: defaultAnnotations(),
-            InputSchema: objectSchema(map[string]any{
+            InputSchema: elementOrPointObjectSchema(map[string]any{
                 "app": stringProperty("Application"),
                 "element_index": stringProperty("Observed editable target"),
                 "x": numberProperty("Input position x in screenshot pixels; provide with y"),
@@ -902,12 +963,12 @@ func toolDefinitions() []toolDefinition {
         },
 		{
 			Name:        "type_text",
-			Description: "Send directed keyboard input to a bound native editable control. set_value selects all before replacement; type_text uses the current selection. Inspect the resulting observation.",
+			Description: "Insert text at the bound receiver's current selection. The executor chooses directed background delivery or a short foreground lease and restores the previous window. This preserves existing text; never use it to retry a replacement.",
 			Annotations: defaultAnnotations(),
 			InputSchema: objectSchema(map[string]any{
 				"app":  stringProperty("App name or bundle identifier"),
 				"text": stringProperty("Literal text to type"),
-                "element_index": stringProperty("Optional editable target; otherwise use the CU-bound target, never system focus"),
+					"element_index": stringProperty("Optional editable target; otherwise use the CU-bound target"),
 			}, []string{"app", "text"}),
 		},
 	}
@@ -931,6 +992,15 @@ func objectSchema(properties map[string]any, required []string) map[string]any {
 	}
 	if len(required) > 0 {
 		schema["required"] = required
+	}
+	return schema
+}
+
+func elementOrPointObjectSchema(properties map[string]any, required []string) map[string]any {
+	schema := objectSchema(properties, required)
+	schema["oneOf"] = []any{
+		map[string]any{"required": []string{"element_index"}},
+		map[string]any{"required": []string{"x", "y"}},
 	}
 	return schema
 }

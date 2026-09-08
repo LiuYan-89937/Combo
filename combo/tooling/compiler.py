@@ -42,7 +42,7 @@ class ToolCompiler:
         output_policy: ToolOutputPolicy,
         compression_model_resolver: Callable[[], Any] | None = None,
         approval_trust_store: ToolApprovalTrustResolver | None = None,
-        timeout_seconds: float,
+        timeout_seconds: float | None,
     ) -> None:
         if max_revisions < 1:
             raise ValueError("max_revisions must be positive")

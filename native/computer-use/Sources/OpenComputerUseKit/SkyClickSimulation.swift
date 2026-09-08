@@ -115,46 +115,69 @@ enum SkyClickDispatcher {
         static let handlingWindowUnderPointer: UInt32 = 92
     }
 
+    // One target window owns the entire event sequence, including synthetic focus.
+    static func withWindowTarget<T>(_ target: SkyClickTarget, spi: SkyLightSPI = .shared,
+                                    body: () throws -> T) throws -> T {
+        guard spi.capability.isAvailable else {
+            throw ComputerUseError.message("[input.background_unsupported] \(spi.capability.unavailableReason)")
+        }
+        guard dispatchLock.try() else {
+            throw ComputerUseError.message("[input.busy] Another window event sequence is still running")
+        }
+        defer { dispatchLock.unlock() }
+        try validate(target: target)
+        let context = NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid
+            ? nil : try spi.beginSyntheticTargetFocus(targetPID: target.pid, targetWindowID: target.windowID)
+        let result: T
+        do { result = try body() }
+        catch {
+            if let context { try? spi.endSyntheticTargetFocus(context) }
+            throw error
+        }
+        if let context {
+            Thread.sleep(forTimeInterval: 0.100)
+            try spi.endSyntheticTargetFocus(context)
+        }
+        return result
+    }
+
+    static func postWindowEvent(_ event: CGEvent, target: SkyClickTarget,
+                                pointer: Bool = false, spi: SkyLightSPI = .shared) throws {
+        try validate(target: target)
+        try spi.setIntegerField(event, field: EventField.targetPID, value: Int64(target.pid))
+        try spi.setIntegerField(event, field: EventField.windowNumber, value: Int64(target.windowID))
+        if pointer {
+            let local = CGPoint(x: event.location.x - target.screenPoint.x + target.windowPoint.x,
+                                y: event.location.y - target.screenPoint.y + target.windowPoint.y)
+            guard CGRect(origin: .zero, size: target.windowBounds.size).contains(local) else {
+                throw ComputerUseError.message("[click.target_invalid] Event is outside the bound window")
+            }
+            try spi.setIntegerField(event, field: EventField.windowUnderPointer, value: Int64(target.windowID))
+            try spi.setIntegerField(event, field: EventField.handlingWindowUnderPointer, value: Int64(target.windowID))
+            try spi.setWindowLocation(event, point: local)
+        }
+        // Keyboard and continuous pointer sequences use one delivery channel.
+        event.postToPid(target.pid)
+    }
+
     static func click(
         target: SkyClickTarget,
         clickCount: Int,
         spi: SkyLightSPI = .shared
     ) throws {
-        guard spi.capability.isAvailable else {
-            throw ComputerUseError.message(
-                "click_method 'sky_click' is unavailable: \(spi.capability.unavailableReason)"
-            )
-        }
+        try withWindowTarget(target, spi: spi) {
+            let recipe = try skyClickEventRecipe(clickCount: clickCount)
+            guard let source = CGEventSource(stateID: .hidSystemState) else {
+                throw ComputerUseError.message("Failed to create SkyLight HID event source.")
+            }
 
-        dispatchLock.lock()
-        defer {
-            dispatchLock.unlock()
-        }
+            // Cua uses the nanosecond component of wall-clock time here, which is
+            // always below one billion. Keep the same narrow raw-field range;
+            // WindowServer does not publish field 58's accepted width.
+            let clickGroupID = Int64(DispatchTime.now().uptimeNanoseconds % 1_000_000_000)
 
-        try validate(target: target)
-        let recipe = try skyClickEventRecipe(clickCount: clickCount)
-        guard let source = CGEventSource(stateID: .hidSystemState) else {
-            throw ComputerUseError.message("Failed to create SkyLight HID event source.")
-        }
-
-        // Cua uses the nanosecond component of wall-clock time here, which is
-        // always below one billion. Keep the same narrow raw-field range;
-        // WindowServer does not publish field 58's accepted width.
-        let clickGroupID = Int64(DispatchTime.now().uptimeNanoseconds % 1_000_000_000)
-
-        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        let focusContext: SkyLightSyntheticFocusContext?
-        if frontmostPID == target.pid {
-            focusContext = nil
-        } else {
-            focusContext = try spi.beginSyntheticTargetFocus(
-                targetPID: target.pid,
-                targetWindowID: target.windowID
-            )
-        }
-
-        do {
             for step in recipe {
+                try validate(target: target)
                 let screenPoint = step.pointKind == .target ? target.screenPoint : primerScreenPoint
                 let windowPoint = step.pointKind == .target ? target.windowPoint : primerWindowPoint
                 guard let event = CGEvent(
@@ -177,6 +200,7 @@ enum SkyClickDispatcher {
                     clickGroupID: clickGroupID,
                     spi: spi
                 )
+                event.flags = []
 
                 // The current Cua Driver Chromium recipe deliberately posts through
                 // both channels: SkyLight reaches Chromium/Catalyst while the public
@@ -189,19 +213,6 @@ enum SkyClickDispatcher {
                     Thread.sleep(forTimeInterval: step.delayAfter)
                 }
             }
-        } catch {
-            if let focusContext {
-                try? spi.endSyntheticTargetFocus(focusContext)
-            }
-            throw error
-        }
-
-        if let focusContext {
-            // SkyLight delivery is asynchronous. Keep the target's AppKit
-            // synthetic active state long enough for Chromium's renderer hop
-            // to consume the final mouse-up before deactivating only the target.
-            Thread.sleep(forTimeInterval: 0.100)
-            try spi.endSyntheticTargetFocus(focusContext)
         }
     }
 
@@ -234,6 +245,11 @@ enum SkyClickDispatcher {
             throw ComputerUseError.stateUnavailable(
                 "sky_click target window is stale, off-screen, or no longer owned by the target app. Run get_app_state again."
             )
+        }
+        guard let info = windowInfo.first(where: { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == target.windowID }),
+              let bounds = info[kCGWindowBounds as String] as? NSDictionary,
+              CGRect(dictionaryRepresentation: bounds) == target.windowBounds else {
+            throw ComputerUseError.message("[observation.stale] The bound window geometry changed")
         }
     }
 

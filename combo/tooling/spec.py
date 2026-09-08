@@ -203,6 +203,7 @@ class ToolSpec(BaseModel):
     output_compression: ToolOutputCompressionConfig = Field(default_factory=ToolOutputCompressionConfig)
     output_projection: ToolOutputProjectionMode = "compress"
     execution_mode: ToolExecutionMode = "managed"
+    timeout_seconds: float | None = Field(default=300.0, gt=0)
     loop_policy: ToolLoopPolicyConfig = Field(default_factory=ToolLoopPolicyConfig)
     sensitive_argument_paths: list[str] = Field(default_factory=list)
     effects: list[ToolEffect]

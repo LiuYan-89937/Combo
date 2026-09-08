@@ -61,6 +61,7 @@ def get_computer_use_tool_specs() -> list[ToolSpec]:
             resources={"computer_use_runtime": COMPUTER_USE_RUNTIME_RESOURCE},
             risk_level="high",
             concurrent=False,
+            timeout_seconds=None,
             max_parallel_calls=1,
             output_projection="passthrough",
             effects=["external_side_effect"],

@@ -260,6 +260,6 @@ function operationView(value: unknown): ComputerUseOperationView | null {
     elementIndex: optionalText(item.element_index), x: optionalNumber(item.x), y: optionalNumber(item.y),
     textLength: optionalNumber(item.text_length), key: optionalText(item.key), action: optionalText(item.action),
     errorCode: optionalText(item.error_code), valueVerified: item.value_verified === true,
-    inputVerification: optionalText(item.input_verification),
+    inputVerification: optionalText(item.input_verification), inputMode: optionalText(item.input_mode),
   }
 }

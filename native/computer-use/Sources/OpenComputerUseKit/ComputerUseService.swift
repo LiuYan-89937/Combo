@@ -1,19 +1,32 @@
 import AppKit
 import ApplicationServices
 import Foundation
-import ImageIO
 
 struct VisualCursorTarget: Equatable {
     let point: CGPoint
     let window: CursorTargetWindow?
 }
 
+private enum ScrollTarget {
+    case element(String)
+    case screenshotPoint(x: Double, y: Double)
+
+    init(elementIndex: String?, x: Double?, y: Double?) throws {
+        switch (elementIndex, x, y) {
+        case let (.some(index), nil, nil):
+            self = .element(index)
+        case let (nil, .some(x), .some(y)):
+            self = .screenshotPoint(x: x, y: y)
+        default:
+            throw ComputerUseError.invalidArguments("scroll requires exactly one target: element_index or both screenshot coordinates x and y")
+        }
+    }
+}
+
 public enum ClickMethod: String, CaseIterable, Sendable {
     case auto
     case accessibility
-    case appPost = "app_post"
     case skyClick = "sky_click"
-    case global
 }
 
 func clickActionSnapshotRecoveryPolicy(for method: ClickMethod) -> SnapshotRecoveryPolicy {
@@ -44,11 +57,7 @@ func validateClickMethod(
         throw ComputerUseError.message("click_method 'accessibility' requires element_index")
     }
 
-    if method == .global, !globalPointerFallbacksEnabled(environment: environment) {
-        throw ComputerUseError.message(
-            "click_method 'global' requires OPEN_COMPUTER_USE_ALLOW_GLOBAL_POINTER_FALLBACKS=1 because it may move the system pointer and change foreground focus"
-        )
-    }
+
 }
 
 func validateSkyClickArguments(
@@ -174,16 +183,7 @@ func inputFallbackDebugEnabled(environment: [String: String]) -> Bool {
     return ["1", "true", "yes", "on"].contains(rawValue)
 }
 
-func globalPointerFallbacksEnabled(environment: [String: String]) -> Bool {
-    guard let rawValue = environment["OPEN_COMPUTER_USE_ALLOW_GLOBAL_POINTER_FALLBACKS"]?
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-        .lowercased()
-    else {
-        return false
-    }
 
-    return ["1", "true", "yes", "on"].contains(rawValue)
-}
 
 func screenshotPixelScale(
     screenshotPixelSize: CGSize?,
@@ -435,7 +435,7 @@ public final class ComputerUseService {
         )
 
         let snapshot = try currentSnapshot(for: query)
-        debugClickDecision("request observation=\(snapshot.observationID) pid=\(snapshot.app.pid) window=\(String(describing: snapshot.targetWindowID)) bounds=\(String(describing: snapshot.windowBounds)) screenshotPixels=\(String(describing: screenshotPixelSize(snapshot: snapshot))) method=\(clickMethod.rawValue) element=\(elementIndex ?? "nil") screenshotPoint=\(diagnosticPoint(x: x, y: y)) button=\(mouseButton) count=\(clickCount)")
+        debugClickDecision("request observation=\(snapshot.observationID) pid=\(snapshot.app.pid) window=\(String(describing: snapshot.targetWindowID)) bounds=\(String(describing: snapshot.windowBounds)) screenshotPixels=\(String(describing: snapshot.screenshotPixelSize)) method=\(clickMethod.rawValue) element=\(elementIndex ?? "nil") screenshotPoint=\(diagnosticPoint(x: x, y: y)) button=\(mouseButton) count=\(clickCount)")
         traceRuntimeContext(stage: "before", snapshot: snapshot)
         defer { traceRuntimeContext(stage: "after", snapshot: snapshot) }
         let button = MouseButtonKind(rawValue: mouseButton.lowercased()) ?? .left
@@ -466,13 +466,13 @@ public final class ComputerUseService {
 
             Thread.sleep(forTimeInterval: 0.15)
             pulseVisualCursor(at: cursorTarget, clickCount: clickCount, mouseButton: button)
-            return snapshotResult(for: try refreshSnapshot(for: query), style: .actionResult)
+            return postActionResult(for: query)
         }
 
         try validateSnapshotWindow(snapshot)
         if let elementIndex {
             let record = try lookupElement(snapshot: snapshot, index: elementIndex)
-            try validateElementIdentity(record.element, snapshot: snapshot, requireWindow: false)
+            try validateElementIdentity(record.element, snapshot: snapshot, requireWindow: true)
             // A semantic action can target a menu item without a visible frame.
             if clickMethod == .auto || clickMethod == .accessibility {
                 let cursor = record.localFrame.flatMap { frame -> VisualCursorTarget? in
@@ -483,7 +483,7 @@ public final class ComputerUseService {
                 if try performPreferredClick(on: record, button: button, clickCount: clickCount) {
                     debugClickDecision("handled by requested target \(clickDebugDescription(record))")
                     pulseVisualCursor(at: cursor, clickCount: clickCount, mouseButton: button)
-                    return snapshotResult(for: try refreshSnapshot(for: query), style: .actionResult)
+                    return postActionResult(for: query)
                 }
                 if clickMethod == .accessibility {
                     throw ComputerUseError.message("[click.unsupported] The requested element does not support this click")
@@ -496,10 +496,7 @@ public final class ComputerUseService {
                                      targetDescription: "element_index=\(elementIndex)")
         } else if let x, let y {
             let screenshotPoint = CGPoint(x: x, y: y)
-            guard x.isFinite, y.isFinite, let size = screenshotPixelSize(snapshot: snapshot),
-                  CGRect(origin: .zero, size: size).contains(screenshotPoint) else {
-                throw ComputerUseError.invalidArguments("[click.target_invalid] Coordinates must be inside the observed screenshot")
-            }
+            try snapshot.validateScreenshotPoint(screenshotPoint)
             let windowPoint = screenshotPixelToWindowPointInSnapshot(snapshot: snapshot, point: screenshotPoint)
             let targetPoint = try windowPointToGlobalPoint(snapshot: snapshot, point: windowPoint)
             let candidates = try clickCandidates(at: windowPoint, in: snapshot)
@@ -507,6 +504,7 @@ public final class ComputerUseService {
             var handled = false
             if clickMethod == .auto {
                 for record in candidates {
+                    try validateElementIdentity(record.element, snapshot: snapshot, requireWindow: true)
                     if try performPreferredClick(on: record, button: button, clickCount: clickCount) {
                         debugClickDecision("handled by point-containing target \(clickDebugDescription(record))")
                         let cursor = makeVisualCursorTarget(at: targetPoint, targetWindowID: snapshot.targetWindowID, targetWindowLayer: snapshot.targetWindowLayer)
@@ -526,24 +524,20 @@ public final class ComputerUseService {
             throw ComputerUseError.invalidArguments("click requires either element_index or x/y")
         }
 
-        let refreshed = try refreshSnapshot(
-            for: query,
-            recoveryPolicy: clickActionSnapshotRecoveryPolicy(for: clickMethod)
-        )
-        debugClickDecision("result observation_before=\(snapshot.observationID) observation_after=\(refreshed.observationID) window_after=\(String(describing: refreshed.targetWindowID)) bounds_after=\(String(describing: refreshed.windowBounds))")
-        return snapshotResult(for: refreshed, style: .actionResult)
+        return postActionResult(for: query, recoveryPolicy: clickActionSnapshotRecoveryPolicy(for: clickMethod))
     }
 
     public func performSecondaryAction(app query: String, elementIndex: String, action: String) throws -> ToolCallResult {
         let snapshot = try currentSnapshot(for: query)
         let record = try lookupElement(snapshot: snapshot, index: elementIndex)
+        try validateElementIdentity(record.element, snapshot: snapshot, requireWindow: true)
 
         if snapshot.mode == .fixture {
             guard action.caseInsensitiveCompare("Raise") == .orderedSame else {
                 throw ComputerUseError.message(invalidSecondaryActionMessage(action: action, record: record))
             }
 
-            return snapshotResult(for: try refreshSnapshot(for: query), style: .actionResult)
+            return postActionResult(for: query)
         }
 
         guard let rawAction = matchingAction(requested: action, record: record) else {
@@ -560,10 +554,17 @@ public final class ComputerUseService {
         }
 
         Thread.sleep(forTimeInterval: 0.15)
-        return snapshotResult(for: try refreshSnapshot(for: query), style: .actionResult)
+        return postActionResult(for: query)
     }
 
-    public func scroll(app query: String, direction: String, elementIndex: String, pages: Double) throws -> ToolCallResult {
+    public func scroll(
+        app query: String,
+        direction: String,
+        elementIndex: String?,
+        x: Double?,
+        y: Double?,
+        pages: Double
+    ) throws -> ToolCallResult {
         let normalized = direction.lowercased()
         guard ["up", "down", "left", "right"].contains(normalized) else {
             throw ComputerUseError.message("Invalid scroll direction: \(direction)")
@@ -573,37 +574,62 @@ public final class ComputerUseService {
         }
 
         let snapshot = try currentSnapshot(for: query)
-        let record = try lookupElement(snapshot: snapshot, index: elementIndex)
+        let target = try ScrollTarget(elementIndex: elementIndex, x: x, y: y)
 
         if snapshot.mode == .fixture {
-            guard let identifier = record.identifier else {
-                throw ComputerUseError.invalidArguments("fixture scroll requires an identifier-backed element")
+            switch target {
+            case let .element(index):
+                let record = try lookupElement(snapshot: snapshot, index: index)
+                guard let identifier = record.identifier else {
+                    throw ComputerUseError.invalidArguments("fixture scroll requires an identifier-backed element")
+                }
+                try FixtureBridge.post(FixtureCommand(kind: "scroll", identifier: identifier, direction: normalized, pages: pages))
+            case let .screenshotPoint(x, y):
+                let identifier = try fixtureIdentifier(at: CGPoint(x: x, y: y), snapshot: snapshot)
+                try FixtureBridge.post(FixtureCommand(kind: "scroll", identifier: identifier, x: x, y: y, direction: normalized, pages: pages))
             }
-            try FixtureBridge.post(FixtureCommand(kind: "scroll", identifier: identifier, direction: normalized, pages: pages))
             Thread.sleep(forTimeInterval: 0.15)
-            return snapshotResult(for: try refreshSnapshot(for: query), style: .actionResult)
+            return postActionResult(for: query)
         }
 
-        if let repeatCount = integralScrollPageCount(pages),
-           let rawAction = record.rawActions.first(where: { $0.caseInsensitiveCompare("AXScroll\(normalized.capitalized)ByPage") == .orderedSame }),
-           let element = record.element {
-            for _ in 0..<repeatCount {
-                _ = AXUIElementPerformAction(element, rawAction as CFString)
-                Thread.sleep(forTimeInterval: 0.05)
+        switch target {
+        case let .element(index):
+            let record = try lookupElement(snapshot: snapshot, index: index)
+            try validateElementIdentity(record.element, snapshot: snapshot, requireWindow: true)
+            if let repeatCount = integralScrollPageCount(pages),
+               let rawAction = record.rawActions.first(where: { $0.caseInsensitiveCompare("AXScroll\(normalized.capitalized)ByPage") == .orderedSame }),
+               let element = record.element {
+                for _ in 0..<repeatCount {
+                    try validateElementIdentity(element, snapshot: snapshot, requireWindow: true)
+                    let result = AXUIElementPerformAction(element, rawAction as CFString)
+                    guard result == .success else {
+                        throw ComputerUseError.message("[scroll.unsupported] Window scroll action failed with \(result.rawValue)")
+                    }
+                    Thread.sleep(forTimeInterval: 0.05)
+                }
+            } else if let point = try globalPoint(for: record, snapshot: snapshot) {
+                try performScrollEvent(
+                    at: point,
+                    direction: normalized,
+                    pages: pages,
+                    targetDescription: "element_index=\(index)",
+                    snapshot: snapshot
+                )
+            } else {
+                throw ComputerUseError.stateUnavailable("element \(index) has no scrollable frame")
             }
-        } else if let point = try globalPoint(for: record, snapshot: snapshot) {
+        case let .screenshotPoint(x, y):
+            let point = try screenshotToGlobalPoint(snapshot: snapshot, x: x, y: y)
             try performScrollEvent(
                 at: point,
                 direction: normalized,
                 pages: pages,
-                targetDescription: "element_index=\(elementIndex)",
+                targetDescription: "screenshot_point=(\(Int(x)), \(Int(y)))",
                 snapshot: snapshot
             )
-        } else {
-            throw ComputerUseError.stateUnavailable("element \(elementIndex) has no scrollable frame")
         }
 
-        return snapshotResult(for: try refreshSnapshot(for: query), style: .actionResult)
+        return postActionResult(for: query)
     }
 
     public func drag(app query: String, fromX: Double, fromY: Double, toX: Double, toY: Double) throws -> ToolCallResult {
@@ -611,7 +637,7 @@ public final class ComputerUseService {
         if snapshot.mode == .fixture {
             try FixtureBridge.post(FixtureCommand(kind: "drag", identifier: "fixture-drag-pad", x: fromX, y: fromY, toX: toX, toY: toY))
             Thread.sleep(forTimeInterval: 0.15)
-            return snapshotResult(for: try refreshSnapshot(for: query), style: .actionResult)
+            return postActionResult(for: query)
         }
 
         let start = try screenshotToGlobalPoint(snapshot: snapshot, x: fromX, y: fromY)
@@ -622,7 +648,7 @@ public final class ComputerUseService {
             targetDescription: "from=(\(Int(fromX)), \(Int(fromY))) to=(\(Int(toX)), \(Int(toY)))",
             snapshot: snapshot
         )
-        return snapshotResult(for: try refreshSnapshot(for: query), style: .actionResult)
+        return postActionResult(for: query)
     }
 
     public func setInputTarget(app query: String, elementIndex: String? = nil, x: Double? = nil, y: Double? = nil) throws -> ToolCallResult {
@@ -640,14 +666,8 @@ public final class ComputerUseService {
             let point = try screenshotToGlobalPoint(snapshot: snapshot, x: x, y: y)
             target = InputTarget(receiver: .windowPoint(point), window: window,
                                  windowID: snapshot.targetWindowID, windowBounds: snapshot.windowBounds)
-            // An explicit coordinate binding establishes the position once, never on each keystroke.
-            inputTargets.removeValue(forKey: snapshot.app.pid)
-            try prepareKeyboardReceiver(target: target, snapshot: snapshot, allowWindowActivation: true)
-            retireObservation(snapshot.observationID)
-            try performNonAXClickFallback(at: point, button: .left, clickCount: 1,
-                                          targetDescription: "input_target", snapshot: snapshot)
-            try validateKeyboardReceiver(target: target, snapshot: snapshot)
         }
+        try establishInputTarget(target, snapshot: snapshot)
         let refreshed = try refreshSnapshot(for: query)
         try validateInputTarget(target, snapshot: refreshed)
         inputTargets[snapshot.app.pid] = target
@@ -670,18 +690,44 @@ public final class ComputerUseService {
         guard let window = snapshot.windowElement else {
             throw ComputerUseError.message("[input.target_invalid] The observation has no window identity")
         }
-        return InputTarget(receiver: .element(element), window: window, windowID: snapshot.targetWindowID, windowBounds: snapshot.windowBounds)
+        // Text/selection attributes provide editor evidence; localized role labels do not.
+        var attributes: CFArray?
+        _ = AXUIElementCopyAttributeNames(element, &attributes)
+        let names = attributes as? [String] ?? []
+        if names.contains(kAXSelectedTextRangeAttribute as String) || names.contains(kAXSelectedTextAttribute as String) {
+            return InputTarget(receiver: .element(element), window: window, windowID: snapshot.targetWindowID,
+                               windowBounds: snapshot.windowBounds, anchorElement: element)
+        }
+        let record = try lookupElement(snapshot: snapshot, index: index)
+        let local = try pointerPoint(for: record, snapshot: snapshot)
+        let point = try windowPointToGlobalPoint(snapshot: snapshot, point: local)
+        debugClickDecision("input locator scope=window anchor={\(diagnosticElementDescription(element))} local=\(local)")
+        return InputTarget(receiver: .windowPoint(point), window: window, windowID: snapshot.targetWindowID,
+                           windowBounds: snapshot.windowBounds, anchorElement: element, anchorFrame: localFrame(of: element, windowBounds: snapshot.windowBounds))
+    }
+
+    private func establishInputTarget(_ target: InputTarget, snapshot: AppSnapshot) throws {
+        inputTargets.removeValue(forKey: snapshot.app.pid)
+        try validateInputTarget(target, snapshot: snapshot)
+        if case .windowPoint(let point) = target.receiver {
+            try performNonAXClickFallback(at: point, button: .left, clickCount: 1,
+                                         targetDescription: "input_target", snapshot: snapshot)
+            try SkyClickDispatcher.withWindowTarget(try windowEventTarget(snapshot)) {
+                try prepareKeyboardReceiver(target: target, snapshot: snapshot)
+            }
+        }
     }
 
     private func resolveInputTarget(snapshot: AppSnapshot, index: String?) throws -> InputTarget {
         if let index {
             let element = try inputElement(snapshot: snapshot, index: index)
-            if let saved = inputTargets[snapshot.app.pid], let savedElement = saved.element, CFEqual(savedElement, element),
+            if let saved = inputTargets[snapshot.app.pid], let savedElement = saved.anchorElement ?? saved.element, CFEqual(savedElement, element),
                saved.windowID == snapshot.targetWindowID {
                 try validateInputTarget(saved, snapshot: snapshot)
                 return saved
             }
             let target = try bindInputTarget(snapshot: snapshot, index: index)
+            try establishInputTarget(target, snapshot: snapshot)
             inputTargets[snapshot.app.pid] = target
             return target
         }
@@ -694,6 +740,13 @@ public final class ComputerUseService {
 
     private func validateInputTarget(_ target: InputTarget, snapshot: AppSnapshot) throws {
         if let element = target.element { try validateInputElement(element, snapshot: snapshot) }
+        if let anchor = target.anchorElement {
+            try validateInputElement(anchor, snapshot: snapshot)
+            if let frame = target.anchorFrame, localFrame(of: anchor, windowBounds: snapshot.windowBounds) != frame {
+                inputTargets.removeValue(forKey: snapshot.app.pid)
+                throw ComputerUseError.message("[input.target_invalid] The bound input position moved; observe and bind again")
+            }
+        }
         if target.element == nil, target.windowBounds != snapshot.windowBounds {
             inputTargets.removeValue(forKey: snapshot.app.pid)
             throw ComputerUseError.message("[input.target_invalid] Window geometry changed; bind the input position again")
@@ -708,55 +761,115 @@ public final class ComputerUseService {
     public func typeText(app query: String, text: String, elementIndex: String? = nil) throws -> ToolCallResult {
         let snapshot = try currentSnapshot(for: query)
         let target = try resolveInputTarget(snapshot: snapshot, index: elementIndex)
-        return try executeKeyboard(target: target, snapshot: snapshot, query: query, operation: "insert") {
-            try InputSimulation.typeText(text, pid: snapshot.app.pid) {
-                try self.validateKeyboardReceiver(target: target, snapshot: snapshot)
+        return try executeKeyboard(target: target, snapshot: snapshot, query: query, operation: "insert") { requireFrontmost in
+            try InputSimulation.typeText(text, target: try self.windowEventTarget(snapshot)) {
+                try self.validateKeyboardReceiver(target: target, snapshot: snapshot, requireFrontmost: requireFrontmost)
             }
+            return "unconfirmed"
         }
     }
 
     public func pressKey(app query: String, key: String, elementIndex: String? = nil) throws -> ToolCallResult {
         let snapshot = try currentSnapshot(for: query)
         let target = try resolveInputTarget(snapshot: snapshot, index: elementIndex)
-        return try executeKeyboard(target: target, snapshot: snapshot, query: query, operation: "key") {
-            try InputSimulation.pressKey(key, pid: snapshot.app.pid)
+        return try executeKeyboard(target: target, snapshot: snapshot, query: query, operation: "key") { requireFrontmost in
+            try self.validateKeyboardReceiver(target: target, snapshot: snapshot, requireFrontmost: requireFrontmost)
+            try InputSimulation.pressKey(key, target: try self.windowEventTarget(snapshot))
+            return "unconfirmed"
         }
     }
 
     public func setValue(app query: String, elementIndex: String? = nil, value: String) throws -> ToolCallResult {
         let snapshot = try currentSnapshot(for: query)
         let target = try resolveInputTarget(snapshot: snapshot, index: elementIndex)
-        return try executeKeyboard(target: target, snapshot: snapshot, query: query, operation: "replace") {
-            // Select in the actual keyboard receiver; AX text may only describe a proxy.
-            try InputSimulation.pressKey("super+a", pid: snapshot.app.pid)
-            try self.validateKeyboardReceiver(target: target, snapshot: snapshot)
+        return try executeKeyboard(target: target, snapshot: snapshot, query: query, operation: "replace") { requireFrontmost in
+            let before = try ReplacementSelection.read(target.element)
+            guard let element = target.element else { throw ReplacementSelectionError.unavailable }
+            let nativeSelection = try before.selectAll(in: element)
+            if !nativeSelection {
+                try InputSimulation.pressKey("super+a", target: try self.windowEventTarget(snapshot))
+            }
+            try self.validateKeyboardReceiver(target: target, snapshot: snapshot, requireFrontmost: requireFrontmost)
+            let selected = try ReplacementSelection.read(target.element)
+            self.debugClickDecision("input replacement selection native=\(nativeSelection) length=\(selected.length) range=\(selected.range) complete=\(selected.coversDocument) original_length=\(before.length)")
+            guard selected.length == before.length, selected.coversDocument else {
+                throw ReplacementSelectionError.unconfirmed
+            }
             if value.isEmpty {
-                try InputSimulation.pressKey("BackSpace", pid: snapshot.app.pid)
+                try InputSimulation.pressKey("BackSpace", target: try self.windowEventTarget(snapshot))
             } else {
-                try InputSimulation.typeText(value, pid: snapshot.app.pid) {
-                    try self.validateKeyboardReceiver(target: target, snapshot: snapshot)
+                try InputSimulation.typeText(value, target: try self.windowEventTarget(snapshot)) {
+                    try self.validateKeyboardReceiver(target: target, snapshot: snapshot, requireFrontmost: requireFrontmost)
                 }
             }
+            return self.verifyReplacementValue(
+                value, element: element, target: target, snapshot: snapshot,
+                requireFrontmost: requireFrontmost
+            ) ? "value_verified" : "unconfirmed"
         }
     }
 
     private func executeKeyboard(target: InputTarget, snapshot: AppSnapshot, query: String,
-                                 operation: String, dispatch: () throws -> Void) throws -> ToolCallResult {
-        try prepareKeyboardReceiver(target: target, snapshot: snapshot)
+                                 operation: String, dispatch: @escaping (Bool) throws -> String) throws -> ToolCallResult {
+        traceRuntimeContext(stage: "keyboard_before", snapshot: snapshot)
+        defer { traceRuntimeContext(stage: "keyboard_after", snapshot: snapshot) }
         retireObservation(snapshot.observationID)
-        debugClickDecision("input dispatch operation=\(operation) pid=\(snapshot.app.pid) window=\(String(describing: snapshot.targetWindowID)) method=targeted_keyboard")
+        let capability: KeyboardDeliveryCapability = target.element != nil && keyboardReceiverMatches(target: target, snapshot: snapshot)
+            ? .directedBackground : .foregroundLease
+        var deliveryStarted = false
+        var verification = "unconfirmed"
+        debugClickDecision("input dispatch operation=\(operation) pid=\(snapshot.app.pid) window=\(String(describing: snapshot.targetWindowID)) mode=\(capability.rawValue)")
         do {
-            try validateKeyboardReceiver(target: target, snapshot: snapshot)
-            try dispatch()
+            let transaction = {
+                if capability.requiresForegroundLease {
+                    try self.reestablishKeyboardTarget(target, snapshot: snapshot)
+                }
+                try SkyClickDispatcher.withWindowTarget(try self.windowEventTarget(snapshot)) {
+                    try self.prepareKeyboardReceiver(target: target, snapshot: snapshot)
+                    try self.validateKeyboardReceiver(target: target, snapshot: snapshot, requireFrontmost: capability.requiresForegroundLease)
+                    deliveryStarted = true
+                    verification = try dispatch(capability.requiresForegroundLease)
+                }
+            }
+            if capability.requiresForegroundLease {
+                try ApplicationFocusLease.withTarget(
+                    app: snapshot.app, window: target.window,
+                    diagnostic: self.debugClickDecision, body: transaction
+                )
+            } else {
+                try ApplicationFocusLease.preservingCurrentApplication(
+                    targetPID: snapshot.app.pid,
+                    diagnostic: self.debugClickDecision,
+                    body: transaction
+                )
+            }
+        } catch let error as ReplacementSelectionError {
+            inputTargets.removeValue(forKey: snapshot.app.pid)
+            debugClickDecision("input replacement stopped: \(error.message)")
+            return ToolCallResult(content: [.text(error.message)], isError: true,
+                                  inputResult: ["delivery": "not_sent", "verification": "unconfirmed", "reason": "replacement_precondition_failed", "input_mode": capability.rawValue])
         } catch {
             inputTargets.removeValue(forKey: snapshot.app.pid)
+            if !deliveryStarted {
+                debugClickDecision("input setup stopped before delivery error=\(error)")
+                return ToolCallResult(
+                    content: [.text("[input.setup_failed] Input setup failed before any keyboard event was sent. Cause: \(error)")],
+                    isError: true,
+                    inputResult: ["delivery": "not_sent", "verification": "unconfirmed", "reason": "focus_setup_failed", "input_mode": capability.rawValue])
+            }
             debugClickDecision("input dispatch interrupted error=\(error)")
             return ToolCallResult(
-                content: [.text("[input.delivery_interrupted] Keyboard delivery may be partial. Observe before any further action; never automatically replay.")],
+                content: [.text("[input.delivery_interrupted] Keyboard delivery may be partial. Observe before any further action; never automatically replay. Cause: \(error)")],
                 isError: true,
-                inputResult: ["delivery": "unknown", "verification": "unconfirmed", "reason": "dispatch_interrupted"])
+                inputResult: ["delivery": "unknown", "verification": "unconfirmed", "reason": "dispatch_interrupted", "input_mode": capability.rawValue])
         }
-        let evidence = ["delivery": "posted", "verification": "unconfirmed", "reason": "keyboard_consumption_unobservable", "target_scope": target.scope]
+        let evidence = [
+            "delivery": "posted",
+            "verification": verification,
+            "reason": verification == "value_verified" ? "value_readback_matched" : "keyboard_consumption_unobservable",
+            "target_scope": target.scope,
+            "input_mode": capability.rawValue,
+        ]
         do {
             let result = snapshotResult(for: try refreshSnapshot(for: query), style: .actionResult)
             return ToolCallResult(content: result.content + [.text("Keyboard events posted to the bound target. Inspect the new observation to verify the effect; AX text and selection may describe an editor proxy. Do not automatically replay.")],
@@ -765,6 +878,34 @@ public final class ComputerUseService {
             return ToolCallResult(content: [.text("[observation.unavailable] Keyboard events were posted, but the next observation is unavailable. Obtain a new state without replaying the action.")],
                                   isError: true, inputResult: evidence)
         }
+    }
+
+    private func verifyReplacementValue(
+        _ expected: String, element: AXUIElement, target: InputTarget,
+        snapshot: AppSnapshot, requireFrontmost: Bool
+    ) -> Bool {
+        let deadline = ProcessInfo.processInfo.systemUptime + KeyboardReceiverPolicy.timeout
+        repeat {
+            do {
+                try validateKeyboardReceiver(
+                    target: target, snapshot: snapshot, requireFrontmost: requireFrontmost
+                )
+            } catch {
+                debugClickDecision("input readback stopped receiver_invalid error=\(error)")
+                return false
+            }
+            var value: CFTypeRef?
+            if AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value) == .success,
+               let actual = value as? String, actual == expected {
+                debugClickDecision("input readback matched length=\(actual.utf16.count)")
+                return true
+            }
+            let remaining = deadline - ProcessInfo.processInfo.systemUptime
+            if remaining <= 0 { break }
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: min(KeyboardReceiverPolicy.pollInterval, remaining)))
+        } while true
+        debugClickDecision("input readback unavailable_or_mismatch expected_length=\(expected.utf16.count)")
+        return false
     }
 
     private func inputElement(snapshot: AppSnapshot, index: String) throws -> AXUIElement {
@@ -780,33 +921,16 @@ public final class ComputerUseService {
 
     private func validateInputElement(_ element: AXUIElement, snapshot: AppSnapshot) throws {
         try validateElementIdentity(element, snapshot: snapshot, requireWindow: true)
-        guard let role = stringValue(of: element, attribute: kAXRoleAttribute),
-              [kAXTextFieldRole as String, kAXTextAreaRole as String, "AXTextView"].contains(role) else {
-            throw ComputerUseError.message("[input.unsupported] The target is not an editable text control")
+        var enabled: CFTypeRef?
+        if AXUIElementCopyAttributeValue(element, kAXEnabledAttribute as CFString, &enabled) == .success,
+           enabled as? Bool == false {
+            throw ComputerUseError.message("[input.unsupported] The requested input target is disabled")
         }
     }
 
-    private func prepareKeyboardReceiver(target: InputTarget, snapshot: AppSnapshot, allowWindowActivation: Bool = false) throws {
+    private func prepareKeyboardReceiver(target: InputTarget, snapshot: AppSnapshot) throws {
         try validateSnapshotWindow(snapshot)
         try validateInputTarget(target, snapshot: snapshot)
-        if target.element == nil && !allowWindowActivation && !keyboardReceiverMatches(target: target, snapshot: snapshot) {
-            inputTargets.removeValue(forKey: snapshot.app.pid)
-            throw ComputerUseError.message("[input.target_required] Window focus changed; use set_input_target with fresh screenshot coordinates")
-        }
-        guard let app = NSRunningApplication(processIdentifier: snapshot.app.pid) else {
-            throw ComputerUseError.message("[input.target_invalid] The target process has exited")
-        }
-        if !app.isActive {
-            let accepted = app.activate(options: [])
-            debugClickDecision("input activate pid=\(snapshot.app.pid) accepted=\(accepted)")
-        }
-        var focusedWindow: CFTypeRef?
-        AXUIElementCopyAttributeValue(AXUIElementCreateApplication(snapshot.app.pid),
-                                      kAXFocusedWindowAttribute as CFString, &focusedWindow)
-        if focusedWindow == nil || !CFEqual(focusedWindow, target.window) {
-            let status = AXUIElementPerformAction(target.window, kAXRaiseAction as CFString)
-            debugClickDecision("input raise pid=\(snapshot.app.pid) status=\(status.rawValue)")
-        }
         if let element = target.element {
             let evidence = KeyboardTargetEvidence(pid: snapshot.app.pid, target: element)
             if !evidence.resolves(to: element), isSettable(element: element, attribute: kAXFocusedAttribute) {
@@ -831,8 +955,41 @@ public final class ComputerUseService {
         try validateKeyboardReceiver(target: target, snapshot: snapshot)
     }
 
+    private func reestablishKeyboardTarget(_ target: InputTarget, snapshot: AppSnapshot) throws {
+        try ApplicationFocusLease.requireOwnership(of: snapshot.app.pid)
+        try validateInputTarget(target, snapshot: snapshot)
+        if keyboardReceiverMatches(target: target, snapshot: snapshot) { return }
+
+        if let element = target.element {
+            if isSettable(element: element, attribute: kAXFocusedAttribute) {
+                let status = AXUIElementSetAttributeValue(
+                    element, kAXFocusedAttribute as CFString, kCFBooleanTrue
+                )
+                debugClickDecision("input lease focus_request pid=\(snapshot.app.pid) status=\(status.rawValue)")
+                RunLoop.current.run(until: Date(timeIntervalSinceNow: KeyboardReceiverPolicy.pollInterval))
+                if keyboardReceiverMatches(target: target, snapshot: snapshot) { return }
+            }
+            guard let frame = localFrame(of: element, windowBounds: snapshot.windowBounds),
+                  frame.width > 0, frame.height > 0 else {
+                throw ComputerUseError.message("[click.position_unavailable] The input receiver has no current clickable position")
+            }
+            let local = CGPoint(x: frame.midX, y: frame.midY)
+            let point = try windowPointToGlobalPoint(snapshot: snapshot, point: local)
+            try performNonAXClickFallback(
+                at: point, button: .left, clickCount: 1,
+                targetDescription: "foreground_input_receiver", snapshot: snapshot
+            )
+        } else if let point = target.boundPoint {
+            try performNonAXClickFallback(
+                at: point, button: .left, clickCount: 1,
+                targetDescription: "foreground_input_position", snapshot: snapshot
+            )
+        } else {
+            throw ComputerUseError.message("[input.target_invalid] The input target has no receiver or bound point")
+        }
+    }
+
     private func keyboardReceiverMatches(target: InputTarget, snapshot: AppSnapshot) -> Bool {
-        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == snapshot.app.pid else { return false }
         var window: CFTypeRef?
         guard AXUIElementCopyAttributeValue(AXUIElementCreateApplication(snapshot.app.pid),
                                             kAXFocusedWindowAttribute as CFString, &window) == .success,
@@ -841,7 +998,12 @@ public final class ComputerUseService {
         return KeyboardTargetEvidence(pid: snapshot.app.pid, target: element).resolves(to: element)
     }
 
-    private func validateKeyboardReceiver(target: InputTarget, snapshot: AppSnapshot) throws {
+    private func validateKeyboardReceiver(
+        target: InputTarget, snapshot: AppSnapshot, requireFrontmost: Bool = false
+    ) throws {
+        if requireFrontmost {
+            try ApplicationFocusLease.requireOwnership(of: snapshot.app.pid)
+        }
         try validateSnapshotWindow(snapshot)
         try validateInputTarget(target, snapshot: snapshot)
         let matched = keyboardReceiverMatches(target: target, snapshot: snapshot)
@@ -877,15 +1039,25 @@ public final class ComputerUseService {
 
     private func validateSnapshotWindow(_ snapshot: AppSnapshot) throws {
         if snapshot.mode == .fixture { return }
-        guard let id = snapshot.targetWindowID, let expected = snapshot.windowBounds,
-              let entries = CGWindowListCopyWindowInfo(.optionIncludingWindow, id) as? [[String: Any]],
-              let info = entries.first,
-              let owner = info[kCGWindowOwnerPID as String] as? NSNumber,
-              owner.int32Value == snapshot.app.pid,
-              let bounds = info[kCGWindowBounds as String] as? NSDictionary,
-              let current = CGRect(dictionaryRepresentation: bounds), current == expected,
-              (info[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue == true else {
-            throw ComputerUseError.message("[observation.stale] The observed window is unavailable or its geometry changed. Run get_app_state again.")
+        guard let id = snapshot.targetWindowID, let expected = snapshot.windowBounds else {
+            throw ComputerUseError.message("[observation.window_unavailable] Observation has no window identity or bounds")
+        }
+        guard let entries = CGWindowListCopyWindowInfo(.optionIncludingWindow, id) as? [[String: Any]],
+              let info = entries.first(where: { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == id }) else {
+            throw ComputerUseError.message("[observation.window_unavailable] Window \(id) is no longer listed")
+        }
+        let owner = (info[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value
+        let onscreen = (info[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue
+        let current = (info[kCGWindowBounds as String] as? NSDictionary).flatMap { CGRect(dictionaryRepresentation: $0) }
+        debugClickDecision("window validation id=\(id) expected_pid=\(snapshot.app.pid) actual_pid=\(String(describing: owner)) expected_bounds=\(expected) actual_bounds=\(String(describing: current)) onscreen=\(String(describing: onscreen))")
+        guard owner == snapshot.app.pid else {
+            throw ComputerUseError.message("[observation.stale] Window owner changed")
+        }
+        guard onscreen == true, let current else {
+            throw ComputerUseError.message("[observation.window_unavailable] Window is offscreen or its bounds cannot be read")
+        }
+        guard current == expected else {
+            throw ComputerUseError.message("[observation.geometry_changed] Window bounds changed from \(expected) to \(current). Use a fresh screenshot for coordinates.")
         }
     }
 
@@ -918,11 +1090,12 @@ public final class ComputerUseService {
     private func pointerPoint(for record: ElementRecord, snapshot: AppSnapshot) throws -> CGPoint {
         try validateSnapshotWindow(snapshot)
         try validateElementIdentity(record.element, snapshot: snapshot, requireWindow: true)
-        guard let frame = record.localFrame, frame.width > 0, frame.height > 0,
-              let bounds = snapshot.windowBounds, let element = record.element,
-              localFrame(of: element, windowBounds: bounds) == frame,
+        let current = record.element.flatMap { localFrame(of: $0, windowBounds: snapshot.windowBounds) }
+        debugClickDecision("pointer geometry element=\(record.index) observed=\(String(describing: record.localFrame)) current=\(String(describing: current)) bounds=\(String(describing: snapshot.windowBounds))")
+        guard let frame = current, !frame.isNull, !frame.isInfinite, frame.width > 0, frame.height > 0,
+              let bounds = snapshot.windowBounds,
               CGRect(origin: .zero, size: bounds.size).contains(CGPoint(x: frame.midX, y: frame.midY)) else {
-            throw ComputerUseError.message("[observation.stale] The target has no current visible pointer location. Observe again or use an explicit accessibility action.")
+            throw ComputerUseError.message("[click.position_unavailable] The identified control has no usable current position inside this window. Choose a position from the latest screenshot.")
         }
         return CGPoint(x: frame.midX, y: frame.midY)
     }
@@ -951,6 +1124,18 @@ public final class ComputerUseService {
     }
 
     @discardableResult
+    private func postActionResult(for query: String, recoveryPolicy: SnapshotRecoveryPolicy = .readOnly) -> ToolCallResult {
+        do {
+            return snapshotResult(for: try refreshSnapshot(for: query, recoveryPolicy: recoveryPolicy), style: .actionResult)
+        } catch {
+            debugClickDecision("observation after_action unavailable error=\(error)")
+            return ToolCallResult.text(
+                "[observation.after_action] The action was dispatched, but the updated window could not be read. Its effect is unconfirmed. Check the window state before further action; do not replay automatically. Cause: \(error)",
+                isError: true
+            )
+        }
+    }
+
     private func refreshSnapshot(
         for query: String,
         textLimit: SnapshotTextLimit = .defaults,
@@ -1234,7 +1419,8 @@ public final class ComputerUseService {
     }
 
     private func screenshotToGlobalPoint(snapshot: AppSnapshot, x: Double, y: Double) throws -> CGPoint {
-        try windowPointToGlobalPoint(
+        try snapshot.validateScreenshotPoint(CGPoint(x: x, y: y))
+        return try windowPointToGlobalPoint(
             snapshot: snapshot,
             point: screenshotPixelToWindowPointInSnapshot(
                 snapshot: snapshot,
@@ -1246,25 +1432,9 @@ public final class ComputerUseService {
     private func screenshotPixelToWindowPointInSnapshot(snapshot: AppSnapshot, point: CGPoint) -> CGPoint {
         screenshotPixelToWindowPoint(
             point,
-            screenshotPixelSize: screenshotPixelSize(snapshot: snapshot),
+            screenshotPixelSize: snapshot.screenshotPixelSize,
             windowBounds: snapshot.windowBounds
         )
-    }
-
-    private func screenshotPixelSize(snapshot: AppSnapshot) -> CGSize? {
-        guard
-            let screenshotPNGData = snapshot.screenshotPNGData,
-            let imageSource = CGImageSourceCreateWithData(screenshotPNGData as CFData, nil),
-            let properties = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [CFString: Any],
-            let pixelWidth = properties[kCGImagePropertyPixelWidth] as? CGFloat,
-            let pixelHeight = properties[kCGImagePropertyPixelHeight] as? CGFloat,
-            pixelWidth > 0,
-            pixelHeight > 0
-        else {
-            return nil
-        }
-
-        return CGSize(width: pixelWidth, height: pixelHeight)
     }
 
     private func windowPointToGlobalPoint(snapshot: AppSnapshot, point: CGPoint) throws -> CGPoint {
@@ -1341,17 +1511,7 @@ public final class ComputerUseService {
         }
     }
 
-    private func debugInputFallback(tool: String, targetDescription: String, snapshot: AppSnapshot) {
-        guard inputFallbackDebugEnabled(environment: ProcessInfo.processInfo.environment) else {
-            return
-        }
 
-        let appReference = snapshot.app.bundleIdentifier ?? snapshot.app.name
-        fputs(
-            "[open-computer-use] global pointer fallback tool=\(tool) app=\(appReference) target=\(targetDescription)\n",
-            stderr
-        )
-    }
 
     private func debugClickDecision(_ message: String) {
         diagnostics.append(message)
@@ -1431,114 +1591,54 @@ public final class ComputerUseService {
         return max(Int(rounded), 1)
     }
 
-    private func performScrollEvent(
-        at point: CGPoint,
-        direction: String,
-        pages: Double,
-        targetDescription: String,
-        snapshot: AppSnapshot
-    ) throws {
-        let eventPoint = inputEventPoint(fromScreenStatePoint: point)
-
-        if globalPointerFallbacksEnabled(environment: ProcessInfo.processInfo.environment) {
-            debugInputFallback(
-                tool: "scroll",
-                targetDescription: targetDescription,
-                snapshot: snapshot
-            )
-            InputSimulation.prepareAppForGlobalPointerInput(snapshot.app)
-            try InputSimulation.scrollGlobally(at: eventPoint, direction: direction, pages: pages)
-            return
+    private func windowEventTarget(_ snapshot: AppSnapshot, at point: CGPoint? = nil) throws -> SkyClickTarget {
+        try validateSnapshotWindow(snapshot)
+        guard let bounds = snapshot.windowBounds, let id = snapshot.targetWindowID else {
+            throw ComputerUseError.message("[observation.required] A target window is required")
         }
-
-        try InputSimulation.scrollTargeted(at: eventPoint, direction: direction, pages: pages, pid: snapshot.app.pid)
+        let screenPoint = point ?? CGPoint(x: bounds.midX, y: bounds.midY)
+        return SkyClickTarget(screenPoint: inputEventPoint(fromScreenStatePoint: screenPoint),
+                              windowPoint: CGPoint(x: screenPoint.x - bounds.minX, y: screenPoint.y - bounds.minY),
+                              windowBounds: bounds, windowID: id, pid: snapshot.app.pid)
     }
 
-    private func performDragEvent(
-        from start: CGPoint,
-        to end: CGPoint,
-        targetDescription: String,
-        snapshot: AppSnapshot
-    ) throws {
-        let eventStart = inputEventPoint(fromScreenStatePoint: start)
-        let eventEnd = inputEventPoint(fromScreenStatePoint: end)
-
-        if globalPointerFallbacksEnabled(environment: ProcessInfo.processInfo.environment) {
-            debugInputFallback(
-                tool: "drag",
-                targetDescription: targetDescription,
-                snapshot: snapshot
-            )
-            InputSimulation.prepareAppForGlobalPointerInput(snapshot.app)
-            try InputSimulation.dragGlobally(from: eventStart, to: eventEnd)
-            return
+    private func performScrollEvent(at point: CGPoint, direction: String, pages: Double,
+                                    targetDescription: String, snapshot: AppSnapshot) throws {
+        let target = try windowEventTarget(snapshot, at: point)
+        debugClickDecision("scroll dispatch=window_targeted pid=\(target.pid) window=\(target.windowID)")
+        try SkyClickDispatcher.withWindowTarget(target) {
+            try InputSimulation.scrollTargeted(at: target.screenPoint, direction: direction, pages: pages, target: target)
         }
-
-        try InputSimulation.dragTargeted(from: eventStart, to: eventEnd, pid: snapshot.app.pid)
     }
 
-    private func performNonAXClickFallback(
-        at point: CGPoint,
-        button: MouseButtonKind,
-        clickCount: Int,
-        targetDescription: String,
-        snapshot: AppSnapshot
-    ) throws {
-        let eventPoint = inputEventPoint(fromScreenStatePoint: point)
-        debugClickDecision("mouse_fallback method=pid_post pid=\(snapshot.app.pid) window=\(String(describing: snapshot.targetWindowID)) eventPoint=\(eventPoint)")
-        try InputSimulation.clickTargeted(at: eventPoint, button: button, clickCount: clickCount, pid: snapshot.app.pid)
+    private func performDragEvent(from start: CGPoint, to end: CGPoint,
+                                  targetDescription: String, snapshot: AppSnapshot) throws {
+        let target = try windowEventTarget(snapshot, at: start)
+        guard let bounds = snapshot.windowBounds, bounds.contains(start), bounds.contains(end) else {
+            throw ComputerUseError.message("[click.target_invalid] Drag endpoints must be inside the bound window")
+        }
+        debugClickDecision("drag dispatch=window_targeted pid=\(target.pid) window=\(target.windowID)")
+        try SkyClickDispatcher.withWindowTarget(target) {
+            try InputSimulation.dragTargeted(from: target.screenPoint, to: inputEventPoint(fromScreenStatePoint: end), target: target)
+        }
     }
 
-    private func performExplicitMouseClick(
-        method: ClickMethod,
-        at point: CGPoint,
-        windowPoint: CGPoint,
-        button: MouseButtonKind,
-        clickCount: Int,
-        targetDescription: String,
-        snapshot: AppSnapshot
-    ) throws {
-        let eventPoint = inputEventPoint(fromScreenStatePoint: point)
-        debugClickDecision("explicit_mouse pid=\(snapshot.app.pid) method=\(method.rawValue) eventPoint=\(eventPoint) windowPoint=\(windowPoint)")
+    private func performNonAXClickFallback(at point: CGPoint, button: MouseButtonKind, clickCount: Int,
+                                           targetDescription: String, snapshot: AppSnapshot) throws {
+        try validateSkyClickArguments(method: .skyClick, mouseButton: button.rawValue, clickCount: clickCount)
+        let target = try windowEventTarget(snapshot, at: point)
+        debugClickDecision("click dispatch=window_targeted pid=\(target.pid) window=\(target.windowID) screen=\(target.screenPoint) local=\(target.windowPoint)")
+        try SkyClickDispatcher.click(target: target, clickCount: clickCount)
+    }
 
-        switch method {
-        case .appPost:
-            debugClickDecision("requested=app_post executed=pid_post target=\(targetDescription)")
-            try InputSimulation.clickTargeted(
-                at: eventPoint,
-                button: button,
-                clickCount: clickCount,
-                pid: snapshot.app.pid
-            )
-        case .skyClick:
-            guard let windowBounds = snapshot.windowBounds, let windowID = snapshot.targetWindowID else {
-                throw ComputerUseError.stateUnavailable(
-                    "click_method 'sky_click' requires a current on-screen target window. Run get_app_state again."
-                )
-            }
-            debugClickDecision("requested=sky_click executed=skylight_pid_post target=\(targetDescription)")
-            try InputSimulation.clickWithSkyLight(
-                at: eventPoint,
-                windowPoint: windowPoint,
-                windowBounds: windowBounds,
-                windowID: windowID,
-                clickCount: clickCount,
-                pid: snapshot.app.pid
-            )
-        case .global:
-            guard globalPointerFallbacksEnabled(environment: ProcessInfo.processInfo.environment) else {
-                throw ComputerUseError.message(
-                    "click_method 'global' requires OPEN_COMPUTER_USE_ALLOW_GLOBAL_POINTER_FALLBACKS=1 because it may move the system pointer and change foreground focus"
-                )
-            }
-            debugClickDecision("requested=global executed=global_hid target=\(targetDescription)")
-            InputSimulation.prepareAppForGlobalPointerInput(snapshot.app)
-            try InputSimulation.clickGlobally(at: eventPoint, button: button, clickCount: clickCount)
-        case .auto, .accessibility:
-            throw ComputerUseError.message(
-                "click_method '\(method.rawValue)' is not a direct mouse event method"
-            )
+    private func performExplicitMouseClick(method: ClickMethod, at point: CGPoint, windowPoint: CGPoint,
+                                           button: MouseButtonKind, clickCount: Int,
+                                           targetDescription: String, snapshot: AppSnapshot) throws {
+        guard method == .skyClick else {
+            throw ComputerUseError.message("[click.unsupported] This method does not dispatch window mouse events")
         }
+        try performNonAXClickFallback(at: point, button: button, clickCount: clickCount,
+                                      targetDescription: targetDescription, snapshot: snapshot)
     }
 
     private func snapshotResult(for snapshot: AppSnapshot, style: SnapshotTextStyle) -> ToolCallResult {

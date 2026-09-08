@@ -91,7 +91,9 @@ public final class ComputerUseToolDispatcher {
             return try service.scroll(
                 app: requireString("app", in: arguments),
                 direction: requireString("direction", in: arguments),
-                elementIndex: requireElementIndex(in: arguments),
+                elementIndex: optionalElementIndex(in: arguments),
+                x: optionalDouble("x", in: arguments),
+                y: optionalDouble("y", in: arguments),
                 pages: optionalDouble("pages", in: arguments) ?? 1
             )
         case "drag":

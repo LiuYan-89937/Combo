@@ -366,9 +366,12 @@ class ComputerUseCoordinator:
                                 json.dumps(error_text, ensure_ascii=False),
                             )
                         _ensure_not_cancelled(cancelled, host, session)
+                        if result.get("isError") and name not in {"get_app_state", "list_apps"}:
+                            result = _observe_after_failed_action(host, session, app, result, cancelled)
                         text = _result_text(result)
-                        if app and not result.get("isError"):
-                            last_states[app] = text
+                        observation = result.get("latest_observation", result)
+                        if app and not observation.get("isError"):
+                            last_states[app] = _result_text(observation)
                         _logger.info(
                             "Computer use request=%s step=%s phase=action_result tool=%s is_error=%s elapsed_ms=%.1f",
                             instance.request.request_id,
@@ -391,7 +394,7 @@ class ComputerUseCoordinator:
                         )
                     messages.append(
                         ToolMessage(
-                            content=_result_text(result),
+                            content=_model_result_text(result),
                             tool_call_id=call["id"],
                             name=name,
                             status="error" if result.get("isError") else "success",
@@ -474,8 +477,48 @@ def _message_text(content: Any) -> str:
     )
 
 
+def _observe_after_failed_action(
+    host: ComputerHostClient, session: str, app: str,
+    result: dict[str, Any], cancelled: Event,
+) -> dict[str, Any]:
+    """Recover observation once, never repeat or rewrite the failed action."""
+    if not app:
+        return result
+    _ensure_not_cancelled(cancelled, host, session)
+    try:
+        observation = host.call(session, "get_app_state", {"app": app})
+    except RuntimeToolExecutionCancelled:
+        raise
+    except Exception as exc:
+        _ensure_not_cancelled(cancelled, host, session)
+        _logger.warning("CU observation recovery failed app=%s error=%s", app, exc)
+        return result
+    _ensure_not_cancelled(cancelled, host, session)
+    _logger.info("CU observation recovery app=%s is_error=%s", app, bool(observation.get("isError")))
+    if observation.get("isError"):
+        return result
+    return {
+        **result,
+        "latest_observation": observation,
+        "content": [
+            *result.get("content", []),
+            {"type": "text", "text": "The failed action was NOT replayed. A fresh observation follows. Use its observation_id and reassess the target before choosing the next action."},
+            *observation.get("content", []),
+        ],
+    }
+
+
 def _result_text(result: dict[str, Any]) -> str:
     return _message_text(result.get("content", []))
+
+
+def _model_result_text(result: dict[str, Any]) -> str:
+    text = _result_text(result)
+    input_result = result.get("input_result")
+    if not isinstance(input_result, dict) or not input_result:
+        return text
+    transaction = json.dumps(input_result, ensure_ascii=False, sort_keys=True)
+    return f"{text}\nInput transaction: {transaction}" if text else f"Input transaction: {transaction}"
 
 
 def _result_images(result: dict[str, Any]) -> list[dict[str, Any]]:
@@ -495,6 +538,7 @@ def _publish_state(
     result: dict[str, Any],
     steps: int,
 ) -> None:
+    result = result.get("latest_observation", result)
     screenshot = None
     for part in result.get("content", []):
         if part.get("type") == "image" and part.get("mimeType") == "image/png":
@@ -551,7 +595,7 @@ def _operation_progress(
     if result is not None:
         text = _result_text(result)
         match = (
-            re.search(r"\[((?:input|observation|click)\.[a-z_]+)\]", text)
+            re.search(r"\[((?:input|observation|click|coordinates)\.[a-z_]+)\]", text)
             if result.get("isError")
             else None
         )
@@ -560,6 +604,14 @@ def _operation_progress(
             if match
             else ("native_error" if result.get("isError") else None)
         )
+        if error_code == "native_error" and "cgWindowNotFound" in text:
+            error_code = "observation.window_unavailable"
+        if (
+            result.get("isError")
+            and result.get("input_result", {}).get("delivery") == "posted"
+            and error_code == "observation.unavailable"
+        ):
+            error_code = "observation.after_action"
         verified = result.get("input_result", {}).get(
             "verification"
         ) == "value_verified" or (
@@ -591,4 +643,5 @@ def _operation_progress(
         "input_verification": (result or {})
         .get("input_result", {})
         .get("verification"),
+        "input_mode": (result or {}).get("input_result", {}).get("input_mode"),
     }

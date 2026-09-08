@@ -50,7 +50,7 @@ class ToolPackageExecution(BaseModel):
 
     allow_parallel_calls: bool = True
     max_parallel_calls: int = Field(default=1, ge=1, le=128)
-    timeout_seconds: float = Field(default=300.0, gt=0, le=3600)
+    timeout_seconds: float | None = Field(default=300.0, gt=0, le=3600)
     output_projection: Literal["compress", "passthrough"] = "compress"
     output_max_model_chars: int = Field(default=50_000, ge=1_000, le=1_000_000)
     retain_raw_output: bool = True

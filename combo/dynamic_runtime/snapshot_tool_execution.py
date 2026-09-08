@@ -319,6 +319,7 @@ def _compile_tool(
         ),
         output_projection=definition.runtime_policy.output_projection,
         execution_mode=definition.execution_mode,
+        timeout_seconds=definition.runtime_policy.timeout_seconds,
         sensitive_argument_paths=list(definition.sensitive_argument_paths),
         loop_policy=ToolLoopPolicyConfig.model_validate(definition.loop_policy.model_dump(mode="json")),
         effects=list(definition.effects),

@@ -201,7 +201,10 @@ class ToolPackageRuntime:
             package_root = self._materialize_package(definition)
             resolution = self._dependency_pool.resolve_profile(
                 python_requirements=implementation.python_requirements,
-                timeout_seconds=max(1, int(definition.runtime_policy.timeout_seconds)),
+                timeout_seconds=(
+                    max(1, int(definition.runtime_policy.timeout_seconds))
+                    if definition.runtime_policy.timeout_seconds is not None else None
+                ),
                 on_progress=on_progress,
             )
             python_paths = tuple(

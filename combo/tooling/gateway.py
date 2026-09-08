@@ -92,7 +92,7 @@ class ToolExecutionGateway:
     output_store: ToolOutputStore | None = None
     approval_trust_store: ToolApprovalTrustResolver | None = None
     compression_model_resolver: Callable[[], Any] | None = None
-    timeout_seconds: float = 300.0
+    timeout_seconds: float | None = 300.0
 
     def execute(
         self,

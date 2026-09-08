@@ -99,6 +99,7 @@ class BuiltinToolCapabilitySource:
         if not isinstance(policy_override, dict):
             raise ValueError(f"builtin tool runtime policy override must be an object: {spec.id}")
         base_policy = ToolRuntimePolicy(
+            timeout_seconds=spec.timeout_seconds,
             risk_level=spec.risk_level,
             allow_parallel_calls=spec.concurrent,
             max_parallel_calls=spec.max_parallel_calls,

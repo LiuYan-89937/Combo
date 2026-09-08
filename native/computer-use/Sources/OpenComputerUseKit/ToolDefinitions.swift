@@ -41,7 +41,7 @@ public enum ToolDefinitions {
             name: "click",
             description: "Click an element by index or pixel coordinates from screenshot. This tool is part of plugin `Computer Use`.",
             annotations: defaultAnnotations(),
-            inputSchema: objectSchema(
+            inputSchema: elementOrPointObjectSchema(
                 properties: [
                     "app": stringProperty(description: "App name or bundle identifier"),
                     "element_index": stringProperty(description: "Element index to click"),
@@ -53,7 +53,7 @@ public enum ToolDefinitions {
                         enumValues: ["left", "right", "middle"]
                     ),
                     "click_method": stringProperty(
-                        description: "Click implementation: auto (default), accessibility, app_post, sky_click, or global. Accessibility requires element_index. app_post sends a public event directly to the target app. sky_click uses the macOS SkyLight background window path. Global may move the system pointer and requires OPEN_COMPUTER_USE_ALLOW_GLOBAL_POINTER_FALLBACKS=1.",
+                        description: "All clicks target the observed window. auto uses an exact window-owned accessibility target or the SkyLight window path. accessibility requires element_index. sky_click explicitly selects the window event path, which supports left single/double clicks. No process-only or global fallback.",
                         enumValues: ClickMethod.allCases.map(\.rawValue)
                     ),
                 ],
@@ -62,7 +62,7 @@ public enum ToolDefinitions {
         ),
         ToolDefinition(
             name: "drag",
-            description: "Drag from one point to another using pixel coordinates. This tool is part of plugin `Computer Use`.",
+            description: "Press and hold the primary mouse button while moving an object, handle, slider, or other explicitly draggable control between screenshot coordinates. Never use drag to scroll a page, list, conversation, document, or other content; use scroll with x/y when no accessibility element is exposed. This tool is part of plugin `Computer Use`.",
             annotations: defaultAnnotations(),
             inputSchema: objectSchema(
                 properties: [
@@ -110,7 +110,7 @@ public enum ToolDefinitions {
         ),
         ToolDefinition(
             name: "press_key",
-            description: "Post a key or chord to the bound editable receiver. Activates and raises the target window when needed, then confirms the actual keyboard receiver. Inspect the returned observation; posting does not prove consumption.",
+            description: "Post a key or chord to the bound receiver. The executor uses directed background delivery when confirmed and otherwise obtains and restores a short foreground focus lease. Inspect the returned observation; posting does not prove consumption.",
             annotations: defaultAnnotations(),
             inputSchema: objectSchema(
                 properties: [
@@ -123,21 +123,23 @@ public enum ToolDefinitions {
         ),
         ToolDefinition(
             name: "scroll",
-            description: "Scroll an element in a direction by a number of pages. This tool is part of plugin `Computer Use`.",
+            description: "Scroll page, list, conversation, document, or other content without pressing a mouse button. Target either an observed element_index or x/y inside the intended scroll region when accessibility does not expose one. Never emulate ordinary scrolling with drag. This tool is part of plugin `Computer Use`.",
             annotations: defaultAnnotations(),
-            inputSchema: objectSchema(
+            inputSchema: elementOrPointObjectSchema(
                 properties: [
                     "app": stringProperty(description: "App name or bundle identifier"),
                     "direction": stringProperty(description: "Scroll direction: up, down, left, or right"),
-                    "element_index": stringProperty(description: "Element identifier"),
+                    "element_index": stringProperty(description: "Observed scroll target; provide this or x/y"),
+                    "x": numberProperty(description: "X coordinate inside the intended scroll region in screenshot pixels; provide with y instead of element_index"),
+                    "y": numberProperty(description: "Y coordinate inside the intended scroll region in screenshot pixels; provide with x instead of element_index"),
                     "pages": numberProperty(description: "Number of pages to scroll. Fractional values are supported. Defaults to 1"),
                 ],
-                required: ["app", "element_index", "direction"]
+                required: ["app", "direction"]
             )
         ),
         ToolDefinition(
             name: "set_value",
-            description: "Replace the editable receiver contents using directed Select All then text, or Backspace for an empty value. Activates and raises the target window when needed. Does not depend on AX text or selection; inspect the returned observation.",
+            description: "Replace through the bound receiver after verifying a complete selection. The executor uses directed background delivery when confirmed and otherwise obtains and restores a short foreground focus lease. Unsupported or unconfirmed selection stops before text is sent. Never prepare or retry this with Raise, click, press_key plus type_text.",
             annotations: defaultAnnotations(),
             inputSchema: objectSchema(
                 properties: [
@@ -150,9 +152,9 @@ public enum ToolDefinitions {
         ),
         ToolDefinition(
             name: "set_input_target",
-            description: "Bind either an AX editable element_index or an explicit input position x/y in the latest screenshot. Coordinate binding activates the observed window and clicks that position once; it needs no AX editor. Inspect the result before typing. Rebind after focus/window changes or pointer actions. Choose exactly one targeting form.",
+            description: "Bind a window-owned element_index or x/y in the latest screenshot. An element exposing text selection uses receiver identity; other elements locate an input position by their current frame and establish window scope with one directed click. No editable capability is inferred from role labels. Inspect the result before typing. Rebind after receiver/window changes or pointer actions.",
             annotations: defaultAnnotations(),
-            inputSchema: objectSchema(
+            inputSchema: elementOrPointObjectSchema(
                 properties: [
                     "app": stringProperty(description: "App name or bundle identifier"),
                     "element_index": stringProperty(description: "Observed editable element"),
@@ -164,7 +166,7 @@ public enum ToolDefinitions {
         ),
         ToolDefinition(
             name: "type_text",
-            description: "Type at the actual selection of the bound receiver using directed Unicode keys. Activates and raises the target window when needed. No AX text writes or clipboard fallback. Observe the returned state; posting does not prove consumption.",
+            description: "Insert text at the actual selection of the bound receiver. The executor uses directed background delivery when confirmed and otherwise obtains and restores a short foreground focus lease. No AX text writes or clipboard fallback. Never replay unconfirmed input.",
             annotations: defaultAnnotations(),
             inputSchema: objectSchema(
                 properties: [
@@ -189,6 +191,15 @@ private func objectSchema(properties: [String: Any], required: [String]) -> [Str
         schema["required"] = required
     }
 
+    return schema
+}
+
+private func elementOrPointObjectSchema(properties: [String: Any], required: [String]) -> [String: Any] {
+    var schema = objectSchema(properties: properties, required: required)
+    schema["oneOf"] = [
+        ["required": ["element_index"]],
+        ["required": ["x", "y"]],
+    ]
     return schema
 }
 

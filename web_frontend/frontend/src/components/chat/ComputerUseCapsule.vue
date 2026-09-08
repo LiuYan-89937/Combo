@@ -19,12 +19,12 @@
         <img v-if="activity.screenshot" class="snapshot" :src="activity.screenshot.dataUrl" :width="activity.screenshot.width" :height="activity.screenshot.height" :alt="title">
         <p v-else>{{ t('conversation.computerUse.screenshotUnavailable') }}</p>
         <ol v-if="operations.length" class="operation-list" :aria-label="t('cu.steps')">
-          <li v-for="operation in displayedOperations" :key="operation.id" :class="{ failed: operation.status === 'failed' && !operation.inputVerification, unconfirmed: operation.inputVerification === 'unconfirmed' }">
+          <li v-for="operation in displayedOperations" :key="operation.id" :class="{ failed: operation.status === 'failed' && !operation.inputVerification && operation.errorCode !== 'observation.after_action', unconfirmed: operation.inputVerification === 'unconfirmed' || operation.errorCode === 'observation.after_action' }">
             <span class="step-number">{{ operation.step }}</span>
             <div class="step-content">
-              <div class="step-heading"><strong>{{ operationTitle(operation) }}</strong><span>{{ operationStatus(operation) }}</span></div>
+              <div class="step-heading"><strong>{{ operationTitle(operation) }}</strong></div>
               <p class="step-target">{{ [operation.app, operationTarget(operation)].filter(Boolean).join(' · ') }}</p>
-              <p v-if="operation.errorCode" class="step-error">{{ errorMessage(operation.errorCode) }}</p>
+              <p v-if="operation.errorCode && errorMessage(operation.errorCode)" class="step-error">{{ errorMessage(operation.errorCode) }}</p>
             </div>
           </li>
         </ol>
@@ -106,19 +106,18 @@ function operationTarget(operation: ComputerUseOperationView) {
   const target = operation.elementIndex != null ? t('cu.elementTarget', { index: operation.elementIndex })
     : operation.x != null && operation.y != null ? t('cu.coordinateTarget', { x: operation.x, y: operation.y })
     : operation.tool === 'type_text' ? t('cu.focusTarget') : ''
-  return [target, operation.textLength != null ? t('cu.textLength', { count: operation.textLength }) : ''].filter(Boolean).join(' · ')
-}
-function operationStatus(operation: ComputerUseOperationView) {
-  if (operation.status === 'running') return running.value ? t('cu.executing') : t('cu.endedUnverified')
-  if (operation.inputVerification === 'unconfirmed') return t('cu.inputUnconfirmed')
-  if (operation.valueVerified) return t('cu.valueVerified')
-  if (operation.status === 'failed') return t('cu.failed')
-  return t(['list_apps', 'get_app_state'].includes(operation.tool) ? 'cu.observed' : 'cu.returned')
+  const mode = operation.inputMode === 'foreground_lease' ? t('cu.inputModeLease')
+    : operation.inputMode === 'directed_background' ? t('cu.inputModeDirected') : ''
+  return [target, operation.textLength != null ? t('cu.textLength', { count: operation.textLength }) : '', mode].filter(Boolean).join(' · ')
 }
 function errorMessage(code: string) {
   const errors: Record<string, string> = {
     'input.target_invalid': 'cu.errorTarget', 'input.focus_mismatch': 'cu.errorFocus',
     'input.receiver_unconfirmed': 'cu.errorFocus',
+    'input.setup_failed': 'cu.errorSetup',
+    'input.activation_failed': 'cu.errorActivation',
+    'input.interrupted_by_user': 'cu.errorInterrupted',
+    'input.busy': 'cu.errorBusy',
     'input.delivery_interrupted': 'cu.errorWrite',
     'input.not_writable': 'cu.errorWritable', 'input.unsupported': 'cu.errorUnsupported',
     'input.write_failed': 'cu.errorWrite', 'input.verification_unavailable': 'cu.errorRead',
@@ -126,13 +125,19 @@ function errorMessage(code: string) {
     'input.verification_unconfirmed': 'cu.errorUnconfirmed',
     'input.target_required': 'cu.errorTargetRequired',
     'input.target_stale': 'cu.errorSelectionStale',
-    'input.selection_unconfirmed': 'cu.errorSelectionStale',
+    'input.selection_unconfirmed': 'cu.errorSelectionUnconfirmed',
     'input.background_unsupported': 'cu.errorBackground',
     'observation.stale': 'cu.errorObservation', 'observation.required': 'cu.errorObservation',
     'observation.unavailable': 'cu.errorObservation',
+    'observation.window_unavailable': 'cu.errorWindowUnavailable',
+    'observation.after_action': 'cu.errorAfterAction',
+    'input.replacement_unsupported': 'cu.errorReplacementUnsupported',
+    'observation.geometry_changed': 'cu.errorGeometryChanged',
+    'click.position_unavailable': 'cu.errorPositionUnavailable',
+    'coordinates.out_of_bounds': 'cu.errorCoordinates',
     'click.target_invalid': 'cu.errorTarget', 'click.unsupported': 'cu.errorClick',
   }
-  return t((errors[code] || 'cu.errorNative') as any)
+  return errors[code] ? t(errors[code] as any) : ''
 }
 function stop() {
   if (!activity.value.requestId || stopping.value) return
@@ -161,11 +166,10 @@ function stop() {
 .operation-list li { display: flex; gap: 10px; padding: 10px 0; border-top: 1px solid var(--app-border); }
 .step-number { flex: 0 0 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; background: var(--app-surface-hover); color: var(--app-text-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
 .step-content { flex: 1; min-width: 0; }
-.step-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.step-heading { display: flex; align-items: baseline; }
 .step-heading strong { font-size: 12px; font-weight: 600; }
-.step-heading span { flex-shrink: 0; color: var(--app-text-muted); font-size: 10px; }
 .step-target, .step-error { margin: 4px 0 0; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 .step-target, .empty-steps { color: var(--app-text-muted); }
-.failed .step-heading span, .step-error { color: var(--app-error-color, #c34242); }
-.unconfirmed .step-heading span, .unconfirmed .step-error { color: var(--app-text-secondary); }
+.step-error { color: var(--app-error-color, #c34242); }
+.unconfirmed .step-error { color: var(--app-text-secondary); }
 </style>

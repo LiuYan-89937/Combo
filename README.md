@@ -164,3 +164,7 @@ Combo/
 ## 重构规范
 
 动态运行时的身份模型、控制面协议、事务边界和完成门槛见 [`docs/DYNAMIC_AGENT_RUNTIME_REFACTOR.md`](docs/DYNAMIC_AGENT_RUNTIME_REFACTOR.md)。
+
+## 致谢
+
+感谢 [open-codex-computer-use](https://github.com/iFurySt/open-codex-computer-use) 为桌面操作能力提供基础。相关许可证和第三方声明保留在 [native/computer-use](native/computer-use/)。

@@ -2,6 +2,7 @@ import AppKit
 import ApplicationServices
 import CoreGraphics
 import Foundation
+import ImageIO
 import ScreenCaptureKit
 
 final class ElementRecord {
@@ -116,6 +117,32 @@ public struct AppSnapshot {
 
     let elements: [Int: ElementRecord]
 
+    var screenshotPixelSize: CGSize? {
+        guard
+            let screenshotPNGData = screenshotPNGData,
+            let imageSource = CGImageSourceCreateWithData(screenshotPNGData as CFData, nil),
+            let properties = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [CFString: Any],
+            let pixelWidth = properties[kCGImagePropertyPixelWidth] as? CGFloat,
+            let pixelHeight = properties[kCGImagePropertyPixelHeight] as? CGFloat,
+            pixelWidth > 0,
+            pixelHeight > 0
+        else {
+            return nil
+        }
+
+        return CGSize(width: pixelWidth, height: pixelHeight)
+    }
+
+    func validateScreenshotPoint(_ point: CGPoint) throws {
+        guard let size = screenshotPixelSize else {
+            throw ComputerUseError.stateUnavailable("[observation.unavailable] Coordinate actions require the current screenshot.")
+        }
+        guard point.x.isFinite, point.y.isFinite,
+              point.x >= 0, point.x < size.width, point.y >= 0, point.y < size.height else {
+            throw ComputerUseError.invalidArguments("[coordinates.out_of_bounds] Received (\(point.x), \(point.y)); screenshot \(Int(size.width))x\(Int(size.height)), valid range 0 <= x < \(Int(size.width)), 0 <= y < \(Int(size.height)).")
+        }
+    }
+
     public var renderedText: String {
         renderedText(style: .fullState)
     }
@@ -128,6 +155,11 @@ public struct AppSnapshot {
         lines.append("App=\(appReference) (pid \(app.pid))")
         lines.append("Observation: \(observationID). Use this observation_id for the next action.")
         lines.append("Window: \(quoted(displayTitle)), App: \(app.name).")
+        if let size = screenshotPixelSize {
+            lines.append("Screenshot: \(Int(size.width))x\(Int(size.height)) pixels. Origin is top-left; x increases right, y increases down. Valid coordinates: 0 <= x < \(Int(size.width)), 0 <= y < \(Int(size.height)). Use screenshot pixels, not desktop or window dimensions.")
+        } else {
+            lines.append("Screenshot unavailable. Coordinate actions are unavailable; do not reuse an older image.")
+        }
         lines.append(contentsOf: treeLines)
 
         if let selectedText, !selectedText.isEmpty {
