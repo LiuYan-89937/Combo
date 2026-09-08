@@ -110,7 +110,7 @@ public enum ToolDefinitions {
         ),
         ToolDefinition(
             name: "press_key",
-            description: "Post a key or key combination to the bound CU input target. Does not adopt system focus or activate the app. Requires a verified app-local keyboard receiver; unsupported background delivery is rejected. Delivery does not prove consumption; observe the effect and rebind the selection.",
+            description: "Post a key or chord to the bound editable receiver. Activates and raises the target window when needed, then confirms the actual keyboard receiver. Inspect the returned observation; posting does not prove consumption.",
             annotations: defaultAnnotations(),
             inputSchema: objectSchema(
                 properties: [
@@ -137,43 +137,40 @@ public enum ToolDefinitions {
         ),
         ToolDefinition(
             name: "set_value",
-            description: "Replace all text in a specified editable text element and verify by reading it back. Empty value clears it. Does not click, focus, submit, or prove application-level completion.",
+            description: "Replace the editable receiver contents using directed Select All then text, or Backspace for an empty value. Activates and raises the target window when needed. Does not depend on AX text or selection; inspect the returned observation.",
             annotations: defaultAnnotations(),
             inputSchema: objectSchema(
                 properties: [
                     "app": stringProperty(description: "App name or bundle identifier"),
                     "element_index": stringProperty(description: "Element identifier"),
                     "value": stringProperty(description: "Value to assign"),
-                    "verification_timeout_ms": positiveIntegerProperty(description: "Read-only verification deadline in milliseconds; defaults to 1000. Never retries the write."),
                 ],
-                required: ["app", "element_index", "value"]
+                required: ["app", "value"]
             )
         ),
         ToolDefinition(
             name: "set_input_target",
-            description: "Bind an observed editable control and a CU-owned UTF-16 selection without changing system focus. Provide selection_start and selection_length together, or read the current control selection once. Rebind after external text changes or unconfirmed input. This is local targeting, not proof of keyboard support.",
+            description: "Bind either an AX editable element_index or an explicit input position x/y in the latest screenshot. Coordinate binding activates the observed window and clicks that position once; it needs no AX editor. Inspect the result before typing. Rebind after focus/window changes or pointer actions. Choose exactly one targeting form.",
             annotations: defaultAnnotations(),
             inputSchema: objectSchema(
                 properties: [
                     "app": stringProperty(description: "App name or bundle identifier"),
                     "element_index": stringProperty(description: "Observed editable element"),
-                    "selection_start": ["type": "integer", "minimum": 0, "description": "CU selection start in UTF-16 code units"],
-                    "selection_length": ["type": "integer", "minimum": 0, "description": "CU selection length; zero places the insertion point"],
+                    "x": numberProperty(description: "Input position x in screenshot pixels; provide with y instead of element_index"),
+                    "y": numberProperty(description: "Input position y in screenshot pixels; provide with x instead of element_index"),
                 ],
-                required: ["app", "element_index"]
+                required: ["app"]
             )
         ),
         ToolDefinition(
             name: "type_text",
-            description: "Insert text at the CU-owned selection of the bound control. element_index explicitly binds a control if none is bound. Direct accessibility text operations work without system focus when supported. Keyboard mode requires evidence of the app-local receiver, never foreground activation. Observe after any unconfirmed write; do not replay.",
+            description: "Type at the actual selection of the bound receiver using directed Unicode keys. Activates and raises the target window when needed. No AX text writes or clipboard fallback. Observe the returned state; posting does not prove consumption.",
             annotations: defaultAnnotations(),
             inputSchema: objectSchema(
                 properties: [
                     "app": stringProperty(description: "App name or bundle identifier"),
                     "text": stringProperty(description: "Literal text to type"),
                     "element_index": stringProperty(description: "Optional editable target in the observed window; otherwise use the session-bound CU target"),
-                    "input_method": stringProperty(description: "Choose accessibility (default) or keyboard explicitly. Keyboard requires a verified app-local receiver; no automatic fallback or activation.", enumValues: ["accessibility", "keyboard"]),
-                    "verification_timeout_ms": positiveIntegerProperty(description: "Read-only verification deadline in milliseconds; defaults to 1000. Never retries the write."),
                 ],
                 required: ["app", "text"]
             )

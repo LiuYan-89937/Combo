@@ -131,10 +131,11 @@ class ComputerUseCoordinator:
                     message="Computer Use session was cancelled.",
                 )
 
-        unregister_cancellation = register_runtime_tool_cancellation(
-            cancel_active_session
-        )
+        unregister_cancellation = lambda: None
         try:
+            unregister_cancellation = register_runtime_tool_cancellation(
+                cancel_active_session
+            )
             _ensure_not_cancelled(cancelled, host, None)
             return self._run_exclusive(
                 instance=instance,
@@ -150,9 +151,13 @@ class ComputerUseCoordinator:
                 ) from None
             raise
         finally:
-            unregister_cancellation()
-            host.close()
-            release_activity()
+            try:
+                unregister_cancellation()
+            finally:
+                try:
+                    host.close()
+                finally:
+                    release_activity()
 
     def _run_exclusive(
         self,

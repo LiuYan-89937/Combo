@@ -24,7 +24,7 @@ var clickMethodValues = []string{"auto", "accessibility", "app_post", "sky_click
 //go:embed runtime.ps1
 var windowsRuntimeScript string
 
-const serverInstructions = "Computer Use tools let you interact with Windows apps by performing UI actions.\n\nBegin by calling `get_app_state` every turn you want to use Computer Use to get the latest state before acting. The available tools are list_apps, get_app_state, click, perform_secondary_action, scroll, drag, set_input_target, type_text, press_key, and set_value.\n\nPrefer element-targeted interactions over coordinate clicks when an index for the targeted element is available. Windows actions use UI Automation patterns first and fall back to window messages when an app does not expose the needed pattern. The Windows runtime does not auto-launch apps, perform SetFocus, or use UIA text fallback by default, so background-capable actions do not intentionally steal the user's foreground focus. Every action requires the observation_id from the latest state for that app, and consumes it even on failure; use the next returned ID or observe again. Coordinates are pixels in the screenshot. Do not queue actions against an old ID. Clicks operate only on the requested target. CU owns a target and UTF-16 selection per window, independent of human focus. Bind with set_input_target; set_value binds and places the CU caret at the verified value end. type_text uses this bound selection, not system focus. Accessibility writes the derived value directly. Explicit keyboard mode uses an exact native control handle; unsupported routes and modifier chords are rejected without activation. Rebind after text changes, keys or unconfirmed writes. Prefer semantic button actions when background keys are unsupported. An unconfirmed write may already have affected the app: observe and never automatically replay. Readback alone does not prove application-level effects."
+const serverInstructions = "Computer Use tools operate Windows apps through observations and actions. Begin with get_app_state. Every action consumes the latest observation_id, even on failure; use the next returned observation before acting again. Coordinates are screenshot pixels. Prefer the exact observed element; clicks do not substitute other controls. set_input_target binds either an editable element_index or explicit x/y in the latest screenshot. Use x/y for an editor with no UIA node. Coordinate binding activates and clicks the target window, then records its native keyboard handle without claiming an editable control. Inspect the screenshot before typing; rebind after focus/window or pointer changes. type_text inserts at the receiver's actual selection. set_value selects all via the native edit protocol and then sends text, or Backspace for an empty value. Element-scope text uses directed messages to a native Edit/RichEdit HWND verified by PID and Runtime ID. Window-scope text targets the recorded native keyboard handle verified against the focused target window and PID; no UIA editor is required. UIA text is not used to assign text or determine input success. Unsupported handles and modifier chords are rejected, without global input or clipboard fallback. Whole replacement is unavailable for opaque window-scope targets on Windows; use type_text at an explicitly selected position. Posted events return verification=unconfirmed and a fresh observation. Inspect the effect; this status alone is not a failure and must not trigger replay. Interrupted input may be partial. Observe before any further action. Ask the user before destructive or externally visible actions when not already authorized."
 
 type toolDefinition struct {
 	Name        string         `json:"name"`
@@ -137,22 +137,18 @@ func (s *appSnapshot) result() toolCallResult {
 }
 
 type inputTarget struct {
+    Scope string `json:"scope"`
+    KeyboardHandle int64 `json:"keyboard_handle,omitempty"`
+    Bounds *frame `json:"bounds,omitempty"`
     PID int `json:"pid"`
     WindowHandle int64 `json:"window_handle"`
     Element *elementRecord `json:"element"`
-    Value string `json:"value"`
-    SelectionStart *int `json:"selection_start"`
-    SelectionLength *int `json:"selection_length"`
 }
 
 type psRequest struct {
     InputTarget *inputTarget `json:"input_target,omitempty"`
-    SelectionStart *int `json:"selection_start,omitempty"`
-    SelectionLength *int `json:"selection_length,omitempty"`
     ObservationID string `json:"observation_id,omitempty"`
     WindowHandle int64 `json:"window_handle,omitempty"`
-    InputMethod string `json:"input_method,omitempty"`
-    VerificationTimeoutMS int `json:"verification_timeout_ms,omitempty"`
     TargetPID int `json:"target_pid,omitempty"`
 	Tool         string         `json:"tool"`
 	App          string         `json:"app,omitempty"`
@@ -270,23 +266,25 @@ func (s *service) callTool(name string, args map[string]any) toolCallResult {
 			requiredFloat(args, "to_y"),
 		)
 	case "set_input_target":
-        start, err := optionalSelectionOffset(args, "selection_start")
-        if err != nil { return textResult(err.Error(), true) }
-        length, err := optionalSelectionOffset(args, "selection_length")
-        if err != nil { return textResult(err.Error(), true) }
-        if (start == nil) != (length == nil) { return textResult("Provide selection_start and selection_length together", true) }
         app := requiredString(args, "app")
         snapshot := s.currentSnapshot(app)
         if snapshot == nil { return textResult("[observation.required] Run get_app_state first", true) }
-        record, err := lookupElement(snapshot, requiredElementIndex(args))
-        if err != nil { return textResult(err.Error(), true) }
-        return s.actionResult(app, psRequest{Tool: "set_input_target", App: app, Element: record, SelectionStart: start, SelectionLength: length})
+        index := optionalElementIndex(args)
+        x, y := optionalFloat(args, "x"), optionalFloat(args, "y")
+        if index != "" {
+            if x != nil || y != nil { return textResult("Choose element_index or x/y, not both", true) }
+            record, err := lookupElement(snapshot, index)
+            if err != nil { return textResult(err.Error(), true) }
+            return s.actionResult(app, psRequest{Tool: "set_input_target", App: app, Element: record})
+        }
+        if x == nil || y == nil { return textResult("Provide element_index or both screenshot coordinates x and y", true) }
+        return s.actionResult(app, psRequest{Tool: "set_input_target", App: app, X: x, Y: y})
     case "type_text":
-		return s.typeText(requiredString(args, "app"), optionalString(args, "text"), requiredElementIndex(args), optionalString(args, "input_method"), intValue(optionalFloat(args, "verification_timeout_ms"), defaultVerificationTimeoutMS))
+		return s.typeText(requiredString(args, "app"), optionalString(args, "text"), requiredElementIndex(args))
 	case "press_key":
 		return s.pressKey(requiredString(args, "app"), requiredString(args, "key"), optionalElementIndex(args))
 	case "set_value":
-		return s.setValue(requiredString(args, "app"), requiredElementIndex(args), optionalString(args, "value"), intValue(optionalFloat(args, "verification_timeout_ms"), defaultVerificationTimeoutMS))
+		return s.setValue(requiredString(args, "app"), requiredElementIndex(args), optionalString(args, "value"))
 	default:
 		return textResult(fmt.Sprintf("unsupportedTool(%q)", name), true)
 	}
@@ -436,7 +434,7 @@ func (s *service) drag(app string, fromX, fromY, toX, toY *float64) toolCallResu
 	return s.actionResult(app, psRequest{Tool: "drag", App: app, FromX: fromX, FromY: fromY, ToX: toX, ToY: toY, WindowBounds: snapshot.WindowBounds})
 }
 
-func (s *service) typeText(app, text, elementIndex, inputMethod string, verificationTimeoutMS int) toolCallResult {
+func (s *service) typeText(app, text, elementIndex string) toolCallResult {
 	if app == "" {
 		return textResult("Missing required argument: app", true)
 	}
@@ -452,7 +450,7 @@ func (s *service) typeText(app, text, elementIndex, inputMethod string, verifica
         record, err = lookupElement(s.currentSnapshot(app), elementIndex)
         if err != nil { return textResult("[input.target_invalid] " + err.Error(), true) }
     }
-    return s.actionResult(app, psRequest{Tool: "type_text", App: app, Text: text, Element: record, InputMethod: inputMethod, VerificationTimeoutMS: verificationTimeoutMS})
+    return s.actionResult(app, psRequest{Tool: "type_text", App: app, Text: text, Element: record})
 }
 
 func (s *service) pressKey(app, key, elementIndex string) toolCallResult {
@@ -474,39 +472,34 @@ func (s *service) pressKey(app, key, elementIndex string) toolCallResult {
     return s.actionResult(app, psRequest{Tool: "press_key", App: app, Key: key, Element: record})
 }
 
-func (s *service) setValue(app, elementIndex, value string, verificationTimeoutMS int) toolCallResult {
-	if app == "" {
-		return textResult("Missing required argument: app", true)
-	}
-	if elementIndex == "" {
-		return textResult("Missing required argument: element_index", true)
-	}
-	snapshot := s.currentSnapshot(app)
-	if snapshot == nil {
-		return textResult("No app state is available for "+app+". Run get_app_state before action tools.", true)
-	}
-	record, err := lookupElement(snapshot, elementIndex)
-	if err != nil {
-		return textResult("[input.target_invalid] "+err.Error(), true)
-	}
-	return s.actionResult(app, psRequest{Tool: "set_value", App: app, Element: record, Value: value, VerificationTimeoutMS: verificationTimeoutMS})
+func (s *service) setValue(app, elementIndex, value string) toolCallResult {
+    snapshot := s.currentSnapshot(app)
+    if snapshot == nil { return textResult("[observation.required] Run get_app_state first", true) }
+    var record *elementRecord
+    if elementIndex != "" {
+        var err error
+        record, err = lookupElement(snapshot, elementIndex)
+        if err != nil { return textResult("[input.target_invalid] " + err.Error(), true) }
+    }
+    return s.actionResult(app, psRequest{Tool: "set_value", App: app, Element: record, Value: value})
 }
-
-const defaultVerificationTimeoutMS = 1000
 
 func (s *service) actionResult(app string, request psRequest) toolCallResult {
     observed := s.currentSnapshot(app)
     if observed == nil { return textResult("[observation.required] Run get_app_state before acting.", true) }
-    if request.Tool == "type_text" || request.Tool == "press_key" {
+    if request.Tool == "click" || request.Tool == "scroll" || request.Tool == "drag" || request.Tool == "perform_secondary_action" {
+        if saved := s.inputTargets[observed.App.PID]; saved != nil && saved.Scope == "window" { delete(s.inputTargets, observed.App.PID) }
+    }
+    if request.Tool == "set_input_target" { delete(s.inputTargets, observed.App.PID) }
+    if request.Tool == "type_text" || request.Tool == "press_key" || request.Tool == "set_value" {
         saved := s.inputTargets[observed.App.PID]
         if saved != nil && saved.WindowHandle == observed.WindowHandle &&
-            (request.Element == nil || reflect.DeepEqual(saved.Element.RuntimeID, request.Element.RuntimeID)) {
+            (request.Element == nil || (saved.Element != nil && reflect.DeepEqual(saved.Element.RuntimeID, request.Element.RuntimeID))) {
             copy := *saved
             request.InputTarget = &copy
             request.Element = saved.Element
-            saved.SelectionStart, saved.SelectionLength = nil, nil
         }
-        if request.Element == nil {
+        if request.Element == nil && request.InputTarget == nil {
             return textResult("[input.target_required] Specify element_index or use set_input_target; CU never adopts human focus.", true)
         }
     }
@@ -522,15 +515,15 @@ func (s *service) actionResult(app string, request psRequest) toolCallResult {
     if result.IsError { return result }
     state := snapshot.result()
     if request.Tool == "set_input_target" {
-        state.Content = append(state.Content, contentItem{Type: "text", Text: "CU target and selection bound without changing system focus. Binding does not prove background keyboard support."})
+        state.Content = append(state.Content, contentItem{Type: "text", Text: "CU target bound. Coordinate binding activates and clicks the observed window; inspect the screenshot to confirm the input position. Window scope does not prove an editable control. Rebind after focus or pointer changes."})
     }
     if request.Tool == "press_key" {
-        state.Content = append(state.Content, contentItem{Type: "text", Text: "Key events posted to the bound control; consumption is unconfirmed. Observe the effect and rebind the selection."})
+        state.Content = append(state.Content, contentItem{Type: "text", Text: "Key events posted to the bound control; consumption is unconfirmed. Observe the effect."})
     }
     state.Diagnostics = result.Diagnostics
     state.InputResult = result.InputResult
-    if result.InputResult["verification"] == "value_verified" {
-        state.Content = append(state.Content, contentItem{Type: "text", Text: "Input result: value_verified. Text readback matched; application-level effects are not verified."})
+    if result.InputResult["delivery"] == "posted" {
+        state.Content = append(state.Content, contentItem{Type: "text", Text: "Keyboard events posted. Inspect the returned observation to verify their effect; do not automatically replay."})
     }
     return state
 }
@@ -639,15 +632,6 @@ func runPowerShell(request psRequest) (*psResponse, error) {
 func requiredString(args map[string]any, key string) string {
 	value, _ := args[key].(string)
 	return strings.TrimSpace(value)
-}
-
-func optionalSelectionOffset(args map[string]any, key string) (*int, error) {
-    raw, present := args[key]
-    if !present { return nil, nil }
-    text := elementIndexString(raw)
-    value, err := strconv.Atoi(text)
-    if err != nil || value < 0 { return nil, fmt.Errorf("%s must be a nonnegative integer", key) }
-    return &value, nil
 }
 
 func optionalString(args map[string]any, key string) string {
@@ -876,7 +860,7 @@ func toolDefinitions() []toolDefinition {
 		},
 		{
 			Name:        "press_key",
-			Description: "Post an unmodified key to the exact native handle of the CU target, without system focus or activation. Modifier chords are unsupported. Delivery does not prove consumption; observe and rebind the selection.",
+			Description: "Post an unmodified key to the exact native handle of the CU target, without system focus or activation. Modifier chords are unsupported. Delivery does not prove consumption; observe the returned state.",
 			Annotations: defaultAnnotations(),
 			InputSchema: objectSchema(map[string]any{
 				"app": stringProperty("App name or bundle identifier"),
@@ -897,36 +881,33 @@ func toolDefinitions() []toolDefinition {
 		},
 		{
 			Name:        "set_value",
-			Description: "Replace all text in a specified editable text element and verify by reading it back. Empty value clears it. Does not click, focus, submit, or prove application-level completion.",
+			Description: "Replace a bound native editable control using Select All and directed character messages. Opaque window-scope targets do not support replacement; use type_text at an explicitly selected position. Inspect the returned state.",
 			Annotations: defaultAnnotations(),
 			InputSchema: objectSchema(map[string]any{
 				"app":           stringProperty("App name or bundle identifier"),
 				"element_index": stringProperty("Element identifier"),
 				"value":         stringProperty("Value to assign"),
-                "verification_timeout_ms": positiveIntegerProperty("Read-only verification deadline in milliseconds; defaults to 1000. Never retries the write."),
-			}, []string{"app", "element_index", "value"}),
+			}, []string{"app", "value"}),
 		},
         {
             Name: "set_input_target",
-            Description: "Bind an observed editable control and CU-owned UTF-16 selection without changing system focus. Provide selection_start and selection_length together or capture the native control selection once. Binding does not guarantee keyboard support.",
+            Description: "Bind either element_index or x/y in the latest screenshot. Coordinate binding activates and clicks the window, then records its native keyboard handle without requiring a UIA editor. Choose exactly one targeting form. Inspect the result before typing.",
             Annotations: defaultAnnotations(),
             InputSchema: objectSchema(map[string]any{
                 "app": stringProperty("Application"),
                 "element_index": stringProperty("Observed editable target"),
-                "selection_start": map[string]any{"type":"integer", "minimum":0},
-                "selection_length": map[string]any{"type":"integer", "minimum":0},
-            }, []string{"app", "element_index"}),
+                "x": numberProperty("Input position x in screenshot pixels; provide with y"),
+                "y": numberProperty("Input position y in screenshot pixels; provide with x"),
+            }, []string{"app"}),
         },
 		{
 			Name:        "type_text",
-			Description: "Insert text at the CU-owned selection. Accessibility writes the derived full value through ValuePattern. Keyboard mode requires an exact native Edit/RichEdit handle. No system focus, automatic activation or replay. Rebind after external text changes or unconfirmed input.",
+			Description: "Send directed keyboard input to a bound native editable control. set_value selects all before replacement; type_text uses the current selection. Inspect the resulting observation.",
 			Annotations: defaultAnnotations(),
 			InputSchema: objectSchema(map[string]any{
 				"app":  stringProperty("App name or bundle identifier"),
 				"text": stringProperty("Literal text to type"),
                 "element_index": stringProperty("Optional editable target; otherwise use the CU-bound target, never system focus"),
-                "input_method": enumStringProperty("Explicit accessibility (default) or native control keyboard delivery. No foreground activation or automatic fallback.", []string{"accessibility", "keyboard"}),
-                "verification_timeout_ms": positiveIntegerProperty("Read-only verification deadline in milliseconds; defaults to 1000. Never retries the write."),
 			}, []string{"app", "text"}),
 		},
 	}

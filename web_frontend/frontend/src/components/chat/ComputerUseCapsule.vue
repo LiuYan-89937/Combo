@@ -118,6 +118,8 @@ function operationStatus(operation: ComputerUseOperationView) {
 function errorMessage(code: string) {
   const errors: Record<string, string> = {
     'input.target_invalid': 'cu.errorTarget', 'input.focus_mismatch': 'cu.errorFocus',
+    'input.receiver_unconfirmed': 'cu.errorFocus',
+    'input.delivery_interrupted': 'cu.errorWrite',
     'input.not_writable': 'cu.errorWritable', 'input.unsupported': 'cu.errorUnsupported',
     'input.write_failed': 'cu.errorWrite', 'input.verification_unavailable': 'cu.errorRead',
     'input.readback_mismatch': 'cu.errorMismatch',

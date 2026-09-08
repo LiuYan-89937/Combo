@@ -625,30 +625,44 @@ public final class ComputerUseService {
         return snapshotResult(for: try refreshSnapshot(for: query), style: .actionResult)
     }
 
-    public func setInputTarget(app query: String, elementIndex: String, selectionStart: Int? = nil, selectionLength: Int? = nil) throws -> ToolCallResult {
+    public func setInputTarget(app query: String, elementIndex: String? = nil, x: Double? = nil, y: Double? = nil) throws -> ToolCallResult {
         let snapshot = try currentSnapshot(for: query)
-        let target = try bindInputTarget(snapshot: snapshot, index: elementIndex)
-        if selectionStart != nil || selectionLength != nil {
-            guard let start = selectionStart, let length = selectionLength,
-                  start >= 0, length >= 0, start <= (target.value as NSString).length,
-                  length <= (target.value as NSString).length - start else {
-                throw ComputerUseError.invalidArguments("Provide a valid UTF-16 selection_start and selection_length together")
+        let target: InputTarget
+        if let elementIndex {
+            guard x == nil && y == nil else {
+                throw ComputerUseError.invalidArguments("Choose element_index or x/y, not both")
             }
-            target.selection = CFRange(location: start, length: length)
+            target = try bindInputTarget(snapshot: snapshot, index: elementIndex)
+        } else {
+            guard let x, let y, let window = snapshot.windowElement else {
+                throw ComputerUseError.invalidArguments("Provide element_index or both screenshot coordinates x and y")
+            }
+            let point = try screenshotToGlobalPoint(snapshot: snapshot, x: x, y: y)
+            target = InputTarget(receiver: .windowPoint(point), window: window,
+                                 windowID: snapshot.targetWindowID, windowBounds: snapshot.windowBounds)
+            // An explicit coordinate binding establishes the position once, never on each keystroke.
+            inputTargets.removeValue(forKey: snapshot.app.pid)
+            try prepareKeyboardReceiver(target: target, snapshot: snapshot, allowWindowActivation: true)
+            retireObservation(snapshot.observationID)
+            try performNonAXClickFallback(at: point, button: .left, clickCount: 1,
+                                          targetDescription: "input_target", snapshot: snapshot)
+            try validateKeyboardReceiver(target: target, snapshot: snapshot)
         }
+        let refreshed = try refreshSnapshot(for: query)
+        try validateInputTarget(target, snapshot: refreshed)
         inputTargets[snapshot.app.pid] = target
-        debugClickDecision("input target bound observation=\(snapshot.observationID) pid=\(snapshot.app.pid) window=\(String(describing: snapshot.targetWindowID)) selection=\(String(describing: target.selection))")
-        let result = snapshotResult(for: try refreshSnapshot(for: query), style: .actionResult)
-        return ToolCallResult(content: result.content + [.text("CU input target bound. System focus was not changed. UTF-16 selection: \(String(describing: target.selection)).")])
+        debugClickDecision("input target bound observation=\(snapshot.observationID) pid=\(snapshot.app.pid) scope=\(target.scope) window=\(String(describing: snapshot.targetWindowID))")
+        let note = target.element == nil
+            ? "Window input position bound by a directed click. Only window identity is confirmed; inspect the screenshot to confirm the intended input position. No AX editable receiver is claimed. Rebind after focus/window changes or pointer actions."
+            : "Editable receiver bound without changing focus. Keyboard actions establish the receiver before dispatch."
+        return ToolCallResult(content: snapshotResult(for: refreshed, style: .actionResult).content + [.text(note)],
+                              inputResult: ["target_scope": target.scope, "verification": "unconfirmed"])
     }
 
-    private func readInputSelection(_ element: AXUIElement) -> CFRange? {
-        var raw: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &raw) == .success,
-              let raw, CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
-        var range = CFRange(location: 0, length: 0)
-        guard AXValueGetValue(raw as! AXValue, .cfRange, &range) else { return nil }
-        return range
+    func invalidateWindowInputTarget(app query: String) {
+        guard let snapshot = snapshotsByApp[query.lowercased()],
+              inputTargets[snapshot.app.pid]?.element == nil else { return }
+        inputTargets.removeValue(forKey: snapshot.app.pid)
     }
 
     private func bindInputTarget(snapshot: AppSnapshot, index: String) throws -> InputTarget {
@@ -656,14 +670,13 @@ public final class ComputerUseService {
         guard let window = snapshot.windowElement else {
             throw ComputerUseError.message("[input.target_invalid] The observation has no window identity")
         }
-        return InputTarget(element: element, window: window, windowID: snapshot.targetWindowID,
-                           value: try inputText(element), selection: readInputSelection(element))
+        return InputTarget(receiver: .element(element), window: window, windowID: snapshot.targetWindowID, windowBounds: snapshot.windowBounds)
     }
 
     private func resolveInputTarget(snapshot: AppSnapshot, index: String?) throws -> InputTarget {
         if let index {
             let element = try inputElement(snapshot: snapshot, index: index)
-            if let saved = inputTargets[snapshot.app.pid], CFEqual(saved.element, element),
+            if let saved = inputTargets[snapshot.app.pid], let savedElement = saved.element, CFEqual(savedElement, element),
                saved.windowID == snapshot.targetWindowID {
                 try validateInputTarget(saved, snapshot: snapshot)
                 return saved
@@ -680,7 +693,11 @@ public final class ComputerUseService {
     }
 
     private func validateInputTarget(_ target: InputTarget, snapshot: AppSnapshot) throws {
-        try validateInputElement(target.element, snapshot: snapshot)
+        if let element = target.element { try validateInputElement(element, snapshot: snapshot) }
+        if target.element == nil, target.windowBounds != snapshot.windowBounds {
+            inputTargets.removeValue(forKey: snapshot.app.pid)
+            throw ComputerUseError.message("[input.target_invalid] Window geometry changed; bind the input position again")
+        }
         guard let window = snapshot.windowElement, CFEqual(window, target.window),
               target.windowID == snapshot.targetWindowID else {
             inputTargets.removeValue(forKey: snapshot.app.pid)
@@ -688,108 +705,66 @@ public final class ComputerUseService {
         }
     }
 
-    private func prepareInputSelection(_ target: InputTarget, range: CFRange) throws {
-        if let current = readInputSelection(target.element),
-           current.location == range.location, current.length == range.length { return }
-        guard try isSettableForSetValue(element: target.element, attribute: kAXSelectedTextRangeAttribute) else {
-            throw ComputerUseError.message("[input.background_unsupported] This control cannot address the CU selection without relying on its own caret")
-        }
-        var requested = range
-        guard let value = AXValueCreate(.cfRange, &requested),
-              AXUIElementSetAttributeValue(target.element, kAXSelectedTextRangeAttribute as CFString, value) == .success,
-              let actual = readInputSelection(target.element),
-              actual.location == range.location, actual.length == range.length else {
-            throw ComputerUseError.message("[input.selection_unconfirmed] The control did not confirm the requested selection; no text was sent")
-        }
-    }
-
-    public func typeText(app query: String, text: String, elementIndex: String? = nil, inputMethod: String = "accessibility", verificationTimeout: TimeInterval? = nil) throws -> ToolCallResult {
+    public func typeText(app query: String, text: String, elementIndex: String? = nil) throws -> ToolCallResult {
         let snapshot = try currentSnapshot(for: query)
         let target = try resolveInputTarget(snapshot: snapshot, index: elementIndex)
-        guard ["accessibility", "keyboard"].contains(inputMethod) else {
-            throw ComputerUseError.invalidArguments("Unknown input_method")
-        }
-        let before = try inputText(target.element)
-        guard before == target.value, let range = target.selection,
-              range.location >= 0, range.length >= 0, range.location <= (before as NSString).length,
-              range.length <= (before as NSString).length - range.location else {
-            target.selection = nil
-            throw ComputerUseError.message("[input.target_stale] Text changed or the CU selection is unavailable. Observe and explicitly bind a new selection with set_input_target.")
-        }
-        let expected = (before as NSString).replacingCharacters(in: NSRange(location: range.location, length: range.length), with: text)
-        // Choose a capability before delivery. Never retry a failed write through another path.
-        let wholeValue: Bool
-        if inputMethod == "accessibility" {
-            wholeValue = try isSettableForSetValue(element: target.element, attribute: kAXValueAttribute)
-        } else {
-            wholeValue = false
-        }
-        if inputMethod == "keyboard" {
-            try validateBackgroundKeyboard(target: target, snapshot: snapshot)
-        } else if !wholeValue {
-            guard try isSettableForSetValue(element: target.element, attribute: kAXSelectedTextAttribute) else {
-                throw ComputerUseError.message("[input.background_unsupported] No writable text value or selection is available")
+        return try executeKeyboard(target: target, snapshot: snapshot, query: query, operation: "insert") {
+            try InputSimulation.typeText(text, pid: snapshot.app.pid) {
+                try self.validateKeyboardReceiver(target: target, snapshot: snapshot)
             }
         }
-        if !wholeValue { try prepareInputSelection(target, range: range) }
-        debugClickDecision("input request tool=type_text observation=\(snapshot.observationID) pid=\(snapshot.app.pid) target=\(diagnosticElementDescription(target.element)) method=\(inputMethod) whole_value=\(wholeValue) before_length=\((before as NSString).length) selection=\(range) submitted_length=\((text as NSString).length)")
-        target.selection = nil
-        invalidateSnapshot(snapshot)
-        do {
-            if inputMethod == "keyboard" {
-                try InputSimulation.typeText(text, pid: snapshot.app.pid) {
-                    try self.validateBackgroundKeyboard(target: target, snapshot: snapshot)
-                }
-            } else {
-                let attribute = wholeValue ? kAXValueAttribute : kAXSelectedTextAttribute
-                let value = wholeValue ? expected : text
-                let error = AXUIElementSetAttributeValue(target.element, attribute as CFString, value as CFString)
-                debugClickDecision("input delivery attribute=\(attribute) result=\(error.rawValue)")
-                guard error == .success else { return inputDeliveryFailure("Text delivery returned \(error.rawValue); observe before further input") }
-            }
-        } catch { return inputDeliveryFailure("Input delivery may be partial; observe before further input") }
-        let result = try verifiedInputResult(element: target.element, expected: expected, query: query, timeout: verificationTimeout)
-        if result.inputResult["verification"] == "value_verified" {
-            target.value = expected
-            target.selection = CFRange(location: range.location + (text as NSString).length, length: 0)
-        }
-        return result
     }
 
     public func pressKey(app query: String, key: String, elementIndex: String? = nil) throws -> ToolCallResult {
         let snapshot = try currentSnapshot(for: query)
         let target = try resolveInputTarget(snapshot: snapshot, index: elementIndex)
-        try validateBackgroundKeyboard(target: target, snapshot: snapshot)
-        guard try inputText(target.element) == target.value, let range = target.selection else {
-            throw ComputerUseError.message("[input.target_stale] Bind a fresh CU selection before keyboard input")
+        return try executeKeyboard(target: target, snapshot: snapshot, query: query, operation: "key") {
+            try InputSimulation.pressKey(key, pid: snapshot.app.pid)
         }
-        try prepareInputSelection(target, range: range)
-        target.selection = nil  // Arbitrary keys can move the caret or change the document.
-        invalidateSnapshot(snapshot)
-        try InputSimulation.pressKey(key, pid: snapshot.app.pid)
-        let result = snapshotResult(for: try refreshSnapshot(for: query), style: .actionResult)
-        return ToolCallResult(content: result.content + [.text("Key events posted to the target process. Consumption is unconfirmed; observe the application effect. Bind a fresh selection before further text input.")],
-                              inputResult: ["delivery": "unknown", "verification": "unconfirmed", "reason": "key_consumption_unobservable"])
     }
 
-    public func setValue(app query: String, elementIndex: String, value: String, verificationTimeout: TimeInterval? = nil) throws -> ToolCallResult {
+    public func setValue(app query: String, elementIndex: String? = nil, value: String) throws -> ToolCallResult {
         let snapshot = try currentSnapshot(for: query)
-        let target = try bindInputTarget(snapshot: snapshot, index: elementIndex)
-        inputTargets[snapshot.app.pid] = target
-        guard try isSettableForSetValue(element: target.element, attribute: kAXValueAttribute) else {
-            throw ComputerUseError.message("[input.not_writable] The target text value is not writable")
+        let target = try resolveInputTarget(snapshot: snapshot, index: elementIndex)
+        return try executeKeyboard(target: target, snapshot: snapshot, query: query, operation: "replace") {
+            // Select in the actual keyboard receiver; AX text may only describe a proxy.
+            try InputSimulation.pressKey("super+a", pid: snapshot.app.pid)
+            try self.validateKeyboardReceiver(target: target, snapshot: snapshot)
+            if value.isEmpty {
+                try InputSimulation.pressKey("BackSpace", pid: snapshot.app.pid)
+            } else {
+                try InputSimulation.typeText(value, pid: snapshot.app.pid) {
+                    try self.validateKeyboardReceiver(target: target, snapshot: snapshot)
+                }
+            }
         }
-        target.selection = nil
-        invalidateSnapshot(snapshot)
-        let error = AXUIElementSetAttributeValue(target.element, kAXValueAttribute as CFString, value as CFString)
-        debugClickDecision("input delivery tool=set_value observation=\(snapshot.observationID) pid=\(snapshot.app.pid) target=\(diagnosticElementDescription(target.element)) submitted_length=\((value as NSString).length) result=\(error.rawValue)")
-        guard error == .success else { return inputDeliveryFailure("AXValue returned \(error.rawValue); do not automatically replay") }
-        let result = try verifiedInputResult(element: target.element, expected: value, query: query, timeout: verificationTimeout)
-        if result.inputResult["verification"] == "value_verified" {
-            target.value = value
-            target.selection = CFRange(location: (value as NSString).length, length: 0)
+    }
+
+    private func executeKeyboard(target: InputTarget, snapshot: AppSnapshot, query: String,
+                                 operation: String, dispatch: () throws -> Void) throws -> ToolCallResult {
+        try prepareKeyboardReceiver(target: target, snapshot: snapshot)
+        retireObservation(snapshot.observationID)
+        debugClickDecision("input dispatch operation=\(operation) pid=\(snapshot.app.pid) window=\(String(describing: snapshot.targetWindowID)) method=targeted_keyboard")
+        do {
+            try validateKeyboardReceiver(target: target, snapshot: snapshot)
+            try dispatch()
+        } catch {
+            inputTargets.removeValue(forKey: snapshot.app.pid)
+            debugClickDecision("input dispatch interrupted error=\(error)")
+            return ToolCallResult(
+                content: [.text("[input.delivery_interrupted] Keyboard delivery may be partial. Observe before any further action; never automatically replay.")],
+                isError: true,
+                inputResult: ["delivery": "unknown", "verification": "unconfirmed", "reason": "dispatch_interrupted"])
         }
-        return result
+        let evidence = ["delivery": "posted", "verification": "unconfirmed", "reason": "keyboard_consumption_unobservable", "target_scope": target.scope]
+        do {
+            let result = snapshotResult(for: try refreshSnapshot(for: query), style: .actionResult)
+            return ToolCallResult(content: result.content + [.text("Keyboard events posted to the bound target. Inspect the new observation to verify the effect; AX text and selection may describe an editor proxy. Do not automatically replay.")],
+                                  inputResult: evidence)
+        } catch {
+            return ToolCallResult(content: [.text("[observation.unavailable] Keyboard events were posted, but the next observation is unavailable. Obtain a new state without replaying the action.")],
+                                  isError: true, inputResult: evidence)
+        }
     }
 
     private func inputElement(snapshot: AppSnapshot, index: String) throws -> AXUIElement {
@@ -811,73 +786,73 @@ public final class ComputerUseService {
         }
     }
 
-    private func validateBackgroundKeyboard(target: InputTarget, snapshot: AppSnapshot) throws {
+    private func prepareKeyboardReceiver(target: InputTarget, snapshot: AppSnapshot, allowWindowActivation: Bool = false) throws {
         try validateSnapshotWindow(snapshot)
         try validateInputTarget(target, snapshot: snapshot)
-        // PID events address an app, not an AX element. Require evidence of its local receiver.
-        let receiver = copyElement(AXUIElementCreateApplication(snapshot.app.pid), attribute: kAXFocusedUIElementAttribute)
-        guard let receiver, CFEqual(receiver, target.element) else {
-            throw ComputerUseError.message("[input.background_unsupported] The application does not expose the bound control as its keyboard receiver. Use direct text/semantic actions; no activation or key delivery was performed.")
+        if target.element == nil && !allowWindowActivation && !keyboardReceiverMatches(target: target, snapshot: snapshot) {
+            inputTargets.removeValue(forKey: snapshot.app.pid)
+            throw ComputerUseError.message("[input.target_required] Window focus changed; use set_input_target with fresh screenshot coordinates")
         }
-    }
-
-    private func invalidateSnapshot(_ snapshot: AppSnapshot) {
-        retireObservation(snapshot.observationID)
-    }
-
-    private func inputDeliveryFailure(_ message: String) -> ToolCallResult {
-        ToolCallResult(content: [.text("[input.write_failed] " + message)], isError: true,
-                       inputResult: ["delivery": "unknown", "verification": "unconfirmed"])
-    }
-
-    private func inputText(_ element: AXUIElement) throws -> String {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value) == .success,
-              let text = value as? String else {
-            throw ComputerUseError.message("[input.verification_unavailable] Cannot read the target's full text value")
+        guard let app = NSRunningApplication(processIdentifier: snapshot.app.pid) else {
+            throw ComputerUseError.message("[input.target_invalid] The target process has exited")
         }
-        return text
-    }
-
-    private func verifiedInputResult(element: AXUIElement, expected: String, query: String, timeout: TimeInterval?) throws -> ToolCallResult {
-        // A configurable read-only deadline allows asynchronous accessibility updates.
-        let policy = InputVerificationPolicy(timeout: timeout)
-        let deadline = ProcessInfo.processInfo.systemUptime + policy.timeout
-        var matched = false
-        var lastLength: Int?
+        if !app.isActive {
+            let accepted = app.activate(options: [])
+            debugClickDecision("input activate pid=\(snapshot.app.pid) accepted=\(accepted)")
+        }
+        var focusedWindow: CFTypeRef?
+        AXUIElementCopyAttributeValue(AXUIElementCreateApplication(snapshot.app.pid),
+                                      kAXFocusedWindowAttribute as CFString, &focusedWindow)
+        if focusedWindow == nil || !CFEqual(focusedWindow, target.window) {
+            let status = AXUIElementPerformAction(target.window, kAXRaiseAction as CFString)
+            debugClickDecision("input raise pid=\(snapshot.app.pid) status=\(status.rawValue)")
+        }
+        if let element = target.element {
+            let evidence = KeyboardTargetEvidence(pid: snapshot.app.pid, target: element)
+            if !evidence.resolves(to: element), isSettable(element: element, attribute: kAXFocusedAttribute) {
+                let status = AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+                debugClickDecision("input focus_request pid=\(snapshot.app.pid) status=\(status.rawValue)")
+            }
+        }
+        // Focus requests are asynchronous; wait for evidence rather than trusting their return code.
+        let deadline = ProcessInfo.processInfo.systemUptime + KeyboardReceiverPolicy.timeout
         repeat {
-            if let actual = try? inputText(element) {
-                lastLength = (actual as NSString).length
-                matched = actual == expected
-                if matched { break }
-            } else {
-                lastLength = nil
+            try validateSnapshotWindow(snapshot)
+            try validateInputTarget(target, snapshot: snapshot)
+            if keyboardReceiverMatches(target: target, snapshot: snapshot) {
+                try validateKeyboardReceiver(target: target, snapshot: snapshot)
+                return
             }
             let remaining = deadline - ProcessInfo.processInfo.systemUptime
             if remaining <= 0 { break }
-            Thread.sleep(forTimeInterval: min(policy.pollInterval, remaining))
+            // AppKit activation completion and focus notifications need the host main run loop.
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: min(KeyboardReceiverPolicy.pollInterval, remaining)))
         } while true
-        debugClickDecision("input verification expected_length=\((expected as NSString).length) actual_length=\(String(describing: lastLength)) exact_match=\(matched)")
-        guard matched else {
-            return ToolCallResult(
-                content: [.text("[input.verification_unconfirmed] The write returned success, but read-only verification did not confirm the expected text. Effects may have occurred. Run get_app_state; do not automatically replay.")],
-                isError: true,
-                inputResult: ["delivery": "returned_success", "verification": "unconfirmed",
-                              "reason": lastLength == nil ? "unreadable" : "readback_mismatch"]
-            )
+        try validateKeyboardReceiver(target: target, snapshot: snapshot)
+    }
+
+    private func keyboardReceiverMatches(target: InputTarget, snapshot: AppSnapshot) -> Bool {
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == snapshot.app.pid else { return false }
+        var window: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(AXUIElementCreateApplication(snapshot.app.pid),
+                                            kAXFocusedWindowAttribute as CFString, &window) == .success,
+              let window, CFEqual(window, target.window) else { return false }
+        guard let element = target.element else { return true }
+        return KeyboardTargetEvidence(pid: snapshot.app.pid, target: element).resolves(to: element)
+    }
+
+    private func validateKeyboardReceiver(target: InputTarget, snapshot: AppSnapshot) throws {
+        try validateSnapshotWindow(snapshot)
+        try validateInputTarget(target, snapshot: snapshot)
+        let matched = keyboardReceiverMatches(target: target, snapshot: snapshot)
+        if let element = target.element {
+            let evidence = KeyboardTargetEvidence(pid: snapshot.app.pid, target: element)
+            debugClickDecision("input receiver pid=\(snapshot.app.pid) scope=element receiver_status=\(evidence.receiverStatus.rawValue) receiver={\(diagnosticElementDescription(evidence.receiver))} matched=\(matched)")
+        } else {
+            debugClickDecision("input receiver pid=\(snapshot.app.pid) scope=window window=\(String(describing: target.windowID)) matched=\(matched) editable_receiver=unobservable")
         }
-        do {
-            let result = snapshotResult(for: try refreshSnapshot(for: query), style: .actionResult)
-            return ToolCallResult(
-                content: result.content + [.text("Input result: value_verified. Text readback matched; application-level effects are not verified.")],
-                inputResult: ["delivery": "returned_success", "verification": "value_verified"]
-            )
-        } catch {
-            return ToolCallResult(
-                content: [.text("[observation.unavailable] Text readback matched, but the next observation is unavailable. Do not replay the input; obtain a new state.")],
-                isError: true,
-                inputResult: ["delivery": "returned_success", "verification": "value_verified"]
-            )
+        guard matched else {
+            throw ComputerUseError.message("[input.receiver_unconfirmed] The target window and keyboard receiver could not be confirmed. Observe and focus the intended editor before retrying.")
         }
     }
 

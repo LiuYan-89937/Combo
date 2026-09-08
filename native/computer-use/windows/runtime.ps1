@@ -7,8 +7,8 @@ $ErrorActionPreference = "Stop"
 $DefaultTextLimit = 500
 $AccessibilityTreeMaxNodeCount = 1200
 $AccessibilityTreeMaxDepth = 64
-$InputVerificationDefaultTimeoutMS = 1000
-$InputVerificationPollMS = 50
+$KeyboardReceiverTimeoutMS = 1000
+$KeyboardReceiverPollMS = 50
 $script:InputResult = @{}
 $script:InputTarget = $null
 $script:Diagnostics = New-Object System.Collections.Generic.List[string]
@@ -56,6 +56,15 @@ public static class OCUWin32 {
 
     [DllImport("user32.dll")]
     public static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    public static extern bool SetForegroundWindow(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
+    public static extern bool IsChild(IntPtr parent, IntPtr child);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr WindowFromPoint(POINT point);
 
     [DllImport("user32.dll")]
     public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
@@ -789,59 +798,92 @@ function Get-BackgroundInputHandle($process, $target) {
     return $handle
 }
 
-function New-InputTarget($process, $element) {
-    $pattern = Get-InputPattern $process $element
-    $value = Read-InputText $pattern
-    $start = $null
-    $length = $null
-    if ($operation.tool -eq "set_input_target" -and $null -ne $operation.selection_start -and $null -ne $operation.selection_length) {
-        $start = [int]$operation.selection_start
-        $length = [int]$operation.selection_length
-        if ($start -lt 0 -or $length -lt 0 -or $start -gt $value.Length -or $length -gt ($value.Length - $start)) {
-            throw "[input.target_invalid] The requested UTF-16 selection is outside the text"
-        }
-    } elseif ($element.Current.NativeWindowHandle -ne 0 -and ($element.Current.ClassName -eq "Edit" -or $element.Current.ClassName -like "RichEdit*")) {
-        $handle = Get-BackgroundInputHandle $process $element
-        [int]$from = 0
-        [int]$to = 0
-        [void][OCUWin32]::GetEditSelection($handle, $EM_GETSEL, [ref]$from, [ref]$to)
-        if ($from -ge 0 -and $to -ge $from -and $to -le $value.Length) {
-            $start = $from
-            $length = $to - $from
-        }
+function Assert-KeyboardControl($process, $element) {
+    Assert-ElementWindow $process $element
+    $type = $element.Current.ControlType
+    if (-not $element.Current.IsEnabled -or
+        ($type -ne [Windows.Automation.ControlType]::Edit -and $type -ne [Windows.Automation.ControlType]::Document)) {
+        throw "[input.unsupported] The target is not an enabled editable control"
     }
-    return [pscustomobject]@{ pid = $process.Id; window_handle = [long]$process.MainWindowHandle;
-        element = $operation.element; value = $value; selection_start = $start; selection_length = $length }
-}
-
-function Assert-InputSelection($pattern, $target) {
-    $before = Read-InputText $pattern
-    if ($null -eq $target.selection_start -or $null -eq $target.selection_length -or
-        -not [string]::Equals($before, $target.value, [StringComparison]::Ordinal)) {
-        throw "[input.target_stale] Text changed or the CU selection is unavailable; observe and use set_input_target"
-    }
-    $start = [int]$target.selection_start
-    $length = [int]$target.selection_length
-    if ($start -lt 0 -or $length -lt 0 -or $start -gt $before.Length -or $length -gt ($before.Length - $start)) {
-        throw "[input.target_stale] The CU selection is outside the current text"
-    }
-}
-
-function Set-BackgroundSelection($process, $element, $target) {
-    $handle = Get-BackgroundInputHandle $process $element
     if ($element.Current.ClassName -ne "Edit" -and $element.Current.ClassName -notlike "RichEdit*") {
-        throw "[input.background_unsupported] Native selection addressing is unavailable; use accessibility input"
+        throw "[input.background_unsupported] The target does not expose the native edit message protocol"
     }
-    [int]$start = $target.selection_start
-    [int]$end = $start + $target.selection_length
-    [void][OCUWin32]::SendMessage($handle, $EM_SETSEL, [IntPtr]$start, [IntPtr]$end)
-    [int]$actualStart = 0
-    [int]$actualEnd = 0
-    [void][OCUWin32]::GetEditSelection($handle, $EM_GETSEL, [ref]$actualStart, [ref]$actualEnd)
-    if ($actualStart -ne $start -or $actualEnd -ne $end) {
-        throw "[input.selection_unconfirmed] The control did not confirm the requested selection; no text or keys were sent"
+    return Get-BackgroundInputHandle $process $element
+}
+
+function Get-WindowKeyboardHandle($process) {
+    $window = [IntPtr]$process.MainWindowHandle
+    if ([OCUWin32]::GetForegroundWindow() -ne $window) { return [IntPtr]::Zero }
+    [uint32]$owner = 0
+    $thread = [OCUWin32]::GetWindowThreadProcessId($window, [ref]$owner)
+    $info = New-Object OCUWin32+GUITHREADINFO
+    $info.cbSize = [Runtime.InteropServices.Marshal]::SizeOf($info)
+    if (-not [OCUWin32]::GetGUIThreadInfo($thread, [ref]$info)) { return [IntPtr]::Zero }
+    $handle = $info.hwndFocus
+    if ($handle -eq [IntPtr]::Zero -or
+        ($handle -ne $window -and -not [OCUWin32]::IsChild($window, $handle))) { return [IntPtr]::Zero }
+    [void][OCUWin32]::GetWindowThreadProcessId($handle, [ref]$owner)
+    if ($owner -ne $process.Id) { return [IntPtr]::Zero }
+    return $handle
+}
+
+function Get-InputHandle($process, $element) {
+    if ($script:InputTarget.scope -ne "window") { return Assert-KeyboardControl $process $element }
+    $target = $script:InputTarget
+    $current = Get-WindowBounds $process (Get-MainElement $process)
+    if ($target.pid -ne $process.Id -or $target.window_handle -ne [long]$process.MainWindowHandle) {
+        throw "[input.target_invalid] The bound window identity changed"
+    }
+    foreach ($field in @("x", "y", "width", "height")) {
+        if ($current.$field -ne $target.bounds.$field) { throw "[input.target_invalid] Window geometry changed; bind the position again" }
+    }
+    $handle = Get-WindowKeyboardHandle $process
+    if ($handle -eq [IntPtr]::Zero -or [long]$handle -ne $target.keyboard_handle) {
+        throw "[input.receiver_unconfirmed] Window focus changed; bind the input position again"
     }
     return $handle
+}
+
+function New-InputTarget($process, $element) {
+    if ($null -ne $element) {
+        [void](Assert-KeyboardControl $process $element)
+        return [pscustomobject]@{ pid = $process.Id; window_handle = [long]$process.MainWindowHandle;
+            element = $operation.element; scope = "element" }
+    }
+    if ($operation.tool -ne "set_input_target" -or $null -eq $operation.x -or $null -eq $operation.y) {
+        throw "[input.target_required] Provide an editable element or bind a screenshot position with set_input_target"
+    }
+    $point = Get-ClickPoint $process $operation $null
+    $window = [IntPtr]$process.MainWindowHandle
+    [void][OCUWin32]::SetForegroundWindow($window)
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    while ([OCUWin32]::GetForegroundWindow() -ne $window -and $clock.ElapsedMilliseconds -lt $KeyboardReceiverTimeoutMS) {
+        Start-Sleep -Milliseconds $KeyboardReceiverPollMS
+    }
+    Assert-ObservedWindow $process $operation
+    if ([OCUWin32]::GetForegroundWindow() -ne $window) {
+        throw "[input.receiver_unconfirmed] The target window could not be activated"
+    }
+    $screenPoint = New-Object OCUWin32+POINT
+    $screenPoint.X = $point.x
+    $screenPoint.Y = $point.y
+    $pointerHandle = [OCUWin32]::WindowFromPoint($screenPoint)
+    [uint32]$pointerOwner = 0
+    [void][OCUWin32]::GetWindowThreadProcessId($pointerHandle, [ref]$pointerOwner)
+    if ($pointerOwner -ne $process.Id -or
+        ($pointerHandle -ne $window -and -not [OCUWin32]::IsChild($window, $pointerHandle))) {
+        throw "[input.target_invalid] The input position is not in the target window"
+    }
+    Send-MouseClick $pointerHandle $point.x $point.y "left" 1
+    $clock.Restart()
+    do {
+        Start-Sleep -Milliseconds $KeyboardReceiverPollMS
+        $handle = Get-WindowKeyboardHandle $process
+    } while ($handle -eq [IntPtr]::Zero -and $clock.ElapsedMilliseconds -lt $KeyboardReceiverTimeoutMS)
+    if ($handle -eq [IntPtr]::Zero) { throw "[input.receiver_unconfirmed] No native keyboard receiver in the target window" }
+    $script:Diagnostics.Add("input scope=window window=$window keyboard_handle=$handle editable_receiver=unobservable")
+    return [pscustomobject]@{ pid = $process.Id; window_handle = [long]$window; element = $null;
+        scope = "window"; keyboard_handle = [long]$handle; bounds = $operation.windowBounds }
 }
 
 function Assert-ObservedWindow($process, $request) {
@@ -880,84 +922,31 @@ function Get-ClickPoint($process, $request, $element) {
     return [pscustomobject]@{ x = [int][math]::Round($x); y = [int][math]::Round($y) }
 }
 
-function Get-InputPattern($process, $element) {
-    Assert-ElementWindow $process $element
-    if ($null -eq $element -or $element.Current.ProcessId -ne $process.Id) {
-        throw "[input.target_invalid] The target does not belong to the observed process"
+function Invoke-TypeText($process, $element, [string]$text, [bool]$replace = $false) {
+    $handle = Get-InputHandle $process $element
+    if ($replace -and $script:InputTarget.scope -eq "window") {
+        throw "[input.unsupported] Whole replacement requires the native edit protocol on Windows; use type_text at the explicitly selected position"
     }
-    $type = $element.Current.ControlType
-    if ($type -ne [Windows.Automation.ControlType]::Edit -and $type -ne [Windows.Automation.ControlType]::Document) {
-        throw "[input.unsupported] The target is not an editable text control"
-    }
-    $pattern = Get-CurrentPatternOrNull $element ([Windows.Automation.ValuePattern]::Pattern)
-    if ($null -eq $pattern -or $pattern.Current.IsReadOnly -or -not $element.Current.IsEnabled) {
-        throw "[input.not_writable] A writable text ValuePattern is unavailable"
-    }
-    return $pattern
-}
-
-function Read-InputText($pattern) {
-    try { return [string]$pattern.Current.Value }
-    catch { throw "[input.verification_unavailable] Cannot read the target's full text value" }
-}
-
-function Confirm-InputValue($pattern, [string]$expected) {
-    $timeout = [int]$operation.verification_timeout_ms
-    if ($timeout -le 0) { $timeout = $script:InputVerificationDefaultTimeoutMS }
-    $clock = [Diagnostics.Stopwatch]::StartNew()
-    $matched = $false
-    $reason = "unreadable"
-    do {
-        try {
-            $actual = Read-InputText $pattern
-            $matched = [string]::Equals($actual, $expected, [StringComparison]::Ordinal)
-            $reason = "readback_mismatch"
-            if ($matched) { break }
-        } catch { $reason = "unreadable" }
-        $remaining = $timeout - $clock.ElapsedMilliseconds
-        if ($remaining -le 0) { break }
-        Start-Sleep -Milliseconds ([int][math]::Min($script:InputVerificationPollMS, $remaining))
-    } while ($true)
-    $script:InputResult = @{ delivery = "returned_success"; verification = "unconfirmed"; reason = $reason }
-    $script:Diagnostics.Add("input verification expected_length=$($expected.Length) exact_match=$matched elapsed_ms=$($clock.ElapsedMilliseconds)")
-    if (-not $matched) {
-        throw "[input.verification_unconfirmed] The write returned success, but read-only verification did not confirm the expected text. Effects may have occurred. Run get_app_state; do not automatically replay."
-    }
-    $script:InputResult = @{ delivery = "returned_success"; verification = "value_verified" }
-}
-
-function Invoke-TypeText($process, $element, [string]$text) {
-    $method = [string]$operation.input_method
-    if ([string]::IsNullOrEmpty($method)) { $method = "accessibility" }
-    if ($method -notin @("accessibility", "keyboard")) { throw "Unknown input_method" }
-    $target = $script:InputTarget
-    $pattern = Get-InputPattern $process $element
-    Assert-InputSelection $pattern $target
-    $before = [string]$target.value
-    [int]$start = $target.selection_start
-    [int]$end = $start + $target.selection_length
-    $expected = $before.Substring(0, $start) + $text + $before.Substring($end)
-    if ($method -eq "keyboard") { $handle = Set-BackgroundSelection $process $element $target }
-    $script:Diagnostics.Add("input target_pid=$($element.Current.ProcessId) selection_start=$start selection_end=$end before_length=$($before.Length) expected_length=$($expected.Length) method=$method")
-    $target.selection_start = $null
-    $target.selection_length = $null
+    $script:Diagnostics.Add("input target_pid=$($process.Id) scope=$($script:InputTarget.scope) hwnd=$handle replace=$replace submitted_length=$($text.Length) method=targeted_keyboard")
     $script:InputResult = @{ delivery = "unknown"; verification = "unconfirmed" }
     try {
-        if ($method -eq "keyboard") {
-            Send-Text $handle $text { [void](Get-BackgroundInputHandle $process $element) }
-        } else {
-            $pattern.SetValue($expected)
+        if ($replace) {
+            # Native edit protocol selects all independently of UIA's document proxy.
+            [void][OCUWin32]::SendMessage($handle, $EM_SETSEL, [IntPtr]::Zero, [IntPtr](-1))
         }
-    } catch { throw "[input.write_failed] Input delivery may be partial; observe before any further write." }
-    Confirm-InputValue $pattern $expected
-    $target.value = $expected
-    $target.selection_start = $start + $text.Length
-    $target.selection_length = 0
+        [void](Get-InputHandle $process $element)
+        if ($replace -and $text.Length -eq 0) {
+            Send-Key $handle "BackSpace"
+        } elseif ($text.Length -gt 0) {
+            Send-Text $handle $text { [void](Get-InputHandle $process $element) }
+        }
+    } catch {
+        $script:InputTarget = $null
+        throw "[input.delivery_interrupted] Keyboard delivery may be partial; observe before any further action."
+    }
+    $script:InputResult = @{ delivery = "posted"; verification = "unconfirmed"; reason = "keyboard_consumption_unobservable"; target_scope = $script:InputTarget.scope }
 }
 
-# Read the operation file as UTF-8 explicitly. Windows PowerShell 5.1's
-# Get-Content defaults to the system ANSI code page (e.g. GBK on Chinese
-# systems) for files without a BOM, which corrupts non-ASCII input such as
 # Chinese text passed to set_value/type_text.
 $operationJson = [System.IO.File]::ReadAllText($OperationPath, [System.Text.Encoding]::UTF8)
 $operation = $operationJson | ConvertFrom-Json
@@ -975,12 +964,12 @@ try {
         $windowBounds = $operation.windowBounds
         if ($operation.tool -in @("type_text", "set_value", "set_input_target", "press_key")) {
             if ($process.Id -ne $operation.target_pid) { throw "[input.target_invalid] The observed application process has changed" }
-            $element = Resolve-InputElement $process $operation.element
-            if ($null -eq $element) { throw "[input.target_required] Bind an observed editable target; system focus is not used" }
+            $element = $null
+            if ($null -ne $operation.element) { $element = Resolve-InputElement $process $operation.element }
             if ($null -ne $operation.input_target) {
                 $script:InputTarget = $operation.input_target
                 if ($script:InputTarget.pid -ne $process.Id -or $script:InputTarget.window_handle -ne [long]$process.MainWindowHandle -or
-                    -not (Same-RuntimeId @($script:InputTarget.element.runtimeId) @($element.GetRuntimeId()))) {
+                    ($script:InputTarget.scope -ne "window" -and ($null -eq $element -or -not (Same-RuntimeId @($script:InputTarget.element.runtimeId) @($element.GetRuntimeId()))))) {
                     $script:InputTarget = $null
                     throw "[input.target_invalid] The bound CU input identity changed"
                 }
@@ -1033,7 +1022,8 @@ try {
                 Send-Drag $hwnd ([int][math]::Round($windowBounds.x + [double]$operation.from_x)) ([int][math]::Round($windowBounds.y + [double]$operation.from_y)) ([int][math]::Round($windowBounds.x + [double]$operation.to_x)) ([int][math]::Round($windowBounds.y + [double]$operation.to_y))
             }
             "set_input_target" {
-                $script:Diagnostics.Add("input target_bound pid=$($process.Id) hwnd=$($process.MainWindowHandle) selection_start=$($script:InputTarget.selection_start) selection_length=$($script:InputTarget.selection_length)")
+                $script:Diagnostics.Add("input target_bound pid=$($process.Id) hwnd=$($process.MainWindowHandle) scope=$($script:InputTarget.scope)")
+                $script:InputResult = @{ target_scope = $script:InputTarget.scope; verification = "unconfirmed" }
             }
             "type_text" {
                 Invoke-TypeText $process $element $operation.text
@@ -1042,25 +1032,13 @@ try {
                 if (([string]$operation.key).Contains("+")) {
                     throw "[input.background_unsupported] Window messages cannot establish independent modifier-key state; use a semantic action"
                 }
-                $pattern = Get-InputPattern $process $element
-                Assert-InputSelection $pattern $script:InputTarget
-                $receiver = Set-BackgroundSelection $process $element $script:InputTarget
-                $script:InputTarget.selection_start = $null
-                $script:InputTarget.selection_length = $null
+                $receiver = Get-InputHandle $process $element
                 $script:InputResult = @{ delivery = "unknown"; verification = "unconfirmed"; reason = "key_consumption_unobservable" }
                 Send-Key $receiver $operation.key
+                $script:InputResult.delivery = "posted"
             }
             "set_value" {
-                $pattern = Get-InputPattern $process $element
-                $script:InputTarget.selection_start = $null
-                $script:InputTarget.selection_length = $null
-                $script:InputResult = @{ delivery = "unknown"; verification = "unconfirmed" }
-                try { $pattern.SetValue([string]$operation.value) }
-                catch { throw "[input.write_failed] ValuePattern.SetValue failed; do not automatically replay" }
-                Confirm-InputValue $pattern ([string]$operation.value)
-                $script:InputTarget.value = [string]$operation.value
-                $script:InputTarget.selection_start = ([string]$operation.value).Length
-                $script:InputTarget.selection_length = 0
+                Invoke-TypeText $process $element ([string]$operation.value) $true
             }
             default {
                 throw "unsupportedTool(`"$($operation.tool)`")"

@@ -1,19 +1,28 @@
 import ApplicationServices
 import Foundation
 
-/// CU-owned editing state. Neither the system focus nor a human caret selects this target.
+/// Session-owned receiver identity. Text and selection belong to the target application.
 final class InputTarget {
-    let element: AXUIElement
+    enum Receiver {
+        case element(AXUIElement)
+        case windowPoint(CGPoint)
+    }
+    let receiver: Receiver
     let window: AXUIElement
     let windowID: CGWindowID?
-    var value: String
-    var selection: CFRange?
+    let windowBounds: CGRect?
 
-    init(element: AXUIElement, window: AXUIElement, windowID: CGWindowID?, value: String, selection: CFRange?) {
-        self.element = element
+    var element: AXUIElement? {
+        if case .element(let element) = receiver { return element }
+        return nil
+    }
+
+    var scope: String { element == nil ? "window" : "element" }
+
+    init(receiver: Receiver, window: AXUIElement, windowID: CGWindowID?, windowBounds: CGRect?) {
+        self.receiver = receiver
         self.window = window
         self.windowID = windowID
-        self.value = value
-        self.selection = selection
+        self.windowBounds = windowBounds
     }
 }

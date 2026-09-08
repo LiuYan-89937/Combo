@@ -56,6 +56,9 @@ public final class ComputerUseToolDispatcher {
             )
             consumedObservation = arguments["observation_id"] as? String
         }
+        if ["click", "scroll", "drag", "perform_secondary_action"].contains(name) {
+            service.invalidateWindowInputTarget(app: try requireString("app", in: arguments))
+        }
         switch name {
         case "list_apps":
             return service.listApps()
@@ -102,17 +105,15 @@ public final class ComputerUseToolDispatcher {
         case "set_input_target":
             return try service.setInputTarget(
                 app: requireString("app", in: arguments),
-                elementIndex: requireElementIndex(in: arguments),
-                selectionStart: try optionalSelectionOffset("selection_start", in: arguments),
-                selectionLength: try optionalSelectionOffset("selection_length", in: arguments)
+                elementIndex: optionalElementIndex(in: arguments),
+                x: optionalDouble("x", in: arguments),
+                y: optionalDouble("y", in: arguments)
             )
         case "type_text":
             return try service.typeText(
                 app: requireString("app", in: arguments),
                 text: requireString("text", in: arguments),
-                elementIndex: optionalElementIndex(in: arguments),
-                inputMethod: optionalString("input_method", in: arguments) ?? "accessibility",
-                verificationTimeout: try optionalPositiveInt("verification_timeout_ms", in: arguments).map { Double($0) / 1000 }
+                elementIndex: optionalElementIndex(in: arguments)
             )
         case "press_key":
             return try service.pressKey(
@@ -123,9 +124,8 @@ public final class ComputerUseToolDispatcher {
         case "set_value":
             return try service.setValue(
                 app: requireString("app", in: arguments),
-                elementIndex: requireElementIndex(in: arguments),
-                value: requireText("value", in: arguments),
-                verificationTimeout: try optionalPositiveInt("verification_timeout_ms", in: arguments).map { Double($0) / 1000 }
+                elementIndex: optionalElementIndex(in: arguments),
+                value: requireText("value", in: arguments)
             )
         default:
             throw ComputerUseError.unsupportedTool(name)
@@ -224,16 +224,6 @@ public final class ComputerUseToolDispatcher {
         }
 
         return try positiveInt(from: value, key: key, expectedDescription: "a positive integer")
-    }
-
-    private func optionalSelectionOffset(_ key: String, in arguments: [String: Any]) throws -> Int? {
-        guard let raw = arguments[key] else { return nil }
-        guard let value = optionalDouble(key, in: arguments), value.isFinite,
-              value >= 0, value.rounded(.towardZero) == value, value < Double(Int.max),
-              CFGetTypeID(raw as CFTypeRef) != CFBooleanGetTypeID() else {
-            throw ComputerUseError.invalidArguments("\(key) must be a nonnegative integer")
-        }
-        return Int(value)
     }
 
     private func positiveInt(from value: Any, key: String, expectedDescription: String) throws -> Int {
