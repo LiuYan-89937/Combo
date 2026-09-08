@@ -68,7 +68,7 @@ enum InputSimulation {
     }
 
     static func clickTargeted(at point: CGPoint, button: MouseButtonKind, clickCount: Int, pid: pid_t) throws {
-        guard let source = CGEventSource(stateID: .combinedSessionState) else {
+        guard let source = CGEventSource(stateID: .privateState) else {
             throw ComputerUseError.message("Failed to create app-post event source.")
         }
 
@@ -100,11 +100,13 @@ enum InputSimulation {
     }
 
     static func scrollTargeted(at point: CGPoint, direction: String, pages: Double, pid: pid_t) throws {
-        guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 2, wheel1: wheel1(direction: direction, pages: pages), wheel2: wheel2(direction: direction, pages: pages), wheel3: 0) else {
+        guard let source = CGEventSource(stateID: .privateState),
+              let event = CGEvent(scrollWheelEvent2Source: source, units: .line, wheelCount: 2, wheel1: wheel1(direction: direction, pages: pages), wheel2: wheel2(direction: direction, pages: pages), wheel3: 0) else {
             throw ComputerUseError.message("Failed to create scroll event.")
         }
 
         event.location = point
+        event.flags = []
         event.postToPid(pid)
         Thread.sleep(forTimeInterval: 0.1)
     }
@@ -120,7 +122,7 @@ enum InputSimulation {
     }
 
     static func dragTargeted(from start: CGPoint, to end: CGPoint, pid: pid_t) throws {
-        guard let source = CGEventSource(stateID: .combinedSessionState) else {
+        guard let source = CGEventSource(stateID: .privateState) else {
             throw ComputerUseError.message("Failed to create targeted event source.")
         }
 
@@ -159,11 +161,15 @@ enum InputSimulation {
         try postMouseEvent(type: .leftMouseUp, source: source, point: end, button: .left, clickState: 1)
     }
 
-    static func typeText(_ text: String, pid: pid_t) throws {
+    static func typeText(_ text: String, pid: pid_t, validateTarget: (() throws -> Void)? = nil) throws {
+        guard let source = CGEventSource(stateID: .privateState) else {
+            throw ComputerUseError.message("Failed to create private input event source")
+        }
         for chunk in keyboardUnicodeChunks(for: text) {
+            try validateTarget?()
             var mutableChunk = chunk
-            guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
-                  let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false) else {
+            guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
+                  let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false) else {
                 throw ComputerUseError.message("Failed to create keyboard event.")
             }
 
@@ -175,6 +181,8 @@ enum InputSimulation {
                 down.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: baseAddress)
                 up.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: baseAddress)
             }
+            down.flags = []
+            up.flags = []
             down.postToPid(pid)
             up.postToPid(pid)
             Thread.sleep(forTimeInterval: 0.02)
@@ -205,11 +213,14 @@ enum InputSimulation {
     }
 
     static func pressKey(_ specification: String, pid: pid_t) throws {
+        guard let source = CGEventSource(stateID: .privateState) else {
+            throw ComputerUseError.message("Failed to create private input event source")
+        }
         let parsed = try KeyPressParser.parse(specification)
         var activeFlags: CGEventFlags = []
 
         for modifier in parsed.modifiers {
-            guard let event = CGEvent(keyboardEventSource: nil, virtualKey: modifier.keyCode, keyDown: true) else {
+            guard let event = CGEvent(keyboardEventSource: source, virtualKey: modifier.keyCode, keyDown: true) else {
                 throw ComputerUseError.message("Failed to create modifier key down event.")
             }
 
@@ -218,8 +229,8 @@ enum InputSimulation {
             event.postToPid(pid)
         }
 
-        guard let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: parsed.keyCode, keyDown: true),
-              let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: parsed.keyCode, keyDown: false) else {
+        guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: parsed.keyCode, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: parsed.keyCode, keyDown: false) else {
             throw ComputerUseError.message("Failed to create key event.")
         }
 
@@ -229,7 +240,7 @@ enum InputSimulation {
         keyUp.postToPid(pid)
 
         for modifier in parsed.modifiers.reversed() {
-            guard let event = CGEvent(keyboardEventSource: nil, virtualKey: modifier.keyCode, keyDown: false) else {
+            guard let event = CGEvent(keyboardEventSource: source, virtualKey: modifier.keyCode, keyDown: false) else {
                 throw ComputerUseError.message("Failed to create modifier key up event.")
             }
 
@@ -257,6 +268,7 @@ enum InputSimulation {
         }
 
         event.setIntegerValueField(.mouseEventClickState, value: Int64(clickState))
+        event.flags = []
         event.postToPid(pid)
         Thread.sleep(forTimeInterval: 0.03)
     }

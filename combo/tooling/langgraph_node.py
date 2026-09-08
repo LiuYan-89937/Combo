@@ -336,14 +336,14 @@ class ComboToolNode:
                     "tool_id": event_tool_id,
                     "tool_call_id": tool_call_id,
                     "arguments": public_arguments,
-                    "status": "completed" if event_type in {"tool_completed", "tool_contract_invalid"} else "failed",
+                    "status": "cancelled" if event_type == "tool_cancelled" else "completed" if event_type in {"tool_completed", "tool_contract_invalid"} else "failed",
                     "result": public_normalized,
                     "output": public_normalized.get("output"),
                     "evidence": public_normalized.get("evidence") if isinstance(public_normalized.get("evidence"), dict) else {},
                     "execution_status": str(normalized.get("execution_status") or ""),
                     "contract_status": str(normalized.get("contract_status") or ""),
                     "observation": public_normalized,
-                    "error": None if event_type in {"tool_completed", "tool_contract_invalid"} else normalized.get("message"),
+                    "error": None if event_type in {"tool_completed", "tool_contract_invalid", "tool_cancelled"} else normalized.get("message"),
                     "message": str(normalized.get("message") or ""),
                 }
             )
@@ -903,6 +903,8 @@ def _observation_completed(payload: dict[str, Any]) -> bool:
 
 
 def _tool_event_type(payload: dict[str, Any]) -> str:
+    if payload.get("status") == "cancelled":
+        return "tool_cancelled"
     if _observation_completed(payload):
         return "tool_completed"
     if payload.get("execution_status") == "completed" and payload.get("contract_status") == "invalid":
@@ -985,7 +987,7 @@ def _observation_payload(
         "arguments": arguments,
         "output": output,
         "evidence": evidence or {},
-        "execution_status": execution_status or ("completed" if status == "completed" else "failed"),
+        "execution_status": execution_status or (status if status in {"completed", "cancelled"} else "failed"),
         "contract_status": contract_status or "valid",
-        "errors": errors if errors is not None else ([] if status == "completed" else [message]),
+        "errors": errors if errors is not None else ([] if status in {"completed", "cancelled"} else [message]),
     }

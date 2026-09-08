@@ -1,5 +1,6 @@
 //! Authenticated private transport to the upstream CU engine; no desktop policy here.
 use serde_json::{json, Value};
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{
@@ -16,14 +17,56 @@ pub struct ComputerHostEndpoint {
     pub address: String,
     pub token: String,
 }
-struct Lease {
-    id: String,
-    cancelled: Arc<AtomicBool>,
+#[derive(Default)]
+struct SessionRegistry {
+    active: Option<String>,
+    leases: HashMap<String, Arc<AtomicBool>>,
+    // A cancel can arrive on the control socket before the sent start is read.
+    revoked_starts: HashSet<String>,
+}
+impl SessionRegistry {
+    fn cancel(&mut self, id: &str, start_pending: bool) {
+        if let Some(flag) = self.leases.get(id) {
+            flag.store(true, Ordering::SeqCst);
+        } else if start_pending {
+            self.revoked_starts.insert(id.to_owned());
+        }
+        if self.active.as_deref() == Some(id) {
+            self.active = None;
+        }
+    }
+
+    fn release(&mut self, id: &str) {
+        self.leases.remove(id);
+        self.revoked_starts.remove(id);
+        if self.active.as_deref() == Some(id) {
+            self.active = None;
+        }
+    }
+}
+
+fn finish_session(
+    owned: &mut Option<(String, Arc<AtomicBool>)>,
+    engine: &Engine,
+    registry: &Mutex<SessionRegistry>,
+) -> Result<(), String> {
+    let Some((id, cancelled)) = owned.take() else {
+        return Ok(());
+    };
+    cancelled.store(true, Ordering::SeqCst);
+    registry.lock().unwrap().release(&id);
+    let result = engine.call(json!({"op":"stop","session_id":id}), None);
+    eprintln!(
+        "CU session={} state=closed cleanup_ok={}",
+        id,
+        result.is_ok()
+    );
+    result.map(|_| ())
 }
 pub struct ComputerHost {
     endpoint: ComputerHostEndpoint,
     shutdown: Arc<AtomicBool>,
-    active: Arc<Mutex<Option<Lease>>>,
+    active: Arc<Mutex<SessionRegistry>>,
     thread: Option<JoinHandle<()>>,
 }
 impl ComputerHost {
@@ -35,7 +78,7 @@ impl ComputerHost {
             token: Uuid::new_v4().to_string(),
         };
         let shutdown = Arc::new(AtomicBool::new(false));
-        let active = Arc::new(Mutex::new(None::<Lease>));
+        let active = Arc::new(Mutex::new(SessionRegistry::default()));
         let engine = Arc::new(Engine::new(app));
         let worker = {
             let shutdown = shutdown.clone();
@@ -71,8 +114,8 @@ impl ComputerHost {
     }
     pub fn shutdown(&mut self) {
         self.shutdown.store(true, Ordering::SeqCst);
-        if let Some(lease) = self.active.lock().unwrap().as_ref() {
-            lease.cancelled.store(true, Ordering::SeqCst);
+        for flag in self.active.lock().unwrap().leases.values() {
+            flag.store(true, Ordering::SeqCst);
         }
         if let Some(worker) = self.thread.take() {
             let _ = worker.join();
@@ -89,7 +132,7 @@ fn serve(
     mut stream: TcpStream,
     token: &str,
     engine: Arc<Engine>,
-    active: Arc<Mutex<Option<Lease>>>,
+    active: Arc<Mutex<SessionRegistry>>,
     shutdown: Arc<AtomicBool>,
 ) {
     // Each connection has a dedicated blocking request loop. Accepted sockets
@@ -123,29 +166,40 @@ fn serve(
             }
             let operation = request["op"].as_str().unwrap_or("").to_owned();
             if operation == "cancel_session" {
-                let guard = active.lock().unwrap();
-                let matched = guard
-                    .as_ref()
-                    .filter(|lease| Some(lease.id.as_str()) == request["session_id"].as_str());
-                if let Some(lease) = matched {
-                    lease.cancelled.store(true, Ordering::SeqCst);
-                }
-                return Ok(json!({"cancelled":matched.is_some()}));
+                let id = request["session_id"].as_str().ok_or("missing session_id")?;
+                Uuid::parse_str(id).map_err(|_| "invalid session_id")?;
+                active
+                    .lock()
+                    .unwrap()
+                    .cancel(id, request["start_pending"].as_bool().unwrap_or(false));
+                eprintln!("CU session={} state=cancelled ownership=released", id);
+                return Ok(json!({"cancelled":true}));
             }
             if operation == "start" {
+                let id = request["session_id"]
+                    .as_str()
+                    .ok_or("missing session_id")?
+                    .to_owned();
+                Uuid::parse_str(&id).map_err(|_| "invalid session_id")?;
                 let mut guard = active.lock().unwrap();
-                if owned.is_some() || guard.is_some() {
+                if guard.revoked_starts.remove(&id) {
+                    return Err("session cancelled before start".into());
+                }
+                if owned.is_some() || guard.active.is_some() || guard.leases.contains_key(&id) {
                     return Err("another CU session is active".into());
                 }
-                let id = Uuid::new_v4().to_string();
                 let cancelled = Arc::new(AtomicBool::new(false));
-                *guard = Some(Lease {
-                    id: id.clone(),
-                    cancelled: cancelled.clone(),
-                });
+                guard.active = Some(id.clone());
+                guard.leases.insert(id.clone(), cancelled.clone());
                 drop(guard);
                 owned = Some((id.clone(), cancelled.clone()));
-                engine.call(json!({"op":"start","session_id":id}), Some(cancelled))?;
+                if let Err(error) =
+                    engine.call(json!({"op":"start","session_id":id}), Some(cancelled))
+                {
+                    let _ = finish_session(&mut owned, &engine, &active);
+                    return Err(error);
+                }
+                eprintln!("CU session={} state=active", id);
                 return Ok(json!({"session_id":id,"engine":"open-computer-use"}));
             }
             let (id, cancelled) = owned.as_ref().ok_or("inactive session")?;
@@ -153,9 +207,7 @@ fn serve(
                 return Err("session ownership mismatch".into());
             }
             if operation == "stop" {
-                engine.call(json!({"op":"stop","session_id":id}), None)?;
-                *active.lock().unwrap() = None;
-                owned = None;
+                finish_session(&mut owned, &engine, &active)?;
                 return Ok(json!({}));
             }
             if operation != "tools" && operation != "call" {
@@ -173,14 +225,7 @@ fn serve(
             break;
         }
     }
-    if let Some((id, cancelled)) = owned {
-        cancelled.store(true, Ordering::SeqCst);
-        let _ = engine.call(json!({"op":"stop","session_id":id}), None);
-        let mut guard = active.lock().unwrap();
-        if guard.as_ref().is_some_and(|lease| lease.id == id) {
-            *guard = None;
-        }
-    }
+    let _ = finish_session(&mut owned, &engine, &active);
 }
 
 struct Engine {
@@ -208,6 +253,12 @@ impl Engine {
         #[cfg(target_os = "windows")]
         let response = {
             let mut worker = self.worker.lock().map_err(|_| "CU worker unavailable")?;
+            if cancelled
+                .as_ref()
+                .is_some_and(|flag| flag.load(Ordering::SeqCst))
+            {
+                return Err("session cancelled".into());
+            }
             if worker.is_none() {
                 *worker = Some(Worker::start(&self.app)?);
             }

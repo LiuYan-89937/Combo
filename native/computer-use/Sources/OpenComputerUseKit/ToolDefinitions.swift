@@ -10,7 +10,14 @@ public struct ToolDefinition: @unchecked Sendable {
         self.name = name
         self.description = description
         self.annotations = annotations
-        self.inputSchema = inputSchema
+        var schema = inputSchema
+        if annotations["readOnlyHint"] as? Bool != true {
+            var properties = schema["properties"] as? [String: Any] ?? [:]
+            properties["observation_id"] = stringProperty(description: "Observation ID from the latest state for this app. Each action refreshes state; never reuse an older ID.")
+            schema["properties"] = properties
+            schema["required"] = (schema["required"] as? [String] ?? []) + ["observation_id"]
+        }
+        self.inputSchema = schema
     }
 
     public var asDictionary: [String: Any] {
@@ -103,12 +110,13 @@ public enum ToolDefinitions {
         ),
         ToolDefinition(
             name: "press_key",
-            description: "Press a key or key-combination on the keyboard, including modifier and navigation keys.\n  - This supports xdotool's `key` syntax.\n  - Examples: \"a\", \"Return\", \"Tab\", \"super+c\", \"Up\", \"KP_0\" (for the numpad 0 key). This tool is part of plugin `Computer Use`.",
+            description: "Post a key or key combination to the bound CU input target. Does not adopt system focus or activate the app. Requires a verified app-local keyboard receiver; unsupported background delivery is rejected. Delivery does not prove consumption; observe the effect and rebind the selection.",
             annotations: defaultAnnotations(),
             inputSchema: objectSchema(
                 properties: [
                     "app": stringProperty(description: "App name or bundle identifier"),
                     "key": stringProperty(description: "Key or key combination to press"),
+                    "element_index": stringProperty(description: "Optional observed editable target; otherwise use the CU-bound control"),
                 ],
                 required: ["app", "key"]
             )
@@ -136,19 +144,36 @@ public enum ToolDefinitions {
                     "app": stringProperty(description: "App name or bundle identifier"),
                     "element_index": stringProperty(description: "Element identifier"),
                     "value": stringProperty(description: "Value to assign"),
+                    "verification_timeout_ms": positiveIntegerProperty(description: "Read-only verification deadline in milliseconds; defaults to 1000. Never retries the write."),
                 ],
                 required: ["app", "element_index", "value"]
             )
         ),
         ToolDefinition(
+            name: "set_input_target",
+            description: "Bind an observed editable control and a CU-owned UTF-16 selection without changing system focus. Provide selection_start and selection_length together, or read the current control selection once. Rebind after external text changes or unconfirmed input. This is local targeting, not proof of keyboard support.",
+            annotations: defaultAnnotations(),
+            inputSchema: objectSchema(
+                properties: [
+                    "app": stringProperty(description: "App name or bundle identifier"),
+                    "element_index": stringProperty(description: "Observed editable element"),
+                    "selection_start": ["type": "integer", "minimum": 0, "description": "CU selection start in UTF-16 code units"],
+                    "selection_length": ["type": "integer", "minimum": 0, "description": "CU selection length; zero places the insertion point"],
+                ],
+                required: ["app", "element_index"]
+            )
+        ),
+        ToolDefinition(
             name: "type_text",
-            description: "Insert literal text at the current caret, replacing the selection. Optional element_index must match the live focused editable element. No whole-value append, foreground activation, or global keyboard fallback. Unsupported insertion returns an error.",
+            description: "Insert text at the CU-owned selection of the bound control. element_index explicitly binds a control if none is bound. Direct accessibility text operations work without system focus when supported. Keyboard mode requires evidence of the app-local receiver, never foreground activation. Observe after any unconfirmed write; do not replay.",
             annotations: defaultAnnotations(),
             inputSchema: objectSchema(
                 properties: [
                     "app": stringProperty(description: "App name or bundle identifier"),
                     "text": stringProperty(description: "Literal text to type"),
-                    "element_index": stringProperty(description: "Optional target; must match the live focused editable element"),
+                    "element_index": stringProperty(description: "Optional editable target in the observed window; otherwise use the session-bound CU target"),
+                    "input_method": stringProperty(description: "Choose accessibility (default) or keyboard explicitly. Keyboard requires a verified app-local receiver; no automatic fallback or activation.", enumValues: ["accessibility", "keyboard"]),
+                    "verification_timeout_ms": positiveIntegerProperty(description: "Read-only verification deadline in milliseconds; defaults to 1000. Never retries the write."),
                 ],
                 required: ["app", "text"]
             )

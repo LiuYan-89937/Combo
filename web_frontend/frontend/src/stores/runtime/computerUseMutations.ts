@@ -18,13 +18,19 @@ export function applyComputerUseLifecycleEvent(
   const payload = event.payload || {}
   const progress = objectValue(payload.output)
   const current = state.computerUseActivity
+  // Late output/cleanup from a revoked request must not replace a newer capsule.
+  if (current.requestId && event.request_id && current.requestId !== event.request_id
+    && status !== 'approval'
+    && !['tool_call_proposed', 'tool_call_started'].includes(event.event_type)) return false
   const toolCallId = toolPayloadValue(payload, ['tool_call_id', 'toolCallId'])
   const retainsObservation = isSameComputerUseActivity(
     current,
     event.request_id || null,
     toolCallId ? String(toolCallId) : null,
   )
-  const nextStatus = terminalComputerUseStatus(current.status, status, event.event_type)
+  const nextStatus = progress?.phase === 'cancelled'
+    ? 'cancelled'
+    : terminalComputerUseStatus(retainsObservation ? current.status : 'idle', status, event.event_type)
   const hasScreenshotField = hasOwn(progress, 'screenshot')
   const nextTarget = targetView(progress?.target)
   const sameTarget = retainsObservation && (!nextTarget
@@ -149,7 +155,8 @@ function terminalComputerUseStatus(
   incoming: ComputerUseActivityView['status'],
   eventType: string,
 ): ComputerUseActivityView['status'] {
-  if (eventType === 'tool_observation_available' && ['completed', 'failed', 'cancelled'].includes(current)) {
+  if (['tool_observation_available', 'tool_call_output_delta'].includes(eventType)
+    && ['completed', 'failed', 'cancelled'].includes(current)) {
     return current
   }
   return incoming
@@ -253,5 +260,6 @@ function operationView(value: unknown): ComputerUseOperationView | null {
     elementIndex: optionalText(item.element_index), x: optionalNumber(item.x), y: optionalNumber(item.y),
     textLength: optionalNumber(item.text_length), key: optionalText(item.key), action: optionalText(item.action),
     errorCode: optionalText(item.error_code), valueVerified: item.value_verified === true,
+    inputVerification: optionalText(item.input_verification),
   }
 }

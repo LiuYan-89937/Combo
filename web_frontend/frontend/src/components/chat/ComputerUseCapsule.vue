@@ -19,7 +19,7 @@
         <img v-if="activity.screenshot" class="snapshot" :src="activity.screenshot.dataUrl" :width="activity.screenshot.width" :height="activity.screenshot.height" :alt="title">
         <p v-else>{{ t('conversation.computerUse.screenshotUnavailable') }}</p>
         <ol v-if="operations.length" class="operation-list" :aria-label="t('cu.steps')">
-          <li v-for="operation in operations" :key="operation.id" :class="{ failed: operation.status === 'failed' }">
+          <li v-for="operation in displayedOperations" :key="operation.id" :class="{ failed: operation.status === 'failed' && !operation.inputVerification, unconfirmed: operation.inputVerification === 'unconfirmed' }">
             <span class="step-number">{{ operation.step }}</span>
             <div class="step-content">
               <div class="step-heading"><strong>{{ operationTitle(operation) }}</strong><span>{{ operationStatus(operation) }}</span></div>
@@ -53,6 +53,7 @@ const visible = ref(false)
 const dismissed = ref(false)
 const stopping = ref(false)
 const operations = computed(() => activity.value.operations || [])
+const displayedOperations = computed(() => [...operations.value].reverse())
 const latestOperation = computed(() => operations.value.at(-1))
 const running = computed(() => ['running', 'approval'].includes(activity.value.status))
 const title = computed(() => latestOperation.value?.app || activity.value.target?.displayName || t('cu.title'))
@@ -92,6 +93,7 @@ function toggleExpanded() {
 watch(running, value => { if (!value) stopping.value = false })
 const toolLabels: Record<string, string> = {
   list_apps: 'cu.listApps', get_app_state: 'cu.observe', click: 'cu.click',
+  set_input_target: 'cu.bindTarget',
   type_text: 'cu.typeText', set_value: 'cu.setValue', press_key: 'cu.pressKey',
   scroll: 'cu.scroll', drag: 'cu.drag', perform_secondary_action: 'cu.secondary',
 }
@@ -108,8 +110,9 @@ function operationTarget(operation: ComputerUseOperationView) {
 }
 function operationStatus(operation: ComputerUseOperationView) {
   if (operation.status === 'running') return running.value ? t('cu.executing') : t('cu.endedUnverified')
-  if (operation.status === 'failed') return t('cu.failed')
+  if (operation.inputVerification === 'unconfirmed') return t('cu.inputUnconfirmed')
   if (operation.valueVerified) return t('cu.valueVerified')
+  if (operation.status === 'failed') return t('cu.failed')
   return t(['list_apps', 'get_app_state'].includes(operation.tool) ? 'cu.observed' : 'cu.returned')
 }
 function errorMessage(code: string) {
@@ -118,6 +121,14 @@ function errorMessage(code: string) {
     'input.not_writable': 'cu.errorWritable', 'input.unsupported': 'cu.errorUnsupported',
     'input.write_failed': 'cu.errorWrite', 'input.verification_unavailable': 'cu.errorRead',
     'input.readback_mismatch': 'cu.errorMismatch',
+    'input.verification_unconfirmed': 'cu.errorUnconfirmed',
+    'input.target_required': 'cu.errorTargetRequired',
+    'input.target_stale': 'cu.errorSelectionStale',
+    'input.selection_unconfirmed': 'cu.errorSelectionStale',
+    'input.background_unsupported': 'cu.errorBackground',
+    'observation.stale': 'cu.errorObservation', 'observation.required': 'cu.errorObservation',
+    'observation.unavailable': 'cu.errorObservation',
+    'click.target_invalid': 'cu.errorTarget', 'click.unsupported': 'cu.errorClick',
   }
   return t((errors[code] || 'cu.errorNative') as any)
 }
@@ -154,4 +165,5 @@ function stop() {
 .step-target, .step-error { margin: 4px 0 0; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 .step-target, .empty-steps { color: var(--app-text-muted); }
 .failed .step-heading span, .step-error { color: var(--app-error-color, #c34242); }
+.unconfirmed .step-heading span, .unconfirmed .step-error { color: var(--app-text-secondary); }
 </style>

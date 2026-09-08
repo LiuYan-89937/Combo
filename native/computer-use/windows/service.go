@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+    "reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -23,7 +24,7 @@ var clickMethodValues = []string{"auto", "accessibility", "app_post", "sky_click
 //go:embed runtime.ps1
 var windowsRuntimeScript string
 
-const serverInstructions = "Computer Use tools let you interact with Windows apps by performing UI actions.\n\nBegin by calling `get_app_state` every turn you want to use Computer Use to get the latest state before acting. The available tools are list_apps, get_app_state, click, perform_secondary_action, scroll, drag, type_text, press_key, and set_value.\n\nPrefer element-targeted interactions over coordinate clicks when an index for the targeted element is available. Windows actions use UI Automation patterns first and fall back to window messages when an app does not expose the needed pattern. The Windows runtime does not auto-launch apps, perform SetFocus, or use UIA text fallback by default, so background-capable actions do not intentionally steal the user's foreground focus."
+const serverInstructions = "Computer Use tools let you interact with Windows apps by performing UI actions.\n\nBegin by calling `get_app_state` every turn you want to use Computer Use to get the latest state before acting. The available tools are list_apps, get_app_state, click, perform_secondary_action, scroll, drag, set_input_target, type_text, press_key, and set_value.\n\nPrefer element-targeted interactions over coordinate clicks when an index for the targeted element is available. Windows actions use UI Automation patterns first and fall back to window messages when an app does not expose the needed pattern. The Windows runtime does not auto-launch apps, perform SetFocus, or use UIA text fallback by default, so background-capable actions do not intentionally steal the user's foreground focus. Every action requires the observation_id from the latest state for that app, and consumes it even on failure; use the next returned ID or observe again. Coordinates are pixels in the screenshot. Do not queue actions against an old ID. Clicks operate only on the requested target. CU owns a target and UTF-16 selection per window, independent of human focus. Bind with set_input_target; set_value binds and places the CU caret at the verified value end. type_text uses this bound selection, not system focus. Accessibility writes the derived value directly. Explicit keyboard mode uses an exact native control handle; unsupported routes and modifier chords are rejected without activation. Rebind after text changes, keys or unconfirmed writes. Prefer semantic button actions when background keys are unsupported. An unconfirmed write may already have affected the app: observe and never automatically replay. Readback alone does not prove application-level effects."
 
 type toolDefinition struct {
 	Name        string         `json:"name"`
@@ -40,6 +41,8 @@ type contentItem struct {
 }
 
 type toolCallResult struct {
+    Diagnostics []string `json:"diagnostics,omitempty"`
+    InputResult map[string]string `json:"input_result,omitempty"`
 	Content []contentItem `json:"content"`
 	IsError bool          `json:"isError"`
 }
@@ -80,6 +83,8 @@ type elementRecord struct {
 }
 
 type appSnapshot struct {
+    ObservationID string `json:"observationID"`
+    WindowHandle int64 `json:"windowHandle"`
 	App                 appDescriptor   `json:"app"`
 	WindowTitle         string          `json:"windowTitle,omitempty"`
 	WindowBounds        *frame          `json:"windowBounds,omitempty"`
@@ -105,6 +110,7 @@ func (s *appSnapshot) renderedText() string {
 
 	lines := []string{
 		fmt.Sprintf("App=%s (pid %d)", appRef, s.App.PID),
+        fmt.Sprintf("Observation: %s. Use this observation_id for the next action.", s.ObservationID),
 		fmt.Sprintf("Window: %q, App: %s.", title, s.App.Name),
 	}
 	lines = append(lines, s.TreeLines...)
@@ -130,7 +136,23 @@ func (s *appSnapshot) result() toolCallResult {
 	return result
 }
 
+type inputTarget struct {
+    PID int `json:"pid"`
+    WindowHandle int64 `json:"window_handle"`
+    Element *elementRecord `json:"element"`
+    Value string `json:"value"`
+    SelectionStart *int `json:"selection_start"`
+    SelectionLength *int `json:"selection_length"`
+}
+
 type psRequest struct {
+    InputTarget *inputTarget `json:"input_target,omitempty"`
+    SelectionStart *int `json:"selection_start,omitempty"`
+    SelectionLength *int `json:"selection_length,omitempty"`
+    ObservationID string `json:"observation_id,omitempty"`
+    WindowHandle int64 `json:"window_handle,omitempty"`
+    InputMethod string `json:"input_method,omitempty"`
+    VerificationTimeoutMS int `json:"verification_timeout_ms,omitempty"`
     TargetPID int `json:"target_pid,omitempty"`
 	Tool         string         `json:"tool"`
 	App          string         `json:"app,omitempty"`
@@ -169,6 +191,9 @@ func (limit textLimit) runtimeValue() any {
 }
 
 type psResponse struct {
+    InputTarget *inputTarget `json:"input_target,omitempty"`
+    Diagnostics []string `json:"diagnostics,omitempty"`
+    InputResult map[string]string `json:"input_result,omitempty"`
 	OK       bool         `json:"ok"`
 	Text     string       `json:"text,omitempty"`
 	Error    string       `json:"error,omitempty"`
@@ -177,14 +202,22 @@ type psResponse struct {
 
 type service struct {
 	snapshots map[string]*appSnapshot
+    inputTargets map[int]*inputTarget
 }
 
 func newService() *service {
-	return &service{snapshots: map[string]*appSnapshot{}}
+	return &service{snapshots: map[string]*appSnapshot{}, inputTargets: map[int]*inputTarget{}}
 }
 
 func (s *service) callTool(name string, args map[string]any) toolCallResult {
-	switch name {
+    for _, definition := range toolDefinitions() {
+        if definition.Name != name || definition.Annotations["readOnlyHint"] == true { continue }
+        snapshot := s.currentSnapshot(requiredString(args, "app"))
+        if snapshot == nil || requiredString(args, "observation_id") == "" || snapshot.ObservationID != requiredString(args, "observation_id") {
+            return textResult("[observation.stale] Run get_app_state and use the latest observation_id before acting.", true)
+        }
+    }
+    switch name {
 	case "list_apps":
 		return s.listApps()
 	case "get_app_state":
@@ -236,12 +269,24 @@ func (s *service) callTool(name string, args map[string]any) toolCallResult {
 			requiredFloat(args, "to_x"),
 			requiredFloat(args, "to_y"),
 		)
-	case "type_text":
-		return s.typeText(requiredString(args, "app"), optionalString(args, "text"), requiredString(args, "element_index"))
+	case "set_input_target":
+        start, err := optionalSelectionOffset(args, "selection_start")
+        if err != nil { return textResult(err.Error(), true) }
+        length, err := optionalSelectionOffset(args, "selection_length")
+        if err != nil { return textResult(err.Error(), true) }
+        if (start == nil) != (length == nil) { return textResult("Provide selection_start and selection_length together", true) }
+        app := requiredString(args, "app")
+        snapshot := s.currentSnapshot(app)
+        if snapshot == nil { return textResult("[observation.required] Run get_app_state first", true) }
+        record, err := lookupElement(snapshot, requiredElementIndex(args))
+        if err != nil { return textResult(err.Error(), true) }
+        return s.actionResult(app, psRequest{Tool: "set_input_target", App: app, Element: record, SelectionStart: start, SelectionLength: length})
+    case "type_text":
+		return s.typeText(requiredString(args, "app"), optionalString(args, "text"), requiredElementIndex(args), optionalString(args, "input_method"), intValue(optionalFloat(args, "verification_timeout_ms"), defaultVerificationTimeoutMS))
 	case "press_key":
-		return s.pressKey(requiredString(args, "app"), requiredString(args, "key"))
+		return s.pressKey(requiredString(args, "app"), requiredString(args, "key"), optionalElementIndex(args))
 	case "set_value":
-		return s.setValue(requiredString(args, "app"), requiredElementIndex(args), optionalString(args, "value"))
+		return s.setValue(requiredString(args, "app"), requiredElementIndex(args), optionalString(args, "value"), intValue(optionalFloat(args, "verification_timeout_ms"), defaultVerificationTimeoutMS))
 	default:
 		return textResult(fmt.Sprintf("unsupportedTool(%q)", name), true)
 	}
@@ -391,7 +436,7 @@ func (s *service) drag(app string, fromX, fromY, toX, toY *float64) toolCallResu
 	return s.actionResult(app, psRequest{Tool: "drag", App: app, FromX: fromX, FromY: fromY, ToX: toX, ToY: toY, WindowBounds: snapshot.WindowBounds})
 }
 
-func (s *service) typeText(app, text, elementIndex string) toolCallResult {
+func (s *service) typeText(app, text, elementIndex, inputMethod string, verificationTimeoutMS int) toolCallResult {
 	if app == "" {
 		return textResult("Missing required argument: app", true)
 	}
@@ -407,10 +452,10 @@ func (s *service) typeText(app, text, elementIndex string) toolCallResult {
         record, err = lookupElement(s.currentSnapshot(app), elementIndex)
         if err != nil { return textResult("[input.target_invalid] " + err.Error(), true) }
     }
-    return s.actionResult(app, psRequest{Tool: "type_text", App: app, Text: text, Element: record})
+    return s.actionResult(app, psRequest{Tool: "type_text", App: app, Text: text, Element: record, InputMethod: inputMethod, VerificationTimeoutMS: verificationTimeoutMS})
 }
 
-func (s *service) pressKey(app, key string) toolCallResult {
+func (s *service) pressKey(app, key, elementIndex string) toolCallResult {
 	if app == "" {
 		return textResult("Missing required argument: app", true)
 	}
@@ -420,10 +465,16 @@ func (s *service) pressKey(app, key string) toolCallResult {
 	if s.currentSnapshot(app) == nil {
 		return textResult("No app state is available for "+app+". Run get_app_state before action tools.", true)
 	}
-	return s.actionResult(app, psRequest{Tool: "press_key", App: app, Key: key})
+	var record *elementRecord
+    if elementIndex != "" {
+        var err error
+        record, err = lookupElement(s.currentSnapshot(app), elementIndex)
+        if err != nil { return textResult("[input.target_invalid] " + err.Error(), true) }
+    }
+    return s.actionResult(app, psRequest{Tool: "press_key", App: app, Key: key, Element: record})
 }
 
-func (s *service) setValue(app, elementIndex, value string) toolCallResult {
+func (s *service) setValue(app, elementIndex, value string, verificationTimeoutMS int) toolCallResult {
 	if app == "" {
 		return textResult("Missing required argument: app", true)
 	}
@@ -438,22 +489,50 @@ func (s *service) setValue(app, elementIndex, value string) toolCallResult {
 	if err != nil {
 		return textResult("[input.target_invalid] "+err.Error(), true)
 	}
-	return s.actionResult(app, psRequest{Tool: "set_value", App: app, Element: record, Value: value})
+	return s.actionResult(app, psRequest{Tool: "set_value", App: app, Element: record, Value: value, VerificationTimeoutMS: verificationTimeoutMS})
 }
 
+const defaultVerificationTimeoutMS = 1000
+
 func (s *service) actionResult(app string, request psRequest) toolCallResult {
-    if request.Tool == "type_text" || request.Tool == "set_value" {
-        request.TargetPID = s.currentSnapshot(app).App.PID
+    observed := s.currentSnapshot(app)
+    if observed == nil { return textResult("[observation.required] Run get_app_state before acting.", true) }
+    if request.Tool == "type_text" || request.Tool == "press_key" {
+        saved := s.inputTargets[observed.App.PID]
+        if saved != nil && saved.WindowHandle == observed.WindowHandle &&
+            (request.Element == nil || reflect.DeepEqual(saved.Element.RuntimeID, request.Element.RuntimeID)) {
+            copy := *saved
+            request.InputTarget = &copy
+            request.Element = saved.Element
+            saved.SelectionStart, saved.SelectionLength = nil, nil
+        }
+        if request.Element == nil {
+            return textResult("[input.target_required] Specify element_index or use set_input_target; CU never adopts human focus.", true)
+        }
     }
-	snapshot, result := s.refreshSnapshot(app, request)
-	if result.IsError {
-		return result
-	}
-    result := snapshot.result()
-    if request.Tool == "type_text" || request.Tool == "set_value" {
-        result.Content = append(result.Content, contentItem{Type: "text", Text: "Input result: value_verified. Text readback matched; application-level effects are not verified."})
+    request.TargetPID = observed.App.PID
+    request.ObservationID = observed.ObservationID
+    request.WindowHandle = observed.WindowHandle
+    request.WindowBounds = observed.WindowBounds
+    // Failed/partial delivery must not leave the old target map available for replay.
+    for key, cached := range s.snapshots {
+        if cached.ObservationID == observed.ObservationID { delete(s.snapshots, key) }
     }
-    return result
+    snapshot, result := s.refreshSnapshot(app, request)
+    if result.IsError { return result }
+    state := snapshot.result()
+    if request.Tool == "set_input_target" {
+        state.Content = append(state.Content, contentItem{Type: "text", Text: "CU target and selection bound without changing system focus. Binding does not prove background keyboard support."})
+    }
+    if request.Tool == "press_key" {
+        state.Content = append(state.Content, contentItem{Type: "text", Text: "Key events posted to the bound control; consumption is unconfirmed. Observe the effect and rebind the selection."})
+    }
+    state.Diagnostics = result.Diagnostics
+    state.InputResult = result.InputResult
+    if result.InputResult["verification"] == "value_verified" {
+        state.Content = append(state.Content, contentItem{Type: "text", Text: "Input result: value_verified. Text readback matched; application-level effects are not verified."})
+    }
+    return state
 }
 
 func (s *service) currentSnapshot(app string) *appSnapshot {
@@ -465,14 +544,25 @@ func (s *service) refreshSnapshot(app string, request psRequest) (*appSnapshot, 
 	if err != nil {
 		return nil, textResult(err.Error(), true)
 	}
+    // Editing state is private to this native session, including on verification/snapshot failure.
+    if response.InputTarget != nil && response.InputTarget.PID == request.TargetPID &&
+        response.InputTarget.WindowHandle == request.WindowHandle {
+        s.inputTargets[response.InputTarget.PID] = response.InputTarget
+    }
 	if !response.OK {
-		return nil, textResult(response.Error, true)
+        failure := textResult(response.Error, true)
+        failure.Diagnostics = response.Diagnostics
+        failure.InputResult = response.InputResult
+        return nil, failure
 	}
 	if response.Snapshot == nil {
-		return nil, textResult("Windows runtime did not return an app snapshot.", true)
+        failure := textResult("[observation.unavailable] Windows runtime did not return an app snapshot. Do not replay the action.", true)
+        failure.InputResult = response.InputResult
+        failure.Diagnostics = response.Diagnostics
+        return nil, failure
 	}
 	s.rememberSnapshot(app, response.Snapshot)
-	return response.Snapshot, toolCallResult{}
+	return response.Snapshot, toolCallResult{Diagnostics: response.Diagnostics, InputResult: response.InputResult}
 }
 
 func (s *service) rememberSnapshot(query string, snapshot *appSnapshot) {
@@ -549,6 +639,15 @@ func runPowerShell(request psRequest) (*psResponse, error) {
 func requiredString(args map[string]any, key string) string {
 	value, _ := args[key].(string)
 	return strings.TrimSpace(value)
+}
+
+func optionalSelectionOffset(args map[string]any, key string) (*int, error) {
+    raw, present := args[key]
+    if !present { return nil, nil }
+    text := elementIndexString(raw)
+    value, err := strconv.Atoi(text)
+    if err != nil || value < 0 { return nil, fmt.Errorf("%s must be a nonnegative integer", key) }
+    return &value, nil
 }
 
 func optionalString(args map[string]any, key string) string {
@@ -721,7 +820,7 @@ func parseClickMethod(value string) (string, error) {
 }
 
 func toolDefinitions() []toolDefinition {
-	return []toolDefinition{
+	definitions := []toolDefinition{
 		{
 			Name:        "click",
 			Description: "Click an element by index or pixel coordinates from screenshot. This tool is part of plugin `Computer Use`.",
@@ -777,11 +876,12 @@ func toolDefinitions() []toolDefinition {
 		},
 		{
 			Name:        "press_key",
-			Description: "Press a key or key-combination on the keyboard, including modifier and navigation keys.\n  - This supports xdotool's `key` syntax.\n  - Examples: \"a\", \"Return\", \"Tab\", \"super+c\", \"Up\", \"KP_0\" (for the numpad 0). This tool is part of plugin `Computer Use`.",
+			Description: "Post an unmodified key to the exact native handle of the CU target, without system focus or activation. Modifier chords are unsupported. Delivery does not prove consumption; observe and rebind the selection.",
 			Annotations: defaultAnnotations(),
 			InputSchema: objectSchema(map[string]any{
 				"app": stringProperty("App name or bundle identifier"),
-				"key": stringProperty("Key or key-combination to press"),
+				"key": stringProperty("Unmodified key to press"),
+                "element_index": stringProperty("Optional observed editable target; otherwise use the CU-bound control"),
 			}, []string{"app", "key"}),
 		},
 		{
@@ -803,19 +903,43 @@ func toolDefinitions() []toolDefinition {
 				"app":           stringProperty("App name or bundle identifier"),
 				"element_index": stringProperty("Element identifier"),
 				"value":         stringProperty("Value to assign"),
+                "verification_timeout_ms": positiveIntegerProperty("Read-only verification deadline in milliseconds; defaults to 1000. Never retries the write."),
 			}, []string{"app", "element_index", "value"}),
 		},
+        {
+            Name: "set_input_target",
+            Description: "Bind an observed editable control and CU-owned UTF-16 selection without changing system focus. Provide selection_start and selection_length together or capture the native control selection once. Binding does not guarantee keyboard support.",
+            Annotations: defaultAnnotations(),
+            InputSchema: objectSchema(map[string]any{
+                "app": stringProperty("Application"),
+                "element_index": stringProperty("Observed editable target"),
+                "selection_start": map[string]any{"type":"integer", "minimum":0},
+                "selection_length": map[string]any{"type":"integer", "minimum":0},
+            }, []string{"app", "element_index"}),
+        },
 		{
 			Name:        "type_text",
-			Description: "Insert literal text at the current caret, replacing the selection. Optional element_index must match the live focused editable element. No whole-value append, foreground activation, or global keyboard fallback. Unsupported insertion returns an error.",
+			Description: "Insert text at the CU-owned selection. Accessibility writes the derived full value through ValuePattern. Keyboard mode requires an exact native Edit/RichEdit handle. No system focus, automatic activation or replay. Rebind after external text changes or unconfirmed input.",
 			Annotations: defaultAnnotations(),
 			InputSchema: objectSchema(map[string]any{
 				"app":  stringProperty("App name or bundle identifier"),
 				"text": stringProperty("Literal text to type"),
-                "element_index": stringProperty("Optional target; must match the live focused editable element"),
+                "element_index": stringProperty("Optional editable target; otherwise use the CU-bound target, never system focus"),
+                "input_method": enumStringProperty("Explicit accessibility (default) or native control keyboard delivery. No foreground activation or automatic fallback.", []string{"accessibility", "keyboard"}),
+                "verification_timeout_ms": positiveIntegerProperty("Read-only verification deadline in milliseconds; defaults to 1000. Never retries the write."),
 			}, []string{"app", "text"}),
 		},
 	}
+    for i := range definitions {
+        d := &definitions[i]
+        if d.Annotations["readOnlyHint"] == true { continue }
+        props := d.InputSchema["properties"].(map[string]any)
+        props["observation_id"] = stringProperty("Observation ID from the latest state of this app. Each action refreshes state; never reuse an older ID.")
+        d.InputSchema["required"] = append(d.InputSchema["required"].([]string), "observation_id")
+
+    }
+    return definitions
+
 }
 
 func objectSchema(properties map[string]any, required []string) map[string]any {
@@ -869,4 +993,3 @@ func textLimitProperty(description string) map[string]any {
 		"description": description,
 	}
 }
-

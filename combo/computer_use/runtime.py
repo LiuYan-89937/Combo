@@ -24,6 +24,7 @@ from combo.runtime_kernel.model_operations.tool_calls import (
 from combo.runtime_protocol import RuntimeInstance
 from combo.tooling.execution_context import (
     RuntimeToolExecutionCancelled,
+    execute_with_runtime_cancellation,
     register_runtime_tool_cancellation,
     runtime_terminal_cancellation_requested,
     runtime_tool_interruption_requested,
@@ -63,6 +64,7 @@ class ComputerUseCoordinator:
         self._host = host
         self._activity_lock = RLock()
         self._active_request_id: str | None = None
+        self._active_host: ComputerHostClient | None = None
 
     @classmethod
     def from_environment(
@@ -79,11 +81,10 @@ class ComputerUseCoordinator:
         )
 
     def close(self) -> None:
-        if self._host is not None:
-            try:
-                self._host.cancel_session()
-            finally:
-                self._host.close()
+        with self._activity_lock:
+            host = self._active_host
+        if host is not None:
+            host.cancel_session()
 
     def _run(
         self,
@@ -93,45 +94,65 @@ class ComputerUseCoordinator:
         on_progress: ComputerUseProgressObserver | None = None,
     ) -> ComputerUseResult:
         request_id = instance.request.request_id
+        if self._host is None:
+            raise RuntimeError("Computer Use requires the desktop native host")
+        host = self._host.new_session(request_id)
+        cancelled = host.cancellation_event
         with self._activity_lock:
-            if self._active_request_id is not None:
-                raise RuntimeError(
-                    "Computer Use is already active for request "
-                    f"{self._active_request_id}"
+            if self._active_host is not None:
+                _logger.info(
+                    "Computer use request=%s phase=session_superseded replacement=%s",
+                    self._active_request_id,
+                    request_id,
                 )
+                self._active_host.cancel_session()
             self._active_request_id = request_id
-        cancelled = Event()
-        active_session_id: list[str | None] = [None]
+            self._active_host = host
+
+        def release_activity() -> None:
+            with self._activity_lock:
+                if self._active_host is host:
+                    self._active_host = None
+                    self._active_request_id = None
 
         def cancel_active_session() -> None:
             cancelled.set()
-            session_id = active_session_id[0]
-            if self._host is not None and session_id is not None:
-                try:
-                    self._host.cancel_session(session_id)
-                except Exception:
-                    _logger.exception(
-                        "Computer use request=%s native cancellation failed",
-                        request_id,
-                    )
+            try:
+                host.cancel_session()
+            except Exception:
+                _logger.exception(
+                    "Computer use request=%s native cancellation failed", request_id
+                )
+            finally:
+                release_activity()
+                _publish_progress(
+                    on_progress,
+                    phase="cancelled",
+                    message="Computer Use session was cancelled.",
+                )
 
         unregister_cancellation = register_runtime_tool_cancellation(
             cancel_active_session
         )
         try:
-            _ensure_not_cancelled(cancelled, self._host, active_session_id[0])
+            _ensure_not_cancelled(cancelled, host, None)
             return self._run_exclusive(
                 instance=instance,
                 goal=goal,
                 on_progress=on_progress,
                 cancelled=cancelled,
-                active_session_id=active_session_id,
+                host=host,
             )
+        except Exception:
+            if cancelled.is_set() or host.cancel_requested:
+                raise RuntimeToolExecutionCancelled(
+                    "Computer Use execution was cancelled."
+                ) from None
+            raise
         finally:
             unregister_cancellation()
-            with self._activity_lock:
-                if self._active_request_id == request_id:
-                    self._active_request_id = None
+            host.close()
+            release_activity()
 
     def _run_exclusive(
         self,
@@ -140,11 +161,8 @@ class ComputerUseCoordinator:
         goal: str,
         on_progress: ComputerUseProgressObserver | None,
         cancelled: Event,
-        active_session_id: list[str | None],
+        host: ComputerHostClient,
     ) -> ComputerUseResult:
-        host = self._host
-        if host is None:
-            raise RuntimeError("Computer Use requires the desktop native host")
         if not goal.strip():
             raise ValueError("computer_use goal must not be empty")
         frozen = instance.request.policy_snapshot.model
@@ -162,7 +180,6 @@ class ComputerUseCoordinator:
             raise RuntimeError("Computer Use model is unavailable")
         _ensure_not_cancelled(cancelled, host, None)
         session = host.start()
-        active_session_id[0] = session
         callback = UsageMetadataCallbackHandler()
         calls = steps = 0
         last_states: dict[str, str] = {}
@@ -208,16 +225,20 @@ class ComputerUseCoordinator:
                     step=steps,
                 )
                 started = perf_counter()
-                response = bound.invoke(
-                    messages,
-                    config={
-                        "callbacks": [callback],
-                        "tags": ["computer-use"],
-                        "metadata": {
-                            "operation": "computer_use",
-                            "request_id": instance.request.request_id,
+                response = execute_with_runtime_cancellation(
+                    lambda: bound.invoke(
+                        messages,
+                        config={
+                            "callbacks": [callback],
+                            "tags": ["computer-use"],
+                            "metadata": {
+                                "operation": "computer_use",
+                                "request_id": instance.request.request_id,
+                            },
                         },
-                    },
+                    ),
+                    timeout_seconds=None,
+                    cancellation_event=cancelled,
                 )
                 calls += 1
                 _ensure_not_cancelled(cancelled, host, session)
@@ -302,11 +323,22 @@ class ComputerUseCoordinator:
                         )
                         started = perf_counter()
                         result = host.call(session, name, arguments)
+                        _ensure_not_cancelled(cancelled, host, session)
                         steps += 1
+                        if result.get("input_result"):
+                            _logger.info(
+                                "Computer use request=%s step=%s phase=input_result tool=%s details=%s",
+                                instance.request.request_id,
+                                steps,
+                                name,
+                                json.dumps(result["input_result"], ensure_ascii=False),
+                            )
                         if result.get("diagnostics"):
                             _logger.info(
                                 "Computer use request=%s step=%s phase=native_diagnostics tool=%s details=%s",
-                                instance.request.request_id, steps, name,
+                                instance.request.request_id,
+                                steps,
+                                name,
                                 json.dumps(result["diagnostics"], ensure_ascii=False),
                             )
                         if result.get("isError"):
@@ -315,7 +347,9 @@ class ComputerUseCoordinator:
                             for key in ("text", "value"):
                                 submitted = arguments.get(key)
                                 if isinstance(submitted, str) and submitted:
-                                    error_text = error_text.replace(submitted, "[redacted]")
+                                    error_text = error_text.replace(
+                                        submitted, "[redacted]"
+                                    )
                             _logger.error(
                                 "Computer use request=%s step=%s phase=action_error tool=%s tool_call_id=%s app=%s element_index=%s error=%s",
                                 instance.request.request_id,
@@ -340,8 +374,15 @@ class ComputerUseCoordinator:
                         )
                         _publish_state(on_progress, app, result, steps)
                         _publish_progress(
-                            on_progress, phase="action_effect", step=steps,
-                            operation=_operation_progress(call, steps, "failed" if result.get("isError") else "returned", result),
+                            on_progress,
+                            phase="action_effect",
+                            step=steps,
+                            operation=_operation_progress(
+                                call,
+                                steps,
+                                "failed" if result.get("isError") else "returned",
+                                result,
+                            ),
                         )
                     messages.append(
                         ToolMessage(
@@ -496,24 +537,53 @@ def _usage_total(callback: UsageMetadataCallbackHandler) -> int:
     )
 
 
-def _operation_progress(call: dict[str, Any], step: int, status: str, result: dict[str, Any] | None = None) -> dict[str, Any]:
+def _operation_progress(
+    call: dict[str, Any], step: int, status: str, result: dict[str, Any] | None = None
+) -> dict[str, Any]:
     arguments = call["args"]
     error_code = None
     verified = False
     if result is not None:
         text = _result_text(result)
-        match = re.search(r"\[(input\.[a-z_]+)\]", text) if result.get("isError") else None
-        error_code = match.group(1) if match else ("native_error" if result.get("isError") else None)
-        verified = not result.get("isError") and any(
-            item.get("type") == "text" and item.get("text", "").startswith("Input result: value_verified.")
-            for item in result.get("content", [])
+        match = (
+            re.search(r"\[((?:input|observation|click)\.[a-z_]+)\]", text)
+            if result.get("isError")
+            else None
+        )
+        error_code = (
+            match.group(1)
+            if match
+            else ("native_error" if result.get("isError") else None)
+        )
+        verified = result.get("input_result", {}).get(
+            "verification"
+        ) == "value_verified" or (
+            not result.get("isError")
+            and any(
+                item.get("type") == "text"
+                and item.get("text", "").startswith("Input result: value_verified.")
+                for item in result.get("content", [])
+            )
         )
     return {
-        "id": call["id"], "step": step, "tool": call["name"],
-        "app": str(arguments.get("app") or ""), "status": status,
+        "id": call["id"],
+        "step": step,
+        "tool": call["name"],
+        "app": str(arguments.get("app") or ""),
+        "status": status,
         "element_index": arguments.get("element_index"),
-        "x": arguments.get("x"), "y": arguments.get("y"),
-        "text_length": len(str(arguments.get("text", arguments.get("value", "")))) if call["name"] in {"type_text", "set_value"} else None,
-        "key": arguments.get("key"), "action": arguments.get("action"),
-        "error_code": error_code, "value_verified": verified,
+        "x": arguments.get("x"),
+        "y": arguments.get("y"),
+        "text_length": (
+            len(str(arguments.get("text", arguments.get("value", ""))))
+            if call["name"] in {"type_text", "set_value"}
+            else None
+        ),
+        "key": arguments.get("key"),
+        "action": arguments.get("action"),
+        "error_code": error_code,
+        "value_verified": verified,
+        "input_verification": (result or {})
+        .get("input_result", {})
+        .get("verification"),
     }

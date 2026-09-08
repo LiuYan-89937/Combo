@@ -20,7 +20,7 @@ ToolObservationStatus = Literal[
     "timed_out",
     "completed",
 ]
-ToolExecutionStatus = Literal["completed", "failed"]
+ToolExecutionStatus = Literal["completed", "failed", "cancelled"]
 ToolContractStatus = Literal["valid", "invalid"]
 
 ToolRiskLevel = Literal["low", "medium", "high"]
@@ -39,6 +39,7 @@ ToolEventType = Literal[
     "tool_call_completed",
     "tool_contract_invalid",
     "tool_call_failed",
+    "tool_call_cancelled",
     "tool_observation_available",
 ]
 

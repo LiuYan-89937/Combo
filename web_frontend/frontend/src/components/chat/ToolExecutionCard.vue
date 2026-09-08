@@ -96,7 +96,7 @@
       </details>
 
       <details v-if="hasOutput || part.error" class="tool-section" :open="state === 'failed'">
-        <summary>{{ part.error ? t('common.error') : t('tool.result') }}</summary>
+        <summary>{{ state === 'failed' ? t('common.error') : t('tool.result') }}</summary>
         <pre>{{ formattedOutput }}</pre>
       </details>
 
@@ -168,7 +168,7 @@ const summaryText = computed(() => (
     : presentation.value.summary)
 ))
 const state = computed(() => {
-  if (props.part.status === 'cancelled' || isRuntimeCancellation(props.part.error || props.part.output)) return 'cancelled'
+  if (props.part.status === 'cancelled' || isRuntimeCancellation(props.part)) return 'cancelled'
   if (props.part.error || props.part.status === 'failed') return 'failed'
   if (props.part.status === 'awaiting_approval') return 'approval'
   if (['running', 'streaming', 'requested'].includes(String(props.part.status || ''))) return 'running'

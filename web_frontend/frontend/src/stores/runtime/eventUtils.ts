@@ -29,6 +29,7 @@ const REQUEST_TERMINAL_EVENT_TYPES = new Set([
   'tool_approval_requested',
   'tool_call_completed',
   'tool_call_failed',
+  'tool_call_cancelled',
   'tool_contract_invalid',
   'tool_observation_available',
 ])

@@ -772,6 +772,7 @@ def _delegated_observation_activities(chunk: Any) -> tuple[dict[str, Any], ...]:
                 "tool_call_started",
                 "tool_call_completed",
                 "tool_call_failed",
+                "tool_call_cancelled",
                 "tool_contract_invalid",
             }:
                 continue

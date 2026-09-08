@@ -6,6 +6,7 @@ import OpenComputerUseKit
 @MainActor
 private enum Sessions {
     static var dispatchers: [String: ComputerUseToolDispatcher] = [:]
+    static var cursorSession: String?
 
     static func handle(_ request: [String: Any]) throws -> [String: Any] {
         let operation = request["op"] as? String ?? ""
@@ -30,11 +31,15 @@ private enum Sessions {
         }
         if operation == "start" {
             dispatchers[session] = ComputerUseToolDispatcher()
+            cursorSession = session
             return ["ok": true]
         }
         if operation == "stop" {
             dispatchers.removeValue(forKey: session)
-            resetOpenComputerUseVisualCursor()
+            if cursorSession == session {
+                resetOpenComputerUseVisualCursor()
+                cursorSession = nil
+            }
             return ["ok": true]
         }
         guard operation == "call", let dispatcher = dispatchers[session],

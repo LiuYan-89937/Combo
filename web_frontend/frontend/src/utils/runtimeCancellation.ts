@@ -38,14 +38,14 @@ function isCancellationRecord(value: Record<string, unknown>): boolean {
   const signal = normalized(value.error || value.cancel_reason || value.stop_reason)
   const category = normalized(value.category)
   const terminalStatus = normalized(value.terminal_status)
-  const status = normalized(value.status || value.execution_status)
+  const statuses = [value.status, value.execution_status].map(normalized)
   const exceptionType = normalized(value.exception_type)
   const message = normalized(value.message || value.reason)
   return CANCELLATION_CODES.has(code)
     || CANCELLATION_CODES.has(signal)
     || category === 'cancelled'
     || terminalStatus === 'cancelled'
-    || CANCELLATION_STATUSES.has(status)
+    || statuses.some(status => CANCELLATION_STATUSES.has(status))
     || exceptionType === 'runtimemodelgenerationinterrupted'
     || message === 'model generation was superseded.'
 }

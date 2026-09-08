@@ -35,6 +35,10 @@ def _frontend_tool_events(payload: dict[str, Any], *, node_id: str | None) -> li
         invalid = _event("tool_contract_invalid", payload, node_id=node_id)
         observation = _event("tool_observation_available", payload, node_id=node_id)
         return [invalid, observation]
+    if event_type == "tool_cancelled":
+        cancelled = _event("tool_call_cancelled", payload, node_id=node_id)
+        observation = _event("tool_observation_available", payload, node_id=node_id)
+        return [cancelled, observation]
     if event_type == "tool_failed":
         failed = _event("tool_call_failed", payload, node_id=node_id)
         observation = _event("tool_observation_available", payload, node_id=node_id)
@@ -80,6 +84,8 @@ def _status_for_event(event_type: str) -> str:
         return "completed"
     if event_type == "tool_contract_invalid":
         return "completed"
+    if event_type == "tool_call_cancelled":
+        return "cancelled"
     if event_type == "tool_call_failed":
         return "failed"
     if event_type == "tool_observation_available":

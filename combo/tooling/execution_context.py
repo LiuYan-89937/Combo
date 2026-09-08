@@ -286,7 +286,8 @@ def register_runtime_tool_cancellation(callback: Callable[[], None]) -> Callable
 def execute_with_runtime_cancellation(
     operation: Callable[[], Any],
     *,
-    timeout_seconds: float,
+    timeout_seconds: float | None,
+    cancellation_event: threading.Event | None = None,
 ) -> Any:
     """Run a synchronous tool operation behind the shared run cancellation boundary.
 
@@ -295,7 +296,7 @@ def execute_with_runtime_cancellation(
     as MCP and shell also register their own hook to terminate external I/O.
     """
 
-    if timeout_seconds <= 0:
+    if timeout_seconds is not None and timeout_seconds <= 0:
         raise ValueError("tool timeout_seconds must be positive")
     control = current_runtime_run_control()
     if control is not None and (
@@ -304,8 +305,11 @@ def execute_with_runtime_cancellation(
     ):
         raise RuntimeToolExecutionCancelled(_runtime_cancel_reason(control))
 
+    if cancellation_event is not None and cancellation_event.is_set():
+        raise RuntimeToolExecutionCancelled(_runtime_cancel_reason(control))
+
     completed = threading.Event()
-    cancelled = threading.Event()
+    cancelled = cancellation_event if cancellation_event is not None else threading.Event()
     outcome: dict[str, Any] = {}
     cancellation_scope = ToolCancellationScope()
     scope_token = _TOOL_CANCELLATION_SCOPE.set(cancellation_scope)
@@ -314,6 +318,8 @@ def execute_with_runtime_cancellation(
 
     def run() -> None:
         try:
+            if cancelled.is_set():
+                return
             outcome["value"] = context.run(operation)
         except BaseException as exc:
             outcome["error"] = exc
@@ -323,16 +329,16 @@ def execute_with_runtime_cancellation(
     unregister = register_runtime_tool_cancellation(cancelled.set)
     worker = threading.Thread(target=run, name="combo-tool-call", daemon=True)
     worker.start()
-    deadline = time.monotonic() + timeout_seconds
+    deadline = time.monotonic() + timeout_seconds if timeout_seconds is not None else None
     try:
         while not completed.is_set():
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
+            remaining = deadline - time.monotonic() if deadline is not None else None
+            if remaining is not None and remaining <= 0:
                 cancellation_scope.cancel()
                 raise RuntimeToolExecutionTimedOut(
                     f"Tool execution timed out after {timeout_seconds:g} seconds."
                 )
-            if cancelled.wait(timeout=min(0.05, remaining)) or (
+            if cancelled.wait(timeout=min(0.05, remaining) if remaining is not None else 0.05) or (
                 control is not None
                 and (
                     bool(getattr(control, "drain_requested", False))

@@ -174,7 +174,7 @@ class ToolExecutionGateway:
                 tool_call_id=tool_call_id,
                 arguments=arguments,
                 retryable=False,
-                errors=[str(exc)],
+                execution_status="cancelled",
             )
         except RuntimeToolExecutionTimedOut as exc:
             return self._observation(

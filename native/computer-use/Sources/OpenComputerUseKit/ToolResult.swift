@@ -27,11 +27,13 @@ public struct ToolCallResult: @unchecked Sendable {
     public let content: [ToolResultContentItem]
     public let isError: Bool
     public let diagnostics: [String]
+    public let inputResult: [String: String]
 
-    public init(content: [ToolResultContentItem], isError: Bool = false, diagnostics: [String] = []) {
+    public init(content: [ToolResultContentItem], isError: Bool = false, diagnostics: [String] = [], inputResult: [String: String] = [:]) {
         self.content = content
         self.isError = isError
         self.diagnostics = diagnostics
+        self.inputResult = inputResult
     }
 
     public var primaryText: String? {
@@ -43,6 +45,7 @@ public struct ToolCallResult: @unchecked Sendable {
             "content": content.map(\.dictionary),
             "isError": isError,
             "diagnostics": diagnostics,
+            "input_result": inputResult,
         ]
     }
 

@@ -100,6 +100,8 @@ private let compactGenericActionTargetMaxWidth: CGFloat = 240
 private let compactGenericActionTargetMaxHeight: CGFloat = 120
 
 public struct AppSnapshot {
+    public let observationID: String
+    let windowElement: AXUIElement?
     public let app: RunningAppDescriptor
     public let windowTitle: String?
     public let windowBounds: CGRect?
@@ -124,6 +126,7 @@ public struct AppSnapshot {
         let appReference = app.bundleIdentifier ?? app.name
 
         lines.append("App=\(appReference) (pid \(app.pid))")
+        lines.append("Observation: \(observationID). Use this observation_id for the next action.")
         lines.append("Window: \(quoted(displayTitle)), App: \(app.name).")
         lines.append(contentsOf: treeLines)
 
@@ -239,6 +242,8 @@ enum SnapshotBuilder {
         }
 
         return AppSnapshot(
+            observationID: UUID().uuidString,
+            windowElement: rootElement,
             app: app,
             windowTitle: windowTitle,
             windowBounds: windowBounds,
@@ -394,6 +399,8 @@ enum SnapshotBuilder {
         }
 
         return AppSnapshot(
+            observationID: UUID().uuidString,
+            windowElement: nil,
             app: app,
             windowTitle: state.windowTitle,
             windowBounds: state.windowBounds.cgRect,
@@ -1078,10 +1085,11 @@ private func valueTypeTrait(of element: AXUIElement) -> String? {
     return nil
 }
 
-private func copyElement(_ element: AXUIElement, attribute: String) -> AXUIElement? {
+// Shared within OpenComputerUseKit by snapshot capture and action diagnostics.
+internal func copyElement(_ element: AXUIElement, attribute: String) -> AXUIElement? {
     var value: CFTypeRef?
     let error = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
-    guard error == .success, let value else {
+    guard error == .success, let value, CFGetTypeID(value) == AXUIElementGetTypeID() else {
         return nil
     }
 

@@ -44,6 +44,18 @@ public final class ComputerUseToolDispatcher {
     }
 
     public func callTool(name: String, arguments: [String: Any]) throws -> ToolCallResult {
+        var consumedObservation: String?
+        defer {
+            if let consumedObservation { service.retireObservation(consumedObservation) }
+        }
+        if let definition = ToolDefinitions.all.first(where: { $0.name == name }),
+           definition.annotations["readOnlyHint"] as? Bool != true {
+            try service.validateObservation(
+                app: requireString("app", in: arguments),
+                observationID: requireString("observation_id", in: arguments)
+            )
+            consumedObservation = arguments["observation_id"] as? String
+        }
         switch name {
         case "list_apps":
             return service.listApps()
@@ -87,22 +99,33 @@ public final class ComputerUseToolDispatcher {
                 toX: requireDouble("to_x", in: arguments),
                 toY: requireDouble("to_y", in: arguments)
             )
+        case "set_input_target":
+            return try service.setInputTarget(
+                app: requireString("app", in: arguments),
+                elementIndex: requireElementIndex(in: arguments),
+                selectionStart: try optionalSelectionOffset("selection_start", in: arguments),
+                selectionLength: try optionalSelectionOffset("selection_length", in: arguments)
+            )
         case "type_text":
             return try service.typeText(
                 app: requireString("app", in: arguments),
                 text: requireString("text", in: arguments),
-                elementIndex: optionalString("element_index", in: arguments)
+                elementIndex: optionalElementIndex(in: arguments),
+                inputMethod: optionalString("input_method", in: arguments) ?? "accessibility",
+                verificationTimeout: try optionalPositiveInt("verification_timeout_ms", in: arguments).map { Double($0) / 1000 }
             )
         case "press_key":
             return try service.pressKey(
                 app: requireString("app", in: arguments),
-                key: requireString("key", in: arguments)
+                key: requireString("key", in: arguments),
+                elementIndex: optionalElementIndex(in: arguments)
             )
         case "set_value":
             return try service.setValue(
                 app: requireString("app", in: arguments),
                 elementIndex: requireElementIndex(in: arguments),
-                value: requireText("value", in: arguments)
+                value: requireText("value", in: arguments),
+                verificationTimeout: try optionalPositiveInt("verification_timeout_ms", in: arguments).map { Double($0) / 1000 }
             )
         default:
             throw ComputerUseError.unsupportedTool(name)
@@ -123,7 +146,7 @@ public final class ComputerUseToolDispatcher {
             let message = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
             result = ToolCallResult.text(message, isError: true)
         }
-        return ToolCallResult(content: result.content, isError: result.isError, diagnostics: service.diagnostics)
+        return ToolCallResult(content: result.content, isError: result.isError, diagnostics: service.diagnostics, inputResult: result.inputResult)
     }
 
     private func requireString(_ key: String, in arguments: [String: Any]) throws -> String {
@@ -201,6 +224,16 @@ public final class ComputerUseToolDispatcher {
         }
 
         return try positiveInt(from: value, key: key, expectedDescription: "a positive integer")
+    }
+
+    private func optionalSelectionOffset(_ key: String, in arguments: [String: Any]) throws -> Int? {
+        guard let raw = arguments[key] else { return nil }
+        guard let value = optionalDouble(key, in: arguments), value.isFinite,
+              value >= 0, value.rounded(.towardZero) == value, value < Double(Int.max),
+              CFGetTypeID(raw as CFTypeRef) != CFBooleanGetTypeID() else {
+            throw ComputerUseError.invalidArguments("\(key) must be a nonnegative integer")
+        }
+        return Int(value)
     }
 
     private func positiveInt(from value: Any, key: String, expectedDescription: String) throws -> Int {

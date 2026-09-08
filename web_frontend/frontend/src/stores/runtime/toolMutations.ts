@@ -34,7 +34,7 @@ export function applyToolLifecycleEvent(
   if (isBackgroundEvent(event, state.activeRequestId)) return
   const computerUseStatus = status === 'approval'
     ? 'approval'
-    : status === 'failed' && toolEventWasCancelled(event)
+    : toolEventWasCancelled(event)
       ? 'cancelled'
       : status === 'completed' || status === 'failed' || status === 'cancelled'
         ? status
@@ -45,9 +45,8 @@ export function applyToolLifecycleEvent(
   if (isComputerUse && event.event_type === 'tool_output_delta') return
   const toolCallId = toolPayloadValue(event.payload || {}, ['tool_call_id', 'toolCallId'])
   const existing = state.tools.find((tool) => toolCallId && tool.toolCallId === String(toolCallId))
-  const nextStatus = status === 'failed' && (
-    toolEventWasCancelled(event)
-    || existing?.status === 'cancelled'
+  const nextStatus = toolEventWasCancelled(event) || (
+    ['failed', 'completed', 'observed'].includes(status) && existing?.status === 'cancelled'
   )
     ? 'cancelled'
     : status

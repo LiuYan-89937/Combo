@@ -464,6 +464,8 @@ export const useRuntimeStore = defineStore('runtime', {
         this._handleToolCallStarted(event)
       } else if (type === 'tool_call_completed') {
         this._handleToolCallCompleted(event)
+      } else if (type === 'tool_call_cancelled') {
+        applyToolLifecycleEvent(this, event, 'cancelled')
       } else if (type === 'tool_call_failed') {
         this._handleToolCallFailed(event)
       } else if (type === 'tool_contract_invalid') {

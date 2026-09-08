@@ -67,6 +67,8 @@ from combo.context_system.token_counter import context_window_payload
 from combo.context_system.token_estimation import estimate_messages_tokens
 from combo.runtime_i18n import RuntimeLocale
 from combo.tooling.execution_context import (
+    RuntimeModelGenerationInterrupted,
+    RuntimeToolExecutionCancelled,
     runtime_run_control_context,
     tool_output_session_context,
 )
@@ -1576,6 +1578,10 @@ def _run_graph_with_control(
         raise
     completed.wait()
     error = outcome.get("error")
+    if control.drain_requested and isinstance(
+        error, (RuntimeModelGenerationInterrupted, RuntimeToolExecutionCancelled)
+    ):
+        return dict(outcome["raw"])
     if error is not None:
         raise error
     return dict(outcome["raw"])
