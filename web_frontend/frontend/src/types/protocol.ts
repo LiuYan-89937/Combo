@@ -347,7 +347,24 @@ export interface ToolActivity {
   payload: Record<string, any>
 }
 
+export interface ComputerUseOperationView {
+  id: string
+  step: number
+  tool: string
+  app: string
+  status: 'running' | 'returned' | 'failed'
+  elementIndex?: string | null
+  x?: number | null
+  y?: number | null
+  textLength?: number | null
+  key?: string | null
+  action?: string | null
+  errorCode?: string | null
+  valueVerified: boolean
+}
+
 export interface ComputerUseActivityView {
+  operations?: ComputerUseOperationView[]
   status: 'idle' | 'approval' | 'running' | 'completed' | 'failed' | 'cancelled'
   requestId?: string | null
   toolCallId?: string | null
@@ -359,6 +376,8 @@ export interface ComputerUseActivityView {
   updatedAt?: string | null
   target?: ComputerUseTargetView | null
   accessibility?: ComputerUseAccessibilityView | null
+  screenshot?: ComputerUseScreenshotView | null
+  screenshotError?: string | null
 }
 
 export interface ComputerUseTargetView {
@@ -366,8 +385,13 @@ export interface ComputerUseTargetView {
   displayName: string
   iconDataUrl?: string | null
   processId: number
-  windowId: number
+  windowId: number | null
   windowTitle: string
+  windowState?: {
+    minimized: boolean | null
+    hidden: boolean | null
+    focused: boolean | null
+  }
 }
 
 export interface ComputerUseAccessibilityView {
@@ -375,7 +399,13 @@ export interface ComputerUseAccessibilityView {
   application: string
   windowTitle: string
   error: string | null
-  nodes: Array<Record<string, any>>
+  text: string
+}
+
+export interface ComputerUseScreenshotView {
+  dataUrl: string
+  width: number
+  height: number
 }
 
 // ========== 计划 ==========

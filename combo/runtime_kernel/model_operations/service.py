@@ -8,7 +8,7 @@ from pathlib import Path
 from queue import Empty, Queue
 from threading import RLock
 from threading import Thread
-from typing import Any, Literal
+from typing import Any, Generic, Literal, TypeVar
 from uuid import uuid4
 
 from langchain_core.messages import BaseMessage, HumanMessage
@@ -49,6 +49,7 @@ from combo.tooling.execution_context import (
 
 _DEFAULT_STRUCTURED_METHOD = "json_mode"
 ModelRole = Literal["main", "task", "compression"]
+StructuredOutputT = TypeVar("StructuredOutputT", bound=BaseModel)
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,29 +61,40 @@ class RuntimeModelHandle:
 
 
 @dataclass(frozen=True, slots=True)
-class StructuredOutputInvocation:
+class StructuredOutputInvocation(Generic[StructuredOutputT]):
     model: Any
     messages: tuple[Any, ...]
     method: str
+    output_model: type[StructuredOutputT]
+    output_json_schema: str
+
+
+@dataclass(frozen=True, slots=True)
+class StructuredOutputExecution(Generic[StructuredOutputT]):
+    value: StructuredOutputT
+    raw: Any
+    attempt_count: int
+    messages: tuple[Any, ...]
 
 
 def prepare_structured_output_invocation(
     *,
     model: Any,
-    output_model: type[BaseModel],
+    output_model: type[StructuredOutputT],
     messages: list[Any],
     model_metadata: dict[str, Any],
     requested_method: str | None = None,
     config_tags: list[str] | None = None,
-) -> StructuredOutputInvocation:
+) -> StructuredOutputInvocation[StructuredOutputT]:
     method = _effective_structured_method(
         requested=requested_method,
         model_metadata=model_metadata,
     )
+    output_json_schema = _schema_payload(output_model)
     request_messages = _structured_request_messages(
         messages=list(messages),
         output_model=output_model,
-        output_json_schema=_schema_payload(output_model),
+        output_json_schema=output_json_schema,
         structured_method=method,
     )
     return StructuredOutputInvocation(
@@ -94,7 +106,64 @@ def prepare_structured_output_invocation(
         ),
         messages=tuple(system_messages_first(request_messages)),
         method=method,
+        output_model=output_model,
+        output_json_schema=output_json_schema,
     )
+
+
+def execute_structured_output_invocation(
+    invocation: StructuredOutputInvocation[StructuredOutputT],
+    *,
+    config: dict[str, Any] | None = None,
+    max_attempts: int = 3,
+    invoke_model: Callable[[Any, tuple[Any, ...], int], Any] | None = None,
+    before_attempt: Callable[[int, int, tuple[Any, ...]], None] | None = None,
+    on_attempt_failure: Callable[[Exception, int, int], None] | None = None,
+) -> StructuredOutputExecution[StructuredOutputT]:
+    attempts = max(1, int(max_attempts))
+    request_messages = list(invocation.messages)
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        attempt_messages = tuple(request_messages)
+        if before_attempt is not None:
+            before_attempt(attempt, attempts, attempt_messages)
+        try:
+            response = (
+                invoke_model(invocation.model, attempt_messages, attempt)
+                if invoke_model is not None
+                else invocation.model.invoke(list(attempt_messages), config=config)
+            )
+            value, raw = _validate_structured_response(
+                response,
+                output_model=invocation.output_model,
+            )
+            return StructuredOutputExecution(
+                value=value,
+                raw=raw,
+                attempt_count=attempt,
+                messages=attempt_messages,
+            )
+        except RuntimeModelGenerationInterrupted:
+            raise
+        except Exception as exc:
+            last_error = exc
+            if on_attempt_failure is not None:
+                on_attempt_failure(exc, attempt, attempts)
+            if attempt < attempts:
+                request_messages.append(
+                    HumanMessage(
+                        content=_structured_retry_instruction(
+                            output_model=invocation.output_model,
+                            error=exc,
+                            attempt=attempt,
+                            max_attempts=attempts,
+                            output_json_schema=invocation.output_json_schema,
+                        )
+                    )
+                )
+    raise RuntimeError(
+        f"structured model operation failed after {attempts} attempts: {last_error}"
+    ) from last_error
 
 
 class RuntimeModelHandleRegistry:
@@ -323,8 +392,6 @@ class ModelInvocationOperations:
                 image_input_enabled=bool(metadata.get("multimodal")),
             )
             request_messages = envelope.messages
-        attempts = max(1, int(max_attempts))
-        last_error: Exception | None = None
         invocation = prepare_structured_output_invocation(
             model=model,
             output_model=output_model,
@@ -339,106 +406,113 @@ class ModelInvocationOperations:
             "structured_output_method": effective_structured_method,
             **(operation_metadata or {}),
         }
-        request_messages = list(invocation.messages)
         input_diagnostics = _structured_input_diagnostics(
             envelope=envelope,
-            request_messages=request_messages,
+            request_messages=list(invocation.messages),
             tool_count=0,
         )
-        for attempt in range(1, attempts + 1):
+        current_attempt = 0
+
+        def before_attempt(
+            attempt: int,
+            attempts: int,
+            attempt_messages: tuple[Any, ...],
+        ) -> None:
+            nonlocal current_attempt, input_diagnostics
+            current_attempt = attempt
+            input_diagnostics = _structured_input_diagnostics(
+                envelope=envelope,
+                request_messages=list(attempt_messages),
+                tool_count=0,
+            )
             _emit(
                 emit_event,
                 "model_call_started",
                 {"operation": "structured_json", "attempt": attempt, "max_attempts": attempts, **operation_context},
             )
-            try:
-                generation_revision = begin_runtime_model_generation()
-                result = execute_runtime_model_invocation(
-                    lambda: invocation.model.invoke(request_messages),
-                    revision=generation_revision,
-                )
-                if isinstance(result, output_model):
-                    parsed = result
-                else:
-                    parsed = output_model.model_validate(result)
-                usage_metadata = getattr(result, "usage_metadata", None) or {}
-                usage_observation = _model_usage_payload(
-                    node_id=node_id,
-                    model_metadata=metadata,
-                    usage_metadata=usage_metadata,
-                    input_diagnostics=input_diagnostics,
-                    fallback_input_tokens=estimate_messages_tokens(request_messages),
-                    fallback_output_tokens=estimate_text_tokens(parsed.model_dump_json()),
-                )
-                _record_model_token_budget(
-                    state=state,
-                    node_id=node_id,
-                    model_role=effective_model_role,
-                    usage_metadata=usage_metadata,
-                    usage_observation=usage_observation,
-                    retained_message_tokens_after_call=estimate_messages_tokens(request_messages),
-                )
-                _emit(
-                    emit_event,
-                    "model_call_completed",
-                    {
-                        "operation": "structured_json",
-                        "attempt": attempt,
-                        "usage_metadata": usage_metadata,
-                        "model_input": input_diagnostics,
-                    },
-                )
-                _emit(emit_event, "model_usage_completed", usage_observation)
-                _emit_model_usage_context_window(
-                    state=state,
-                    services=services,
-                    node_id=node_id,
-                    model_role=effective_model_role,
-                    usage_observation=usage_observation,
-                )
-                return parsed
-            except RuntimeModelGenerationInterrupted:
-                _emit(
-                    emit_event,
-                    "model_generation_interrupted",
-                    {
-                        "operation": "structured_json",
-                        "attempt": attempt,
-                    },
-                )
-                raise
-            except Exception as exc:
-                last_error = exc
-                _emit(
-                    emit_event,
-                    "model_call_failed",
-                    {
-                        "operation": "structured_json",
-                        "attempt": attempt,
-                        "max_attempts": attempts,
-                        "error": str(exc),
-                        **operation_context,
-                    },
-                )
-                if attempt < attempts:
-                    request_messages = [
-                        *request_messages,
-                        HumanMessage(
-                            content=_structured_retry_instruction(
-                                output_model=output_model,
-                                error=exc,
-                                attempt=attempt,
-                                max_attempts=attempts,
-                                output_json_schema=schema_payload,
-                            )
-                        ),
-                    ]
-                    input_diagnostics = _structured_input_diagnostics(
-                        envelope=envelope,
-                        request_messages=request_messages,
-                        tool_count=0,
-                    )
-        raise RuntimeError(f"structured model operation failed after {attempts} attempts: {last_error}")
+
+        def invoke_model(
+            structured_model: Any,
+            attempt_messages: tuple[Any, ...],
+            _attempt: int,
+        ) -> Any:
+            generation_revision = begin_runtime_model_generation()
+            return execute_runtime_model_invocation(
+                lambda: structured_model.invoke(list(attempt_messages)),
+                revision=generation_revision,
+            )
+
+        def on_attempt_failure(exc: Exception, attempt: int, attempts: int) -> None:
+            _emit(
+                emit_event,
+                "model_call_failed",
+                {
+                    "operation": "structured_json",
+                    "attempt": attempt,
+                    "max_attempts": attempts,
+                    "error": str(exc),
+                    **operation_context,
+                },
+            )
+
+        try:
+            execution = execute_structured_output_invocation(
+                invocation,
+                max_attempts=max_attempts,
+                invoke_model=invoke_model,
+                before_attempt=before_attempt,
+                on_attempt_failure=on_attempt_failure,
+            )
+        except RuntimeModelGenerationInterrupted:
+            _emit(
+                emit_event,
+                "model_generation_interrupted",
+                {
+                    "operation": "structured_json",
+                    "attempt": current_attempt,
+                },
+            )
+            raise
+
+        parsed = execution.value
+        result = execution.raw
+        request_messages = list(execution.messages)
+        usage_metadata = getattr(result, "usage_metadata", None) or {}
+        usage_observation = _model_usage_payload(
+            node_id=node_id,
+            model_metadata=metadata,
+            usage_metadata=usage_metadata,
+            input_diagnostics=input_diagnostics,
+            fallback_input_tokens=estimate_messages_tokens(request_messages),
+            fallback_output_tokens=estimate_text_tokens(parsed.model_dump_json()),
+        )
+        _record_model_token_budget(
+            state=state,
+            node_id=node_id,
+            model_role=effective_model_role,
+            usage_metadata=usage_metadata,
+            usage_observation=usage_observation,
+            retained_message_tokens_after_call=estimate_messages_tokens(request_messages),
+        )
+        _emit(
+            emit_event,
+            "model_call_completed",
+            {
+                "operation": "structured_json",
+                "attempt": execution.attempt_count,
+                "usage_metadata": usage_metadata,
+                "model_input": input_diagnostics,
+            },
+        )
+        _emit(emit_event, "model_usage_completed", usage_observation)
+        _emit_model_usage_context_window(
+            state=state,
+            services=services,
+            node_id=node_id,
+            model_role=effective_model_role,
+            usage_observation=usage_observation,
+        )
+        return parsed
 
 
 class ModelOperationService(ModelInvocationOperations):
@@ -809,13 +883,42 @@ def _structured_model(
     config_tags: list[str] | None,
 ) -> Any:
     structured = (
-        model.with_structured_output(output_model, method=method)
+        model.with_structured_output(output_model, method=method, include_raw=True)
         if method
-        else model.with_structured_output(output_model)
+        else model.with_structured_output(output_model, include_raw=True)
     )
     if config_tags and hasattr(structured, "with_config"):
         structured = structured.with_config(tags=list(config_tags))
     return structured
+
+
+def _validate_structured_response(
+    response: Any,
+    *,
+    output_model: type[StructuredOutputT],
+) -> tuple[StructuredOutputT, Any]:
+    if isinstance(response, output_model):
+        return response, response
+
+    raw = response
+    candidate = response
+    parsing_error: Any = None
+    if isinstance(response, dict) and "raw" in response:
+        raw = response.get("raw")
+        candidate = response.get("parsed")
+        parsing_error = response.get("parsing_error")
+
+    if isinstance(candidate, output_model):
+        return candidate, raw
+    if candidate is not None:
+        return output_model.model_validate(candidate), raw
+
+    content = content_to_text(getattr(raw, "content", raw)).strip()
+    if content:
+        return output_model.model_validate_json(content), raw
+    if parsing_error is not None:
+        raise parsing_error
+    raise ValueError("structured model response did not contain parsed data or JSON text")
 
 
 def _structured_config_tags(config_tags: list[str] | None) -> list[str]:

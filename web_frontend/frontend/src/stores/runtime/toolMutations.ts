@@ -39,16 +39,10 @@ export function applyToolLifecycleEvent(
       : status === 'completed' || status === 'failed' || status === 'cancelled'
         ? status
         : 'running'
-  if (applyComputerUseLifecycleEvent(state, event, computerUseStatus)) {
-    if (
-      computerUseStatus === 'completed'
-      || computerUseStatus === 'failed'
-      || computerUseStatus === 'cancelled'
-    ) {
-      upsertToolActivityFromEvent(state, event, computerUseStatus)
-    }
-    return
-  }
+  const isComputerUse = applyComputerUseLifecycleEvent(state, event, computerUseStatus)
+  // Observations belong to the floating view. Lifecycle events still render
+  // the ordinary tool call in the transcript, just like browser tools.
+  if (isComputerUse && event.event_type === 'tool_output_delta') return
   const toolCallId = toolPayloadValue(event.payload || {}, ['tool_call_id', 'toolCallId'])
   const existing = state.tools.find((tool) => toolCallId && tool.toolCallId === String(toolCallId))
   const nextStatus = status === 'failed' && (
@@ -73,7 +67,7 @@ export function applyToolApprovalRequested(state: ToolMutationState, event: Runt
       ...event,
       payload: { ...(event.payload || {}), ...req },
     } satisfies RuntimeFrontendEvent
-    if (applyComputerUseApprovalRequest(state, approvalEvent, req)) return
+    applyComputerUseApprovalRequest(state, approvalEvent, req)
     const activity = upsertToolActivityFromEvent(state, approvalEvent, 'approval')
     if (activity) {
       activity.approvalState = 'pending'

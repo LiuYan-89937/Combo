@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from combo.tooling.spec import ToolLoopPolicyConfig, ToolSpec
-
+from combo.tooling.spec import ToolSpec
 
 COMPUTER_USE_RUNTIME_RESOURCE = "computer_use_runtime"
 
@@ -11,10 +10,14 @@ def get_computer_use_tool_specs() -> list[ToolSpec]:
         ToolSpec(
             id="computer_use",
             description=(
-                "Operate the user's macOS or Windows desktop through the system-level accessibility runtime. "
-                "Use this for native desktop applications and whole-desktop interaction. It is independent from the "
-                "browser_* built-in tools. Provide one concise goal; the computer-use runtime performs its own "
-                "AX Tree observation/action loop and returns only the terminal result."
+                "Operate a native application through the desktop host. "
+                "It is independent from the "
+                "browser_* built-in tools. Pass the user's complete desktop objective in one call: the runtime already "
+                "uses the integrated open-computer-use engine inside its own model loop. "
+                "The engine returns indexed accessibility text and screenshots after operations. Final assessment belongs to the model. "
+                "Do not split setup, navigation, and the final action into separate calls. "
+                "Further calls may continue unfinished work or handle another objective. "
+                "Use the previous result to avoid repeating actions whose effects are already verified or uncertain."
             ),
             entrypoint="combo.tooling.builtins.computer_use.tool:run",
             input_schema={
@@ -34,21 +37,15 @@ def get_computer_use_tool_specs() -> list[ToolSpec]:
                 "properties": {
                     "status": {
                         "type": "string",
-                        "enum": ["completed", "blocked", "step_limit"],
+                        "enum": ["finished"],
                     },
                     "summary": {"type": "string"},
                     "steps": {"type": "integer"},
                     "model_calls": {"type": "integer"},
                     "total_tokens": {"type": "integer"},
-                    "application": {
-                        "type": "object",
-                        "properties": {
-                            "display_name": {"type": "string"},
-                            "bundle_identifier": {"type": ["string", "null"]},
-                            "icon_data_url": {"type": ["string", "null"]},
-                        },
-                        "required": ["display_name", "bundle_identifier", "icon_data_url"],
-                        "additionalProperties": False,
+                    "verification": {
+                        "type": "string",
+                        "enum": ["model_assessed"],
                     },
                 },
                 "required": [
@@ -57,6 +54,7 @@ def get_computer_use_tool_specs() -> list[ToolSpec]:
                     "steps",
                     "model_calls",
                     "total_tokens",
+                    "verification",
                 ],
                 "additionalProperties": False,
             },
@@ -65,7 +63,6 @@ def get_computer_use_tool_specs() -> list[ToolSpec]:
             concurrent=False,
             max_parallel_calls=1,
             output_projection="passthrough",
-            loop_policy=ToolLoopPolicyConfig(max_calls=4, max_identical_calls=2),
             effects=["external_side_effect"],
             read_only=False,
             system_available=True,

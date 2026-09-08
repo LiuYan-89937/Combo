@@ -39,7 +39,6 @@ _ADAPTER_SPECS = {
         "combo.models.adapters.openai_responses",
         "GenericOpenAIResponsesAdapter",
     ),
-    "anthropic": _AdapterSpec("combo.models.adapters.anthropic", "AnthropicChatAdapter"),
     "deepseek": _AdapterSpec("combo.models.adapters.deepseek", "DeepSeekChatAdapter"),
     "qwen": _AdapterSpec("combo.models.adapters.qwen", "QwenChatAdapter"),
     "zhipu": _AdapterSpec("combo.models.adapters.zhipu", "ZhipuChatAdapter"),

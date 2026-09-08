@@ -8,25 +8,22 @@
       :style="panelStyle"
     >
       <div class="page-capsule-stack">
-      <div
+      <ActivityCapsule
         v-for="(target, index) in browserTargets"
         :key="target.pageId"
         class="page-capsule"
-        :class="{ active: target.pageId === activePageId }"
+        :active="target.pageId === activePageId"
+        :title="target.title || target.url || t('browser.panelTitle')"
+        :subtitle="target.pageId === activePageId ? agentOperation : ''"
+        :expanded="target.pageId === activePageId && !minimized"
+        @select="activateTarget(target)"
         :style="{ zIndex: index + 1 }"
         @pointerdown="target.pageId === activePageId && beginPanelDrag($event)"
       >
-        <button class="capsule-select" type="button" @click="activateTarget(target)">
-          <span
-            class="live-dot"
-            :class="target.pageId === activePageId ? connectionStatus : 'parked'"
-          ></span>
-          <span class="capsule-copy">
-            <strong>{{ target.title || target.url || t('browser.panelTitle') }}</strong>
-            <small v-if="target.pageId === activePageId && agentOperation">{{ agentOperation }}</small>
-          </span>
-        </button>
-        <div class="capsule-actions">
+        <template #leading>
+          <span class="live-dot" :class="target.pageId === activePageId ? connectionStatus : 'parked'"></span>
+        </template>
+        <template #actions>
           <span v-if="target.pageId === activePageId" class="capsule-grip" aria-hidden="true">⠿</span>
           <button v-if="target.pageId === activePageId" type="button" @click="minimized = !minimized">
             {{ minimized ? t('browser.expand') : t('browser.minimize') }}
@@ -37,8 +34,8 @@
             :disabled="closingPageIds.has(target.pageId)"
             @click.stop="closeTarget(target)"
           >×</button>
-        </div>
-      </div>
+        </template>
+      </ActivityCapsule>
       </div>
 
       <div v-if="!minimized && currentTarget" class="browser-window">
@@ -87,7 +84,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useFloatingCapsule } from '@/composables/useFloatingCapsule'
+import ActivityCapsule from '@/components/common/ActivityCapsule.vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from '@/composables/useI18n'
 import { backendUrl } from '@/api/backendUrl'
 import { useRuntimeStore } from '@/stores/runtime'
@@ -124,25 +123,12 @@ const panelRef = ref<HTMLElement | null>(null)
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 const sourceWidth = ref(1440)
 const sourceHeight = ref(900)
-const panelPosition = ref<{ x: number; y: number } | null>(null)
-const dragging = ref(false)
 let socket: WebSocket | null = null
 let connectionGeneration = 0
 let pendingFrameMetadata: Record<string, any> | null = null
-let dragState: {
-  pointerId: number
-  offsetX: number
-  offsetY: number
-  originX: number
-  originY: number
-  captureTarget: HTMLElement
-} | null = null
-let suppressCapsuleClick = false
 let activeCanvasPointer: number | null = null
 
-const panelStyle = computed(() => panelPosition.value
-  ? { left: `${panelPosition.value.x}px`, top: `${panelPosition.value.y}px` }
-  : { right: '18px', top: '76px' })
+const { panelPosition, panelStyle, dragging, beginPanelDrag, clampPanelPosition, shouldSuppressClick } = useFloatingCapsule(panelRef)
 
 const viewportAspectRatio = computed(() => (
   `${Math.max(sourceWidth.value, 1)} / ${Math.max(sourceHeight.value, 1)}`
@@ -493,7 +479,7 @@ function markTargetClosed(pageId: string) {
 }
 
 function activateTarget(target: BrowserTarget) {
-  if (suppressCapsuleClick) return
+  if (shouldSuppressClick()) return
   upsertTarget(target)
   activePageId.value = target.pageId
   visible.value = true
@@ -525,84 +511,6 @@ async function closeTarget(target: BrowserTarget) {
   }
 }
 
-function beginPanelDrag(event: PointerEvent) {
-  if (event.button !== 0) return
-  const target = event.target as HTMLElement | null
-  if (target?.closest('.capsule-actions button')) return
-  const panel = panelRef.value
-  if (!panel) return
-  event.preventDefault()
-  const captureTarget = event.currentTarget as HTMLElement
-  captureTarget.setPointerCapture(event.pointerId)
-  const bounds = panel.getBoundingClientRect()
-  dragState = {
-    pointerId: event.pointerId,
-    offsetX: event.clientX - bounds.left,
-    offsetY: event.clientY - bounds.top,
-    originX: event.clientX,
-    originY: event.clientY,
-    captureTarget,
-  }
-  dragging.value = true
-  window.addEventListener('pointermove', movePanel)
-  window.addEventListener('pointerup', endPanelDrag)
-  window.addEventListener('pointercancel', endPanelDrag)
-}
-
-function movePanel(event: PointerEvent) {
-  if (!dragState || event.pointerId !== dragState.pointerId) return
-  const panel = panelRef.value
-  if (!panel) return
-  const bounds = panel.getBoundingClientRect()
-  panelPosition.value = constrainedPosition(
-    event.clientX - dragState.offsetX,
-    event.clientY - dragState.offsetY,
-    bounds.width,
-    bounds.height,
-  )
-}
-
-function endPanelDrag(event: PointerEvent) {
-  if (!dragState || event.pointerId !== dragState.pointerId) return
-  const moved = Math.hypot(
-    event.clientX - dragState.originX,
-    event.clientY - dragState.originY,
-  ) > 4
-  if (dragState.captureTarget.hasPointerCapture(event.pointerId)) {
-    dragState.captureTarget.releasePointerCapture(event.pointerId)
-  }
-  dragState = null
-  dragging.value = false
-  window.removeEventListener('pointermove', movePanel)
-  window.removeEventListener('pointerup', endPanelDrag)
-  window.removeEventListener('pointercancel', endPanelDrag)
-  if (moved) {
-    suppressCapsuleClick = true
-    window.setTimeout(() => { suppressCapsuleClick = false }, 120)
-  }
-}
-
-function constrainedPosition(x: number, y: number, width: number, height: number) {
-  const margin = 10
-  return {
-    x: Math.min(Math.max(x, margin), Math.max(margin, window.innerWidth - width - margin)),
-    y: Math.min(Math.max(y, margin), Math.max(margin, window.innerHeight - height - margin)),
-  }
-}
-
-function clampPanelPosition() {
-  const panel = panelRef.value
-  if (!panel) return
-  const bounds = panel.getBoundingClientRect()
-  const current = panelPosition.value
-  panelPosition.value = constrainedPosition(
-    current?.x ?? window.innerWidth - bounds.width - 18,
-    current?.y ?? 76,
-    bounds.width,
-    bounds.height,
-  )
-}
-
 function closePanel() {
   visible.value = false
   interactive.value = false
@@ -619,15 +527,8 @@ function disconnectViewSocket() {
 
 onBeforeUnmount(() => {
   disconnectViewSocket()
-  window.removeEventListener('resize', clampPanelPosition)
-  window.removeEventListener('pointermove', movePanel)
-  window.removeEventListener('pointerup', endPanelDrag)
-  window.removeEventListener('pointercancel', endPanelDrag)
 })
 
-onMounted(() => {
-  window.addEventListener('resize', clampPanelPosition)
-})
 </script>
 
 <style scoped>
@@ -636,15 +537,8 @@ onMounted(() => {
 .browser-panel.dragging { transition: none; user-select: none; }
 .page-capsule-stack { display: flex; max-height: 192px; flex-direction: column; align-items: flex-end; gap: 8px; padding: 8px 8px 3px; overflow-y: auto; scrollbar-width: none; }
 .page-capsule-stack::-webkit-scrollbar { display: none; }
-.page-capsule { width: min(100%, 360px); height: 48px; display: flex; align-items: center; overflow: hidden; border: 1px solid var(--app-border); border-radius: var(--app-radius-pill); background: var(--app-surface); box-shadow: 0 7px 20px color-mix(in srgb, var(--app-text) 8%, transparent); transition: width .2s ease, transform .2s ease, border-color .2s ease, box-shadow .2s ease; }
 .page-capsule.active { width: 100%; border-color: var(--app-border-focus); box-shadow: 0 11px 26px color-mix(in srgb, var(--app-text) 12%, transparent); cursor: grab; touch-action: none; user-select: none; }
 .browser-panel.dragging .page-capsule.active { cursor: grabbing; }
-.capsule-select { min-width: 0; flex: 1; display: flex; align-items: center; gap: 9px; padding: 9px 8px 9px 13px; text-align: left; }
-.capsule-copy { min-width: 0; display: grid; gap: 1px; }
-.capsule-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
-.capsule-copy small { overflow: hidden; color: var(--app-text-muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-.capsule-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 1px; padding-right: 7px; }
-.capsule-actions button { padding: 5px 7px; font-size: 11px; }
 .capsule-grip { padding: 6px 4px; color: var(--app-text-muted); cursor: grab; touch-action: none; }
 .browser-panel.dragging .capsule-grip { cursor: grabbing; }
 .live-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: var(--app-text-muted); }

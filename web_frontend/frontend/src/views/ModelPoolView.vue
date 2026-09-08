@@ -947,7 +947,9 @@ async function saveProfile(): Promise<void> {
         tool_calling: !isImageModel && !isEmbeddingModel && profileForm.tool_calling,
         streaming_tool_calls: false,
         strict_tool_schema: false,
-        structured_output_methods: isImageModel || isEmbeddingModel ? [] : ['json_mode', 'function_calling'],
+        structured_output_methods: isImageModel || isEmbeddingModel
+          ? []
+          : providerStructuredOutputMethods(credential.provider),
         reasoning_supported: !isImageModel && !isEmbeddingModel && profileForm.reasoning_supported,
         reasoning_efforts: [],
         reasoning_content: !isImageModel && !isEmbeddingModel && profileForm.reasoning_supported,
@@ -1100,6 +1102,11 @@ function providerLabel(providerId: string): string {
 
 function providerDefaultBaseUrl(providerId: string | undefined): string {
   return providers.value.find((item) => item.provider_id === providerId)?.default_base_url || ''
+}
+
+function providerStructuredOutputMethods(providerId: string): string[] {
+  const provider = providers.value.find((item) => item.provider_id === providerId)
+  return [...(provider?.structured_output_methods || [])]
 }
 
 function providerSupportsKind(providerId: string, kind: 'chat' | 'embedding' | 'image_generation'): boolean {

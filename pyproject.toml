@@ -36,7 +36,6 @@ dependencies = [
     "pypdf>=4.0",
     "python-pptx>=1.0,<2",
     "ruamel.yaml>=0.18",
-    "langchain-anthropic>=1.1,<2",
     "striprtf>=0.0.29,<1",
     "xlrd>=2.0,<3",
 ]

@@ -39,11 +39,19 @@
       "resources/README.md": "README.md",
       "../combo": "combo",
       "../web_frontend/backend": "web_frontend/backend",
-      "../web_frontend/frontend/dist": "web_frontend/dist"
+      "../web_frontend/frontend/dist": "web_frontend/dist",
+      "resources/computer-use": "computer-use",
+      "../native/computer-use/Sources/OpenComputerUseKit/Resources/official-software-cursor-window-252.png": "official-software-cursor-window-252.png"
     },
     "externalBin": [],
     "macOS": {
-      "signingIdentity": "-"
+      "signingIdentity": "-",
+      "hardenedRuntime": true,
+      "entitlements": "entitlements.plist",
+      "frameworks": [
+        "resources/computer-use/libComboCU.dylib"
+      ],
+      "minimumSystemVersion": "14.0"
     },
     "copyright": "Copyright (c) 2026 Combo Team",
     "category": "DeveloperTool",

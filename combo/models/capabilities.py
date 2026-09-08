@@ -76,22 +76,6 @@ OPENAI_RESPONSES_CAPABILITIES = ModelProviderCapabilities(
     cache_usage="model_specific",
 )
 
-ANTHROPIC_CAPABILITIES = ModelProviderCapabilities(
-    transport="anthropic_messages",
-    image_input="model_specific",
-    tool_calling="model_specific",
-    streaming_tool_calls="adapter",
-    strict_tool_schema="model_specific",
-    structured_output_methods=("function_calling", "json_schema"),
-    default_structured_output_method="json_schema",
-    reasoning="model_specific",
-    reasoning_efforts=("max", "xhigh", "high", "medium", "low"),
-    reasoning_summaries=("summarized",),
-    reasoning_content="model_specific",
-    send_reasoning_history="adapter",
-    cache_usage="model_specific",
-)
-
 DEEPSEEK_CAPABILITIES = ModelProviderCapabilities(
     transport="openai_chat_completions",
     tool_calling="model_specific",
@@ -203,14 +187,6 @@ PROVIDER_PROFILES: dict[str, ProviderProfile] = {
         adapter_id="qwen",
         capabilities=QWEN_CAPABILITIES,
         aliases=("qwen", "aliyun_bailian", "bailian", "tongyi", "dashscope_wanx", "wanx", "aliyun_wanx"),
-    ),
-    "anthropic": ProviderProfile(
-        provider_id="anthropic",
-        display_name="Anthropic Messages",
-        adapter_id="anthropic",
-        capabilities=ANTHROPIC_CAPABILITIES,
-        aliases=("claude",),
-        notes=("Uses Anthropic native Messages API through langchain-anthropic.",),
     ),
 }
 

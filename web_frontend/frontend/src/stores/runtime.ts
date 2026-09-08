@@ -101,7 +101,7 @@ import {
   finalizeToolActivitiesForRequest,
   applyToolLifecycleEvent,
 } from './runtime/toolMutations'
-import { clearComputerUseForRequest } from './runtime/computerUseMutations'
+import { finalizeComputerUseForRequest } from './runtime/computerUseMutations'
 import {
   detectBrowserLocale,
   localeStorageKey,
@@ -715,7 +715,7 @@ export const useRuntimeStore = defineStore('runtime', {
       if (!this.activeRequestId || this.activeRequestId === requestId) {
         this.activeRequestId = null
       }
-      clearComputerUseForRequest(this, requestId)
+      finalizeComputerUseForRequest(this, requestId, event.timestamp, completedStatus === 'stopped' ? 'cancelled' : 'completed')
       this.pendingInterrupt = null
 
       // 同步 agent session
@@ -769,7 +769,7 @@ export const useRuntimeStore = defineStore('runtime', {
       if (!this.activeRequestId || this.activeRequestId === requestId) {
         this.activeRequestId = null
       }
-      clearComputerUseForRequest(this, requestId)
+      finalizeComputerUseForRequest(this, requestId, event.timestamp, 'cancelled')
     },
 
     _handleRunFailed(event: RuntimeFrontendEvent) {
@@ -825,7 +825,7 @@ export const useRuntimeStore = defineStore('runtime', {
       if (!this.activeRequestId || this.activeRequestId === requestId) {
         this.activeRequestId = null
       }
-      clearComputerUseForRequest(this, requestId)
+      finalizeComputerUseForRequest(this, requestId, event.timestamp, 'failed')
     },
 
     _syncAgentSessionFromRunEvent(event: RuntimeFrontendEvent) {

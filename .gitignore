@@ -34,3 +34,7 @@ src-tauri/target/
 src-tauri/gen/
 src-tauri/resources/python/
 build/python-downloads/
+
+# Built upstream CU platform artifacts
+src-tauri/resources/computer-use/
+native/computer-use/.build/

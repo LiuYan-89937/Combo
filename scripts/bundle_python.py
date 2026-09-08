@@ -5,14 +5,19 @@
 """
 import os
 import platform
-import json
 import shutil
+import subprocess
 import sys
 import tarfile
 import zipfile
 from pathlib import Path
 from typing import Optional
 from urllib.request import urlretrieve
+
+from install_locked_python_dependencies import (
+    install_locked_dependencies,
+    is_reusable_runtime,
+)
 
 # python-build-standalone 版本配置
 PYTHON_VERSION = "3.11"
@@ -173,91 +178,21 @@ def _convert_symlinks_to_files(python_dir: Path):
     print(f"✓ 转换了 {converted} 个符号链接")
 
 
-def _default_playwright_cache_dir() -> Optional[Path]:
-    """返回 Playwright 在当前平台使用的共享浏览器缓存目录。"""
-    system = platform.system()
-    if system == "Darwin":
-        return Path.home() / "Library" / "Caches" / "ms-playwright"
-    if system == "Linux":
-        cache_home = os.environ.get("XDG_CACHE_HOME")
-        return Path(cache_home) / "ms-playwright" if cache_home else Path.home() / ".cache" / "ms-playwright"
-    if system == "Windows":
-        local_app_data = os.environ.get("LOCALAPPDATA")
-        return Path(local_app_data) / "ms-playwright" if local_app_data else None
-    return None
-
-
-def _seed_playwright_browser_cache(python_dir: Path, browser_dir: Path) -> None:
-    """复用与当前 Playwright 版本完全匹配的共享浏览器缓存。"""
-    cache_dir = _default_playwright_cache_dir()
-    if cache_dir is None or not cache_dir.is_dir():
-        return
-
-    manifests = list(
-        python_dir.glob("lib/python*/site-packages/playwright/driver/package/browsers.json")
-    )
-    manifests.extend(
-        python_dir.glob("Lib/site-packages/playwright/driver/package/browsers.json")
-    )
-    if not manifests:
-        return
-
-    with manifests[0].open(encoding="utf-8") as manifest_file:
-        browsers = json.load(manifest_file).get("browsers", [])
-
-    revisions = {
-        browser["name"]: str(browser["revision"])
-        for browser in browsers
-        if browser.get("name") in {"chromium-headless-shell", "ffmpeg"}
-        and browser.get("revision") is not None
-    }
-    browser_dir.mkdir(parents=True, exist_ok=True)
-    reused = []
-    for browser_name, revision in revisions.items():
-        directory_name = f"{browser_name.replace('-', '_')}-{revision}"
-        source = cache_dir / directory_name
-        destination = browser_dir / directory_name
-        if not source.is_dir():
-            continue
-        shutil.copytree(source, destination, dirs_exist_ok=True)
-        reused.append(directory_name)
-
-    if reused:
-        print(f"复用 Playwright 浏览器缓存: {', '.join(reused)}")
-
-
-def install_dependencies(python_dir: Path, project_root: Path):
-    """使用打包的 Python 安装项目依赖"""
+def install_dependencies(python_dir: Path, project_root: Path, runtime_id: str):
+    """从 uv.lock 向全新运行时安装固定依赖。"""
     python_exe = _find_python_executable(python_dir)
     if not python_exe:
-        print("✗ 无法找到 Python 可执行文件，跳过依赖安装")
-        return
+        raise RuntimeError("无法找到打包的 Python 可执行文件")
 
-    print(f"\n安装依赖到打包的 Python...")
-    import subprocess
-
+    print("\n从 uv.lock 安装依赖到打包的 Python...")
     try:
-        # 升级 pip
-        print("升级 pip...")
-        subprocess.run([str(python_exe), "-m", "pip", "install", "--upgrade", "pip"], check=True)
-
-        # 安装项目及其依赖（包括 web 可选依赖）
-        print("安装项目依赖...")
-        subprocess.run(
-            [str(python_exe), "-m", "pip", "install", "-e", f"{project_root}[web]"],
-            check=True
-        )
-        browser_dir = python_dir / "playwright-browsers"
-        _seed_playwright_browser_cache(python_dir, browser_dir)
-        browser_environment = {**os.environ, "PLAYWRIGHT_BROWSERS_PATH": str(browser_dir)}
-        print("安装 Chromium headless shell...")
-        subprocess.run(
-            [str(python_exe), "-m", "playwright", "install", "--only-shell", "chromium"],
-            check=True,
-            env=browser_environment,
+        install_locked_dependencies(
+            project_root=project_root,
+            python_runtime=python_exe,
+            runtime_id=runtime_id,
         )
         print("✓ 依赖安装完成")
-    except subprocess.CalledProcessError as e:
+    except (RuntimeError, subprocess.CalledProcessError) as e:
         print(f"✗ 依赖安装失败: {e}")
         sys.exit(1)
 
@@ -279,6 +214,17 @@ def main():
     print("Combo Python 打包工具")
     print("=" * 60)
 
+    system, architecture = get_platform_info()
+    runtime_id = PLATFORM_MAP[system][architecture]
+    existing_python = _find_python_executable(python_bundle_dir)
+    if existing_python and is_reusable_runtime(
+        project_root=project_root,
+        python_runtime=existing_python,
+        runtime_id=runtime_id,
+    ):
+        print("✓ Python 运行时与 uv.lock 一致，复用现有构建")
+        return
+
     # 1. 下载 python-build-standalone
     archive_path = download_python(download_dir)
 
@@ -287,7 +233,7 @@ def main():
 
     # 3. 安装项目依赖
     print("\n准备安装项目依赖...")
-    install_dependencies(python_bundle_dir, project_root)
+    install_dependencies(python_bundle_dir, project_root, archive_path.name)
 
     # 依赖与 Chromium 安装后可能新增符号链接，统一转换为可打包文件。
     _convert_symlinks_to_files(python_bundle_dir)

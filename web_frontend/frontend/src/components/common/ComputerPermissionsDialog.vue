@@ -35,7 +35,7 @@ import { useI18n } from '@/composables/useI18n'
 const permissions = useComputerPermissionsStore()
 const startup = useStartupStore()
 const { t } = useI18n()
-const permissionNames = ['accessibility'] as const
+const permissionNames = ['accessibility', 'screen_recording'] as const
 
 function recheckOnFocus() {
   if (startup.ready && permissions.visible && !permissions.busy) void permissions.check()

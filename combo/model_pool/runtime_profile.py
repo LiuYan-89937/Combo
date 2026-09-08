@@ -9,7 +9,6 @@ from combo.models.capabilities import (
     ProviderProfile,
     resolve_provider_profile,
 )
-from combo.models.protocol import StructuredOutputMethod
 
 
 def resolve_model_pool_provider_profile(
@@ -20,7 +19,6 @@ def resolve_model_pool_provider_profile(
 
     provider_profile = resolve_provider_profile(provider)
     provider_capabilities = provider_profile.capabilities
-    structured_output_methods = tuple(capabilities.structured_output_methods)
     return replace(
         provider_profile,
         capabilities=replace(
@@ -45,10 +43,9 @@ def resolve_model_pool_provider_profile(
                 capabilities.strict_tool_schema,
                 provider_capabilities.strict_tool_schema,
             ),
-            structured_output_methods=structured_output_methods,
-            default_structured_output_method=_default_structured_output_method(
-                provider_capabilities,
-                structured_output_methods,
+            structured_output_methods=provider_capabilities.structured_output_methods,
+            default_structured_output_method=(
+                provider_capabilities.default_structured_output_method
             ),
             reasoning=_declared_feature(
                 capabilities.reasoning_supported,
@@ -78,16 +75,6 @@ def _declared_feature(enabled: bool, provider_support: FeatureScope) -> FeatureS
     if not enabled:
         return "unsupported"
     return provider_support if provider_support != "unsupported" else "model_specific"
-
-
-def _default_structured_output_method(
-    provider_capabilities: ModelProviderCapabilities,
-    methods: tuple[StructuredOutputMethod, ...],
-) -> StructuredOutputMethod:
-    current = provider_capabilities.default_structured_output_method
-    if current in methods or not methods:
-        return current
-    return methods[0]
 
 
 def _reasoning_efforts(

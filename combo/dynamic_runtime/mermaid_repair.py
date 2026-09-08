@@ -7,7 +7,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from combo.model_pool import ModelPoolStore
 from combo.model_pool.resolver import resolve_available_chat_model
-from combo.runtime_kernel.model_operations import prepare_structured_output_invocation
+from combo.runtime_kernel.model_operations import (
+    execute_structured_output_invocation,
+    prepare_structured_output_invocation,
+)
 
 
 MAX_MERMAID_SOURCE_CHARS = 100_000
@@ -69,8 +72,8 @@ def repair_mermaid_source(
         model_metadata=resolved.settings.metadata(),
         config_tags=["mermaid-syntax-repair"],
     )
-    result = invocation.model.invoke(
-        list(invocation.messages),
+    result = execute_structured_output_invocation(
+        invocation,
         config={
             "metadata": {
                 "operation": "mermaid_syntax_repair",
@@ -78,6 +81,4 @@ def repair_mermaid_source(
             }
         },
     )
-    if isinstance(result, MermaidRepairResult):
-        return result
-    return MermaidRepairResult.model_validate(result)
+    return result.value

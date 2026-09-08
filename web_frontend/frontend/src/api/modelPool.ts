@@ -130,7 +130,7 @@ export async function resolveRuntimeMainModelProfileId(
         input_modalities: ['text'],
         output_modalities: ['text'],
         tool_calling: true,
-        structured_output_methods: ['json_mode', 'function_calling'],
+        structured_output_methods: ['json_mode', 'json_schema', 'function_calling'],
         optimize_for: 'balanced',
       }],
     })

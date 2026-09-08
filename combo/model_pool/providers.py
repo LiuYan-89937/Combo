@@ -87,7 +87,6 @@ def list_model_pool_provider_profiles() -> list[dict[str, Any]]:
         "dashscope",
         "openai_chat_completions",
         "openai_responses",
-        "anthropic",
     ):
         payload = chat_by_id[provider_id]
         payload["kind"] = "chat"
@@ -96,9 +95,6 @@ def list_model_pool_provider_profiles() -> list[dict[str, Any]]:
             payload["supported_kinds"].extend(("embedding", "image_generation"))
             payload["capabilities"] = dict(IMAGE_GENERATION_PROVIDERS[provider_id].capabilities or {})
             payload["default_base_url"] = IMAGE_GENERATION_PROVIDERS[provider_id].default_base_url
-        elif provider_id == "anthropic":
-            payload["default_base_url"] = "https://api.anthropic.com"
-            payload["capabilities"] = {}
         else:
             payload["default_base_url"] = "https://api.openai.com/v1"
             payload["capabilities"] = {}
@@ -152,8 +148,5 @@ def _canonical_image_provider(provider: str) -> str:
 
 
 def _chat_provider_supports_embedding(provider: dict[str, Any]) -> bool:
-    # External embeddings use the same OpenAI-compatible credential and
-    # transport as chat. Native Messages providers (for example Anthropic)
-    # are deliberately excluded because their credential cannot be sent to
-    # an /embeddings endpoint.
+    # Embeddings use the same OpenAI-compatible credential and transport as chat.
     return str(provider.get("transport") or "").strip().lower() == "openai_chat_completions"

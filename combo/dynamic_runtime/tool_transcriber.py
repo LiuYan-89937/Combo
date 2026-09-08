@@ -8,7 +8,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from combo.model_pool import ModelPoolStore
 from combo.model_pool.resolver import resolve_available_chat_model
-from combo.runtime_kernel.model_operations import prepare_structured_output_invocation
+from combo.runtime_kernel.model_operations import (
+    execute_structured_output_invocation,
+    prepare_structured_output_invocation,
+)
 
 
 class ToolTranscriptionParameter(BaseModel):
@@ -143,10 +146,8 @@ def transcribe_tool_source(
         model_metadata=resolved.settings.metadata(),
         config_tags=["tool-package-transcription"],
     )
-    result = invocation.model.invoke(
-        list(invocation.messages),
+    result = execute_structured_output_invocation(
+        invocation,
         config={"metadata": {"operation": "tool_package_transcription", "task_model_profile_id": resolved.profile_id}},
     )
-    if isinstance(result, ToolTranscriptionResult):
-        return result
-    return ToolTranscriptionResult.model_validate(result)
+    return result.value

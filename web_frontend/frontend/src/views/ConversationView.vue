@@ -1,5 +1,6 @@
 <template>
   <div class="conversation-view">
+    <ComputerUseCapsule />
     <div
       class="chat-container"
       :style="{ '--composer-occlusion': `${composerOcclusion}px` }"
@@ -137,6 +138,7 @@ import { useConversationMessageProjection } from '@/composables/conversation/use
 import { useCommand } from '@/composables/useCommand'
 import MessageItem from '@/components/chat/MessageItem.vue'
 import MessageInput from '@/components/chat/MessageInput.vue'
+import ComputerUseCapsule from '@/components/chat/ComputerUseCapsule.vue'
 import CurrentActivitySummary from '@/components/chat/CurrentActivitySummary.vue'
 import ToolApprovalPanel from '@/components/chat/ToolApprovalPanel.vue'
 import QuestionInterruptPanel from '@/components/chat/QuestionInterruptPanel.vue'

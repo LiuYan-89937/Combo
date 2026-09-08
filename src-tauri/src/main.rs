@@ -1,8 +1,6 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod computer_accessibility;
-mod computer_applications;
 mod computer_host;
 mod computer_permissions;
 mod desktop_file_actions;

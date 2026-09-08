@@ -1,5 +1,6 @@
 import type {
   ComputerUseActivityView,
+  ComputerUseOperationView,
   RuntimeFrontendEvent,
   RuntimeViewState,
 } from '@/types/protocol'
@@ -24,7 +25,20 @@ export function applyComputerUseLifecycleEvent(
     toolCallId ? String(toolCallId) : null,
   )
   const nextStatus = terminalComputerUseStatus(current.status, status, event.event_type)
+  const hasScreenshotField = hasOwn(progress, 'screenshot')
+  const nextTarget = targetView(progress?.target)
+  const sameTarget = retainsObservation && (!nextTarget
+    || nextTarget.applicationId === current.target?.applicationId)
+  const previousScreenshot = sameTarget ? current.screenshot : null
+  const operations = retainsObservation ? [...(current.operations || [])] : []
+  const operation = operationView(progress?.operation)
+  if (operation) {
+    const index = operations.findIndex(item => item.id === operation.id)
+    if (index < 0) operations.push(operation)
+    else operations[index] = operation
+  }
   state.computerUseActivity = {
+    operations,
     status: nextStatus,
     requestId: event.request_id || current.requestId || null,
     toolCallId: toolCallId ? String(toolCallId) : current.toolCallId || null,
@@ -39,10 +53,16 @@ export function applyComputerUseLifecycleEvent(
       || null,
     startedAt: startedAtForEvent(current, event, retainsObservation),
     updatedAt: event.timestamp,
-    target: targetView(progress?.target) || (retainsObservation ? current.target : null) || null,
+    target: nextTarget || (retainsObservation ? current.target : null) || null,
     accessibility: accessibilityView(progress?.accessibility)
       || (retainsObservation ? current.accessibility : null)
       || null,
+    screenshot: hasScreenshotField
+      ? screenshotView(progress?.screenshot) || previousScreenshot
+      : previousScreenshot,
+    screenshotError: hasOwn(progress, 'screenshot_error')
+      ? optionalText(progress?.screenshot_error)
+      : (retainsObservation ? current.screenshotError : null),
   }
   return true
 }
@@ -91,7 +111,7 @@ export function finalizeComputerUseForRequest(
   state: ComputerUseMutationState,
   requestId: string | null,
   timestamp: string,
-  status: 'cancelled' | 'failed',
+  status: 'completed' | 'cancelled' | 'failed',
   message?: string,
 ): void {
   const current = state.computerUseActivity
@@ -104,15 +124,6 @@ export function finalizeComputerUseForRequest(
     message: optionalText(message) || current.message || null,
     updatedAt: timestamp,
   }
-}
-
-export function clearComputerUseForRequest(
-  state: ComputerUseMutationState,
-  requestId: string | null,
-): void {
-  const current = state.computerUseActivity
-  if (!requestId || current.requestId !== requestId) return
-  state.computerUseActivity = { status: 'idle' }
 }
 
 function eventBelongsToComputerUse(
@@ -176,16 +187,28 @@ function objectValue(value: unknown): Record<string, any> | null {
 
 function accessibilityView(value: unknown) {
   const accessibility = objectValue(value)
-  if (!accessibility || !Array.isArray(accessibility.nodes)) return null
+  if (!accessibility || typeof accessibility.text !== 'string') return null
   return {
     available: accessibility.available === true,
     application: optionalText(accessibility.application) || '',
     windowTitle: optionalText(accessibility.window_title) || '',
     error: optionalText(accessibility.error),
-    nodes: accessibility.nodes.filter(
-      (node): node is Record<string, any> => Boolean(node && typeof node === 'object' && !Array.isArray(node)),
-    ),
+    text: accessibility.text,
   }
+}
+
+function screenshotView(value: unknown) {
+  const screenshot = objectValue(value)
+  if (!screenshot) return null
+  const dataUrl = optionalText(screenshot.data_url)
+  const width = optionalNumber(screenshot.width)
+  const height = optionalNumber(screenshot.height)
+  if (!dataUrl || width === null || width <= 0 || height === null || height <= 0) return null
+  return { dataUrl, width, height }
+}
+
+function hasOwn(value: Record<string, any> | null, key: string): boolean {
+  return Boolean(value && Object.prototype.hasOwnProperty.call(value, key))
 }
 
 function targetView(value: unknown) {
@@ -195,7 +218,8 @@ function targetView(value: unknown) {
   const displayName = optionalText(target.display_name)
   const processId = optionalNumber(target.process_id)
   const windowId = optionalNumber(target.window_id)
-  if (!applicationId || !displayName || processId === null || windowId === null) return null
+  if (!applicationId || !displayName || processId === null) return null
+  const windowState = objectValue(target.window_state)
   return {
     applicationId,
     displayName,
@@ -203,6 +227,11 @@ function targetView(value: unknown) {
     processId,
     windowId,
     windowTitle: optionalText(target.window_title) || '',
+    windowState: {
+      minimized: typeof windowState?.minimized === 'boolean' ? windowState.minimized : null,
+      hidden: typeof windowState?.hidden === 'boolean' ? windowState.hidden : null,
+      focused: typeof windowState?.focused === 'boolean' ? windowState.focused : null,
+    },
   }
 }
 
@@ -213,4 +242,16 @@ function optionalText(value: unknown): string | null {
 
 function optionalNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function operationView(value: unknown): ComputerUseOperationView | null {
+  const item = objectValue(value)
+  if (!item || !item.id || !item.tool || !['running', 'returned', 'failed'].includes(String(item.status))) return null
+  return {
+    id: String(item.id), step: Number(item.step), tool: String(item.tool), app: String(item.app || ''),
+    status: item.status as ComputerUseOperationView['status'],
+    elementIndex: optionalText(item.element_index), x: optionalNumber(item.x), y: optionalNumber(item.y),
+    textLength: optionalNumber(item.text_length), key: optionalText(item.key), action: optionalText(item.action),
+    errorCode: optionalText(item.error_code), valueVerified: item.value_verified === true,
+  }
 }

@@ -3,6 +3,7 @@ import { useI18n } from '@/composables/useI18n'
 import { useRuntimeStore } from '@/stores/runtime'
 import type {
   ComputerUseAccessibilityView,
+  ComputerUseScreenshotView,
   ComputerUseTargetView,
   ToolActivity,
   TranscriptItem,
@@ -22,6 +23,8 @@ export interface ConversationActivitySummary {
   startedAt: string | null
   target: ComputerUseTargetView | null
   accessibility: ComputerUseAccessibilityView | null
+  screenshot: ComputerUseScreenshotView | null
+  screenshotError: string | null
 }
 
 export function useConversationMessageProjection() {
@@ -113,6 +116,8 @@ export function useConversationMessageProjection() {
       startedAt: displayStatus.startedAt,
       target: displayStatus.target,
       accessibility: displayStatus.accessibility,
+      screenshot: displayStatus.screenshot,
+      screenshotError: displayStatus.screenshotError,
     }
   })
   const activeStreamContentKey = computed(() => {
@@ -124,6 +129,7 @@ export function useConversationMessageProjection() {
       toolActivityHint.value,
       currentActivity.value?.text || '',
       currentActivity.value?.status || '',
+      currentActivity.value?.screenshot?.dataUrl.length || 0,
     ].join('')
   })
 
@@ -182,6 +188,8 @@ function activeRuntimeDisplayStatus(
       startedAt: computerUseActivity.startedAt || null,
       target: computerUseActivity.target || null,
       accessibility: computerUseActivity.accessibility || null,
+      screenshot: computerUseActivity.screenshot || null,
+      screenshotError: computerUseActivity.screenshotError || null,
     }
   }
   if (
@@ -197,6 +205,8 @@ function activeRuntimeDisplayStatus(
       startedAt: null,
       target: null,
       accessibility: null,
+      screenshot: null,
+      screenshotError: null,
     }
   }
   const activitySummary = String(runtimeActivity.payload?.summary || '').trim()
@@ -213,6 +223,8 @@ function activeRuntimeDisplayStatus(
       startedAt: null,
       target: null,
       accessibility: null,
+      screenshot: null,
+      screenshotError: null,
     }
   }
   return {
@@ -222,6 +234,8 @@ function activeRuntimeDisplayStatus(
     startedAt: null,
     target: null,
     accessibility: null,
+    screenshot: null,
+    screenshotError: null,
   }
 }
 
@@ -237,8 +251,11 @@ function computerUseActivityText(
     applications: 'conversation.computerUse.applications',
     attaching: 'conversation.computerUse.attaching',
     observing: 'conversation.computerUse.observing',
+    targeting: 'conversation.computerUse.targeting',
     analyzing: 'conversation.computerUse.analyzing',
     acting: 'conversation.computerUse.acting',
+    verifying: 'conversation.computerUse.verifying',
+    action_effect: 'conversation.computerUse.verifying',
   }
   const phase = t((phaseKey[String(activity.phase || '')] || 'conversation.computerUse.running') as any)
   const step = activity.step ? t('conversation.computerUse.step', { step: activity.step }) : ''

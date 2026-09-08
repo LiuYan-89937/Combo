@@ -15,7 +15,10 @@ from combo.model_pool import (
 )
 from combo.model_pool.resolver import resolve_available_chat_model
 from combo.models.embedding_model import resolve_embedding_model_profile
-from combo.runtime_kernel.model_operations import prepare_structured_output_invocation
+from combo.runtime_kernel.model_operations import (
+    execute_structured_output_invocation,
+    prepare_structured_output_invocation,
+)
 
 
 DelegatedModelSelectionSource = Literal["task_model", "hybrid", "keyword", "inherited"]
@@ -112,8 +115,8 @@ class DelegatedTaskModelSelector:
                 model_metadata=resolved.settings.metadata(),
                 config_tags=["delegated-model-selection"],
             )
-            raw = invocation.model.invoke(
-                list(invocation.messages),
+            execution = execute_structured_output_invocation(
+                invocation,
                 config={
                     "metadata": {
                         "operation": "delegated_model_selection",
@@ -121,7 +124,7 @@ class DelegatedTaskModelSelector:
                     }
                 },
             )
-            decision = raw if isinstance(raw, _TaskModelDecision) else _TaskModelDecision.model_validate(raw)
+            decision = execution.value
         except Exception:
             return None
         allowed_ids = {profile.profile_id for profile in candidates}

@@ -30,6 +30,7 @@ MODEL_POOL_SCHEMA_MIGRATIONS = (
     "2026-08-13.remove-model-capability-async-job",
     "2026-08-13.consolidate-provider-protocols",
     "2026-08-19.split-openai-chat-and-responses",
+    "2026-09-07.remove-anthropic-provider",
 )
 INFRASTRUCTURE_MODEL_ROLE_KINDS = {
     "task": "chat",
@@ -315,12 +316,18 @@ class ModelPoolStore:
     ) -> ModelPoolProfile:
         now = utc_now_text()
         capabilities = profile.capabilities
-        if profile.kind == "embedding":
+        if profile.kind == "chat":
+            provider_capabilities = provider_default_capabilities(profile.provider, kind="chat")
+            capabilities = capabilities.model_copy(
+                update={
+                    "structured_output_methods": list(
+                        provider_capabilities.structured_output_methods
+                    ),
+                }
+            )
+        elif profile.kind == "embedding":
             capabilities = provider_default_capabilities(profile.provider, kind="embedding")
         elif (
-            profile.kind == "chat"
-            and not capabilities.structured_output_methods
-        ) or (
             profile.kind == "image_generation"
             and "image" not in capabilities.output_modalities
         ):
@@ -748,6 +755,8 @@ class ModelPoolStore:
                 ModelPoolStore._consolidate_provider_protocols(conn)
             elif migration_id == "2026-08-19.split-openai-chat-and-responses":
                 ModelPoolStore._split_openai_chat_and_responses(conn)
+            elif migration_id == "2026-09-07.remove-anthropic-provider":
+                ModelPoolStore._remove_anthropic_provider_data(conn)
             else:
                 raise RuntimeError(f"unknown model pool schema migration: {migration_id}")
             conn.execute(
@@ -849,6 +858,109 @@ class ModelPoolStore:
              where lower(provider) = 'openai'
             """
         )
+
+    @staticmethod
+    def _remove_anthropic_provider_data(conn: sqlite3.Connection) -> None:
+        """Delete retired Anthropic credentials and every model using them."""
+
+        provider_values = ("anthropic", "claude")
+        credential_rows = conn.execute(
+            """
+            select credential_id
+              from model_credentials
+             where lower(provider) in (?, ?)
+            union
+            select json_extract(payload_json, '$.credential_id')
+              from model_credential_revisions
+             where lower(json_extract(payload_json, '$.provider')) in (?, ?)
+            """,
+            (*provider_values, *provider_values),
+        ).fetchall()
+        credential_ids = {
+            str(row["credential_id"] or "").strip()
+            for row in credential_rows
+            if str(row["credential_id"] or "").strip()
+        }
+
+        profile_predicates = ["lower(provider) in (?, ?)"]
+        profile_revision_predicates = [
+            "lower(json_extract(payload_json, '$.provider')) in (?, ?)"
+        ]
+        profile_params: list[str] = [*provider_values]
+        profile_revision_params: list[str] = [*provider_values]
+        if credential_ids:
+            placeholders = ", ".join("?" for _ in credential_ids)
+            profile_predicates.append(f"credential_id in ({placeholders})")
+            profile_revision_predicates.append(f"credential_id in ({placeholders})")
+            profile_params.extend(sorted(credential_ids))
+            profile_revision_params.extend(sorted(credential_ids))
+        profile_rows = conn.execute(
+            f"""
+            select profile_id
+              from model_pool_profiles
+             where {" or ".join(profile_predicates)}
+            union
+            select json_extract(payload_json, '$.profile_id')
+              from model_profile_revisions
+             where {" or ".join(profile_revision_predicates)}
+            """,
+            (*profile_params, *profile_revision_params),
+        ).fetchall()
+        profile_ids = {
+            str(row["profile_id"] or "").strip()
+            for row in profile_rows
+            if str(row["profile_id"] or "").strip()
+        }
+
+        for profile_id in profile_ids:
+            row = conn.execute(
+                """
+                select max(revision) as last_revision
+                  from model_profile_revisions
+                 where profile_id = ?
+                """,
+                (profile_id,),
+            ).fetchone()
+            last_revision = max(1, int(row["last_revision"] or 1))
+            conn.execute(
+                """
+                insert into model_profile_tombstones(profile_id, last_revision, deleted_at)
+                values (?, ?, ?)
+                on conflict(profile_id) do update set
+                  last_revision = max(model_profile_tombstones.last_revision, excluded.last_revision),
+                  deleted_at = excluded.deleted_at
+                """,
+                (profile_id, last_revision, utc_now_text()),
+            )
+            conn.execute("delete from model_role_bindings where profile_id = ?", (profile_id,))
+            conn.execute("delete from model_profile_revisions where profile_id = ?", (profile_id,))
+            conn.execute("delete from model_pool_profiles where profile_id = ?", (profile_id,))
+
+        for credential_id in credential_ids:
+            row = conn.execute(
+                """
+                select max(revision) as last_revision
+                  from model_credential_revisions
+                 where credential_id = ?
+                """,
+                (credential_id,),
+            ).fetchone()
+            last_revision = max(1, int(row["last_revision"] or 1))
+            conn.execute(
+                """
+                insert into model_credential_tombstones(credential_id, last_revision, deleted_at)
+                values (?, ?, ?)
+                on conflict(credential_id) do update set
+                  last_revision = max(model_credential_tombstones.last_revision, excluded.last_revision),
+                  deleted_at = excluded.deleted_at
+                """,
+                (credential_id, last_revision, utc_now_text()),
+            )
+            conn.execute(
+                "delete from model_credential_revisions where credential_id = ?",
+                (credential_id,),
+            )
+            conn.execute("delete from model_credentials where credential_id = ?", (credential_id,))
 
     @staticmethod
     def _migrate_role_binding_schema(conn: sqlite3.Connection) -> None:

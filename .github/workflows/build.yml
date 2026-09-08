@@ -12,6 +12,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -21,6 +26,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.9.18'
+          enable-cache: false
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -46,8 +57,19 @@ jobs:
         with:
           node-version: '18'
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.9.18'
+          enable-cache: false
 
       - name: Package Windows app
         shell: powershell
@@ -61,71 +83,8 @@ jobs:
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
 
-  build-linux:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install system dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y \
-            libwebkit2gtk-4.1-dev \
-            build-essential \
-            curl \
-            wget \
-            file \
-            libssl-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install frontend dependencies
-        run: |
-          cd web_frontend/frontend
-          npm install
-
-      - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install Pillow
-
-      - name: Bundle Python runtime
-        run: python scripts/bundle_python.py
-
-      - name: Generate icons
-        run: python scripts/generate_icons.py
-
-      - name: Install Tauri CLI
-        run: cargo install tauri-cli --version '^2.0.0'
-
-      - name: Build Tauri app
-        run: |
-          cd src-tauri
-          cargo tauri build
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-app
-          path: |
-            src-tauri/target/release/bundle/appimage/*.AppImage
-            src-tauri/target/release/bundle/deb/*.deb
-
   release:
-    needs: [build-macos, build-windows, build-linux]
+    needs: [build-macos, build-windows]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
@@ -138,7 +97,6 @@ jobs:
           files: |
             macos-app/**/*
             windows-app/**/*
-            linux-app/**/*
           draft: true
           generate_release_notes: true
         env:

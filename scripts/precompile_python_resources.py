@@ -15,7 +15,7 @@ def _compile(root: Path) -> bool:
         quiet=1,
         force=True,
         optimize=0,
-        invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH,
+        invalidation_mode=py_compile.PycInvalidationMode.CHECKED_HASH,
     )
 
 

@@ -1,25 +1,26 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-import logging
+import base64
 import json
+import logging
+import re
+import struct
 from threading import Event, RLock
 from time import perf_counter
 from typing import Any, Callable
 
+from jsonschema import Draft202012Validator
 from langchain_core.callbacks import UsageMetadataCallbackHandler
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from combo.computer_use.decisions import ApplicationSelection, ComputerDecision
-from combo.computer_use.host import (
-    ApplicationDescriptor,
-    ApplicationTarget,
-    ComputerHostClient,
-    WindowObservation,
-)
+from combo.computer_use.host import ComputerHostClient
 from combo.dynamic_runtime.model_service import RuntimeModelResolver
 from combo.models.chat_model import create_chat_model_from_settings
-from combo.runtime_kernel.model_operations import prepare_structured_output_invocation
+from combo.runtime_kernel.model_operations.tool_calls import (
+    bind_tools,
+    tool_calls_from_response,
+)
 from combo.runtime_protocol import RuntimeInstance
 from combo.tooling.execution_context import (
     RuntimeToolExecutionCancelled,
@@ -27,23 +28,6 @@ from combo.tooling.execution_context import (
     runtime_terminal_cancellation_requested,
     runtime_tool_interruption_requested,
 )
-
-
-MAX_COMPUTER_STEPS = 32
-COMPUTER_MODEL_MAX_OUTPUT_TOKENS = 700
-
-_APPLICATION_SELECTION_PROMPT = """Select the single application that must be controlled to finish GOAL.
-Only choose an application_id present in APPLICATIONS. Use window titles to disambiguate.
-Return blocked only when none of the listed applications can satisfy the goal.
-GOAL: {goal}"""
-
-_COMPUTER_PROMPT = """You control one attached application window. Finish GOAL quickly.
-Return the structured decision with status, actions and a short note.
-Each observation contains only the attached application's accessibility tree. There are no pixels or coordinate actions.
-Use perform_action only with an element_id and an action explicitly listed on that node. Use set_value only when the node lists set_value. Element IDs belong only to the current observation; after an action changes the interface, stop the batch and observe again.
-Batch only deterministic actions that cannot invalidate later element paths. A done decision may include the final deterministic action that completes GOAL; the runtime executes it before completing. Use done without actions only when GOAL is already semantically complete.
-GOAL: {goal}"""
-
 
 _logger = logging.getLogger(__name__)
 ComputerUseProgressObserver = Callable[[dict[str, Any]], None]
@@ -56,33 +40,37 @@ class ComputerUseResult:
     steps: int
     model_calls: int
     total_tokens: int
-    application: dict[str, Any] | None = None
+    verification: str = "model_assessed"
 
     def payload(self) -> dict[str, Any]:
-        payload = {
+        return {
             "status": self.status,
             "summary": self.summary,
             "steps": self.steps,
             "model_calls": self.model_calls,
             "total_tokens": self.total_tokens,
+            "verification": self.verification,
         }
-        if self.application is not None:
-            payload["application"] = self.application
-        return payload
 
 
 class ComputerUseCoordinator:
     """Own the high-speed vision/action loop without entering the ordinary tool loop."""
 
-    def __init__(self, *, model_resolver: RuntimeModelResolver, host: ComputerHostClient | None) -> None:
+    def __init__(
+        self, *, model_resolver: RuntimeModelResolver, host: ComputerHostClient | None
+    ) -> None:
         self._model_resolver = model_resolver
         self._host = host
         self._activity_lock = RLock()
         self._active_request_id: str | None = None
 
     @classmethod
-    def from_environment(cls, *, model_resolver: RuntimeModelResolver) -> "ComputerUseCoordinator":
-        return cls(model_resolver=model_resolver, host=ComputerHostClient.from_environment())
+    def from_environment(
+        cls, *, model_resolver: RuntimeModelResolver
+    ) -> "ComputerUseCoordinator":
+        return cls(
+            model_resolver=model_resolver, host=ComputerHostClient.from_environment()
+        )
 
     def for_runtime(self, instance: RuntimeInstance) -> "RuntimeComputerUse":
         return RuntimeComputerUse(
@@ -126,11 +114,10 @@ class ComputerUseCoordinator:
                         "Computer use request=%s native cancellation failed",
                         request_id,
                     )
-            with self._activity_lock:
-                if self._active_request_id == request_id:
-                    self._active_request_id = None
 
-        unregister_cancellation = register_runtime_tool_cancellation(cancel_active_session)
+        unregister_cancellation = register_runtime_tool_cancellation(
+            cancel_active_session
+        )
         try:
             _ensure_not_cancelled(cancelled, self._host, active_session_id[0])
             return self._run_exclusive(
@@ -155,14 +142,11 @@ class ComputerUseCoordinator:
         cancelled: Event,
         active_session_id: list[str | None],
     ) -> ComputerUseResult:
-        if instance.request.runtime_role != "main":
-            raise PermissionError("system computer use is available only to the main runtime")
         host = self._host
         if host is None:
-            raise RuntimeError(
-                "system computer use requires the Combo desktop native host; it is unavailable in this backend process"
-            )
-        phase_started = perf_counter()
+            raise RuntimeError("Computer Use requires the desktop native host")
+        if not goal.strip():
+            raise ValueError("computer_use goal must not be empty")
         frozen = instance.request.policy_snapshot.model
         resolved = self._model_resolver.resolve_chat_model(
             operation="computer_use",
@@ -171,241 +155,222 @@ class ComputerUseCoordinator:
             expected_credential_revision=frozen.credential_revision,
             reasoning_intensity=1,
         )
-        configured_max = resolved.settings.max_output_tokens
-        max_output = (
-            min(configured_max, COMPUTER_MODEL_MAX_OUTPUT_TOKENS)
-            if configured_max is not None
-            else COMPUTER_MODEL_MAX_OUTPUT_TOKENS
-        )
         model = create_chat_model_from_settings(
-            replace(
-                resolved.settings,
-                role="computer_use",
-                max_output_tokens=max_output,
-            )
+            replace(resolved.settings, role="computer_use")
         )
         if model is None:
-            raise RuntimeError("computer-use model could not be created from the frozen profile")
-        _ensure_not_cancelled(cancelled, host, active_session_id[0])
-        _publish_progress(on_progress, phase="model_setup", message="Desktop model is ready.")
-
-        _logger.info("Computer use request=%s phase=model_setup elapsed_ms=%.1f",
-                     instance.request.request_id, (perf_counter() - phase_started) * 1000)
-        normalized_goal = str(goal or "").strip()
-        if not normalized_goal:
-            raise ValueError("computer_use goal must not be empty")
-        model_calls = 0
-        total_tokens = 0
-        last_note = ""
-
-        usage_callback = UsageMetadataCallbackHandler()
-        phase_started = perf_counter()
-        _ensure_not_cancelled(cancelled, host, active_session_id[0])
-        session_id = host.start()
-        active_session_id[0] = session_id
-        failed = False
+            raise RuntimeError("Computer Use model is unavailable")
+        _ensure_not_cancelled(cancelled, host, None)
+        session = host.start()
+        active_session_id[0] = session
+        callback = UsageMetadataCallbackHandler()
+        calls = steps = 0
+        last_states: dict[str, str] = {}
         try:
-            _ensure_not_cancelled(cancelled, host, session_id)
-            _publish_progress(
-                on_progress,
-                phase="applications",
-                message="Reading available applications.",
-            )
-            applications = host.list_applications(session_id)
-            _ensure_not_cancelled(cancelled, host, session_id)
-            if not applications:
-                return ComputerUseResult(
-                    status="blocked",
-                    summary="No controllable application windows are available.",
-                    steps=0,
-                    model_calls=0,
-                    total_tokens=0,
-                )
-            selection_invocation = prepare_structured_output_invocation(
-                model=model,
-                output_model=ApplicationSelection,
-                messages=[
-                    SystemMessage(
-                        content=_APPLICATION_SELECTION_PROMPT.format(goal=normalized_goal)
-                    ),
-                    HumanMessage(content=_applications_message(applications)),
+            _ensure_not_cancelled(cancelled, host, session)
+            catalog = host.tools(session)
+            definitions = {tool["name"]: tool for tool in catalog["tools"]}
+            validators = {
+                name: Draft202012Validator(tool["inputSchema"])
+                for name, tool in definitions.items()
+            }
+            bound = bind_tools(
+                model,
+                [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": tool["name"],
+                            "description": tool["description"],
+                            "parameters": tool["inputSchema"],
+                        },
+                    }
+                    for tool in definitions.values()
                 ],
-                model_metadata=resolved.settings.metadata(),
-                config_tags=["computer-use", "application-selection"],
             )
-            selection_response = selection_invocation.model.invoke(
-                list(selection_invocation.messages),
-                config={
-                    "callbacks": [usage_callback],
-                    "metadata": {
-                        "operation": "computer_use_application_selection",
-                        "request_id": instance.request.request_id,
-                    },
-                },
-            )
-            _ensure_not_cancelled(cancelled, host, session_id)
-            selection = ApplicationSelection.model_validate(selection_response)
-            model_calls += 1
-            total_tokens = _usage_total(usage_callback)
-            if selection.status == "blocked":
-                return ComputerUseResult(
-                    status="blocked",
-                    summary=selection.note or "No listed application can satisfy this task.",
-                    steps=0,
-                    model_calls=model_calls,
-                    total_tokens=total_tokens,
+            messages: list[Any] = [
+                SystemMessage(content=catalog["instructions"]),
+                HumanMessage(content=goal),
+            ]
+            # Same upstream discovery operation, in the same persistent engine session.
+            inventory = host.call(session, "list_apps", {})
+            messages.append(
+                HumanMessage(
+                    content="Available applications:\n" + _result_text(inventory)
                 )
-            application_id = str(selection.application_id or "").strip()
-            if application_id not in {item.application_id for item in applications}:
-                raise RuntimeError(
-                    "computer-use model selected an application outside the current application list"
-                )
-            _publish_progress(
-                on_progress,
-                phase="attaching",
-                message="Opening the target application.",
             )
-            _ensure_not_cancelled(cancelled, host, session_id)
-            target = host.attach_application(session_id, application_id)
-            _ensure_not_cancelled(cancelled, host, session_id)
-            _logger.info(
-                "Computer use request=%s selected application_id=%s bundle_id=%s pid=%s window_id=%s",
-                instance.request.request_id,
-                target.application_id,
-                target.bundle_identifier,
-                target.process_id,
-                target.window_id,
-            )
-            system = SystemMessage(content=_COMPUTER_PROMPT.format(goal=normalized_goal))
-            _publish_progress(
-                on_progress,
-                phase="observing",
-                message="Reading the target window.",
-                target=target,
-            )
-            observation = host.observe(session_id)
-            _ensure_not_cancelled(cancelled, host, session_id)
-            _require_usable_observation(observation)
-            _log_observation(instance.request.request_id, observation)
-            _logger.info("Computer use request=%s phase=first_observation elapsed_ms=%.1f",
-                         instance.request.request_id, (perf_counter() - phase_started) * 1000)
-            for step in range(1, MAX_COMPUTER_STEPS + 1):
-                _ensure_not_cancelled(cancelled, host, session_id)
+            while True:
+                _ensure_not_cancelled(cancelled, host, session)
                 _publish_progress(
                     on_progress,
                     phase="analyzing",
-                    step=step,
-                    message="Analyzing the target window.",
-                    observation=observation,
+                    message="Planning from the upstream application state.",
+                    step=steps,
                 )
-                invocation = prepare_structured_output_invocation(
-                    model=model,
-                    output_model=ComputerDecision,
-                    messages=[
-                        system,
-                        _observation_message(
-                            observation,
-                            last_note=last_note,
-                        ),
-                    ],
-                    model_metadata=resolved.settings.metadata(),
-                    config_tags=["computer-use"],
-                )
-                phase_started = perf_counter()
-                try:
-                    response = invocation.model.invoke(
-                        list(invocation.messages),
-                        config={
-                            "callbacks": [usage_callback],
-                            "metadata": {
-                                "operation": "computer_use",
-                                "request_id": instance.request.request_id,
-                                "step": step,
-                            },
+                started = perf_counter()
+                response = bound.invoke(
+                    messages,
+                    config={
+                        "callbacks": [callback],
+                        "tags": ["computer-use"],
+                        "metadata": {
+                            "operation": "computer_use",
+                            "request_id": instance.request.request_id,
                         },
-                    )
-                    _ensure_not_cancelled(cancelled, host, session_id)
-                    decision = ComputerDecision.model_validate(response)
-                finally:
+                    },
+                )
+                calls += 1
+                _ensure_not_cancelled(cancelled, host, session)
+                tool_calls = tool_calls_from_response(response)
+                _logger.info(
+                    "Computer use request=%s decision=%s phase=model_decision elapsed_ms=%.1f tool_calls=%s",
+                    instance.request.request_id,
+                    calls,
+                    (perf_counter() - started) * 1000,
+                    len(tool_calls),
+                )
+                if not tool_calls:
+                    summary = _message_text(response.content)
                     _logger.info(
-                        "Computer use request=%s step=%s phase=model_decision elapsed_ms=%.1f",
-                        instance.request.request_id, step, (perf_counter() - phase_started) * 1000,
+                        "Computer use request=%s phase=finished verification=model_assessed",
+                        instance.request.request_id,
                     )
-                model_calls += 1
-                total_tokens = _usage_total(usage_callback)
-                status = decision.status
-                note = decision.note
-                actions = [action.model_dump() for action in decision.actions]
-                if status == "done" and not actions:
                     return ComputerUseResult(
-                        status="completed",
-                        summary=note or "Desktop task completed.",
-                        steps=step,
-                        model_calls=model_calls,
-                        total_tokens=total_tokens,
-                        application=_application_result(observation.target),
+                        "finished", summary, steps, calls, _usage_total(callback)
                     )
-                if status == "blocked":
-                    return ComputerUseResult(
-                        status="blocked",
-                        summary=note or "Desktop task requires user intervention.",
-                        steps=step,
-                        model_calls=model_calls,
-                        total_tokens=total_tokens,
-                        application=_application_result(observation.target),
+                # Preserve provider reasoning, but normalize tool call envelopes once.
+                extra = {
+                    key: value
+                    for key, value in response.additional_kwargs.items()
+                    if key not in {"tool_calls", "invalid_tool_calls"}
+                }
+                messages.append(
+                    AIMessage(
+                        content=response.content,
+                        tool_calls=tool_calls,
+                        additional_kwargs=extra,
                     )
-                phase_started = perf_counter()
-                _publish_progress(
-                    on_progress,
-                    phase="acting",
-                    step=step,
-                    action_count=len(actions),
-                    message="Controlling the target window.",
                 )
-                _ensure_not_cancelled(cancelled, host, session_id)
-                host.act(session_id, actions)
-                _ensure_not_cancelled(cancelled, host, session_id)
-                last_note = _compact_action_note(actions, note)
-                _publish_progress(
-                    on_progress,
-                    phase="observing",
-                    step=step,
-                    message="Reading the updated window.",
-                    target=observation.target,
-                )
-                observation = host.observe(session_id)
-                _ensure_not_cancelled(cancelled, host, session_id)
-                _require_usable_observation(observation)
-                _log_observation(instance.request.request_id, observation)
-                _logger.info("Computer use request=%s step=%s phase=actions_and_observe elapsed_ms=%.1f",
-                             instance.request.request_id, step, (perf_counter() - phase_started) * 1000)
-                if status == "done":
-                    return ComputerUseResult(
-                        status="completed",
-                        summary=note or "Desktop task completed.",
-                        steps=step,
-                        model_calls=model_calls,
-                        total_tokens=total_tokens,
-                        application=_application_result(observation.target),
+                images: list[dict[str, Any]] = []
+                invalid_ids = {
+                    item.get("id")
+                    for item in getattr(response, "invalid_tool_calls", []) or []
+                }
+                for call in tool_calls:
+                    _ensure_not_cancelled(cancelled, host, session)
+                    name, arguments = call["name"], call["args"]
+                    errors = (
+                        list(validators[name].iter_errors(arguments))
+                        if name in validators
+                        else []
                     )
-            return ComputerUseResult(
-                status="step_limit",
-                summary="Desktop task did not finish within the computer-use step limit.",
-                steps=MAX_COMPUTER_STEPS,
-                model_calls=model_calls,
-                total_tokens=total_tokens,
-                application=_application_result(observation.target),
-            )
-        except BaseException:
-            failed = True
-            raise
+                    if name not in definitions or call["id"] in invalid_ids or errors:
+                        detail = (
+                            "; ".join(error.message for error in errors)
+                            or "Unknown operation or invalid arguments"
+                        )
+                        result = {
+                            "isError": True,
+                            "content": [{"type": "text", "text": detail}],
+                        }
+                    else:
+                        app = str(arguments.get("app") or "")
+                        index = arguments.get("element_index")
+                        label = _element_description(last_states.get(app, ""), index)
+                        log_args = {
+                            key: value
+                            for key, value in arguments.items()
+                            if key not in {"text", "value"}
+                        }
+                        for key in ("text", "value"):
+                            if key in arguments:
+                                log_args[key + "_length"] = len(str(arguments[key]))
+                        _logger.info(
+                            "Computer use request=%s step=%s phase=action_proposed tool=%s arguments=%s target=%s",
+                            instance.request.request_id,
+                            steps + 1,
+                            name,
+                            json.dumps(log_args, ensure_ascii=False),
+                            label,
+                        )
+                        _publish_progress(
+                            on_progress,
+                            phase="acting",
+                            message=f"{name}: {label or app}",
+                            step=steps + 1,
+                            operation=_operation_progress(call, steps + 1, "running"),
+                        )
+                        started = perf_counter()
+                        result = host.call(session, name, arguments)
+                        steps += 1
+                        if result.get("diagnostics"):
+                            _logger.info(
+                                "Computer use request=%s step=%s phase=native_diagnostics tool=%s details=%s",
+                                instance.request.request_id, steps, name,
+                                json.dumps(result["diagnostics"], ensure_ascii=False),
+                            )
+                        if result.get("isError"):
+                            error_text = _result_text(result)
+                            # Native errors can echo arguments; keep submitted text private.
+                            for key in ("text", "value"):
+                                submitted = arguments.get(key)
+                                if isinstance(submitted, str) and submitted:
+                                    error_text = error_text.replace(submitted, "[redacted]")
+                            _logger.error(
+                                "Computer use request=%s step=%s phase=action_error tool=%s tool_call_id=%s app=%s element_index=%s error=%s",
+                                instance.request.request_id,
+                                steps,
+                                name,
+                                call["id"],
+                                app,
+                                index,
+                                json.dumps(error_text, ensure_ascii=False),
+                            )
+                        _ensure_not_cancelled(cancelled, host, session)
+                        text = _result_text(result)
+                        if app and not result.get("isError"):
+                            last_states[app] = text
+                        _logger.info(
+                            "Computer use request=%s step=%s phase=action_result tool=%s is_error=%s elapsed_ms=%.1f",
+                            instance.request.request_id,
+                            steps,
+                            name,
+                            bool(result.get("isError")),
+                            (perf_counter() - started) * 1000,
+                        )
+                        _publish_state(on_progress, app, result, steps)
+                        _publish_progress(
+                            on_progress, phase="action_effect", step=steps,
+                            operation=_operation_progress(call, steps, "failed" if result.get("isError") else "returned", result),
+                        )
+                    messages.append(
+                        ToolMessage(
+                            content=_result_text(result),
+                            tool_call_id=call["id"],
+                            name=name,
+                            status="error" if result.get("isError") else "success",
+                        )
+                    )
+                    if resolved.settings.multimodal:
+                        images.extend(_result_images(result))
+                # Tool responses remain text; screenshots enter a supported image message.
+                if images:
+                    messages.append(
+                        HumanMessage(
+                            content=[
+                                {
+                                    "type": "text",
+                                    "text": "Screenshots returned by the preceding operations, in operation order.",
+                                },
+                                *images,
+                            ]
+                        )
+                    )
         finally:
             try:
-                host.stop(session_id)
+                host.stop(session)
             except Exception:
-                if not failed:
-                    raise
-                _logger.exception("Computer use cleanup failed after execution error")
+                _logger.exception("Computer use session cleanup failed")
 
 
 @dataclass(frozen=True, slots=True)
@@ -446,164 +411,82 @@ def _ensure_not_cancelled(
     raise RuntimeToolExecutionCancelled("Computer Use execution was cancelled.")
 
 
-def _observation_message(
-    observation: WindowObservation,
-    *,
-    last_note: str,
-) -> HumanMessage:
-    state = {
-        "application": observation.target.display_name,
-        "window_title": observation.target.window_title,
-        "last_action": last_note[:180],
-        "accessibility": _model_accessibility(observation.accessibility),
-    }
-    return HumanMessage(content=json.dumps(state, ensure_ascii=False, separators=(",", ":")))
-
-
-def _model_accessibility(accessibility: dict[str, Any]) -> dict[str, Any]:
-    nodes = accessibility.get("nodes")
-    compact_nodes = []
-    for node in nodes if isinstance(nodes, list) else []:
-        if not isinstance(node, dict):
-            continue
-        compact = {
-            "id": node.get("element_id"),
-            "parent": node.get("parent_id"),
-            "role": str(node.get("role") or "").removeprefix("AX"),
-        }
-        for source, target in (
-            ("subrole", "subrole"),
-            ("name", "name"),
-            ("value", "value"),
-            ("identifier", "identifier"),
-            ("placeholder", "placeholder"),
-        ):
-            value = str(node.get(source) or "").strip()
-            if value:
-                compact[target] = value
-        actions = [
-            str(action)
-            for action in (node.get("actions") or [])
-            if str(action).strip()
-        ]
-        if node.get("value_settable") is True:
-            actions.append("set_value")
-        if actions:
-            compact["actions"] = actions
-        for field in ("focused", "selected", "expanded"):
-            if node.get(field) is True:
-                compact[field] = True
-        if node.get("enabled") is False:
-            compact["enabled"] = False
-        compact_nodes.append(compact)
-    return {
-        "complete": accessibility.get("complete") is True,
-        "nodes": compact_nodes,
-    }
-
-
-def _require_usable_observation(observation: WindowObservation) -> None:
-    accessibility = observation.accessibility
-    accessibility_available = bool(
-        isinstance(accessibility, dict)
-        and accessibility.get("usable") is True
-    )
-    if not accessibility_available:
-        error = (
-            accessibility.get("error")
-            if isinstance(accessibility, dict)
-            else None
-        )
-        detail = str(error or "accessibility tree is unavailable")
-        raise RuntimeError(f"computer use requires an accessibility tree: {detail}")
-
-
-def _log_observation(
-    request_id: str,
-    observation: WindowObservation,
-) -> None:
-    accessibility = observation.accessibility
-    _logger.info(
-        "Computer use request=%s application_id=%s bundle_id=%s pid=%s window_id=%s ax_usable=%s ax_complete=%s ax_nodes=%s ax_actionable=%s ax_named=%s ax_quality=%s",
-        request_id,
-        observation.target.application_id,
-        observation.target.bundle_identifier,
-        observation.target.process_id,
-        observation.target.window_id,
-        accessibility.get("usable"),
-        accessibility.get("complete"),
-        len(accessibility.get("nodes") or []),
-        accessibility.get("actionable_node_count"),
-        accessibility.get("named_node_count"),
-        accessibility.get("quality_score"),
-    )
-
-
 def _publish_progress(
-    observer: ComputerUseProgressObserver | None,
-    *,
-    phase: str,
-    message: str,
-    step: int | None = None,
-    action_count: int | None = None,
-    observation: WindowObservation | None = None,
-    target: ApplicationTarget | None = None,
+    observer: ComputerUseProgressObserver | None, **payload: Any
 ) -> None:
-    if observer is None:
-        return
-    progress: dict[str, Any] = {
-        "phase": phase,
-        "message": message,
-        "step": step,
-        "action_count": action_count,
-    }
-    if observation is not None:
-        target = observation.target
-        progress["accessibility"] = observation.accessibility
-    if target is not None:
-        progress["target"] = {
-            "application_id": target.application_id,
-            "display_name": target.display_name,
-            "bundle_identifier": target.bundle_identifier,
-            "process_id": target.process_id,
-            "icon_data_url": target.icon_data_url,
-            "window_id": target.window_id,
-            "window_title": target.window_title,
-        }
-    observer(progress)
+    if observer:
+        observer(payload)
 
 
-def _applications_message(applications: tuple[ApplicationDescriptor, ...]) -> str:
-    payload = [
-        {
-            "application_id": application.application_id,
-            "display_name": application.display_name,
-            "bundle_identifier": application.bundle_identifier,
-            "process_id": application.process_id,
-            "windows": [
-                {
-                    "title": str(window.get("title") or ""),
-                    "focused": bool(window.get("focused", False)),
-                    "minimized": bool(window.get("minimized", False)),
-                }
-                for window in application.windows
-            ],
-        }
-        for application in applications
-    ]
-    return json.dumps(
-        {"applications": payload},
-        ensure_ascii=False,
-        separators=(",", ":"),
+def _message_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    return "\n".join(
+        str(part.get("text", ""))
+        for part in content
+        if isinstance(part, dict) and part.get("type") == "text"
     )
 
 
-def _application_result(target: ApplicationTarget) -> dict[str, Any]:
-    return {
-        "display_name": target.display_name,
-        "bundle_identifier": target.bundle_identifier,
-        "icon_data_url": target.icon_data_url,
-    }
+def _result_text(result: dict[str, Any]) -> str:
+    return _message_text(result.get("content", []))
+
+
+def _result_images(result: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "image_url",
+            "image_url": {"url": f"data:{part['mimeType']};base64,{part['data']}"},
+        }
+        for part in result.get("content", [])
+        if part.get("type") == "image"
+    ]
+
+
+def _publish_state(
+    observer: ComputerUseProgressObserver | None,
+    app: str,
+    result: dict[str, Any],
+    steps: int,
+) -> None:
+    screenshot = None
+    for part in result.get("content", []):
+        if part.get("type") == "image" and part.get("mimeType") == "image/png":
+            header = base64.b64decode(part["data"][:32])
+            width, height = struct.unpack(">II", header[16:24])
+            screenshot = {
+                "data_url": f"data:image/png;base64,{part['data']}",
+                "width": width,
+                "height": height,
+            }
+    _publish_progress(
+        observer,
+        phase="action_effect",
+        message=(
+            "Upstream operation returned an error."
+            if result.get("isError")
+            else "Application state refreshed."
+        ),
+        step=steps,
+        target={"application_id": app, "display_name": app, "window_state": {}},
+        accessibility={
+            "available": not bool(result.get("isError")),
+            "application": app,
+            "window_title": "",
+            "text": _result_text(result),
+            "error": _result_text(result) if result.get("isError") else None,
+        },
+        screenshot=screenshot,
+        screenshot_error=None,
+    )
+
+
+def _element_description(state: str, index: Any) -> str:
+    if index is None:
+        return ""
+    # Diagnostics only: use the upstream rendered line, never to resolve an action.
+    match = re.search(r"(?m)^\s*" + re.escape(str(index)) + r"\s+([^\n]+)$", state)
+    return match.group(1) if match else ""
 
 
 def _usage_total(callback: UsageMetadataCallbackHandler) -> int:
@@ -613,6 +496,24 @@ def _usage_total(callback: UsageMetadataCallbackHandler) -> int:
     )
 
 
-def _compact_action_note(actions: list[dict[str, Any]], note: str) -> str:
-    names = ",".join(str(action.get("type") or "") for action in actions)
-    return f"{names};{note}" if note else names
+def _operation_progress(call: dict[str, Any], step: int, status: str, result: dict[str, Any] | None = None) -> dict[str, Any]:
+    arguments = call["args"]
+    error_code = None
+    verified = False
+    if result is not None:
+        text = _result_text(result)
+        match = re.search(r"\[(input\.[a-z_]+)\]", text) if result.get("isError") else None
+        error_code = match.group(1) if match else ("native_error" if result.get("isError") else None)
+        verified = not result.get("isError") and any(
+            item.get("type") == "text" and item.get("text", "").startswith("Input result: value_verified.")
+            for item in result.get("content", [])
+        )
+    return {
+        "id": call["id"], "step": step, "tool": call["name"],
+        "app": str(arguments.get("app") or ""), "status": status,
+        "element_index": arguments.get("element_index"),
+        "x": arguments.get("x"), "y": arguments.get("y"),
+        "text_length": len(str(arguments.get("text", arguments.get("value", "")))) if call["name"] in {"type_text", "set_value"} else None,
+        "key": arguments.get("key"), "action": arguments.get("action"),
+        "error_code": error_code, "value_verified": verified,
+    }

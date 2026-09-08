@@ -22,7 +22,7 @@ require_command() {
 
 [[ "$(uname -s)" == "Darwin" ]] || fail "This script must run on macOS."
 
-for command_name in python3 npm cargo file codesign hdiutil otool shasum; do
+for command_name in python3 uv npm cargo swift file codesign hdiutil otool shasum; do
     require_command "${command_name}"
 done
 
@@ -128,9 +128,11 @@ fi
 DMG_DIR="${TAURI_DIR}/target/release/bundle/dmg"
 DMG_PATH="${DMG_DIR}/${PRODUCT_NAME}_${PRODUCT_VERSION}_${DMG_ARCH}.dmg"
 STAGING_DIR="$(mktemp -d "${TMPDIR:-/tmp}/combo-dmg.XXXXXX")"
+WRITABLE_DMG_PATH="${STAGING_DIR}.dmg"
 
 cleanup() {
     rm -rf "${STAGING_DIR}"
+    rm -f "${WRITABLE_DMG_PATH}"
 }
 trap cleanup EXIT
 
@@ -138,13 +140,22 @@ cp -R "${APP_PATH}" "${STAGING_DIR}/"
 ln -s /Applications "${STAGING_DIR}/Applications"
 mkdir -p "${DMG_DIR}"
 
-echo "Creating disk image..."
+echo "Creating compact disk image..."
 hdiutil create \
     -volname "${PRODUCT_NAME}" \
     -srcfolder "${STAGING_DIR}" \
-    -format UDZO \
+    -fs HFS+ \
+    -format UDRW \
     -ov \
-    "${DMG_PATH}"
+    "${WRITABLE_DMG_PATH}"
+
+hdiutil resize -size min "${WRITABLE_DMG_PATH}"
+
+hdiutil convert "${WRITABLE_DMG_PATH}" \
+    -format UDZO \
+    -imagekey zlib-level=9 \
+    -ov \
+    -o "${DMG_PATH}"
 
 hdiutil verify "${DMG_PATH}"
 

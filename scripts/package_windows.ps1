@@ -104,7 +104,7 @@ function Test-TauriCli {
     return $LASTEXITCODE -eq 0
 }
 
-foreach ($CommandName in @("cargo.exe", "rustup.exe", "npm.cmd", "curl.exe", "tar.exe", "cmd.exe")) {
+foreach ($CommandName in @("cargo.exe", "go.exe", "rustup.exe", "uv.exe", "npm.cmd", "curl.exe", "tar.exe", "cmd.exe")) {
     Assert-Command -Name $CommandName
 }
 
@@ -152,69 +152,81 @@ if ($LASTEXITCODE -ne 0) {
     throw "npm ci failed with exit code $LASTEXITCODE."
 }
 
-New-Item -ItemType Directory -Force -Path $DownloadDir | Out-Null
-if (-not (Test-ArchiveChecksum)) {
-    if (Test-Path -LiteralPath $PythonArchivePath) {
-        Remove-Item -LiteralPath $PythonArchivePath -Force
+$DependencyInstaller = Join-Path $ProjectRoot "scripts\install_locked_python_dependencies.py"
+$ReusePythonRuntime = $false
+if (Test-Path -LiteralPath $PythonExecutable -PathType Leaf) {
+    & $PythonExecutable $DependencyInstaller check `
+        --project-root $ProjectRoot `
+        --python-runtime $PythonExecutable `
+        --runtime-id $PythonArchiveName
+    if ($LASTEXITCODE -eq 0) {
+        $ReusePythonRuntime = $true
+        Write-Host "Bundled Python runtime matches uv.lock; reusing it."
     }
-
-    Write-Host "Downloading pinned x64 Python runtime..."
-    & curl.exe --fail --location --retry 3 --output $PythonArchivePath $PythonArchiveUrl
-    if ($LASTEXITCODE -ne 0) {
-        throw "Python runtime download failed with exit code $LASTEXITCODE."
+    elseif ($LASTEXITCODE -ne 3) {
+        throw "Python runtime reuse validation failed with exit code $LASTEXITCODE."
     }
 }
 
-if (-not (Test-ArchiveChecksum)) {
-    throw "Python runtime checksum verification failed: $PythonArchivePath"
-}
+if (-not $ReusePythonRuntime) {
+    New-Item -ItemType Directory -Force -Path $DownloadDir | Out-Null
+    if (-not (Test-ArchiveChecksum)) {
+        if (Test-Path -LiteralPath $PythonArchivePath) {
+            Remove-Item -LiteralPath $PythonArchivePath -Force
+        }
 
-$ExtractionDir = Join-Path $ProjectRoot "build\python-extract-windows-x64"
-if (Test-Path -LiteralPath $ExtractionDir) {
-    Remove-Item -LiteralPath $ExtractionDir -Recurse -Force
-}
-New-Item -ItemType Directory -Path $ExtractionDir | Out-Null
-
-try {
-    Write-Host "Extracting bundled Python runtime..."
-    & tar.exe -xf $PythonArchivePath -C $ExtractionDir
-    if ($LASTEXITCODE -ne 0) {
-        throw "Python runtime extraction failed with exit code $LASTEXITCODE."
+        Write-Host "Downloading pinned x64 Python runtime..."
+        & curl.exe --fail --location --retry 3 --output $PythonArchivePath $PythonArchiveUrl
+        if ($LASTEXITCODE -ne 0) {
+            throw "Python runtime download failed with exit code $LASTEXITCODE."
+        }
     }
 
-    $ExtractedPythonDir = Join-Path $ExtractionDir "python"
-    if (-not (Test-Path -LiteralPath $ExtractedPythonDir -PathType Container)) {
-        throw "Python archive does not contain the expected python directory."
+    if (-not (Test-ArchiveChecksum)) {
+        throw "Python runtime checksum verification failed: $PythonArchivePath"
     }
 
-    if (Test-Path -LiteralPath $PythonResourcesDir) {
-        Remove-Item -LiteralPath $PythonResourcesDir -Recurse -Force
-    }
-    Move-Item -LiteralPath $ExtractedPythonDir -Destination $PythonResourcesDir
-}
-finally {
+    $ExtractionDir = Join-Path $ProjectRoot "build\python-extract-windows-x64"
     if (Test-Path -LiteralPath $ExtractionDir) {
         Remove-Item -LiteralPath $ExtractionDir -Recurse -Force
     }
-}
+    New-Item -ItemType Directory -Path $ExtractionDir | Out-Null
 
-if (-not (Test-Path -LiteralPath $PythonExecutable -PathType Leaf)) {
-    throw "Bundled Python executable not found: $PythonExecutable"
-}
+    try {
+        Write-Host "Extracting bundled Python runtime..."
+        & tar.exe -xf $PythonArchivePath -C $ExtractionDir
+        if ($LASTEXITCODE -ne 0) {
+            throw "Python runtime extraction failed with exit code $LASTEXITCODE."
+        }
 
-Write-Host "Installing Python application dependencies..."
-& $PythonExecutable -m pip install --upgrade pip
-if ($LASTEXITCODE -ne 0) {
-    throw "pip upgrade failed with exit code $LASTEXITCODE."
-}
-& $PythonExecutable -m pip install -e "${ProjectRoot}[web]"
-if ($LASTEXITCODE -ne 0) {
-    throw "Python dependency installation failed with exit code $LASTEXITCODE."
-}
-$env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $PythonResourcesDir "playwright-browsers"
-& $PythonExecutable -m playwright install --only-shell chromium
-if ($LASTEXITCODE -ne 0) {
-    throw "Playwright Chromium installation failed with exit code $LASTEXITCODE."
+        $ExtractedPythonDir = Join-Path $ExtractionDir "python"
+        if (-not (Test-Path -LiteralPath $ExtractedPythonDir -PathType Container)) {
+            throw "Python archive does not contain the expected python directory."
+        }
+
+        if (Test-Path -LiteralPath $PythonResourcesDir) {
+            Remove-Item -LiteralPath $PythonResourcesDir -Recurse -Force
+        }
+        Move-Item -LiteralPath $ExtractedPythonDir -Destination $PythonResourcesDir
+    }
+    finally {
+        if (Test-Path -LiteralPath $ExtractionDir) {
+            Remove-Item -LiteralPath $ExtractionDir -Recurse -Force
+        }
+    }
+
+    if (-not (Test-Path -LiteralPath $PythonExecutable -PathType Leaf)) {
+        throw "Bundled Python executable not found: $PythonExecutable"
+    }
+
+    Write-Host "Installing Python application dependencies from uv.lock..."
+    & $PythonExecutable $DependencyInstaller install `
+        --project-root $ProjectRoot `
+        --python-runtime $PythonExecutable `
+        --runtime-id $PythonArchiveName
+    if ($LASTEXITCODE -ne 0) {
+        throw "Locked Python dependency installation failed with exit code $LASTEXITCODE."
+    }
 }
 & $PythonExecutable (Join-Path $ProjectRoot "scripts\generate_icons.py")
 if ($LASTEXITCODE -ne 0) {

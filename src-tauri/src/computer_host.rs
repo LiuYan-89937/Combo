@@ -1,559 +1,333 @@
-use crate::computer_accessibility::{
-    capture_accessibility_tree, perform_accessibility_element_action,
-    set_accessibility_element_value, AccessibilitySnapshot,
-};
-use crate::computer_applications::{
-    application_descriptor, list_applications, resolve_application_target, resolve_target_window,
-    ApplicationTarget,
-};
-use serde::Deserialize;
-use serde_json::json;
+//! Authenticated private transport to the upstream CU engine; no desktop policy here.
+use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tauri::AppHandle;
 use uuid::Uuid;
-
-const MAIN_THREAD_TIMEOUT: Duration = Duration::from_secs(10);
-const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(25);
-const MAX_ACTIONS_PER_BATCH: usize = 16;
 
 #[derive(Clone, Debug)]
 pub struct ComputerHostEndpoint {
     pub address: String,
     pub token: String,
 }
-
+struct Lease {
+    id: String,
+    cancelled: Arc<AtomicBool>,
+}
 pub struct ComputerHost {
     endpoint: ComputerHostEndpoint,
     shutdown: Arc<AtomicBool>,
-    server_thread: Option<JoinHandle<()>>,
+    active: Arc<Mutex<Option<Lease>>>,
+    thread: Option<JoinHandle<()>>,
 }
-
 impl ComputerHost {
-    pub fn start(app_handle: AppHandle) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn start(app: AppHandle) -> Result<Self, Box<dyn std::error::Error>> {
         let listener = TcpListener::bind(("127.0.0.1", 0))?;
         listener.set_nonblocking(true)?;
         let endpoint = ComputerHostEndpoint {
             address: listener.local_addr()?.to_string(),
-            token: Uuid::new_v4().simple().to_string(),
+            token: Uuid::new_v4().to_string(),
         };
         let shutdown = Arc::new(AtomicBool::new(false));
-        let session_state = Arc::new(Mutex::new(SessionState::default()));
-        let main_thread = MainThreadExecutor::new(app_handle);
-        let server_thread = {
-            let shutdown = Arc::clone(&shutdown);
-            let session_state = Arc::clone(&session_state);
+        let active = Arc::new(Mutex::new(None::<Lease>));
+        let engine = Arc::new(Engine::new(app));
+        let worker = {
+            let shutdown = shutdown.clone();
+            let active = active.clone();
             let token = endpoint.token.clone();
-            thread::Builder::new()
-                .name("combo-computer-host".into())
-                .spawn(move || server_loop(listener, token, shutdown, session_state, main_thread))?
+            thread::spawn(move || {
+                while !shutdown.load(Ordering::SeqCst) {
+                    match listener.accept() {
+                        Ok((stream, _)) => {
+                            let engine = engine.clone();
+                            let active = active.clone();
+                            let token = token.clone();
+                            let shutdown = shutdown.clone();
+                            thread::spawn(move || serve(stream, &token, engine, active, shutdown));
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(25))
+                        }
+                        Err(_) => break,
+                    }
+                }
+            })
         };
         Ok(Self {
             endpoint,
             shutdown,
-            server_thread: Some(server_thread),
+            active,
+            thread: Some(worker),
         })
     }
-
     pub fn endpoint(&self) -> ComputerHostEndpoint {
         self.endpoint.clone()
     }
-
     pub fn shutdown(&mut self) {
-        if self.shutdown.swap(true, Ordering::SeqCst) {
-            return;
+        self.shutdown.store(true, Ordering::SeqCst);
+        if let Some(lease) = self.active.lock().unwrap().as_ref() {
+            lease.cancelled.store(true, Ordering::SeqCst);
         }
-        if let Some(thread) = self.server_thread.take() {
-            let _ = thread.join();
+        if let Some(worker) = self.thread.take() {
+            let _ = worker.join();
         }
     }
 }
-
 impl Drop for ComputerHost {
     fn drop(&mut self) {
         self.shutdown();
     }
 }
 
-#[derive(Clone)]
-struct MainThreadExecutor {
-    app_handle: AppHandle,
-}
-
-impl MainThreadExecutor {
-    fn new(app_handle: AppHandle) -> Self {
-        Self { app_handle }
-    }
-
-    fn run<T, F>(&self, operation: &'static str, task: F) -> Result<T, String>
-    where
-        T: Send + 'static,
-        F: FnOnce() -> Result<T, String> + Send + 'static,
-    {
-        let (sender, receiver) = mpsc::sync_channel(1);
-        self.app_handle
-            .run_on_main_thread(move || {
-                let _ = sender.send(task());
-            })
-            .map_err(|error| {
-                format!("could not schedule {operation} on the main thread: {error}")
-            })?;
-        receiver
-            .recv_timeout(MAIN_THREAD_TIMEOUT)
-            .map_err(|_| format!("main-thread operation timed out: {operation}"))?
-    }
-}
-
-#[derive(Clone)]
-struct SessionLease {
-    connection_id: Uuid,
-    session_id: Uuid,
-    cancelled: Arc<AtomicBool>,
-}
-
-#[derive(Default)]
-struct SessionState {
-    owner: Option<SessionLease>,
-    target: Option<ApplicationTarget>,
-}
-
-impl SessionState {
-    fn acquire(&mut self, connection_id: Uuid) -> Result<SessionLease, String> {
-        match self.owner.as_ref() {
-            Some(owner) if owner.connection_id != connection_id => {
-                Err("another Computer Use session is already active".into())
-            }
-            Some(owner) => Ok(owner.clone()),
-            None => {
-                let owner = SessionLease {
-                    connection_id,
-                    session_id: Uuid::new_v4(),
-                    cancelled: Arc::new(AtomicBool::new(false)),
-                };
-                self.owner = Some(owner.clone());
-                self.target = None;
-                Ok(owner)
-            }
-        }
-    }
-
-    fn require_owner(&self, connection_id: Uuid, session_id: Uuid) -> Result<SessionLease, String> {
-        let owner = self
-            .owner
-            .as_ref()
-            .filter(|owner| owner.connection_id == connection_id && owner.session_id == session_id)
-            .ok_or_else(|| "Computer Use session is no longer active".to_string())?;
-        ensure_session_active(&owner.cancelled)?;
-        Ok(owner.clone())
-    }
-
-    fn release(&mut self, connection_id: Uuid, session_id: Option<Uuid>) -> bool {
-        let Some(owner) = self.owner.as_ref() else {
-            return false;
-        };
-        if owner.connection_id != connection_id
-            || session_id.is_some_and(|value| value != owner.session_id)
-        {
-            return false;
-        }
-        owner.cancelled.store(true, Ordering::SeqCst);
-        self.owner = None;
-        self.target = None;
-        true
-    }
-
-    fn cancel(&mut self, session_id: Uuid) -> bool {
-        let Some(owner) = self.owner.as_ref() else {
-            return false;
-        };
-        if owner.session_id != session_id {
-            return false;
-        }
-        owner.cancelled.store(true, Ordering::SeqCst);
-        self.owner = None;
-        self.target = None;
-        true
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct HostRequest {
-    token: String,
-    op: String,
-    #[serde(default)]
-    application_id: Option<String>,
-    #[serde(default)]
-    session_id: Option<Uuid>,
-    #[serde(default)]
-    actions: Vec<ComputerAction>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum ComputerAction {
-    PerformAction { element_id: u32, action: String },
-    SetValue { element_id: u32, text: String },
-    Wait { milliseconds: u64 },
-}
-
-fn server_loop(
-    listener: TcpListener,
-    token: String,
-    shutdown: Arc<AtomicBool>,
-    session_state: Arc<Mutex<SessionState>>,
-    main_thread: MainThreadExecutor,
-) {
-    while !shutdown.load(Ordering::Relaxed) {
-        match listener.accept() {
-            Ok((stream, _)) => {
-                let token = token.clone();
-                let shutdown = Arc::clone(&shutdown);
-                let session_state = Arc::clone(&session_state);
-                let main_thread = main_thread.clone();
-                let _ = thread::Builder::new()
-                    .name("combo-computer-client".into())
-                    .spawn(move || {
-                        if let Err(error) =
-                            handle_connection(stream, &token, shutdown, session_state, main_thread)
-                        {
-                            eprintln!("Computer host connection failed: {error}");
-                        }
-                    });
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(20));
-            }
-            Err(_) => break,
-        }
-    }
-}
-
-fn handle_connection(
+fn serve(
     mut stream: TcpStream,
     token: &str,
+    engine: Arc<Engine>,
+    active: Arc<Mutex<Option<Lease>>>,
     shutdown: Arc<AtomicBool>,
-    session_state: Arc<Mutex<SessionState>>,
-    main_thread: MainThreadExecutor,
-) -> Result<(), Box<dyn std::error::Error>> {
-    stream.set_nonblocking(false)?;
-    stream.set_nodelay(true)?;
-    let reader_stream = stream.try_clone()?;
-    let mut reader = BufReader::new(reader_stream);
-    let connection_id = Uuid::new_v4();
-    let mut observed: Option<ObservedWindow> = None;
+) {
+    // Each connection has a dedicated blocking request loop. Accepted sockets
+    // can inherit the listener's nonblocking mode on macOS.
+    if let Err(error) = stream.set_nonblocking(false) {
+        eprintln!("CU host connection setup failed: {error}");
+        return;
+    }
+    let Ok(input) = stream.try_clone() else {
+        return;
+    };
+    let mut reader = BufReader::new(input);
+    let mut owned: Option<(String, Arc<AtomicBool>)> = None;
     loop {
-        if shutdown.load(Ordering::Relaxed) {
-            break;
-        }
         let mut line = String::new();
-        if reader.read_line(&mut line)? == 0 {
+        match reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(error) => {
+                eprintln!("CU host connection read failed: {error}");
+                break;
+            }
+        }
+        let response = (|| -> Result<Value, String> {
+            let mut request: Value = serde_json::from_str(&line).map_err(|e| e.to_string())?;
+            if request["token"].as_str() != Some(token) {
+                return Err("invalid host token".into());
+            }
+            if shutdown.load(Ordering::SeqCst) {
+                return Err("host is stopping".into());
+            }
+            let operation = request["op"].as_str().unwrap_or("").to_owned();
+            if operation == "cancel_session" {
+                let guard = active.lock().unwrap();
+                let matched = guard
+                    .as_ref()
+                    .filter(|lease| Some(lease.id.as_str()) == request["session_id"].as_str());
+                if let Some(lease) = matched {
+                    lease.cancelled.store(true, Ordering::SeqCst);
+                }
+                return Ok(json!({"cancelled":matched.is_some()}));
+            }
+            if operation == "start" {
+                let mut guard = active.lock().unwrap();
+                if owned.is_some() || guard.is_some() {
+                    return Err("another CU session is active".into());
+                }
+                let id = Uuid::new_v4().to_string();
+                let cancelled = Arc::new(AtomicBool::new(false));
+                *guard = Some(Lease {
+                    id: id.clone(),
+                    cancelled: cancelled.clone(),
+                });
+                drop(guard);
+                owned = Some((id.clone(), cancelled.clone()));
+                engine.call(json!({"op":"start","session_id":id}), Some(cancelled))?;
+                return Ok(json!({"session_id":id,"engine":"open-computer-use"}));
+            }
+            let (id, cancelled) = owned.as_ref().ok_or("inactive session")?;
+            if request["session_id"].as_str() != Some(id.as_str()) {
+                return Err("session ownership mismatch".into());
+            }
+            if operation == "stop" {
+                engine.call(json!({"op":"stop","session_id":id}), None)?;
+                *active.lock().unwrap() = None;
+                owned = None;
+                return Ok(json!({}));
+            }
+            if operation != "tools" && operation != "call" {
+                return Err("unknown transport operation".into());
+            }
+            request.as_object_mut().unwrap().remove("token");
+            engine.call(request, Some(cancelled.clone()))
+        })();
+        let output = match response {
+            Ok(value) => json!({"ok":true,"result":value}),
+            Err(error) => json!({"ok":false,"error":error}),
+        };
+        if let Err(error) = writeln!(stream, "{output}") {
+            eprintln!("CU host connection write failed: {error}");
             break;
         }
-        let request: HostRequest = match serde_json::from_str(line.trim()) {
-            Ok(request) => request,
-            Err(error) => {
-                write_error(&mut stream, &format!("invalid request: {error}"))?;
-                continue;
+    }
+    if let Some((id, cancelled)) = owned {
+        cancelled.store(true, Ordering::SeqCst);
+        let _ = engine.call(json!({"op":"stop","session_id":id}), None);
+        let mut guard = active.lock().unwrap();
+        if guard.as_ref().is_some_and(|lease| lease.id == id) {
+            *guard = None;
+        }
+    }
+}
+
+struct Engine {
+    app: AppHandle,
+    #[cfg(target_os = "windows")]
+    worker: Mutex<Option<Worker>>,
+}
+impl Engine {
+    fn new(app: AppHandle) -> Self {
+        Self {
+            app,
+            #[cfg(target_os = "windows")]
+            worker: Mutex::new(None),
+        }
+    }
+    fn call(&self, request: Value, cancelled: Option<Arc<AtomicBool>>) -> Result<Value, String> {
+        if cancelled
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::SeqCst))
+        {
+            return Err("session cancelled".into());
+        }
+        #[cfg(target_os = "macos")]
+        let response = call_on_main_thread(&self.app, request, cancelled)?;
+        #[cfg(target_os = "windows")]
+        let response = {
+            let mut worker = self.worker.lock().map_err(|_| "CU worker unavailable")?;
+            if worker.is_none() {
+                *worker = Some(Worker::start(&self.app)?);
             }
+            let result = worker.as_mut().unwrap().call(&request);
+            if result.is_err() {
+                *worker = None;
+            } // A broken worker is never replayed.
+            result?
         };
-        if request.token != token {
-            write_error(&mut stream, "unauthorized")?;
-            continue;
+        if let Some(error) = response["bridge_error"].as_str() {
+            return Err(error.into());
         }
-        if let Err(error) = dispatch_request(
-            &mut stream,
-            request,
-            connection_id,
-            &session_state,
-            &main_thread,
-            &mut observed,
-        ) {
-            write_error(&mut stream, &error)?;
-        }
+        Ok(response)
     }
-    release_session(&session_state, connection_id, None);
-    Ok(())
 }
 
-fn dispatch_request(
-    stream: &mut TcpStream,
-    request: HostRequest,
-    connection_id: Uuid,
-    session_state: &Arc<Mutex<SessionState>>,
-    main_thread: &MainThreadExecutor,
-    observed: &mut Option<ObservedWindow>,
-) -> Result<(), String> {
-    match request.op.as_str() {
-        "start" => {
-            if !crate::computer_permissions::computer_permissions().ready() {
-                return Err("computer-use permission is required: grant Accessibility to Combo before starting a conversation".into());
-            }
-            let lease = {
-                let mut session = session_state
-                    .lock()
-                    .map_err(|_| "computer session state is unavailable")?;
-                session.acquire(connection_id)?
-            };
-            write_json_line(
-                stream,
-                &json!({ "ok": true, "session_id": lease.session_id }),
-            )
-            .map_err(|error| error.to_string())
-        }
-        "list_applications" => {
-            require_owner(session_state, connection_id, required_session_id(&request)?)?;
-            let applications = list_applications()?;
-            write_json_line(stream, &json!({ "ok": true, "applications": applications }))
-                .map_err(|error| error.to_string())
-        }
-        "attach_application" => {
-            let session_id = required_session_id(&request)?;
-            require_owner(session_state, connection_id, session_id)?;
-            let application_id = request
-                .application_id
-                .filter(|value| !value.trim().is_empty())
-                .ok_or_else(|| "attach_application requires application_id".to_string())?;
-            let application = application_descriptor(&application_id)?;
-            let target = resolve_application_target(&application)?;
-            {
-                let mut session = session_state
-                    .lock()
-                    .map_err(|_| "computer session state is unavailable")?;
-                session.require_owner(connection_id, session_id)?;
-                session.target = Some(target.clone());
-            }
-            *observed = None;
-            write_json_line(stream, &json!({ "ok": true, "target": target }))
-                .map_err(|error| error.to_string())
-        }
-        "observe" => {
-            let (target, lease) =
-                require_target(session_state, connection_id, required_session_id(&request)?)?;
-            ensure_session_active(&lease.cancelled)?;
-            let (target, _) = resolve_target_window(&target)?;
-            let accessibility = capture_accessibility_tree(&target);
-            ensure_session_active(&lease.cancelled)?;
-            {
-                let mut session = session_state
-                    .lock()
-                    .map_err(|_| "computer session state is unavailable")?;
-                session.require_owner(connection_id, lease.session_id)?;
-                session.target = Some(target.clone());
-            }
-            *observed = Some(ObservedWindow {
-                target: target.clone(),
-                accessibility: accessibility.clone(),
-            });
-            write_json_line(
-                stream,
-                &json!({
-                    "ok": true,
-                    "target": target,
-                    "accessibility": accessibility,
-                }),
-            )
-            .map_err(|error| error.to_string())
-        }
-        "act" => {
-            let session_id = required_session_id(&request)?;
-            let (target, lease) = require_target(session_state, connection_id, session_id)?;
-            let current = observed
+#[cfg(target_os = "macos")]
+extern "C" {
+    fn combo_cu_dispatch(input: *const std::ffi::c_char) -> *mut std::ffi::c_char;
+    fn combo_cu_free(output: *mut std::ffi::c_char);
+}
+#[cfg(target_os = "macos")]
+pub fn call_on_main_thread(
+    app: &AppHandle,
+    request: Value,
+    cancelled: Option<Arc<AtomicBool>>,
+) -> Result<Value, String> {
+    let (send, receive) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        let result = (|| {
+            if cancelled
                 .as_ref()
-                .ok_or_else(|| "act requires a current targeted observation".to_string())?;
-            if current.target.application_id != target.application_id
-                || current.target.window_id != target.window_id
+                .is_some_and(|flag| flag.load(Ordering::SeqCst))
             {
-                return Err(
-                    "target window changed after the current observation; observe again".into(),
-                );
+                return Err("session cancelled".to_string());
             }
-            execute_actions(
-                main_thread,
-                &request.actions,
-                &current.target,
-                &current.accessibility,
-                &lease.cancelled,
-            )?;
-            ensure_session_active(&lease.cancelled)?;
-            *observed = None;
-            write_ok(stream)
+            let input = std::ffi::CString::new(request.to_string()).map_err(|e| e.to_string())?;
+            unsafe {
+                let output = combo_cu_dispatch(input.as_ptr());
+                if output.is_null() {
+                    return Err("native engine returned no response".into());
+                }
+                let text = std::ffi::CStr::from_ptr(output)
+                    .to_string_lossy()
+                    .into_owned();
+                combo_cu_free(output);
+                serde_json::from_str(&text).map_err(|e| e.to_string())
+            }
+        })();
+        let _ = send.send(result);
+    })
+    .map_err(|e| e.to_string())?;
+    receive
+        .recv()
+        .map_err(|_| "native engine stopped".to_string())?
+}
+
+#[cfg(target_os = "windows")]
+struct Worker {
+    child: std::process::Child,
+    input: std::process::ChildStdin,
+    output: BufReader<std::process::ChildStdout>,
+}
+#[cfg(target_os = "windows")]
+impl Worker {
+    fn start(app: &AppHandle) -> Result<Self, String> {
+        use std::process::{Command, Stdio};
+        use tauri::Manager;
+        let name = "combo-cu.exe";
+        let bundled = app
+            .path()
+            .resource_dir()
+            .map_err(|e| e.to_string())?
+            .join("computer-use")
+            .join(name);
+        let path = if bundled.is_file() {
+            bundled
+        } else {
+            std::env::current_exe()
+                .map_err(|e| e.to_string())?
+                .parent()
+                .ok_or("executable directory unavailable")?
+                .join("computer-use")
+                .join(name)
+        };
+        let mut command = Command::new(path);
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000); // CREATE_NO_WINDOW
         }
-        "stop" => {
-            release_session(
-                session_state,
-                connection_id,
-                Some(required_session_id(&request)?),
-            );
-            *observed = None;
-            write_ok(stream)
+        let mut child = command.spawn().map_err(|e| e.to_string())?;
+        Ok(Self {
+            input: child.stdin.take().unwrap(),
+            output: BufReader::new(child.stdout.take().unwrap()),
+            child,
+        })
+    }
+    fn call(&mut self, request: &Value) -> Result<Value, String> {
+        writeln!(self.input, "{request}").map_err(|e| e.to_string())?;
+        let mut line = String::new();
+        if self
+            .output
+            .read_line(&mut line)
+            .map_err(|e| e.to_string())?
+            == 0
+        {
+            return Err("CU worker exited; action outcome unknown".into());
         }
-        "cancel_session" => {
-            let cancelled = session_state
-                .lock()
-                .map_err(|_| "computer session state is unavailable")?
-                .cancel(required_session_id(&request)?);
-            write_json_line(stream, &json!({ "ok": true, "cancelled": cancelled }))
-                .map_err(|error| error.to_string())
-        }
-        _ => Err("unsupported operation".into()),
+        serde_json::from_str(&line).map_err(|e| e.to_string())
     }
 }
-
-fn require_owner(
-    session_state: &Arc<Mutex<SessionState>>,
-    connection_id: Uuid,
-    session_id: Uuid,
-) -> Result<SessionLease, String> {
-    session_state
-        .lock()
-        .map_err(|_| "computer session state is unavailable".to_string())?
-        .require_owner(connection_id, session_id)
-}
-
-fn require_target(
-    session_state: &Arc<Mutex<SessionState>>,
-    connection_id: Uuid,
-    session_id: Uuid,
-) -> Result<(ApplicationTarget, SessionLease), String> {
-    let session = session_state
-        .lock()
-        .map_err(|_| "computer session state is unavailable".to_string())?;
-    let lease = session.require_owner(connection_id, session_id)?;
-    let target = session
-        .target
-        .clone()
-        .ok_or_else(|| "Computer Use has not attached an application".to_string())?;
-    Ok((target, lease))
-}
-
-fn release_session(
-    session_state: &Arc<Mutex<SessionState>>,
-    connection_id: Uuid,
-    session_id: Option<Uuid>,
-) -> bool {
-    session_state
-        .lock()
-        .map(|mut session| session.release(connection_id, session_id))
-        .unwrap_or(false)
-}
-
-fn required_session_id(request: &HostRequest) -> Result<Uuid, String> {
-    request
-        .session_id
-        .ok_or_else(|| "computer host request requires session_id".into())
-}
-
-fn ensure_session_active(cancelled: &AtomicBool) -> Result<(), String> {
-    if cancelled.load(Ordering::SeqCst) {
-        Err("Computer Use session was cancelled".into())
-    } else {
-        Ok(())
-    }
-}
-
-fn write_json_line<T: serde::Serialize>(
-    stream: &mut TcpStream,
-    payload: &T,
-) -> Result<(), Box<dyn std::error::Error>> {
-    serde_json::to_writer(&mut *stream, payload)?;
-    stream.write_all(b"\n")?;
-    Ok(())
-}
-
-fn write_ok(stream: &mut TcpStream) -> Result<(), String> {
-    write_json_line(stream, &json!({ "ok": true })).map_err(|error| error.to_string())
-}
-
-fn write_error(stream: &mut TcpStream, error: &str) -> Result<(), Box<dyn std::error::Error>> {
-    write_json_line(stream, &json!({ "ok": false, "error": error }))
-}
-
-#[derive(Clone)]
-struct ObservedWindow {
-    target: ApplicationTarget,
-    accessibility: AccessibilitySnapshot,
-}
-
-fn execute_actions(
-    main_thread: &MainThreadExecutor,
-    actions: &[ComputerAction],
-    target: &ApplicationTarget,
-    accessibility: &AccessibilitySnapshot,
-    cancelled: &Arc<AtomicBool>,
-) -> Result<(), String> {
-    if actions.len() > MAX_ACTIONS_PER_BATCH {
-        return Err(format!(
-            "computer action batch exceeds {MAX_ACTIONS_PER_BATCH} actions"
-        ));
-    }
-    for action in actions {
-        ensure_session_active(cancelled)?;
-        if let ComputerAction::Wait { milliseconds } = action {
-            interruptible_wait(Duration::from_millis((*milliseconds).min(5_000)), cancelled)?;
-            continue;
-        }
-        let action = action.clone();
-        let observed_target = target.clone();
-        let accessibility = accessibility.clone();
-        let cancelled = Arc::clone(cancelled);
-        main_thread.run("computer input", move || {
-            ensure_session_active(&cancelled)?;
-            let (current_target, _) = resolve_target_window(&observed_target)?;
-            validate_observation_geometry(&observed_target, &current_target)?;
-            ensure_session_active(&cancelled)?;
-            execute_accessibility_action(&action, &current_target, &accessibility)
-        })?;
-    }
-    Ok(())
-}
-
-fn interruptible_wait(duration: Duration, cancelled: &AtomicBool) -> Result<(), String> {
-    let deadline = Instant::now() + duration;
-    loop {
-        ensure_session_active(cancelled)?;
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Ok(());
-        }
-        thread::sleep(remaining.min(CANCELLATION_POLL_INTERVAL));
-    }
-}
-
-fn validate_observation_geometry(
-    observed: &ApplicationTarget,
-    current: &ApplicationTarget,
-) -> Result<(), String> {
-    if observed.application_id != current.application_id
-        || observed.process_id != current.process_id
-        || observed.window_id != current.window_id
-    {
-        return Err("target window changed after observation; observe again".into());
-    }
-    if observed.bounds.width != current.bounds.width
-        || observed.bounds.height != current.bounds.height
-    {
-        return Err("target window was resized after observation; observe again".into());
-    }
-    Ok(())
-}
-
-fn execute_accessibility_action(
-    action: &ComputerAction,
-    target: &ApplicationTarget,
-    accessibility: &AccessibilitySnapshot,
-) -> Result<(), String> {
-    match action {
-        ComputerAction::PerformAction { element_id, action } => {
-            perform_accessibility_element_action(target, accessibility, *element_id, action)
-        }
-        ComputerAction::SetValue { element_id, text } => {
-            set_accessibility_element_value(target, accessibility, *element_id, text)
-        }
-        ComputerAction::Wait { .. } => unreachable!("wait actions execute outside the UI thread"),
+#[cfg(target_os = "windows")]
+impl Drop for Worker {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }

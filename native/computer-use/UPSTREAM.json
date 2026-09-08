@@ -1,0 +1,10 @@
+{
+  "repository": "https://github.com/iFurySt/open-codex-computer-use",
+  "revision": "1571a4eecf325cba4bc9ae2af36b74f8c2d00105",
+  "integration": "Native dispatch without MCP transport. Swift MCP server excluded and instructions extracted; permission identity resolves only the embedding host; cursor image keeps Bundle.main lookup with a relocated source fallback and is included in host resources. Go CLI/MCP entrypoint excluded, with its unused io import removed; non-input service and runtime logic retained; input behavior modified as documented below.",
+  "platforms": [
+    "macos",
+    "windows"
+  ],
+  "input_contract": "Intentional divergence: explicit text targets, live focus check for insertion, selection replacement without whole-value append, full replacement with readback, no global input fallback. Linux engine removed."
+}
