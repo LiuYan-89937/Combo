@@ -148,7 +148,13 @@ public final class ComputerUseToolDispatcher {
             let message = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
             result = ToolCallResult.text(message, isError: true)
         }
-        return ToolCallResult(content: result.content, isError: result.isError, diagnostics: service.diagnostics, inputResult: result.inputResult)
+        return ToolCallResult(
+            content: result.content,
+            isError: result.isError,
+            diagnostics: service.diagnostics,
+            inputResult: result.inputResult,
+            application: result.application
+        )
     }
 
     private func requireString(_ key: String, in arguments: [String: Any]) throws -> String {

@@ -549,6 +549,28 @@ def _publish_state(
                 "width": width,
                 "height": height,
             }
+    application = result.get("application")
+    if isinstance(application, dict):
+        target = {
+            "application_id": application.get("application_id") or app,
+            "display_name": application.get("display_name") or app,
+            "icon_data_url": application.get("icon_data_url"),
+            "process_id": application.get("process_id"),
+            "window_id": application.get("window_id"),
+            "window_title": application.get("window_title") or "",
+            "window_state": application.get("window_state")
+            if isinstance(application.get("window_state"), dict)
+            else {},
+        }
+    elif app:
+        target = {
+            "application_id": app,
+            "display_name": app,
+            "process_id": None,
+            "window_state": {},
+        }
+    else:
+        target = None
     _publish_progress(
         observer,
         phase="action_effect",
@@ -558,7 +580,7 @@ def _publish_state(
             else "Application state refreshed."
         ),
         step=steps,
-        target={"application_id": app, "display_name": app, "window_state": {}},
+        target=target,
         accessibility={
             "available": not bool(result.get("isError")),
             "application": app,

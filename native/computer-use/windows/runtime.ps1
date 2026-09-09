@@ -737,6 +737,32 @@ function Capture-WindowPngBase64([IntPtr]$hwnd, $bounds) {
     }
 }
 
+function Get-ApplicationIconDataUrl($Process) {
+    $icon = $null
+    $bitmap = $null
+    $stream = $null
+    try {
+        $executablePath = $Process.MainModule.FileName
+        if ([string]::IsNullOrWhiteSpace($executablePath)) {
+            return $null
+        }
+        $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($executablePath)
+        if ($null -eq $icon) {
+            return $null
+        }
+        $bitmap = $icon.ToBitmap()
+        $stream = New-Object System.IO.MemoryStream
+        $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
+        return "data:image/png;base64,$([Convert]::ToBase64String($stream.ToArray()))"
+    } catch {
+        return $null
+    } finally {
+        if ($null -ne $stream) { $stream.Dispose() }
+        if ($null -ne $bitmap) { $bitmap.Dispose() }
+        if ($null -ne $icon) { $icon.Dispose() }
+    }
+}
+
 function Get-FocusedSummary($processId, $TextLimit = $script:DefaultTextLimit) {
     try {
         $focused = [Windows.Automation.AutomationElement]::FocusedElement
@@ -781,6 +807,7 @@ function Build-Snapshot([string]$query, $TextLimit = $script:DefaultTextLimit, [
         app = [pscustomobject]@{
             name = $process.ProcessName
             bundleIdentifier = $process.ProcessName
+            iconDataUrl = Get-ApplicationIconDataUrl $process
             pid = [int]$process.Id
         }
         windowTitle = Limit-Text $process.MainWindowTitle $TextLimit

@@ -44,10 +44,11 @@ type contentItem struct {
 }
 
 type toolCallResult struct {
-    Diagnostics []string `json:"diagnostics,omitempty"`
-    InputResult map[string]string `json:"input_result,omitempty"`
-	Content []contentItem `json:"content"`
-	IsError bool          `json:"isError"`
+	Diagnostics []string               `json:"diagnostics,omitempty"`
+	InputResult map[string]string       `json:"input_result,omitempty"`
+	Content     []contentItem           `json:"content"`
+	IsError     bool                    `json:"isError"`
+	Application *toolResultApplication `json:"application,omitempty"`
 }
 
 func textResult(text string, isError bool) toolCallResult {
@@ -57,7 +58,18 @@ func textResult(text string, isError bool) toolCallResult {
 type appDescriptor struct {
 	Name             string `json:"name"`
 	BundleIdentifier string `json:"bundleIdentifier,omitempty"`
+	IconDataURL      string `json:"iconDataUrl,omitempty"`
 	PID              int    `json:"pid"`
+}
+
+type toolResultApplication struct {
+	ApplicationIdentifier string         `json:"application_id"`
+	DisplayName           string         `json:"display_name"`
+	IconDataURL           string         `json:"icon_data_url,omitempty"`
+	ProcessID             int            `json:"process_id"`
+	WindowID              int64          `json:"window_id,omitempty"`
+	WindowTitle           string         `json:"window_title"`
+	WindowState           map[string]any `json:"window_state"`
 }
 
 type frame struct {
@@ -150,7 +162,8 @@ func (s *appSnapshot) validateScreenshotPoint(x, y *float64) error {
 
 func (s *appSnapshot) result() toolCallResult {
 	result := toolCallResult{
-		Content: []contentItem{{Type: "text", Text: s.renderedText()}},
+		Content:     []contentItem{{Type: "text", Text: s.renderedText()}},
+		Application: s.applicationResult(),
 	}
 	if s != nil && s.ScreenshotPNGBase64 != "" {
 		result.Content = append(result.Content, contentItem{
@@ -160,6 +173,25 @@ func (s *appSnapshot) result() toolCallResult {
 		})
 	}
 	return result
+}
+
+func (s *appSnapshot) applicationResult() *toolResultApplication {
+	if s == nil {
+		return nil
+	}
+	identifier := s.App.BundleIdentifier
+	if identifier == "" {
+		identifier = s.App.Name
+	}
+	return &toolResultApplication{
+		ApplicationIdentifier: identifier,
+		DisplayName:           s.App.Name,
+		IconDataURL:           s.App.IconDataURL,
+		ProcessID:             s.App.PID,
+		WindowID:              s.WindowHandle,
+		WindowTitle:           s.WindowTitle,
+		WindowState:           map[string]any{},
+	}
 }
 
 type inputTarget struct {

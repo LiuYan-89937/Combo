@@ -225,7 +225,7 @@ function targetView(value: unknown) {
   const displayName = optionalText(target.display_name)
   const processId = optionalNumber(target.process_id)
   const windowId = optionalNumber(target.window_id)
-  if (!applicationId || !displayName || processId === null) return null
+  if (!applicationId || !displayName) return null
   const windowState = objectValue(target.window_state)
   return {
     applicationId,

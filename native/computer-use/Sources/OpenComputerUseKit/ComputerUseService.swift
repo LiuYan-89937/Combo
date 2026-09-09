@@ -675,8 +675,12 @@ public final class ComputerUseService {
         let note = target.element == nil
             ? "Window input position bound by a directed click. Only window identity is confirmed; inspect the screenshot to confirm the intended input position. No AX editable receiver is claimed. Rebind after focus/window changes or pointer actions."
             : "Editable receiver bound without changing focus. Keyboard actions establish the receiver before dispatch."
-        return ToolCallResult(content: snapshotResult(for: refreshed, style: .actionResult).content + [.text(note)],
-                              inputResult: ["target_scope": target.scope, "verification": "unconfirmed"])
+        let result = snapshotResult(for: refreshed, style: .actionResult)
+        return ToolCallResult(
+            content: result.content + [.text(note)],
+            inputResult: ["target_scope": target.scope, "verification": "unconfirmed"],
+            application: result.application
+        )
     }
 
     func invalidateWindowInputTarget(app query: String) {
@@ -872,8 +876,11 @@ public final class ComputerUseService {
         ]
         do {
             let result = snapshotResult(for: try refreshSnapshot(for: query), style: .actionResult)
-            return ToolCallResult(content: result.content + [.text("Keyboard events posted to the bound target. Inspect the new observation to verify the effect; AX text and selection may describe an editor proxy. Do not automatically replay.")],
-                                  inputResult: evidence)
+            return ToolCallResult(
+                content: result.content + [.text("Keyboard events posted to the bound target. Inspect the new observation to verify the effect; AX text and selection may describe an editor proxy. Do not automatically replay.")],
+                inputResult: evidence,
+                application: result.application
+            )
         } catch {
             return ToolCallResult(content: [.text("[observation.unavailable] Keyboard events were posted, but the next observation is unavailable. Obtain a new state without replaying the action.")],
                                   isError: true, inputResult: evidence)
@@ -1646,6 +1653,9 @@ public final class ComputerUseService {
         if let screenshotPNGData = snapshot.screenshotPNGData {
             content.append(.pngImage(screenshotPNGData))
         }
-        return ToolCallResult(content: content)
+        return ToolCallResult(
+            content: content,
+            application: ToolResultApplication(snapshot: snapshot)
+        )
     }
 }

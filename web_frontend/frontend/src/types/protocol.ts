@@ -386,7 +386,7 @@ export interface ComputerUseTargetView {
   applicationId: string
   displayName: string
   iconDataUrl?: string | null
-  processId: number
+  processId: number | null
   windowId: number | null
   windowTitle: string
   windowState?: {
