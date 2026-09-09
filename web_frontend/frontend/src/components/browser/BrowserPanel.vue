@@ -3,8 +3,8 @@
     <aside
       v-if="visible && props.active"
       ref="panelRef"
-      class="browser-panel"
-      :class="{ minimized, dragging }"
+      class="browser-panel floating-activity-shell"
+      :class="{ expanded: !minimized, minimized, dragging }"
       :style="panelStyle"
     >
       <div class="page-capsule-stack">
@@ -38,7 +38,11 @@
       </ActivityCapsule>
       </div>
 
-      <div v-if="!minimized && currentTarget" class="browser-window">
+      <FloatingActivityPanel
+        :open="!minimized && !!currentTarget"
+        as="div"
+        @opened="clampPanelPosition"
+      >
         <div class="browser-toolbar">
         <button type="button" :aria-label="t('browser.back')" @click="send({ type: 'back' })">←</button>
         <button type="button" :aria-label="t('browser.forward')" @click="send({ type: 'forward' })">→</button>
@@ -78,7 +82,7 @@
           </div>
           <div v-else-if="!interactive" class="watching-badge">{{ t('browser.agentControl') }}</div>
         </div>
-      </div>
+      </FloatingActivityPanel>
     </aside>
   </Teleport>
 </template>
@@ -86,6 +90,7 @@
 <script setup lang="ts">
 import { useFloatingCapsule } from '@/composables/useFloatingCapsule'
 import ActivityCapsule from '@/components/common/ActivityCapsule.vue'
+import FloatingActivityPanel from '@/components/common/FloatingActivityPanel.vue'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from '@/composables/useI18n'
 import { backendUrl } from '@/api/backendUrl'
@@ -532,12 +537,9 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.browser-panel { position: fixed; z-index: 35; width: clamp(360px, 30vw, 460px); min-width: 0; display: flex; flex-direction: column; overflow: visible; transition: width .26s cubic-bezier(.16, 1, .3, 1); }
-.browser-panel.minimized { width: min(340px, calc(100vw - 20px)); }
-.browser-panel.dragging { transition: none; user-select: none; }
-.page-capsule-stack { display: flex; max-height: 192px; flex-direction: column; align-items: flex-end; gap: 8px; padding: 8px 8px 3px; overflow-y: auto; scrollbar-width: none; }
+.page-capsule-stack { width: calc(100% + 32px); max-height: 192px; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; margin-inline: -16px; padding: 8px 16px 3px; overflow-y: auto; scrollbar-width: none; }
 .page-capsule-stack::-webkit-scrollbar { display: none; }
-.page-capsule.active { width: 100%; border-color: var(--app-border-focus); box-shadow: 0 11px 26px color-mix(in srgb, var(--app-text) 12%, transparent); cursor: grab; touch-action: none; user-select: none; }
+.page-capsule.active { cursor: grab; touch-action: none; user-select: none; }
 .browser-panel.dragging .page-capsule.active { cursor: grabbing; }
 .capsule-grip { padding: 6px 4px; color: var(--app-text-muted); cursor: grab; touch-action: none; }
 .browser-panel.dragging .capsule-grip { cursor: grabbing; }
@@ -548,7 +550,6 @@ onBeforeUnmount(() => {
 .live-dot.parked { opacity: .5; }
 button { border: 0; border-radius: 10px; padding: 7px 9px; color: var(--app-text); background: transparent; cursor: pointer; }
 button:hover { background: var(--app-surface-muted); }
-.browser-window { margin-top: 5px; overflow: hidden; border: 1px solid var(--app-divider); border-radius: 20px; background: var(--app-surface-elevated); box-shadow: 0 18px 50px rgba(0, 0, 0, .16); }
 .browser-toolbar { min-height: 40px; display: flex; align-items: center; gap: 3px; margin: 7px; padding: 4px; border: 1px solid var(--app-divider); border-radius: 999px; background: var(--app-surface-muted); }
 .browser-toolbar > button { padding: 5px 7px; }
 .address-form { flex: 1; }
@@ -561,5 +562,5 @@ button:hover { background: var(--app-surface-muted); }
 .viewport-status { position: absolute; padding: 10px 14px; border-radius: 12px; color: white; background: rgba(0, 0, 0, .68); backdrop-filter: blur(12px); }
 .watching-badge { position: absolute; right: 12px; bottom: 12px; padding: 6px 10px; border-radius: 999px; color: white; background: rgba(0, 0, 0, .58); font-size: 11px; backdrop-filter: blur(10px); }
 @keyframes browser-pulse { 50% { opacity: .35; transform: scale(.75); } }
-@media (max-width: 560px) { .browser-panel { width: calc(100vw - 20px); } .control-toggle { padding-inline: 6px; } }
+@media (max-width: 560px) { .control-toggle { padding-inline: 6px; } }
 </style>

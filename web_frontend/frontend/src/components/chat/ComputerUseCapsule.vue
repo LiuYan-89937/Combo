@@ -1,6 +1,6 @@
 <template>
   <Teleport to="body">
-    <aside v-if="visible && activity.status !== 'idle' && !dismissed" ref="panelRef" class="cu-capsule" :class="{ expanded, dragging }" :style="panelStyle" :aria-label="t('cu.title')">
+    <aside v-if="visible && activity.status !== 'idle' && !dismissed" ref="panelRef" class="cu-capsule floating-activity-shell" :class="{ expanded, dragging }" :style="panelStyle" :aria-label="t('cu.title')">
       <ActivityCapsule :title="title" :subtitle="subtitle" :active="running" :expanded="expanded" @select="toggleExpanded" @pointerdown="beginPanelDrag">
         <template #leading>
           <img v-if="activity.target?.iconDataUrl" class="app-icon" :src="activity.target.iconDataUrl" alt="">
@@ -9,11 +9,17 @@
         <template #actions>
           <span class="capsule-grip" aria-hidden="true">⠿</span>
           <button v-if="running" type="button" :disabled="stopping || !activity.requestId" @click="stop">{{ t(stopping ? 'cu.stopping' : 'cu.stop') }}</button>
-          <button type="button" :aria-label="t(expanded ? 'browser.minimize' : 'browser.expand')" @click="expanded = !expanded">{{ expanded ? '⌄' : '⌃' }}</button>
+          <button type="button" @click="expanded = !expanded">{{ t(expanded ? 'browser.minimize' : 'browser.expand') }}</button>
           <button v-if="!running" type="button" :aria-label="t('common.close')" @click="dismissed = true">×</button>
         </template>
       </ActivityCapsule>
-      <section v-if="expanded" class="cu-details">
+      <FloatingActivityPanel
+        :open="expanded"
+        scrollable
+        :aria-label="t('cu.steps')"
+        @opened="clampPanelPosition"
+      >
+        <div class="cu-details-content">
         <header><strong>{{ t('conversation.computerUse.screenshot') }}</strong><span>{{ t('cu.snapshot') }}</span></header>
         <p v-if="activity.screenshot && activity.screenshotError" class="error">{{ t('conversation.computerUse.screenshotUnavailable') }}</p>
         <img v-if="activity.screenshot" class="snapshot" :src="activity.screenshot.dataUrl" :width="activity.screenshot.width" :height="activity.screenshot.height" :alt="title">
@@ -29,7 +35,8 @@
           </li>
         </ol>
         <p v-else class="empty-steps">{{ t('cu.waitingStep') }}</p>
-      </section>
+        </div>
+      </FloatingActivityPanel>
     </aside>
   </Teleport>
 </template>
@@ -39,6 +46,7 @@ import { useFloatingCapsule } from '@/composables/useFloatingCapsule'
 import { isComputerUseToolName } from '@/utils/computerUse'
 import type { ComputerUseOperationView } from '@/types/protocol'
 import ActivityCapsule from '@/components/common/ActivityCapsule.vue'
+import FloatingActivityPanel from '@/components/common/FloatingActivityPanel.vue'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
@@ -146,11 +154,9 @@ function stop() {
 }
 </script>
 <style scoped>
-.cu-capsule { position: fixed;  z-index: 35; width: min(340px, calc(100vw - 36px)); display: flex; flex-direction: column; gap: 8px; color: var(--app-text); }
 .capsule-grip { padding: 6px 4px; cursor: grab; touch-action: none; color: var(--app-text-muted); }
 .cu-capsule :deep(.activity-capsule) { cursor: grab; touch-action: none; user-select: none; }
 .cu-capsule.dragging :deep(.activity-capsule) { cursor: grabbing; }
-.cu-capsule.expanded { width: min(460px, calc(100vw - 36px)); }
 .cu-capsule button { border: 0; background: transparent; color: inherit; cursor: pointer; }
 .cu-capsule button:disabled { opacity: .5; cursor: default; }
 .app-icon { width: 22px; height: 22px; object-fit: contain; }
@@ -158,9 +164,9 @@ function stop() {
 .status-dot.running, .status-dot.approval { background: var(--app-primary-color); }
 .status-dot.failed, .error { color: var(--app-error-color, #c34242); }
 .status-dot.failed { background: currentColor; }
-.cu-details { max-height: min(65vh, 640px); overflow: auto; padding: 12px; border: 1px solid var(--app-border); border-radius: 18px; background: var(--app-surface); box-shadow: var(--app-shadow-sm); font-size: 12px; }
-.cu-details header { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
-.cu-details header span { color: var(--app-text-muted); }
+.cu-details-content { padding: 12px; font-size: 12px; }
+.cu-details-content header { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.cu-details-content header span { color: var(--app-text-muted); }
 .snapshot { display: block; width: 100%; height: auto; max-height: 36vh; object-fit: contain; }
 .operation-list { list-style: none; margin: 14px 0 0; padding: 0; max-height: 220px; overflow: auto; }
 .operation-list li { display: flex; gap: 10px; padding: 10px 0; border-top: 1px solid var(--app-border); }
