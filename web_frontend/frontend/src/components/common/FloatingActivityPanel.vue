@@ -29,9 +29,7 @@ const emit = defineEmits<{ opened: [] }>()
 </script>
 
 <style>
-.floating-activity-shell {
-  position: fixed;
-  z-index: 35;
+.floating-activity-frame {
   width: min(340px, calc(100vw - 20px));
   min-width: 0;
   display: flex;
@@ -41,13 +39,18 @@ const emit = defineEmits<{ opened: [] }>()
   transition: width .26s cubic-bezier(.16, 1, .3, 1);
 }
 
-.floating-activity-shell.expanded {
+.floating-activity-frame.expanded {
   width: min(460px, calc(100vw - 20px));
 }
 
-.floating-activity-shell.dragging {
+.floating-activity-frame.dragging {
   transition: none;
   user-select: none;
+}
+
+.floating-activity-shell {
+  position: fixed;
+  z-index: 35;
 }
 </style>
 

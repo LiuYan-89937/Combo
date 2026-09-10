@@ -4,55 +4,44 @@
       v-for="(run, index) in visibleRuns"
       :key="run.run_id"
       :ref="value => setRunElement(run.run_id, value)"
-      class="scheduler-capsule-anchor"
+      class="scheduler-capsule-anchor floating-activity-frame"
       :class="[`side-${runPosition(run.run_id, index).side}`, { 'is-dragging': draggingRunId === run.run_id, expanded: expandedRunId === run.run_id }]"
       :style="runStyle(run.run_id, index)"
       @pointerdown="startRunDrag(run.run_id, index, $event)"
       @click.capture="captureRunClick"
     >
-      <n-popover
-        :ref="value => setPopoverRef(run.run_id, value)"
-        trigger="click"
-        :show="expandedRunId === run.run_id"
-        :placement="runPosition(run.run_id, index).side === 'left' ? 'bottom-start' : 'bottom-end'"
-        :show-arrow="false"
-        raw
-        @update:show="setExpandedRun(run.run_id, $event)"
+      <ActivityCapsule
+        :title="capsuleTitle(run)"
+        :subtitle="runSummary(run)"
+        :active="isActive(run.status)"
+        :expanded="expandedRunId === run.run_id"
+        @select="setExpandedRun(run.run_id, expandedRunId !== run.run_id)"
       >
-        <template #trigger>
-          <ActivityCapsule
-            :title="capsuleTitle(run)"
-            :subtitle="runSummary(run)"
-            :active="isActive(run.status)"
-            :expanded="expandedRunId === run.run_id"
-          >
-            <template #leading>
-              <span class="scheduler-capsule-mark" aria-hidden="true"><n-icon size="16"><Time /></n-icon></span>
-            </template>
-            <template #actions>
-              <small class="scheduler-capsule-elapsed">{{ elapsed(run) }}</small>
-              <span class="capsule-grip" aria-hidden="true">⠿</span>
-              <button
-                type="button"
-                @pointerdown.stop
-                @click.stop="setExpandedRun(run.run_id, expandedRunId !== run.run_id)"
-              >{{ expandedRunId === run.run_id ? '⌃' : '⌄' }}</button>
-            </template>
-          </ActivityCapsule>
+        <template #leading>
+          <span class="scheduler-capsule-mark" aria-hidden="true"><n-icon size="16"><Time /></n-icon></span>
         </template>
-
+        <template #actions>
+          <small class="scheduler-capsule-elapsed">{{ elapsed(run) }}</small>
+          <span class="capsule-grip" aria-hidden="true">⠿</span>
+          <button
+            type="button"
+            @pointerdown.stop
+            @click.stop="setExpandedRun(run.run_id, expandedRunId !== run.run_id)"
+          >{{ t(expandedRunId === run.run_id ? 'browser.minimize' : 'browser.expand') }}</button>
+        </template>
+      </ActivityCapsule>
+      <FloatingActivityPanel :open="expandedRunId === run.run_id" scrollable>
         <BackgroundTaskPopover
           :task="asBackgroundTask(run)"
           :title="capsuleTitle(run)"
           :fallback-title="capsuleTitle(run)"
-          wide
-          detached
+          embedded
           :controller="schedulerTaskController"
           @dismiss="dismissRun(run.run_id)"
           @updated="reconcileRun"
           @deleted="dismissRun"
         />
-      </n-popover>
+      </FloatingActivityPanel>
     </div>
   </div>
 </template>
@@ -60,7 +49,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ComponentPublicInstance, CSSProperties } from 'vue'
-import { NIcon, NPopover } from 'naive-ui'
+import { NIcon } from 'naive-ui'
 import { Time } from '@/components/icons'
 import { schedulerApi } from '@/api/scheduler'
 import type { SchedulerRunEventView, SchedulerRunView } from '@/api/resourceTypes'
@@ -75,6 +64,7 @@ import { useI18n } from '@/composables/useI18n'
 import BackgroundTaskPopover from '@/components/chat/BackgroundTaskPopover.vue'
 import type { BackgroundTaskController } from '@/components/chat/BackgroundTaskCard.vue'
 import ActivityCapsule from '@/components/common/ActivityCapsule.vue'
+import FloatingActivityPanel from '@/components/common/FloatingActivityPanel.vue'
 import { schedulerActivity } from './schedulerActivity'
 
 const props = defineProps<{ sessionId: string; workspaceId: string }>()
@@ -84,7 +74,6 @@ const runs = ref<SchedulerRunView[]>([])
 const expandedRunId = ref<string | null>(null)
 const dismissed = ref(new Set<string>())
 const runElements = new Map<string, HTMLElement>()
-const popoverRefs = new Map<string, { syncPosition: () => void }>()
 const positions = ref<Record<string, DockPosition>>(loadPositions())
 const runDrag = ref<RunDragState | null>(null)
 const suppressClick = ref(false)
@@ -391,11 +380,6 @@ function setRunElement(runId: string, value: Element | ComponentPublicInstance |
   else runElements.delete(runId)
 }
 
-function setPopoverRef(runId: string, value: Element | ComponentPublicInstance | null): void {
-  if (value && 'syncPosition' in value) popoverRefs.set(runId, value as unknown as { syncPosition: () => void })
-  else popoverRefs.delete(runId)
-}
-
 function setExpandedRun(runId: string, visible: boolean): void {
   expandedRunId.value = visible ? runId : null
 }
@@ -433,7 +417,6 @@ function moveRunDrag(event: PointerEvent): void {
   drag.y = clamp(event.clientY - bounds.top - drag.offsetY, 8, Math.max(8, bounds.height - (element?.offsetHeight || 48) - 8))
   if (Math.hypot(event.clientX - drag.originX, event.clientY - drag.originY) > 5) drag.moved = true
   runDrag.value = { ...drag }
-  popoverRefs.get(drag.runId)?.syncPosition()
 }
 
 function finishRunDrag(event: PointerEvent): void {

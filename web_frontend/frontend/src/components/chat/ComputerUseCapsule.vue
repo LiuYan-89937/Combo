@@ -1,6 +1,6 @@
 <template>
   <Teleport to="body">
-    <aside v-if="visible && activity.status !== 'idle' && !dismissed" ref="panelRef" class="cu-capsule floating-activity-shell" :class="{ expanded, dragging }" :style="panelStyle" :aria-label="t('cu.title')">
+    <aside v-if="visible && activity.status !== 'idle' && !dismissed" ref="panelRef" class="cu-capsule floating-activity-frame floating-activity-shell" :class="{ expanded, dragging }" :style="panelStyle" :aria-label="t('cu.title')">
       <ActivityCapsule :title="title" :subtitle="subtitle" :active="running" :expanded="expanded" @select="toggleExpanded" @pointerdown="beginPanelDrag">
         <template #leading>
           <img v-if="activity.target?.iconDataUrl" class="app-icon" :src="activity.target.iconDataUrl" alt="">

@@ -3,7 +3,7 @@
     <aside
       v-if="visible && props.active"
       ref="panelRef"
-      class="browser-panel floating-activity-shell"
+      class="browser-panel floating-activity-frame floating-activity-shell"
       :class="{ expanded: !minimized, minimized, dragging }"
       :style="panelStyle"
     >
@@ -537,7 +537,7 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.page-capsule-stack { width: calc(100% + 32px); max-height: 192px; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; margin-inline: -16px; padding: 8px 16px 3px; overflow-y: auto; scrollbar-width: none; }
+.page-capsule-stack { width: 100%; max-height: 192px; display: flex; flex-direction: column; gap: 8px; padding: 0; overflow-y: auto; scrollbar-width: none; }
 .page-capsule-stack::-webkit-scrollbar { display: none; }
 .page-capsule.active { cursor: grab; touch-action: none; user-select: none; }
 .browser-panel.dragging .page-capsule.active { cursor: grabbing; }
