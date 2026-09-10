@@ -473,9 +473,7 @@ function clamp(value: number, minimum: number, maximum: number): number {
 
 <style scoped>
 .scheduler-capsule-layer { position: absolute; z-index: 4; inset: 0; overflow: hidden; pointer-events: none; }
-.scheduler-capsule-anchor { position: absolute; width: min(340px, calc(100vw - 20px)); pointer-events: auto; touch-action: none; user-select: none; transition: width .26s cubic-bezier(.16, 1, .3, 1); }
-.scheduler-capsule-anchor.expanded { width: min(460px, calc(100vw - 20px)); }
-.scheduler-capsule-anchor :deep(.activity-capsule) { width: 100%; }
+.scheduler-capsule-anchor { position: absolute; pointer-events: auto; touch-action: none; user-select: none; }
 .scheduler-capsule-anchor.side-left { left: 12px; right: auto; }
 .scheduler-capsule-anchor.side-right { right: 12px; left: auto; }
 .scheduler-capsule-anchor.is-dragging { z-index: 5; cursor: grabbing; }

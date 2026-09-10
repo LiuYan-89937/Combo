@@ -1,5 +1,12 @@
 <template>
-  <section class="task-popover" :class="{ 'task-popover-wide': wide, 'task-popover-detached': detached }">
+  <section
+    class="task-popover"
+    :class="{
+      'task-popover-wide': wide,
+      'task-popover-detached': detached,
+      'task-popover-embedded': embedded,
+    }"
+  >
     <button class="task-popover-close" type="button" :aria-label="t('backgroundTask.closeCapsule')" @click="emit('dismiss')">×</button>
     <div class="task-detail">
       <BackgroundTaskCard
@@ -27,6 +34,8 @@ defineProps<{
   wide?: boolean
   /** Render as a standalone floating card instead of merging with its capsule. */
   detached?: boolean
+  /** Render inside the shared floating activity panel surface. */
+  embedded?: boolean
   controller?: BackgroundTaskController
 }>()
 const emit = defineEmits<{
@@ -44,6 +53,7 @@ const { t } = useI18n()
    mirroring the browser / computer-use floating panels instead of merging into one
    card with square corners at the junction. */
 .task-popover-detached { margin-top: var(--app-space-xs); border-top: 1px solid var(--app-border); border-radius: var(--app-radius-lg); box-shadow: var(--app-shadow-lg); }
+.task-popover-embedded { width: 100%; max-height: inherit; border: 0; border-radius: 0; background: transparent; }
 .task-popover-close { position: absolute; z-index: 2; top: 12px; right: 12px; width: 26px; height: 26px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; color: var(--app-text); background: transparent; font-size: 17px; cursor: pointer; }
 .task-popover-close:hover { background: var(--app-surface-hover); }
 .task-detail { max-height: min(72vh, 680px); overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
