@@ -247,7 +247,7 @@ import { workspaceApi, type WorkspaceProjectView } from '@/api/workspace'
 import type { SchedulerJobInput } from '@/api/resourceTypes'
 import type { ApprovalMode, ExecutionPreference } from '@/api/dynamicRuntime'
 import { useI18n } from '@/composables/useI18n'
-import { requiredTextRule } from '@/utils/formValidation'
+import { cronExpressionRule, positiveNumberRule, requiredTextRule } from '@/utils/formValidation'
 
 type ScheduleMode = 'recurring' | 'once'
 type RecurrenceKind = 'daily' | 'weekly' | 'interval' | 'cron'
@@ -324,10 +324,10 @@ const rules = computed<FormRules>(() => ({
     ? [{ type: 'array', required: true, min: 1, message: t('scheduler.validateWeekdays'), trigger: ['blur', 'change'] }]
     : [],
   interval_value: formData.value.schedule_mode === 'recurring' && formData.value.recurrence_kind === 'interval'
-    ? [{ type: 'number', required: true, min: 1, message: t('scheduler.validateInterval'), trigger: ['blur', 'change'] }]
+    ? [positiveNumberRule(t('scheduler.validateInterval'))]
     : [],
   cron_expression: formData.value.schedule_mode === 'recurring' && formData.value.recurrence_kind === 'cron'
-    ? [requiredTextRule(t('scheduler.validateCron'))]
+    ? [cronExpressionRule(t('scheduler.validateCronFormat'))]
     : [],
   run_once_at: formData.value.schedule_mode === 'once'
     ? [{ type: 'number', required: true, message: t('scheduler.validateRunDate'), trigger: ['blur', 'change'] }]

@@ -12,6 +12,7 @@ from combo.dynamic_runtime.knowledge_search import (
     HybridKnowledgeSearchIndex,
     KnowledgeRetrievalSettings,
 )
+from combo.dynamic_runtime.schedule_validation import validate_schedule
 from combo.dynamic_runtime.repositories import utc_now_text
 
 
@@ -197,6 +198,11 @@ class WorkspaceSchedulerStore:
         } for row in rows]
 
     def create_job(self, payload: dict[str, Any]) -> dict[str, Any]:
+        validate_schedule(
+            payload.get("schedule_type"),
+            payload.get("schedule_expr"),
+            payload.get("timezone", "UTC"),
+        )
         job_id = uuid4().hex
         now = utc_now_text()
         enabled = bool(payload.get("enabled", True))

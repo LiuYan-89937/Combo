@@ -5,7 +5,7 @@
       :key="run.run_id"
       :ref="value => setRunElement(run.run_id, value)"
       class="scheduler-capsule-anchor"
-      :class="[`side-${runPosition(run.run_id, index).side}`, { 'is-dragging': draggingRunId === run.run_id }]"
+      :class="[`side-${runPosition(run.run_id, index).side}`, { 'is-dragging': draggingRunId === run.run_id, expanded: expandedRunId === run.run_id }]"
       :style="runStyle(run.run_id, index)"
       @pointerdown="startRunDrag(run.run_id, index, $event)"
       @click.capture="captureRunClick"
@@ -20,25 +20,32 @@
         @update:show="setExpandedRun(run.run_id, $event)"
       >
         <template #trigger>
-          <button class="scheduler-capsule" type="button" :aria-expanded="expandedRunId === run.run_id">
-            <span class="scheduler-capsule-mark" aria-hidden="true">
-              <n-icon size="16"><Time /></n-icon>
-            </span>
-            <span class="scheduler-capsule-copy">
-              <span class="scheduler-capsule-meta">
-                <strong>{{ capsuleTitle(run) }}</strong>
-                <small>{{ elapsed(run) }}</small>
-              </span>
-              <span class="scheduler-capsule-summary">{{ runSummary(run) }}</span>
-            </span>
-            <span class="scheduler-capsule-chevron" aria-hidden="true">⌄</span>
-          </button>
+          <ActivityCapsule
+            :title="capsuleTitle(run)"
+            :subtitle="runSummary(run)"
+            :active="isActive(run.status)"
+            :expanded="expandedRunId === run.run_id"
+          >
+            <template #leading>
+              <span class="scheduler-capsule-mark" aria-hidden="true"><n-icon size="16"><Time /></n-icon></span>
+            </template>
+            <template #actions>
+              <small class="scheduler-capsule-elapsed">{{ elapsed(run) }}</small>
+              <span class="capsule-grip" aria-hidden="true">⠿</span>
+              <button
+                type="button"
+                @pointerdown.stop
+                @click.stop="setExpandedRun(run.run_id, expandedRunId !== run.run_id)"
+              >{{ expandedRunId === run.run_id ? '⌃' : '⌄' }}</button>
+            </template>
+          </ActivityCapsule>
         </template>
 
         <BackgroundTaskPopover
           :task="asBackgroundTask(run)"
           :title="capsuleTitle(run)"
           :fallback-title="capsuleTitle(run)"
+          wide
           :controller="schedulerTaskController"
           @dismiss="dismissRun(run.run_id)"
           @updated="reconcileRun"
@@ -66,6 +73,8 @@ import type {
 import { useI18n } from '@/composables/useI18n'
 import BackgroundTaskPopover from '@/components/chat/BackgroundTaskPopover.vue'
 import type { BackgroundTaskController } from '@/components/chat/BackgroundTaskCard.vue'
+import ActivityCapsule from '@/components/common/ActivityCapsule.vue'
+import { schedulerActivity } from './schedulerActivity'
 
 const props = defineProps<{ sessionId: string; workspaceId: string }>()
 const { t } = useI18n()
@@ -225,7 +234,7 @@ function asBackgroundTask(run: SchedulerRunView): BackgroundTask {
 }
 
 function asBackgroundTaskEvent(event: SchedulerRunEventView): BackgroundTaskEvent {
-  const activity = schedulerActivity(event)
+  const activity = schedulerActivity(event, key => t(key as any))
   return {
     seq: event.sequence,
     event_id: `${event.run_id}:${event.sequence}`,
@@ -259,31 +268,6 @@ function interactionFromEvents(task: BackgroundTask, events: BackgroundTaskEvent
     requests: Array.isArray(interrupt.requests) ? interrupt.requests as Array<Record<string, unknown>> : [],
     resource_requests: [],
     payload: interrupt,
-  }
-}
-
-function schedulerActivity(event: SchedulerRunEventView): Record<string, unknown> {
-  const payload = event.payload || {}
-  if (event.event_type === 'tool_activity') {
-    const details = recordValue(payload.details) || payload
-    return {
-      phase_id: String(payload.phase_id || details.tool_call_id || `scheduler:${event.sequence}`),
-      category: 'tool',
-      title: String(payload.title || details.model_alias || details.tool_name || t('scheduler.toolActivity')),
-      summary: String(payload.summary || details.status || event.event_type),
-      status: String(payload.status || details.status || 'running'),
-      occurred_at: event.created_at,
-      details,
-    }
-  }
-  return {
-    phase_id: `scheduler:${event.sequence}`,
-    category: 'activity',
-    title: eventTitle(event.event_type),
-    summary: eventSummary(event),
-    status: eventStatus(event.event_type),
-    occurred_at: event.created_at,
-    details: { ...payload, scheduler_event_type: event.event_type },
   }
 }
 
@@ -364,31 +348,6 @@ function resultArtifacts(result: Record<string, unknown> | null): Array<Record<s
     : []
 }
 
-function eventTitle(eventType: string): string {
-  const keys: Record<string, string> = {
-    run_started: 'scheduler.status.running',
-    agent_queued: 'scheduler.agentQueued',
-    process_started: 'scheduler.processStarted',
-    process_output: 'scheduler.output',
-    result: 'scheduler.result',
-    failed: 'scheduler.status.failed',
-    cancelled: 'scheduler.status.cancelled',
-  }
-  return keys[eventType] ? t(keys[eventType] as any) : eventType
-}
-
-function eventSummary(event: SchedulerRunEventView): string {
-  const payload = event.payload || {}
-  return String(payload.text || payload.message || payload.summary || payload.stderr || payload.stdout || eventTitle(event.event_type)).trim()
-}
-
-function eventStatus(eventType: string): string {
-  if (eventType === 'failed') return 'failed'
-  if (eventType === 'cancelled') return 'cancelled'
-  if (eventType === 'result') return 'completed'
-  return 'running'
-}
-
 function isActive(status: string): boolean {
   return ['queued', 'running', 'waiting_approval', 'waiting_external'].includes(status)
 }
@@ -463,8 +422,8 @@ function moveRunDrag(event: PointerEvent): void {
   if (!drag || !layer || event.pointerId !== drag.pointerId) return
   const bounds = layer.getBoundingClientRect()
   const element = runElements.get(drag.runId)
-  drag.x = clamp(event.clientX - bounds.left - drag.offsetX, 8, Math.max(8, bounds.width - (element?.offsetWidth || 340) - 8))
-  drag.y = clamp(event.clientY - bounds.top - drag.offsetY, 8, Math.max(8, bounds.height - (element?.offsetHeight || 58) - 8))
+  drag.x = clamp(event.clientX - bounds.left - drag.offsetX, 8, Math.max(8, bounds.width - (element?.offsetWidth || 360) - 8))
+  drag.y = clamp(event.clientY - bounds.top - drag.offsetY, 8, Math.max(8, bounds.height - (element?.offsetHeight || 48) - 8))
   if (Math.hypot(event.clientX - drag.originX, event.clientY - drag.originY) > 5) drag.moved = true
   runDrag.value = { ...drag }
   popoverRefs.get(drag.runId)?.syncPosition()
@@ -480,8 +439,8 @@ function finishRunDrag(event: PointerEvent): void {
     suppressClick.value = true
     expandedRunId.value = null
     const element = runElements.get(drag.runId)
-    const side: DockSide = drag.x + (element?.offsetWidth || 340) / 2 < layer.clientWidth / 2 ? 'left' : 'right'
-    const availableHeight = Math.max(1, layer.clientHeight - (element?.offsetHeight || 58) - 16)
+    const side: DockSide = drag.x + (element?.offsetWidth || 360) / 2 < layer.clientWidth / 2 ? 'left' : 'right'
+    const availableHeight = Math.max(1, layer.clientHeight - (element?.offsetHeight || 48) - 16)
     positions.value = { ...positions.value, [drag.runId]: { side, y: clamp((drag.y - 8) / availableHeight, 0, 1) } }
     window.localStorage.setItem(POSITION_STORAGE_KEY, JSON.stringify(positions.value))
     window.setTimeout(() => { suppressClick.value = false }, 160)
@@ -524,18 +483,14 @@ function clamp(value: number, minimum: number, maximum: number): number {
 
 <style scoped>
 .scheduler-capsule-layer { position: absolute; z-index: 4; inset: 0; overflow: hidden; pointer-events: none; }
-.scheduler-capsule-anchor { position: absolute; pointer-events: auto; touch-action: none; user-select: none; }
+.scheduler-capsule-anchor { position: absolute; width: min(340px, calc(100vw - 20px)); pointer-events: auto; touch-action: none; user-select: none; transition: width .26s cubic-bezier(.16, 1, .3, 1); }
+.scheduler-capsule-anchor.expanded { width: min(460px, calc(100vw - 20px)); }
+.scheduler-capsule-anchor :deep(.activity-capsule) { width: 100%; }
 .scheduler-capsule-anchor.side-left { left: 12px; right: auto; }
 .scheduler-capsule-anchor.side-right { right: 12px; left: auto; }
 .scheduler-capsule-anchor.is-dragging { z-index: 5; cursor: grabbing; }
-.scheduler-capsule { width: min(340px, calc(100vw - 48px)); height: 58px; display: flex; align-items: center; gap: 8px; padding: 5px 12px 5px 7px; overflow: hidden; color: var(--app-text); background: var(--app-surface); border: 1px solid var(--app-border); border-radius: var(--app-radius-pill); box-shadow: 0 7px 20px color-mix(in srgb, var(--app-text) 8%, transparent); cursor: pointer; transition: border-color .18s ease; }
-.scheduler-capsule:hover { border-color: var(--app-border-hover); }
-.scheduler-capsule-mark { width: 40px; height: 40px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 50%; color: var(--app-surface); background: var(--app-text); }
-.scheduler-capsule-copy { min-width: 0; flex: 1; display: grid; gap: 3px; text-align: left; }
-.scheduler-capsule-meta { min-width: 0; display: flex; align-items: baseline; gap: 6px; color: var(--app-text-muted); }
-.scheduler-capsule-meta strong, .scheduler-capsule-meta small, .scheduler-capsule-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.scheduler-capsule-meta strong { flex: 1; color: var(--app-text); font-size: 12px; font-weight: 620; }
-.scheduler-capsule-meta small { font-size: 9px; }
-.scheduler-capsule-summary { color: var(--app-text-secondary); font-size: 10px; line-height: 1.35; }
-.scheduler-capsule-chevron { flex: 0 0 auto; color: var(--app-text-muted); font-size: 11px; }
+.scheduler-capsule-mark { width: 24px; height: 24px; flex: 0 0 auto; display: grid; place-items: center; color: var(--app-text-muted); }
+.scheduler-capsule-elapsed { color: var(--app-text-muted); font-size: 9px; white-space: nowrap; }
+.capsule-grip { padding: 5px 2px; color: var(--app-text-muted); cursor: grab; }
+.scheduler-capsule-anchor button { border: 0; background: transparent; color: inherit; cursor: pointer; }
 </style>

@@ -14,6 +14,7 @@ from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from combo.dynamic_runtime.control_plane_store import WorkspaceSchedulerStore
+from combo.dynamic_runtime.schedule_validation import validate_schedule
 from combo.dynamic_runtime.repositories import CommandInbox, ConversationStore
 from combo.runtime_protocol import (
     CancelRuntimeRequestPayload,
@@ -344,16 +345,16 @@ def _agent_result_text(messages: list[Any], *, request_id: str) -> str:
 
 
 def _trigger(job: dict[str, Any]):
-    schedule_type = str(job.get("schedule_type") or "cron")
-    expression = _required(job, "schedule_expr")
-    timezone = str(job.get("timezone") or "UTC")
-    if schedule_type == "cron":
-        return CronTrigger.from_crontab(expression, timezone=timezone)
-    if schedule_type == "date":
-        return DateTrigger(run_date=datetime.fromisoformat(expression), timezone=timezone)
-    if schedule_type == "interval":
-        return IntervalTrigger(seconds=float(expression), timezone=timezone)
-    raise ValueError(f"unsupported schedule type: {schedule_type}")
+    schedule = validate_schedule(
+        job.get("schedule_type", "cron"),
+        job.get("schedule_expr"),
+        job.get("timezone", "UTC"),
+    )
+    if schedule.schedule_type == "cron":
+        return CronTrigger.from_crontab(schedule.expression, timezone=schedule.timezone)
+    if schedule.schedule_type == "date":
+        return DateTrigger(run_date=schedule.date, timezone=schedule.timezone)
+    return IntervalTrigger(seconds=schedule.interval_seconds, timezone=schedule.timezone)
 
 
 def _required(value: dict[str, Any], key: str) -> str:

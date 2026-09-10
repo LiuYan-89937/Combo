@@ -42,7 +42,12 @@
       <span class="status-dot" :class="`dot-${normalizeStatus(view.status)}`" />
       <span>
         <strong>{{ currentTitle }}</strong>
-        <small v-if="currentDescription && !view.delivery">{{ currentDescription }}</small>
+        <MessagePartRenderer
+          v-if="view.livePart"
+          :part="view.livePart"
+          :streaming="view.liveStreaming"
+        />
+        <small v-else-if="currentDescription && !view.delivery">{{ currentDescription }}</small>
         <div
           v-if="view.delivery"
           class="task-delivery markdown-content"
@@ -63,8 +68,13 @@
           <span class="progress-report-rail" aria-hidden="true">
             <span class="status-dot" :class="`dot-${normalizeStatus(report.status)}`" />
           </span>
+          <MessagePartRenderer
+            v-if="report.messagePart"
+            :part="report.messagePart"
+            :streaming="report.streaming"
+          />
           <ToolExecutionCard
-            v-if="report.toolExecution"
+            v-else-if="report.toolExecution"
             :part="report.toolExecution"
           />
           <span v-else class="activity-copy">
@@ -139,8 +149,10 @@ import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
 import { backgroundTasksApi } from '@/api/backgroundTasks'
 import SubAgentMascot from '@/components/brand/SubAgentMascot.vue'
 import ToolExecutionCard from '@/components/chat/ToolExecutionCard.vue'
+import MessagePartRenderer from '@/components/chat/MessagePartRenderer.vue'
 import type {
   ChatMessagePartStatus,
+  ChatMessagePart,
   RuntimeFrontendEvent,
   ToolExecutionMessagePart,
 } from '@/types/protocol'
@@ -331,26 +343,47 @@ function buildView(current: BackgroundTask, timeline: BackgroundTaskEvent[], fal
     const title = titleKey === 'backgroundTask.activity.current'
       ? ''
       : localize(titleKey) || String(event.payload.title || '').trim()
-    const summary = localize(event.payload.summary_key)
-      || backgroundTaskActivityText(event.payload.summary, t)
+    const incomingDetails = recordValue(event.payload.details)
+    const previous = reportsByPhase.get(phaseId)
+    const details = mergeActivityDetails(previous?.details, incomingDetails)
+    const streamKind = streamKindOf(event.payload, details)
+    const streamFormat = streamFormatOf(event.payload, details)
+    const streamText = streamKind
+      ? mergeStreamText(previous?.streamText || '', details, previous?.details)
+      : ''
+    const summary = streamKind
+      ? streamText || localize(event.payload.summary_key) || backgroundTaskActivityText(event.payload.summary, t)
+      : localize(event.payload.summary_key)
+        || backgroundTaskActivityText(event.payload.summary, t)
+        || activitySummary(details, event.payload)
     if (!phaseId || !summary) continue
     const occurredAt = String(event.payload.occurred_at || event.created_at)
-    const details = recordValue(event.payload.details)
-    const previous = reportsByPhase.get(phaseId)
     reportsByPhase.set(phaseId, {
       phaseId,
       title,
       summary,
-      status: String(event.payload.status || 'completed'),
+      status: String(event.payload.status || previous?.status || 'completed'),
       occurredAt,
       startedAt: previous?.startedAt || String(details?.started_at || details?.created_at || occurredAt),
       category: String(event.payload.category || 'activity'),
       details,
+      streamKind,
+      streamText,
+      streaming: streamKind
+        ? String(event.payload.status || '') === 'running'
+          && !['succeeded', 'failed', 'cancelled'].includes(current.status)
+        : false,
+      streamFormat,
     })
   }
   const reports = Array.from(reportsByPhase.values())
     .sort((left, right) => Date.parse(right.occurredAt) - Date.parse(left.occurredAt))
-    .map(report => ({ ...report, toolExecution: toolExecutionFromReport(report)[0] || null }))
+    .map(report => ({
+      ...report,
+      messagePart: messagePartFromReport(report),
+      toolExecution: toolExecutionFromReport(report)[0] || null,
+    }))
+  const liveReport = reports.find(report => report.streaming && report.messagePart)
   return {
     id: current.task_id,
     title: current.agent_name || fallbackTitle,
@@ -358,6 +391,8 @@ function buildView(current: BackgroundTask, timeline: BackgroundTaskEvent[], fal
     status: current.status,
     reports,
     latestSummary: reports.at(0)?.summary || '',
+    livePart: liveReport?.messagePart || null,
+    liveStreaming: Boolean(liveReport?.streaming),
     artifacts: artifactViews(current),
     delivery: current.result_summary || '',
     error: String(
@@ -378,7 +413,88 @@ interface ActivityReport {
   startedAt: string
   category: string
   details: Record<string, unknown> | null
+  streamKind?: 'output' | 'reasoning' | null
+  streamFormat?: 'markdown' | 'plain'
+  streamText?: string
+  streaming?: boolean
+  messagePart?: ChatMessagePart | null
   toolExecution?: ToolExecutionMessagePart | null
+}
+
+function mergeActivityDetails(
+  previous: Record<string, unknown> | null | undefined,
+  current: Record<string, unknown> | null,
+): Record<string, unknown> | null {
+  if (!previous && !current) return null
+  const merged = { ...(previous || {}) }
+  for (const [key, value] of Object.entries(current || {})) {
+    if (value !== null && value !== undefined && value !== '') merged[key] = value
+  }
+  const eventType = String(current?.event_type || '')
+  if (eventType === 'tool_call_output_delta') {
+    const delta = String(current?.delta ?? current?.output ?? '')
+    const output = String(previous?.output || '')
+    if (delta) merged.output = output + delta
+  }
+  return merged
+}
+
+function streamKindOf(
+  payload: Record<string, unknown>,
+  details: Record<string, unknown> | null,
+): 'output' | 'reasoning' | null {
+  const value = String(payload.stream_kind || details?.stream_kind || '').trim()
+  return value === 'output' || value === 'reasoning' ? value : null
+}
+
+function streamFormatOf(
+  payload: Record<string, unknown>,
+  details: Record<string, unknown> | null,
+): 'markdown' | 'plain' {
+  return String(payload.stream_format || details?.stream_format || '').trim() === 'plain'
+    ? 'plain'
+    : 'markdown'
+}
+
+function mergeStreamText(
+  previous: string,
+  details: Record<string, unknown> | null,
+  previousDetails: Record<string, unknown> | null | undefined,
+): string {
+  const delta = String(details?.delta || '')
+  const snapshot = String(details?.content || '')
+  let text = previous
+  if (delta) text += delta
+  if (snapshot && (!text || snapshot.length >= text.length)) text = snapshot
+  if (!text && previousDetails) {
+    text = String(previousDetails.content || previousDetails.delta || '')
+  }
+  return text
+}
+
+function activitySummary(
+  details: Record<string, unknown> | null,
+  payload: Record<string, unknown>,
+): string {
+  const toolName = String(details?.tool_name || details?.tool_id || payload.title || '').trim()
+  const status = String(payload.status || details?.status || '').trim()
+  if (toolName && status) return `${toolName} ${status}`
+  return String(details?.message || payload.title || '').trim()
+}
+
+function messagePartFromReport(report: ActivityReport): ChatMessagePart | null {
+  if (!report.streamKind || !report.streamText) return null
+  const common = {
+    id: report.phaseId,
+    status: report.streaming ? 'streaming' as const : 'completed' as const,
+    createdAt: report.occurredAt,
+    startedAt: report.startedAt,
+    updatedAt: report.occurredAt,
+  }
+  if (report.streamKind === 'reasoning') {
+    return { ...common, type: 'reasoning', text: report.streamText }
+  }
+  return { ...common, type: 'text', format: report.streamFormat || 'markdown', text: report.streamText }
 }
 
 function toolExecutionFromReport(report: ActivityReport): ToolExecutionMessagePart[] {

@@ -50,6 +50,33 @@ export function requiredArrayRule(
   }
 }
 
+export function cronExpressionRule(message: string): FormItemRule {
+  return {
+    required: true,
+    trigger: ['input', 'blur'],
+    validator: (_rule, value) => {
+      const text = typeof value === 'string' ? value.trim() : ''
+      if (!text) return new Error(message)
+      const fields = text.split(/\s+/)
+      return fields.length === 5 && fields.every(field => /^[0-9A-Za-z*/?,\-]+$/.test(field))
+        ? true
+        : new Error(message)
+    },
+  }
+}
+
+export function positiveNumberRule(message: string): FormItemRule {
+  return {
+    required: true,
+    trigger: ['input', 'blur', 'change'],
+    validator: (_rule, value) => (
+      typeof value === 'number' && Number.isFinite(value) && value > 0
+        ? true
+        : new Error(message)
+    ),
+  }
+}
+
 export function requiredHttpUrlRule(
   requiredMessage: string,
   invalidMessage: string,

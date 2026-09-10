@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from combo.dynamic_runtime.control_plane_store import WorkspaceSchedulerStore
+from combo.dynamic_runtime.schedule_validation import validate_schedule
 from combo.runtime_protocol import RuntimeExecutionIdentity
 from combo.tooling.builtins.scheduler.specs import (
     RUNTIME_IDENTITY_RESOURCE,
@@ -34,15 +35,19 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     elif action == "describe":
         output = {"action": action, "job": _owned_job(store, identity, arguments)}
     elif action == "create":
+        schedule_type = _required_text(arguments, "schedule_type")
+        schedule_expr = _required_text(arguments, "schedule_expr")
+        timezone = _required_text(arguments, "timezone")
+        validate_schedule(schedule_type, schedule_expr, timezone)
         output = {
             "action": action,
             "job": store.create_job({
                 "workspace_id": identity.workspace_id,
                 "source_session_id": identity.session_id,
                 "task_content": _required_text(arguments, "task_content"),
-                "schedule_type": _required_text(arguments, "schedule_type"),
-                "schedule_expr": _required_text(arguments, "schedule_expr"),
-                "timezone": _required_text(arguments, "timezone"),
+                "schedule_type": schedule_type,
+                "schedule_expr": schedule_expr,
+                "timezone": timezone,
                 "strategy": str(arguments.get("strategy") or "auto"),
                 "approval_policy": str(arguments.get("approval_policy") or "ask"),
             }),
