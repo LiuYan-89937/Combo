@@ -79,6 +79,7 @@ class MainTurnCommandHandler:
                 operation="main_turn",
                 execution_preference=payload.execution_preference,
                 approval_mode=payload.approval_mode,
+                session_id=envelope.session_id,
             )
             if payload.scheduler_run_id is not None:
                 selector = self._delegated_model_selector
@@ -93,6 +94,7 @@ class MainTurnCommandHandler:
                     operation="main_turn",
                     profile_id=selected.profile_id,
                     reasoning_intensity=policy.reasoning_intensity,
+                    session_id=envelope.session_id,
                 )
                 resolved_policy = ResolvedRuntimePolicy(
                     snapshot=resolved_policy.snapshot.model_copy(update={"model": selected_model.snapshot}),

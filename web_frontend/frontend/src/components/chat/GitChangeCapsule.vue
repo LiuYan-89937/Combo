@@ -68,7 +68,11 @@
         </span>
       </header>
 
-      <div class="git-review-workspace">
+      <div
+        ref="workspaceEl"
+        class="git-review-workspace"
+        :style="{ '--review-file-list-width': `${fileListWidth}px` }"
+      >
         <aside class="review-file-list" role="tablist" :aria-label="t('git.changedFilesLabel')">
           <button
             v-for="file in changes.files"
@@ -92,6 +96,20 @@
           </button>
         </aside>
 
+        <div
+          class="review-splitter"
+          role="separator"
+          aria-orientation="vertical"
+          :aria-label="t('git.resizeFileList')"
+          :aria-valuenow="Math.round(fileListWidth)"
+          :aria-valuemin="FILE_LIST_MIN_WIDTH"
+          :aria-valuemax="fileListMaxWidth"
+          tabindex="0"
+          @pointerdown="startResize"
+          @keydown="handleSplitterKeydown"
+          @dblclick="resetFileListWidth"
+        />
+
         <section class="git-review-content">
           <div class="git-review-path" :title="selectedPath">{{ selectedPath }}</div>
           <GitDiffViewer :diff="selectedDiff" :loading="diffLoading" :error="diffError" />
@@ -102,11 +120,18 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NModal, useDialog, useMessage } from 'naive-ui'
 import { gitApi, type GitFileDiff, type GitTurnChanges } from '@/api/git'
 import { useI18n } from '@/composables/useI18n'
 import GitDiffViewer from '@/components/chat/GitDiffViewer.vue'
+
+const FILE_LIST_DEFAULT_WIDTH = 260
+const FILE_LIST_MIN_WIDTH = 180
+// 右侧差异区保留的最小宽度，决定左栏能被拖多宽。
+const FILE_LIST_CONTENT_MIN_WIDTH = 320
+const SPLITTER_WIDTH = 12
+const FILE_LIST_WIDTH_STORAGE_KEY = 'combo.gitReviewFileListWidth'
 
 const props = defineProps<{ changes: GitTurnChanges }>()
 const { t } = useI18n()
@@ -151,6 +176,96 @@ async function selectFile(path: string) {
     diffLoading.value = false
   }
 }
+
+// 左栏宽度可拖动调整；拖动只在当前会话内即时生效，松手后写入本地偏好。
+const workspaceEl = ref<HTMLElement | null>(null)
+const fileListWidth = ref(readStoredFileListWidth())
+const fileListMaxWidth = ref(FILE_LIST_DEFAULT_WIDTH)
+let resizing = false
+
+function readStoredFileListWidth(): number {
+  if (typeof window === 'undefined') return FILE_LIST_DEFAULT_WIDTH
+  const value = Number(window.localStorage.getItem(FILE_LIST_WIDTH_STORAGE_KEY))
+  return Number.isFinite(value) && value > 0 ? value : FILE_LIST_DEFAULT_WIDTH
+}
+
+function maximumFileListWidth(): number {
+  const width = workspaceEl.value?.clientWidth ?? 0
+  if (!width) return fileListMaxWidth.value
+  return Math.max(
+    FILE_LIST_MIN_WIDTH,
+    Math.round(width - SPLITTER_WIDTH - FILE_LIST_CONTENT_MIN_WIDTH),
+  )
+}
+
+function applyFileListWidth(value: number): void {
+  fileListMaxWidth.value = maximumFileListWidth()
+  fileListWidth.value = Math.min(
+    Math.max(Math.round(value), FILE_LIST_MIN_WIDTH),
+    fileListMaxWidth.value,
+  )
+}
+
+function persistFileListWidth(): void {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(FILE_LIST_WIDTH_STORAGE_KEY, String(fileListWidth.value))
+}
+
+function startResize(event: PointerEvent): void {
+  if (event.button !== 0) return
+  event.preventDefault()
+  resizing = true
+  window.addEventListener('pointermove', handleResizeMove)
+  window.addEventListener('pointerup', stopResize)
+  window.addEventListener('pointercancel', stopResize)
+}
+
+function handleResizeMove(event: PointerEvent): void {
+  if (!resizing) return
+  const rect = workspaceEl.value?.getBoundingClientRect()
+  if (!rect) return
+  applyFileListWidth(event.clientX - rect.left)
+}
+
+function stopResize(): void {
+  if (!resizing) return
+  resizing = false
+  window.removeEventListener('pointermove', handleResizeMove)
+  window.removeEventListener('pointerup', stopResize)
+  window.removeEventListener('pointercancel', stopResize)
+  persistFileListWidth()
+}
+
+function resetFileListWidth(): void {
+  applyFileListWidth(FILE_LIST_DEFAULT_WIDTH)
+  persistFileListWidth()
+}
+
+function handleSplitterKeydown(event: KeyboardEvent): void {
+  const step = event.shiftKey ? 48 : 16
+  if (event.key === 'ArrowLeft') applyFileListWidth(fileListWidth.value - step)
+  else if (event.key === 'ArrowRight') applyFileListWidth(fileListWidth.value + step)
+  else if (event.key === 'Home') applyFileListWidth(FILE_LIST_MIN_WIDTH)
+  else if (event.key === 'End') applyFileListWidth(fileListMaxWidth.value)
+  else return
+  event.preventDefault()
+  persistFileListWidth()
+}
+
+function handleWindowResize(): void {
+  applyFileListWidth(fileListWidth.value)
+}
+
+// 弹窗打开后容器才有尺寸，此时才能算出有效的最大宽度。
+watch(reviewOpen, (open) => {
+  if (open) void nextTick(() => applyFileListWidth(fileListWidth.value))
+})
+
+onMounted(() => window.addEventListener('resize', handleWindowResize))
+onBeforeUnmount(() => {
+  stopResize()
+  window.removeEventListener('resize', handleWindowResize)
+})
 
 function confirmApply() {
   const reapply = reverted.value
@@ -229,7 +344,12 @@ function dirname(path: string): string {
 .git-review-shell { width: 100%; min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 12px; overflow: hidden; }
 .git-review-toolbar { display: flex; align-items: center; min-width: 0; }
 .review-total { flex: 0 0 auto; padding: 9px 13px; border: 1px solid var(--app-border); border-radius: var(--app-radius-pill); color: var(--app-text-secondary); }
-.git-review-workspace { height: clamp(360px, 65vh, 680px); max-height: calc(100vh - 190px); min-width: 0; min-height: 0; display: grid; grid-template-columns: minmax(210px, 260px) minmax(0, 1fr); align-items: stretch; gap: 12px; overflow: hidden; }
+.git-review-workspace { height: clamp(360px, 65vh, 680px); max-height: calc(100vh - 190px); min-width: 0; min-height: 0; display: grid; grid-template-columns: var(--review-file-list-width, 260px) 12px minmax(0, 1fr); align-items: stretch; gap: 0; overflow: hidden; }
+/* 左右分栏之间的可拖拽分隔条：命中区域宽 12px，视觉上是一条细线。 */
+.review-splitter { position: relative; min-width: 0; cursor: col-resize; touch-action: none; }
+.review-splitter::before { content: ''; position: absolute; top: 0; bottom: 0; left: 50%; width: 1px; background: var(--app-border); transform: translateX(-50%); transition: background .15s var(--app-transition-fast); }
+.review-splitter:hover::before, .review-splitter:focus-visible::before { width: 3px; border-radius: var(--app-radius-pill); background: var(--app-text-muted); }
+.review-splitter:focus-visible { outline: none; }
 .review-file-list { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 4px; padding: 5px; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--app-border); border-radius: var(--app-radius-lg); background: var(--app-surface-muted); }
 .review-file-list button { min-width: 0; flex: 0 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 10px 9px; border: 0; border-radius: var(--app-radius-md); background: transparent; color: var(--app-text-secondary); text-align: left; cursor: pointer; }
 .review-file-list button:hover { background: var(--app-surface-hover); }
@@ -240,5 +360,5 @@ function dirname(path: string): string {
 .git-review-content { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; border: 1px solid var(--app-border); border-radius: var(--app-radius-lg); background: var(--app-surface); }
 .git-review-path { overflow: hidden; padding: 11px 14px; border-bottom: 1px solid var(--app-border); color: var(--app-text-muted); font: 11px/1.4 var(--app-font-mono); text-overflow: ellipsis; white-space: nowrap; }
 .git-review-content :deep(.git-diff-viewer) { border: 0; border-radius: 0; }
-@media (max-width: 820px) { .git-change-summary { align-items: flex-start; flex-wrap: wrap; }.git-change-actions { width: 100%; margin-left: 60px; }.git-review-workspace { grid-template-columns: 1fr; grid-template-rows: minmax(110px, 26%) minmax(0, 1fr); }.review-file-list { display: grid; grid-auto-rows: min-content; } }
+@media (max-width: 820px) { .git-change-summary { align-items: flex-start; flex-wrap: wrap; }.git-change-actions { width: 100%; margin-left: 60px; }.git-review-workspace { grid-template-columns: 1fr; grid-template-rows: minmax(110px, 26%) minmax(0, 1fr); }.review-splitter { display: none; }.review-file-list { display: grid; grid-auto-rows: min-content; } }
 </style>

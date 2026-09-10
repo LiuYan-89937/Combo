@@ -25,10 +25,17 @@ def redact_sensitive_value(value: Any, *, field_name: str | None = None) -> Any:
     if field_name is not None and _SENSITIVE_NAME.search(field_name):
         return "[redacted]"
     if isinstance(value, dict):
-        return {
+        redacted = {
             str(key): redact_sensitive_value(item, field_name=str(key))
             for key, item in value.items()
         }
+        # Header-shaped records ({"name": "Authorization", "value": "..."}) carry
+        # the secret in a sibling field, so keying off the field name alone would
+        # leak it.
+        name = value.get("name")
+        if isinstance(name, str) and _SENSITIVE_NAME.search(name) and "value" in redacted:
+            redacted["value"] = "[redacted]"
+        return redacted
     if isinstance(value, list):
         return [redact_sensitive_value(item) for item in value]
     if isinstance(value, tuple):

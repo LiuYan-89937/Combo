@@ -326,10 +326,17 @@ class DynamicRuntimeService:
             }
         )
 
+        main_model = self._resolve_frozen_model(latest_runtime)
+        compression_model = self._resolve_frozen_compression_model(
+            latest_runtime,
+            fallback=main_model,
+        )
         compressed_messages, report = maybe_compress_messages(
             messages=graph_messages,
             policy=compression_policy,
             node_id="manual_context_compression",
+            summary_model=compression_model.model,
+            summary_model_max_output_tokens=compression_model.settings.max_output_tokens,
             force=True,
         )
         report_payload = report.model_dump(mode="json")
@@ -419,10 +426,15 @@ class DynamicRuntimeService:
             canonical_messages, current_user_message = self._runtime_input(claimed_instance)
             graph = self._service_set.graph_for(claimed_instance.request.strategy)
             resolved_model = self._resolve_frozen_model(claimed_instance)
+            compression_model = self._resolve_frozen_compression_model(
+                claimed_instance,
+                fallback=resolved_model,
+            )
             register_runtime_model_handle(
                 self._service_set.model_handles,
                 runtime_instance_id=claimed_instance.runtime_instance_id,
                 resolved=resolved_model,
+                compression_resolved=compression_model,
             )
             model_registered = True
             config = {
@@ -778,9 +790,30 @@ class DynamicRuntimeService:
             expected_profile_revision=frozen.profile_revision,
             expected_credential_revision=frozen.credential_revision,
             reasoning_intensity=instance.request.policy_snapshot.reasoning_intensity,
+            session_id=instance.request.session_id,
         )
         if resolved.snapshot != frozen:
             raise RuntimeError("resolved model does not match the runtime policy snapshot")
+        return resolved
+
+    def _resolve_frozen_compression_model(
+        self,
+        instance: RuntimeInstance,
+        *,
+        fallback: Any,
+    ):
+        frozen = instance.request.policy_snapshot.compression_model
+        if frozen is None:
+            return fallback
+        resolved = self._model_resolver.resolve_chat_model(
+            operation=frozen.operation,
+            profile_id=frozen.profile_id,
+            expected_profile_revision=frozen.profile_revision,
+            expected_credential_revision=frozen.credential_revision,
+            session_id=instance.request.session_id,
+        )
+        if resolved.snapshot != frozen:
+            raise RuntimeError("resolved compression model does not match the runtime policy snapshot")
         return resolved
 
 

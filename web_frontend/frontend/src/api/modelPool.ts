@@ -25,6 +25,12 @@ export interface ModelProviderProfile {
   notes: string[]
 }
 
+export interface ModelPoolCredentialHeader {
+  name: string
+  value: string
+  default_value: string
+}
+
 export interface ModelPoolCredential {
   credential_id: string
   display_name: string
@@ -33,6 +39,7 @@ export interface ModelPoolCredential {
   api_key_masked: string
   api_key_fingerprint: string
   has_api_key: boolean
+  headers: ModelPoolCredentialHeader[]
   enabled: boolean
   revision: number
   created_at: string
@@ -247,7 +254,7 @@ export const modelPoolApi = {
       method: 'DELETE',
     }),
   pingProfile: (profileId: string) =>
-    requestJson<{ status: 'ok'; profile_id: string; latency_ms: number; response_preview?: string; dimensions?: number; image_base64?: string; mime_type?: string }>(
+    requestJson<{ status: 'ok'; profile_id: string; latency_ms: number; response_preview?: string; dimensions?: number; image_base64?: string; mime_type?: string; custom_headers_applied?: string[]; custom_headers_skipped?: string[] }>(
       `/api/model-pool/profiles/${encodeURIComponent(profileId)}/ping`,
       { method: 'POST' },
     ),

@@ -90,6 +90,10 @@ class ContextSystemRuntime:
             model_role=model_role,
         )
         compression_result_counter = _compression_result_counter(services=services)
+        summary_model, summary_model_max_output_tokens = _runtime_compression_model(
+            services,
+            state=working_state,
+        )
         compression_messages, compression_report = maybe_compress_messages(
             messages=working_messages,
             policy=compression_policy,
@@ -104,6 +108,8 @@ class ContextSystemRuntime:
                 node_id=node_id,
                 payload=report.model_dump(mode="json"),
             ),
+            summary_model=summary_model,
+            summary_model_max_output_tokens=summary_model_max_output_tokens,
         )
         compression_event_type = {
             "completed": "context_compression_completed",
@@ -374,6 +380,16 @@ def _runtime_model_operation(services: Any, *, state: Any) -> str:
     if callable(resolver):
         return str(resolver(state))
     return "main_turn" if bool(getattr(service, "authoritative_runtime_model", False)) else "main"
+
+
+def _runtime_compression_model(
+    services: Any,
+    *,
+    state: Any,
+) -> tuple[Any | None, int | None]:
+    service = getattr(services, "model_operation_service", None)
+    resolver = getattr(service, "compression_model_for_state", None)
+    return resolver(state) if callable(resolver) else (None, None)
 
 
 def _reusable_turn_evidence_frame(*, state: Any, node_id: str) -> LLMContextFrame | None:

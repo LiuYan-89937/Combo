@@ -85,6 +85,7 @@ class RuntimePreferencesWrite(BaseModel):
     memory_agent_write_enabled: bool | None = None
     memory_max_injected_items: int | None = Field(default=None, ge=1, le=64)
     memory_max_injected_tokens: int | None = Field(default=None, ge=100, le=32000)
+    computer_use_enabled: bool | None = None
 
 
 class MemoryDeleteRequest(BaseModel):
@@ -481,6 +482,7 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
             memory_agent_write_enabled=payload.memory_agent_write_enabled if payload.memory_agent_write_enabled is not None else current.memory_agent_write_enabled if current else True,
             memory_max_injected_items=payload.memory_max_injected_items if payload.memory_max_injected_items is not None else current.memory_max_injected_items if current else 8,
             memory_max_injected_tokens=payload.memory_max_injected_tokens if payload.memory_max_injected_tokens is not None else current.memory_max_injected_tokens if current else 1200,
+            computer_use_enabled=payload.computer_use_enabled if payload.computer_use_enabled is not None else current.computer_use_enabled if current else False,
             max_temporary_delegation_depth=current.max_temporary_delegation_depth if current else 0,
             delegation_grant_ttl_seconds=current.delegation_grant_ttl_seconds if current else 900,
             locale=locale,
@@ -1399,6 +1401,7 @@ def _synchronize_policy(
         memory_agent_write_enabled=current.memory_agent_write_enabled if current else True,
         memory_max_injected_items=current.memory_max_injected_items if current else 8,
         memory_max_injected_tokens=current.memory_max_injected_tokens if current else 1200,
+        computer_use_enabled=current.computer_use_enabled if current else False,
         max_temporary_delegation_depth=current.max_temporary_delegation_depth if current else 0,
         delegation_grant_ttl_seconds=current.delegation_grant_ttl_seconds if current else 900,
         locale=normalize_runtime_locale(locale),
@@ -2032,6 +2035,7 @@ def _runtime_preferences_view(policy: UserRuntimePolicy | None) -> dict[str, Any
         "memory_agent_write_enabled": policy.memory_agent_write_enabled if policy else True,
         "memory_max_injected_items": policy.memory_max_injected_items if policy else 8,
         "memory_max_injected_tokens": policy.memory_max_injected_tokens if policy else 1200,
+        "computer_use_enabled": policy.computer_use_enabled if policy else False,
         "updated_at": policy.updated_at if policy else None,
     }
 

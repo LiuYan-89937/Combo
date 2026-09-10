@@ -306,6 +306,59 @@
         <section class="settings-group">
           <header class="group-header">
             <div class="group-icon" aria-hidden="true">
+              <n-icon size="18"><DesktopOutline /></n-icon>
+            </div>
+            <div class="group-title-block">
+              <div class="group-title">{{ t('settings.groupComputerUse') }}</div>
+            </div>
+          </header>
+
+          <div class="group-body">
+            <div class="field-row">
+              <div class="field-copy">
+                <label class="field-label">{{ t('settings.computerUseEnabled') }}</label>
+                <p class="field-status">{{ computerUseStatusText }}</p>
+              </div>
+              <n-switch
+                :value="computerPermissions.enabled"
+                :loading="computerUseBusy"
+                @update:value="toggleComputerUse"
+              />
+            </div>
+
+            <div class="field-divider" aria-hidden="true"></div>
+
+            <div
+              v-for="permission in computerUsePermissions"
+              :key="permission"
+              class="field-row"
+            >
+              <div class="field-copy">
+                <label class="field-label">{{ t(`computerPermissions.${permission}`) }}</label>
+              </div>
+              <n-button
+                secondary
+                :disabled="computerPermissions.busy || computerPermissions.status?.[permission]"
+                @click="requestComputerUsePermission(permission)"
+              >
+                {{ t(computerPermissions.status?.[permission] ? 'computerPermissions.granted' : 'computerPermissions.authorize') }}
+              </n-button>
+            </div>
+
+            <p class="field-status">{{ t('computerPermissions.recheckHint') }}</p>
+            <p v-if="computerPermissions.error" class="field-error">{{ computerPermissions.error }}</p>
+
+            <div class="settings-action-row">
+              <n-button secondary :disabled="computerPermissions.busy" @click="recheckComputerUse">
+                {{ t('computerPermissions.recheck') }}
+              </n-button>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-group">
+          <header class="group-header">
+            <div class="group-icon" aria-hidden="true">
               <n-icon size="18"><ServerOutline /></n-icon>
             </div>
             <div class="group-title-block">
@@ -405,10 +458,11 @@ import {
   NSwitch,
   useDialog,
 } from 'naive-ui'
-import { ChatbubbleEllipsesOutline, ColorPalette, NotificationsOutline, Refresh, ServerOutline, Time, TrashOutline } from '@/components/icons'
+import { ChatbubbleEllipsesOutline, ColorPalette, DesktopOutline, NotificationsOutline, Refresh, ServerOutline, Time, TrashOutline } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import { useUiStore } from '@/stores/ui'
 import { useRuntimePreferencesStore } from '@/stores/runtimePreferences'
+import { useComputerPermissionsStore } from '@/stores/computerPermissions'
 import {
   useTaskNotificationPreferencesStore,
   type TaskNotificationCategory,
@@ -437,6 +491,7 @@ const emit = defineEmits<{
 const uiStore = useUiStore()
 const router = useRouter()
 const runtimePreferences = useRuntimePreferencesStore()
+const computerPermissions = useComputerPermissionsStore()
 const taskNotificationPreferences = useTaskNotificationPreferencesStore()
 const appUpdateStore = useAppUpdateStore()
 const agentStore = useAgentStore()
@@ -452,6 +507,34 @@ const conversationStorageError = ref('')
 const knowledgeSettings = ref<KnowledgeRetrievalSettings | null>(null)
 const knowledgeSettingsError = ref('')
 const savingKnowledgeSettings = ref(false)
+const computerUseBusy = ref(false)
+const computerUsePermissions = ['accessibility', 'screen_recording'] as const
+
+const computerUseStatusText = computed(() => {
+  if (!computerPermissions.enabled) return t('settings.computerUseStatusOff')
+  return computerPermissions.granted
+    ? t('settings.computerUseStatusOn')
+    : t('settings.computerUseStatusPermissionMissing')
+})
+
+async function toggleComputerUse(value: boolean) {
+  if (computerUseBusy.value) return
+  computerUseBusy.value = true
+  try {
+    if (value) await computerPermissions.enable()
+    else computerPermissions.disable()
+  } finally {
+    computerUseBusy.value = false
+  }
+}
+
+function requestComputerUsePermission(permission: 'accessibility' | 'screen_recording') {
+  void computerPermissions.request(permission)
+}
+
+function recheckComputerUse() {
+  void computerPermissions.check()
+}
 
 onMounted(() => {
   void appUpdateStore.loadCurrentVersion()
@@ -463,6 +546,7 @@ watch(() => props.show, visible => {
   if (visible) {
     void loadConversationUsage()
     void loadKnowledgeRetrievalSettings()
+    void computerPermissions.check()
   }
 })
 

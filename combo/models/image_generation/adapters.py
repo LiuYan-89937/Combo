@@ -46,7 +46,7 @@ class OpenAIImageAdapter:
         )
         response = _client(self.settings).post(
             _endpoint(self.settings.base_url, "/images/generations"),
-            headers=_json_headers(self.settings.api_key),
+            headers=_json_headers(self.settings),
             json=payload,
         )
         return _parse_openai_image_sources(_raise_json(response))
@@ -69,7 +69,7 @@ class OpenAIImageAdapter:
         )
         response = _client(self.settings).post(
             _endpoint(self.settings.base_url, "/images/edits"),
-            headers=_auth_headers(self.settings.api_key),
+            headers=_auth_headers(self.settings),
             data={key: str(value) for key, value in data.items()},
             files=files,
         )
@@ -107,7 +107,7 @@ class DashScopeWanxImageAdapter:
         }
         response = _client(self.settings).post(
             _endpoint(self.settings.base_url, "/services/aigc/multimodal-generation/generation"),
-            headers=_json_headers(self.settings.api_key),
+            headers=_json_headers(self.settings),
             json=payload,
         )
         body = _raise_json(response)
@@ -123,7 +123,7 @@ class DashScopeWanxImageAdapter:
         while time.monotonic() < deadline:
             response = _client(self.settings).get(
                 _endpoint(self.settings.base_url, poll_path),
-                headers=_auth_headers(self.settings.api_key),
+                headers=_auth_headers(self.settings),
             )
             body = _raise_json(response)
             last_body = body
@@ -161,7 +161,7 @@ class VolcengineSeedreamImageAdapter:
         payload.pop("endpoint_path", None)
         response = _client(self.settings).post(
             _endpoint(self.settings.base_url, endpoint_path),
-            headers=_json_headers(self.settings.api_key),
+            headers=_json_headers(self.settings),
             json=payload,
         )
         return _parse_openai_image_sources(_raise_json(response))
@@ -182,7 +182,7 @@ class VolcengineSeedreamImageAdapter:
         payload.pop("endpoint_path", None)
         response = _client(self.settings).post(
             _endpoint(self.settings.base_url, endpoint_path),
-            headers=_json_headers(self.settings.api_key),
+            headers=_json_headers(self.settings),
             json=payload,
         )
         return _parse_nested_image_sources(_raise_json(response))
@@ -205,12 +205,14 @@ def _timeout(settings: ImageGenerationSettings) -> float:
     return float(settings.timeout_seconds or 120.0)
 
 
-def _auth_headers(api_key: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {api_key}"}
+def _auth_headers(settings: ImageGenerationSettings) -> dict[str, str]:
+    headers = {"Authorization": f"Bearer {settings.api_key}"}
+    headers.update(dict(settings.headers or {}))
+    return headers
 
 
-def _json_headers(api_key: str) -> dict[str, str]:
-    return {**_auth_headers(api_key), "Content-Type": "application/json"}
+def _json_headers(settings: ImageGenerationSettings) -> dict[str, str]:
+    return {**_auth_headers(settings), "Content-Type": "application/json"}
 
 
 def _endpoint(base_url: str, default_path: str) -> str:

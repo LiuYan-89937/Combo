@@ -29,6 +29,7 @@
 
             <template v-for="item in timelineItems" :key="item.id">
               <MessageItem
+                :data-anchor-id="item.id"
                 :message="item.message"
                 :messages="item.messages"
                 :streaming="isTimelineItemStreaming(item)"
@@ -46,6 +47,37 @@
 
           </div>
         </n-scrollbar>
+        <div class="outline-dock">
+          <n-popover
+            v-if="showOutlineToggle"
+            trigger="click"
+            :show="showOutline"
+            placement="bottom-end"
+            :show-arrow="false"
+            raw
+            @update:show="showOutline = $event"
+          >
+            <template #trigger>
+              <n-button
+                class="outline-toggle-button"
+                circle
+                size="small"
+                :aria-label="t('outline.title')"
+                :title="t('outline.title')"
+              >
+                <template #icon>
+                  <n-icon><ListOutline /></n-icon>
+                </template>
+              </n-button>
+            </template>
+            <div class="outline-panel-shell">
+              <ConversationOutline
+                :active-anchor-id="activeAnchorId"
+                @jump="jumpToAnchor"
+              />
+            </div>
+          </n-popover>
+        </div>
         <n-button
           v-if="showScrollToLatest"
           class="scroll-latest-button"
@@ -129,7 +161,7 @@
 <script setup lang="ts">
 import { computed, ref, onBeforeUnmount, onMounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NButton, NIcon, NScrollbar } from 'naive-ui'
+import { NButton, NIcon, NPopover, NScrollbar } from 'naive-ui'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useAgentStore } from '@/stores/agent'
 import { useI18n } from '@/composables/useI18n'
@@ -143,6 +175,7 @@ import CurrentActivitySummary from '@/components/chat/CurrentActivitySummary.vue
 import ToolApprovalPanel from '@/components/chat/ToolApprovalPanel.vue'
 import QuestionInterruptPanel from '@/components/chat/QuestionInterruptPanel.vue'
 import ConversationFloatingDock from '@/components/chat/ConversationFloatingDock.vue'
+import ConversationOutline from '@/components/chat/ConversationOutline.vue'
 import NewAgentSessionDialog from '@/components/agent/NewAgentSessionDialog.vue'
 import ContextProgressControl from '@/components/chat/ContextProgressControl.vue'
 import ComboMascot from '@/components/brand/ComboMascot.vue'
@@ -157,7 +190,7 @@ import { workspaceApi } from '@/api/workspace'
 import { SYSTEM_CHAT_PACKAGE_ID } from '@/utils/resourceScope'
 import { agentPackageConversationScope } from '@/stores/runtime/scopes'
 import { useAgentSessionNavigation } from '@/composables/agent/useAgentSessionNavigation'
-import { ArrowDownOutline } from '@/components/icons'
+import { ArrowDownOutline, ListOutline } from '@/components/icons'
 
 const runtimeStore = useRuntimeStore()
 const agentStore = useAgentStore()
@@ -187,6 +220,9 @@ const latestScrollTop = ref<number | null>(null)
 const bottomLockEpsilonPx = 1
 const upwardScrollEpsilonPx = 0.5
 let userScrollIntentUntil = 0
+const showOutline = ref(false)
+const activeAnchorId = ref<string | null>(null)
+let activeAnchorFrame: number | null = null
 type PendingWorkspaceAction = {
   kind: 'new_session'
   packageId: string
@@ -241,6 +277,12 @@ const {
 
 const backgroundTaskSessionId = computed(() => (
   runtimeStore.activeAgentSessionId || runtimeStore.activeMainSessionId || null
+))
+
+// One anchor per user turn is what makes a long transcript navigable; a single
+// turn alone does not need an outline yet.
+const showOutlineToggle = computed(() => (
+  timelineItems.value.filter(item => item.message.role === 'user').length > 1
 ))
 
 
@@ -351,6 +393,7 @@ function handleMessagesScroll() {
   const currentScrollTop = container.scrollTop
   const previousScrollTop = latestScrollTop.value
   latestScrollTop.value = currentScrollTop
+  scheduleActiveAnchorUpdate()
   const userInitiated = Date.now() <= userScrollIntentUntil
   const movedUp = previousScrollTop !== null
     && currentScrollTop < previousScrollTop - upwardScrollEpsilonPx
@@ -407,6 +450,50 @@ function jumpToLatest() {
   nextTick(() => scrollToBottom('smooth'))
 }
 
+function timelineAnchors(): HTMLElement[] {
+  const list = messagesListRef.value
+  if (!list) return []
+  return Array.from(list.querySelectorAll<HTMLElement>('[data-anchor-id]'))
+}
+
+// The outline highlight tracks the reading position, but scroll events fire many
+// times per second while streaming; rAF keeps the layout reads cheap.
+function scheduleActiveAnchorUpdate() {
+  if (activeAnchorFrame !== null) return
+  activeAnchorFrame = window.requestAnimationFrame(() => {
+    activeAnchorFrame = null
+    updateActiveAnchor()
+  })
+}
+
+function updateActiveAnchor() {
+  const container = scrollContainer()
+  const anchors = timelineAnchors()
+  if (!container || anchors.length === 0) {
+    activeAnchorId.value = null
+    return
+  }
+  const threshold = container.getBoundingClientRect().top + 96
+  let active = anchors[0].dataset.anchorId ?? null
+  for (const anchor of anchors) {
+    if (anchor.getBoundingClientRect().top > threshold) break
+    active = anchor.dataset.anchorId ?? active
+  }
+  activeAnchorId.value = active
+}
+
+function jumpToAnchor(anchorId: string) {
+  const container = scrollContainer()
+  const anchor = timelineAnchors().find(element => element.dataset.anchorId === anchorId)
+  if (!container || !anchor) return
+  // Jumping into history is an explicit "I am reading now", so stop tail-following
+  // instead of letting the next stream chunk pull the viewport back down.
+  followsLatestMessage.value = false
+  const offset = anchor.getBoundingClientRect().top - container.getBoundingClientRect().top
+  scrollbarRef.value?.scrollTo({ top: Math.max(0, container.scrollTop + offset - 12), behavior: 'smooth' })
+  activeAnchorId.value = anchorId
+}
+
 function followBottomIfNeeded() {
   if (!followsLatestMessage.value || followBottomScheduled) return
   followBottomScheduled = true
@@ -457,6 +544,8 @@ onBeforeUnmount(() => {
   if (followBottomFrame !== null) window.cancelAnimationFrame(followBottomFrame)
   followBottomFrame = null
   followBottomScheduled = false
+  if (activeAnchorFrame !== null) window.cancelAnimationFrame(activeAnchorFrame)
+  activeAnchorFrame = null
   messagesResizeObserver?.disconnect()
   messagesResizeObserver = null
   composerResizeObserver?.disconnect()
@@ -486,7 +575,10 @@ async function captureCompletedGitTurns() {
 // 补充 Markdown、图片和折叠面板完成异步布局后的变化。
 watch(
   () => activeStreamContentKey.value,
-  followBottomIfNeeded,
+  () => {
+    followBottomIfNeeded()
+    scheduleActiveAnchorUpdate()
+  },
 )
 
 watch(
@@ -498,7 +590,12 @@ watch(
   () => {
     // 切换会话时从“最新位置”开始，不继承上一个会话的阅读状态。
     resumeLatestMessageFollow()
-    nextTick(() => followBottomIfNeeded())
+    activeAnchorId.value = null
+    showOutline.value = false
+    nextTick(() => {
+      followBottomIfNeeded()
+      scheduleActiveAnchorUpdate()
+    })
   },
 )
 
@@ -514,6 +611,7 @@ onMounted(async () => {
   await nextTick()
   observeMessagesSize()
   observeComposerSize()
+  scheduleActiveAnchorUpdate()
 
   if (!route.meta.showcaseMode) {
     nextTick(() => {
@@ -684,6 +782,45 @@ function routeParamText(value: unknown): string | null {
   border-color: var(--app-text);
   color: var(--app-text);
   transform: translateY(-2px);
+}
+
+.outline-dock {
+  position: absolute;
+  top: 6px;
+  right: 14px;
+  z-index: 4;
+}
+
+.outline-toggle-button {
+  border: 1px solid var(--app-border);
+  background: var(--app-surface-elevated);
+  color: var(--app-text-secondary);
+  box-shadow: none;
+  transition: color var(--app-transition-base), border-color var(--app-transition-base), transform var(--app-transition-spring);
+}
+
+.outline-toggle-button:hover {
+  border-color: var(--app-text);
+  color: var(--app-text);
+  transform: translateY(-2px);
+}
+
+.outline-panel-shell {
+  overflow: hidden;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-lg);
+  background: var(--app-surface);
+  box-shadow: 0 24px 64px color-mix(in srgb, var(--app-text) 16%, transparent);
+  animation: outline-panel-enter .24s cubic-bezier(.16, 1, .3, 1) both;
+}
+
+@keyframes outline-panel-enter {
+  from { opacity: 0; transform: translateY(-7px) scale(.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .outline-panel-shell { animation: none; }
 }
 
 .chat-empty {

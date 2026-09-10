@@ -32,7 +32,7 @@ from combo.tooling.builtins.skillhub.specs import get_skillhub_tool_specs
 from combo.tooling.builtins.skill.specs import get_skill_tool_specs
 from combo.tooling.builtins.skill_installer.specs import get_skill_installer_tool_specs
 from combo.tooling.builtins.tool_output.specs import get_tool_output_tool_specs
-from combo.tooling.builtins.presentations import presentations_for_builtin
+from combo.tooling.builtins.localization import localized_model_copy_for_builtin
 from combo.tooling.output_store import TOOL_OUTPUT_STORE_RESOURCE
 from combo.tooling.spec import ToolSpec
 
@@ -114,6 +114,9 @@ class BuiltinToolCapabilitySource:
         })
         description = str(override.get("description") or spec.description).strip()
         display_name = str(override.get("display_name") or spec.id).strip()
+        localized_descriptions, localized_guidance = localized_model_copy_for_builtin(spec)
+        if "description" in override:
+            localized_descriptions = {}
         package_files, package_digest = self._package_files(
             spec=spec,
             display_name=display_name,
@@ -124,8 +127,9 @@ class BuiltinToolCapabilitySource:
             model_alias=spec.id,
             model_description=description,
             schema_error_guidance=spec.schema_error_guidance,
+            localized_model_descriptions=localized_descriptions,
+            localized_schema_error_guidance=localized_guidance,
             input_schema=spec.input_schema,
-            presentations=presentations_for_builtin(spec),
             output_schema=spec.output_schema,
             execution_mode=spec.execution_mode,
             implementation=ToolImplementation(
@@ -158,7 +162,7 @@ class BuiltinToolCapabilitySource:
                 display_name=display_name,
                 description=description,
                 keywords=tuple(dict.fromkeys((spec.id, *spec.effects))),
-                definition_schema="tool_definition.v2",
+                definition_schema="tool_definition.v3",
                 definition=definition.model_dump(mode="json"),
             ),
             updated_by_principal_id=config.publisher_principal_id,

@@ -16,6 +16,7 @@ class ImageGenerationSettings:
     profile_id: str = ""
     source: str = "model_pool"
     timeout_seconds: float | None = None
+    headers: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)

@@ -16,7 +16,10 @@ from combo.dynamic_runtime.capability_search_contracts import (
 from combo.dynamic_runtime.capability_search_documents import (
     search_candidates_from_active_capabilities,
 )
-from combo.dynamic_runtime.delegation_policy import TEMPORARY_RUNTIME_ONLY_CAPABILITY_IDS
+from combo.dynamic_runtime.delegation_policy import (
+    TEMPORARY_RUNTIME_ONLY_CAPABILITY_IDS,
+    computer_use_excluded_capability_ids,
+)
 from combo.dynamic_runtime.model_service import ResolvedRuntimePolicy
 from combo.dynamic_runtime.mcp_gateway import MCPGateway
 from combo.runtime_protocol import (
@@ -185,6 +188,10 @@ class MainTurnCapabilityResolver:
         resolved_workspace_id = _require_text(workspace_id, "workspace_id")
         if policy.snapshot.principal_id != principal_id:
             raise CapabilityResolutionError("runtime policy principal differs from command principal")
+        excluded_capability_ids = (
+            frozenset(excluded_capability_ids)
+            | computer_use_excluded_capability_ids(policy.snapshot.computer_use_enabled)
+        )
 
         active = self._store.active_capabilities()
         active_by_id = {item.revision.capability_id: item for item in active}

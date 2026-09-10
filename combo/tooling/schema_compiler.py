@@ -141,6 +141,15 @@ def _format_error(error: Any) -> str:
         missing = [str(name) for name in error.validator_value if name not in error.instance]
         if len(missing) == 1:
             return f"{_location([*path, missing[0]])}: required property is missing"
+    if error.validator == "additionalProperties" and isinstance(error.instance, dict):
+        schema = error.schema if isinstance(error.schema, dict) else {}
+        properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+        unexpected = sorted(str(name) for name in set(error.instance) - set(properties))
+        if unexpected:
+            return "; ".join(
+                f"{_location([*path, name])}: property is not allowed"
+                for name in unexpected
+            )
     location = _location(path)
     validator = str(error.validator or "schema")
     constraint = error.validator_value

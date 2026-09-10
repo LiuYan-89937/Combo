@@ -279,6 +279,35 @@
           >
             <n-input v-model:value="credentialForm.api_key" type="password" show-password-on="mousedown" :placeholder="t('modelPool.apiKeyPlaceholder')" />
           </n-form-item>
+          <n-collapse class="credential-advanced">
+            <n-collapse-item name="advanced" :title="t('modelPool.advancedSettings')">
+              <n-text depth="3" class="credential-advanced__hint">{{ t('modelPool.customHeadersHint') }}</n-text>
+              <div class="credential-header-list">
+                <div v-for="(header, index) in credentialForm.headers" :key="index" class="credential-header-row">
+                  <n-input
+                    v-model:value="header.name"
+                    class="credential-header-row__name"
+                    :placeholder="t('modelPool.headerNamePlaceholder')"
+                  />
+                  <div class="credential-header-row__value">
+                    <n-input
+                      v-model:value="header.value"
+                      :placeholder="t('modelPool.headerValuePlaceholder')"
+                    />
+                    <n-input
+                      v-model:value="header.default_value"
+                      :placeholder="t('modelPool.headerDefaultPlaceholder')"
+                    />
+                  </div>
+                  <n-button quaternary size="small" :title="t('modelPool.removeHeader')" @click="removeCredentialHeader(index)">
+                    <template #icon><n-icon><TrashOutline /></n-icon></template>
+                  </n-button>
+                </div>
+                <n-button dashed size="small" @click="addCredentialHeader">{{ t('modelPool.addHeader') }}</n-button>
+              </div>
+              <n-text depth="3" class="credential-advanced__vars">{{ t('modelPool.headerVariablesHint') }}</n-text>
+            </n-collapse-item>
+          </n-collapse>
         </section>
       </n-form>
       <template #footer>
@@ -454,6 +483,8 @@ import VChart from 'vue-echarts'
 import {
   NButton,
   NCheckbox,
+  NCollapse,
+  NCollapseItem,
   NDataTable,
   NEmpty,
   NForm,
@@ -480,10 +511,11 @@ import {
   type FormInst,
   type FormRules,
 } from 'naive-ui'
-import { Add, Pulse, Refresh } from '@/components/icons'
+import { Add, Pulse, Refresh, TrashOutline } from '@/components/icons'
 import {
   modelPoolApi,
   type ModelPoolCredential,
+  type ModelPoolCredentialHeader,
   type ModelPoolProfile,
   type ModelPoolDefaults,
   type ModelProviderProfile,
@@ -550,6 +582,7 @@ const credentialForm = reactive({
   provider: '',
   base_url: '',
   api_key: '',
+  headers: [] as ModelPoolCredentialHeader[],
 })
 
 const profileForm = reactive({
@@ -833,12 +866,35 @@ async function saveInfrastructureBindings(): Promise<void> {
   }
 }
 
+function addCredentialHeader(): void {
+  credentialForm.headers.push({ name: '', value: '', default_value: '' })
+}
+
+function removeCredentialHeader(index: number): void {
+  credentialForm.headers.splice(index, 1)
+}
+
+function normalizedCredentialHeaders(): ModelPoolCredentialHeader[] {
+  return credentialForm.headers
+    .map((header) => ({
+      name: header.name.trim(),
+      value: header.value.trim(),
+      default_value: header.default_value.trim(),
+    }))
+    .filter((header) => header.name)
+}
+
 function openCredential(item?: ModelPoolCredential): void {
   credentialEditing.value = item || null
   credentialForm.display_name = item?.display_name || ''
   credentialForm.provider = item?.provider || providers.value[0]?.provider_id || ''
   credentialForm.base_url = item?.base_url || providerDefaultBaseUrl(credentialForm.provider)
   credentialForm.api_key = ''
+  credentialForm.headers = (item?.headers || []).map((header) => ({
+    name: header.name,
+    value: header.value,
+    default_value: header.default_value || '',
+  }))
   credentialModalOpen.value = true
   void nextTick(() => credentialFormRef.value?.restoreValidation())
 }
@@ -852,6 +908,7 @@ async function saveCredential(): Promise<void> {
       provider: credentialForm.provider,
       base_url: credentialForm.base_url,
       enabled: credentialEditing.value?.enabled ?? true,
+      headers: normalizedCredentialHeaders(),
     }
     if (credentialForm.api_key.trim()) payload.api_key = credentialForm.api_key.trim()
     if (credentialEditing.value) {
@@ -1034,6 +1091,9 @@ async function pingProfile(profile: ModelPoolProfile): Promise<void> {
       : profile.kind === 'image_generation'
         ? t('modelPool.imageConnectionSucceeded', { latency: result.latency_ms })
         : t('modelPool.connectionSucceeded', { latency: result.latency_ms }))
+    if (result.custom_headers_skipped?.length) {
+      message.info(t('modelPool.connectionSkippedHeaders', { count: result.custom_headers_skipped.length }))
+    }
   } catch (error) {
     message.error(error instanceof Error ? error.message : t('common.requestFailed'))
   } finally {
@@ -1411,6 +1471,59 @@ function formatCost(value: number | null | undefined): string {
 
 .manager-empty {
   padding: 48px 0;
+}
+
+.credential-advanced {
+  margin-top: 4px;
+}
+
+.credential-advanced__hint,
+.credential-advanced__vars {
+  display: block;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.credential-advanced__vars {
+  margin-top: 10px;
+  font-family: var(--app-font-mono);
+}
+
+.credential-header-list {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  margin: 10px 0;
+}
+
+.credential-header-row {
+  width: 100%;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--app-divider);
+  border-radius: var(--app-radius-md);
+}
+
+.credential-header-row__name {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+}
+
+.credential-header-row__value {
+  grid-column: 1;
+  grid-row: 2;
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.credential-header-row > .n-button {
+  grid-column: 2;
+  grid-row: 1;
 }
 .image-test-preview { display: grid; gap: 10px; justify-items: center; }.image-test-preview img { display: block; max-width: 100%; max-height: 520px; object-fit: contain; }
 

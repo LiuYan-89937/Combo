@@ -58,6 +58,8 @@ class RuntimeModelHandle:
     snapshot: ModelSelectionSnapshot
     model: Any
     settings: Any
+    compression_model: Any
+    compression_settings: Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -581,6 +583,16 @@ class ModelOperationService(ModelInvocationOperations):
     def operation_for_state(self, state: Any) -> str:
         _model, metadata = self._resolve_model(state=state)
         return str(metadata["model_operation"])
+
+    def compression_model_for_state(self, state: Any) -> tuple[Any, int | None]:
+        runtime_instance_id = str(
+            getattr(getattr(state, "run", None), "runtime_instance_id", "") or ""
+        ).strip()
+        handle = self._registry.require(runtime_instance_id)
+        return (
+            handle.compression_model,
+            getattr(handle.compression_settings, "max_output_tokens", None),
+        )
 
 
 def _emit(emit_event, event_type: str, payload: dict[str, Any]) -> None:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 import os
 from typing import TYPE_CHECKING, Any
@@ -24,6 +24,7 @@ class EmbeddingModelSettings:
     timeout_seconds: float | None = None
     profile_id: str | None = None
     source: str = "model_pool"
+    headers: dict[str, str] = field(default_factory=dict)
 
     @property
     def available(self) -> bool:
@@ -111,6 +112,8 @@ def _create_embedding_model(settings: EmbeddingModelSettings) -> Embeddings | No
     }
     if settings.timeout_seconds is not None:
         kwargs["timeout"] = settings.timeout_seconds
+    if settings.headers:
+        kwargs["default_headers"] = dict(settings.headers)
     return BatchedEmbeddings(
         OpenAIEmbeddings(**kwargs),
         batch_size=settings.batch_size,
@@ -159,6 +162,10 @@ def _model_pool_settings(
         if not credential.api_key:
             raise ValueError(f"embedding model credential has no API key: {credential.credential_id}")
         from combo.model_pool.resolver import resolve_protocol_base_url
+        from combo.model_pool.headers import (
+            credential_header_variables,
+            render_credential_headers,
+        )
 
         return EmbeddingModelSettings(
             provider=profile.provider,
@@ -170,6 +177,10 @@ def _model_pool_settings(
             timeout_seconds=profile.limits.timeout_seconds,
             profile_id=profile.profile_id,
             source="model_pool",
+            headers=render_credential_headers(
+                credential.headers,
+                variables=credential_header_variables(profile_id=profile.profile_id),
+            ),
         )
     except ImportError:
         return None

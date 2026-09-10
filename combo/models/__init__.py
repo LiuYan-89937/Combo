@@ -1,7 +1,6 @@
 from combo.models.chat_model import (
     ChatModelSettings,
     create_chat_model_from_settings,
-    get_compression_model,
     get_main_model,
     get_task_model,
     list_supported_chat_model_profiles,
@@ -49,7 +48,6 @@ __all__ = [
     "get_embedding_model",
     "get_embedding_model_settings",
     "resolve_embedding_model_profile",
-    "get_compression_model",
     "get_main_model",
     "get_task_model",
     "list_supported_chat_model_profiles",

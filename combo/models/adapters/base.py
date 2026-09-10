@@ -48,6 +48,9 @@ class OpenAICompatibleAdapter:
             kwargs["timeout"] = settings.timeout_seconds
         if getattr(settings, "max_output_tokens", None) is not None:
             kwargs["max_tokens"] = settings.max_output_tokens
+        headers = getattr(settings, "headers", None)
+        if headers:
+            kwargs["default_headers"] = dict(headers)
         return kwargs
 
 

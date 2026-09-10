@@ -212,6 +212,7 @@ class BoundDelegationRuntime:
                 else None
             ),
             reasoning_intensity=parent_policy.reasoning_intensity,
+            session_id=parent.request.session_id,
         )
         child_policy = parent_policy.model_copy(
             update={

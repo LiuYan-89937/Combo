@@ -21,6 +21,7 @@ export interface RuntimePreferences {
   memory_agent_write_enabled: boolean
   memory_max_injected_items: number
   memory_max_injected_tokens: number
+  computer_use_enabled: boolean
   updated_at: string | null
 }
 
@@ -42,6 +43,7 @@ export type RuntimePreferencesPatch = Partial<Pick<
   | 'memory_agent_write_enabled'
   | 'memory_max_injected_items'
   | 'memory_max_injected_tokens'
+  | 'computer_use_enabled'
 >>
 
 export const runtimePreferencesApi = {

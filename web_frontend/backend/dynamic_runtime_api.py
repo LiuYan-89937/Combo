@@ -282,6 +282,7 @@ class RuntimePolicyWriteRequest(BaseModel):
     memory_agent_write_enabled: bool = True
     memory_max_injected_items: int = Field(default=8, ge=1, le=64)
     memory_max_injected_tokens: int = Field(default=1200, ge=100, le=32000)
+    computer_use_enabled: bool | None = None
     max_temporary_delegation_depth: int = Field(ge=0)
     delegation_grant_ttl_seconds: int = Field(ge=1)
     timezone: str
@@ -1298,6 +1299,11 @@ def create_dynamic_runtime_router(
             memory_agent_write_enabled=payload.memory_agent_write_enabled,
             memory_max_injected_items=payload.memory_max_injected_items,
             memory_max_injected_tokens=payload.memory_max_injected_tokens,
+            computer_use_enabled=(
+                payload.computer_use_enabled
+                if payload.computer_use_enabled is not None
+                else current.computer_use_enabled if current is not None else False
+            ),
             max_temporary_delegation_depth=payload.max_temporary_delegation_depth,
             delegation_grant_ttl_seconds=payload.delegation_grant_ttl_seconds,
             locale=normalize_runtime_locale(request.headers.get("X-Combo-Locale")),

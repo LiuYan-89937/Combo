@@ -58,6 +58,7 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
   const memoryAgentWriteEnabled = ref(true)
   const memoryMaxInjectedItems = ref(DEFAULT_MEMORY_MAX_INJECTED_ITEMS)
   const memoryMaxInjectedTokens = ref(DEFAULT_MEMORY_MAX_INJECTED_TOKENS)
+  const computerUseEnabled = ref(false)
   const maxParallelSubAgentsSaveFailed = ref(false)
   const revision = ref(0)
   let pendingPatch: RuntimePreferencesPatch = {}
@@ -163,6 +164,11 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     enqueue({ memory_max_injected_tokens: memoryMaxInjectedTokens.value })
   }
 
+  function setComputerUseEnabled(value: boolean): void {
+    computerUseEnabled.value = value
+    enqueue({ computer_use_enabled: value })
+  }
+
   async function refreshRuntimePreferences(): Promise<void> {
     apply(await runtimePreferencesApi.get())
     maxParallelSubAgentsSaveFailed.value = false
@@ -214,6 +220,7 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     memoryAgentWriteEnabled.value = value.memory_agent_write_enabled
     memoryMaxInjectedItems.value = value.memory_max_injected_items
     memoryMaxInjectedTokens.value = value.memory_max_injected_tokens
+    computerUseEnabled.value = value.computer_use_enabled
     writeOrRemove(STORAGE_KEYS.mainModelProfileId, mainModelProfileId.value)
     writeStoredValue(STORAGE_KEYS.reasoningIntensity, String(reasoningIntensity.value))
     writeStoredValue(STORAGE_KEYS.approvalMode, approvalMode.value)
@@ -244,6 +251,7 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     memoryAgentWriteEnabled,
     memoryMaxInjectedItems,
     memoryMaxInjectedTokens,
+    computerUseEnabled,
     maxParallelSubAgentsSaveFailed,
     setMainModelProfileId,
     setReasoningIntensity,
@@ -263,6 +271,7 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     setMemoryAgentWriteEnabled,
     setMemoryMaxInjectedItems,
     setMemoryMaxInjectedTokens,
+    setComputerUseEnabled,
     refreshMaxParallelSubAgents: refreshRuntimePreferences,
     refreshRuntimePreferences,
   }

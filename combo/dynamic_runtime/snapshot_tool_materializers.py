@@ -67,7 +67,7 @@ class ToolProjectionMaterializer:
         capability_snapshot: CapabilitySnapshot,
         runtime_instance: RuntimeInstance,
     ) -> tuple[MaterializedSnapshotTool, ...]:
-        if projection.kind != self.kind or projection.runtime_definition_schema != "tool_definition.v2":
+        if projection.kind != self.kind or projection.runtime_definition_schema != "tool_definition.v3":
             raise ValueError("tool materializer received a non-tool projection")
         definition = ToolDefinition.model_validate(projection.runtime_definition)
         definition = _runtime_visible_tool_definition(definition, runtime_instance)

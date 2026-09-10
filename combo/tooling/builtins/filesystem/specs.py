@@ -45,17 +45,6 @@ _WRITE_PATH_DESCRIPTION = (
     "新生成的文件应直接写入工作区内，例如 report.md 或 "
     f"{DEFAULT_BUILTIN_WORKSPACE_ROOT}/report.md。"
 )
-_CONTEXT_LINE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "line_number": _INTEGER,
-        "text": _STRING,
-        "text_truncated": _BOOLEAN,
-    },
-    "required": ["line_number", "text", "text_truncated"],
-    "additionalProperties": False,
-}
-
 FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
     ToolSpec(
         id="read",
@@ -241,107 +230,45 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
     ToolSpec(
         id="rg",
         description=(
-            "使用应用随包提供的 ripgrep 在 workspace 边界内查找文件或搜索内容。"
-            "action=files 根据 glob 模式返回文件路径；action=search 返回带行号和上下文的文本或正则命中。"
-            "搜索遵循 ignore 文件并默认排除隐藏目录、依赖目录和构建产物。"
+            "在 workspace 内查找路径或搜索文件内容时使用本工具，包括按名称、扩展名、目录结构、文本或正则定位代码。"
+            "文件发现和内容检索不要通过 shell 调用 grep、find 或 ls。"
+            "始终传 action、pattern；path 可省略。"
+            "查找文件示例：{\"action\":\"files\",\"pattern\":\"**/*.py\"}。"
+            "搜索内容示例：{\"action\":\"search\",\"pattern\":\"ModelPool\",\"path\":\"combo\"}。"
+            "默认遵循 ignore 文件，并排除依赖目录和构建产物。"
         ),
         schema_error_guidance=(
-            "查找文件时使用 action=files，并提供 pattern；搜索内容时使用 action=search，并提供 pattern。"
-            "path、include、exclude、大小写、正则和上下文参数只能放在对应 action 的 schema 中。"
+            "参数固定为 action、pattern、path、max_results；其中 action 和 pattern 必填。"
         ),
         entrypoint="combo.tooling.builtins.filesystem.rg:run",
         input_schema={
-            "oneOf": [
-                {
-                    "type": "object",
-                    "properties": {
-                        "action": {"const": "files"},
-                        "pattern": {
-                            "type": "string",
-                            "minLength": 1,
-                            "description": "用于查找文件的 glob 模式，例如 **/*.py 或 src/**。",
-                        },
-                        "path": {
-                            "type": "string",
-                            "default": ".",
-                            "description": f"查找根目录。{_PATH_BOUNDARY_DESCRIPTION}",
-                        },
-                        "exclude": {
-                            "type": "array",
-                            "items": _STRING,
-                            "description": "额外排除的 glob 模式。",
-                        },
-                        "max_results": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": 5000,
-                            "default": 100,
-                            "description": "最多返回的文件数量。",
-                        },
-                    },
-                    "required": ["action", "pattern"],
-                    "additionalProperties": False,
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["files", "search"],
+                    "description": "files 查找路径，search 搜索文件内容。",
                 },
-                {
-                    "type": "object",
-                    "properties": {
-                        "action": {"const": "search"},
-                        "pattern": {
-                            "type": "string",
-                            "minLength": 1,
-                            "description": "要搜索的文本或正则表达式。",
-                        },
-                        "path": {
-                            "type": "string",
-                            "default": ".",
-                            "description": f"要搜索的文件或目录。{_PATH_BOUNDARY_DESCRIPTION}",
-                        },
-                        "include": {
-                            "type": "array",
-                            "items": _STRING,
-                            "description": "只搜索这些 glob 模式匹配的文件。",
-                        },
-                        "exclude": {
-                            "type": "array",
-                            "items": _STRING,
-                            "description": "排除这些 glob 模式匹配的文件。",
-                        },
-                        "case_sensitive": {
-                            "type": "boolean",
-                            "default": True,
-                            "description": "是否区分英文字母大小写。",
-                        },
-                        "regex": {
-                            "type": "boolean",
-                            "default": True,
-                            "description": "是否将 pattern 解释为正则；false 时按普通文本搜索。",
-                        },
-                        "context_before": {
-                            "type": "integer",
-                            "minimum": 0,
-                            "maximum": 20,
-                            "default": 0,
-                            "description": "每个命中前返回的上下文行数。",
-                        },
-                        "context_after": {
-                            "type": "integer",
-                            "minimum": 0,
-                            "maximum": 20,
-                            "default": 0,
-                            "description": "每个命中后返回的上下文行数。",
-                        },
-                        "max_results": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": 5000,
-                            "default": 100,
-                            "description": "最多返回的命中数量。",
-                        },
-                    },
-                    "required": ["action", "pattern"],
-                    "additionalProperties": False,
+                "pattern": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "files 时为 glob；search 时为文本或正则表达式。",
                 },
-            ]
+                "path": {
+                    "type": "string",
+                    "default": ".",
+                    "description": f"搜索起点，可以是文件或目录。{_PATH_BOUNDARY_DESCRIPTION}",
+                },
+                "max_results": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 5000,
+                    "default": 100,
+                    "description": "最多返回的路径或命中数量。",
+                },
+            },
+            "required": ["action", "pattern"],
+            "additionalProperties": False,
         },
         output_schema={
             "oneOf": [
@@ -373,16 +300,12 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
                                     "path": _STRING,
                                     "line_number": _INTEGER,
                                     "text": _STRING,
-                                    "before": {"type": "array", "items": _CONTEXT_LINE_SCHEMA},
-                                    "after": {"type": "array", "items": _CONTEXT_LINE_SCHEMA},
                                     "text_truncated": _BOOLEAN,
                                 },
                                 "required": [
                                     "path",
                                     "line_number",
                                     "text",
-                                    "before",
-                                    "after",
                                     "text_truncated",
                                 ],
                                 "additionalProperties": False,

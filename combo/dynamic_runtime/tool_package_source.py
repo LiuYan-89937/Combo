@@ -318,7 +318,7 @@ class FileSystemToolCapabilitySource:
                 display_name=manifest.display_name or manifest.name,
                 description=manifest.description,
                 keywords=tuple(dict.fromkeys((manifest.name, manifest.model_alias, *manifest.keywords))),
-                definition_schema="tool_definition.v2",
+                definition_schema="tool_definition.v3",
                 definition=definition.model_dump(mode="json"),
             ),
             updated_by_principal_id=self._config.publisher_principal_id,

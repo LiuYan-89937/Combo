@@ -114,23 +114,54 @@ def _group_records(
     buckets: dict[str, dict[str, Any]] = {}
     for record in records:
         key = _group_key(record, group_by, model_profile_groups=model_profile_groups)
-        group = buckets.setdefault(
-            key,
-            {
+        group = buckets.get(key)
+        if group is None:
+            group = buckets[key] = {
                 "key": key,
-                "label": (group_labels or {}).get(key, key),
-                "provider": str(record.get("provider") or ""),
-                "model_name": str(record.get("model_name") or ""),
+                "label": "",
+                "provider": "",
+                "model_name": "",
                 "model_profile_id": str(record.get("model_profile_id") or ""),
                 "runtime_role": str(record.get("runtime_role") or ""),
                 "strategy": str(record.get("strategy") or ""),
                 "workspace_id": str(record.get("workspace_id") or ""),
                 "session_id": str(record.get("session_id") or ""),
                 "totals": _empty_totals(),
-            },
-        )
+            }
+        # 记录按时间升序，始终保留最近一次调用的服务商与模型名，
+        # 这样档案被编辑后不会继续显示旧模型。
+        group["provider"] = str(record.get("provider") or "")
+        group["model_name"] = str(record.get("model_name") or "")
         _add_totals(group["totals"], record)
+    for key, group in buckets.items():
+        group["label"] = _group_label(
+            key=key,
+            provider=str(group["provider"]),
+            model_name=str(group["model_name"]),
+            model_profile_id=str(group["model_profile_id"]),
+            group_labels=group_labels,
+        )
     return list(buckets.values())
+
+
+def _group_label(
+    *,
+    key: str,
+    provider: str,
+    model_name: str,
+    model_profile_id: str,
+    group_labels: dict[str, str] | None,
+) -> str:
+    """标签的权威来源是当前档案名；档案已删除时才回落到模型标识。
+
+    档案 id 是创建时生成的 slug，改名后不会再变，因此不能把它当作展示名。
+    """
+    label = (group_labels or {}).get(key)
+    if label:
+        return label
+    if model_profile_id.strip() and model_name.strip():
+        return f"{provider}:{model_name}" if provider.strip() else model_name
+    return key
 
 
 def _series(
@@ -142,6 +173,7 @@ def _series(
     group_labels: dict[str, str] | None,
 ) -> list[dict[str, Any]]:
     buckets: dict[str, dict[str, dict[str, Any]]] = {}
+    labels: dict[str, str] = {}
     for record in records:
         key = _group_key(record, group_by, model_profile_groups=model_profile_groups)
         day = str(record.get("created_at") or "")[:10]
@@ -149,10 +181,17 @@ def _series(
             continue
         totals = buckets.setdefault(key, {}).setdefault(day, _empty_totals())
         _add_totals(totals, record)
+        labels[key] = _group_label(
+            key=key,
+            provider=str(record.get("provider") or ""),
+            model_name=str(record.get("model_name") or ""),
+            model_profile_id=str(record.get("model_profile_id") or ""),
+            group_labels=group_labels,
+        )
     return [
         {
             "key": key,
-            "label": (group_labels or {}).get(key, key),
+            "label": labels.get(key, key),
             "points": [
                 {"bucket": day, **totals}
                 for day, totals in sorted(points.items())

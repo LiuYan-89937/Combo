@@ -56,6 +56,8 @@ PROCESS_TOOL_SPECS: list[ToolSpec] = [
         id="shell",
         description=(
             f"在 workspace 边界内通过当前平台的 {host_shell_display_name()} 启动命令，"
+            "用于构建、检查、格式化、版本控制、运行脚本或服务。"
+            "文件路径发现和文件内容搜索使用 rg，按行读取文件使用 read。"
             "子进程默认已位于当前会话工作区根目录，命令应直接使用相对路径，无需先执行 cd。"
             "foreground 会持续显示 stdout/stderr 并等待命令进入最终状态，一次调用即可获得完整结果；"
             "仅对服务、监听器等明确需要脱离当前轮次的长期任务使用 background。"

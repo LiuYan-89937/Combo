@@ -13,6 +13,10 @@ from combo.model_pool.providers import (
     provider_supports_kind,
 )
 from combo.model_pool.defaults import DEFAULT_EMBEDDING_BATCH_SIZE
+from combo.model_pool.headers import (
+    validate_header_name,
+    validate_header_template,
+)
 from combo.models.capabilities import resolve_provider_profile
 from combo.models.protocol import ModelReasoningSettings, StructuredOutputMethod
 
@@ -107,6 +111,29 @@ class ModelPoolPricing(BaseModel):
     image_edit_unit_price: float | None = Field(default=None, ge=0)
 
 
+class ModelPoolCredentialHeader(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    value: str = ""
+    default_value: str = ""
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, value: str) -> str:
+        return validate_header_name(value)
+
+    @field_validator("value", "default_value")
+    @classmethod
+    def _text(cls, value: str) -> str:
+        return str(value or "")
+
+    @field_validator("value")
+    @classmethod
+    def _known_variables(cls, value: str) -> str:
+        return validate_header_template(value)
+
+
 class ModelPoolCredential(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -115,6 +142,7 @@ class ModelPoolCredential(BaseModel):
     provider: str
     base_url: str
     api_key: str | None = None
+    headers: list[ModelPoolCredentialHeader] = Field(default_factory=list)
     enabled: bool = True
     revision: int = Field(default=1, ge=1)
     created_at: str = Field(default_factory=utc_now_text)
@@ -152,6 +180,7 @@ class ModelPoolCredential(BaseModel):
             api_key_masked=mask_api_key(self.api_key),
             api_key_fingerprint=self.api_key_fingerprint,
             has_api_key=bool(self.api_key),
+            headers=list(self.headers),
             enabled=self.enabled,
             revision=self.revision,
             created_at=self.created_at,
@@ -169,6 +198,7 @@ class ModelPoolCredentialPublic(BaseModel):
     api_key_masked: str = ""
     api_key_fingerprint: str = ""
     has_api_key: bool = False
+    headers: list[ModelPoolCredentialHeader] = Field(default_factory=list)
     enabled: bool = True
     revision: int = Field(default=1, ge=1)
     created_at: str = ""

@@ -177,6 +177,7 @@ class ComputerUseCoordinator:
             expected_profile_revision=frozen.profile_revision,
             expected_credential_revision=frozen.credential_revision,
             reasoning_intensity=1,
+            session_id=instance.request.session_id,
         )
         model = create_chat_model_from_settings(
             replace(resolved.settings, role="computer_use")

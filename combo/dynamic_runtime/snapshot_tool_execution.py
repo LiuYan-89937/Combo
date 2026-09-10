@@ -17,6 +17,7 @@ from combo.runtime_protocol import (
     CapabilitySnapshot,
     RuntimeInstance,
 )
+from combo.runtime_i18n import RuntimeLocale
 from combo.tooling.approval_policy import (
     ToolApprovalOverrideConfig,
     ToolApprovalPolicyConfig,
@@ -300,15 +301,20 @@ def _compile_tool(
     expected_resources = (*definition.runtime_resources, *(item.name for item in definition.resource_bindings))
     if set(resources) != set(expected_resources):
         raise ValueError("materialized Tool resources differ from the immutable resource bindings")
-    presentation = definition.presentations.get(runtime_instance.request.policy_snapshot.locale)
     spec = ToolSpec(
         id=definition.model_alias,
-        description=presentation.description if presentation is not None else definition.model_description,
-        schema_error_guidance=(
-            presentation.schema_error_guidance if presentation is not None else definition.schema_error_guidance
+        description=_localized_tool_text(
+            definition.model_description,
+            definition.localized_model_descriptions,
+            runtime_instance.request.policy_snapshot.locale,
+        ),
+        schema_error_guidance=_localized_tool_text(
+            definition.schema_error_guidance,
+            definition.localized_schema_error_guidance,
+            runtime_instance.request.policy_snapshot.locale,
         ),
         entrypoint=definition.implementation.entrypoint,
-        input_schema=presentation.input_schema if presentation is not None else definition.input_schema,
+        input_schema=definition.input_schema,
         output_schema=definition.output_schema,
         resources={name: name for name in expected_resources},
         risk_level=definition.runtime_policy.risk_level,
@@ -357,7 +363,11 @@ def _compile_mcp_tool(
 ):
     spec = ToolSpec(
         id=definition.model_alias,
-        description=definition.model_description,
+        description=_localized_tool_text(
+            definition.model_description,
+            definition.localized_model_descriptions,
+            runtime_instance.request.policy_snapshot.locale,
+        ),
         entrypoint=f"mcp:{definition.server_id}/{definition.upstream_tool_name}",
         input_schema=definition.input_schema.canonical_schema,
         # The SDK validates structuredContent against the upstream MCP output
@@ -382,6 +392,14 @@ def _compile_mcp_tool(
         approval=approval,
         maximum_argument_revisions=maximum_argument_revisions,
     ).compile_resolved(spec, entrypoint=entrypoint)
+
+
+def _localized_tool_text(
+    default: str,
+    localized: Mapping[RuntimeLocale, str],
+    locale: RuntimeLocale,
+) -> str:
+    return localized.get(locale, default)
 
 
 def _compiler(

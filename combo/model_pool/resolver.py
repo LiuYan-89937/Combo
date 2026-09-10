@@ -10,6 +10,10 @@ from combo.model_pool.schema import (
     ModelSelectionRequirement,
     ModelToolBinding,
 )
+from combo.model_pool.headers import (
+    credential_header_variables,
+    render_credential_headers,
+)
 from combo.model_pool.runtime_profile import resolve_model_pool_provider_profile
 from combo.model_pool.selector import ModelPoolSelector
 from combo.model_pool.store import ModelPoolStore
@@ -97,6 +101,10 @@ def resolve_chat_model_profile(
         multimodal="image" in profile.capabilities.input_modalities,
         reasoning=_default_reasoning(),
         structured_output_method=None,
+        headers=render_credential_headers(
+            credential.headers,
+            variables=credential_header_variables(profile_id=profile.profile_id),
+        ),
     )
     model = create_chat_model_from_settings(settings)
     if model is None:
@@ -179,6 +187,10 @@ def resolve_image_generation_model_profile(
         profile_id=profile.profile_id,
         source="model_pool",
         timeout_seconds=profile.limits.timeout_seconds,
+        headers=render_credential_headers(
+            credential.headers,
+            variables=credential_header_variables(profile_id=profile.profile_id),
+        ),
     )
     return ResolvedImageGenerationProfile(
         profile_id=profile.profile_id,

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from combo.model_pool.store import ModelPoolStore
+from combo.model_pool.headers import credential_header_variables, render_credential_headers
 from combo.model_pool.runtime_profile import resolve_model_pool_provider_profile
 from combo.models import ChatModelSettings
 from combo.models.chat_model import create_chat_model_from_settings
@@ -52,6 +53,7 @@ class RuntimeModelResolver:
         expected_profile_revision: int | None = None,
         expected_credential_revision: int | None = None,
         reasoning_intensity: int | None = None,
+        session_id: str | None = None,
     ) -> ResolvedRuntimeChatModel:
         normalized_profile_id = _required_text(profile_id, "profile_id")
         profile = (
@@ -97,6 +99,13 @@ class RuntimeModelResolver:
             multimodal="image" in profile.capabilities.input_modalities,
             reasoning=ModelReasoningSettings(),
             structured_output_method=None,
+            headers=render_credential_headers(
+                credential.headers,
+                variables=credential_header_variables(
+                    profile_id=profile.profile_id,
+                    session_id=session_id,
+                ),
+            ),
         )
         if reasoning_intensity is not None and settings.profile.capabilities.supports_reasoning():
             settings = apply_reasoning_intensity(settings, reasoning_intensity)
@@ -145,6 +154,7 @@ class RuntimeModelResolver:
         operation: ModelOperationKind,
         execution_preference: ExecutionPreference | None = None,
         approval_mode: ApprovalMode | None = None,
+        session_id: str | None = None,
     ) -> ResolvedRuntimePolicy:
         if not policy.model_profile_id:
             raise RuntimeModelResolutionError("runtime policy requires an explicit model_profile_id")
@@ -152,6 +162,11 @@ class RuntimeModelResolver:
             operation=operation,
             profile_id=policy.model_profile_id,
             reasoning_intensity=policy.reasoning_intensity,
+            session_id=session_id,
+        )
+        compression_resolved = self._resolve_compression_model(
+            fallback_profile_id=resolved.snapshot.profile_id,
+            session_id=session_id,
         )
         snapshot = RuntimePolicySnapshot(
             principal_id=policy.principal_id,
@@ -162,6 +177,7 @@ class RuntimeModelResolver:
             approval_mode=approval_mode or policy.approval_mode,
             approval_mode_source="command" if approval_mode is not None else "user_policy",
             model=resolved.snapshot,
+            compression_model=compression_resolved.snapshot,
             reasoning_intensity=policy.reasoning_intensity,
             request_timeout_seconds=policy.request_timeout_seconds,
             browser_operation_timeout_ms=policy.browser_operation_timeout_ms,
@@ -175,12 +191,29 @@ class RuntimeModelResolver:
             memory_agent_write_enabled=policy.memory_agent_write_enabled,
             memory_max_injected_items=policy.memory_max_injected_items,
             memory_max_injected_tokens=policy.memory_max_injected_tokens,
+            computer_use_enabled=policy.computer_use_enabled,
             max_temporary_delegation_depth=policy.max_temporary_delegation_depth,
             delegation_grant_ttl_seconds=policy.delegation_grant_ttl_seconds,
             locale=policy.locale,
             timezone=policy.timezone,
         )
-        return ResolvedRuntimePolicy(snapshot=snapshot, chat_model=resolved)
+        return ResolvedRuntimePolicy(
+            snapshot=snapshot,
+            chat_model=resolved,
+        )
+
+    def _resolve_compression_model(
+        self,
+        *,
+        fallback_profile_id: str,
+        session_id: str | None,
+    ) -> ResolvedRuntimeChatModel:
+        profile_id = self._store.task_model_binding() or fallback_profile_id
+        return self.resolve_chat_model(
+            operation="context_compression",
+            profile_id=profile_id,
+            session_id=session_id,
+        )
 
 
 def register_runtime_model_handle(
@@ -188,12 +221,15 @@ def register_runtime_model_handle(
     *,
     runtime_instance_id: str,
     resolved: ResolvedRuntimeChatModel,
+    compression_resolved: ResolvedRuntimeChatModel,
 ) -> RuntimeModelHandle:
     handle = RuntimeModelHandle(
         runtime_instance_id=_required_text(runtime_instance_id, "runtime_instance_id"),
         snapshot=resolved.snapshot,
         model=resolved.model,
         settings=resolved.settings,
+        compression_model=compression_resolved.model,
+        compression_settings=compression_resolved.settings,
     )
     registry.register(handle)
     return handle

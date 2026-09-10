@@ -119,8 +119,8 @@ class SkillCapabilityAdapter(TypedCapabilityAdapter[SkillDefinition]):
 class ToolCapabilityAdapter(TypedCapabilityAdapter[ToolDefinition]):
     kind = "tool"
     adapter_id = "dynamic_runtime.tool"
-    adapter_revision = "3"
-    definition_schema = "tool_definition.v2"
+    adapter_revision = "4"
+    definition_schema = "tool_definition.v3"
     definition_model = ToolDefinition
 
     def _validate_definition(

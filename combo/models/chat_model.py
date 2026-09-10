@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -31,6 +31,7 @@ class ChatModelSettings:
     multimodal: bool = False
     reasoning: ModelReasoningSettings = field(default_factory=ModelReasoningSettings)
     structured_output_method: StructuredOutputMethod | None = None
+    headers: dict[str, str] = field(default_factory=dict)
 
     @property
     def available(self) -> bool:
@@ -72,25 +73,6 @@ def get_main_model() -> BaseChatModel | None:
 
 def get_task_model() -> BaseChatModel | None:
     return _available_model("task")
-
-
-def get_compression_model(*, max_output_tokens: int | None = None) -> BaseChatModel | None:
-    from combo.model_pool.resolver import resolve_available_chat_model
-
-    resolved = resolve_available_chat_model("compression")
-    if resolved is None:
-        return None
-    if max_output_tokens is None:
-        return resolved.model
-    configured_limit = resolved.settings.max_output_tokens
-    effective_limit = (
-        min(max_output_tokens, configured_limit)
-        if configured_limit is not None
-        else max_output_tokens
-    )
-    return create_chat_model_from_settings(
-        replace(resolved.settings, max_output_tokens=effective_limit)
-    )
 
 
 def create_chat_model_from_settings(settings: ChatModelSettings) -> BaseChatModel | None:

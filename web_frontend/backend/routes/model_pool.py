@@ -157,9 +157,9 @@ def create_model_pool_router(
         value = group_by.strip().lower()
         if value not in {"model", "credential"}:
             raise HTTPException(status_code=400, detail="unsupported usage group_by")
+        store = ModelPoolStore()
+        profiles = store.list_profiles()
         if value == "credential":
-            store = ModelPoolStore()
-            profiles = store.list_profiles()
             credentials = {item.credential_id: item for item in store.list_credentials()}
             return usage_store.summary(
                 group_by="credential",
@@ -167,7 +167,13 @@ def create_model_pool_router(
                 model_profile_groups={item.profile_id: item.credential_id for item in profiles},
                 group_labels={key: item.display_name for key, item in credentials.items()},
             )
-        return usage_store.summary(group_by=value, days=days)
+        # 按档案 id 分组，但展示名取当前档案名：档案被改名或改模型后，
+        # 历史统计不应继续沿用创建时生成的 id / 旧名字。
+        return usage_store.summary(
+            group_by="model",
+            days=days,
+            group_labels={item.profile_id: item.display_name for item in profiles},
+        )
 
     @router.post("/profiles")
     def create_profile(payload: dict[str, Any], background_tasks: BackgroundTasks):
@@ -306,7 +312,32 @@ def _ping_chat_profile(profile_id: str, store: ModelPoolStore) -> dict[str, Any]
         "profile_id": profile_id,
         "latency_ms": latency_ms,
         "response_preview": content[:500],
+        "custom_headers_applied": sorted(resolved.settings.headers),
+        "custom_headers_skipped": _skipped_custom_headers(profile_id, store, resolved.settings.headers),
     }
+
+
+def _skipped_custom_headers(
+    profile_id: str,
+    store: ModelPoolStore,
+    applied: dict[str, str],
+) -> list[str]:
+    """Custom headers that rendered to nothing and were left out of the request.
+
+    A value only renders when its default is set, because a connection test has
+    no session context.
+    """
+
+    try:
+        profile = store.require_profile(profile_id)
+        credential = store.require_credential(profile.credential_id)
+    except Exception:
+        return []
+    return sorted(
+        header.name
+        for header in credential.headers
+        if header.name not in applied
+    )
 
 
 def _ping_embedding_profile(profile_id: str, store: ModelPoolStore) -> dict[str, Any]:

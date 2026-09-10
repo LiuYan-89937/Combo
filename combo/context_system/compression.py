@@ -10,7 +10,6 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from combo.context_system.schema import CompressionDetail, CompressionPolicy, ContextCompressionReport
 from combo.context_system.token_counter import TokenCountResult
 from combo.context_system.token_estimation import estimate_messages_tokens, estimate_text_tokens
-from combo.models import get_compression_model
 from combo.runtime_protocol.messages import incomplete_tool_call_ids
 
 
@@ -31,6 +30,8 @@ def maybe_compress_messages(
     messages: list[Any],
     policy: CompressionPolicy,
     node_id: str,
+    summary_model: Any,
+    summary_model_max_output_tokens: int | None,
     protected_tail_start_id: str | None = None,
     token_counter: Callable[[list[Any]], TokenCountResult] | None = None,
     trigger_count: TokenCountResult | None = None,
@@ -124,6 +125,8 @@ def maybe_compress_messages(
                 conversation_input,
                 detail=policy.detail,
                 max_output_tokens=conversation_limit,
+                model=summary_model,
+                model_max_output_tokens=summary_model_max_output_tokens,
             )
             summary_messages.append(
                 _summary_message(
@@ -139,6 +142,8 @@ def maybe_compress_messages(
                 tool_input,
                 detail=policy.detail,
                 max_output_tokens=tool_limit,
+                model=summary_model,
+                model_max_output_tokens=summary_model_max_output_tokens,
             )
             summary_messages.append(
                 _summary_message(
@@ -367,6 +372,8 @@ def _summarize_conversation(
     *,
     detail: CompressionDetail,
     max_output_tokens: int,
+    model: Any | None,
+    model_max_output_tokens: int | None,
 ) -> str:
     return _invoke_summary_model(
         system_prompt=(
@@ -389,6 +396,8 @@ def _summarize_conversation(
         input_text=conversation_input,
         expected_tag="conversation_summary",
         max_output_tokens=max_output_tokens,
+        model=model,
+        model_max_output_tokens=model_max_output_tokens,
     )
 
 
@@ -397,6 +406,8 @@ def _summarize_tool_results(
     *,
     detail: CompressionDetail,
     max_output_tokens: int,
+    model: Any | None,
+    model_max_output_tokens: int | None,
 ) -> str:
     return _invoke_summary_model(
         system_prompt=(
@@ -418,6 +429,8 @@ def _summarize_tool_results(
         input_text=tool_input,
         expected_tag="tool_results_summary",
         max_output_tokens=max_output_tokens,
+        model=model,
+        model_max_output_tokens=model_max_output_tokens,
     )
 
 
@@ -427,15 +440,21 @@ def _invoke_summary_model(
     input_text: str,
     expected_tag: str,
     max_output_tokens: int,
+    model: Any | None,
+    model_max_output_tokens: int | None,
 ) -> str:
-    model = get_compression_model(max_output_tokens=max_output_tokens)
     if model is None:
-        raise RuntimeError("compression model is not configured")
+        raise RuntimeError("compression requires the active runtime model")
     prompt = [
         SystemMessage(content=system_prompt),
         HumanMessage(content=input_text),
     ]
-    response = model.invoke(prompt)
+    effective_max_output_tokens = (
+        min(max_output_tokens, model_max_output_tokens)
+        if model_max_output_tokens is not None
+        else max_output_tokens
+    )
+    response = model.invoke(prompt, max_tokens=effective_max_output_tokens)
     text = _message_text(response).strip()
     if not text:
         raise RuntimeError("compression model returned empty summary")

@@ -157,6 +157,7 @@ class CapabilityInvocationRuntime:
             expected_profile_revision=model_snapshot.profile_revision,
             expected_credential_revision=model_snapshot.credential_revision,
             reasoning_intensity=policy_snapshot.reasoning_intensity,
+            session_id=runtime_instance.request.session_id,
         )
         return capability_resolver.resolve_requirements(
             principal_id=runtime_instance.request.principal_id,

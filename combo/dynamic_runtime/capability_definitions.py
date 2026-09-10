@@ -268,24 +268,14 @@ class ToolResourceBinding(FrozenProtocolModel):
         return _required_text(value, getattr(info, "field_name", "value"))
 
 
-class ToolModelPresentation(FrozenProtocolModel):
-    description: str
-    schema_error_guidance: str = ""
-    input_schema: dict[str, JsonValue]
-
-    @field_validator("description")
-    @classmethod
-    def _description_is_present(cls, value: str) -> str:
-        return _required_text(value, "tool presentation description")
-
-
 class ToolDefinition(FrozenProtocolModel):
-    schema_version: Literal["tool_definition.v2"] = "tool_definition.v2"
+    schema_version: Literal["tool_definition.v3"] = "tool_definition.v3"
     model_alias: str
     model_description: str
     schema_error_guidance: str = ""
+    localized_model_descriptions: dict[RuntimeLocale, str] = Field(default_factory=dict)
+    localized_schema_error_guidance: dict[RuntimeLocale, str] = Field(default_factory=dict)
     input_schema: dict[str, JsonValue]
-    presentations: dict[RuntimeLocale, ToolModelPresentation] = Field(default_factory=dict)
     context_schema: dict[str, JsonValue] = Field(default_factory=dict)
     output_schema: dict[str, JsonValue]
     execution_mode: Literal["managed", "delegated"] = "managed"
@@ -335,14 +325,15 @@ class ToolDefinition(FrozenProtocolModel):
             raise ValueError("runtime_resources must be unique")
         return values
 
-    @field_validator("presentations")
+    @field_validator("localized_model_descriptions", "localized_schema_error_guidance")
     @classmethod
-    def _presentation_locales_are_complete(
+    def _localized_tool_copy_is_valid(
         cls,
-        values: dict[RuntimeLocale, ToolModelPresentation],
-    ) -> dict[RuntimeLocale, ToolModelPresentation]:
-        if values and set(values) != {"zh-CN", "en-US"}:
-            raise ValueError("localized tool presentations require both zh-CN and en-US")
+        values: dict[RuntimeLocale, str],
+        info: object,
+    ) -> dict[RuntimeLocale, str]:
+        if any(not value.strip() for value in values.values()):
+            raise ValueError(f"{getattr(info, 'field_name', 'localized tool copy')} values must not be empty")
         return values
 
     @field_validator("sensitive_argument_paths")
@@ -437,6 +428,7 @@ class MCPToolDefinition(FrozenProtocolModel):
     upstream_tool_name: str
     model_alias: str
     model_description: str
+    localized_model_descriptions: dict[RuntimeLocale, str] = Field(default_factory=dict)
     input_schema: MCPSchemaEvidence
     output_schema: MCPSchemaEvidence
     runtime_policy: ToolRuntimePolicy = Field(default_factory=lambda: ToolRuntimePolicy(risk_level="medium"))
@@ -451,6 +443,16 @@ class MCPToolDefinition(FrozenProtocolModel):
     @classmethod
     def _tool_text_is_present(cls, value: str, info: object) -> str:
         return _required_text(value, getattr(info, "field_name", "value"))
+
+    @field_validator("localized_model_descriptions")
+    @classmethod
+    def _localized_model_descriptions_are_valid(
+        cls,
+        values: dict[RuntimeLocale, str],
+    ) -> dict[RuntimeLocale, str]:
+        if any(not value.strip() for value in values.values()):
+            raise ValueError("localized_model_descriptions values must not be empty")
+        return values
 
     @field_validator("model_alias")
     @classmethod

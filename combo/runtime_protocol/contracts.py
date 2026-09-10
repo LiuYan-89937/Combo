@@ -84,6 +84,7 @@ class UserRuntimePolicy(ProtocolModel):
     memory_agent_write_enabled: bool = True
     memory_max_injected_items: int = Field(default=8, ge=1, le=64)
     memory_max_injected_tokens: int = Field(default=1200, ge=100, le=32000)
+    computer_use_enabled: bool = False
     max_temporary_delegation_depth: int = Field(default=0, ge=0)
     delegation_grant_ttl_seconds: int = Field(default=900, ge=1)
     locale: RuntimeLocale = "zh-CN"
@@ -143,6 +144,7 @@ class RuntimePolicySnapshot(FrozenProtocolModel):
     approval_mode: ApprovalMode
     approval_mode_source: PolicyValueSource
     model: ModelSelectionSnapshot
+    compression_model: ModelSelectionSnapshot | None = None
     reasoning_intensity: int = Field(
         default=DEFAULT_REASONING_INTENSITY,
         ge=MIN_REASONING_INTENSITY,
@@ -165,6 +167,7 @@ class RuntimePolicySnapshot(FrozenProtocolModel):
     memory_agent_write_enabled: bool
     memory_max_injected_items: int = Field(ge=1, le=64)
     memory_max_injected_tokens: int = Field(ge=100, le=32000)
+    computer_use_enabled: bool = False
     max_temporary_delegation_depth: int = Field(ge=0)
     delegation_grant_ttl_seconds: int = Field(ge=1)
     locale: RuntimeLocale = "zh-CN"
