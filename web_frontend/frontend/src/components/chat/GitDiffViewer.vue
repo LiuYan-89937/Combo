@@ -159,12 +159,12 @@ onBeforeUnmount(disposeEditor)
 
 <style scoped>
 .git-diff-viewer { width: 100%; height: 100%; min-width: 0; min-height: 0; }
-.unified-diff { overflow: hidden; border: 1px solid var(--app-border); border-radius: 18px; background: var(--app-surface); }
+.unified-diff { overflow: hidden; border: 1px solid var(--app-border); border-radius: var(--app-radius-lg); background: var(--app-surface); }
 .diff-editor-host { width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
 .diff-editor-host :deep(.git-diff-added-line) { background: var(--app-diff-addition-surface); }
 .diff-editor-host :deep(.git-diff-removed-line) { background: var(--app-diff-deletion-surface); }
 .diff-editor-host :deep(.git-diff-added-marker)::before { content: '+'; color: var(--app-diff-addition); font-weight: 700; }
 .diff-editor-host :deep(.git-diff-removed-marker)::before { content: '−'; color: var(--app-diff-deletion); font-weight: 700; }
-.git-diff-state { display: grid; place-items: center; overflow: hidden; border: 1px solid var(--app-border); border-radius: 18px; color: var(--app-text-muted); }
+.git-diff-state { display: grid; place-items: center; overflow: hidden; border: 1px solid var(--app-border); border-radius: var(--app-radius-lg); color: var(--app-text-muted); }
 .git-diff-state.error { color: var(--app-error); }
 </style>

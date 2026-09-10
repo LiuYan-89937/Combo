@@ -41,7 +41,7 @@ const { url: previewUrl } = useRuntimeAttachmentObjectUrl(attachmentId)
   width: 44px;
   height: 44px;
   flex: 0 0 44px;
-  border-radius: 8px;
+  border-radius: var(--app-radius-sm);
   object-fit: cover;
 }
 </style>

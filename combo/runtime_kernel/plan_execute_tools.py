@@ -11,9 +11,7 @@ PLAN_EXECUTE_CASUAL_NODE_ID = "casual_react"
 PLAN_EXECUTE_PLANNER_INSPECTION_TOOL_IDS = frozenset(
     {
         "delegation_status",
-        "glob",
-        "grep",
-        "ls",
+        "rg",
         "read",
     }
 )

@@ -249,7 +249,7 @@ function formatTime(timestamp: string): string {
   display: flex;
   gap: 8px;
   padding: 6px 8px;
-  border-radius: 12px;
+  border-radius: var(--app-radius-md);
   transition: background-color var(--app-transition-base);
 }
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from combo.dynamic_runtime.control_plane_store import WorkspaceSchedulerStore
-from combo.dynamic_runtime.schedule_validation import validate_schedule
+from combo.dynamic_runtime.schedule_validation import validate_execution_mode, validate_schedule
 from combo.runtime_protocol import RuntimeExecutionIdentity
 from combo.tooling.builtins.scheduler.specs import (
     RUNTIME_IDENTITY_RESOURCE,
@@ -50,6 +50,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
                 "timezone": timezone,
                 "strategy": str(arguments.get("strategy") or "auto"),
                 "approval_policy": str(arguments.get("approval_policy") or "ask"),
+                "execution_mode": validate_execution_mode(arguments.get("execution_mode")),
             }),
         }
     elif action in {"pause", "resume", "delete"}:

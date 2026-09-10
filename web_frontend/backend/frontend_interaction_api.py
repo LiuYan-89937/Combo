@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from combo.dynamic_runtime.repositories import utc_now_text
 from combo.dynamic_runtime.knowledge_search import KnowledgeRetrievalSettings
-from combo.dynamic_runtime.schedule_validation import validate_schedule
+from combo.dynamic_runtime.schedule_validation import validate_execution_mode, validate_schedule
 from combo.model_pool import ModelPoolStore
 from combo.model_pool.store import ModelPoolStoreError
 from combo.native_directory_picker import NativeDirectoryPicker, NativeDirectoryPickerUnavailableError
@@ -1160,6 +1160,7 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
                 job.get("schedule_expr"),
                 job.get("timezone") or request.headers.get("X-Combo-Timezone") or "UTC",
             )
+            validate_execution_mode(job.get("execution_mode"))
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         created = backend.application.stores.scheduler.create_job({

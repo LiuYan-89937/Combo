@@ -548,19 +548,19 @@ onBeforeUnmount(() => {
 .live-dot.connecting { animation: browser-pulse 1s ease-in-out infinite; }
 .live-dot.error { background: var(--app-error); }
 .live-dot.parked { opacity: .5; }
-button { border: 0; border-radius: 10px; padding: 7px 9px; color: var(--app-text); background: transparent; cursor: pointer; }
+button { border: 0; border-radius: var(--app-radius-sm); padding: 7px 9px; color: var(--app-text); background: transparent; cursor: pointer; }
 button:hover { background: var(--app-surface-muted); }
-.browser-toolbar { min-height: 40px; display: flex; align-items: center; gap: 3px; margin: 7px; padding: 4px; border: 1px solid var(--app-divider); border-radius: 999px; background: var(--app-surface-muted); }
+.browser-toolbar { min-height: 40px; display: flex; align-items: center; gap: 3px; margin: 7px; padding: 4px; border: 1px solid var(--app-divider); border-radius: var(--app-radius-pill); background: var(--app-surface-muted); }
 .browser-toolbar > button { padding: 5px 7px; }
 .address-form { flex: 1; }
-.address-form input { width: 100%; height: 28px; padding: 0 9px; border: 1px solid var(--app-divider); border-radius: 999px; outline: 0; color: var(--app-text); background: var(--app-surface-elevated); font-size: 11px; }
+.address-form input { width: 100%; height: 28px; padding: 0 9px; border: 1px solid var(--app-divider); border-radius: var(--app-radius-pill); outline: 0; color: var(--app-text); background: var(--app-surface-elevated); font-size: 11px; }
 .control-toggle { white-space: nowrap; border: 1px solid var(--app-divider); font-size: 10px; }
 .control-toggle.active { color: var(--app-surface); background: var(--app-text); }
-.browser-viewport { position: relative; width: calc(100% - 14px); min-height: 0; display: grid; place-items: center; margin: 0 7px 7px; overflow: hidden; border: 1px solid var(--app-divider); border-radius: 14px; background: var(--app-surface-muted); }
+.browser-viewport { position: relative; width: calc(100% - 14px); min-height: 0; display: grid; place-items: center; margin: 0 7px 7px; overflow: hidden; border: 1px solid var(--app-divider); border-radius: var(--app-radius-md); background: var(--app-surface-muted); }
 .browser-viewport canvas { display: block; width: 100%; height: 100%; cursor: default; touch-action: none; }
 .browser-viewport.interactive canvas { cursor: crosshair; }
-.viewport-status { position: absolute; padding: 10px 14px; border-radius: 12px; color: white; background: rgba(0, 0, 0, .68); backdrop-filter: blur(12px); }
-.watching-badge { position: absolute; right: 12px; bottom: 12px; padding: 6px 10px; border-radius: 999px; color: white; background: rgba(0, 0, 0, .58); font-size: 11px; backdrop-filter: blur(10px); }
+.viewport-status { position: absolute; padding: 10px 14px; border-radius: var(--app-radius-md); color: white; background: rgba(0, 0, 0, .68); backdrop-filter: blur(12px); }
+.watching-badge { position: absolute; right: 12px; bottom: 12px; padding: 6px 10px; border-radius: var(--app-radius-pill); color: white; background: rgba(0, 0, 0, .58); font-size: 11px; backdrop-filter: blur(10px); }
 @keyframes browser-pulse { 50% { opacity: .35; transform: scale(.75); } }
 @media (max-width: 560px) { .control-toggle { padding-inline: 6px; } }
 </style>

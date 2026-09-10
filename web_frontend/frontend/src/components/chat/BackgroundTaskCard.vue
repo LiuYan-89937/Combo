@@ -566,15 +566,15 @@ function formatTime(value: unknown): string {
 .background-task-card { display: grid; gap: 13px; padding: 16px; color: var(--app-text); background: var(--app-surface); }
 .task-header { display: flex; align-items: center; gap: 11px; }
 .task-header:has(.task-status-label:first-child) { min-height: 28px; padding-right: 28px; }
-.task-mark { width: 46px; height: 46px; display: grid; overflow: hidden; place-items: center; border: 1px solid var(--app-border); border-radius: 13px; background: var(--app-surface-muted); }
+.task-mark { width: 46px; height: 46px; display: grid; overflow: hidden; place-items: center; border: 1px solid var(--app-border); border-radius: var(--app-radius-md); background: var(--app-surface-muted); }
 .task-heading { min-width: 0; flex: 1; display: grid; gap: 2px; padding-right: 22px; }
-.task-status-label { flex: 0 0 auto; padding: 4px 8px; border: 1px solid var(--app-border); border-radius: 999px; color: var(--app-text-secondary); font-size: 10px; }
+.task-status-label { flex: 0 0 auto; padding: 4px 8px; border: 1px solid var(--app-border); border-radius: var(--app-radius-pill); color: var(--app-text-secondary); font-size: 10px; }
 .task-delete { flex: 0 0 auto; }
 .task-heading strong { overflow-wrap: anywhere; font-size: 14px; }
 .task-heading small { color: var(--app-text-muted); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; white-space: normal; }
-.task-heading .task-model { width: fit-content; max-width: 100%; padding: 1px 6px; border-radius: 999px; background: var(--app-surface-muted); color: var(--app-text-secondary); font-size: 10px; }
+.task-heading .task-model { width: fit-content; max-width: 100%; padding: 1px 6px; border-radius: var(--app-radius-pill); background: var(--app-surface-muted); color: var(--app-text-secondary); font-size: 10px; }
 .task-section small, .task-current small { color: var(--app-text-muted); font-size: 12px; line-height: 1.5; }
-.task-current { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; padding: 12px; border: 1px solid var(--app-border); border-radius: 13px; }
+.task-current { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; padding: 12px; border: 1px solid var(--app-border); border-radius: var(--app-radius-md); }
 .task-current > span:last-child { display: grid; gap: 3px; }
 .status-dot { width: 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: var(--app-text-muted); }
 .dot-running { background: var(--app-text); box-shadow: 0 0 0 4px color-mix(in srgb, var(--app-text) 10%, transparent); }
@@ -602,13 +602,13 @@ function formatTime(value: unknown): string {
 .interaction-copy { display: grid; gap: 5px; }
 .interaction-copy p { margin: 0; font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
 .interaction-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.interaction-options button { display: grid; gap: 3px; padding: 10px; text-align: left; color: var(--app-text); background: var(--app-surface); border: 1px solid var(--app-border); border-radius: 11px; cursor: pointer; }
+.interaction-options button { display: grid; gap: 3px; padding: 10px; text-align: left; color: var(--app-text); background: var(--app-surface); border: 1px solid var(--app-border); border-radius: var(--app-radius-md); cursor: pointer; }
 .interaction-options button.selected { border-color: var(--app-text); box-shadow: inset 0 0 0 1px var(--app-text); }
 .interaction-options small { color: var(--app-text-muted); }
 .interaction-actions { display: flex; justify-content: flex-end; }
 .artifact-list { display: flex; flex-wrap: wrap; gap: 6px; }
-.artifact-list span { padding: 5px 8px; border: 1px solid var(--app-border); border-radius: 8px; font-size: 11px; }
+.artifact-list span { padding: 5px 8px; border: 1px solid var(--app-border); border-radius: var(--app-radius-sm); font-size: 11px; }
 .task-delivery { min-width: 0; margin-top: 5px; color: var(--app-text-secondary); font-size: 12px; line-height: 1.6; }
-.task-notice { display: grid; gap: 4px; margin: 0; padding: 10px; border-radius: 10px; font-size: 12px; }
+.task-notice { display: grid; gap: 4px; margin: 0; padding: 10px; border-radius: var(--app-radius-sm); font-size: 12px; }
 .task-notice-error { color: var(--app-error); background: color-mix(in srgb, var(--app-error) 8%, transparent); }
 </style>

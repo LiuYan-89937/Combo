@@ -367,7 +367,7 @@ onBeforeUnmount(() => {
 .floating-dock-item.side-right { right: 12px; left: auto; }
 .floating-dock-item.is-dragging { z-index: 30; filter: drop-shadow(0 18px 28px color-mix(in srgb, var(--app-text) 20%, transparent)); cursor: grabbing; }
 .floating-dock-item.is-dragging > * { transform: scale(1.035); }
-.snap-guide { position: absolute; z-index: 1; top: 12%; bottom: 12%; width: 3px; border-radius: 999px; background: var(--app-text); opacity: .16; animation: guide-in .16s ease both; }
+.snap-guide { position: absolute; z-index: 1; top: 12%; bottom: 12%; width: 3px; border-radius: var(--app-radius-pill); background: var(--app-text); opacity: .16; animation: guide-in .16s ease both; }
 .guide-left { left: 5px; }
 .guide-right { right: 5px; }
 .dock-capsule, .dock-card {
@@ -377,7 +377,7 @@ onBeforeUnmount(() => {
   height: 38px;
   padding: 0 12px;
   border: 1px solid var(--app-border);
-  border-radius: 999px;
+  border-radius: var(--app-radius-pill);
   background: var(--app-surface);
   color: var(--app-text);
   font: inherit;
@@ -398,7 +398,7 @@ onBeforeUnmount(() => {
 .dock-panel {
   overflow: hidden;
   border: 1px solid var(--app-border);
-  border-radius: 18px;
+  border-radius: var(--app-radius-lg);
   background: var(--app-surface);
   box-shadow: 0 24px 64px color-mix(in srgb, var(--app-text) 16%, transparent);
   animation: dock-panel-enter .24s cubic-bezier(.16, 1, .3, 1) both;

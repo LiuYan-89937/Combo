@@ -37,9 +37,7 @@ const TOOL_PRESENTATIONS: Record<string, Pick<ToolPresentation, 'category' | 'la
   read: { category: 'read', labelKey: 'tool.names.read', icon: 'document' },
   write: { category: 'write', labelKey: 'tool.names.write', icon: 'edit' },
   edit: { category: 'write', labelKey: 'tool.names.edit', icon: 'edit' },
-  glob: { category: 'search', labelKey: 'tool.names.glob', icon: 'search' },
-  grep: { category: 'search', labelKey: 'tool.names.grep', icon: 'search' },
-  ls: { category: 'read', labelKey: 'tool.names.ls', icon: 'folder' },
+  rg: { category: 'search', labelKey: 'tool.names.rg', icon: 'search' },
   shell: { category: 'process', labelKey: 'tool.names.shell', icon: 'terminal' },
   shell_status: { category: 'process', labelKey: 'tool.names.shellStatus', icon: 'task' },
   shell_stop: { category: 'process', labelKey: 'tool.names.shellStop', icon: 'close' },
@@ -210,24 +208,21 @@ function toolArgumentPresentation(
 ): Pick<ToolPresentation, 'summary' | 'summaryKey'> {
   const args = recordValue(value)
   if (!args) return { summary: '' }
-  if (toolName === 'ls' && isWorkspaceRoot(args.path)) {
-    return { summary: '', summaryKey: 'tool.location.workspaceRoot' }
-  }
   if (toolName === 'shell') return summary(compact(args.command))
-  if (toolName === 'grep') return summary(compact(args.pattern, args.path || args.base_path))
-  if (toolName === 'glob') return summary(compact(args.pattern, args.base_path))
+  if (toolName === 'rg') return summary(compact(args.action, args.pattern, args.path))
   if (toolName === 'edit') {
     const operations = Array.isArray(args.operations) ? args.operations : []
-    const paths = operations
+    const operationPaths = operations
       .flatMap(operation => {
         const record = recordValue(operation)
         return record ? [record.path, record.source_path, record.destination_path] : []
       })
       .filter(Boolean)
-      .slice(0, 2)
+    // The edit tool targets one file through `path`; the transactional variant uses `operations`.
+    const paths = (operationPaths.length ? operationPaths : [args.path]).filter(Boolean).slice(0, 2)
     return summary(compact(args.action, ...paths, args.transaction_id))
   }
-  if (toolName === 'read' || toolName === 'write' || toolName === 'ls') {
+  if (toolName === 'read' || toolName === 'write') {
     return summary(compact(args.path))
   }
   if (toolName === 'shell_status' || toolName === 'shell_stop') return summary(compact(args.process_id))
@@ -254,10 +249,6 @@ function summary(value: string): Pick<ToolPresentation, 'summary'> {
   return { summary: value }
 }
 
-function isWorkspaceRoot(value: unknown): boolean {
-  const path = String(value ?? '').trim().replace(/\\/g, '/').replace(/\/+$/, '')
-  return path === '.' || path === './' || path === '/workdir'
-}
 
 function recordValue(value: unknown): Record<string, any> | null {
   return value && typeof value === 'object' && !Array.isArray(value)

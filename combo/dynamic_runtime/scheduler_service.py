@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 from pathlib import Path
 from typing import Any
@@ -14,7 +14,7 @@ from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from combo.dynamic_runtime.control_plane_store import WorkspaceSchedulerStore
-from combo.dynamic_runtime.schedule_validation import validate_schedule
+from combo.dynamic_runtime.schedule_validation import validate_execution_mode, validate_schedule
 from combo.dynamic_runtime.repositories import CommandInbox, ConversationStore
 from combo.runtime_protocol import (
     CancelRuntimeRequestPayload,
@@ -49,13 +49,16 @@ class SchedulerService:
     def start(self) -> None:
         self._event_loop = asyncio.get_running_loop()
         self._scheduler.start()
-        self.synchronize()
+        # Retire runs that were in flight before the restart first: serial jobs
+        # treat a failed run as completed, so synchronize() can then re-anchor
+        # their next fire time from now.
         for run in self._store.active_runs():
             self._store.update_run(
                 str(run["run_id"]),
                 status="failed",
                 patch={"error": {"code": "application_restarted", "message": "Task execution was interrupted by an application restart."}},
             )
+        self.synchronize()
 
     async def stop(self) -> None:
         self._store.bind_change_listener(None)
@@ -80,10 +83,21 @@ class SchedulerService:
         for job in self._store.enabled_jobs():
             job_id = str(job["job_id"])
             try:
-                trigger = _trigger(job)
+                trigger = self._next_trigger(job)
             except (TypeError, ValueError) as exc:
                 self._store.set_schedule_error(job_id, str(exc))
                 continue
+            configured_ids.add(job_id)
+            if trigger is None:
+                # A serial job held by its own unfinished run. It is re-armed by
+                # _finalize_run() once that run reaches a terminal state, so
+                # leave no trigger behind.
+                self._unschedule(job_id)
+                self._store.set_schedule_error(job_id, None)
+                continue
+            # max_instances/coalesce only govern this launch step, which returns
+            # as soon as the run is created. Overlap control for the run itself
+            # lives in the store (see create_run(allow_overlap=...)).
             self._scheduler.add_job(
                 self._scheduled_fire,
                 trigger=trigger,
@@ -94,16 +108,41 @@ class SchedulerService:
                 max_instances=1,
                 misfire_grace_time=300,
             )
-            configured_ids.add(job_id)
             self._store.set_schedule_error(job_id, None)
-            scheduled = self._scheduler.get_job(job_id)
-            self._store.set_fire_times(
-                job_id,
-                next_fire_at=(scheduled.next_run_time.isoformat() if scheduled and scheduled.next_run_time else None),
-            )
+            self._store.set_fire_times(job_id, next_fire_at=self._next_run_time(job_id))
         for scheduled in self._scheduler.get_jobs():
             if scheduled.id not in configured_ids:
                 self._scheduler.remove_job(scheduled.id)
+
+    def _unschedule(self, job_id: str) -> None:
+        if self._scheduler.get_job(job_id) is not None:
+            self._scheduler.remove_job(job_id)
+
+    def _next_run_time(self, job_id: str) -> str | None:
+        scheduled = self._scheduler.get_job(job_id)
+        if scheduled is None or scheduled.next_run_time is None:
+            return None
+        return scheduled.next_run_time.isoformat()
+
+    def _next_trigger(self, job: dict[str, Any]) -> Any:
+        """Build the trigger for a job, or ``None`` when a serial job is held.
+
+        Parallel jobs keep their recurring fixed-rate triggers. Serial interval
+        jobs are anchored to a stored absolute fire time and use a one-shot
+        trigger: the anchor is recomputed from the completion moment of each
+        run, which also keeps the cadence stable across pause/resume and
+        application restarts.
+        """
+        if _execution_mode(job) == "serial" and _schedule_type(job) == "interval":
+            job_id = str(job["job_id"])
+            if self._store.has_active_run(job_id):
+                return None
+            anchor = _future_fire_time(job.get("next_fire_at"))
+            if anchor is None:
+                anchor = _interval_anchor(job)
+                self._store.set_fire_times(job_id, next_fire_at=anchor.isoformat())
+            return DateTrigger(run_date=anchor)
+        return _trigger(job)
 
     def launch(self, job_id: str, *, trigger_source: str, scheduled_fire_at: str | None = None) -> dict[str, Any]:
         job = self._store.require_job(job_id)
@@ -117,7 +156,13 @@ class SchedulerService:
             "executor_type": "script" if target["target_type"] == "script_run" else "agent",
             "job_snapshot": job,
         }
-        run = self._store.create_run(job_id=job_id, payload=snapshot)
+        run = self._store.create_run(
+            job_id=job_id,
+            payload=snapshot,
+            allow_overlap=_execution_mode(job) == "parallel",
+        )
+        if bool(run.get("skipped")):
+            raise RuntimeError("scheduler job already has an unfinished run")
         if bool(run.get("deduplicated")):
             return run
         task = asyncio.create_task(self._execute(run, job), name=f"scheduler-run-{run['run_id']}")
@@ -163,13 +208,21 @@ class SchedulerService:
 
     async def _scheduled_fire(self, job_id: str) -> None:
         fire_at = datetime.now().astimezone().isoformat()
+        job = self._store.require_job(job_id)
+        serial = _execution_mode(job) == "serial"
+        if serial and self._store.has_active_run(job_id):
+            # Serial cron jobs keep their absolute clock, so this fire is
+            # dropped rather than postponed. Record why.
+            self._store.mark_skipped(job_id, fire_at)
+            self._store.set_fire_times(job_id, next_fire_at=self._next_run_time(job_id), last_fire_at=fire_at)
+            return
         self.launch(job_id, trigger_source="scheduled", scheduled_fire_at=fire_at)
-        scheduled = self._scheduler.get_job(job_id)
-        self._store.set_fire_times(
-            job_id,
-            next_fire_at=(scheduled.next_run_time.isoformat() if scheduled and scheduled.next_run_time else None),
-            last_fire_at=fire_at,
-        )
+        if serial and _schedule_type(job) == "interval":
+            # The one-shot trigger consumed itself. The run that just started
+            # re-anchors the next fire time when it finishes.
+            self._store.set_fire_times(job_id, next_fire_at=None, last_fire_at=fire_at)
+            return
+        self._store.set_fire_times(job_id, next_fire_at=self._next_run_time(job_id), last_fire_at=fire_at)
 
     async def _execute(self, run: dict[str, Any], job: dict[str, Any]) -> None:
         run_id = str(run["run_id"])
@@ -190,6 +243,25 @@ class SchedulerService:
             error = {"code": type(exc).__name__, "message": str(exc)}
             self._store.append_run_event(run_id, "failed", error)
             self._store.update_run(run_id, status="failed", patch={"error": error})
+        finally:
+            self._finalize_run(job)
+
+    def _finalize_run(self, job: dict[str, Any]) -> None:
+        """Re-arm a serial job once its run reaches a terminal state.
+
+        Completion, failure and cancellation all count as completion, so the
+        next interval starts counting from here. Jobs paused or deleted while
+        running are left alone.
+        """
+        if _execution_mode(job) != "serial" or _schedule_type(job) != "interval":
+            return
+        job_id = str(job["job_id"])
+        current = self._store.find_job(job_id)
+        if current is None or str(current.get("status") or "") != "enabled":
+            return
+        if self._store.has_active_run(job_id):
+            return
+        self.synchronize()
 
     async def _execute_agent(self, run_id: str, job: dict[str, Any]) -> dict[str, Any]:
         principal_id = _required(job, "principal_id")
@@ -342,6 +414,39 @@ def _agent_result_text(messages: list[Any], *, request_id: str) -> str:
         if text:
             return text
     return ""
+
+
+def _execution_mode(job: dict[str, Any]) -> str:
+    return validate_execution_mode(job.get("execution_mode"))
+
+
+def _schedule_type(job: dict[str, Any]) -> str:
+    return str(job.get("schedule_type") or "cron")
+
+
+def _future_fire_time(value: Any) -> datetime | None:
+    """Parse a stored fire time, returning ``None`` when missing or already past."""
+    if not value:
+        return None
+    try:
+        candidate = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    if candidate.tzinfo is None or candidate.utcoffset() is None:
+        return None
+    return candidate if candidate > datetime.now().astimezone() else None
+
+
+def _interval_anchor(job: dict[str, Any]) -> datetime:
+    """The next fire time for a serial interval job: now plus one interval."""
+    schedule = validate_schedule(
+        job.get("schedule_type", "interval"),
+        job.get("schedule_expr"),
+        job.get("timezone", "UTC"),
+    )
+    if schedule.interval_seconds is None:
+        raise ValueError("serial interval job requires a positive interval expression")
+    return datetime.now().astimezone() + timedelta(seconds=schedule.interval_seconds)
 
 
 def _trigger(job: dict[str, Any]):

@@ -107,7 +107,7 @@ function submit() {
 .question-panel {
   padding: 18px;
   border: 1px solid var(--app-border);
-  border-radius: 20px;
+  border-radius: var(--app-radius-lg);
   background: var(--app-surface);
   color: var(--app-text);
   animation: app-fade-in-up 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
@@ -148,7 +148,7 @@ function submit() {
   gap: 3px;
   padding: 10px 12px;
   border: 1px solid var(--app-border);
-  border-radius: 12px;
+  border-radius: var(--app-radius-md);
   background: transparent;
   color: inherit;
   text-align: left;

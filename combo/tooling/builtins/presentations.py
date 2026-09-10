@@ -20,8 +20,8 @@ def _copy(zh_cn: str, en_us: str, *, zh_guidance: str = "", en_guidance: str = "
 
 BUILTIN_TOOL_COPY: dict[str, BuiltinToolCopy] = {
     "read": _copy(
-        "按行读取当前工作区内的 UTF-8 文本文件。路径不确定时先用 ls 核对目录，不要把一次读取失败当作文件不存在。",
-        "Read a bounded line range from a UTF-8 text file in the current workspace. If a path is uncertain, inspect its directory with ls before concluding that the file is unavailable.",
+        "按行读取当前工作区内的 UTF-8 文本文件。路径不确定时先用 rg 的 files 操作查找，不要把一次读取失败当作文件不存在。",
+        "Read a bounded line range from a UTF-8 text file in the current workspace. If a path is uncertain, locate it with the files action of rg before concluding that it is unavailable.",
     ),
     "write": _copy(
         "在当前工作区内创建或整体替换文本文件。完整正文使用 write_once；需要分段生成时依次使用 start、append、commit，放弃时使用 abort；局部修改请用 edit。",
@@ -35,9 +35,10 @@ BUILTIN_TOOL_COPY: dict[str, BuiltinToolCopy] = {
         zh_guidance="提供 path、old_text 和 new_text。old_text 默认只能匹配一处；替换全部匹配时设置 replace_all=true。",
         en_guidance="Provide path, old_text, and new_text. old_text must match once by default; set replace_all=true to replace every match.",
     ),
-    "glob": _copy("按 glob 模式查找当前工作区内的文件路径。", "Find file paths in the current workspace with a glob pattern."),
-    "grep": _copy("在当前工作区的文件内容中搜索文本或正则表达式。", "Search file contents in the current workspace for text or a regular expression."),
-    "ls": _copy("列出当前工作区内指定目录的内容。", "List the contents of a directory in the current workspace."),
+    "rg": _copy(
+        "使用应用随包提供的 ripgrep 查找当前工作区内的文件路径或搜索文件内容。files 用于路径查找，search 用于文本或正则搜索。",
+        "Use the app-bundled ripgrep to find file paths or search file contents in the current workspace. Use files for path discovery and search for text or regular-expression matching.",
+    ),
     "ask_usr": _copy(
         "当子 Agent 缺少继续任务所必需的信息时，在主对话中向用户提出一个聚焦问题。少量互斥答案使用 choices，需要自由输入时启用 allow_free_text；不要用于工具审批或普通进度通知。",
         "Ask one focused question in the main conversation when a child Agent cannot continue without required information. Use choices for a small mutually exclusive set and allow_free_text for written answers. Do not use this for approvals or routine progress updates.",

@@ -88,6 +88,10 @@ export const zh = {
       scheduler: { title: '定时任务', description: '让重复工作按计划在指定工作区运行，并持续保留执行记录。' },
       knowledge: { title: '知识库', description: '把项目资料、文档和检索来源放进任务的真实上下文。' },
     },
+    schedulerModes: {
+      parallel: { title: '可连续调用', description: '按计划时间到点即执行，允许与上一次执行重叠。' },
+      serial: { title: '等待上一次完成', description: '上一次执行结束后才开始计下一个间隔，不会重叠执行。' },
+    },
     controlEyebrow: '本地优先',
     controlTitle: '过程看得见，边界握在你手里',
     controlSubtitle: 'Combo 在你选择的工作区中执行。文件去向、工具审批和任务状态都有明确反馈。',
@@ -231,6 +235,10 @@ export const en = {
       mcp: { title: 'MCP', description: 'Connect existing services and bring external capabilities into the current task.' },
       scheduler: { title: 'Scheduled tasks', description: 'Run recurring work on schedule in a chosen workspace and keep its execution history.' },
       knowledge: { title: 'Knowledge base', description: 'Ground the task in project documents, reference material, and retrieval sources.' },
+    },
+    schedulerModes: {
+      parallel: { title: 'Run continuously', description: 'Fire on schedule even when the previous run is still going.' },
+      serial: { title: 'Wait for the previous run', description: 'Start counting the next interval only after the previous run finishes, so runs never overlap.' },
     },
     controlEyebrow: 'Local first',
     controlTitle: 'See the process. Keep control of the boundary.',

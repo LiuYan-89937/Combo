@@ -74,6 +74,7 @@ npm --prefix "${FRONTEND_DIR}" ci
 echo "Preparing bundled Python runtime..."
 python3 "${PROJECT_ROOT}/scripts/bundle_python.py"
 [[ -x "${PYTHON_RUNTIME}" ]] || fail "Bundled Python executable not found: ${PYTHON_RUNTIME}"
+"${PYTHON_RUNTIME}" "${PROJECT_ROOT}/scripts/bundle_ripgrep.py" --target macos-arm64
 "${PYTHON_RUNTIME}" "${PROJECT_ROOT}/scripts/generate_icons.py"
 
 PYTHON_FILE_INFO="$(file "${PYTHON_RUNTIME}")"

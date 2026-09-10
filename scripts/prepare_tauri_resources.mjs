@@ -18,6 +18,12 @@ const bundledPython = process.platform === 'win32'
 if (!existsSync(bundledPython)) {
   throw new Error(`Bundled Python executable is unavailable: ${bundledPython}`)
 }
+const bundledRipgrep = process.platform === 'win32'
+  ? resolve(projectRoot, 'src-tauri/resources/ripgrep/rg.exe')
+  : resolve(projectRoot, 'src-tauri/resources/ripgrep/rg')
+if (!existsSync(bundledRipgrep)) {
+  throw new Error(`Bundled ripgrep executable is unavailable: ${bundledRipgrep}`)
+}
 const precompile = spawnSync(
   bundledPython,
   [

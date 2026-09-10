@@ -46,6 +46,7 @@
           :title="capsuleTitle(run)"
           :fallback-title="capsuleTitle(run)"
           wide
+          detached
           :controller="schedulerTaskController"
           @dismiss="dismissRun(run.run_id)"
           @updated="reconcileRun"
@@ -119,7 +120,12 @@ const visibleRuns = computed(() => runs.value.filter(run => {
 const schedulerTaskController: BackgroundTaskController = {
   events: async (runId, after) => {
     const response = await schedulerApi.runEvents(runId, after)
-    return { events: response.events.map(asBackgroundTaskEvent) }
+    return {
+      events: response.events.flatMap(event => {
+        const activity = asBackgroundTaskEvent(event)
+        return activity ? [activity] : []
+      }),
+    }
   },
   project: (task, events) => ({
     ...task,
@@ -233,8 +239,9 @@ function asBackgroundTask(run: SchedulerRunView): BackgroundTask {
   }
 }
 
-function asBackgroundTaskEvent(event: SchedulerRunEventView): BackgroundTaskEvent {
+function asBackgroundTaskEvent(event: SchedulerRunEventView): BackgroundTaskEvent | null {
   const activity = schedulerActivity(event, key => t(key as any))
+  if (!activity) return null
   return {
     seq: event.sequence,
     event_id: `${event.run_id}:${event.sequence}`,

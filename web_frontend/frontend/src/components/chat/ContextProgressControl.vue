@@ -221,7 +221,7 @@ function optionalNumber(value: unknown): number | null {
   left: calc(50% - 1px);
   width: 2px;
   height: 5px;
-  border-radius: 2px;
+  border-radius: var(--app-radius-pill);
   background: var(--app-warning);
   transform-origin: 1px 15px;
 }
@@ -231,7 +231,7 @@ function optionalNumber(value: unknown): number | null {
 .bubble-heading, .bubble-meta { display: flex; justify-content: space-between; gap: 12px; }
 .bubble-heading { align-items: baseline; font-size: 12px; }
 .bubble-heading span, .bubble-meta { color: var(--app-text-muted); font-size: 10px; }
-.bubble-meter { position: relative; height: 5px; margin: 12px 0 8px; overflow: visible; border-radius: 999px; background: var(--app-divider); }
+.bubble-meter { position: relative; height: 5px; margin: 12px 0 8px; overflow: visible; border-radius: var(--app-radius-pill); background: var(--app-divider); }
 .bubble-meter-progress {
   display: block;
   height: 100%;
@@ -270,7 +270,7 @@ function optionalNumber(value: unknown): number | null {
   margin-top: 10px;
   padding: 7px 10px;
   border: 1px solid var(--app-divider);
-  border-radius: 9px;
+  border-radius: var(--app-radius-sm);
   background: var(--app-surface);
   color: var(--app-text);
   font-size: 11px;

@@ -145,7 +145,7 @@ watchEffect(() => {
   overflow: auto;
   padding: 8px;
   border: 1px solid var(--app-border);
-  border-radius: 17px;
+  border-radius: var(--app-radius-lg);
   background: var(--app-surface);
   box-shadow: 0 22px 60px color-mix(in srgb, var(--app-text) 16%, transparent);
   animation: agent-popout-right .22s cubic-bezier(.16, 1, .3, 1) both;
@@ -159,7 +159,7 @@ watchEffect(() => {
   gap: 8px;
   padding: 9px;
   border: 0;
-  border-radius: 11px;
+  border-radius: var(--app-radius-md);
   background: transparent;
   color: var(--app-text);
   text-align: left;
@@ -205,9 +205,9 @@ watchEffect(() => {
 .connection-dot.is-connecting { background: var(--app-warning); animation: connection-breathe 1.4s ease-in-out infinite; }
 .connection-dot.is-error { background: var(--app-error); }
 .conversation-title { max-width: 420px; overflow: hidden; color: var(--app-text); font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-button.conversation-title { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border: 0; border-radius: 999px; background: transparent; cursor: pointer; }
+button.conversation-title { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border: 0; border-radius: var(--app-radius-pill); background: transparent; cursor: pointer; }
 button.conversation-title:hover { background: var(--app-surface-muted); }
-.library-trigger { border-radius: 999px; padding: 0; }
+.library-trigger { border-radius: var(--app-radius-pill); padding: 0; }
 .header-icon-btn { width: 32px; height: 32px; border-radius: 50%; }
 .window-controls { align-self: stretch; display: flex; margin-left: 4px; }
 .window-control { width: 46px; border: 0; background: transparent; color: var(--app-text); cursor: default; }

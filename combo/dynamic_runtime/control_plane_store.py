@@ -12,8 +12,13 @@ from combo.dynamic_runtime.knowledge_search import (
     HybridKnowledgeSearchIndex,
     KnowledgeRetrievalSettings,
 )
-from combo.dynamic_runtime.schedule_validation import validate_schedule
+from combo.dynamic_runtime.schedule_validation import validate_execution_mode, validate_schedule
 from combo.dynamic_runtime.repositories import utc_now_text
+
+
+# Run states that mean a job still occupies its execution slot. Serial jobs
+# refuse to start a new run while any of these is present.
+ACTIVE_RUN_STATUSES = ("queued", "running", "waiting_approval", "waiting_external")
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,12 +208,20 @@ class WorkspaceSchedulerStore:
             payload.get("schedule_expr"),
             payload.get("timezone", "UTC"),
         )
+        execution_mode = validate_execution_mode(payload.get("execution_mode"))
         job_id = uuid4().hex
         now = utc_now_text()
         enabled = bool(payload.get("enabled", True))
         status = "enabled" if enabled else "paused"
         job_payload = {key: value for key, value in payload.items() if key != "principal_id"}
-        job = {**job_payload, "enabled": enabled, "job_id": job_id, "created_at": now, "updated_at": now}
+        job = {
+            **job_payload,
+            "execution_mode": execution_mode,
+            "enabled": enabled,
+            "job_id": job_id,
+            "created_at": now,
+            "updated_at": now,
+        }
         with self._database.transaction() as connection:
             connection.execute(
                 "insert into scheduler_jobs(job_id, workspace_id, revision, status, payload_json, created_at, updated_at, next_fire_at, last_fire_at) values (?, ?, 1, ?, ?, ?, ?, null, null)",
@@ -236,7 +249,27 @@ class WorkspaceSchedulerStore:
             "status": str(row["status"]),
         }
 
-    def create_run(self, *, job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def find_job(self, job_id: str) -> dict[str, Any] | None:
+        """Like :meth:`require_job` but returns ``None`` for unknown or deleted jobs."""
+        try:
+            return self.require_job(job_id)
+        except LookupError:
+            return None
+
+    def create_run(
+        self,
+        *,
+        job_id: str,
+        payload: dict[str, Any],
+        allow_overlap: bool = True,
+    ) -> dict[str, Any]:
+        """Create a SchedulerRun for ``job_id``.
+
+        ``allow_overlap=False`` enforces serial execution: when the job still
+        owns a non-terminal run, no new run is created and a ``skipped``
+        sentinel is returned instead. The check shares the insert's write
+        transaction, so concurrent callers cannot both start a run.
+        """
         run_id = uuid4().hex
         now = utc_now_text()
         scheduled_fire_at = str(payload.get("scheduled_fire_at") or now)
@@ -250,6 +283,14 @@ class WorkspaceSchedulerStore:
             "completed_at": None,
         }
         with self._database.transaction() as connection:
+            if not allow_overlap and self._has_active_run(connection, job_id):
+                return {
+                    "job_id": job_id,
+                    "scheduled_fire_at": scheduled_fire_at,
+                    "status": "skipped",
+                    "skipped": True,
+                    "reason": "previous run has not finished",
+                }
             existing = connection.execute(
                 "select payload_json, status from scheduler_runs where job_id = ? and json_extract(payload_json, '$.scheduled_fire_at') = ?",
                 (job_id, scheduled_fire_at),
@@ -320,6 +361,29 @@ class WorkspaceSchedulerStore:
             payload["updated_at"] = now
             connection.execute(
                 "update scheduler_jobs set payload_json = ?, next_fire_at = null, updated_at = ? where job_id = ?",
+                (json.dumps(payload, ensure_ascii=False, sort_keys=True), now, job_id),
+            )
+
+    def mark_skipped(self, job_id: str, skipped_at: str) -> None:
+        """Record that a serial fire was dropped because a run was still active.
+
+        A skipped fire never becomes a run, so the marker lives on the job
+        payload instead. This deliberately does not notify the change listener:
+        skipping does not alter the schedule.
+        """
+        now = utc_now_text()
+        with self._database.transaction() as connection:
+            row = connection.execute(
+                "select payload_json from scheduler_jobs where job_id = ? and status != 'deleted'",
+                (job_id,),
+            ).fetchone()
+            if row is None:
+                raise LookupError(f"scheduler job not found: {job_id}")
+            payload = json.loads(str(row["payload_json"]))
+            payload["last_skipped_at"] = skipped_at
+            payload["updated_at"] = now
+            connection.execute(
+                "update scheduler_jobs set payload_json = ?, updated_at = ? where job_id = ?",
                 (json.dumps(payload, ensure_ascii=False, sort_keys=True), now, job_id),
             )
 
@@ -502,6 +566,20 @@ class WorkspaceSchedulerStore:
             "status": str(row["status"]),
             "runtime_instance_id": row["runtime_instance_id"],
         } for row in rows]
+
+    @staticmethod
+    def _has_active_run(connection: Any, job_id: str) -> bool:
+        placeholders = ",".join("?" for _ in ACTIVE_RUN_STATUSES)
+        row = connection.execute(
+            f"select 1 from scheduler_runs where job_id = ? and status in ({placeholders}) limit 1",
+            (job_id, *ACTIVE_RUN_STATUSES),
+        ).fetchone()
+        return row is not None
+
+    def has_active_run(self, job_id: str) -> bool:
+        """Whether the job still owns its execution slot."""
+        with self._database.connection(query_only=True) as connection:
+            return self._has_active_run(connection, job_id)
 
     def set_status(self, job_id: str, status: str) -> None:
         if status not in {"enabled", "paused", "deleted"}:

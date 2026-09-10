@@ -118,7 +118,7 @@ function deletePlanCapsule() {
 </script>
 
 <style scoped>
-.plan-capsule { display:flex; min-width:190px; max-width:300px; height:48px; align-items:center; gap:9px; padding:5px 10px 5px 6px; border:1px solid var(--app-border); border-radius:999px; background:var(--app-surface); color:var(--app-text); box-shadow:0 7px 20px color-mix(in srgb, var(--app-text) 8%, transparent); cursor:pointer; transition:transform .2s cubic-bezier(.16,1,.3,1), border-color .18s ease, box-shadow .2s ease; }
+.plan-capsule { display:flex; min-width:190px; max-width:300px; height:48px; align-items:center; gap:9px; padding:5px 10px 5px 6px; border:1px solid var(--app-border); border-radius:var(--app-radius-pill); background:var(--app-surface); color:var(--app-text); box-shadow:0 7px 20px color-mix(in srgb, var(--app-text) 8%, transparent); cursor:pointer; transition:transform .2s cubic-bezier(.16,1,.3,1), border-color .18s ease, box-shadow .2s ease; }
 .plan-capsule:hover { transform:translateY(-2px); border-color:var(--app-text); box-shadow:0 11px 26px color-mix(in srgb, var(--app-text) 12%, transparent); }
 .plan-mark { display:grid; width:36px; height:36px; flex:0 0 36px; place-items:center; border-radius:50%; background:var(--app-text); color:var(--app-surface); }
 .plan-mark.status-completed { opacity:.62; }
@@ -129,7 +129,7 @@ function deletePlanCapsule() {
 .plan-meta strong { font-size:11px; }
 .plan-meta small { color:var(--app-text-muted); font-size:9px; }
 .plan-chevron { color:var(--app-text-muted); font-size:11px; }
-.plan-popover { width:min(430px, calc(100vw - 44px)); max-height:min(68vh, 620px); overflow:auto; border:1px solid var(--app-border); border-radius:20px; background:var(--app-surface); box-shadow:0 24px 64px color-mix(in srgb, var(--app-text) 16%, transparent); }
+.plan-popover { width:min(430px, calc(100vw - 44px)); max-height:min(68vh, 620px); overflow:auto; border:1px solid var(--app-border); border-radius:var(--app-radius-lg); background:var(--app-surface); box-shadow:0 24px 64px color-mix(in srgb, var(--app-text) 16%, transparent); }
 .plan-popover header { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; padding:18px 19px 15px; border-bottom:1px solid var(--app-divider); }
 .plan-popover header span { display:grid; min-width:0; gap:4px; }
 .plan-popover header small { color:var(--app-text-muted); font-size:9px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; }
@@ -149,7 +149,7 @@ function deletePlanCapsule() {
 .node-copy small { color:var(--app-text-muted); font-size:10px; line-height:1.45; }
 .node-copy .node-result { color:var(--app-text); }
 .plan-actions { display:flex; justify-content:flex-end; padding:0 18px 16px; }
-.plan-action { min-height:30px; padding:0 12px; border:1px solid var(--app-border); border-radius:999px; background:transparent; color:var(--app-text); font:inherit; font-size:10px; cursor:pointer; }
+.plan-action { min-height:30px; padding:0 12px; border:1px solid var(--app-border); border-radius:var(--app-radius-pill); background:transparent; color:var(--app-text); font:inherit; font-size:10px; cursor:pointer; }
 .plan-action:hover { background:var(--app-surface-muted); }
 @media (prefers-reduced-motion:reduce) { .plan-capsule { transition:none; } }
 </style>

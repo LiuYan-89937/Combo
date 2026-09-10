@@ -37,17 +37,24 @@ _PATH_BOUNDARY_DESCRIPTION = (
 )
 _READ_MISSING_GUIDANCE = (
     "如果 read 提示文件不存在或路径不确定，不要直接断定文件不可用；"
-    "先调用 ls 查看父目录或相近目录，确认真实文件名、大小写、后缀或路径层级后再重试 read。"
+    "先调用 rg 的 files 操作查找父目录或相近路径，确认真实文件名、大小写、后缀或路径层级后再重试 read。"
 )
 _READ_PATH_DESCRIPTION = f"要读取的文件路径。{_PATH_BOUNDARY_DESCRIPTION}{_READ_MISSING_GUIDANCE}"
-_LS_PATH_DESCRIPTION = f"要列出的目录路径。{_PATH_BOUNDARY_DESCRIPTION}"
 _WRITE_PATH_DESCRIPTION = (
     f"要写入的文件路径。{_PATH_BOUNDARY_DESCRIPTION}"
     "新生成的文件应直接写入工作区内，例如 report.md 或 "
     f"{DEFAULT_BUILTIN_WORKSPACE_ROOT}/report.md。"
 )
-_BASE_PATH_DESCRIPTION = f"可选搜索根目录。{_PATH_BOUNDARY_DESCRIPTION}"
-
+_CONTEXT_LINE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "line_number": _INTEGER,
+        "text": _STRING,
+        "text_truncated": _BOOLEAN,
+    },
+    "required": ["line_number", "text", "text_truncated"],
+    "additionalProperties": False,
+}
 
 FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
     ToolSpec(
@@ -232,169 +239,170 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
         max_parallel_calls=1,
     ),
     ToolSpec(
-        id="glob",
-        description="在 workspace 边界内基于 glob 模式查找文件路径。",
-        entrypoint="combo.tooling.builtins.filesystem.glob:run",
+        id="rg",
+        description=(
+            "使用应用随包提供的 ripgrep 在 workspace 边界内查找文件或搜索内容。"
+            "action=files 根据 glob 模式返回文件路径；action=search 返回带行号和上下文的文本或正则命中。"
+            "搜索遵循 ignore 文件并默认排除隐藏目录、依赖目录和构建产物。"
+        ),
+        schema_error_guidance=(
+            "查找文件时使用 action=files，并提供 pattern；搜索内容时使用 action=search，并提供 pattern。"
+            "path、include、exclude、大小写、正则和上下文参数只能放在对应 action 的 schema 中。"
+        ),
+        entrypoint="combo.tooling.builtins.filesystem.rg:run",
         input_schema={
-            "type": "object",
-            "properties": {
-                "pattern": {"type": "string", "description": "glob 匹配模式。"},
-                "base_path": {"type": "string", "default": ".", "description": _BASE_PATH_DESCRIPTION},
-                "max_results": {"type": "integer", "minimum": 1, "maximum": 5000, "default": 100, "description": "可选最大返回数量。"},
-            },
-            "required": ["pattern"],
-            "additionalProperties": False,
+            "oneOf": [
+                {
+                    "type": "object",
+                    "properties": {
+                        "action": {"const": "files"},
+                        "pattern": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "用于查找文件的 glob 模式，例如 **/*.py 或 src/**。",
+                        },
+                        "path": {
+                            "type": "string",
+                            "default": ".",
+                            "description": f"查找根目录。{_PATH_BOUNDARY_DESCRIPTION}",
+                        },
+                        "exclude": {
+                            "type": "array",
+                            "items": _STRING,
+                            "description": "额外排除的 glob 模式。",
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 5000,
+                            "default": 100,
+                            "description": "最多返回的文件数量。",
+                        },
+                    },
+                    "required": ["action", "pattern"],
+                    "additionalProperties": False,
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "action": {"const": "search"},
+                        "pattern": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "要搜索的文本或正则表达式。",
+                        },
+                        "path": {
+                            "type": "string",
+                            "default": ".",
+                            "description": f"要搜索的文件或目录。{_PATH_BOUNDARY_DESCRIPTION}",
+                        },
+                        "include": {
+                            "type": "array",
+                            "items": _STRING,
+                            "description": "只搜索这些 glob 模式匹配的文件。",
+                        },
+                        "exclude": {
+                            "type": "array",
+                            "items": _STRING,
+                            "description": "排除这些 glob 模式匹配的文件。",
+                        },
+                        "case_sensitive": {
+                            "type": "boolean",
+                            "default": True,
+                            "description": "是否区分英文字母大小写。",
+                        },
+                        "regex": {
+                            "type": "boolean",
+                            "default": True,
+                            "description": "是否将 pattern 解释为正则；false 时按普通文本搜索。",
+                        },
+                        "context_before": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 20,
+                            "default": 0,
+                            "description": "每个命中前返回的上下文行数。",
+                        },
+                        "context_after": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 20,
+                            "default": 0,
+                            "description": "每个命中后返回的上下文行数。",
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 5000,
+                            "default": 100,
+                            "description": "最多返回的命中数量。",
+                        },
+                    },
+                    "required": ["action", "pattern"],
+                    "additionalProperties": False,
+                },
+            ]
         },
         output_schema={
-            "type": "object",
-            "properties": {
-                "matches": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "path": _STRING,
-                            "name": _STRING,
-                            "type": {"type": "string", "enum": ["file", "directory", "other"]},
-                            "size_bytes": {"type": ["integer", "null"]},
-                            "modified_at": _STRING,
+            "oneOf": [
+                {
+                    "type": "object",
+                    "properties": {
+                        "files": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {"path": _STRING},
+                                "required": ["path"],
+                                "additionalProperties": False,
+                            },
                         },
-                        "required": ["path", "name", "type", "size_bytes", "modified_at"],
-                        "additionalProperties": False,
+                        "truncated": _BOOLEAN,
                     },
+                    "required": ["files", "truncated"],
+                    "additionalProperties": False,
                 },
-                "truncated": _BOOLEAN,
-            },
-            "required": ["matches", "truncated"],
-            "additionalProperties": False,
+                {
+                    "type": "object",
+                    "properties": {
+                        "matches": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "path": _STRING,
+                                    "line_number": _INTEGER,
+                                    "text": _STRING,
+                                    "before": {"type": "array", "items": _CONTEXT_LINE_SCHEMA},
+                                    "after": {"type": "array", "items": _CONTEXT_LINE_SCHEMA},
+                                    "text_truncated": _BOOLEAN,
+                                },
+                                "required": [
+                                    "path",
+                                    "line_number",
+                                    "text",
+                                    "before",
+                                    "after",
+                                    "text_truncated",
+                                ],
+                                "additionalProperties": False,
+                            },
+                        },
+                        "truncated": _BOOLEAN,
+                    },
+                    "required": ["matches", "truncated"],
+                    "additionalProperties": False,
+                },
+            ]
         },
         resources=_FILESYSTEM_RESOURCE,
         effects=["read"],
         read_only=True,
         risk_level="low",
-        risk_evaluator=ToolRiskEvaluatorConfig(hard=f"{_FS_MODULE}.glob:evaluate_risk"),
+        risk_evaluator=ToolRiskEvaluatorConfig(hard=f"{_FS_MODULE}.rg:evaluate_risk"),
         concurrent=True,
         max_parallel_calls=4,
-    ),
-    ToolSpec(
-        id="grep",
-        description="在 workspace 边界内的文件内容中搜索文本或正则模式。",
-        entrypoint="combo.tooling.builtins.filesystem.grep:run",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "pattern": {"type": "string", "description": "搜索文本或正则。"},
-                "path": {
-                    "type": "string",
-                    "default": ".",
-                    "description": f"要搜索的文件或目录路径。{_PATH_BOUNDARY_DESCRIPTION}",
-                },
-                "include": {
-                    "oneOf": [
-                        {"type": "string"},
-                        {"type": "array", "items": _STRING},
-                    ],
-                    "description": "可选文件匹配模式或模式列表。",
-                },
-                "exclude": {
-                    "oneOf": [
-                        {"type": "string"},
-                        {"type": "array", "items": _STRING},
-                    ],
-                    "description": "可选排除文件模式或模式列表。",
-                },
-                "case_sensitive": {"type": "boolean", "default": True, "description": "是否区分英文字母大小写。"},
-                "regex": {"type": "boolean", "default": True, "description": "是否将 pattern 解释为正则表达式；关闭时按普通文本搜索。"},
-                "context_before": {"type": "integer", "minimum": 0, "maximum": 20, "default": 0, "description": "每个命中项之前附带的上下文行数。"},
-                "context_after": {"type": "integer", "minimum": 0, "maximum": 20, "default": 0, "description": "每个命中项之后附带的上下文行数。"},
-                "max_file_bytes": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 20000000,
-                    "default": 2000000,
-                    "description": "跳过超过该字节数的文件，避免读取异常大的内容。",
-                },
-                "max_results": {"type": "integer", "minimum": 1, "maximum": 5000, "default": 100, "description": "最多返回的匹配数量。"},
-            },
-            "required": ["pattern"],
-            "additionalProperties": False,
-        },
-        output_schema={
-            "type": "object",
-            "properties": {
-                "matches": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "path": _STRING,
-                            "line": _STRING,
-                            "line_number": _INTEGER,
-                            "before": {"type": "array", "items": _STRING},
-                            "after": {"type": "array", "items": _STRING},
-                        },
-                        "required": ["path", "line", "line_number", "before", "after"],
-                        "additionalProperties": False,
-                    },
-                },
-                "truncated": _BOOLEAN,
-                "files_searched": _INTEGER,
-            },
-            "required": ["matches", "truncated", "files_searched"],
-            "additionalProperties": False,
-        },
-        resources=_FILESYSTEM_RESOURCE,
-        effects=["read"],
-        read_only=True,
-        risk_level="low",
-        risk_evaluator=ToolRiskEvaluatorConfig(hard=f"{_FS_MODULE}.grep:evaluate_risk"),
-        concurrent=True,
-        max_parallel_calls=4,
-    ),
-    ToolSpec(
-        id="ls",
-        description="列出 workspace 边界内的指定目录内容。",
-        entrypoint="combo.tooling.builtins.filesystem.ls:run",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": _LS_PATH_DESCRIPTION},
-                "recursive": {"type": "boolean", "default": False, "description": "是否递归列出全部子目录。"},
-                "max_entries": {"type": "integer", "minimum": 1, "maximum": 5000, "default": 200, "description": "最多返回的目录项数量。"},
-            },
-            "required": ["path"],
-            "additionalProperties": False,
-        },
-        output_schema={
-            "type": "object",
-            "properties": {
-                "entries": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "path": _STRING,
-                            "name": _STRING,
-                            "type": {"type": "string", "enum": ["file", "directory", "other"]},
-                            "size_bytes": {"type": ["integer", "null"]},
-                            "modified_at": _STRING,
-                        },
-                        "required": ["path", "name", "type", "size_bytes", "modified_at"],
-                        "additionalProperties": False,
-                    },
-                },
-                "truncated": _BOOLEAN,
-            },
-            "required": ["entries", "truncated"],
-            "additionalProperties": False,
-        },
-        resources=_FILESYSTEM_RESOURCE,
-        effects=["read"],
-        read_only=True,
-        risk_level="low",
-        risk_evaluator=ToolRiskEvaluatorConfig(hard=f"{_FS_MODULE}.ls:evaluate_risk"),
-        concurrent=True,
-        max_parallel_calls=4,
+        timeout_seconds=30.0,
     ),
 ]
 

@@ -11,15 +11,15 @@ from combo.tooling.builtins.filesystem.common import (
     positive_int,
     required_string,
     resolve_path,
+    workspace_relative_path,
 )
 from combo.tooling.envelope import tool_envelope
-from combo.tooling.builtins.filesystem.workspace_search import workspace_relative_path
 
 
 def _missing_file_message(*, requested: str, resolved: str, parent: str) -> str:
     return (
         f"file not found: requested={requested!r}; resolved={resolved}. "
-        f"请先调用 ls 查看父目录或相近目录，例如 path={parent!r}，"
+        f"请先调用 rg(action='files') 查找父目录或相近路径，例如 path={parent!r}，"
         "确认真实文件名、大小写、后缀或路径层级后，再用准确路径重试 read。"
     )
 
@@ -27,7 +27,7 @@ def _missing_file_message(*, requested: str, resolved: str, parent: str) -> str:
 def _directory_read_message(*, requested: str, resolved: str) -> str:
     return (
         f"path is a directory, not a file: requested={requested!r}; resolved={resolved}. "
-        f"请先调用 ls 查看该目录内容，例如 path={resolved!r}，选择具体文件后再调用 read。"
+        f"请先调用 rg(action='files') 查找该目录中的文件，例如 path={resolved!r}，选择具体文件后再调用 read。"
     )
 
 

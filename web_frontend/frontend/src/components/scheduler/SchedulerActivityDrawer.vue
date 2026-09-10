@@ -56,14 +56,17 @@ const schedulerTaskController: BackgroundTaskController = {
   events: async (runId, after) => {
     const response = await schedulerApi.runEvents(runId, after)
     return {
-      events: response.events.map((event): BackgroundTaskEvent => ({
-        seq: event.sequence,
-        event_id: `${event.run_id}:${event.sequence}`,
-        event_type: 'background_task_activity',
-        created_at: event.created_at,
-        task_id: event.run_id,
-        payload: schedulerActivity(event, key => t(key as any)),
-      })),
+      events: response.events.flatMap((event): BackgroundTaskEvent[] => {
+        const activity = schedulerActivity(event, key => t(key as any))
+        return activity ? [{
+          seq: event.sequence,
+          event_id: `${event.run_id}:${event.sequence}`,
+          event_type: 'background_task_activity',
+          created_at: event.created_at,
+          task_id: event.run_id,
+          payload: activity,
+        }] : []
+      }),
     }
   },
   cancel: async current => {

@@ -75,7 +75,7 @@ onBeforeUnmount(() => editor?.dispose())
   min-height: v-bind('`${minHeight}px`');
   overflow: hidden;
   border: 1px solid var(--app-border);
-  border-radius: 10px;
+  border-radius: var(--app-radius-sm);
   background: var(--app-surface);
 }
 </style>

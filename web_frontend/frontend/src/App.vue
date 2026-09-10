@@ -474,7 +474,7 @@ html {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border-radius: 24px !important;
+  border-radius: var(--app-radius-lg) !important;
   color: var(--app-text);
   background: var(--app-surface);
 }
@@ -523,7 +523,7 @@ html {
   .editor-modal-shell.n-card {
     width: calc(100vw - 24px) !important;
     max-height: calc(100vh - 24px);
-    border-radius: 18px !important;
+    border-radius: var(--app-radius-lg) !important;
   }
 }
 

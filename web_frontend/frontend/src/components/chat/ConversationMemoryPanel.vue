@@ -160,7 +160,7 @@ header small { color: var(--app-text-muted); font-size: 10px; }
 .memory-search { margin-bottom: 12px; }
 .memory-search :deep(.n-input) { flex: 1; }
 .memory-list { display: grid; max-height: 430px; overflow: auto; gap: 8px; padding-right: 3px; }
-.memory-item { padding: 10px 11px; border: 1px solid var(--app-border); border-radius: 13px; background: var(--app-surface); }
+.memory-item { padding: 10px 11px; border: 1px solid var(--app-border); border-radius: var(--app-radius-md); background: var(--app-surface); }
 .memory-item-heading span { color: var(--app-text-muted); font-size: 10px; }
 .memory-item p { margin: 6px 0; font-size: 11px; line-height: 1.5; }
 .memory-item time { color: var(--app-text-subtle); font-size: 9px; }

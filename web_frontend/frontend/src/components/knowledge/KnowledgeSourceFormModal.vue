@@ -484,7 +484,7 @@ function isValidUrl(value: string): boolean {
   height: 100%;
   padding: 20px;
   border: 1px solid var(--app-border);
-  border-radius: 18px;
+  border-radius: var(--app-radius-lg);
   background: var(--app-surface);
 }
 
@@ -502,7 +502,7 @@ function isValidUrl(value: string): boolean {
   height: 38px;
   place-items: center;
   color: var(--app-surface);
-  border-radius: 12px;
+  border-radius: var(--app-radius-md);
   background: var(--app-text);
   font-size: 11px;
   font-weight: 750;
@@ -545,7 +545,7 @@ function isValidUrl(value: string): boolean {
   gap: 12px;
   padding: 14px 16px;
   border: 1px solid var(--app-border);
-  border-radius: 13px;
+  border-radius: var(--app-radius-md);
   background: var(--app-surface);
 }
 
@@ -649,7 +649,7 @@ function isValidUrl(value: string): boolean {
   color: var(--app-text);
   text-align: left;
   border: 1px solid var(--app-border);
-  border-radius: 14px;
+  border-radius: var(--app-radius-md);
   background: var(--app-surface);
   cursor: pointer;
   transition: border-color 0.15s ease, color 0.15s ease, background-color 0.15s ease;

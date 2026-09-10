@@ -31,6 +31,7 @@ def maybe_compress_messages(
     messages: list[Any],
     policy: CompressionPolicy,
     node_id: str,
+    protected_tail_start_id: str | None = None,
     token_counter: Callable[[list[Any]], TokenCountResult] | None = None,
     trigger_count: TokenCountResult | None = None,
     on_start: Callable[[ContextCompressionReport], None] | None = None,
@@ -71,6 +72,7 @@ def maybe_compress_messages(
     protected, compressible, recent = _partition_messages(
         messages,
         keep_recent=policy.keep_recent_messages,
+        protected_tail_start_id=protected_tail_start_id,
         minimum_token_reduction=(
             1
             if force
@@ -211,6 +213,7 @@ def _partition_messages(
     messages: list[Any],
     *,
     keep_recent: int,
+    protected_tail_start_id: str | None,
     minimum_token_reduction: int,
 ) -> tuple[list[Any], list[Any], list[Any]]:
     normalized = list(messages)
@@ -224,6 +227,14 @@ def _partition_messages(
         return protected, [], normalized[cursor:]
 
     preferred_boundary = len(normalized) - keep_recent
+    if protected_tail_start_id:
+        protected_tail_start = _message_index(normalized, protected_tail_start_id)
+        if protected_tail_start is None:
+            raise ValueError(
+                "protected compression tail is missing from the conversation: "
+                f"{protected_tail_start_id}"
+            )
+        preferred_boundary = min(preferred_boundary, protected_tail_start)
     selected_boundary: int | None = None
     for boundary in range(preferred_boundary, cursor, -1):
         if boundary < len(normalized) and _is_tool_message(normalized[boundary]):
@@ -247,6 +258,13 @@ def _partition_messages(
     compressible = normalized[cursor:selected_boundary]
     recent = normalized[selected_boundary:]
     return protected, compressible, recent
+
+
+def _message_index(messages: list[Any], message_id: str) -> int | None:
+    for index in range(len(messages) - 1, -1, -1):
+        if str(getattr(messages[index], "id", "") or "") == message_id:
+            return index
+    return None
 
 
 def _is_protected_message(message: Any) -> bool:

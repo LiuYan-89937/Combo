@@ -76,7 +76,7 @@ function openCapabilityPool(pool: 'mcp' | 'tools' | 'skills') {
 .capability-library-modal.n-card {
   width: min(760px, calc(100vw - 40px));
   border: 1px solid var(--app-border);
-  border-radius: 24px;
+  border-radius: var(--app-radius-lg);
   background: var(--app-surface);
   box-shadow: 0 30px 90px color-mix(in srgb, var(--app-text) 18%, transparent);
 }
@@ -94,7 +94,7 @@ function openCapabilityPool(pool: 'mcp' | 'tools' | 'skills') {
   min-height: 104px;
   padding: 16px;
   border: 1px solid var(--app-border);
-  border-radius: 16px;
+  border-radius: var(--app-radius-md);
   background: var(--app-surface);
   color: var(--app-text);
   text-align: left;

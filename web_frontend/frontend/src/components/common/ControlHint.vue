@@ -151,7 +151,7 @@ onBeforeUnmount(removePositionListeners)
   width: max-content;
   max-width: min(280px, calc(100vw - 16px));
   padding: 7px 10px;
-  border-radius: 8px;
+  border-radius: var(--app-radius-sm);
   background: var(--app-text);
   box-shadow: var(--app-shadow-md);
   color: var(--app-surface);

@@ -5,7 +5,7 @@ export type SchedulerActivityTranslator = (key: string) => string
 export function schedulerActivity(
   event: SchedulerRunEventView,
   translate: SchedulerActivityTranslator,
-): Record<string, unknown> {
+): Record<string, unknown> | null {
   const payload = event.payload || {}
   if (event.event_type === 'tool_activity') {
     const details = recordValue(payload.details) || payload
@@ -58,25 +58,45 @@ export function schedulerActivity(
   if (event.event_type === 'runtime_activity_updated') {
     const details = recordValue(payload.details) || payload
     const phase = String(details.plan_step_id || details.activity_id || details.source || 'runtime')
+    const title = String(payload.title || details.title || '').trim()
+    const summary = String(payload.summary || details.summary || '').trim()
+    // Status-only heartbeats carry nothing worth a row.
+    if (!title && !summary) return null
     return {
       phase_id: `runtime:${phase}`,
       category: 'activity',
-      title: String(payload.title || details.title || translate('scheduler.activity')),
-      summary: String(payload.summary || details.summary || translate('scheduler.activity')),
+      title: title || translate('scheduler.activity'),
+      summary: summary || title,
       status: String(payload.status || details.status || 'running'),
       occurred_at: event.created_at,
       details: { ...details, scheduler_event_type: event.event_type },
     }
   }
+  // Unmodelled runtime observations (node/context events) are persisted once per
+  // emission. Most carry no text at all, and giving each its own row produced a
+  // wall of identical entries, so keep only the ones with something to say and
+  // collapse repeats of the same activity under one stable phase id.
+  const content = String(payload.text || payload.message || payload.summary || '').trim()
+  if (!content && !(event.event_type in EVENT_TITLES)) return null
   return {
-    phase_id: `scheduler:${event.sequence}`,
+    phase_id: `${event.event_type}:${activityIdentity(event, payload)}`,
     category: 'activity',
     title: eventTitle(event.event_type, translate),
-    summary: eventSummary(event, translate),
+    summary: content || eventSummary(event, translate),
     status: eventStatus(event.event_type),
     occurred_at: event.created_at,
     details: { ...payload, scheduler_event_type: event.event_type },
   }
+}
+
+function activityIdentity(event: SchedulerRunEventView, payload: Record<string, unknown>): string {
+  const details = recordValue(payload.details) || payload
+  const explicit = String(
+    details.activity_id || details.plan_step_id || details.node_id
+    || details.source_event_id || details.source
+    || payload.activity_id || payload.node_id || payload.source || '',
+  ).trim()
+  return explicit || `seq:${event.sequence}`
 }
 
 function toolEventActivity(
@@ -153,22 +173,25 @@ function toolActivityStatus(eventType: string, value: unknown): string {
   return status || 'running'
 }
 
+// Event types we have a dedicated label for. Anything else is an unmodelled
+// runtime observation and only surfaces when it actually carries text.
+const EVENT_TITLES: Record<string, string> = {
+  run_started: 'scheduler.status.running',
+  agent_queued: 'scheduler.agentQueued',
+  process_started: 'scheduler.processStarted',
+  process_output: 'scheduler.output',
+  model_call_started: 'scheduler.modelGenerating',
+  model_message_completed: 'scheduler.result',
+  model_stream_delta: 'scheduler.modelOutput',
+  model_reasoning_delta: 'scheduler.modelReasoning',
+  model_reasoning_completed: 'scheduler.modelReasoning',
+  result: 'scheduler.result',
+  failed: 'scheduler.status.failed',
+  cancelled: 'scheduler.status.cancelled',
+}
+
 function eventTitle(eventType: string, translate: SchedulerActivityTranslator): string {
-  const keys: Record<string, string> = {
-    run_started: 'scheduler.status.running',
-    agent_queued: 'scheduler.agentQueued',
-    process_started: 'scheduler.processStarted',
-    process_output: 'scheduler.output',
-    model_call_started: 'scheduler.modelGenerating',
-    model_message_completed: 'scheduler.result',
-    model_stream_delta: 'scheduler.modelOutput',
-    model_reasoning_delta: 'scheduler.modelReasoning',
-    model_reasoning_completed: 'scheduler.modelReasoning',
-    result: 'scheduler.result',
-    failed: 'scheduler.status.failed',
-    cancelled: 'scheduler.status.cancelled',
-  }
-  return keys[eventType] ? translate(keys[eventType]) : translate('scheduler.activity')
+  return EVENT_TITLES[eventType] ? translate(EVENT_TITLES[eventType]) : translate('scheduler.activity')
 }
 
 function eventSummary(event: SchedulerRunEventView, translate: SchedulerActivityTranslator): string {

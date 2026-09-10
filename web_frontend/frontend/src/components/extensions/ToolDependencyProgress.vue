@@ -113,20 +113,20 @@ function stageKey(stage: string) {
   gap: 14px;
   padding: 14px;
   border: 1px solid var(--app-border);
-  border-radius: 18px;
+  border-radius: var(--app-radius-lg);
   background: var(--app-surface-muted);
 }
-.progress-mascot { display: grid; min-height: 72px; place-items: center; border-radius: 13px; background: var(--app-surface); }
+.progress-mascot { display: grid; min-height: 72px; place-items: center; border-radius: var(--app-radius-md); background: var(--app-surface); }
 .progress-content { display: grid; min-width: 0; align-content: center; gap: 9px; }
 .progress-heading { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
 .progress-heading > div { display: grid; gap: 2px; }
 .progress-heading strong { color: var(--app-text); font-size: 13px; }
 .progress-heading span, .progress-heading small { color: var(--app-text-muted); font-size: 10px; }
 .requirement-list { display: flex; flex-wrap: wrap; gap: 5px; }
-.requirement-list span { padding: 3px 7px; border: 1px solid var(--app-border); border-radius: 999px; color: var(--app-text-secondary); background: var(--app-surface); font-family: ui-monospace, monospace; font-size: 9px; }
+.requirement-list span { padding: 3px 7px; border: 1px solid var(--app-border); border-radius: var(--app-radius-pill); color: var(--app-text-secondary); background: var(--app-surface); font-family: ui-monospace, monospace; font-size: 9px; }
 .progress-logs { min-width: 0; color: var(--app-text-muted); font-size: 10px; }
 .progress-logs summary { cursor: pointer; }
-.progress-logs pre { max-height: 126px; margin: 7px 0 0; overflow: auto; padding: 9px; border-radius: 10px; color: var(--app-text-secondary); background: var(--app-surface); font: 9px/1.55 ui-monospace, monospace; white-space: pre-wrap; word-break: break-word; }
+.progress-logs pre { max-height: 126px; margin: 7px 0 0; overflow: auto; padding: 9px; border-radius: var(--app-radius-sm); color: var(--app-text-secondary); background: var(--app-surface); font: 9px/1.55 ui-monospace, monospace; white-space: pre-wrap; word-break: break-word; }
 .progress-error { margin: 0; color: var(--app-text); font-size: 10px; line-height: 1.55; }
 @media (max-width: 600px) { .dependency-progress { grid-template-columns: 1fr; } .progress-mascot { display: none; } }
 </style>

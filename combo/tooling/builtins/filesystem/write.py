@@ -12,6 +12,7 @@ from combo.tooling.builtins.filesystem.common import (
     require_file_locks,
     required_string,
     resolve_path,
+    workspace_relative_path,
     write_focus_facts,
 )
 from combo.tooling.envelope import tool_envelope
@@ -26,7 +27,6 @@ from combo.tooling.builtins.filesystem.staged_write import (
     commit_staged_write,
     start_staged_write,
 )
-from combo.tooling.builtins.filesystem.workspace_search import workspace_relative_path
 
 
 FOCUS_EVIDENCE_KEY = "focus"

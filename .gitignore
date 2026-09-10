@@ -33,7 +33,10 @@ vendor/
 src-tauri/target/
 src-tauri/gen/
 src-tauri/resources/python/
+src-tauri/resources/ripgrep/
 build/python-downloads/
+src-tauri/resources/ripgrep/
+build/ripgrep-downloads/
 
 # Built upstream CU platform artifacts
 src-tauri/resources/computer-use/

@@ -1346,7 +1346,7 @@ function formatCost(value: number | null | undefined): string {
   height: 100%;
   padding: 20px;
   border: 1px solid var(--app-border);
-  border-radius: 18px;
+  border-radius: var(--app-radius-lg);
   background: var(--app-surface);
 }
 
@@ -1363,7 +1363,7 @@ function formatCost(value: number | null | undefined): string {
   width: 38px;
   height: 38px;
   place-items: center;
-  border-radius: 12px;
+  border-radius: var(--app-radius-md);
   color: var(--app-surface);
   background: var(--app-text);
   font-size: 11px;

@@ -16,8 +16,13 @@
           <ToolIcon v-else :name="presentation.icon" />
         </span>
         <span class="tool-copy">
-          <strong>{{ displayName }}</strong>
-          <span v-if="summaryText" class="tool-summary-text">{{ summaryText }}</span>
+          <span class="tool-copy-line">
+            <strong>{{ summaryTitle }}</strong>
+            <span v-if="changeFileName" class="tool-change-path" :title="changePath">{{ changeFileName }}</span>
+            <b v-if="displayTotals.added" class="tool-change-added">+{{ displayTotals.added }}</b>
+            <i v-if="displayTotals.removed" class="tool-change-removed">-{{ displayTotals.removed }}</i>
+          </span>
+          <span v-if="secondaryText" class="tool-summary-text">{{ secondaryText }}</span>
         </span>
       </span>
       <span class="tool-side">
@@ -43,20 +48,46 @@
         <span v-for="fact in resultFacts" :key="fact">{{ fact }}</span>
       </div>
 
-      <div v-if="transactionFiles.length" class="structured-results transaction-results">
+      <div v-if="editDiffRows.length" class="tool-diff">
+        <div class="tool-diff-header">
+          <ResourceIcon :name="diffFilePath" kind="file" :size="16" />
+          <span class="tool-diff-path" :title="diffFilePath">{{ diffFilePath }}</span>
+          <span class="tool-diff-total">
+            <b v-if="editDiffTotals.added">+{{ editDiffTotals.added }}</b>
+            <i v-if="editDiffTotals.removed">-{{ editDiffTotals.removed }}</i>
+          </span>
+        </div>
+        <div class="tool-diff-body">
+          <div
+            v-for="(row, index) in visibleDiffRows"
+            :key="`${index}:${row.lineNumber}:${row.kind}`"
+            class="tool-diff-row"
+            :class="`tool-diff-${row.kind}`"
+          >
+            <span class="tool-diff-gutter">{{ row.lineNumber }}</span>
+            <span class="tool-diff-marker" aria-hidden="true" />
+            <code class="tool-diff-text">{{ row.text || ' ' }}</code>
+          </div>
+        </div>
+        <p v-if="diffTruncated" class="tool-diff-truncated">
+          {{ t('tool.diff.truncated', { count: editDiffRows.length - visibleDiffRows.length }) }}
+        </p>
+      </div>
+
+      <div v-if="changedFiles.length" class="structured-results transaction-results">
         <div
-          v-for="file in transactionFiles"
-          :key="`${file.change_type}:${file.path}`"
+          v-for="file in changedFiles"
+          :key="`${file.changeType}:${file.path}`"
           class="transaction-file"
         >
           <ResourceIcon :name="file.path" kind="file" :size="18" />
-          <span class="transaction-file-path">{{ file.path }}</span>
-          <span class="transaction-change" :class="`transaction-change-${file.change_type}`">
-            {{ transactionChangeLabel(file.change_type) }}
+          <span class="transaction-file-path" :title="file.path">{{ file.path }}</span>
+          <span class="transaction-change" :class="`transaction-change-${file.changeType}`">
+            {{ transactionChangeLabel(file.changeType) }}
           </span>
           <span class="transaction-lines">
-            <b v-if="file.change_summary?.added_lines">+{{ file.change_summary.added_lines }}</b>
-            <i v-if="file.change_summary?.removed_lines">-{{ file.change_summary.removed_lines }}</i>
+            <b v-if="file.added">+{{ file.added }}</b>
+            <i v-if="file.removed">-{{ file.removed }}</i>
           </span>
         </div>
       </div>
@@ -142,6 +173,7 @@ import { useI18n } from '@/composables/useI18n'
 import { useWorkspaceResourceUrls } from '@/composables/useWorkspaceResourceUrls'
 import { isImageResource, workspaceResourceUrl } from '@/utils/workspaceResources'
 import { toolPresentation } from '@/utils/toolPresentation'
+import { buildUnifiedDiff, type UnifiedDiffRow } from '@/utils/unifiedDiff'
 import { isRuntimeCancellation } from '@/utils/runtimeCancellation'
 import type {
   ArtifactMessagePart,
@@ -155,6 +187,20 @@ const props = withDefaults(defineProps<{
 }>(), {
   workspaceContext: null,
 })
+
+interface ChangedFile {
+  path: string
+  name: string
+  changeType: string
+  added: number
+  removed: number
+}
+
+/** Tools that rewrite one file and therefore always report a target path. */
+const WRITE_TOOL_NAMES = new Set(['edit', 'write'])
+
+/** Long edits are capped so a huge rewrite cannot flood the transcript. */
+const MAX_DIFF_ROWS = 200
 
 const { t } = useI18n()
 const presentation = computed(() => toolPresentation(props.part.toolName, props.part.arguments))
@@ -193,6 +239,12 @@ const showStatusLabel = computed(() => (
   || ['preview_ready', 'committed'].includes(String(resultRecord.value?.status || ''))
 ))
 const formattedArguments = computed(() => valueString(props.part.arguments))
+const argumentRecord = computed<Record<string, any> | null>(() => {
+  const value = props.part.arguments
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, any>
+    : null
+})
 const formattedOutput = computed(() => valueString(props.part.error || displayOutput(props.part.output)))
 const hasArguments = computed(() => hasValue(props.part.arguments))
 const hasOutput = computed(() => hasValue(props.part.output))
@@ -276,13 +328,17 @@ const resultFacts = computed(() => {
   const entries = Array.isArray(result.entries) ? result.entries.length : null
   if (matches !== null) facts.push(t('tool.fact.matches', { count: matches }))
   if (entries !== null) facts.push(t('tool.fact.entries', { count: entries }))
-  if (typeof result.replacements === 'number') facts.push(t('tool.fact.replacements', { count: result.replacements }))
-  if (typeof result.bytes_written === 'number') facts.push(t('tool.fact.bytesWritten', { count: result.bytes_written }))
+  // The summary line already reports added/removed lines for files we can name,
+  // so the raw replacement/byte counters would only repeat it.
+  const hasFileChanges = changedFiles.value.length > 0
+  if (!hasFileChanges && typeof result.replacements === 'number') {
+    facts.push(t('tool.fact.replacements', { count: result.replacements }))
+  }
+  if (!hasFileChanges && typeof result.bytes_written === 'number') {
+    facts.push(t('tool.fact.bytesWritten', { count: result.bytes_written }))
+  }
   if (typeof result.operations_count === 'number') {
     facts.push(t('tool.fact.operations', { count: result.operations_count }))
-  }
-  if (Array.isArray(result.affected_files)) {
-    facts.push(t('tool.fact.affectedFiles', { count: result.affected_files.length }))
   }
   if (typeof result.exit_code === 'number') facts.push(t('tool.fact.exitCode', { code: result.exit_code }))
   if (result.truncated === true || result.stdout_truncated === true || result.stderr_truncated === true) {
@@ -290,16 +346,82 @@ const resultFacts = computed(() => {
   }
   return facts
 })
-const transactionFiles = computed<Array<Record<string, any>>>(() => {
-  const files = resultRecord.value?.affected_files
-  if (!Array.isArray(files)) return []
-  return files.filter(file => (
-    file
-    && typeof file === 'object'
-    && typeof file.path === 'string'
-    && ['created', 'modified', 'deleted'].includes(String(file.change_type || ''))
-  ))
+const changedFiles = computed<ChangedFile[]>(() => {
+  const result = resultRecord.value
+  if (!result) return []
+  const affected = result.affected_files
+  if (Array.isArray(affected)) {
+    return affected
+      .filter(file => (
+        file
+        && typeof file === 'object'
+        && typeof file.path === 'string'
+        && ['created', 'modified', 'deleted'].includes(String(file.change_type || ''))
+      ))
+      .map(file => normalizeChangedFile(
+        String(file.path),
+        String(file.change_type || 'modified'),
+        file.change_summary,
+      ))
+  }
+  // Single-file tools (edit / write_once) report the target path and its diff
+  // directly instead of an affected_files list.
+  const path = String(result.path || '').trim()
+  if (path && result.change_summary && typeof result.change_summary === 'object') {
+    const changeType = result.created === true ? 'created' : 'modified'
+    return [normalizeChangedFile(path, changeType, result.change_summary)]
+  }
+  // The result payload may still be in flight or compressed away. Fall back to
+  // the requested target so the touched file is always named on write tools.
+  const requested = String(argumentRecord.value?.path || '').trim()
+  if (!WRITE_TOOL_NAMES.has(props.part.toolName) || !requested) return []
+  return [normalizeChangedFile(requested, 'modified', null)]
 })
+const changeTotals = computed(() => changedFiles.value.reduce(
+  (totals, file) => ({ added: totals.added + file.added, removed: totals.removed + file.removed }),
+  { added: 0, removed: 0 },
+))
+// The edit tool only reports the swapped snippet, so its real content change is
+// rebuilt here from the old/new text the model actually sent.
+const editDiffRows = computed<UnifiedDiffRow[]>(() => {
+  if (props.part.toolName !== 'edit') return []
+  const oldText = typeof argumentRecord.value?.old_text === 'string' ? argumentRecord.value.old_text : ''
+  const newText = typeof argumentRecord.value?.new_text === 'string' ? argumentRecord.value.new_text : ''
+  if (!oldText && !newText) return []
+  return buildUnifiedDiff(oldText, newText)
+})
+const editDiffTotals = computed(() => editDiffRows.value.reduce(
+  (totals, row) => {
+    if (row.kind === 'added') totals.added += 1
+    else if (row.kind === 'removed') totals.removed += 1
+    return totals
+  },
+  { added: 0, removed: 0 },
+))
+const displayTotals = computed(() => (
+  changeTotals.value.added || changeTotals.value.removed ? changeTotals.value : editDiffTotals.value
+))
+const visibleDiffRows = computed(() => editDiffRows.value.slice(0, MAX_DIFF_ROWS))
+const diffTruncated = computed(() => editDiffRows.value.length > MAX_DIFF_ROWS)
+const diffFilePath = computed(() => changePath.value || String(argumentRecord.value?.path || '').trim())
+// `已编辑` / `已新建` / `已删除`, or a file count when a transaction touched many.
+const changeAction = computed(() => {
+  const files = changedFiles.value
+  if (!files.length) return ''
+  if (files.length > 1) return t('tool.change.editedFiles', { count: files.length })
+  const key = files[0].changeType === 'created'
+    ? 'tool.change.created'
+    : files[0].changeType === 'deleted'
+      ? 'tool.change.deleted'
+      : 'tool.change.edited'
+  return t(key as any)
+})
+// A file change says more about what happened than the generic tool name, so the
+// action leads the summary and the touched file keeps its own underlined span.
+const changeFileName = computed(() => (changedFiles.value.length === 1 ? changedFiles.value[0].name : ''))
+const summaryTitle = computed(() => changeAction.value || displayName.value)
+const secondaryText = computed(() => summaryText.value)
+const changePath = computed(() => changedFiles.value[0]?.path || '')
 const grepMatches = computed<Array<Record<string, any>>>(() => {
   const matches = resultRecord.value?.matches
   if (!Array.isArray(matches) || !matches.some(item => item && typeof item.line_number === 'number')) return []
@@ -362,6 +484,19 @@ function preventUnavailablePath(event: MouseEvent, path: unknown, kind?: unknown
 
 function preventUnavailableArtifact(event: MouseEvent, artifact: ArtifactMessagePart) {
   if (!artifactUrl(artifact)) event.preventDefault()
+}
+
+function normalizeChangedFile(path: string, changeType: string, summary: unknown): ChangedFile {
+  const record = summary && typeof summary === 'object' && !Array.isArray(summary)
+    ? summary as Record<string, any>
+    : {}
+  return {
+    path,
+    name: path.split(/[\\/]/).pop() || path,
+    changeType,
+    added: Number(record.added_lines) || 0,
+    removed: Number(record.removed_lines) || 0,
+  }
 }
 
 function transactionChangeLabel(changeType: unknown): string {
@@ -495,6 +630,13 @@ function displayOutput(value: unknown): unknown {
   gap: 2px;
 }
 
+.tool-copy-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
 .tool-copy strong,
 .tool-summary-text {
   overflow: hidden;
@@ -503,7 +645,138 @@ function displayOutput(value: unknown): unknown {
 }
 
 .tool-copy strong {
+  min-width: 0;
   font-size: 13px;
+}
+
+.tool-change-added,
+.tool-change-removed {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 600;
+  font-style: normal;
+}
+
+.tool-change-path {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--app-text);
+  text-decoration: underline dotted;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  text-decoration-color: color-mix(in srgb, var(--app-text) 40%, transparent);
+}
+
+.tool-change-added {
+  color: var(--app-diff-addition);
+}
+
+.tool-change-removed {
+  color: var(--app-diff-deletion);
+}
+
+/* Inline content diff for the edit tool: shows the actual added/removed lines
+   instead of only the tool name. */
+.tool-diff {
+  margin: var(--app-space-xs, 8px) var(--app-space-sm, 12px) 0;
+  overflow: hidden;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface);
+}
+
+.tool-diff-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--app-border);
+  background: var(--app-surface-muted);
+}
+
+.tool-diff-path {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--app-text-secondary);
+  font-family: var(--app-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-diff-total {
+  flex: none;
+  display: inline-flex;
+  gap: 6px;
+  font: 10px/1 var(--app-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+.tool-diff-total b { color: var(--app-diff-addition); }
+.tool-diff-total i { color: var(--app-diff-deletion); font-style: normal; }
+
+.tool-diff-body {
+  max-height: min(46vh, 420px);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.tool-diff-row {
+  display: grid;
+  grid-template-columns: 38px 14px minmax(0, 1fr);
+  align-items: baseline;
+  font-family: var(--app-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+.tool-diff-gutter {
+  padding-right: 8px;
+  color: var(--app-text-subtle);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+.tool-diff-marker { user-select: none; }
+
+.tool-diff-text {
+  min-width: 0;
+  padding-right: 10px;
+  color: var(--app-text);
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tool-diff-added { background: var(--app-diff-addition-surface); }
+.tool-diff-removed { background: var(--app-diff-deletion-surface); }
+
+.tool-diff-added .tool-diff-marker::before {
+  content: '+';
+  color: var(--app-diff-addition);
+  font-weight: 700;
+}
+
+.tool-diff-removed .tool-diff-marker::before {
+  content: '−';
+  color: var(--app-diff-deletion);
+  font-weight: 700;
+}
+
+.tool-diff-context .tool-diff-text { color: var(--app-text-secondary); }
+
+.tool-diff-truncated {
+  margin: 0;
+  padding: 7px 10px;
+  border-top: 1px solid var(--app-border);
+  color: var(--app-text-muted);
+  font-size: 10px;
 }
 
 .tool-summary-text,

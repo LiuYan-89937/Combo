@@ -94,6 +94,7 @@ class ContextSystemRuntime:
             messages=working_messages,
             policy=compression_policy,
             node_id=node_id,
+            protected_tail_start_id=working_state.conversation.current_user_input_id,
             token_counter=compression_result_counter,
             trigger_count=effective_count,
             on_start=lambda report: emit_context_event(

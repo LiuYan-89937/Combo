@@ -858,7 +858,7 @@ defineExpose({
   gap: var(--app-space-md);
   padding: 10px 12px 10px 16px;
   border: 1px solid var(--app-text);
-  border-radius: 22px;
+  border-radius: var(--app-radius-lg);
   background: var(--app-surface);
   box-shadow: 0 10px 28px color-mix(in srgb, var(--app-text) 12%, transparent);
   transform-origin: 28px 100%;
@@ -1055,7 +1055,7 @@ defineExpose({
   padding: 0 12px;
   color: var(--app-text);
   border-color: color-mix(in srgb, var(--app-text) 14%, transparent);
-  border-radius: 999px;
+  border-radius: var(--app-radius-pill);
   background: var(--app-surface-muted);
   box-shadow: inset 0 1px 0 var(--app-glass-border-light);
 }
@@ -1123,7 +1123,7 @@ defineExpose({
 .plan-mode-button.active,
 .collaboration-mode-button.active {
   color: var(--app-surface);
-  border-radius: 8px;
+  border-radius: var(--app-radius-sm);
   background: var(--app-text);
   box-shadow: none;
 }
@@ -1286,7 +1286,7 @@ defineExpose({
   padding: 0 4px;
   place-items: center;
   border: 2px solid var(--app-surface);
-  border-radius: 999px;
+  border-radius: var(--app-radius-pill);
   background: var(--app-text);
   color: var(--app-surface);
   font-size: 9px;

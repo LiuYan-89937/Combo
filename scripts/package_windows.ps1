@@ -228,6 +228,10 @@ if (-not $ReusePythonRuntime) {
         throw "Locked Python dependency installation failed with exit code $LASTEXITCODE."
     }
 }
+& $PythonExecutable (Join-Path $ProjectRoot "scripts\bundle_ripgrep.py") --target windows-x64
+if ($LASTEXITCODE -ne 0) {
+    throw "Bundled ripgrep preparation failed with exit code $LASTEXITCODE."
+}
 & $PythonExecutable (Join-Path $ProjectRoot "scripts\generate_icons.py")
 if ($LASTEXITCODE -ne 0) {
     throw "Application icon generation failed with exit code $LASTEXITCODE."

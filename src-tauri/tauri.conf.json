@@ -36,6 +36,7 @@
     ],
     "resources": {
       "resources/python": "python",
+      "resources/ripgrep": "ripgrep",
       "resources/README.md": "README.md",
       "../combo": "combo",
       "../web_frontend/backend": "web_frontend/backend",

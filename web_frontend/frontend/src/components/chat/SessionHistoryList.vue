@@ -291,7 +291,7 @@ watch([() => props.activeSessionId, groupedSessions], expandActiveWorkspace, { i
   min-height: 52px;
   padding: 8px 10px;
   border: 1px solid var(--app-border);
-  border-radius: 14px;
+  border-radius: var(--app-radius-md);
   background: var(--app-surface);
   box-shadow: 0 5px 14px color-mix(in srgb, var(--app-text) 5%, transparent);
   transition: transform var(--app-transition-fast), border-color var(--app-transition-fast);
@@ -308,7 +308,7 @@ watch([() => props.activeSessionId, groupedSessions], expandActiveWorkspace, { i
   display: grid;
   place-items: center;
   flex: 0 0 auto;
-  border-radius: 10px;
+  border-radius: var(--app-radius-sm);
   background: var(--app-surface-muted);
 }
 
@@ -350,7 +350,7 @@ watch([() => props.activeSessionId, groupedSessions], expandActiveWorkspace, { i
   gap: 8px;
   min-height: 64px;
   padding: 10px 72px 10px 12px;
-  border-radius: 12px;
+  border-radius: var(--app-radius-md);
   background: transparent;
   transition: background-color var(--app-transition-fast);
 }
@@ -419,7 +419,7 @@ watch([() => props.activeSessionId, groupedSessions], expandActiveWorkspace, { i
   place-items: center;
   padding: 0;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--app-radius-pill);
   color: var(--app-text-muted);
   background: transparent;
   cursor: pointer;

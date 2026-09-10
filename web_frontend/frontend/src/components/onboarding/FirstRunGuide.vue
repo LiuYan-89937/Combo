@@ -200,7 +200,7 @@ function finish() {
 .guide-focus {
   position: fixed;
   border: 1px solid color-mix(in srgb, var(--app-text) 36%, transparent);
-  border-radius: 18px;
+  border-radius: var(--app-radius-lg);
   box-shadow: 0 0 0 9999px color-mix(in srgb, var(--app-text) 14%, transparent);
   pointer-events: none;
   transition: inset .22s ease, width .22s ease, height .22s ease;
@@ -215,7 +215,7 @@ function finish() {
   gap: 16px;
   padding: 18px;
   border: 1px solid var(--app-border);
-  border-radius: 24px;
+  border-radius: var(--app-radius-lg);
   color: var(--app-text);
   background: var(--app-surface);
   box-shadow: 0 28px 90px color-mix(in srgb, var(--app-text) 24%, transparent);
@@ -246,7 +246,7 @@ function finish() {
   min-height: 110px;
   overflow: hidden;
   place-items: center;
-  border-radius: 17px;
+  border-radius: var(--app-radius-lg);
   background: var(--app-surface-muted);
 }
 
@@ -267,7 +267,7 @@ function finish() {
 .guide-bubble button {
   min-height: 36px;
   padding: 0 12px;
-  border-radius: 999px;
+  border-radius: var(--app-radius-pill);
   font: inherit;
   font-size: 12px;
   cursor: pointer;
@@ -277,7 +277,7 @@ function finish() {
 .guide-skip, .guide-back { border: 0; color: var(--app-text-muted); background: transparent; }
 .guide-next { justify-self: end; border: 1px solid var(--app-text); color: var(--app-surface); background: var(--app-text); }
 .guide-progress { display: flex; gap: 5px; }
-.guide-progress span { width: 5px; height: 5px; border-radius: 999px; background: var(--app-border-hover); transition: width var(--app-transition-base), background var(--app-transition-fast); }
+.guide-progress span { width: 5px; height: 5px; border-radius: var(--app-radius-pill); background: var(--app-border-hover); transition: width var(--app-transition-base), background var(--app-transition-fast); }
 .guide-progress span.active { width: 18px; background: var(--app-text); }
 
 @keyframes guide-bubble-in {

@@ -462,7 +462,7 @@ watch(() => props.show, (visible) => {
   height: 100%;
   padding: 18px;
   border: 1px solid var(--app-border);
-  border-radius: 18px;
+  border-radius: var(--app-radius-lg);
   background: var(--app-surface);
 }
 
@@ -480,7 +480,7 @@ watch(() => props.show, (visible) => {
   height: 29px;
   place-items: center;
   color: var(--app-surface);
-  border-radius: 10px;
+  border-radius: var(--app-radius-sm);
   background: var(--app-text);
   font-size: 9px;
   font-weight: 800;
@@ -507,7 +507,7 @@ watch(() => props.show, (visible) => {
   margin-top: 10px;
   padding: 12px;
   color: var(--app-surface);
-  border-radius: 13px;
+  border-radius: var(--app-radius-md);
   background: var(--app-text);
 }
 
@@ -554,7 +554,7 @@ watch(() => props.show, (visible) => {
   color: var(--app-text);
   text-align: left;
   border: 1px solid var(--app-border);
-  border-radius: 15px;
+  border-radius: var(--app-radius-md);
   background: var(--app-surface);
   cursor: pointer;
   transition: border-color .16s ease, background .16s ease, color .16s ease;
@@ -582,7 +582,7 @@ watch(() => props.show, (visible) => {
   height: 38px;
   place-items: center;
   border: 1px solid currentColor;
-  border-radius: 12px;
+  border-radius: var(--app-radius-md);
   font-size: 11px;
   font-weight: 800;
 }
@@ -666,7 +666,7 @@ watch(() => props.show, (visible) => {
   color: var(--app-text);
   text-align: left;
   border: 1px solid var(--app-border);
-  border-radius: 13px;
+  border-radius: var(--app-radius-md);
   background: var(--app-surface);
   cursor: pointer;
   transition: border-color .16s ease, background .16s ease, color .16s ease;
@@ -734,7 +734,7 @@ watch(() => props.show, (visible) => {
 :global(.scheduler-job-modal.n-card) {
   --editor-modal-width: 1120px;
   overflow: hidden;
-  border-radius: 24px;
+  border-radius: var(--app-radius-lg);
   background: var(--app-surface);
 }
 

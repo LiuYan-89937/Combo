@@ -65,7 +65,7 @@ const emit = defineEmits<{ opened: [] }>()
   min-height: 0;
   overflow: hidden;
   border: 1px solid var(--app-border);
-  border-radius: 20px;
+  border-radius: var(--app-radius-lg);
   background: var(--app-surface-elevated);
   box-shadow: var(--app-shadow-lg);
 }

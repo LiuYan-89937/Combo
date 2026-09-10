@@ -233,7 +233,7 @@ function handleRevise() {
 .tool-approval-panel {
   padding: 18px;
   border: 1px solid var(--app-border);
-  border-radius: 20px;
+  border-radius: var(--app-radius-lg);
   background: var(--app-surface);
   color: var(--app-text);
   box-shadow: 0 12px 32px rgb(0 0 0 / 7%);
@@ -298,7 +298,7 @@ function handleRevise() {
   max-width: 100%;
   padding: 3px 9px;
   border: 1px solid var(--app-border);
-  border-radius: 999px;
+  border-radius: var(--app-radius-pill);
   color: var(--app-text-secondary);
   font-size: 12px;
   line-height: 1.6;

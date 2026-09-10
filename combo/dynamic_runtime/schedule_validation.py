@@ -4,13 +4,16 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 import math
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from apscheduler.triggers.cron import CronTrigger
 
 
 ScheduleType = Literal["cron", "interval", "date"]
+ExecutionMode = Literal["parallel", "serial"]
+
+DEFAULT_EXECUTION_MODE: ExecutionMode = "parallel"
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +67,25 @@ def validate_schedule(
         return ValidatedSchedule(kind, expression, timezone_name, date=run_date)
 
     raise ValueError("schedule_type must be one of: cron, interval, date")
+
+
+def validate_execution_mode(value: Any) -> ExecutionMode:
+    """Normalize a job's execution mode.
+
+    ``parallel`` fires on schedule and tolerates overlapping runs (the
+    historical behaviour). ``serial`` starts counting the next interval only
+    after the previous run reaches a terminal state.
+    """
+    if value is None:
+        return DEFAULT_EXECUTION_MODE
+    if not isinstance(value, str):
+        raise ValueError("execution_mode must be a string")
+    mode = value.strip()
+    if not mode:
+        return DEFAULT_EXECUTION_MODE
+    if mode not in ("parallel", "serial"):
+        raise ValueError("execution_mode must be one of: parallel, serial")
+    return cast(ExecutionMode, mode)
 
 
 def _text(value: Any, field: str) -> str:
