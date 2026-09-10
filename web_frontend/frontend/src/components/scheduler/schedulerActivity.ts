@@ -47,7 +47,9 @@ export function schedulerActivity(
     }
   }
   if (event.event_type === 'model_call_started') {
-    return streamActivity(event, 'output', streamId, translate)
+    // Lifecycle only. It carries no content, and creating the output stream report
+    // here would order the reply before the reasoning deltas that come first.
+    return null
   }
   if (event.event_type === 'model_call_failed') {
     return streamActivity(event, 'output', streamId, translate)

@@ -18,8 +18,9 @@ import type {
   RunStatus,
 } from '@/types/protocol'
 import {
-  buildConversationScopeState,
-  normalizeConversationScopeState,
+  captureConversationScopeState,
+  createConversationScopeState,
+  isConversationStateKey,
 } from './runtime/conversationState'
 import {
   ensureConversationTurn,
@@ -1213,7 +1214,14 @@ export const useRuntimeStore = defineStore('runtime', {
         restore()
         this._saveActiveConversationScope()
       } else {
-        this._projectConversationScope(scope, restore)
+        const state = this.conversationScopes[scope] || createConversationScopeState()
+        this.conversationScopes[scope] = state
+        scopedRuntimeContext(this, scope, state)._applyAgentPackageSessionSnapshot(
+          snapshot,
+          session,
+          scope,
+          false,
+        )
       }
     },
 
@@ -1417,12 +1425,9 @@ export const useRuntimeStore = defineStore('runtime', {
       if (!scope || this.activeConversationScope === scope) return
       this._saveActiveConversationScope()
       this.activeConversationScope = scope
-      const saved = this.conversationScopes[scope]
-      if (saved) {
-        this._restoreConversationScope(saved)
-      } else {
-        this._clearConversationViewState()
-      }
+      const state = this.conversationScopes[scope] || createConversationScopeState()
+      this.conversationScopes[scope] = state
+      this._restoreConversationScope(state)
     },
 
     _shouldActivateConversationScope(scope: string): boolean {
@@ -1431,70 +1436,41 @@ export const useRuntimeStore = defineStore('runtime', {
         || isMoreSpecificConversationScope(this.activeConversationScope, scope)
     },
 
-    _projectConversationScope(scope: string, project: () => void) {
-      const previousScope = this.activeConversationScope
-      if (previousScope) this._saveActiveConversationScope()
-      this.activeConversationScope = scope
-      const saved = this.conversationScopes[scope]
-      if (saved) {
-        this._restoreConversationScope(saved)
-      } else {
-        this._clearConversationViewState()
-      }
-      try {
-        project()
-        this._saveActiveConversationScope()
-      } finally {
-        if (previousScope) {
-          this.activeConversationScope = previousScope
-          const previous = this.conversationScopes[previousScope]
-          if (previous) {
-            this._restoreConversationScope(previous)
-          } else {
-            this._clearConversationViewState()
-          }
-        } else {
-          this.activeConversationScope = null
-          this._clearConversationViewState()
-        }
-      }
-    },
-
     _saveActiveConversationScope() {
       const scope = this.activeConversationScope
       if (!scope) return
-      this.conversationScopes[scope] = buildConversationScopeState(this)
+      this.conversationScopes[scope] = captureConversationScopeState(this)
     },
 
     _restoreConversationScope(saved: ConversationScopeState) {
-      const restored = normalizeConversationScopeState(saved)
-      this.activeRequestId = restored.activeRequestId ?? null
-      this.runStatus = restored.runStatus ?? 'idle'
-      this.pendingInterrupt = restored.pendingInterrupt ?? null
-      this.currentRunId = restored.currentRunId ?? null
-      this.nodes = restored.nodes || {}
-      this.stages = restored.stages || {}
-      this.transcript = restored.transcript
-      this.conversationTurns = restored.conversationTurns
-      this.timeline = restored.timeline
-      this.tools = restored.tools
-      this.currentPlan = restored.currentPlan
-      this.runtimeActivity = restored.runtimeActivity
-      this.computerUseActivity = restored.computerUseActivity
-      this.contextActivity = restored.contextActivity
-      this.contextWindow = restored.contextWindow
-      this.memoryActivity = restored.memoryActivity
-      this.modelStreams = restored.modelStreams
-      this.activeMainSessionId = restored.activeMainSessionId
-      this.activeAgentSessionId = restored.activeAgentSessionId
-      this.activeWorkspaceId = restored.activeWorkspaceId
+      this.activeRequestId = saved.activeRequestId ?? null
+      this.runStatus = saved.runStatus ?? 'idle'
+      this.pendingInterrupt = saved.pendingInterrupt ?? null
+      this.currentRunId = saved.currentRunId ?? null
+      this.nodes = saved.nodes || {}
+      this.stages = saved.stages || {}
+      this.transcript = saved.transcript
+      this.conversationTurns = saved.conversationTurns
+      this.timeline = saved.timeline
+      this.tools = saved.tools
+      this.currentPlan = saved.currentPlan
+      this.runtimeActivity = saved.runtimeActivity
+      this.computerUseActivity = saved.computerUseActivity
+      this.contextActivity = saved.contextActivity
+      this.contextWindow = saved.contextWindow
+      this.memoryActivity = saved.memoryActivity
+      this.modelStreams = saved.modelStreams
+      this.activeMainSessionId = saved.activeMainSessionId
+      this.activeAgentSessionId = saved.activeAgentSessionId
+      this.activeWorkspaceId = saved.activeWorkspaceId
     },
 
     _dispatchEventToConversationScope(scope: string, event: RuntimeFrontendEvent) {
-      this._projectConversationScope(scope, () => {
-        this._dispatchEvent(event)
-        this._recordTimelineEvent(event)
-      })
+      const state = this.conversationScopes[scope] || createConversationScopeState()
+      this.conversationScopes[scope] = state
+      const context = scopedRuntimeContext(this, scope, state)
+      context._dispatchEvent(event)
+      context._recordTimelineEvent(event)
     },
 
     _renameConversationScope(previousScope: string, nextScope: string) {
@@ -1825,6 +1801,37 @@ export const useRuntimeStore = defineStore('runtime', {
 
   },
 })
+
+/**
+ * Reuse the canonical runtime reducer against an off-screen conversation.
+ * Conversation-owned fields are redirected to that scope, while process-wide
+ * registries and package metadata continue to use the root store.
+ */
+function scopedRuntimeContext<T extends object>(
+  store: T,
+  scope: string,
+  state: ConversationScopeState,
+): T {
+  let currentScope = scope
+  return new Proxy(store, {
+    get(target, property) {
+      if (property === 'activeConversationScope') return currentScope
+      if (isConversationStateKey(property)) return state[property]
+      return Reflect.get(target, property, target)
+    },
+    set(target, property, value) {
+      if (property === 'activeConversationScope') {
+        currentScope = String(value || '')
+        return true
+      }
+      if (isConversationStateKey(property)) {
+        Reflect.set(state, property, value)
+        return true
+      }
+      return Reflect.set(target, property, value, target)
+    },
+  })
+}
 
 function currentLocale() {
   if (typeof window === 'undefined') return detectBrowserLocale()

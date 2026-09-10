@@ -562,7 +562,7 @@ async function openRoutedAgentSession(version: number): Promise<boolean> {
     if (emptyAgentRouteIsActive(packageId, workspaceId)) return true
     agentStore.enterAgentChat(packageId, null)
     runtimeStore.showEmptyAgentPackageSession(packageId, workspaceId)
-    await commands.selectAgentPackage(packageId)
+    await ensureAgentPackageSelected(packageId)
     return true
   }
   if (!sessionId) return false
@@ -575,15 +575,22 @@ async function openRoutedAgentSession(version: number): Promise<boolean> {
   ) {
     return true
   }
+  const scopeIsCached = Boolean(runtimeStore.conversationScopes[routedScope])
   agentStore.enterAgentChat(packageId, sessionId)
   runtimeStore.expectAgentPackageSession(packageId, sessionId)
-  await commands.selectAgentPackage(packageId)
+  await ensureAgentPackageSelected(packageId)
   if (version !== routeActivationVersion || !routeMatchesAgentSession(packageId, sessionId)) return true
+  if (scopeIsCached) return true
   await commands.loadAgentPackageSession(
     packageId,
     sessionId,
   )
   return true
+}
+
+async function ensureAgentPackageSelected(packageId: string): Promise<void> {
+  if (runtimeStore.selectedAgentPackage?.package_id === packageId) return
+  await commands.selectAgentPackage(packageId)
 }
 
 function activateAgentWorkspace(): void {

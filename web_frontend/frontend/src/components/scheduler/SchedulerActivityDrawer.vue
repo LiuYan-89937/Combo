@@ -110,7 +110,7 @@ function noticeTask(notice: SchedulerRunNoticeView): BackgroundTask {
     task_text: notice.title,
     activity_summary: notice.summary,
     activity_updated_at: notice.timestamp,
-    payload: notice.payload || {},
+    payload: { scheduler_run: true, ...(notice.payload || {}) },
     delivery_standard: {},
     visible_context: {},
     depends_on: [],

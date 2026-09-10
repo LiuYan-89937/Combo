@@ -316,7 +316,7 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
     @router.get("/api/agent-packages")
     async def agent_packages(request: Request) -> dict[str, Any]:
         principal_id = _principal(request)
-        sessions = _session_views(backend, principal_id)
+        sessions = await asyncio.to_thread(_session_views, backend, principal_id)
         return {"event": _event("agent_packages_listed", {"packages": [_system_package(len(sessions))]})}
 
     @router.post("/api/agent-packages/select")
@@ -324,7 +324,7 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
         principal_id = _principal(request)
         payload = await request.json()
         _require_system_package(payload.get("package_id"))
-        sessions = _session_views(backend, principal_id)
+        sessions = await asyncio.to_thread(_session_views, backend, principal_id)
         return {
             "event": _event(
                 "agent_package_selected",
@@ -335,18 +335,20 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
     @router.get("/api/agent-packages/{package_id}/sessions")
     async def agent_package_sessions(request: Request, package_id: str) -> dict[str, Any]:
         _require_system_package(package_id)
-        return {"event": _event("agent_package_sessions_listed", {"sessions": _session_views(backend, _principal(request))})}
+        sessions = await asyncio.to_thread(_session_views, backend, _principal(request))
+        return {"event": _event("agent_package_sessions_listed", {"sessions": sessions})}
 
     @router.get("/api/agent-packages/{package_id}/sessions/{session_id}")
     async def agent_package_session(request: Request, package_id: str, session_id: str) -> dict[str, Any]:
         _require_system_package(package_id)
         principal_id = _principal(request)
+        session = await asyncio.to_thread(_session_snapshot, backend, principal_id, session_id)
         return {
             "event": _event(
                 "agent_package_session_loaded",
                 {
                     "package_id": SYSTEM_CHAT_PACKAGE_ID,
-                    "session": _session_snapshot(backend, principal_id, session_id),
+                    "session": session,
                 },
                 session_id=session_id,
             )

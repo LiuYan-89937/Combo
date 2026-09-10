@@ -160,7 +160,6 @@ def _cancel_runtime_for_inactive_conversation(
         conn,
         instance=instance,
         error=error,
-        reason="conversation_inactive",
         reserve_event_sequence=False,
         now=now,
     )
@@ -190,7 +189,6 @@ def _cancel_incomplete_runtime(conn, *, instance: RuntimeInstance, now: str) -> 
         conn,
         instance=instance,
         error=error,
-        reason="application_restarted",
         reserve_event_sequence=True,
         now=now,
     )
@@ -218,7 +216,6 @@ def _cancel_runtime_record(
     *,
     instance: RuntimeInstance,
     error: RuntimeErrorEnvelope,
-    reason: str,
     reserve_event_sequence: bool,
     now: str,
 ) -> RuntimeInstance:
@@ -230,15 +227,13 @@ def _cancel_runtime_record(
             "updated_at": now,
             "terminal_at": now,
             "error": error,
-            "cancel_requested_at": now,
-            "cancel_reason": reason,
         }
     )
     changed = conn.execute(
         """
         update runtime_instances
         set status = 'cancelled', last_event_sequence = ?, payload_json = ?,
-            updated_at = ?, terminal_at = ?, cancel_requested_at = ?
+            updated_at = ?, terminal_at = ?, cancel_requested_at = ?, cancel_command_id = ?
         where runtime_instance_id = ? and status = ?
         """,
         (
@@ -246,7 +241,8 @@ def _cancel_runtime_record(
             cancelled.model_dump_json(),
             now,
             now,
-            now,
+            cancelled.cancel_requested_at,
+            cancelled.cancel_command_id,
             instance.runtime_instance_id,
             instance.status,
         ),

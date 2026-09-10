@@ -38,53 +38,77 @@
       </n-button>
     </header>
 
-    <section class="task-current">
-      <span class="status-dot" :class="`dot-${normalizeStatus(view.status)}`" />
-      <span>
-        <strong>{{ currentTitle }}</strong>
-        <MessagePartRenderer
-          v-if="view.livePart"
-          :part="view.livePart"
-          :streaming="view.liveStreaming"
-        />
-        <small v-else-if="currentDescription && !view.delivery">{{ currentDescription }}</small>
-        <div
-          v-if="view.delivery"
-          class="task-delivery markdown-content"
-          v-html="renderedDelivery"
-        ></div>
-      </span>
-    </section>
+    <!-- Scheduler runs render the live model output through the exact same
+         conversation pipeline as the main chat (MessageItem → MessagePartRenderer /
+         tool cards), so the run reads as a streamed assistant turn with no composer. -->
+    <template v-if="schedulerRun">
+      <section class="task-current">
+        <span class="status-dot" :class="`dot-${normalizeStatus(view.status)}`" />
+        <span>
+          <strong>{{ currentTitle }}</strong>
+          <small v-if="schedulerStatusDetail">{{ schedulerStatusDetail }}</small>
+          <div
+            v-if="!view.streamMessage && view.delivery"
+            class="task-delivery markdown-content"
+            v-html="renderedDelivery"
+          ></div>
+        </span>
+      </section>
 
-    <details v-if="view.reports.length" class="task-section task-trace">
-      <summary>{{ t('backgroundTask.activity') }}</summary>
-      <div class="activity-chain">
-        <div
-          v-for="report in view.reports"
-          :key="report.phaseId"
-          class="activity-chain-item"
-          :class="`activity-${report.category}`"
-        >
-          <span class="progress-report-rail" aria-hidden="true">
-            <span class="status-dot" :class="`dot-${normalizeStatus(report.status)}`" />
-          </span>
+      <section v-if="view.streamMessage" class="task-stream">
+        <MessageItem :message="view.streamMessage" :streaming="view.streaming" />
+      </section>
+    </template>
+
+    <template v-else>
+      <section class="task-current">
+        <span class="status-dot" :class="`dot-${normalizeStatus(view.status)}`" />
+        <span>
+          <strong>{{ currentTitle }}</strong>
           <MessagePartRenderer
-            v-if="report.messagePart"
-            :part="report.messagePart"
-            :streaming="report.streaming"
+            v-if="view.livePart"
+            :part="view.livePart"
+            :streaming="view.liveStreaming"
           />
-          <ToolExecutionCard
-            v-else-if="report.toolExecution"
-            :part="report.toolExecution"
-          />
-          <span v-else class="activity-copy">
-            <strong v-if="report.title">{{ report.title }}</strong>
-            <small>{{ report.summary }}</small>
-          </span>
-          <time>{{ formatTime(report.occurredAt) }}</time>
+          <small v-else-if="currentDescription && !view.delivery">{{ currentDescription }}</small>
+          <div
+            v-if="view.delivery"
+            class="task-delivery markdown-content"
+            v-html="renderedDelivery"
+          ></div>
+        </span>
+      </section>
+
+      <details v-if="view.reports.length" class="task-section task-trace">
+        <summary>{{ t('backgroundTask.activity') }}</summary>
+        <div class="activity-chain">
+          <div
+            v-for="report in view.reports"
+            :key="report.phaseId"
+            class="activity-chain-item"
+            :class="`activity-${report.category}`"
+          >
+            <span class="progress-report-rail" aria-hidden="true">
+              <span class="status-dot" :class="`dot-${normalizeStatus(report.status)}`" />
+            </span>
+            <MessagePartRenderer
+              v-if="report.messagePart"
+              :part="report.messagePart"
+              :streaming="report.streaming"
+            />
+            <ToolExecutionCard
+              v-else-if="report.toolExecution"
+              :part="report.toolExecution"
+            />
+            <span v-else class="activity-copy">
+              <strong v-if="report.title">{{ report.title }}</strong>
+              <small>{{ report.summary }}</small>
+            </span>
+            <time>{{ formatTime(report.occurredAt) }}</time>
+          </div>
         </div>
-      </div>
-    </details>
+      </details>
+    </template>
 
     <section v-if="interaction" class="task-interaction">
       <div v-if="interaction.kind === 'tool_approval'" class="interaction-copy">
@@ -150,11 +174,13 @@ import { backgroundTasksApi } from '@/api/backgroundTasks'
 import SubAgentMascot from '@/components/brand/SubAgentMascot.vue'
 import ToolExecutionCard from '@/components/chat/ToolExecutionCard.vue'
 import MessagePartRenderer from '@/components/chat/MessagePartRenderer.vue'
+import MessageItem from '@/components/chat/MessageItem.vue'
 import type {
   ChatMessagePartStatus,
   ChatMessagePart,
   RuntimeFrontendEvent,
   ToolExecutionMessagePart,
+  TranscriptItem,
 } from '@/types/protocol'
 import { backgroundTaskActivityText } from '@/utils/backgroundTaskActivity'
 
@@ -186,6 +212,16 @@ const view = computed(() => buildView(
 const terminal = computed(() => ['succeeded', 'failed', 'cancelled'].includes(view.value.status))
 const statusLabel = computed(() => t(`backgroundTask.status.${view.value.status}` as any))
 const currentTitle = computed(() => localize(interaction.value?.title) || statusLabel.value)
+/**
+ * Scheduler runs are tagged by `asBackgroundTask` in SchedulerRunCapsules. They
+ * reuse the conversation renderer instead of the phase-report activity chain.
+ */
+const schedulerRun = computed(() => task.value.payload?.scheduler_run === true)
+const schedulerStatusDetail = computed(() => (
+  interaction.value?.message
+  || (projectedTask.value.status === 'failed' ? projectedTask.value.error?.message : '')
+  || ''
+))
 const currentDescription = computed(() => (
   interaction.value?.message
   || (projectedTask.value.status === 'failed' ? projectedTask.value.error?.message : '')
@@ -376,13 +412,17 @@ function buildView(current: BackgroundTask, timeline: BackgroundTaskEvent[], fal
       streamFormat,
     })
   }
-  const reports = Array.from(reportsByPhase.values())
-    .sort((left, right) => Date.parse(right.occurredAt) - Date.parse(left.occurredAt))
+  const orderedReports = Array.from(reportsByPhase.values())
+    .sort((left, right) => parseReportTime(left.startedAt || left.occurredAt)
+      - parseReportTime(right.startedAt || right.occurredAt))
     .map(report => ({
       ...report,
       messagePart: messagePartFromReport(report),
       toolExecution: toolExecutionFromReport(report)[0] || null,
     }))
+  const reports = [...orderedReports].sort(
+    (left, right) => Date.parse(right.occurredAt) - Date.parse(left.occurredAt),
+  )
   const liveReport = reports.find(report => report.streaming && report.messagePart)
   return {
     id: current.task_id,
@@ -390,6 +430,8 @@ function buildView(current: BackgroundTask, timeline: BackgroundTaskEvent[], fal
     objective: current.task_text,
     status: current.status,
     reports,
+    streamMessage: streamTranscriptMessage(current, orderedReports),
+    streaming: Boolean(liveReport?.streaming),
     latestSummary: reports.at(0)?.summary || '',
     livePart: liveReport?.messagePart || null,
     liveStreaming: Boolean(liveReport?.streaming),
@@ -401,6 +443,37 @@ function buildView(current: BackgroundTask, timeline: BackgroundTaskEvent[], fal
       || current.error?.code
       || '',
     ),
+  }
+}
+
+/**
+ * Fold a run's phase reports into a single assistant turn so the scheduler panel
+ * can render the run through the shared conversation components. Only model /
+ * process stream and tool reports become parts; pure status rows (agent queued,
+ * run started, …) carry no message content and are dropped.
+ */
+function streamTranscriptMessage(
+  current: BackgroundTask,
+  orderedReports: ActivityReport[],
+): TranscriptItem | null {
+  const parts: ChatMessagePart[] = []
+  for (const report of orderedReports) {
+    if (report.messagePart) parts.push(report.messagePart)
+    else if (report.toolExecution) parts.push(report.toolExecution)
+  }
+  if (parts.length === 0) return null
+  return {
+    id: `scheduler-run-${current.task_id}`,
+    role: 'assistant',
+    parts,
+    content: '',
+    timestamp: String(
+      orderedReports[0]?.startedAt
+      || orderedReports[0]?.occurredAt
+      || current.started_at
+      || current.created_at,
+    ),
+    metadata: {},
   }
 }
 
@@ -554,6 +627,11 @@ function localize(value: unknown): string {
   return key ? t(key as any) : ''
 }
 
+function parseReportTime(value: unknown): number {
+  const parsed = Date.parse(String(value || ''))
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
 function formatTime(value: unknown): string {
   const parsed = new Date(String(value || ''))
   if (!Number.isFinite(parsed.getTime())) return ''
@@ -576,6 +654,10 @@ function formatTime(value: unknown): string {
 .task-section small, .task-current small { color: var(--app-text-muted); font-size: 12px; line-height: 1.5; }
 .task-current { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; padding: 12px; border: 1px solid var(--app-border); border-radius: var(--app-radius-md); }
 .task-current > span:last-child { display: grid; gap: 3px; }
+/* Scheduler runs render the live model output as a conversation turn, so the
+   transcript inherits the main chat look and only drops the message padding. */
+.task-stream { min-width: 0; }
+.task-stream :deep(.message-item) { padding-inline: 0; }
 .status-dot { width: 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: var(--app-text-muted); }
 .dot-running { background: var(--app-text); box-shadow: 0 0 0 4px color-mix(in srgb, var(--app-text) 10%, transparent); }
 .dot-succeeded { background: var(--app-success); }
