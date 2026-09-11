@@ -376,7 +376,7 @@ async function refreshTasks(version: number) {
   try {
     const response = await backgroundTasksApi.list({ sessionId })
     if (version !== requestVersion || sessionId !== String(props.sessionId || '').trim()) return
-    tasks.value.splice(0, tasks.value.length, ...response.tasks)
+    tasks.value.splice(0, tasks.value.length, ...response.tasks.map(mergeTask))
     if (hydratedSessionId !== sessionId) {
       dismissedTaskIds.value = new Set(
         response.tasks.filter(task => isTerminal(task.status)).map(task => task.task_id),
@@ -398,7 +398,33 @@ async function refreshTasks(version: number) {
 
 function reconcileOne(updated: BackgroundTask) {
   const index = tasks.value.findIndex(task => task.task_id === updated.task_id)
-  if (index >= 0) tasks.value.splice(index, 1, updated)
+  if (index >= 0) tasks.value.splice(index, 1, mergeTask(updated))
+}
+
+/**
+ * Merges a server copy of a task over the locally held one.
+ *
+ * Runtime activity events reach the UI before the row they describe is
+ * persisted, so a refresh can carry an older `activity_summary` than the one
+ * already on screen. Replacing blindly made the capsule's status line fall back
+ * to the previous text for a few frames on every event — the status text
+ * oscillated A→B→A and read as the capsule flashing. Only the activity fields
+ * are guarded; the server's `status` stays authoritative so terminal
+ * transitions are never masked.
+ */
+function mergeTask(incoming: BackgroundTask): BackgroundTask {
+  const current = tasks.value.find(task => task.task_id === incoming.task_id)
+  if (!current) return incoming
+  const incomingAt = Date.parse(incoming.activity_updated_at || '')
+  const currentAt = Date.parse(current.activity_updated_at || '')
+  if (!Number.isFinite(incomingAt) || !Number.isFinite(currentAt) || currentAt <= incomingAt) {
+    return incoming
+  }
+  return {
+    ...incoming,
+    activity_summary: current.activity_summary,
+    activity_updated_at: current.activity_updated_at,
+  }
 }
 
 function removeTask(taskId: string) {
