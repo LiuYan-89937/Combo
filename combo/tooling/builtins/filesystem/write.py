@@ -17,10 +17,8 @@ from combo.tooling.builtins.filesystem.common import (
 )
 from combo.tooling.envelope import tool_envelope
 from combo.tooling.spec import ToolRiskResult
-from combo.tooling.builtins.filesystem.text_changes import (
-    atomic_write_bytes,
-    text_change_summary,
-)
+from combo.file_atomic import atomic_write_bytes
+from combo.tooling.builtins.filesystem.text_changes import text_change_summary
 from combo.tooling.builtins.filesystem.staged_write import (
     abort_staged_write,
     append_staged_write,

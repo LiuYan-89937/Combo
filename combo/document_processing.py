@@ -14,13 +14,9 @@ from typing import Any
 from urllib.parse import urlparse
 
 from combo.file_capabilities import (
-    DOCX_EXTENSIONS,
     EBOOK_EXTENSIONS,
-    EMAIL_EXTENSIONS,
-    IMAGE_EXTENSIONS,
     LEGACY_PRESENTATION_EXTENSIONS,
     LEGACY_WORD_EXTENSIONS,
-    OFFICE_EXTENSIONS,
     OPEN_DOCUMENT_EXTENSIONS,
     PDF_EXTENSIONS,
     RICH_TEXT_EXTENSIONS,

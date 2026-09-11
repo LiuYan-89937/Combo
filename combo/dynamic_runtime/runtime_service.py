@@ -12,7 +12,7 @@ from typing import Any, Literal, Protocol
 
 from langchain_core.messages import BaseMessage, HumanMessage, messages_from_dict, messages_to_dict
 from langgraph.types import Command
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from combo.dynamic_runtime.conversation_projection import (
     conversation_to_graph_messages,

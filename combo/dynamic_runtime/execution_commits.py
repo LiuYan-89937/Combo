@@ -16,7 +16,6 @@ from combo.dynamic_runtime.event_persistence import (
 from combo.dynamic_runtime.persistence_helpers import (
     advance_conversation_revision,
     insert_message,
-    insert_outbox,
 )
 from combo.dynamic_runtime.repositories import utc_now_text
 from combo.model_pool.usage import insert_runtime_model_usage
@@ -27,7 +26,6 @@ from combo.runtime_protocol import (
     RuntimeInstance,
     RuntimeModelUsage,
     ToolCallRecord,
-    OutboxRecord,
 )
 from combo.runtime_protocol.events import RuntimeEventPayload
 from combo.runtime_protocol.state_machines import (

@@ -114,6 +114,7 @@ import {
   type WorkspaceGroupedSession,
   type SessionWorkspaceSummary,
 } from '@/utils/sessionWorkspaceGrouping'
+import { formatClockTime, formatRelativeMinutes, isToday, parseDate } from '@/utils/format'
 
 export interface SessionHistoryItem extends WorkspaceGroupedSession {
   package_id?: string
@@ -245,15 +246,14 @@ function expandActiveWorkspace() {
 }
 
 function formatTime(timestamp: string): string {
-  const date = new Date(timestamp)
-  const now = new Date()
-  const diff = now.getTime() - date.getTime()
+  const date = parseDate(timestamp)
+  if (!date) return timestamp
+  const diff = Date.now() - date.getTime()
   if (diff < 3_600_000) {
-    const minutes = Math.floor(diff / 60_000)
-    return new Intl.RelativeTimeFormat(locale.value, { numeric: 'auto' }).format(-minutes, 'minute')
+    return formatRelativeMinutes(date, locale.value)
   }
-  if (date.toDateString() === now.toDateString()) {
-    return date.toLocaleTimeString(locale.value, { hour: '2-digit', minute: '2-digit' })
+  if (isToday(date)) {
+    return formatClockTime(date, locale.value)
   }
   return date.toLocaleDateString(locale.value, { month: '2-digit', day: '2-digit' })
 }

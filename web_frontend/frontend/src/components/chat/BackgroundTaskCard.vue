@@ -184,6 +184,7 @@ import type {
 } from '@/types/protocol'
 import { backgroundTaskActivityText } from '@/utils/backgroundTaskActivity'
 import { displayText } from '@/utils/displayText'
+import { formatClockTime, parseDate } from '@/utils/format'
 
 const props = defineProps<{
   task: BackgroundTask
@@ -634,9 +635,8 @@ function parseReportTime(value: unknown): number {
 }
 
 function formatTime(value: unknown): string {
-  const parsed = new Date(String(value || ''))
-  if (!Number.isFinite(parsed.getTime())) return ''
-  return new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' }).format(parsed)
+  const parsed = parseDate(value || '')
+  return parsed ? formatClockTime(parsed) : ''
 }
 
 </script>

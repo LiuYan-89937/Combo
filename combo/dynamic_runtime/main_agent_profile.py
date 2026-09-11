@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-import os
 from pathlib import Path
-import tempfile
+
+from combo.file_atomic import atomic_write_text
 
 
 PROFILE_VERSION = "main_agent_capability_profile.v2"
@@ -81,20 +81,8 @@ class MainAgentCapabilityProfileStore:
 
     def _write(self, profile: MainAgentCapabilityProfile) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix="main-agent-profile-",
-            dir=self._path.parent,
-        )
-        temporary = Path(temporary_name)
-        try:
-            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-                json.dump(profile.to_document(), stream, ensure_ascii=False, indent=2)
-                stream.write("\n")
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, self._path)
-        finally:
-            temporary.unlink(missing_ok=True)
+        serialized = json.dumps(profile.to_document(), ensure_ascii=False, indent=2) + "\n"
+        atomic_write_text(self._path, serialized)
 
 
 def _required_text(value: str) -> str:

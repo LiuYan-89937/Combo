@@ -3,7 +3,6 @@
 下载并打包 python-build-standalone 到 Tauri 资源目录
 用于生产环境的 Python 运行时
 """
-import os
 import platform
 import shutil
 import subprocess

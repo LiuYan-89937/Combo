@@ -79,7 +79,6 @@ def create_icns(png_1024: Path, output_icns: Path):
     """创建 macOS .icns 文件（需要 iconutil）"""
     import subprocess
     import tempfile
-    import shutil
 
     with tempfile.TemporaryDirectory() as tmpdir:
         iconset = Path(tmpdir) / "icon.iconset"

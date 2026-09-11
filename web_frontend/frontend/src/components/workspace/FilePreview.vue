@@ -6,7 +6,7 @@
         <span class="file-info-copy">
           <n-text strong class="file-name" :title="file.name">{{ file.name }}</n-text>
           <n-text depth="3" class="file-meta">
-            {{ formatFileSize(file.sizeBytes) }} · {{ previewLabel }}
+            {{ formatBytes(file.sizeBytes) }} · {{ previewLabel }}
           </n-text>
         </span>
       </div>
@@ -70,6 +70,7 @@ import { useMessage } from 'naive-ui'
 import FilePreviewContent from './FilePreviewContent.vue'
 import ResourceIcon from '@/components/common/ResourceIcon.vue'
 import { fileExtension, filePreviewKind } from '@/utils/filePreview'
+import { formatBytes } from '@/utils/format'
 
 const props = defineProps<{
   file: WorkspaceFileView
@@ -127,12 +128,6 @@ function releaseRawPreview(): void {
   rawFileUrl.value = ''
   if (rawFileObjectUrl) URL.revokeObjectURL(rawFileObjectUrl)
   rawFileObjectUrl = ''
-}
-
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 async function handleDownload() {

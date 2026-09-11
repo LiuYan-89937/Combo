@@ -78,7 +78,7 @@
             <n-icon size="13"><LinkOutline /></n-icon>
           </span>
           <span v-if="row.entry.kind === 'file' && row.entry.sizeBytes" class="entry-size">
-            {{ formatFileSize(row.entry.sizeBytes) }}
+            {{ formatBytes(row.entry.sizeBytes) }}
           </span>
           <div v-if="row.entry.mount" class="entry-actions" @click.stop>
             <ControlHint :label="t('workspace.unmountDirectory')">
@@ -167,6 +167,7 @@ import {
 } from '@/api/desktopWorkspaceFiles'
 import { useContextReferenceStore } from '@/stores/contextReferences'
 import { workspaceFileContextReference } from '@/utils/contextReferences'
+import { formatBytes } from '@/utils/format'
 import type { WorkspaceRequestContext } from '@/api/resourceTypes'
 import type { RuntimeFrontendEvent, WorkspaceEntry, WorkspaceScope } from '@/types/protocol'
 
@@ -492,12 +493,6 @@ function toggleExpanded(path: string): void {
     next.add(path)
   }
   expandedDirs.value = next
-}
-
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 onMounted(() => {

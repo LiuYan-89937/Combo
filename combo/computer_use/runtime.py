@@ -369,7 +369,6 @@ class ComputerUseCoordinator:
                         _ensure_not_cancelled(cancelled, host, session)
                         if result.get("isError") and name not in {"get_app_state", "list_apps"}:
                             result = _observe_after_failed_action(host, session, app, result, cancelled)
-                        text = _result_text(result)
                         observation = result.get("latest_observation", result)
                         if app and not observation.get("isError"):
                             last_states[app] = _result_text(observation)

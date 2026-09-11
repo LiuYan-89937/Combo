@@ -7,7 +7,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
 
-from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 from langgraph.prebuilt import ToolNode
@@ -16,7 +16,6 @@ from langgraph.runtime import Runtime
 from langgraph.types import interrupt
 
 from combo.runtime_kernel.observability.tool_events import emit_runtime_tool_activity
-from combo.runtime_protocol.messages import incomplete_tool_call_ids
 from combo.tooling.builtins.ask_usr.specs import ASK_USR_TOOL_ID
 from combo.tooling.execution_context import (
     current_tool_approval_override,

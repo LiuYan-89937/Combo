@@ -33,7 +33,6 @@ from combo.tooling.builtins.skill.specs import get_skill_tool_specs
 from combo.tooling.builtins.skill_installer.specs import get_skill_installer_tool_specs
 from combo.tooling.builtins.tool_output.specs import get_tool_output_tool_specs
 from combo.tooling.builtins.localization import localized_model_copy_for_builtin
-from combo.tooling.output_store import TOOL_OUTPUT_STORE_RESOURCE
 from combo.tooling.spec import ToolSpec
 
 

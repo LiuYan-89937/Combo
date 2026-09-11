@@ -553,7 +553,8 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
         after: int = 0,
     ) -> dict[str, Any]:
         principal_id = _principal(request)
-        task = _delegated_task_view(backend, principal_id, task_id)
+        # Raises 404 for an unknown task before the event list is built.
+        _delegated_task_view(backend, principal_id, task_id)
         events = _delegated_task_event_views(backend, principal_id, task_id)
         return {"events": [event for event in events if int(event["seq"]) > max(0, after)]}
 

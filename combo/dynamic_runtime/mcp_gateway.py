@@ -26,6 +26,7 @@ from combo.dynamic_runtime.mcp_runtime import (
     MCPServerCatalog,
     MCPServerRuntimeBinding,
 )
+from combo.file_atomic import atomic_write_text
 from combo.runtime_protocol import (
     CapabilityProjectionSnapshot,
     CapabilityRevisionRef,
@@ -718,16 +719,7 @@ def read_mcp_gateway_registry(path: Path) -> dict[str, Any]:
 def write_mcp_gateway_registry(path: Path, document: dict[str, Any]) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
-    try:
-        with temporary.open("w", encoding="utf-8") as stream:
-            json.dump(document, stream, ensure_ascii=False, indent=2)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, target)
-    finally:
-        temporary.unlink(missing_ok=True)
+    atomic_write_text(target, json.dumps(document, ensure_ascii=False, indent=2) + "\n")
 
 
 def _schema_evidence(schema: Any) -> MCPSchemaEvidence:

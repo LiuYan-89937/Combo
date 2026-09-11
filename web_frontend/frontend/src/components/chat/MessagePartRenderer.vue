@@ -151,6 +151,7 @@ import type { AttachmentMessagePart, ChatMessagePart, TranscriptAttachmentView }
 import type { WorkspaceRequestContext } from '@/api/resourceTypes'
 import { toolPresentation } from '@/utils/toolPresentation'
 import { isImageResource, workspaceImageSources } from '@/utils/workspaceResources'
+import { formatBytes } from '@/utils/format'
 
 const props = defineProps<{
   part: ChatMessagePart
@@ -220,7 +221,7 @@ const artifactMeta = computed(() => {
   if (props.part.type !== 'artifact') return ''
   return [
     props.part.mimeType,
-    typeof props.part.sizeBytes === 'number' ? formatFileSize(props.part.sizeBytes) : null,
+    typeof props.part.sizeBytes === 'number' ? formatBytes(props.part.sizeBytes) : null,
   ].filter(Boolean).join(' · ')
 })
 const delegatedDeliveryLabel = computed(() => {
@@ -309,12 +310,6 @@ function resolveMessageImageUrl(source: string): string | null {
 
 function preventUnavailableArtifact(event: MouseEvent) {
   if (!artifactFileUrl.value) event.preventDefault()
-}
-
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 function valueString(value: unknown): string {

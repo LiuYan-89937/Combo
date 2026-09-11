@@ -72,6 +72,7 @@ import { computed } from 'vue'
 import { useAppUpdateStore } from '@/stores/appUpdate'
 import { useStartupStore } from '@/stores/startup'
 import { renderMarkdownDocument } from '@/rendering/markdown'
+import { formatBytes } from '@/utils/format'
 
 const updateStore = useAppUpdateStore()
 const startupStore = useStartupStore()
@@ -98,10 +99,6 @@ const progressLabel = computed(() => {
   return `${downloaded} / ${formatBytes(updateStore.contentLength)}`
 })
 
-function formatBytes(value: number): string {
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
-  return `${(value / (1024 * 1024)).toFixed(1)} MB`
-}
 </script>
 
 <style scoped>

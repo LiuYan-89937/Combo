@@ -186,6 +186,7 @@ import { useWorkspaceResourceUrls } from '@/composables/useWorkspaceResourceUrls
 import { isImageResource, workspaceResourceUrl } from '@/utils/workspaceResources'
 import { toolPresentation } from '@/utils/toolPresentation'
 import { buildUnifiedDiff, type UnifiedDiffRow } from '@/utils/unifiedDiff'
+import { formatBytes } from '@/utils/format'
 import { isRuntimeCancellation } from '@/utils/runtimeCancellation'
 import type {
   ArtifactMessagePart,
@@ -536,15 +537,9 @@ function transactionChangeLabel(changeType: unknown): string {
 function artifactMeta(artifact: ArtifactMessagePart): string {
   const values = [
     artifact.mimeType,
-    typeof artifact.sizeBytes === 'number' ? formatFileSize(artifact.sizeBytes) : null,
+    typeof artifact.sizeBytes === 'number' ? formatBytes(artifact.sizeBytes) : null,
   ].filter(Boolean)
   return values.join(' · ')
-}
-
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 function hasValue(value: unknown): boolean {

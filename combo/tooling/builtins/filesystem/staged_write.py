@@ -21,7 +21,7 @@ from combo.tooling.builtins.filesystem.common import (
     require_filesystem_runtime,
     require_file_locks,
 )
-from combo.tooling.builtins.filesystem.text_changes import atomic_write_file
+from combo.file_atomic import atomic_write_file
 
 
 DEFAULT_STAGED_WRITE_TTL_SECONDS = 600

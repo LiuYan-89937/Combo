@@ -479,6 +479,7 @@ import { useAgentStore } from '@/stores/agent'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useSessionStore } from '@/stores/session'
 import { SYSTEM_CHAT_PACKAGE_ID } from '@/utils/resourceScope'
+import { formatBytes } from '@/utils/format'
 
 const props = defineProps<{
   show: boolean
@@ -772,18 +773,6 @@ async function clearConversations(): Promise<void> {
   }
 }
 
-function formatBytes(value: number): string {
-  const bytes = Math.max(0, Number(value) || 0)
-  if (bytes < 1024) return `${bytes} B`
-  const units = ['KB', 'MB', 'GB', 'TB']
-  let amount = bytes / 1024
-  let index = 0
-  while (amount >= 1024 && index < units.length - 1) {
-    amount /= 1024
-    index += 1
-  }
-  return `${amount >= 10 ? amount.toFixed(1) : amount.toFixed(2)} ${units[index]}`
-}
 </script>
 
 <style scoped>

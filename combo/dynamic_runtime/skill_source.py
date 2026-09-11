@@ -24,6 +24,7 @@ from combo.dynamic_runtime.filesystem_source_cache import (
     CapabilityDraftSource,
     FileSystemCapabilityDraftCache,
 )
+from combo.file_atomic import atomic_write_text
 from combo.runtime_protocol import CapabilityContent, CapabilityDraft, CapabilityTrustLevel
 
 
@@ -104,16 +105,7 @@ def _write_skill_manifest(
     yaml.allow_unicode = True
     stream = StringIO()
     yaml.dump(metadata, stream)
-    descriptor, temporary_name = tempfile.mkstemp(prefix="skill-manifest-", dir=path.parent)
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
-            output.write(f"---\n{stream.getvalue()}---\n\n{instructions.strip()}\n")
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
+    atomic_write_text(path, f"---\n{stream.getvalue()}---\n\n{instructions.strip()}\n")
 
 
 @dataclass(frozen=True, slots=True)

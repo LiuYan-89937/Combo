@@ -91,6 +91,7 @@ import {
   type GitHubRepository,
 } from '@/api/github'
 import { useI18n } from '@/composables/useI18n'
+import { formatBytes } from '@/utils/format'
 
 const emit = defineEmits<{
   back: []
@@ -190,12 +191,6 @@ async function cloneRepository(repository: GitHubRepository) {
 
 function formatDate(value: string): string {
   return new Intl.DateTimeFormat(locale.value, { dateStyle: 'medium' }).format(new Date(value))
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
 function errorText(error: unknown): string {

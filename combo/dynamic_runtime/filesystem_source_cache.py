@@ -3,12 +3,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 import json
-import os
 from pathlib import Path
 from stat import S_ISDIR, S_ISLNK, S_ISREG
-import tempfile
 from threading import RLock
 
+from combo.file_atomic import atomic_write_text
 from combo.runtime_protocol import CapabilityDraft
 
 
@@ -73,20 +72,8 @@ class FileSystemCapabilityDraftCache:
 
     def _write(self, document: dict[str, object]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{self._path.name}.",
-            suffix=".tmp",
-            dir=self._path.parent,
-        )
-        temporary = Path(temporary_name)
-        try:
-            with os.fdopen(descriptor, "w", encoding="utf-8") as output:
-                json.dump(document, output, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-                output.flush()
-                os.fsync(output.fileno())
-            os.replace(temporary, self._path)
-        finally:
-            temporary.unlink(missing_ok=True)
+        serialized = json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        atomic_write_text(self._path, serialized)
 
 
 def _cached_draft(value: object, inventory: list[dict[str, object]]) -> CapabilityDraft | None:

@@ -18,7 +18,7 @@ from combo.model_pool.headers import (
     validate_header_template,
 )
 from combo.models.capabilities import resolve_provider_profile
-from combo.models.protocol import ModelReasoningSettings, StructuredOutputMethod
+from combo.models.protocol import StructuredOutputMethod
 
 
 ModelPoolProfileKind = Literal["chat", "embedding", "image_generation"]

@@ -535,6 +535,7 @@ import type { OperationProgress } from '@/api/http'
 import type { ExtensionItemView } from '@/types/protocol'
 import { useI18n } from '@/composables/useI18n'
 import { toolPresentation } from '@/utils/toolPresentation'
+import { formatBytes } from '@/utils/format'
 
 type PoolName = 'mcp' | 'tools' | 'skills'
 type PoolItem = CapabilityPoolItem
@@ -776,7 +777,6 @@ function mcpToolsFor(id: string) { const target = id.replace(/^mcp-server:\/\//,
 function transportLabel(item: CapabilityPoolItem) { return ({ stdio: '本地进程', streamable_http: 'Streamable HTTP', sse: 'SSE' } as Record<string, string>)[String(item.details.transport)] || 'MCP' }
 function riskLabel(value: unknown) { return ({ low: '低风险', medium: '中风险', high: '高风险' } as Record<string, string>)[String(value)] || '风险未标注' }
 function outputLabel(item: CapabilityPoolItem) { return item.details.output_projection === 'passthrough' ? '原样输出' : `压缩至 ${Number(item.details.output_max_model_chars || 50000).toLocaleString()} 字符` }
-function formatBytes(value: number) { if (value < 1024) return `${value} B`; if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`; return `${(value / 1024 / 1024).toFixed(1)} MB` }
 function formatMcpLog(entry: Record<string, unknown>) { return typeof entry.data === 'string' ? entry.data : JSON.stringify(entry.data) }
 async function readMcpResource(resource: Record<string, unknown>) {
   if (!selectedMcpDetails.value) return

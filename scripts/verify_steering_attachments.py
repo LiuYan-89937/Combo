@@ -33,12 +33,19 @@ class _FakeCommands:
     def __init__(self, payload, receipt) -> None:
         self._payload = payload
         self._receipt = receipt
+        self.pending_steering = []
 
     def message_command_payload(self, **_kwargs):
         return self._payload, self._receipt
 
     def complete_queued_as_steering(self, **_kwargs):
         return self._receipt
+
+    def set_pending_steering(self, *, command_id, principal_id, session_id, runtime_instance_id):
+        # Mirrors RuntimeCommandRepository.set_pending_steering: reserves the queued
+        # turn for the active runtime, or releases it when runtime_instance_id is None.
+        self.pending_steering.append((command_id, principal_id, session_id, runtime_instance_id))
+        return True
 
 
 class _FakeRuntimeInstances:
@@ -53,7 +60,14 @@ class _FakeRunControls:
     def __init__(self) -> None:
         self.injections = []
 
-    def submit_input(self, *, runtime_instance_id, injection, on_checkpointed=None):
+    def submit_input(
+        self,
+        *,
+        runtime_instance_id,
+        injection,
+        on_checkpointed=None,
+        on_discarded=None,
+    ):
         self.injections.append((runtime_instance_id, injection))
         return True
 
@@ -124,8 +138,9 @@ def _verify_handler_wiring() -> None:
     )
     controls = _FakeRunControls()
     attachments = _FakeAttachmentResolver()
+    commands = _FakeCommands(message, receipt)
     handler = SteerRuntimeCommandHandler(
-        commands=_FakeCommands(message, receipt),
+        commands=commands,
         runtime_instances=_FakeRuntimeInstances(instance),
         run_controls=controls,
         attachments=attachments,
@@ -140,6 +155,9 @@ def _verify_handler_wiring() -> None:
     )
     outcome = asyncio.run(handler.handle(envelope, receipt))
     assert outcome.status == "completed", outcome
+    assert commands.pending_steering == [
+        ("cmd-queued", "principal", "session-1", "run-1")
+    ], commands.pending_steering
     assert attachments.calls and attachments.calls[0]["runtime_instance_id"] == "run-1", attachments.calls
     assert attachments.calls[0]["references"] == (reference,), attachments.calls
     assert controls.injections, "the active runtime received no injection"

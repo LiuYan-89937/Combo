@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from hashlib import sha256
-import os
 from pathlib import Path
-import tempfile
 
 from combo.dynamic_runtime.capability_definitions import SkillContentRef, ToolPackageFileRef
+from combo.file_atomic import atomic_write_bytes
 from combo.dynamic_runtime.content_media import is_text_media_type
 
 
@@ -57,19 +56,9 @@ class CapabilityBlobStore:
         if target.exists():
             self._verify_blob(target, expected_digest=digest, expected_size=len(content))
         else:
-            descriptor, temporary_name = tempfile.mkstemp(prefix="blob-", dir=target.parent)
-            temporary = Path(temporary_name)
-            try:
-                with os.fdopen(descriptor, "wb") as stream:
-                    stream.write(content)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                if target.exists():
-                    self._verify_blob(target, expected_digest=digest, expected_size=len(content))
-                else:
-                    os.replace(temporary, target)
-            finally:
-                temporary.unlink(missing_ok=True)
+            atomic_write_bytes(target, content)
+            # 内容寻址：并发写入者可能已建好同一个 blob，校验实际落盘的内容。
+            self._verify_blob(target, expected_digest=digest, expected_size=len(content))
         return blob_id, digest
 
     def read(self, reference: SkillContentRef | ToolPackageFileRef) -> bytes:

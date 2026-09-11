@@ -133,7 +133,6 @@ from combo.dynamic_runtime.mcp_gateway import (
     MCPGatewayConfig,
     MCP_GATEWAY_REGISTRY_VERSION,
     empty_mcp_gateway_registry,
-    read_mcp_gateway_registry,
     write_mcp_gateway_registry,
 )
 from combo.sensitive_data import redact_sensitive_text
@@ -146,6 +145,7 @@ from web_frontend.backend.attachment_upload_store import StagedAttachmentLaunchR
 from web_frontend.backend.attachment_upload_store import attachment_upload_store
 from web_frontend.backend.conversation_lifecycle import ConversationLifecycleService
 from web_frontend.backend.frontend_origins import allowed_frontend_origins
+from combo.file_atomic import atomic_write_text
 
 
 @dataclass(frozen=True, slots=True)
@@ -2554,24 +2554,10 @@ def _read_builtin_tool_overrides(path: Path) -> dict[str, Any]:
     return document
 
 
-def _write_json_document(
-    path: Path,
-    document: dict[str, Any],
-    *,
-    temporary_prefix: str = "capability-config-",
-) -> None:
+def _write_json_document(path: Path, document: dict[str, Any]) -> None:
     serialized = json.dumps(document, ensure_ascii=False, indent=2) + "\n"
     path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(prefix=temporary_prefix, dir=path.parent)
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(serialized)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
+    atomic_write_text(path, serialized)
 
 
 def _write_yaml_document(path: Path, document: dict[str, Any]) -> None:
@@ -2581,16 +2567,7 @@ def _write_yaml_document(path: Path, document: dict[str, Any]) -> None:
     stream = StringIO()
     yaml.dump(document, stream)
     path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(prefix="tool-manifest-", dir=path.parent)
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
-            output.write(stream.getvalue())
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
+    atomic_write_text(path, stream.getvalue())
 
 
 def _report_tool_preparation(

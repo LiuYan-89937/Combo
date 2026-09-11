@@ -43,6 +43,7 @@ import { NButton, NDrawer, NDrawerContent, NList, NListItem, NThing, NTag, NText
 import { useSchedulerStore } from '@/stores/scheduler'
 import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
+import { parseDate } from '@/utils/format'
 
 const props = defineProps<{
   show: boolean
@@ -104,9 +105,8 @@ function runStatusLabel(status: string): string {
 
 function formatTime(timestamp: string): string {
   if (!timestamp) return t('time.notStarted')
-  const date = new Date(timestamp)
-  if (isNaN(date.getTime())) return timestamp
-  return date.toLocaleString(locale.value)
+  const date = parseDate(timestamp)
+  return date ? date.toLocaleString(locale.value) : timestamp
 }
 </script>
 

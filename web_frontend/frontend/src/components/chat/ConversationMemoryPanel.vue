@@ -51,6 +51,7 @@ import { memoryApi, type MemoryContextItemView } from '@/api/memory'
 import { useI18n } from '@/composables/useI18n'
 import { useResourceContext } from '@/composables/useResourceContext'
 import { useRuntimeStore } from '@/stores/runtime'
+import { formatShortDateTime, parseDate } from '@/utils/format'
 
 const runtimeStore = useRuntimeStore()
 const resourceContext = useResourceContext()
@@ -137,10 +138,8 @@ function memoryScopeLabel(scope: string): string {
 }
 
 function formatTime(value: string): string {
-  const parsed = new Date(value)
-  return Number.isFinite(parsed.getTime())
-    ? new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(parsed)
-    : value
+  const parsed = parseDate(value)
+  return parsed ? formatShortDateTime(parsed) : value
 }
 
 watch(contextKey, () => {

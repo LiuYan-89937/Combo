@@ -60,3 +60,8 @@ web = [
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.ruff.lint.per-file-ignores]
+# `combo/tooling/__init__.py` publishes its API lazily through `__getattr__` and
+# `__all__`; the names imported there under `TYPE_CHECKING` are intentional.
+"combo/tooling/__init__.py" = ["F401"]

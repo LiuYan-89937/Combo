@@ -109,6 +109,7 @@ import type { GitTurnChanges } from '@/api/git'
 import type { AttachmentMessagePart, ChatMessagePart, ToolExecutionMessagePart, TranscriptItem } from '@/types/protocol'
 import { conversationVisibleMessageParts, conversationVisibleParts } from '@/utils/toolPresentation'
 import { isImageResource } from '@/utils/workspaceResources'
+import { formatClockTime, isToday, parseDate } from '@/utils/format'
 import type { WorkspaceRequestContext } from '@/api/resourceTypes'
 
 const props = withDefaults(
@@ -232,9 +233,9 @@ const dispatchStatusType = computed(() => (
 ))
 
 function formatTime(timestamp: string): string {
-  const date = new Date(timestamp)
-  const now = new Date()
-  const diff = now.getTime() - date.getTime()
+  const date = parseDate(timestamp)
+  if (!date) return timestamp
+  const diff = Date.now() - date.getTime()
 
   // 小于 1 分钟
   if (diff < 60000) {
@@ -248,11 +249,8 @@ function formatTime(timestamp: string): string {
   }
 
   // 今天
-  if (date.toDateString() === now.toDateString()) {
-    return date.toLocaleTimeString(locale.value, {
-      hour: '2-digit',
-      minute: '2-digit',
-    })
+  if (isToday(date)) {
+    return formatClockTime(date, locale.value)
   }
 
   // 更早
