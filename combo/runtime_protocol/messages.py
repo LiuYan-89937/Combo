@@ -24,17 +24,6 @@ def has_complete_tool_call_history(messages: Sequence[Any]) -> bool:
     return not pending
 
 
-def close_incomplete_tool_call_history(
-    messages: Sequence[Any],
-    *,
-    content: str,
-) -> list[Any]:
-    return _close_incomplete_tool_calls(
-        messages,
-        lambda tool_call_ids: _interrupted_tool_messages(tool_call_ids, content),
-    )
-
-
 def close_incomplete_tool_call_messages(
     messages: Sequence[Any],
     *,
@@ -106,19 +95,6 @@ def incomplete_tool_call_ids(messages: Sequence[Any]) -> list[str]:
     if pending:
         missing.extend(pending)
     return missing
-
-
-def _interrupted_tool_messages(tool_call_ids: Sequence[str], content: str) -> list[ToolMessage]:
-    return [
-        ToolMessage(
-            id=f"terminal:{error_code}:{tool_call_id}",
-            content=content,
-            tool_call_id=tool_call_id,
-            status="error",
-            additional_kwargs={"runtime_control": {"type": "tool_execution_interrupted"}},
-        )
-        for tool_call_id in tool_call_ids
-    ]
 
 
 def _terminal_tool_messages(
