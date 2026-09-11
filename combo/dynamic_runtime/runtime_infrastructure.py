@@ -7,6 +7,7 @@ from threading import RLock
 from types import MappingProxyType
 from typing import Any
 
+from combo.dynamic_runtime.capability_blob_store import CapabilityBlobStore
 from combo.dynamic_runtime.capability_definitions import MCPToolDefinition, ToolDefinition
 from combo.dynamic_runtime.mcp_runtime import MCPRuntimePool
 from combo.dynamic_runtime.mcp_content_runtime import MCPBinaryContentMaterializer, MCPContentRuntime

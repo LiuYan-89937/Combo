@@ -105,9 +105,9 @@ def create_icns(png_1024: Path, output_icns: Path):
             )
             print(f"✓ 生成 macOS 图标: {output_icns}")
         except subprocess.CalledProcessError:
-            print(f"⚠ 无法生成 .icns（需要 macOS iconutil）")
+            print("⚠ 无法生成 .icns（需要 macOS iconutil）")
         except FileNotFoundError:
-            print(f"⚠ iconutil 未找到，跳过 .icns 生成")
+            print("⚠ iconutil 未找到，跳过 .icns 生成")
 
 
 def create_ico(source_path: Path, output_ico: Path):

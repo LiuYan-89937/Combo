@@ -117,7 +117,7 @@ def extract_python(archive_path: Path, target_dir: Path):
             shutil.move(str(item), target_dir / item.name)
         extracted_python.rmdir()
 
-    print(f"✓ 解压完成")
+    print("✓ 解压完成")
 
     # 验证 Python 可执行文件
     python_exe = _find_python_executable(target_dir)
@@ -147,7 +147,7 @@ def _convert_symlinks_to_files(python_dir: Path):
     """将符号链接转换为实际文件（Tauri 不支持打包符号链接）"""
     import os
 
-    print(f"\n转换符号链接...")
+    print("\n转换符号链接...")
     converted = 0
 
     for root, dirs, files in os.walk(python_dir):
