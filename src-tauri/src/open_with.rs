@@ -1,12 +1,48 @@
 use serde::Serialize;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
+
+/// Rendered icon edge length, matching the size the transcript already uses for
+/// computer-use application icons.
+const ICON_PIXEL_SIZE: isize = 64;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct OpenWithApplication {
     pub name: String,
     pub path: String,
     pub is_default: bool,
+    /// `data:image/png;base64,...` for the application icon, when renderable.
+    pub icon_data_url: Option<String>,
+}
+
+/// Icons are keyed by application bundle and kept for the process lifetime.
+///
+/// The same handful of applications answer for every file in a turn, so without
+/// this the menu would re-render identical icons on each open.
+fn icon_cache() -> &'static Mutex<HashMap<String, Option<String>>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, Option<String>>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Recovers the guard even if another thread panicked while holding it; a stale
+/// cache is harmless, whereas propagating the panic would break the menu.
+fn lock_icon_cache() -> std::sync::MutexGuard<'static, HashMap<String, Option<String>>> {
+    icon_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// A missing icon is cached as `None` too, so an unrenderable application is not
+/// re-queried on every menu open.
+fn icon_data_url(application_path: &str) -> Option<String> {
+    if let Some(cached) = lock_icon_cache().get(application_path) {
+        return cached.clone();
+    }
+    let rendered = platform::icon(application_path);
+    lock_icon_cache().insert(application_path.to_string(), rendered.clone());
+    rendered
 }
 
 pub fn list_applications_for_path(source_path: &str) -> Result<Vec<OpenWithApplication>, String> {
@@ -50,6 +86,16 @@ fn existing_file(source_path: &str) -> Result<PathBuf, String> {
 #[cfg(target_os = "macos")]
 mod platform {
     use super::*;
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine as _;
+    use objc2::rc::{autoreleasepool, Retained};
+    use objc2::runtime::AnyObject;
+    use objc2::AnyThread;
+    use objc2_app_kit::{
+        NSBitmapImageFileType, NSBitmapImageRep, NSBitmapImageRepPropertyKey,
+        NSDeviceRGBColorSpace, NSGraphicsContext, NSImage, NSWorkspace,
+    };
+    use objc2_foundation::{NSDictionary, NSPoint, NSRect, NSSize, NSString};
     use std::collections::HashSet;
     use std::ffi::c_void;
     use std::os::raw::{c_char, c_int, c_long};
@@ -239,6 +285,7 @@ mod platform {
             result.push(OpenWithApplication {
                 is_default: default_path.as_deref() == Some(path.as_str()),
                 name,
+                icon_data_url: icon_data_url(&path),
                 path,
             });
         }
@@ -295,6 +342,71 @@ mod platform {
         candidate.path.len() < current.path.len()
     }
 
+    /// Renders an application bundle's icon as a PNG data URL.
+    pub(super) fn icon(application_path: &str) -> Option<String> {
+        autoreleasepool(|_pool| {
+            let workspace = NSWorkspace::sharedWorkspace();
+            let path = NSString::from_str(application_path);
+            let image = workspace.iconForFile(&path);
+            png_data_url_for_image(&image)
+        })
+    }
+
+    /// Draws the icon into a bitmap of exactly [`ICON_PIXEL_SIZE`] pixels.
+    ///
+    /// Encoding one of the image's own representations is not an option: bundle
+    /// icons come back as AppKit's private `NSISIconImageRep`, which reports small
+    /// pixel sizes but re-renders at its natural size when encoded, where the
+    /// largest representation is 2048 px. That produced ~2 MB of base64 per
+    /// application; rendering into a fixed bitmap keeps it to a few kilobytes.
+    fn png_data_url_for_image(image: &NSImage) -> Option<String> {
+        let bitmap = scaled_bitmap(image, ICON_PIXEL_SIZE)?;
+        png_data_url(&bitmap)
+    }
+
+    fn scaled_bitmap(image: &NSImage, pixels: isize) -> Option<Retained<NSBitmapImageRep>> {
+        let bitmap = unsafe {
+            NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel(
+                NSBitmapImageRep::alloc(),
+                std::ptr::null_mut(),
+                pixels,
+                pixels,
+                8,
+                4,
+                true,
+                false,
+                NSDeviceRGBColorSpace,
+                0,
+                0,
+            )
+        }?;
+        let context = NSGraphicsContext::graphicsContextWithBitmapImageRep(&bitmap)?;
+        NSGraphicsContext::saveGraphicsState_class();
+        NSGraphicsContext::setCurrentContext(Some(&context));
+        image.drawInRect(NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(pixels as f64, pixels as f64),
+        ));
+        context.flushGraphics();
+        NSGraphicsContext::restoreGraphicsState_class();
+        Some(bitmap)
+    }
+
+    fn png_data_url(bitmap: &NSBitmapImageRep) -> Option<String> {
+        // The `properties` generic has to match the documented key type; PNG
+        // encoding needs no entries, so an empty dictionary is passed.
+        let properties = NSDictionary::<NSBitmapImageRepPropertyKey, AnyObject>::from_slices::<
+            NSString,
+        >(&[], &[]);
+        let data = unsafe {
+            bitmap.representationUsingType_properties(NSBitmapImageFileType::PNG, &properties)
+        }?;
+        Some(format!(
+            "data:image/png;base64,{}",
+            STANDARD.encode(data.to_vec())
+        ))
+    }
+
     pub(super) fn open(source: &Path, application: &str) -> Result<(), String> {
         Command::new("open")
             .arg("-a")
@@ -320,7 +432,13 @@ mod platform {
             name: "Default application".to_string(),
             path: path.to_string(),
             is_default: true,
+            icon_data_url: None,
         }])
+    }
+
+    /// Icons come from AppKit, which only exists on macOS.
+    pub(super) fn icon(_application_path: &str) -> Option<String> {
+        None
     }
 
     pub(super) fn open(source: &Path, application: &str) -> Result<(), String> {
@@ -349,6 +467,26 @@ fn open_with(source: &Path, application: &str) -> Result<(), String> {
     platform::open(source, application)
 }
 
+/// Width and height of a PNG data URL, read from the IHDR chunk.
+///
+/// The tests use this to prove an icon really is [`ICON_PIXEL_SIZE`] pixels,
+/// instead of trusting that the encoder produced the size we asked for.
+#[cfg(test)]
+fn png_dimensions(data_url: &str) -> Option<(u32, u32)> {
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine as _;
+
+    let bytes = STANDARD
+        .decode(data_url.strip_prefix("data:image/png;base64,")?)
+        .ok()?;
+    if bytes.len() < 24 || &bytes[..8] != b"\x89PNG\r\n\x1a\n" {
+        return None;
+    }
+    let width = u32::from_be_bytes(bytes[16..20].try_into().ok()?);
+    let height = u32::from_be_bytes(bytes[20..24].try_into().ok()?);
+    Some((width, height))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -365,8 +503,19 @@ mod tests {
         fs::write(&path, b"%PDF-1.4\n").expect("create test PDF");
         let path_string = path.to_string_lossy().into_owned();
         let result = list_applications_for_path(&path_string);
-        println!("open_with applications for {path_string}: {result:#?}");
         let applications = result.expect("LaunchServices application enumeration");
+        for application in &applications {
+            println!(
+                "{} | default={} | icon={} | {}",
+                application.name,
+                application.is_default,
+                match application.icon_data_url.as_deref() {
+                    Some(url) => format!("{} bytes, {:?}", url.len(), png_dimensions(url)),
+                    None => "none".to_string(),
+                },
+                application.path,
+            );
+        }
         assert!(!applications.is_empty());
         assert_eq!(
             applications
@@ -375,6 +524,30 @@ mod tests {
                 .count(),
             1
         );
+        let rendered = applications
+            .iter()
+            .filter_map(|application| application.icon_data_url.as_deref())
+            .collect::<Vec<_>>();
+        println!("icons rendered: {}/{}", rendered.len(), applications.len());
+        assert!(
+            !rendered.is_empty(),
+            "expected at least one rendered application icon"
+        );
+        // A 64 px icon is a few kilobytes; anything near a megabyte means the
+        // encoder silently used a 512/1024 px representation instead.
+        for url in &rendered {
+            let (width, height) = png_dimensions(url).expect("icon is a valid PNG");
+            assert_eq!(
+                (width, height),
+                (ICON_PIXEL_SIZE as u32, ICON_PIXEL_SIZE as u32),
+                "icon should be rendered at the menu's pixel size, got {width}x{height}"
+            );
+            assert!(
+                url.len() < 60_000,
+                "icon payload is {} bytes; expected a scaled-down icon",
+                url.len()
+            );
+        }
         fs::remove_file(path).expect("remove test PDF");
     }
 }

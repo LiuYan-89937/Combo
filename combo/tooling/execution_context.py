@@ -208,6 +208,12 @@ def consume_runtime_inputs() -> tuple[Any, ...]:
     return tuple(consume())
 
 
+def acknowledge_runtime_inputs(messages: list[Any]) -> None:
+    control = current_runtime_run_control()
+    if control is not None:
+        control.acknowledge_checkpointed_inputs(messages)
+
+
 def begin_runtime_model_generation() -> int:
     control = current_runtime_run_control()
     begin = getattr(control, "begin_model_generation", None)

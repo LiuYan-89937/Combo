@@ -159,6 +159,7 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
     ) -> dict[str, Any]:
         command = body.command
         command_type = _required_text(command.get("type"), "command.type")
+        command_id = _command_id(command)
         principal_id = _required_text(x_combo_principal, "principal header")
         client_id = _required_text(x_combo_client, "client header")
         timezone = _required_text(x_combo_timezone, "timezone header")
@@ -194,13 +195,13 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
                 protocol_version=RuntimeProtocolDescriptor(
                     build_revision=backend.config.build_revision
                 ).protocol_version,
-                command_id=_command_id(command),
+                command_id=command_id,
                 client_instance_id=client_id,
                 principal_id=principal_id,
                 session_id=session_id,
                 payload={
                     "kind": "send_message",
-                    "message_id": uuid4().hex,
+                    "message_id": f"user-{command_id}",
                     "content": content,
                     "attachments": attachment_references,
                     "execution_preference": turn_policy.execution_preference,
@@ -221,7 +222,7 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
                 protocol_version=RuntimeProtocolDescriptor(
                     build_revision=backend.config.build_revision
                 ).protocol_version,
-                command_id=_command_id(command),
+                command_id=command_id,
                 client_instance_id=client_id,
                 principal_id=principal_id,
                 session_id=queued.session_id,
@@ -254,7 +255,7 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
                 protocol_version=RuntimeProtocolDescriptor(
                     build_revision=backend.config.build_revision
                 ).protocol_version,
-                command_id=_command_id(command),
+                command_id=command_id,
                 client_instance_id=client_id,
                 principal_id=principal_id,
                 session_id=session_id,
@@ -272,7 +273,7 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
                 protocol_version=RuntimeProtocolDescriptor(
                     build_revision=backend.config.build_revision
                 ).protocol_version,
-                command_id=_command_id(command),
+                command_id=command_id,
                 client_instance_id=client_id,
                 principal_id=principal_id,
                 session_id=current.request.session_id,
@@ -1583,7 +1584,12 @@ def _session_snapshot(backend: Any, principal_id: str, session_id: str) -> dict[
         grouped[message.turn_id].append(message)
     with backend.application.database.connection(query_only=True) as connection:
         rows = connection.execute(
-            "select payload_json from conversation_turns where session_id = ? order by created_at, rowid",
+            """
+            select turn.payload_json, command.queue_sequence
+            from conversation_turns turn left join command_inbox command
+              on command.command_id = json_extract(turn.payload_json, '$.source_command_id')
+            where turn.session_id = ? order by turn.task_revision, turn.rowid
+            """,
             (session_id,),
         ).fetchall()
         tool_rows = connection.execute(
@@ -1652,11 +1658,22 @@ def _session_snapshot(backend: Any, principal_id: str, session_id: str) -> dict[
                 ],
             )
         )
-        message_views.sort(key=lambda item: str(item.get("timestamp") or ""))
+        for view in message_views:
+            if view.get("role") == "user":
+                view.setdefault("metadata", {}).update({
+                    "dispatch_state": (
+                        "promoted" if turn.steering and turn.steering.after_message_id
+                        else "steering" if turn.status == "queued" and turn.steering
+                        else _turn_dispatch_state(turn.status)
+                    ),
+                    "queue_sequence": row["queue_sequence"],
+                    "steering": turn.steering.model_dump(mode="json") if turn.steering else None,
+                })
         turns.append(
             {
                 "index": turn.task_revision,
                 "request_id": frontend_request_id,
+                "runtime_instance_id": turn.active_runtime_instance_id,
                 "status": "interrupted" if turn.status in {"waiting_approval", "waiting_external"} else turn.status,
                 "created_at": turn.created_at,
                 "updated_at": turn.updated_at,

@@ -42,10 +42,11 @@ class CognitiveAnswerNode:
             services=context.services,
             node_id=context.node_id,
         )
+        ai_message = result.ai_message if isinstance(result.ai_message, AIMessage) else None
         if result.clarification_question:
             reasoning_content = _reasoning_content_from_metadata(result.metadata)
             return {
-                "messages": [AIMessage(content=result.clarification_question)],
+                "messages": [_ai_message_with_origin(result.clarification_question, [], context, source=ai_message, reasoning_content=reasoning_content)],
                 **_context_token_budget_patch(result.metadata, context.node_id),
                 "conversation": {
                     "assistant_draft": result.assistant_draft,
@@ -57,7 +58,6 @@ class CognitiveAnswerNode:
                     "route_decision": result.route_decision or "subgraph.need_more_input",
                 },
             }
-        ai_message = result.ai_message if isinstance(result.ai_message, AIMessage) else None
         tool_calls = _message_tool_calls(ai_message) or list(result.tool_calls or [])
         reasoning_content = _reasoning_content_from_metadata(result.metadata)
         if tool_calls:
@@ -68,6 +68,7 @@ class CognitiveAnswerNode:
                         result.assistant_draft or "",
                         tool_calls,
                         context,
+                        source=ai_message,
                         reasoning_content=reasoning_content,
                     )
                 ],
@@ -86,13 +87,8 @@ class CognitiveAnswerNode:
                 },
             }
         final_answer = result.final_answer or result.assistant_draft or ""
-        response_message = AIMessage(
-            content=final_answer,
-            additional_kwargs=(
-                {"reasoning_content": reasoning_content}
-                if reasoning_content
-                else {}
-            ),
+        response_message = _ai_message_with_origin(
+            final_answer, [], context, source=ai_message, reasoning_content=reasoning_content,
         )
         route_decision = result.route_decision or "model.ready_to_answer"
         if _plan_and_execute_planner_waiting_for_input(context=context, state=state):
@@ -223,16 +219,19 @@ def _ai_message_with_origin(
     tool_calls: list[dict[str, Any]],
     context: NodeExecutionContext,
     *,
+    source: AIMessage | None = None,
     reasoning_content: str | None = None,
 ) -> AIMessage:
     additional_kwargs = {
+        **(source.additional_kwargs if source is not None else {}),
         "combo_origin_node_id": context.node_id,
         "combo_origin_impl": context.impl,
     }
     if reasoning_content:
         additional_kwargs["reasoning_content"] = reasoning_content
-    return AIMessage(
-        content=content,
-        tool_calls=tool_calls,
-        additional_kwargs=additional_kwargs,
-    )
+    message = source if source is not None else AIMessage(content=content)
+    return message.model_copy(update={
+        "content": content,
+        "tool_calls": tool_calls,
+        "additional_kwargs": additional_kwargs,
+    })

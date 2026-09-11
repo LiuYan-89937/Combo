@@ -38,6 +38,8 @@ class RuntimeRunControl:
         "_input_checkpoint_callbacks",
         "_model_cancel_callbacks",
         "_generation_revision",
+        "_closed",
+        "_input_discard_callbacks",
     )
 
     def __init__(self) -> None:
@@ -49,9 +51,11 @@ class RuntimeRunControl:
         self._tool_cancel_callbacks: dict[str, Callable[[], None]] = {}
         self._input_injections: dict[str, RuntimeInputInjection] = {}
         self._claimed_input_injections: dict[str, RuntimeInputInjection] = {}
-        self._input_checkpoint_callbacks: dict[str, Callable[[], None]] = {}
+        self._input_checkpoint_callbacks: dict[str, Callable[[list[Any]], None]] = {}
         self._model_cancel_callbacks: dict[str, Callable[[], None]] = {}
         self._generation_revision = 0
+        self._closed = False
+        self._input_discard_callbacks: dict[str, Callable[[], None]] = {}
 
     def request_drain(self, reason: str = "shutdown") -> None:
         drain_reason = _required_text(reason, "reason")
@@ -176,14 +180,19 @@ class RuntimeRunControl:
         self,
         injection: RuntimeInputInjection,
         *,
-        on_checkpointed: Callable[[], None] | None = None,
+        on_checkpointed: Callable[[list[Any]], None] | None = None,
+        on_discarded: Callable[[], None] | None = None,
     ) -> bool:
         with self._tool_cancel_lock:
-            if self._drain_event.is_set():
+            if self._drain_event.is_set() or self._closed:
                 return False
+            if injection.injection_id in self._input_injections or injection.injection_id in self._claimed_input_injections:
+                return True
             self._input_injections[injection.injection_id] = injection
             if on_checkpointed is not None:
                 self._input_checkpoint_callbacks[injection.injection_id] = on_checkpointed
+            if on_discarded is not None:
+                self._input_discard_callbacks[injection.injection_id] = on_discarded
             return True
 
     def revoke_input(self, injection_id: str) -> None:
@@ -191,6 +200,7 @@ class RuntimeRunControl:
             self._input_injections.pop(_required_text(injection_id, "injection_id"), None)
             self._claimed_input_injections.pop(injection_id, None)
             self._input_checkpoint_callbacks.pop(injection_id, None)
+            self._input_discard_callbacks.pop(injection_id, None)
 
     def consume_inputs(self) -> tuple[RuntimeInputInjection, ...]:
         with self._tool_cancel_lock:
@@ -219,10 +229,11 @@ class RuntimeRunControl:
             )
         for injection_id, callback in callbacks:
             if callback is not None:
-                callback()
+                callback(messages)
             with self._tool_cancel_lock:
                 self._claimed_input_injections.pop(injection_id, None)
                 self._input_checkpoint_callbacks.pop(injection_id, None)
+                self._input_discard_callbacks.pop(injection_id, None)
         return acknowledged
 
     def restore_uncheckpointed_inputs(self) -> None:
@@ -230,6 +241,17 @@ class RuntimeRunControl:
             for injection_id, injection in self._claimed_input_injections.items():
                 self._input_injections.setdefault(injection_id, injection)
             self._claimed_input_injections.clear()
+
+    def close(self) -> None:
+        with self._tool_cancel_lock:
+            self._closed = True
+            callbacks = tuple(self._input_discard_callbacks.values())
+            self._input_discard_callbacks.clear()
+            self._input_checkpoint_callbacks.clear()
+            self._input_injections.clear()
+            self._claimed_input_injections.clear()
+        for callback in callbacks:
+            callback()
 
 
 class RuntimeRunControlRegistry:
@@ -268,13 +290,14 @@ class RuntimeRunControlRegistry:
         *,
         runtime_instance_id: str,
         injection: RuntimeInputInjection,
-        on_checkpointed: Callable[[], None] | None = None,
+        on_checkpointed: Callable[[list[Any]], None] | None = None,
+        on_discarded: Callable[[], None] | None = None,
     ) -> bool:
         instance_id = _required_text(runtime_instance_id, "runtime_instance_id")
         with self._lock:
             control = self._controls.get(instance_id)
         return (
-            control.submit_input(injection, on_checkpointed=on_checkpointed)
+            control.submit_input(injection, on_checkpointed=on_checkpointed, on_discarded=on_discarded)
             if control is not None
             else False
         )
@@ -308,6 +331,7 @@ class RuntimeRunControlRegistry:
         with self._lock:
             if self._controls.get(instance_id) is control:
                 self._controls.pop(instance_id, None)
+        control.close()
 
 
 def _required_text(value: str, field_name: str) -> str:

@@ -22,7 +22,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, h, ref, type VNodeChild } from 'vue'
 import { useMessage } from 'naive-ui'
 import { useI18n } from '@/composables/useI18n'
 import { openWithApi, type OpenWithApplication } from '@/api/openWith'
@@ -41,7 +41,9 @@ const loading = ref(false)
 const loadError = ref('')
 const loaded = ref(false)
 
-type MenuOption = { key: string; label: string; disabled?: boolean } | { key: string; type: 'divider' }
+type MenuOption =
+  | { key: string; label: string; disabled?: boolean; icon?: () => VNodeChild }
+  | { key: string; type: 'divider' }
 
 const options = computed<MenuOption[]>(() => {
   const items: MenuOption[] = []
@@ -53,11 +55,24 @@ const options = computed<MenuOption[]>(() => {
     items.push({ key: 'empty', label: t('fileOpenMenu.empty'), disabled: true })
   } else {
     applications.value.forEach((application) => {
+      const icon = application.icon_data_url
       items.push({
         key: `app:${application.path}`,
         label: application.is_default
           ? `${application.name}${t('fileOpenMenu.defaultSuffix')}`
           : application.name,
+        ...(icon
+          ? {
+              // Inline styles: the dropdown renders in a teleported layer, so this
+              // component's scoped styles would not reach the icon.
+              icon: () =>
+                h('img', {
+                  src: icon,
+                  alt: '',
+                  style: 'width:16px;height:16px;border-radius:3px;object-fit:contain;flex:none;',
+                }),
+            }
+          : {}),
       })
     })
   }

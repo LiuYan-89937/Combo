@@ -4,6 +4,7 @@ from typing import Any, Iterable
 from uuid import uuid4
 
 from combo.dynamic_runtime.database import DynamicRuntimeDatabase
+from combo.dynamic_runtime.context_snapshot_store import ConversationContextSnapshot, ConversationContextSnapshotStore
 from combo.dynamic_runtime.delegated_task_transitions import (
     commit_delegated_task_transition,
 )
@@ -134,6 +135,7 @@ class RuntimeExecutionCommitStore:
         messages: Iterable[ConversationMessage] = (),
         tool_calls: Iterable[ToolCallRecord] = (),
         model_usage: Iterable[RuntimeModelUsage] = (),
+        context_snapshot: ConversationContextSnapshot | None = None,
         error: RuntimeErrorEnvelope | None = None,
     ) -> RuntimeInstance:
         if status not in {"waiting_approval", "waiting_external", "completed", "failed", "cancelled"}:
@@ -193,6 +195,13 @@ class RuntimeExecutionCommitStore:
                     now=now,
                     terminal_at=terminal_at,
                 )
+            if context_snapshot is not None:
+                if (current.request.runtime_role != "main"
+                    or context_snapshot.session_id != current.request.session_id
+                    or context_snapshot.principal_id != current.request.principal_id
+                    or context_snapshot.through_task_revision != current.request.task_revision):
+                    raise ValueError("context snapshot ownership differs from the committing runtime")
+                ConversationContextSnapshotStore.insert(conn, context_snapshot)
             for tool_call in tool_calls:
                 _upsert_tool_call(conn, tool_call, current=current, now=now)
             for usage in model_usage:

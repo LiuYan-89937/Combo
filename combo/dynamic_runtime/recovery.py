@@ -14,7 +14,7 @@ from combo.dynamic_runtime.persistence_helpers import (
     insert_message,
     insert_outbox,
 )
-from combo.dynamic_runtime.repositories import utc_now_text
+from combo.dynamic_runtime.repositories import CommandInbox, utc_now_text
 from combo.runtime_protocol import (
     CommandReceipt,
     ConversationMessage,
@@ -89,6 +89,22 @@ class RuntimeRecoveryService:
                 else:
                     _finalize_attached_command(conn, receipt=receipt, now=now)
                     counts["finalized_commands"] += 1
+            pending_steering = conn.execute(
+                """
+                select command.command_id, command.principal_id, command.session_id
+                from command_inbox command join conversation_turns turn
+                  on command.command_id = json_extract(turn.payload_json, '$.source_command_id')
+                where command.status = 'queued'
+                  and json_extract(turn.payload_json, '$.steering.runtime_instance_id') is not null
+                  and json_extract(turn.payload_json, '$.steering.after_message_id') is null
+                """
+            ).fetchall()
+        inbox = CommandInbox(self._database)
+        for row in pending_steering:
+            inbox.set_pending_steering(
+                command_id=str(row["command_id"]), principal_id=str(row["principal_id"]),
+                session_id=str(row["session_id"]), runtime_instance_id=None,
+            )
         return RuntimeRecoveryReport(**counts)
 
 

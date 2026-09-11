@@ -6,7 +6,7 @@ from typing import Any, Literal
 from langgraph.graph import END, StateGraph
 
 from combo.runtime_kernel.services import RuntimeServices
-from combo.runtime_kernel.fixed_runner import make_fixed_runner
+from combo.runtime_kernel.fixed_runner import make_context_preparer, make_fixed_runner
 from combo.runtime_kernel.model_operations import ModelOperationService
 from combo.runtime_kernel.nodes.base import NodeImplementation
 from combo.runtime_kernel.nodes.standard import (
@@ -86,16 +86,28 @@ def build_fixed_runtime_graph(
             next_node=topology.next_node,
         )
 
+    preparation_nodes = {
+        node.node_id: f"prepare_{node.node_id}"
+        for node in topology.nodes if node.impl.startswith("cognitive.")
+    }
+    for node in topology.nodes:
+        if node.node_id in preparation_nodes:
+            node_runners[preparation_nodes[node.node_id]] = make_context_preparer(
+                node_id=node.node_id, implementation=implementations[node.impl], services=services,
+            )
     graph = StateGraph(RuntimeGraphState)
     for node_id, runner in node_runners.items():
         graph.add_node(node_id, runner)
     graph.set_conditional_entry_point(
         _entry_router(topology),
-        {node.node_id: node.node_id for node in topology.nodes},
+        {node.node_id: preparation_nodes.get(node.node_id, node.node_id) for node in topology.nodes},
     )
+    for target, preparation in preparation_nodes.items():
+        mapping = {"context.prepared": target, "runtime.steered": preparation, "__end__": END}
+        graph.add_conditional_edges(preparation, _route_router(mapping), mapping)
     outgoing: dict[str, dict[str, str]] = {}
     for edge in topology.edges:
-        outgoing.setdefault(edge.source, {})[edge.condition] = edge.target
+        outgoing.setdefault(edge.source, {})[edge.condition] = preparation_nodes.get(edge.target, edge.target)
     for node in topology.nodes:
         if node.node_id in topology.success_nodes:
             graph.add_edge(node.node_id, END)

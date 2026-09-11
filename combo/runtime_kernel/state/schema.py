@@ -44,6 +44,7 @@ class ContextState(BaseModel):
     tool_context: dict[str, Any] = Field(default_factory=dict)
     hidden_context: dict[str, Any] = Field(default_factory=dict)
     compression_applied: bool = False
+    compression_report: dict[str, Any] = Field(default_factory=dict)
     token_budget: dict[str, Any] = Field(default_factory=dict)
 
 

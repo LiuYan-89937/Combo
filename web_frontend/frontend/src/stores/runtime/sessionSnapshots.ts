@@ -11,6 +11,7 @@ import type {
   TranscriptItem,
 } from '@/types/protocol'
 import { agentPackageConversationScope } from './scopes'
+import { dispatchStateForTurn, orderedTranscript } from './requestDispatch'
 import { isPlanCapsuleDismissed } from '@/utils/planCapsuleDismissals'
 import { isRuntimeCancellation } from '@/utils/runtimeCancellation'
 
@@ -151,13 +152,7 @@ function conversationFromTurns(rawTurns: any[], context: TurnRestoreContext) {
     }
   })
   return {
-    transcript: transcript
-      .map((message, index) => ({ message, index }))
-      .sort((left, right) => (
-        Date.parse(left.message.timestamp) - Date.parse(right.message.timestamp)
-        || left.index - right.index
-      ))
-      .map(item => item.message),
+    transcript: orderedTranscript(transcript),
     conversationTurns,
     activeTurn: activeTurnFrom(conversationTurns),
   }
@@ -180,6 +175,7 @@ function restoreTurnMessages(options: {
     mode: options.context.mode,
     package_id: options.context.packageId,
     agent_session_id: options.context.agentSessionId,
+    runtime_instance_id: options.turn.runtime_instance_id || null,
   }
   const conversationTurn: ConversationTurn = {
     id: `${options.context.keyPrefix}-turn-${options.turnIndex}`,
@@ -189,7 +185,7 @@ function restoreTurnMessages(options: {
     assistantMessages: [],
     tools: options.toolActivities,
     startedAt: options.createdAt,
-    completedAt: isActiveTurnStatus(status) ? null : options.updatedAt,
+    completedAt: status === 'queued' || isActiveTurnStatus(status) ? null : options.updatedAt,
     errorMessage: null,
     metadata,
   }
@@ -207,7 +203,7 @@ function restoreTurnMessages(options: {
       item.metadata = {
         ...(item.metadata || {}),
         request_id: conversationTurn.requestId,
-        dispatch_state: dispatchStateForTurn(status),
+        dispatch_state: item.metadata?.dispatch_state || dispatchStateForTurn(status),
       }
     }
     options.transcript.push(item)
@@ -265,6 +261,7 @@ function transcriptItemFromPartMessage(
 
 function normalizeTurnStatus(value: any, fallback: RunStatus): RunStatus {
   if (
+    value === 'queued' ||
     value === 'running' ||
     value === 'stopping' ||
     value === 'waiting_for_workers' ||
@@ -280,21 +277,11 @@ function normalizeTurnStatus(value: any, fallback: RunStatus): RunStatus {
 }
 
 function isActiveTurnStatus(status: RunStatus): boolean {
-  return status === 'running' || status === 'stopping' || status === 'interrupted'
-}
-
-function dispatchStateForTurn(status: RunStatus): string {
-  if (status === 'running' || status === 'interrupted') return 'running'
-  if (status === 'stopping') return 'stopping'
-  if (status === 'cancelled') return 'cancelled'
-  if (status === 'failed') return 'failed'
-  if (status === 'stopped') return 'stopped'
-  return 'completed'
+  return status === 'running' || status === 'stopping' || status === 'interrupted' || status === 'waiting_for_workers'
 }
 
 function activeTurnFrom(turns: ConversationTurn[]): ConversationTurn | null {
-  const latest = turns[turns.length - 1]
-  return latest && isActiveTurnStatus(latest.status) && Boolean(latest.requestId) ? latest : null
+  return [...turns].reverse().find(turn => isActiveTurnStatus(turn.status) && Boolean(turn.requestId)) || null
 }
 
 function stringOrNull(value: any): string | null {

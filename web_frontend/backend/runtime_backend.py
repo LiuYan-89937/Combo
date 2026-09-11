@@ -454,6 +454,10 @@ class RuntimeBackend:
                 select * from (
                   select command_id, session_id, status, receipt_json, envelope_json,
                          queue_sequence, received_at, updated_at,
+                         (select json_extract(turn.payload_json, '$.steering.runtime_instance_id')
+                          from conversation_turns turn
+                          where json_extract(turn.payload_json, '$.source_command_id') = command_inbox.command_id
+                         ) as steering_runtime_instance_id,
                          (
                            select runtime.status from runtime_instances as runtime
                            where runtime.runtime_instance_id = json_extract(
@@ -504,7 +508,8 @@ class RuntimeBackend:
                     "started_at": str(row["received_at"]),
                     "completed_at": None,
                     "payload": {
-                        "dispatch_state": dispatch_state,
+                        "dispatch_state": "steering" if status == "queued" and row["steering_runtime_instance_id"] else dispatch_state,
+                        "queue_sequence": row["queue_sequence"],
                         "queue_position": queue_position,
                         "runtime_status": runtime_status or None,
                         "session_id": session_id,

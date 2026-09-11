@@ -4,6 +4,7 @@
  * 基于协议文档的 Request-Scoped Reducer 规则实现
  * 参考 CLI 的 runtimeStore.ts
  */
+import { isPendingDispatch, type RequestDispatchState } from './runtime/requestDispatch'
 import { defineStore } from 'pinia'
 import type {
   RuntimeFrontendEvent,
@@ -196,7 +197,7 @@ export const useRuntimeStore = defineStore('runtime', {
       return Object.values(state.activeRequests).filter((request) => (
         request.source === 'user'
         && request.status === 'running'
-        && request.payload?.dispatch_state === 'queued'
+        && isPendingDispatch(request.payload?.dispatch_state)
         && (!state.activeConversationScope || request.conversationScope === state.activeConversationScope)
       )).length
     },
@@ -206,20 +207,22 @@ export const useRuntimeStore = defineStore('runtime', {
         .filter((request) => (
           request.source === 'user'
           && request.status === 'running'
-          && request.payload?.dispatch_state === 'queued'
+          && isPendingDispatch(request.payload?.dispatch_state)
           && (!state.activeConversationScope || request.conversationScope === state.activeConversationScope)
         ))
         .sort((left, right) => {
-          const positionDelta = Number(left.payload?.queue_position || 0) - Number(right.payload?.queue_position || 0)
+          const positionDelta = Number(left.payload?.queue_sequence ?? Number.MAX_SAFE_INTEGER) - Number(right.payload?.queue_sequence ?? Number.MAX_SAFE_INTEGER)
           return positionDelta || Date.parse(left.startedAt) - Date.parse(right.startedAt)
         })
-        .map((request) => {
+        .map((request, index) => {
           const turn = state.conversationTurns.find((item) => item.requestId === request.requestId)
           return {
             requestId: request.requestId,
             content: String(turn?.userMessage?.content || request.payload?.message || ''),
-            position: Number(request.payload?.queue_position || 0),
+            position: index + 1,
             attachmentCount: turn?.userMessage?.attachments?.length || 0,
+            steering: request.payload?.dispatch_state === 'steering',
+            submitting: request.payload?.submission_state === 'pending',
           }
         })
     },
@@ -337,8 +340,15 @@ export const useRuntimeStore = defineStore('runtime', {
       // Runtime request dispatch
       else if (type === 'runtime_request_queued') {
         this._handleRuntimeRequestQueued(event)
+      } else if (type === 'runtime_request_steering_started') {
+        const request = event.request_id ? this.activeRequests[event.request_id] : null
+        if (request?.status === 'running' && isPendingDispatch(request.payload?.dispatch_state)) {
+          this._setRequestDispatchState(event.request_id, 'steering', payload)
+        }
       } else if (type === 'runtime_request_steering') {
         this._handleRuntimeRequestSteering(event)
+      } else if (type === 'runtime_request_steering_rejected') {
+        this.restoreRequestQueued(String(payload?.queued_request_id || event.request_id || ''))
       } else if (type === 'runtime_request_dispatched') {
         this._handleRuntimeRequestDispatched(event)
       }
@@ -581,6 +591,11 @@ export const useRuntimeStore = defineStore('runtime', {
         : []
       const activeRequestIds = new Set(activeRequests.map(request => request.requestId))
 
+      for (const [id, request] of Object.entries(this.activeRequests)) {
+        if (request.payload?.submission_state === 'pending') activeRequestIds.add(id)
+        else if (request.status === 'running' && !activeRequestIds.has(id)) delete this.activeRequests[id]
+      }
+
       if (activeRequests.length === 0) {
         this._clearStaleForegroundRun()
         this._reconcileRestoredTurnStatuses(activeRequestIds)
@@ -601,12 +616,13 @@ export const useRuntimeStore = defineStore('runtime', {
           || scopeFromEventPayload(scopeEvent)
           || null
         this.activeRequests[request.requestId] = request
+        this._setRequestDispatchState(request.requestId, request.payload.dispatch_state || 'running', request.payload)
       })
 
       const foregroundRequests = activeRequests.filter((request) => (
         !request.background
         && request.status === 'running'
-        && request.payload?.dispatch_state !== 'queued'
+        && !isPendingDispatch(request.payload?.dispatch_state)
       ))
       this._reconcileRestoredTurnStatuses(activeRequestIds)
       if (foregroundRequests.length === 0) return
@@ -637,7 +653,7 @@ export const useRuntimeStore = defineStore('runtime', {
     _clearStaleForegroundRun() {
       if (!this.activeRequestId || !['running', 'stopping'].includes(this.runStatus)) return
       const request = this.activeRequests[this.activeRequestId]
-      if (request?.background) return
+      if (request?.background || request?.payload?.submission_state === 'pending') return
       this.activeRequestId = null
       this.runStatus = 'idle'
     },
@@ -1112,11 +1128,15 @@ export const useRuntimeStore = defineStore('runtime', {
         payload: {
           ...(existing?.payload || {}),
           ...(event.payload || {}),
+          submission_state: 'accepted',
         },
       }
     },
 
     _handleRuntimeRequestQueued(event: RuntimeFrontendEvent) {
+      const request = event.request_id ? this.activeRequests[event.request_id] : null
+      if (request && (request.status !== 'running' || request.runId)) return
+      if (request?.payload?.dispatch_state === 'steering') return
       this._registerActiveRequest(event, 'running')
       this._setRequestDispatchState(event.request_id, 'queued', event.payload)
     },
@@ -1127,6 +1147,8 @@ export const useRuntimeStore = defineStore('runtime', {
     },
 
     _handleRuntimeRequestDispatched(event: RuntimeFrontendEvent) {
+      const existing = event.request_id ? this.activeRequests[event.request_id] : null
+      if (existing && existing.status !== 'running') return
       this._registerActiveRequest(event, 'running')
       this._setRequestDispatchState(event.request_id, 'running', event.payload)
       const request = event.request_id ? this.activeRequests[event.request_id] : null
@@ -1138,11 +1160,17 @@ export const useRuntimeStore = defineStore('runtime', {
 
     _setRequestDispatchState(
       requestId: string | null | undefined,
-      dispatchState: 'queued' | 'promoted' | 'running' | 'stopping' | 'completed' | 'cancelled' | 'failed' | 'stopped',
+      dispatchState: RequestDispatchState,
       payload: Record<string, any> = {},
     ) {
       if (!requestId) return
       const request = this.activeRequests[requestId]
+      const userMessage = this.transcript.find(item => item.role === 'user' && item.metadata?.request_id === requestId)
+      const wasPending = isPendingDispatch(userMessage?.metadata?.dispatch_state)
+      if (userMessage && wasPending && dispatchState === 'running') {
+        this.transcript.splice(this.transcript.indexOf(userMessage), 1)
+        this.transcript.push(userMessage)
+      }
       if (request) {
         request.payload = {
           ...(request.payload || {}),
@@ -1152,6 +1180,9 @@ export const useRuntimeStore = defineStore('runtime', {
       }
       const turn = this.conversationTurns.find((item) => item.requestId === requestId)
       if (turn) {
+        if (dispatchState === 'queued' || dispatchState === 'steering') turn.status = 'queued'
+        else if (dispatchState === 'promoted') turn.status = 'completed'
+        else turn.status = dispatchState
         turn.metadata = {
           ...(turn.metadata || {}),
           ...payload,
@@ -1232,6 +1263,16 @@ export const useRuntimeStore = defineStore('runtime', {
       scope: string,
       activate: boolean,
     ) {
+      const restoredIds = new Set(snapshot.conversationTurns.map(turn => turn.requestId))
+      const pendingTurns = this.conversationTurns.filter(turn => (
+        turn.requestId && !restoredIds.has(turn.requestId)
+        && this.activeRequests[turn.requestId]?.conversationScope === scope
+        && this.activeRequests[turn.requestId]?.payload?.submission_state === 'pending'
+      ))
+      const foreground = snapshot.activeTurn || pendingTurns.find(turn => turn.status === 'running') || null
+      this.activeRequestId = foreground?.requestId || null
+      this.runStatus = foreground?.status || 'idle'
+      this.currentRunId = foreground?.metadata?.runtime_instance_id || null
       this.activeMainSessionId = null
       this.activeAgentSessionId = String(session.session_id)
       this.activeWorkspaceId = String(session.workspace_id || '') || null
@@ -1246,17 +1287,32 @@ export const useRuntimeStore = defineStore('runtime', {
       this.tools = snapshot.tools
       this.pendingInterrupt = snapshot.pendingInterrupt
 
-      this.transcript = snapshot.transcript
-      this.conversationTurns = snapshot.conversationTurns
-      this._reconcileRestoredTurnStatuses(
-        new Set(
-          Object.values(this.activeRequests)
-            .filter(request => request.status === 'running')
-            .map(request => request.requestId),
-        ),
-      )
+      this.transcript = [
+        ...snapshot.transcript,
+        ...pendingTurns.flatMap(turn => turn.userMessage ? [turn.userMessage] : []),
+      ]
+      this.conversationTurns = [...snapshot.conversationTurns, ...pendingTurns]
+      for (const [id, request] of Object.entries(this.activeRequests)) {
+        if (request.conversationScope === scope && request.source === 'user' && request.payload?.submission_state !== 'pending') delete this.activeRequests[id]
+      }
+      for (const turn of snapshot.conversationTurns) {
+        if (!turn.requestId || !turn.userMessage) continue
+        const dispatch = turn.userMessage.metadata?.dispatch_state
+        this.activeRequests[turn.requestId] = {
+          requestId: turn.requestId,
+          status: ['queued', 'running', 'stopping', 'interrupted', 'waiting_for_workers'].includes(turn.status) ? 'running' : turn.status,
+          mode: 'agent_package',
+          runId: turn.metadata?.runtime_instance_id || null,
+          conversationScope: scope,
+          background: false,
+          source: 'user',
+          startedAt: turn.startedAt,
+          completedAt: turn.completedAt,
+          payload: { ...turn.userMessage.metadata, dispatch_state: dispatch, session_id: session.session_id, package_id: snapshot.sessionPackageId },
+        }
+      }
       this._restoreProcessEvents(snapshot.processEvents)
-      this._restoreActiveTurnFromSnapshot(snapshot.activeTurn, {
+      this._restoreActiveTurnFromSnapshot(foreground, {
         mode: 'agent_package',
         conversationScope: scope,
         payload: {
@@ -1642,11 +1698,12 @@ export const useRuntimeStore = defineStore('runtime', {
         this._switchConversationScope(conversationScope)
       }
       const timestamp = new Date().toISOString()
-      const messageId = `user-${Date.now()}`
+      const messageId = `user-${requestId || crypto.randomUUID()}`
       const queued = Boolean(this.activeRequestId && ['running', 'stopping'].includes(this.runStatus))
       const dispatchState = queued ? 'queued' : 'running'
       const messageMetadata = {
         ...metadata,
+        submission_state: 'pending',
         request_id: requestId,
         dispatch_state: dispatchState,
       }
@@ -1670,7 +1727,7 @@ export const useRuntimeStore = defineStore('runtime', {
       this.transcript.push(item)
       const turn = ensureConversationTurn(this, requestId, timestamp)
       turn.userMessage = item
-      turn.status = 'running'
+      turn.status = queued ? 'queued' : 'running'
       turn.metadata = {
         ...turn.metadata,
         ...messageMetadata,
@@ -1750,53 +1807,32 @@ export const useRuntimeStore = defineStore('runtime', {
       this._saveActiveConversationScope()
     },
 
-    markRequestSteering(requestId: string) {
-      const targetRequestId = String(requestId || '').trim()
-      if (!targetRequestId) return
-      const request = this.activeRequests[targetRequestId]
-      if (request) {
-        request.payload = {
-          ...(request.payload || {}),
-          dispatch_state: 'steering',
-        }
-      }
-      const turn = this.conversationTurns.find((item) => item.requestId === targetRequestId)
-      if (turn) {
-        turn.metadata = {
-          ...(turn.metadata || {}),
-          dispatch_state: 'steering',
-        }
-        if (turn.userMessage) {
-          turn.userMessage.metadata = {
-            ...(turn.userMessage.metadata || {}),
-            dispatch_state: 'steering',
-          }
+    settleRequestSubmission(requestId: string | null | undefined, accepted: boolean) {
+      if (!requestId) return
+      const request = this.activeRequests[requestId]
+      if (!request || request.payload?.submission_state !== 'pending') return
+      request.payload.submission_state = accepted ? 'accepted' : 'failed'
+      if (!accepted) {
+        request.status = 'failed'
+        this._setRequestDispatchState(requestId, 'failed')
+        if (this.activeRequestId === requestId) {
+          this.activeRequestId = null
+          this.runStatus = 'failed'
         }
       }
     },
 
-    restoreRequestQueued(requestId: string) {
-      const targetRequestId = String(requestId || '').trim()
-      if (!targetRequestId) return
-      const request = this.activeRequests[targetRequestId]
-      if (request && request.status === 'running') {
-        request.payload = {
-          ...(request.payload || {}),
-          dispatch_state: 'queued',
-        }
+    markRequestSteering(requestId: string) {
+      const request = this.activeRequests[requestId]
+      if (request && request.payload?.dispatch_state === 'queued') {
+        this._setRequestDispatchState(requestId, 'steering')
       }
-      const turn = this.conversationTurns.find((item) => item.requestId === targetRequestId)
-      if (turn) {
-        turn.metadata = {
-          ...(turn.metadata || {}),
-          dispatch_state: 'queued',
-        }
-        if (turn.userMessage) {
-          turn.userMessage.metadata = {
-            ...(turn.userMessage.metadata || {}),
-            dispatch_state: 'queued',
-          }
-        }
+    },
+
+    restoreRequestQueued(requestId: string) {
+      const request = this.activeRequests[requestId]
+      if (request && request.payload?.dispatch_state === 'steering') {
+        this._setRequestDispatchState(requestId, 'queued')
       }
     },
 

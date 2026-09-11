@@ -591,7 +591,7 @@ def project_runtime_event(
 ) -> list[dict[str, Any]]:
     kind = event.payload.kind
     mapping = {
-        "runtime_queued": "runtime_request_queued",
+        "runtime_queued": "runtime_request_dispatched",
         "runtime_started": "run_started",
         "runtime_completed": "run_completed",
         "failed": "run_failed",
@@ -667,6 +667,9 @@ def project_command_event(record: OutboxRecord) -> list[dict[str, Any]]:
     request_source = str(raw.pop("request_source", "user") or "user")
     dispatch_state = str(raw.pop("dispatch_state", "") or "")
     queue_position = raw.pop("queue_position", None)
+    queue_sequence = raw.pop("queue_sequence", None)
+    steering = raw.pop("steering", None)
+    queued_command_id = raw.pop("queued_command_id", None)
     try:
         receipt = CommandReceipt.model_validate(raw)
     except Exception:
@@ -681,9 +684,15 @@ def project_command_event(record: OutboxRecord) -> list[dict[str, Any]]:
     elif record.event_kind == "command_attached_runtime" and command_kind == "send_message":
         event_type = "runtime_request_dispatched"
         payload = {"dispatch_state": "running", "queue_position": 0}
+    elif record.event_kind == "command_steering_started":
+        event_type = "runtime_request_steering_started"
+        payload = {"dispatch_state": "steering", "steering": steering}
     elif record.event_kind == "command_steering":
         event_type = "runtime_request_steering"
-        payload = {"dispatch_state": dispatch_state or "steering", "queue_position": 0}
+        payload = {"dispatch_state": "promoted", "queue_position": 0, "steering": steering}
+    elif record.event_kind == "command_steering_rejected" or (command_kind == "steer_runtime_request" and record.event_kind in {"command_failed", "command_rejected"}):
+        event_type = "runtime_request_steering_rejected"
+        payload = {"queued_request_id": queued_command_id, "reason": receipt.rejection_code}
     elif record.event_kind in {"command_failed", "command_rejected"} and receipt.runtime_instance_id is None:
         event_type = "run_failed"
         payload = {
@@ -704,6 +713,7 @@ def project_command_event(record: OutboxRecord) -> list[dict[str, Any]]:
         return []
     payload.update(
         {
+            **({"queue_sequence": queue_sequence} if queue_sequence is not None else {}),
             "principal_id": receipt.principal_id,
             "package_id": "main_chat",
             "agent_session_id": receipt.session_id,
@@ -717,7 +727,7 @@ def project_command_event(record: OutboxRecord) -> list[dict[str, Any]]:
             runtime_instance_id=receipt.runtime_instance_id,
             session_id=receipt.session_id,
             node_id=None,
-            timestamp=receipt.updated_at,
+            timestamp=record.created_at,
             payload=payload,
             event_id=record.event_id,
         )

@@ -130,32 +130,51 @@ class SteerRuntimeCommandHandler:
                 rejection_code="steering_content_unavailable",
             )
         injection = RuntimeInputInjection(
-            injection_id=payload.queued_command_id,
+            injection_id=message.message_id,
             role="user",
             content=content,
             attachments=attachments,
         )
 
-        def acknowledge_checkpoint() -> None:
-            acknowledged = self._commands.complete_queued_as_steering(
+        def acknowledge_checkpoint(messages: list[Any]) -> None:
+            position = next(index for index, item in enumerate(messages) if item.id == injection.injection_id)
+            predecessor = next(
+                (item for item in reversed(messages[:position])
+                 if getattr(item, "type", None) in {"human", "ai"} and item.id),
+                None,
+            )
+            if predecessor is None:
+                raise RuntimeError("steered input has no conversation predecessor")
+            self._commands.complete_queued_as_steering(
                 command_id=payload.queued_command_id,
                 principal_id=envelope.principal_id,
                 session_id=envelope.session_id,
+                runtime_instance_id=active.runtime_instance_id,
+                after_message_id=str(predecessor.id),
             )
-            # A target may have been claimed after the initial status check.
-            # Cancel its active tool so the injected guidance is the only
-            # continuation and the race cannot surface as a runtime failure.
-            if acknowledged.status == "running" and acknowledged.runtime_instance_id:
-                self._run_controls.request_tool_interrupt(
-                    runtime_instance_id=acknowledged.runtime_instance_id,
-                    reason="user_steered",
-                )
 
+        def release_pending() -> None:
+            self._commands.set_pending_steering(
+                command_id=payload.queued_command_id,
+                principal_id=envelope.principal_id,
+                session_id=envelope.session_id,
+                runtime_instance_id=None,
+            )
+
+        if not self._commands.set_pending_steering(
+            command_id=payload.queued_command_id,
+            principal_id=envelope.principal_id,
+            session_id=envelope.session_id,
+            runtime_instance_id=active.runtime_instance_id,
+        ):
+            return CommandOutcome(status="rejected", rejection_code="steering_target_not_active")
         if not self._run_controls.submit_input(
             runtime_instance_id=active.runtime_instance_id,
             injection=injection,
             on_checkpointed=acknowledge_checkpoint,
+            on_discarded=release_pending,
         ):
+            release_pending()
             return CommandOutcome(
                 status="rejected",
                 rejection_code="active_runtime_not_accepting_steering",
@@ -171,6 +190,7 @@ class SteerRuntimeCommandHandler:
                 runtime_instance_id=active.runtime_instance_id,
                 injection_id=injection.injection_id,
             )
+            release_pending()
             return CommandOutcome(
                 status="rejected",
                 rejection_code="active_runtime_not_available_for_steering",

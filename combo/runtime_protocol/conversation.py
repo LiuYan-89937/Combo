@@ -200,6 +200,11 @@ class ConversationMessage(ProtocolModel):
         return self
 
 
+class SteeringPlacement(FrozenProtocolModel):
+    runtime_instance_id: str = Field(min_length=1)
+    after_message_id: str | None = Field(default=None, min_length=1)
+
+
 class ConversationTurn(ProtocolModel):
     turn_id: str = Field(default_factory=lambda: uuid4().hex)
     session_id: str
@@ -208,6 +213,7 @@ class ConversationTurn(ProtocolModel):
     status: ConversationTurnStatus = "queued"
     active_runtime_instance_id: str | None = None
     source_command_id: str | None = None
+    steering: SteeringPlacement | None = None
     created_at: str = Field(default_factory=utc_now_text)
     updated_at: str = Field(default_factory=utc_now_text)
     terminal_at: str | None = None

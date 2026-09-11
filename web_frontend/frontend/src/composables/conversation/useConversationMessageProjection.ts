@@ -1,4 +1,5 @@
 import { computed } from 'vue'
+import { isPendingDispatch, orderedTranscript } from '@/stores/runtime/requestDispatch'
 import { useI18n } from '@/composables/useI18n'
 import { useRuntimeStore } from '@/stores/runtime'
 import type {
@@ -44,8 +45,8 @@ export function useConversationMessageProjection() {
   const timelineItems = computed<ConversationTimelineItem[]>(() => {
     const items: ConversationTimelineItem[] = []
     let activeAssistantItem: ConversationTimelineItem | null = null
-    runtimeStore.transcript.forEach((message, index) => {
-      if (message.metadata?.dispatch_state === 'queued') return
+    orderedTranscript(runtimeStore.transcript).forEach((message, index) => {
+      if (isPendingDispatch(message.metadata?.dispatch_state)) return
       if (conversationVisibleParts(message.parts).length === 0) return
       const requestId = String(message.metadata?.request_id || '').trim()
       if (message.role === 'assistant' && !message.metadata?.delegated_delivery) {
@@ -58,7 +59,7 @@ export function useConversationMessageProjection() {
         } else {
           activeAssistantItem = {
             kind: 'message',
-            id: requestId ? assistantProjectionId(requestId) : `assistant-turn-${message.id}`,
+            id: `assistant-segment-${message.id}`,
             timestamp: message.timestamp,
             order: index,
             message,
@@ -262,9 +263,7 @@ function computerUseActivityText(
   return [t('conversation.computerUse.label'), phase, step].filter(Boolean).join(' · ')
 }
 
-function assistantProjectionId(requestId: string): string {
-  return `assistant-turn-${requestId}`
-}
+
 
 function assistantMessagesBelongTogether(activeRequestId: string, nextRequestId: string): boolean {
   if (activeRequestId && nextRequestId) return activeRequestId === nextRequestId

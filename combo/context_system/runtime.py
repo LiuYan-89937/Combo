@@ -11,6 +11,7 @@ from combo.context_system.compression import maybe_compress_messages
 from combo.context_system.events import emit_context_event
 from combo.context_system.schema import (
     ContextCandidate,
+    ContextCompressionReport,
     ContextContractConfig,
     ContextInjectionReport,
     ContextPolicy,
@@ -540,6 +541,8 @@ def _state_with_compressed_token_budget(
     messages: list[Any],
 ) -> Any:
     updated = state.model_copy(deep=True)
+    updated.context.compression_applied = True
+    updated.context.compression_report = compression_report.model_dump(mode="json")
     updated.context.token_budget = {
         **dict(getattr(updated.context, "token_budget", {}) or {}),
         "token_count": compression_report.token_estimate_after,

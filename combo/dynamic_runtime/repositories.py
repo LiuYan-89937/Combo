@@ -7,6 +7,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from combo.dynamic_runtime.database import DynamicRuntimeDatabase
+from combo.runtime_protocol.conversation import SteeringPlacement
 from combo.dynamic_runtime.persistence_helpers import (
     advance_conversation_revision,
     insert_runtime_instance,
@@ -742,6 +743,7 @@ class CommandInbox:
                         ),
                         "dispatch_state": "queued" if queue_position else "dispatching",
                         "queue_position": queue_position,
+                        "queue_sequence": sequence,
                     },
                     created_at=queued.updated_at,
                     updated_at=queued.updated_at,
@@ -792,12 +794,69 @@ class CommandInbox:
                 raise TypeError("steering target is not a send-message command")
         return envelope.payload, receipt
 
+    def set_pending_steering(
+        self, *, command_id: str, principal_id: str, session_id: str,
+        runtime_instance_id: str | None,
+    ) -> bool:
+        """Reserve/release a queued turn without claiming a second execution."""
+        with self._database.transaction() as conn:
+            row = conn.execute(
+                """
+                select command.receipt_json, turn.payload_json
+                from command_inbox command join conversation_turns turn
+                  on json_extract(turn.payload_json, '$.source_command_id') = command.command_id
+                where command.command_id = ? and command.principal_id = ?
+                  and command.session_id = ? and command.status = 'queued'
+                """,
+                (command_id, principal_id, session_id),
+            ).fetchone()
+            if row is None:
+                return False
+            receipt = CommandReceipt.model_validate_json(str(row["receipt_json"]))
+            turn = ConversationTurn.model_validate_json(str(row["payload_json"]))
+            if turn.steering is not None and turn.steering.after_message_id is not None:
+                return False
+            if runtime_instance_id is not None:
+                active = conn.execute(
+                    """
+                    select 1 from runtime_instances where runtime_instance_id = ?
+                      and session_id = ? and status = 'running'
+                      and json_extract(payload_json, '$.request.principal_id') = ?
+                    """, (runtime_instance_id, session_id, principal_id),
+                ).fetchone()
+                if active is None:
+                    return False
+            placement = SteeringPlacement(runtime_instance_id=runtime_instance_id) if runtime_instance_id else None
+            if turn.steering == placement:
+                return True
+            now = utc_now_text()
+            updated = turn.model_copy(update={"steering": placement, "updated_at": now})
+            conn.execute(
+                "update conversation_turns set payload_json = ?, updated_at = ? where turn_id = ?",
+                (updated.model_dump_json(), now, turn.turn_id),
+            )
+            insert_outbox(conn, OutboxRecord(
+                aggregate_kind="command", aggregate_id=command_id,
+                aggregate_revision=receipt.receipt_revision,
+                event_id=f"command:{command_id}:steering:{uuid4().hex}",
+                event_kind="command_steering_started" if placement else "command_steering_rejected",
+                payload={
+                    **receipt.model_dump(mode="json"), "queued_command_id": command_id,
+                    "steering": placement.model_dump(mode="json") if placement else None,
+                },
+                created_at=now, updated_at=now,
+            ))
+            advance_conversation_revision(conn, session_id, updated_at=now)
+            return True
+
     def complete_queued_as_steering(
         self,
         *,
         command_id: str,
         principal_id: str,
         session_id: str,
+        runtime_instance_id: str,
+        after_message_id: str,
     ) -> CommandReceipt:
         target_id = _required_text(command_id, "command_id")
         owner = _required_text(principal_id, "principal_id")
@@ -815,11 +874,8 @@ class CommandInbox:
                 raise LookupError(f"message command not found: {target_id}")
             receipt = CommandReceipt.model_validate_json(str(row["receipt_json"]))
             if receipt.status != "queued":
-                # A queued message may be claimed between dispatch and the
-                # checkpoint that acknowledges the injected input.  The
-                # steering caller handles a running target by cancelling its
-                # current runtime; terminal targets are already settled and
-                # must not poison the active runtime with a validation error.
+                # Cancellation may settle the queued command before acknowledgement.
+                # Never rewrite a terminal command from a late graph checkpoint.
                 return receipt
             now = utc_now_text()
             completed = receipt.model_copy(
@@ -859,8 +915,9 @@ class CommandInbox:
                 raise LookupError(f"conversation turn not found for command: {target_id}")
             turn = ConversationTurn.model_validate_json(str(turn_row["payload_json"]))
             require_transition(turn.status, "completed", CONVERSATION_TURN_TRANSITIONS, machine="conversation turn")
+            placement = SteeringPlacement(runtime_instance_id=runtime_instance_id, after_message_id=after_message_id)
             completed_turn = turn.model_copy(
-                update={"status": "completed", "updated_at": now, "terminal_at": now}
+                update={"status": "completed", "updated_at": now, "terminal_at": now, "steering": placement}
             )
             turn_changed = conn.execute(
                 """
@@ -884,6 +941,7 @@ class CommandInbox:
                         **completed.model_dump(mode="json"),
                         "command_kind": "send_message",
                         "dispatch_state": "promoted",
+                        "steering": placement.model_dump(mode="json"),
                     },
                     created_at=now,
                     updated_at=now,
@@ -1049,6 +1107,12 @@ class CommandInbox:
                 select * from command_inbox queued
                 where queued.status = 'queued'
                   and {lane_filter}
+                  and not exists (
+                    select 1 from conversation_turns turn
+                    where json_extract(turn.payload_json, '$.source_command_id') = queued.command_id
+                      and json_extract(turn.payload_json, '$.steering.runtime_instance_id') is not null
+                      and json_extract(turn.payload_json, '$.steering.after_message_id') is null
+                  )
                   and (
                     queued.command_kind in ({control_placeholders})
                     or not exists (

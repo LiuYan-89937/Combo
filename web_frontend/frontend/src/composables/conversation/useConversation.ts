@@ -166,9 +166,7 @@ export function useConversation() {
         agentSessionId ? null : newSessionWorkspaceId,
         runtimeStore.hasActiveRun && runningMessageMode.value === 'steer',
         async (runtimeCommand) => {
-          const targetWorkspaceId = agentSessionId
-            ? runtimeStore.activeWorkspaceId
-            : newSessionWorkspaceId
+          const targetWorkspaceId = newSessionWorkspaceId
           const gitWorkspaceId = String(targetWorkspaceId || '').trim()
           if (!gitWorkspaceId) return
           const response = await workspaceApi.projects()

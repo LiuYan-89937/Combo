@@ -7,7 +7,7 @@
 
 export type RuntimeMode = 'agent_package' | 'agent_group'
 
-export type RunStatus = 'idle' | 'running' | 'stopping' | 'waiting_for_workers' | 'interrupted' | 'completed' | 'stopped' | 'cancelled' | 'failed'
+export type RunStatus = 'queued' | 'idle' | 'running' | 'stopping' | 'waiting_for_workers' | 'interrupted' | 'completed' | 'stopped' | 'cancelled' | 'failed'
 
 export type PlanStepStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'skipped'
 
@@ -297,6 +297,8 @@ export interface ActiveRequestView {
 }
 
 export interface QueuedMessageView {
+  steering: boolean
+  submitting: boolean
   requestId: string
   content: string
   position: number

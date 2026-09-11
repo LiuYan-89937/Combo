@@ -10,7 +10,7 @@ import threading
 from time import perf_counter
 from typing import Any, Literal, Protocol
 
-from langchain_core.messages import BaseMessage, messages_from_dict, messages_to_dict
+from langchain_core.messages import BaseMessage, HumanMessage, messages_from_dict, messages_to_dict
 from langgraph.types import Command
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -292,6 +292,7 @@ class DynamicRuntimeService:
                     principal_id=principal_id,
                     through_task_revision=through_task_revision,
                     graph_messages=tuple(messages_to_dict(graph_messages)),
+                    included_user_message_ids=latest_snapshot.included_user_message_ids,
                     context_window=window,
                     compression_report={
                         "status": "skipped",
@@ -355,6 +356,7 @@ class DynamicRuntimeService:
             principal_id=principal_id,
             through_task_revision=through_task_revision,
             graph_messages=tuple(messages_to_dict(compressed_messages)),
+            included_user_message_ids=latest_snapshot.included_user_message_ids if latest_snapshot else (),
             context_window=window,
             compression_report=report_payload,
         )
@@ -580,6 +582,9 @@ class DynamicRuntimeService:
                     ),
                     messages=projected_messages,
                     tool_calls=projected_tool_calls,
+                    context_snapshot=self._execution_context_snapshot(
+                        claimed_instance, state=state, messages=projection_messages, status=status,
+                    ),
                     model_usage=_model_usage_records(claimed_instance, state.observability.events),
                     error=error,
                 )
@@ -632,6 +637,9 @@ class DynamicRuntimeService:
                         instance=claimed_instance,
                         waiting_status=status,
                         observations=state.observability.events,
+                    ),
+                    context_snapshot=self._execution_context_snapshot(
+                        claimed_instance, state=state, messages=projection_messages, status=status,
                     ),
                     model_usage=_model_usage_records(claimed_instance, state.observability.events),
                     error=error,
@@ -763,8 +771,32 @@ class DynamicRuntimeService:
         )
         return [
             *messages_from_dict(list(snapshot.graph_messages)),
-            *conversation_to_graph_messages(delta),
+            *conversation_to_graph_messages([message for message in delta if message.message_id not in snapshot.included_user_message_ids]),
         ]
+
+    def _execution_context_snapshot(
+        self, instance: RuntimeInstance, *, state: RuntimeState, messages: list[Any], status: str,
+    ) -> ConversationContextSnapshot | None:
+        if instance.request.runtime_role != "main" or status not in {"completed", "failed", "cancelled"}:
+            return None
+        previous = self._context_snapshots.latest(instance.request.session_id)
+        if previous is None and not any(
+            is_context_summary_message(message)
+            or message.additional_kwargs.get("kind") == "runtime_steered_input"
+            for message in messages
+        ):
+            return None
+        included = set(previous.included_user_message_ids if previous else ())
+        included.update(str(message.id) for message in messages if isinstance(message, HumanMessage) and message.id)
+        return ConversationContextSnapshot(
+            session_id=instance.request.session_id,
+            principal_id=instance.request.principal_id,
+            through_task_revision=instance.request.task_revision,
+            graph_messages=tuple(messages_to_dict(messages)),
+            included_user_message_ids=tuple(sorted(included)),
+            context_window=_latest_context_window(state, graph_messages=messages) or {},
+            compression_report=state.context.compression_report or (previous.compression_report if previous else {}),
+        )
 
     def _runtime_input(
         self,
@@ -1577,7 +1609,7 @@ def _run_graph_with_control(
                     graph_input,
                     config=config,
                     stream_mode=["values", "custom"],
-                    durability="exit",
+                    durability="sync",
                 ):
                     if mode == "values" and isinstance(chunk, dict):
                         outcome["raw"] = chunk

@@ -23,7 +23,7 @@
       >
         <div class="queued-message-copy">
           <span class="queued-message-status">
-            {{ t('chat.messageQueuedAt', { position: queuedMessage.position }) }}
+            {{ queuedMessage.submitting ? t('chat.messagePreparing') : queuedMessage.steering ? t('chat.messageSteering') : t('chat.messageQueuedAt', { position: queuedMessage.position }) }}
           </span>
           <span class="queued-message-content">
             {{ queuedMessage.content || t('chat.attachmentMessage') }}
@@ -37,6 +37,7 @@
             size="small"
             text
             class="queued-message-action"
+            :disabled="queuedMessage.steering || queuedMessage.submitting"
             @click="emit('cancelQueued', queuedMessage)"
           >
             {{ t('common.cancel') }}
@@ -45,6 +46,7 @@
             size="small"
             text
             class="queued-message-action"
+            :disabled="queuedMessage.steering || queuedMessage.submitting"
             @click="emit('steer', queuedMessage.requestId)"
           >
             {{ t('chat.steer') }}

@@ -19,6 +19,7 @@ class ConversationContextSnapshot(BaseModel):
     principal_id: str
     through_task_revision: int = Field(ge=1)
     graph_messages: tuple[dict[str, Any], ...]
+    included_user_message_ids: tuple[str, ...] = ()
     context_window: dict[str, Any]
     compression_report: dict[str, Any]
     created_at: str = Field(default_factory=utc_now_text)
@@ -48,34 +49,38 @@ class ConversationContextSnapshotStore:
 
     def append(self, snapshot: ConversationContextSnapshot) -> None:
         with self._database.transaction() as connection:
-            latest = connection.execute(
-                """
-                select through_task_revision
-                from conversation_context_snapshots
-                where session_id = ?
-                order by created_at desc, rowid desc
-                limit 1
-                """,
-                (snapshot.session_id,),
-            ).fetchone()
-            if latest is not None and int(latest["through_task_revision"]) > snapshot.through_task_revision:
-                raise RuntimeError("context snapshot revision moved backwards")
-            connection.execute(
-                """
-                insert into conversation_context_snapshots(
-                  snapshot_id, session_id, principal_id, through_task_revision,
-                  payload_json, created_at
-                ) values (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    snapshot.snapshot_id,
-                    snapshot.session_id,
-                    snapshot.principal_id,
-                    snapshot.through_task_revision,
-                    snapshot.model_dump_json(),
-                    snapshot.created_at,
-                ),
-            )
+            self.insert(connection, snapshot)
+
+    @staticmethod
+    def insert(connection: Any, snapshot: ConversationContextSnapshot) -> None:
+        latest = connection.execute(
+            """
+            select through_task_revision
+            from conversation_context_snapshots
+            where session_id = ?
+            order by created_at desc, rowid desc
+            limit 1
+            """,
+            (snapshot.session_id,),
+        ).fetchone()
+        if latest is not None and int(latest["through_task_revision"]) > snapshot.through_task_revision:
+            raise RuntimeError("context snapshot revision moved backwards")
+        connection.execute(
+            """
+            insert into conversation_context_snapshots(
+              snapshot_id, session_id, principal_id, through_task_revision,
+              payload_json, created_at
+            ) values (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                snapshot.snapshot_id,
+                snapshot.session_id,
+                snapshot.principal_id,
+                snapshot.through_task_revision,
+                snapshot.model_dump_json(),
+                snapshot.created_at,
+            ),
+        )
 
     def latest(self, session_id: str) -> ConversationContextSnapshot | None:
         with self._database.connection(query_only=True) as connection:

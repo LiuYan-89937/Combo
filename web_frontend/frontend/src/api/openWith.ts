@@ -6,6 +6,8 @@ export interface OpenWithApplication {
   /** Absolute path of the application bundle/executable. */
   path: string
   is_default: boolean
+  /** `data:image/png;base64,...` icon, or null when it could not be rendered. */
+  icon_data_url: string | null
 }
 
 function requireDesktop(): void {

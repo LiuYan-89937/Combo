@@ -97,10 +97,7 @@ export function reconcileCompletedAssistantSnapshot(
   if (!text) return
   const messageId = String(snapshot?.message_id || `${event.run_id || event.request_id}:assistant`)
   const timestamp = String(snapshot?.created_at || event.timestamp)
-  const streamed = [...state.transcript].reverse().find((message) => (
-    messageHasVisibleAssistantContent(message)
-    && messageBelongsToRuntimeEvent(message, event)
-  ))
+  const streamed = state.transcript.find(message => message.id === messageId)
   if (streamed) {
     streamed.parts = [
       ...streamed.parts.filter(part => part.type !== 'text'),
@@ -125,7 +122,6 @@ export function reconcileCompletedAssistantSnapshot(
     }
     return
   }
-  if (turn.assistantMessages.some(messageHasVisibleAssistantContent)) return
   const message: TranscriptItem = {
     id: messageId,
     role: 'assistant',
@@ -272,13 +268,6 @@ function syncTurnAssistantMessage(
   turn.assistantMessages.push(message)
 }
 
-function messageHasVisibleAssistantContent(message: TranscriptItem): boolean {
-  if (message.role !== 'assistant' || message.metadata?.tool_activity) return false
-  return message.parts.some((part) => (
-    (part.type === 'text' || part.type === 'reasoning') && part.text.trim().length > 0
-  ))
-}
-
 function hasAuthoritativeAssistantSnapshot(
   state: MessageMutationState,
   event: RuntimeFrontendEvent,
@@ -286,22 +275,8 @@ function hasAuthoritativeAssistantSnapshot(
   return state.transcript.some(message => (
     message.role === 'assistant'
     && message.metadata?.authoritative_snapshot === true
-    && messageBelongsToRuntimeEvent(message, event)
+    && message.id === messageIdFromEvent(event)
   ))
-}
-
-function messageBelongsToRuntimeEvent(
-  message: TranscriptItem,
-  event: RuntimeFrontendEvent,
-): boolean {
-  const runtimeInstanceId = String(event.run_id || '').trim()
-  const messageRuntimeInstanceId = String(message.metadata?.runtime_instance_id || '').trim()
-  if (runtimeInstanceId && messageRuntimeInstanceId) {
-    return runtimeInstanceId === messageRuntimeInstanceId
-  }
-  const requestId = String(event.request_id || '').trim()
-  const messageRequestId = String(message.metadata?.request_id || '').trim()
-  return Boolean(requestId && messageRequestId && requestId === messageRequestId)
 }
 
 function messageIdFromEvent(event: RuntimeFrontendEvent): string {

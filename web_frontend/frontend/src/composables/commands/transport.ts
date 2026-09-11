@@ -20,6 +20,11 @@ const SESSION_ESTABLISHING_COMMANDS = new Set<RuntimeFrontendCommand['type']>([
 ])
 
 let cancellationBarrier: Promise<void> = Promise.resolve()
+interface SubmissionLane {
+  tail: Promise<void>
+  sessionId: string | null
+}
+const submissionLanes = new Map<string, SubmissionLane>()
 
 export function useCommandTransport() {
   const uiStore = useUiStore()
@@ -38,24 +43,61 @@ export function useCommandTransport() {
     })
   }
 
-  function sendRuntimeCommand(command: RuntimeFrontendCommand) {
-    const dispatch = () => postCommand(command)
-    const request = command.type !== 'cancel_runtime_request' && FOREGROUND_RUN_COMMANDS.has(command.type)
-      ? cancellationBarrier.then(dispatch)
-      : dispatch()
+  function sendRuntimeCommand(
+    command: RuntimeFrontendCommand,
+    beforeDispatch?: (command: RuntimeFrontendCommand) => Promise<void>,
+  ) {
+    const ordered = FOREGROUND_RUN_COMMANDS.has(command.type)
+    const scope = runtimeStore.activeConversationScope
+    const sessionId = String(command.session_id || '').trim() || null
+    const laneKey = sessionId ? `session:${sessionId}` : `scope:${scope}`
+    const lane = ordered
+      ? submissionLanes.get(laneKey) || { tail: Promise.resolve(), sessionId }
+      : null
+    if (lane) submissionLanes.set(laneKey, lane)
+    const cancellation = cancellationBarrier
+    const dispatch = async () => {
+      if (lane) await cancellation
+      if (lane?.sessionId && !command.session_id) {
+        command.session_id = lane.sessionId
+        command.payload = { ...command.payload, session_id: lane.sessionId }
+      }
+      await beforeDispatch?.(command)
+      const response = await postCommand(command)
+      runtimeStore.settleRequestSubmission(command.request_id, response.receipt.status !== 'rejected')
+      const acceptedSessionId = String(response.receipt?.session_id || '').trim()
+      const packageId = String(command.payload?.package_id || '').trim()
+      if (acceptedSessionId && lane) {
+        lane.sessionId = acceptedSessionId
+        submissionLanes.set(`session:${acceptedSessionId}`, lane)
+      }
+      if (acceptedSessionId && packageId && SESSION_ESTABLISHING_COMMANDS.has(command.type)) {
+        // A delayed response must not navigate away from a conversation the user switched to.
+        if (runtimeStore.activeConversationScope === scope || runtimeStore.activeAgentSessionId === acceptedSessionId) {
+          runtimeStore.acceptAgentPackageSession(packageId, acceptedSessionId)
+          agentStore.enterAgentChat(packageId, acceptedSessionId)
+        }
+      }
+      ensureRuntimeEventStream(response.event_stream_id)
+      return response
+    }
+    // Register the submission synchronously, before Git/attachment preparation can yield.
+    const request = lane ? lane.tail.then(dispatch) : dispatch()
+    if (lane) {
+      const tail = request.then(() => undefined, () => undefined)
+      lane.tail = tail
+      void tail.then(() => {
+        if (lane.tail !== tail) return
+        for (const [key, value] of submissionLanes) if (value === lane) submissionLanes.delete(key)
+      })
+    }
     if (command.type === 'cancel_runtime_request') {
       cancellationBarrier = request.then(() => undefined, () => undefined)
     }
-    void request.then((response) => {
-      const sessionId = String(response.receipt?.session_id || '').trim()
-      const packageId = String(command.payload?.package_id || '').trim()
-      if (sessionId && packageId && SESSION_ESTABLISHING_COMMANDS.has(command.type)) {
-        runtimeStore.acceptAgentPackageSession(packageId, sessionId)
-        agentStore.enterAgentChat(packageId, sessionId)
-      }
-      ensureRuntimeEventStream(response.event_stream_id)
+    void request.catch(error => {
+      runtimeStore.settleRequestSubmission(command.request_id, false)
+      reportError(error)
     })
-    void request.catch(reportError)
     return request
   }
 

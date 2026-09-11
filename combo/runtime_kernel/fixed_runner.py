@@ -28,7 +28,7 @@ from combo.runtime_protocol.messages import (
     close_incomplete_tool_call_messages,
     incomplete_tool_call_ids,
 )
-from combo.tooling.execution_context import consume_runtime_inputs
+from combo.tooling.execution_context import acknowledge_runtime_inputs, consume_runtime_inputs
 from combo.tooling.execution_context import (
     RuntimeModelGenerationInterrupted,
     runtime_terminal_cancellation_requested,
@@ -58,6 +58,7 @@ def make_fixed_runner(
         runtime: Runtime = None,
     ) -> dict[str, Any]:
         state = runtime_state_from_graph(raw_state)
+        acknowledge_runtime_inputs(list(raw_state.get("messages") or []))
         if state.execution.finished:
             return runtime_graph_patch(state)
         if _timed_out(state) and not _must_close_tool_protocol(implementation, raw_state):
@@ -102,13 +103,11 @@ def make_fixed_runner(
         try:
             injected_messages = (
                 _consume_steered_inputs(active_state)
-                if implementation.impl_id in {"cognitive.answer", "terminal.commit"}
+                if implementation.impl_id == "terminal.commit"
                 else []
             )
+            messages_patch.extend(injected_messages)
             if injected_messages:
-                context.graph_messages.extend(injected_messages)
-            if implementation.impl_id == "terminal.commit" and injected_messages:
-                context_messages = None
                 raw_patch = {
                     "execution": {
                         "current_node": context.node_id,
@@ -116,21 +115,7 @@ def make_fixed_runner(
                     }
                 }
             else:
-                active_state, context_messages = _prepare_context(
-                    state=active_state,
-                    context=context,
-                    services=services,
-                )
                 raw_patch = implementation.execute(active_state, context)
-            prepared_messages = (
-                context_messages
-                if context_messages is not None
-                else list(context.graph_messages)
-                if injected_messages
-                else None
-            )
-            if prepared_messages is not None:
-                messages_patch.extend([RemoveMessage(id=REMOVE_ALL_MESSAGES), *prepared_messages])
 
             node_messages, patch = split_graph_patch(raw_patch)
             route_decision = str((patch.get("execution") or {}).get("route_decision") or "")
@@ -345,7 +330,11 @@ def _injected_messages(injections: Any) -> list[Any]:
         if not injection_id or (not content and not attachments):
             continue
         if role == "user":
-            messages.append(HumanMessage(id=injection_id, content=content))
+            messages.append(HumanMessage(
+                id=injection_id,
+                content=content,
+                additional_kwargs={"kind": "runtime_steered_input"},
+            ))
         elif role == "system":
             messages.append(
                 SystemMessage(
@@ -357,29 +346,59 @@ def _injected_messages(injections: Any) -> list[Any]:
     return messages
 
 
-def _prepare_context(
-    *,
-    state: RuntimeState,
-    context: NodeExecutionContext,
-    services: RuntimeServices,
-) -> tuple[RuntimeState, list[Any] | None]:
-    if not context.impl.startswith("cognitive."):
-        return state, None
-    context_system = services.context_system
-    result = context_system.prepare_before_model_call(
-        state=state,
-        node_id=context.node_id,
-        impl=context.impl,
-        messages=list(context.graph_messages),
-        services=services,
-        resources=services.runtime_context_resources.current(),
-        enable_dynamic_evidence=(
-            state.run.strategy != "plan_and_execute"
-            or context.node_id == "executor"
-        ),
-    )
-    context.graph_messages = list(result.messages)
-    return result.state, list(result.messages) if result.messages_changed else None
+def make_context_preparer(
+    *, node_id: str, implementation: NodeImplementation, services: RuntimeServices,
+) -> Callable[..., dict[str, Any]]:
+    """Commit model inputs and their accounting before entering model execution."""
+    def prepare(raw_state: dict[str, Any]) -> dict[str, Any]:
+        state = runtime_state_from_graph(raw_state)
+        acknowledge_runtime_inputs(list(raw_state.get("messages") or []))
+        if state.execution.finished:
+            return runtime_graph_patch(state)
+        if runtime_terminal_cancellation_requested():
+            _finish(state, status="cancelled", location="runtime.cancel")
+            return runtime_graph_patch(state)
+        if _timed_out(state):
+            _finish(state, status="failed", error="Execution timed out before context preparation.", location=node_id)
+            return runtime_graph_patch(state)
+        injected = _consume_steered_inputs(state)
+        messages = [*list(raw_state.get("messages") or []), *injected]
+        try:
+            result = services.context_system.prepare_before_model_call(
+                state=state,
+                node_id=node_id,
+                impl=implementation.impl_id,
+                messages=messages,
+                services=services,
+                resources=services.runtime_context_resources.current(),
+                enable_dynamic_evidence=(
+                    state.run.strategy != "plan_and_execute" or node_id == "executor"
+                ),
+            )
+            prepared = result.state
+            _mark_activity(prepared)
+            prepared.execution.current_node = node_id
+            prepared.execution.route_decision = "context.prepared"
+            return runtime_graph_patch(
+                prepared,
+                messages=[RemoveMessage(id=REMOVE_ALL_MESSAGES), *result.messages]
+                if result.messages_changed else injected,
+            )
+        except RuntimeModelGenerationInterrupted as exc:
+            if runtime_terminal_cancellation_requested():
+                _finish(state, status="cancelled", location="runtime.cancel")
+            else:
+                injected.extend(_steered_messages(state, exc.input_injections))
+                injected.extend(_consume_steered_inputs(state))
+                state.execution.route_decision = "runtime.steered"
+            return runtime_graph_patch(state, messages=injected)
+        except GraphInterrupt:
+            raise
+        except Exception as exc:
+            _finish(state, status="failed", error=str(exc), location=node_id)
+            return runtime_graph_patch(state, messages=injected)
+
+    return prepare
 
 
 def _resolve_after_node(

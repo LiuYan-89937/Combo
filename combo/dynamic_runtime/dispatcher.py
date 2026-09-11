@@ -130,10 +130,10 @@ class CommandDispatcher:
             finally:
                 self._executions.release(envelope.command_id, execution)
         current_receipt = self._inbox.get_receipt(receipt.command_id)
-        self._finalize(current_receipt, outcome)
+        self._finalize(current_receipt, outcome, envelope)
         return True
 
-    def _finalize(self, receipt: CommandReceipt, outcome: CommandOutcome) -> None:
+    def _finalize(self, receipt: CommandReceipt, outcome: CommandOutcome, envelope: CommandEnvelope) -> None:
         now = utc_now_text()
         terminal = receipt.model_copy(
             update={
@@ -156,7 +156,11 @@ class CommandDispatcher:
                 aggregate_revision=terminal.receipt_revision,
                 event_id=f"command:{terminal.command_id}:{terminal.receipt_revision}",
                 event_kind=f"command_{terminal.status}",
-                payload=terminal.model_dump(mode="json"),
+                payload={
+                    **terminal.model_dump(mode="json"),
+                    "command_kind": envelope.payload.kind,
+                    "queued_command_id": getattr(envelope.payload, "queued_command_id", None),
+                },
                 created_at=now,
                 updated_at=now,
             ),
