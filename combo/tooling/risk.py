@@ -7,6 +7,10 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field
 
 from combo.models import get_task_model
+from combo.runtime_kernel.structured_output import (
+    execute_structured_output_invocation,
+    prepare_structured_output_invocation,
+)
 from combo.tooling.spec import ToolRiskAction, ToolRiskLevel, ToolRiskResult
 
 
@@ -37,11 +41,10 @@ def call_llm_risk_evaluator(
             risk_level=base_risk_level,
             reasons=["task model is not configured for llm risk evaluation"],
         )
-    structured_model = model.with_structured_output(LLMRiskDecision, method="json_mode").with_config(
-        tags=["nostream", "tool-risk"]
-    )
-    raw_decision = structured_model.invoke(
-        [
+    invocation = prepare_structured_output_invocation(
+        model=model,
+        output_model=LLMRiskDecision,
+        messages=[
             SystemMessage(
                 content=(
                     "You are the small-task model used only for tool argument risk evaluation. "
@@ -62,9 +65,12 @@ def call_llm_risk_evaluator(
                     ensure_ascii=False,
                 )
             ),
-        ]
+        ],
+        model_metadata={},
+        requested_method="json_mode",
+        config_tags=["tool-risk"],
     )
-    decision = raw_decision if isinstance(raw_decision, LLMRiskDecision) else LLMRiskDecision.model_validate(raw_decision)
+    decision = execute_structured_output_invocation(invocation).value
     return ToolRiskResult(
         action=decision.action,
         risk_level=decision.risk_level,

@@ -338,6 +338,7 @@ class DynamicRuntimeService:
             node_id="manual_context_compression",
             summary_model=compression_model.model,
             summary_model_max_output_tokens=compression_model.settings.max_output_tokens,
+            summary_model_metadata=compression_model.settings.metadata(),
             force=True,
         )
         report_payload = report.model_dump(mode="json")

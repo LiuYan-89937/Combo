@@ -23,6 +23,47 @@ class CompressionPolicy(BaseModel):
     keep_recent_messages: int = Field(default=12, ge=0, le=128)
 
 
+class ConversationCompressionSummary(BaseModel):
+    """Structured conversation summary retained in the model context."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    user_intent: str = Field(
+        description="The user's durable intent and requested outcome."
+    )
+    key_facts: str = Field(
+        description="Facts, constraints, identifiers, and decisions needed for continuity."
+    )
+    completed_actions: str = Field(
+        description="Actions already completed and their confirmed outcomes."
+    )
+    active_state: str = Field(
+        description="The current state, unresolved issues, and known failures."
+    )
+    continuation_instructions: str = Field(
+        description="What the next agent turn must preserve or do next."
+    )
+
+
+class ToolResultsCompressionSummary(BaseModel):
+    """Structured tool and knowledge-result summary retained in model context."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    confirmed_results: str = Field(
+        description="Tool results that are directly confirmed by returned evidence."
+    )
+    artifacts_and_references: str = Field(
+        description="Relevant paths, URLs, IDs, and generated artifacts."
+    )
+    errors_and_constraints: str = Field(
+        description="Errors, limitations, and constraints that affect continuation."
+    )
+    repeat_avoidance: str = Field(
+        description="Completed work and checks that should not be repeated unnecessarily."
+    )
+
+
 class CrossSessionMemoryPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

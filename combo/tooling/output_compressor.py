@@ -10,12 +10,15 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field
 
+from combo.runtime_kernel.structured_output import (
+    execute_structured_output_invocation,
+    prepare_structured_output_invocation,
+)
 from combo.tooling.schema_compiler import compile_json_schema
 from combo.tooling.spec import ToolOutputCompressionActionConfig
 
 
 DEFAULT_COMPRESSION_MAX_CHARS = 6000
-DEFAULT_MAX_ATTEMPTS = 2
 
 COMPRESSION_SYSTEM_PROMPT = (
     "You are the small-task model used only for tool output compression. "
@@ -149,29 +152,16 @@ def _invoke_structured_compression(
         SystemMessage(content=COMPRESSION_SYSTEM_PROMPT),
         HumanMessage(content=user_content),
     ]
-    last_error: Exception | None = None
-    for attempt in range(1, DEFAULT_MAX_ATTEMPTS + 1):
-        try:
-            structured_model = model.with_structured_output(output_model, method="json_mode").with_config(
-                tags=["nostream", "tool-output-compression", f"tool:{tool_id}"]
-            )
-            result = structured_model.invoke(messages)
-            parsed = result if isinstance(result, output_model) else output_model.model_validate(result)
-            return parsed.model_dump(mode="json")
-        except Exception as exc:
-            last_error = exc
-            if attempt >= DEFAULT_MAX_ATTEMPTS:
-                break
-            messages.append(
-                HumanMessage(
-                    content=(
-                        "The previous compression output failed schema validation.\n"
-                        f"Error: {type(exc).__name__}: {exc}\n"
-                        "Return JSON only using the required schema. Preserve identifiers verbatim."
-                    )
-                )
-            )
-    raise last_error or ValueError("structured compression failed")
+    invocation = prepare_structured_output_invocation(
+        model=model,
+        output_model=output_model,
+        messages=messages,
+        model_metadata={},
+        requested_method="json_mode",
+        config_tags=["tool-output-compression", f"tool:{tool_id}"],
+    )
+    execution = execute_structured_output_invocation(invocation)
+    return execution.value.model_dump(mode="json")
 
 
 def _compression_user_prompt(

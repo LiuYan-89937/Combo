@@ -1,6 +1,7 @@
 from combo.context_system.schema import (
     AssemblyPolicy,
     CompressionPolicy,
+    ConversationCompressionSummary,
     CrossSessionMemoryPolicy,
     ContextCandidate,
     ContextContractConfig,
@@ -9,11 +10,13 @@ from combo.context_system.schema import (
     ContextQuery,
     ContextRetrievalReport,
     LLMContextFrame,
+    ToolResultsCompressionSummary,
 )
 
 __all__ = [
     "AssemblyPolicy",
     "CompressionPolicy",
+    "ConversationCompressionSummary",
     "CrossSessionMemoryPolicy",
     "ContextCandidate",
     "ContextContractConfig",
@@ -22,4 +25,5 @@ __all__ = [
     "ContextQuery",
     "ContextRetrievalReport",
     "LLMContextFrame",
+    "ToolResultsCompressionSummary",
 ]

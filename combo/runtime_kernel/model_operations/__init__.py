@@ -3,6 +3,8 @@ from combo.runtime_kernel.model_operations.service import (
     ModelOperationService,
     RuntimeModelHandle,
     RuntimeModelHandleRegistry,
+)
+from combo.runtime_kernel.structured_output import (
     StructuredOutputExecution,
     StructuredOutputInvocation,
     execute_structured_output_invocation,

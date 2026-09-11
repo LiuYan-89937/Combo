@@ -6,11 +6,22 @@ from typing import Any
 from uuid import uuid4
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from pydantic import BaseModel
 
-from combo.context_system.schema import CompressionDetail, CompressionPolicy, ContextCompressionReport
+from combo.context_system.schema import (
+    CompressionDetail,
+    CompressionPolicy,
+    ContextCompressionReport,
+    ConversationCompressionSummary,
+    ToolResultsCompressionSummary,
+)
 from combo.context_system.token_counter import TokenCountResult
 from combo.context_system.token_estimation import estimate_messages_tokens, estimate_text_tokens
 from combo.runtime_protocol.messages import incomplete_tool_call_ids
+from combo.runtime_kernel.structured_output import (
+    execute_structured_output_invocation,
+    prepare_structured_output_invocation,
+)
 
 
 LEGACY_CONTEXT_SUMMARY_KIND = "context_summary"
@@ -32,6 +43,7 @@ def maybe_compress_messages(
     node_id: str,
     summary_model: Any,
     summary_model_max_output_tokens: int | None,
+    summary_model_metadata: dict[str, Any] | None = None,
     protected_tail_start_id: str | None = None,
     token_counter: Callable[[list[Any]], TokenCountResult] | None = None,
     trigger_count: TokenCountResult | None = None,
@@ -127,6 +139,7 @@ def maybe_compress_messages(
                 max_output_tokens=conversation_limit,
                 model=summary_model,
                 model_max_output_tokens=summary_model_max_output_tokens,
+                model_metadata=summary_model_metadata,
             )
             summary_messages.append(
                 _summary_message(
@@ -144,6 +157,7 @@ def maybe_compress_messages(
                 max_output_tokens=tool_limit,
                 model=summary_model,
                 model_max_output_tokens=summary_model_max_output_tokens,
+                model_metadata=summary_model_metadata,
             )
             summary_messages.append(
                 _summary_message(
@@ -374,30 +388,26 @@ def _summarize_conversation(
     max_output_tokens: int,
     model: Any | None,
     model_max_output_tokens: int | None,
+    model_metadata: dict[str, Any] | None,
 ) -> str:
     return _invoke_summary_model(
         system_prompt=(
             "You are incrementally compacting conversation history into private runtime state for a future agent turn. "
             "The input may contain an earlier conversation summary followed by newer messages. Merge them into one updated summary. "
             "Do not summarize tool payloads here; tool evidence is compacted independently.\n\n"
-            "Return exactly this structure:\n"
-            "<conversation_summary>\n"
-            "  <user_intent>...</user_intent>\n"
-            "  <key_facts>...</key_facts>\n"
-            "  <completed_actions>...</completed_actions>\n"
-            "  <active_state>...</active_state>\n"
-            "  <continuation_instructions>...</continuation_instructions>\n"
-            "</conversation_summary>\n\n"
+            "Return one JSON object matching the requested structured output fields. "
+            "Do not include markdown fences or explanatory text.\n\n"
             + _detail_instruction(detail)
             + "\nPreserve exact names, numbers, URLs, paths, IDs, decisions, constraints, failures, and pending work when they affect continuity. "
-            "Remove greetings, repetition, and stale narration. If a section has no useful content, write 'None'. "
-            "Do not invent facts and return only the tagged summary."
+            "Remove greetings, repetition, and stale narration. If a field has no useful content, write 'None'. "
+            "Do not invent facts."
         ),
         input_text=conversation_input,
-        expected_tag="conversation_summary",
+        output_model=ConversationCompressionSummary,
         max_output_tokens=max_output_tokens,
         model=model,
         model_max_output_tokens=model_max_output_tokens,
+        model_metadata=model_metadata,
     )
 
 
@@ -408,29 +418,26 @@ def _summarize_tool_results(
     max_output_tokens: int,
     model: Any | None,
     model_max_output_tokens: int | None,
+    model_metadata: dict[str, Any] | None,
 ) -> str:
     return _invoke_summary_model(
         system_prompt=(
             "You are incrementally compacting tool and knowledge results into private runtime state for a future agent turn. "
             "The input may contain an earlier tool summary followed by newer tool calls and results. Merge them into one updated summary. "
             "The original payloads remain stored outside model context, so retain only evidence needed to continue without repeating completed work.\n\n"
-            "Return exactly this structure:\n"
-            "<tool_results_summary>\n"
-            "  <confirmed_results>...</confirmed_results>\n"
-            "  <artifacts_and_references>...</artifacts_and_references>\n"
-            "  <errors_and_constraints>...</errors_and_constraints>\n"
-            "  <repeat_avoidance>...</repeat_avoidance>\n"
-            "</tool_results_summary>\n\n"
+            "Return one JSON object matching the requested structured output fields. "
+            "Do not include markdown fences or explanatory text.\n\n"
             + _detail_instruction(detail)
             + "\nPreserve tool names and exact result details only when they affect later decisions. Never paste large raw payloads. "
-            "Distinguish confirmed output from inference. If a section has no useful content, write 'None'. "
-            "Do not invent facts and return only the tagged summary."
+            "Distinguish confirmed output from inference. If a field has no useful content, write 'None'. "
+            "Do not invent facts."
         ),
         input_text=tool_input,
-        expected_tag="tool_results_summary",
+        output_model=ToolResultsCompressionSummary,
         max_output_tokens=max_output_tokens,
         model=model,
         model_max_output_tokens=model_max_output_tokens,
+        model_metadata=model_metadata,
     )
 
 
@@ -438,29 +445,35 @@ def _invoke_summary_model(
     *,
     system_prompt: str,
     input_text: str,
-    expected_tag: str,
+    output_model: type[BaseModel],
     max_output_tokens: int,
     model: Any | None,
     model_max_output_tokens: int | None,
+    model_metadata: dict[str, Any] | None,
 ) -> str:
     if model is None:
         raise RuntimeError("compression requires the active runtime model")
-    prompt = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=input_text),
-    ]
+    prompt = [SystemMessage(content=system_prompt), HumanMessage(content=input_text)]
     effective_max_output_tokens = (
         min(max_output_tokens, model_max_output_tokens)
         if model_max_output_tokens is not None
         else max_output_tokens
     )
-    response = model.invoke(prompt, max_tokens=effective_max_output_tokens)
-    text = _message_text(response).strip()
-    if not text:
-        raise RuntimeError("compression model returned empty summary")
-    if not text.startswith(f"<{expected_tag}>") or not text.endswith(f"</{expected_tag}>"):
-        raise RuntimeError(f"compression model returned invalid {expected_tag} structure")
-    return text
+    invocation = prepare_structured_output_invocation(
+        model=model,
+        output_model=output_model,
+        messages=prompt,
+        model_metadata=dict(model_metadata or {}),
+        config_tags=["context-compression", output_model.__name__],
+    )
+    execution = execute_structured_output_invocation(
+        invocation,
+        invoke_model=lambda structured_model, attempt_messages, _attempt: structured_model.invoke(
+            list(attempt_messages),
+            max_tokens=effective_max_output_tokens,
+        ),
+    )
+    return execution.value.model_dump_json()
 
 
 def _conversation_text(messages: list[Any]) -> str:
