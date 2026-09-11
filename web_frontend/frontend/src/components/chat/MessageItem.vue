@@ -67,6 +67,11 @@
             :timestamp="block.timestamp"
             :workspace-context="workspaceContext"
           />
+          <MessageImageGallery
+            v-else-if="block.kind === 'images'"
+            :parts="block.parts"
+            :workspace-context="workspaceContext"
+          />
           <template v-else>
             <MessagePartRenderer
               v-for="part in block.parts"
@@ -96,12 +101,14 @@ import { NButton, NIcon, NTag, NText } from 'naive-ui'
 import { ReturnUpBackOutline } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import MessagePartRenderer from './MessagePartRenderer.vue'
+import MessageImageGallery from './MessageImageGallery.vue'
 import ComboFrameAnimation from '@/components/brand/ComboFrameAnimation.vue'
 import ToolTraceGroup from './ToolTraceGroup.vue'
 import GitChangeCapsule from './GitChangeCapsule.vue'
 import type { GitTurnChanges } from '@/api/git'
-import type { ChatMessagePart, ToolExecutionMessagePart, TranscriptItem } from '@/types/protocol'
+import type { AttachmentMessagePart, ChatMessagePart, ToolExecutionMessagePart, TranscriptItem } from '@/types/protocol'
 import { conversationVisibleMessageParts, conversationVisibleParts } from '@/utils/toolPresentation'
+import { isImageResource } from '@/utils/workspaceResources'
 import type { WorkspaceRequestContext } from '@/api/resourceTypes'
 
 const props = withDefaults(
@@ -144,12 +151,13 @@ const runtimeErrorPart = computed(() => {
 })
 type MessageDisplayBlock =
   | { kind: 'parts'; id: string; parts: ChatMessagePart[] }
+  | { kind: 'images'; id: string; parts: AttachmentMessagePart[] }
   | { kind: 'tools'; id: string; executions: ToolExecutionMessagePart[]; timestamp: string }
 
 const displayBlocks = computed<MessageDisplayBlock[]>(() => {
   const blocks: MessageDisplayBlock[] = []
   const sequence = props.messages.length ? props.messages : [props.message]
-  let currentKind: 'parts' | 'tools' | null = null
+  let currentKind: 'parts' | 'images' | 'tools' | null = null
   let currentParts: ChatMessagePart[] = []
   const flush = () => {
     if (!currentKind || currentParts.length === 0) return
@@ -159,6 +167,17 @@ const displayBlocks = computed<MessageDisplayBlock[]>(() => {
         id: `parts-${currentParts[0].id}`,
         parts: currentParts,
       })
+    } else if (currentKind === 'images') {
+      const images = currentParts.filter(
+        (part): part is AttachmentMessagePart => part.type === 'attachment',
+      )
+      if (images.length > 0) {
+        blocks.push({
+          kind: 'images',
+          id: `images-${images[0].id}`,
+          parts: images,
+        })
+      }
     } else {
       const executions = currentParts.filter(
         (part): part is ToolExecutionMessagePart => part.type === 'tool_execution',
@@ -173,7 +192,11 @@ const displayBlocks = computed<MessageDisplayBlock[]>(() => {
     currentParts = []
   }
   conversationVisibleMessageParts(sequence).forEach((part) => {
-    const nextKind = part.type === 'tool_execution' ? 'tools' : 'parts'
+    const nextKind = part.type === 'tool_execution'
+      ? 'tools'
+      : part.type === 'attachment' && isImageResource(part.attachment.name, part.attachment.mime_type)
+        ? 'images'
+        : 'parts'
     if (currentKind && currentKind !== nextKind) flush()
     currentKind = nextKind
     currentParts.push(part)
@@ -365,6 +388,14 @@ function formatTime(timestamp: string): string {
 }
 
 .role-user :deep(.message-image-card img) {
+  max-height: 280px;
+}
+
+.role-user :deep(.message-image-gallery) {
+  max-width: min(420px, 100%);
+}
+
+.role-user :deep(.gallery-tile.is-single img) {
   max-height: 280px;
 }
 

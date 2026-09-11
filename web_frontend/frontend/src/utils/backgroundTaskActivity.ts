@@ -1,5 +1,6 @@
 import type { I18nKey } from '@/i18n'
 import { toolPresentation } from '@/utils/toolPresentation'
+import { displayText } from '@/utils/displayText'
 
 type Translate = (key: I18nKey, params?: Record<string, string | number>) => string
 
@@ -26,7 +27,7 @@ const SENTENCE_KEYS: Record<string, I18nKey> = {
 }
 
 export function backgroundTaskActivityText(value: unknown, t: Translate): string {
-  const summary = String(value || '').trim()
+  const summary = displayText(value)
   if (!summary) return ''
   const normalized = summary.toLowerCase().replace(/\s+/g, '_')
   const directKey = STATUS_KEYS[normalized] || SENTENCE_KEYS[summary.toLowerCase()]

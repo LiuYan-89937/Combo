@@ -53,8 +53,13 @@ const { t } = useI18n()
    mirroring the browser / computer-use floating panels instead of merging into one
    card with square corners at the junction. */
 .task-popover-detached { margin-top: var(--app-space-xs); border-top: 1px solid var(--app-border); border-radius: var(--app-radius-lg); box-shadow: var(--app-shadow-lg); }
-.task-popover-embedded { width: 100%; max-height: inherit; border: 0; border-radius: 0; background: transparent; }
+.task-popover-embedded { width: 100%; max-height: none; overflow: visible; border: 0; border-radius: 0; background: transparent; }
 .task-popover-close { position: absolute; z-index: 2; top: 12px; right: 12px; width: 26px; height: 26px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; color: var(--app-text); background: transparent; font-size: 17px; cursor: pointer; }
 .task-popover-close:hover { background: var(--app-surface-hover); }
 .task-detail { max-height: min(72vh, 680px); overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+/* Embedded in the shared floating activity panel, which already owns scrolling.
+   Leaving this card its own scroll container produced two stacked scrollbars and,
+   because `overscroll-behavior: contain` stops chaining, the outer region's
+   remaining content could not be reached by wheel or trackpad at all. */
+.task-popover-embedded .task-detail { max-height: none; overflow: visible; overscroll-behavior: auto; scrollbar-gutter: auto; }
 </style>

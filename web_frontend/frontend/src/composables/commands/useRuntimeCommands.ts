@@ -151,7 +151,17 @@ export function useRuntimeCommands() {
     })
     runtimeStore.markRequestSteering(queuedRequestId)
     const request = transport.sendRuntimeCommand(command)
-    void request.catch(() => runtimeStore.restoreRequestQueued(queuedRequestId))
+    // Steering can be rejected (for example when a queued attachment can no
+    // longer be imported). Put the message back into its queued state instead of
+    // leaving the card stuck on "steering".
+    void request.then(
+      (response) => {
+        if (response?.receipt?.status === 'rejected') {
+          runtimeStore.restoreRequestQueued(queuedRequestId)
+        }
+      },
+      () => runtimeStore.restoreRequestQueued(queuedRequestId),
+    )
     return request
   }
 

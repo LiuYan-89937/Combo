@@ -2,6 +2,7 @@
 .DS_Store
 .idea/
 .combo/
+.agent/
 .agent_runtime/
 environment.lock.json
 .venv/

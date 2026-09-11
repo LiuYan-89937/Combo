@@ -565,8 +565,11 @@ class ConversationStore:
         with self._database.connection(query_only=True) as conn:
             rows = conn.execute(
                 """
-                select payload_json from conversation_messages
-                where session_id = ? order by created_at, rowid
+                select message.payload_json
+                from conversation_messages as message
+                join conversation_turns as turn on turn.turn_id = message.turn_id
+                where message.session_id = ?
+                order by turn.task_revision, message.turn_sequence
                 """,
                 (_required_text(session_id, "session_id"),),
             ).fetchall()
@@ -587,7 +590,7 @@ class ConversationStore:
                 from conversation_messages as message
                 join conversation_turns as turn on turn.turn_id = message.turn_id
                 where message.session_id = ? and turn.task_revision <= ?
-                order by turn.task_revision, message.created_at, message.rowid
+                order by turn.task_revision, message.turn_sequence
                 """,
                 (_required_text(session_id, "session_id"), task_revision),
             ).fetchall()
@@ -613,7 +616,7 @@ class ConversationStore:
                 where message.session_id = ?
                   and turn.task_revision > ?
                   and turn.task_revision <= ?
-                order by turn.task_revision, message.created_at, message.rowid
+                order by turn.task_revision, message.turn_sequence
                 """,
                 (
                     _required_text(session_id, "session_id"),

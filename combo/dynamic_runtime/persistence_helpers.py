@@ -112,17 +112,27 @@ def insert_turn(conn: sqlite3.Connection, turn: ConversationTurn) -> None:
 
 
 def insert_message(conn: sqlite3.Connection, message: ConversationMessage) -> None:
+    turn_sequence = int(
+        conn.execute(
+            """
+            select coalesce(max(turn_sequence), 0) + 1
+            from conversation_messages where turn_id = ?
+            """,
+            (message.turn_id,),
+        ).fetchone()[0]
+    )
     conn.execute(
         """
         insert into conversation_messages(
-          message_id, session_id, turn_id, role, status,
+          message_id, session_id, turn_id, turn_sequence, role, status,
           payload_json, created_at, committed_at
-        ) values (?, ?, ?, ?, ?, ?, ?, ?)
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             message.message_id,
             message.session_id,
             message.turn_id,
+            turn_sequence,
             message.role,
             message.status,
             message.model_dump_json(),

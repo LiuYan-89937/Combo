@@ -35,6 +35,7 @@ import type { BackgroundTask, BackgroundTaskEvent, BackgroundTaskStatus, Interac
 import type { SchedulerRunNoticeView } from '@/types/protocol'
 import { schedulerApi } from '@/api/scheduler'
 import { schedulerActivity } from './schedulerActivity'
+import { displayText } from '@/utils/displayText'
 
 const router = useRouter()
 const runtimeStore = useRuntimeStore()
@@ -132,7 +133,7 @@ function noticeTaskFromRun(run: Record<string, unknown>): Partial<BackgroundTask
   const status = noticeStatus(String(run.status || 'running'))
   return {
     status,
-    result_summary: String(run.result_summary || ''),
+    result_summary: displayText(run.result_summary),
     result: recordValue(run.result),
     error: recordValue(run.error) as BackgroundTask['error'],
     completed_at: String(run.completed_at || '') || null,

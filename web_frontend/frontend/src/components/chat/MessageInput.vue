@@ -28,6 +28,9 @@
           <span class="queued-message-content">
             {{ queuedMessage.content || t('chat.attachmentMessage') }}
           </span>
+          <span v-if="queuedMessage.attachmentCount > 0" class="queued-message-attachments">
+            {{ t('chat.queuedAttachments', { count: queuedMessage.attachmentCount }) }}
+          </span>
         </div>
         <div class="queued-message-actions">
           <n-button
@@ -72,17 +75,27 @@
 
     <!-- 附件预览区 -->
     <div v-if="attachmentsEnabled && attachments.length > 0" class="attachments-preview">
-      <div
-        v-for="(attachment, index) in attachments"
-        :key="index"
-        class="attachment-item"
-      >
-        <UploadedAttachmentThumbnail :attachment="attachment" />
-        <span class="attachment-name">{{ attachment.name }}</span>
-        <n-button text size="small" @click="removeAttachment(index)">
-          <n-icon><Close /></n-icon>
-        </n-button>
-      </div>
+      <template v-for="(attachment, index) in attachments" :key="`${attachment.name}:${index}`">
+        <div v-if="isImageAttachment(attachment)" class="attachment-tile" :title="attachment.name">
+          <UploadedAttachmentThumbnail :attachment="attachment" :size="72" />
+          <button
+            type="button"
+            class="attachment-tile-remove"
+            :title="t('common.remove')"
+            :aria-label="t('common.remove')"
+            @click="removeAttachment(index)"
+          >
+            <n-icon :size="12"><Close /></n-icon>
+          </button>
+        </div>
+        <div v-else class="attachment-item">
+          <UploadedAttachmentThumbnail :attachment="attachment" />
+          <span class="attachment-name">{{ attachment.name }}</span>
+          <n-button text size="small" @click="removeAttachment(index)">
+            <n-icon><Close /></n-icon>
+          </n-button>
+        </div>
+      </template>
       <n-text depth="3" class="attachment-count">
         {{ t('attachments.limitHint', { count: attachments.length, max: maxAttachments }) }}
       </n-text>
@@ -324,6 +337,7 @@ import {
   saveConversationDraft,
 } from '@/utils/conversationDrafts'
 import { REASONING_INTENSITY_DEFAULT } from '@/utils/reasoning'
+import { isImageResource } from '@/utils/workspaceResources'
 
 const { t } = useI18n()
 const messageApi = useMessage()
@@ -684,6 +698,13 @@ function removeAttachment(index: number) {
   attachments.value.splice(index, 1)
 }
 
+// Images keep a fixed square tile so several attachments line up in a grid;
+// everything else stays a compact chip with its name.
+function isImageAttachment(attachment: RuntimeAttachmentInput): boolean {
+  if (attachment.content_kind === 'image') return true
+  return isImageResource(attachment.name, attachment.mime_type)
+}
+
 function referenceKindLabel(sourceKind?: string): string {
   if (sourceKind === 'workspace_file') return t('references.workspaceFile')
   if (sourceKind === 'text_selection') return t('references.selection')
@@ -882,9 +903,20 @@ defineExpose({
 
 .queued-message-content {
   min-width: 0;
+  flex: 0 1 auto;
   overflow: hidden;
   color: var(--app-text);
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queued-message-attachments {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border-radius: var(--app-radius-pill);
+  background: var(--app-surface-muted);
+  color: var(--app-text-muted);
+  font-size: 11px;
   white-space: nowrap;
 }
 
@@ -926,12 +958,55 @@ defineExpose({
 .attachments-preview {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 7px;
   padding: 7px 9px;
   background: var(--app-surface-muted);
   border-radius: var(--app-radius-md);
   animation: app-fade-in 0.2s ease both;
 }
+
+/* Image attachments stay square so any number of them lines up in a tidy row. */
+.attachment-tile {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  flex: 0 0 72px;
+  overflow: hidden;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius-md);
+  background: var(--app-surface);
+  animation: app-pop-in 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.attachment-tile :deep(img) {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.attachment-tile-remove {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--app-transition-fast), background-color var(--app-transition-fast);
+}
+
+.attachment-tile:hover .attachment-tile-remove,
+.attachment-tile:focus-within .attachment-tile-remove { opacity: 1; }
+
+.attachment-tile-remove:hover { background: rgba(0, 0, 0, 0.78); }
 
 .attachment-item {
   display: flex;

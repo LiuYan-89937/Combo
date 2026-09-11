@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import datetime, timedelta
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -469,6 +470,70 @@ def _required(value: dict[str, Any], key: str) -> str:
     return text
 
 
+_RESULT_TEXT_KEYS = ("text", "message", "summary", "content", "label", "title", "detail")
+_RESULT_TEXT_MAX_DEPTH = 5
+_RESULT_SUMMARY_CHARS = 500
+_RESULT_JSON_CHARS = 2000
+
+
 def _summary(result: dict[str, Any]) -> str:
-    value = result.get("content") or result.get("stdout") or result.get("summary") or result.get("status") or "completed"
-    return str(value).strip()[:500]
+    """Describe a finished run in the one text field the UI reads back.
+
+    Run results are loosely typed: agent runs report a string ``content``, script
+    runs report ``stdout``, and a structured result may carry a list of typed
+    content parts. The previous ``str(value)`` produced Python repr (single
+    quotes, ``None``) for the latter, which then reached the UI.
+    """
+    for key in ("content", "stdout", "summary"):
+        text = _result_text(result.get(key))
+        if text:
+            return text[:_RESULT_SUMMARY_CHARS]
+    # A run may legitimately produce no text. Returning the bare status here made
+    # a silent run look like it delivered the word "completed"; the UI falls back
+    # to the job's task text when this is empty, which says more.
+    return ""
+
+
+def _result_text(value: Any, depth: int = 0) -> str:
+    """Coerce one loosely typed result field into display text."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if depth >= _RESULT_TEXT_MAX_DEPTH:
+        return ""
+    if isinstance(value, (list, tuple)):
+        return _join_result_fragments(_result_text(item, depth + 1) for item in value)
+    if isinstance(value, dict):
+        extracted = _join_result_fragments(
+            _result_text(value.get(key), depth + 1) for key in _RESULT_TEXT_KEYS
+        )
+        if extracted:
+            return extracted
+        # A typed content part with no text (image, file, artifact) has nothing to
+        # show and may carry megabytes of base64, so never serialize it.
+        if isinstance(value.get("type"), str):
+            return ""
+        return _result_json(value)
+    return ""
+
+
+def _join_result_fragments(values: Iterable[str]) -> str:
+    """Join non-empty fragments, dropping a repeat of the fragment just added."""
+    parts: list[str] = []
+    for value in values:
+        if value and (not parts or parts[-1] != value):
+            parts.append(value)
+    return " ".join(parts)
+
+
+def _result_json(value: Any) -> str:
+    try:
+        serialized = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        return ""
+    return serialized[:_RESULT_JSON_CHARS]

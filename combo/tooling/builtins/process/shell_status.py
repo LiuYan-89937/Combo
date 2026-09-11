@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from combo.tooling.builtins.process.manager import output_limit, required_string, require_process_runtime
+from combo.tooling.builtins.process.manager import required_string, require_process_runtime
 from combo.tooling.envelope import tool_envelope
 from combo.tooling.spec import ToolRiskResult
 
@@ -23,6 +23,5 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     return tool_envelope(
         require_process_runtime(resources).manager.snapshot(
             process_id=process_id,
-            max_output_chars=output_limit(arguments),
         )
     )

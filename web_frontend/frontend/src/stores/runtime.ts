@@ -219,6 +219,7 @@ export const useRuntimeStore = defineStore('runtime', {
             requestId: request.requestId,
             content: String(turn?.userMessage?.content || request.payload?.message || ''),
             position: Number(request.payload?.queue_position || 0),
+            attachmentCount: turn?.userMessage?.attachments?.length || 0,
           }
         })
     },

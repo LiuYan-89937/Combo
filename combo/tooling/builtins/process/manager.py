@@ -94,7 +94,7 @@ class ProcessManager:
         command: str,
         cwd: Path,
         mode: str,
-        max_output_chars: int,
+        max_output_chars: int = _DEFAULT_OUTPUT_CHARS,
         on_output: ProcessOutputObserver | None = None,
         cancellation_requested: ProcessCancellationCheck | None = None,
     ) -> dict[str, Any]:
@@ -135,7 +135,12 @@ class ProcessManager:
             )
         return self.snapshot(process_id=process_id, max_output_chars=max_output_chars)
 
-    def snapshot(self, *, process_id: str, max_output_chars: int) -> dict[str, Any]:
+    def snapshot(
+        self,
+        *,
+        process_id: str,
+        max_output_chars: int = _DEFAULT_OUTPUT_CHARS,
+    ) -> dict[str, Any]:
         managed = self._get(process_id)
         if managed.process.poll() is not None:
             for thread in managed.reader_threads:
@@ -158,7 +163,13 @@ class ProcessManager:
             "duration_ms": int((time.monotonic() - managed.started_at) * 1000),
         }
 
-    def stop(self, *, process_id: str, grace_seconds: int, max_output_chars: int) -> dict[str, Any]:
+    def stop(
+        self,
+        *,
+        process_id: str,
+        grace_seconds: int,
+        max_output_chars: int = _DEFAULT_OUTPUT_CHARS,
+    ) -> dict[str, Any]:
         managed = self._get(process_id)
         self._terminate(managed, grace_seconds=grace_seconds)
         return self.snapshot(process_id=process_id, max_output_chars=max_output_chars)
@@ -361,7 +372,3 @@ def bounded_int(arguments: dict[str, Any], key: str, *, default: int, minimum: i
     if value < minimum or value > maximum:
         raise ValueError(f"{key} must be between {minimum} and {maximum}")
     return value
-
-
-def output_limit(arguments: dict[str, Any]) -> int:
-    return bounded_int(arguments, "max_output_chars", default=_DEFAULT_OUTPUT_CHARS, minimum=1, maximum=200_000)

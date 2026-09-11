@@ -1,13 +1,33 @@
 from __future__ import annotations
 
+from typing import Any, Protocol, Sequence
+import logging
+
 from combo.dynamic_runtime.dispatcher import CommandOutcome
 from combo.dynamic_runtime.repositories import CommandInbox, RuntimeInstanceStore
 from combo.dynamic_runtime.run_control import RuntimeInputInjection, RuntimeRunControlRegistry
 from combo.runtime_protocol import (
+    AttachmentRevisionRef,
     CommandEnvelope,
     CommandReceipt,
     SteerRuntimeRequestPayload,
 )
+
+logger = logging.getLogger(__name__)
+
+
+class SteeringAttachmentResolver(Protocol):
+    """Resolve a queued message's attachments into the active runtime scope."""
+
+    def resolve_runtime_attachments(
+        self,
+        *,
+        principal_id: str,
+        workspace_id: str,
+        references: Sequence[AttachmentRevisionRef],
+        runtime_instance_id: str,
+    ) -> tuple[dict[str, Any], ...]:
+        ...
 
 
 class SteerRuntimeCommandHandler:
@@ -19,10 +39,49 @@ class SteerRuntimeCommandHandler:
         commands: CommandInbox,
         runtime_instances: RuntimeInstanceStore,
         run_controls: RuntimeRunControlRegistry,
+        attachments: SteeringAttachmentResolver | None = None,
     ) -> None:
         self._commands = commands
         self._runtime_instances = runtime_instances
         self._run_controls = run_controls
+        self._attachments = attachments
+
+    def _resolve_attachments(
+        self,
+        envelope: CommandEnvelope,
+        active: Any,
+        references: Sequence[AttachmentRevisionRef],
+    ) -> tuple[dict[str, Any], ...]:
+        """Import the queued message's attachments into the active runtime scope.
+
+        Attachment resolution is best effort: a stale staged upload must not
+        block the user's guidance, but the failure is logged instead of silently
+        dropping the attachments.
+        """
+        resolved_references = tuple(references or ())
+        if not resolved_references:
+            return ()
+        if self._attachments is None:
+            logger.warning(
+                "steering attachments were dropped because no resolver is configured: %s",
+                envelope.command_id,
+            )
+            return ()
+        request = active.request
+        try:
+            return self._attachments.resolve_runtime_attachments(
+                principal_id=envelope.principal_id,
+                workspace_id=request.workspace_id,
+                references=resolved_references,
+                runtime_instance_id=active.runtime_instance_id,
+            )
+        except Exception:
+            logger.warning(
+                "steering attachments could not be resolved for command %s",
+                envelope.command_id,
+                exc_info=True,
+            )
+            return ()
 
     async def handle(
         self,
@@ -60,10 +119,21 @@ class SteerRuntimeCommandHandler:
                 status="rejected",
                 rejection_code="active_runtime_not_available_for_steering",
             )
+        content = str(message.content or "").strip()
+        attachments = self._resolve_attachments(envelope, active, message.attachments)
+        if not content and not attachments:
+            # An attachment-only message whose files can no longer be imported has
+            # nothing left to steer with; keep it queued instead of injecting an
+            # empty turn.
+            return CommandOutcome(
+                status="rejected",
+                rejection_code="steering_content_unavailable",
+            )
         injection = RuntimeInputInjection(
             injection_id=payload.queued_command_id,
             role="user",
-            content=message.content,
+            content=content,
+            attachments=attachments,
         )
 
         def acknowledge_checkpoint() -> None:

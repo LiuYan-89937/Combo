@@ -2345,9 +2345,18 @@ def _task_result_summary(value: Any) -> str:
         return ""
     if isinstance(value, str):
         return value[:240]
-    if isinstance(value, dict) and value.get("summary") is not None:
-        return str(value["summary"])[:240]
-    return json.dumps(value, ensure_ascii=False)[:240]
+    if isinstance(value, (bool, int, float)):
+        return str(value)[:240]
+    if isinstance(value, dict):
+        summary = value.get("summary")
+        # `summary` is loosely typed: only a string is usable as-is. A bare
+        # `str()` on a structured value would emit Python repr into a
+        # user-visible field, so serialize the field the caller actually meant.
+        if isinstance(summary, str):
+            return summary[:240]
+        if summary is not None:
+            return json.dumps(summary, ensure_ascii=False, default=str)[:240]
+    return json.dumps(value, ensure_ascii=False, default=str)[:240]
 
 
 def _delegated_error_view(value: Any) -> dict[str, Any] | None:

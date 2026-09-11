@@ -12,10 +12,15 @@ class RuntimeInputInjection:
     injection_id: str
     role: Literal["user", "system"]
     content: str
+    # Runtime attachment payloads (same shape as the runtime config attachments)
+    # that belong to this injected user message. Without them a steered message
+    # would reach the model as plain text and silently lose its attachments.
+    attachments: tuple[dict[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
         _required_text(self.injection_id, "injection_id")
-        _required_text(self.content, "content")
+        if not str(self.content or "").strip() and not self.attachments:
+            raise ValueError("runtime input injection requires content or attachments")
 
 
 class RuntimeRunControl:

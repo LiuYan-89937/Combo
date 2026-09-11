@@ -4,7 +4,6 @@ from typing import Any
 
 from combo.tooling.builtins.process.manager import (
     bounded_int,
-    output_limit,
     required_string,
     require_process_runtime,
 )
@@ -34,6 +33,5 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         require_process_runtime(resources).manager.stop(
             process_id=process_id,
             grace_seconds=grace_seconds,
-            max_output_chars=output_limit(arguments),
         )
     )

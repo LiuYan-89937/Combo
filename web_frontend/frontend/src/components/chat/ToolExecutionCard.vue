@@ -2,7 +2,8 @@
   <details
     class="tool-execution-card"
     :class="[`tool-state-${state}`]"
-    :open="active || state === 'failed'"
+    :open="cardExpanded"
+    @toggle="handleCardToggle"
   >
     <summary class="tool-summary">
       <span class="tool-main">
@@ -43,7 +44,7 @@
       </span>
     </summary>
 
-    <div class="tool-body">
+    <div v-if="cardExpanded" class="tool-body">
       <div v-if="resultFacts.length" class="tool-facts">
         <span v-for="fact in resultFacts" :key="fact">{{ fact }}</span>
       </div>
@@ -121,14 +122,24 @@
         <pre ref="shellOutputElement" @scroll="handleShellOutputScroll">{{ shellOutput }}</pre>
       </div>
 
-      <details v-if="hasArguments" class="tool-section">
+      <details
+        v-if="hasArguments"
+        class="tool-section"
+        :open="argumentsExpanded"
+        @toggle="handleArgumentsToggle"
+      >
         <summary>{{ t('tool.arguments') }}</summary>
-        <pre>{{ formattedArguments }}</pre>
+        <pre v-if="argumentsExpanded">{{ formattedArguments }}</pre>
       </details>
 
-      <details v-if="hasOutput || part.error" class="tool-section" :open="state === 'failed'">
+      <details
+        v-if="hasOutput || part.error"
+        class="tool-section"
+        :open="outputExpanded"
+        @toggle="handleOutputToggle"
+      >
         <summary>{{ state === 'failed' ? t('common.error') : t('tool.result') }}</summary>
-        <pre>{{ formattedOutput }}</pre>
+        <pre v-if="outputExpanded">{{ formattedOutput }}</pre>
       </details>
 
       <div v-if="part.artifacts.length" class="tool-artifacts">
@@ -170,6 +181,7 @@ import ResourceIcon from '@/components/common/ResourceIcon.vue'
 import ToolIcon from '@/components/common/ToolIcon.vue'
 import ErrorReportButton from '@/components/common/ErrorReportButton.vue'
 import { useI18n } from '@/composables/useI18n'
+import { useAutoExpandedDetails } from '@/composables/useAutoExpandedDetails'
 import { useWorkspaceResourceUrls } from '@/composables/useWorkspaceResourceUrls'
 import { isImageResource, workspaceResourceUrl } from '@/utils/workspaceResources'
 import { toolPresentation } from '@/utils/toolPresentation'
@@ -221,6 +233,14 @@ const state = computed(() => {
   return 'completed'
 })
 const active = computed(() => state.value === 'running' || state.value === 'approval')
+
+// The card body and its argument/result sections mount only while expanded:
+// content rendered inside a collapsed `<details>` can come back blank until the
+// section is toggled again, which is what made arguments/results look empty.
+const cardAutoExpanded = computed(() => active.value || state.value === 'failed')
+const { expanded: cardExpanded, handleToggle: handleCardToggle } = useAutoExpandedDetails(cardAutoExpanded)
+const { expanded: argumentsExpanded, handleToggle: handleArgumentsToggle } = useAutoExpandedDetails(computed(() => false))
+const { expanded: outputExpanded, handleToggle: handleOutputToggle } = useAutoExpandedDetails(computed(() => state.value === 'failed'))
 const statusLabel = computed(() => {
   if (state.value === 'cancelled') return t('tool.status.cancelled')
   if (state.value === 'failed') return t('tool.status.failed')
@@ -962,11 +982,34 @@ details[open] > summary .summary-chevron {
 }
 
 .tool-section summary {
-  padding: var(--app-space-sm) var(--app-space-md);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px var(--app-space-md);
   color: var(--app-text-muted);
   cursor: pointer;
   font-size: 12px;
   font-weight: 600;
+  list-style: none;
+  transition: background-color var(--app-transition-fast), color var(--app-transition-fast);
+}
+
+.tool-section summary::-webkit-details-marker { display: none; }
+
+.tool-section summary::before {
+  display: inline-block;
+  content: '›';
+  color: var(--app-text-subtle);
+  font-size: 14px;
+  line-height: 1;
+  transition: transform var(--app-transition-base);
+}
+
+.tool-section[open] > summary::before { transform: rotate(90deg); }
+
+.tool-section summary:hover {
+  background: var(--app-surface-muted);
+  color: var(--app-text-secondary);
 }
 
 .tool-section pre {

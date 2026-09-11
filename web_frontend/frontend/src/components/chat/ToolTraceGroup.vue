@@ -35,6 +35,8 @@
           </span>
         </summary>
         <ToolExecutionChain
+          v-if="expanded"
+          class="trace-body"
           :executions="props.executions"
           :workspace-context="workspaceContext"
         />
@@ -44,10 +46,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed } from 'vue'
 import ToolExecutionChain from '@/components/chat/ToolExecutionChain.vue'
 import ComboFrameAnimation from '@/components/brand/ComboFrameAnimation.vue'
 import { useI18n } from '@/composables/useI18n'
+import { useAutoExpandedDetails } from '@/composables/useAutoExpandedDetails'
 import type { ToolExecutionMessagePart } from '@/types/protocol'
 import type { WorkspaceRequestContext } from '@/api/resourceTypes'
 import {
@@ -93,18 +96,7 @@ const durationLabel = computed(() => (
 // collapsed. An explicit user toggle always wins until the group's activity
 // state changes again.
 const autoExpanded = computed(() => isActive.value || hasFailure.value)
-const userOverride = ref<boolean | null>(null)
-const expanded = computed(() => userOverride.value ?? autoExpanded.value)
-
-watch(autoExpanded, () => {
-  userOverride.value = null
-})
-
-function handleToggle(event: Event) {
-  const element = (event.currentTarget || event.target) as HTMLDetailsElement | null
-  if (!element || element.open === expanded.value) return
-  userOverride.value = element.open
-}
+const { expanded, handleToggle } = useAutoExpandedDetails(autoExpanded)
 </script>
 
 <style scoped>
@@ -115,7 +107,7 @@ function handleToggle(event: Event) {
 }
 
 .tool-trace-message.embedded {
-  padding: 0 0 3px;
+  padding: 0;
 }
 
 .assistant-avatar {
@@ -154,21 +146,30 @@ function handleToggle(event: Event) {
 .trace-caption {
   display: flex;
   width: 100%;
+  min-height: 27px;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 2px;
-  padding: 3px 6px;
-  border-radius: var(--app-radius-sm);
+  margin: 1px 0;
+  padding: 3px 10px 3px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--app-radius-pill);
   color: var(--app-text-muted);
-  font-size: 11px;
+  font-size: 12px;
   cursor: pointer;
   list-style: none;
-  transition: background-color var(--app-transition-base), color var(--app-transition-base);
+  transition: background-color var(--app-transition-base), border-color var(--app-transition-base), color var(--app-transition-base);
 }
 
 .trace-caption:hover {
-  background: var(--app-surface-hover);
+  border-color: var(--app-border);
+  background: var(--app-surface-muted);
+  color: var(--app-text-secondary);
+}
+
+.trace-group[open] > .trace-caption {
+  border-color: color-mix(in srgb, var(--app-info) 24%, var(--app-border));
+  background: color-mix(in srgb, var(--app-info) 6%, var(--app-surface-muted));
   color: var(--app-text-secondary);
 }
 
@@ -179,8 +180,10 @@ function handleToggle(event: Event) {
   min-width: 0;
   align-items: baseline;
   flex-wrap: wrap;
-  gap: 0 7px;
+  gap: 0 8px;
 }
+
+.trace-count { font-weight: 550; letter-spacing: -0.01em; }
 
 .trace-state-dot {
   align-self: center;
@@ -189,15 +192,18 @@ function handleToggle(event: Event) {
   flex: 0 0 7px;
   border-radius: 50%;
   background: var(--app-success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--app-success) 15%, transparent);
 }
 
 .trace-state-running .trace-state-dot {
   background: var(--app-info);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--app-info) 15%, transparent);
   animation: app-pulse-soft 1.4s ease-in-out infinite;
 }
 
 .trace-state-failed .trace-state-dot {
   background: var(--app-error);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--app-error) 15%, transparent);
 }
 
 .trace-meta::before {
@@ -221,10 +227,18 @@ function handleToggle(event: Event) {
 
 .trace-chevron {
   flex: 0 0 auto;
-  transition: transform 160ms ease;
+  color: var(--app-text-subtle);
+  font-size: 13px;
+  line-height: 1;
+  transition: transform var(--app-transition-base), color var(--app-transition-base);
 }
+
+.trace-caption:hover .trace-chevron { color: var(--app-text-secondary); }
 
 .trace-group[open] .trace-chevron {
   transform: rotate(180deg);
 }
+
+/* Expanded tool cards sit slightly inset from the collapsed caption they belong to. */
+.trace-body { padding: 3px 0 4px 6px; }
 </style>

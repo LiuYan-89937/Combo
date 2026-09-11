@@ -1,4 +1,5 @@
 import type { SchedulerRunEventView } from '@/api/resourceTypes'
+import { displayText } from '@/utils/displayText'
 
 export type SchedulerActivityTranslator = (key: string) => string
 
@@ -9,15 +10,16 @@ export function schedulerActivity(
   const payload = event.payload || {}
   if (event.event_type === 'tool_activity') {
     const details = recordValue(payload.details) || payload
-    const rawEventType = String(details.event_type || '').trim()
-    const toolCallId = String(details.tool_call_id || details.tool_id || '').trim()
+    const rawEventType = displayText(details.event_type)
+    const toolCallId = displayText(details.tool_call_id || details.tool_id)
     const status = toolActivityStatus(rawEventType, details.status)
-    const toolName = String(details.model_alias || details.tool_name || details.tool_id || '').trim()
+    const toolName = displayText(details.model_alias || details.tool_name || details.tool_id)
     return {
-      phase_id: String(payload.phase_id || (toolCallId ? `tool:${toolCallId}` : `scheduler:${event.sequence}`)),
+      phase_id: displayText(payload.phase_id) || (toolCallId ? `tool:${toolCallId}` : `scheduler:${event.sequence}`),
       category: 'tool',
-      title: String(payload.title || toolName || translate('scheduler.toolActivity')),
-      summary: String(payload.summary || details.message || (toolName ? `${toolName} ${status}` : translate('scheduler.toolActivity'))),
+      title: displayText(payload.title) || toolName || translate('scheduler.toolActivity'),
+      summary: displayText(payload.summary) || displayText(details.message)
+        || (toolName ? `${toolName} ${status}` : translate('scheduler.toolActivity')),
       status,
       occurred_at: event.created_at,
       details: { ...details, event_type: rawEventType || 'tool_activity' },
@@ -34,13 +36,13 @@ export function schedulerActivity(
     return streamActivity(event, 'reasoning', streamId, translate)
   }
   if (event.event_type === 'tool_output_delta' || event.event_type === 'tool_call_output_delta') {
-    const toolCallId = String(payload.tool_call_id || payload.tool_id || '').trim()
-    const toolName = String(payload.tool_name || payload.tool_id || '').trim()
+    const toolCallId = displayText(payload.tool_call_id || payload.tool_id)
+    const toolName = displayText(payload.tool_name || payload.tool_id)
     return {
       phase_id: toolCallId ? `tool:${toolCallId}` : `scheduler:${event.sequence}`,
       category: 'tool',
-      title: String(toolName || translate('scheduler.toolActivity')),
-      summary: String(payload.message || (toolName ? `${toolName} running` : translate('scheduler.toolActivity'))),
+      title: toolName || translate('scheduler.toolActivity'),
+      summary: displayText(payload.message) || (toolName ? `${toolName} running` : translate('scheduler.toolActivity')),
       status: 'running',
       occurred_at: event.created_at,
       details: { ...payload, event_type: 'tool_call_output_delta', status: 'running' },
@@ -59,9 +61,9 @@ export function schedulerActivity(
   }
   if (event.event_type === 'runtime_activity_updated') {
     const details = recordValue(payload.details) || payload
-    const phase = String(details.plan_step_id || details.activity_id || details.source || 'runtime')
-    const title = String(payload.title || details.title || '').trim()
-    const summary = String(payload.summary || details.summary || '').trim()
+    const phase = displayText(details.plan_step_id || details.activity_id || details.source) || 'runtime'
+    const title = displayText(payload.title) || displayText(details.title)
+    const summary = displayText(payload.summary) || displayText(details.summary)
     // Status-only heartbeats carry nothing worth a row.
     if (!title && !summary) return null
     return {
@@ -69,7 +71,7 @@ export function schedulerActivity(
       category: 'activity',
       title: title || translate('scheduler.activity'),
       summary: summary || title,
-      status: String(payload.status || details.status || 'running'),
+      status: displayText(payload.status || details.status) || 'running',
       occurred_at: event.created_at,
       details: { ...details, scheduler_event_type: event.event_type },
     }
@@ -78,7 +80,7 @@ export function schedulerActivity(
   // emission. Most carry no text at all, and giving each its own row produced a
   // wall of identical entries, so keep only the ones with something to say and
   // collapse repeats of the same activity under one stable phase id.
-  const content = String(payload.text || payload.message || payload.summary || '').trim()
+  const content = displayText(payload.text) || displayText(payload.message) || displayText(payload.summary)
   if (!content && !(event.event_type in EVENT_TITLES)) return null
   return {
     phase_id: `${event.event_type}:${activityIdentity(event, payload)}`,
@@ -93,11 +95,11 @@ export function schedulerActivity(
 
 function activityIdentity(event: SchedulerRunEventView, payload: Record<string, unknown>): string {
   const details = recordValue(payload.details) || payload
-  const explicit = String(
+  const explicit = displayText(
     details.activity_id || details.plan_step_id || details.node_id
     || details.source_event_id || details.source
-    || payload.activity_id || payload.node_id || payload.source || '',
-  ).trim()
+    || payload.activity_id || payload.node_id || payload.source,
+  )
   return explicit || `seq:${event.sequence}`
 }
 
@@ -106,17 +108,18 @@ function toolEventActivity(
   translate: SchedulerActivityTranslator,
 ): Record<string, unknown> {
   const payload = event.payload || {}
-  const toolCallId = String(payload.tool_call_id || payload.tool_id || '').trim()
+  const toolCallId = displayText(payload.tool_call_id || payload.tool_id)
   const eventType = event.event_type.startsWith('tool_call_') || event.event_type === 'tool_contract_invalid' || event.event_type === 'tool_observation_available'
     ? event.event_type
     : event.event_type === 'tool_proposed' ? 'tool_call_proposed' : event.event_type.replace('tool_', 'tool_call_')
   const status = toolActivityStatus(eventType, payload.status)
-  const toolName = String(payload.tool_name || payload.tool_id || '').trim()
+  const toolName = displayText(payload.tool_name || payload.tool_id)
   return {
     phase_id: toolCallId ? `tool:${toolCallId}` : `scheduler:${event.sequence}`,
     category: 'tool',
-    title: String(toolName || translate('scheduler.toolActivity')),
-    summary: String(payload.message || payload.summary || (toolName ? `${toolName} ${status}` : translate('scheduler.toolActivity'))),
+    title: toolName || translate('scheduler.toolActivity'),
+    summary: displayText(payload.message) || displayText(payload.summary)
+      || (toolName ? `${toolName} ${status}` : translate('scheduler.toolActivity')),
     status,
     occurred_at: event.created_at,
     details: { ...payload, event_type: eventType, status },
@@ -138,9 +141,9 @@ function streamActivity(
     phase_id: `model:${streamId || 'default'}:${streamKind}`,
     category: 'stream',
     title: streamKind === 'reasoning' ? translate('scheduler.modelReasoning') : translate('scheduler.modelOutput'),
-    summary: String(payload.delta || payload.content || payload.error || translate(
+    summary: displayText(payload.delta) || displayText(payload.content) || displayText(payload.error) || translate(
       failed ? 'scheduler.status.failed' : completed ? 'scheduler.result' : 'scheduler.modelGenerating',
-    )),
+    ),
     status: failed ? 'failed' : completed ? 'completed' : 'running',
     occurred_at: event.created_at,
     stream_kind: streamKind,
@@ -153,12 +156,13 @@ function processActivity(
   translate: SchedulerActivityTranslator,
 ): Record<string, unknown> {
   const payload = event.payload || {}
-  const stream = String(payload.stream || 'stdout').trim() || 'stdout'
+  const stream = displayText(payload.stream) || 'stdout'
   return {
     phase_id: `process:${stream}`,
     category: 'stream',
     title: translate('scheduler.output'),
-    summary: String(payload.text || payload.stdout || payload.stderr || translate('scheduler.output')),
+    summary: displayText(payload.text) || displayText(payload.stdout) || displayText(payload.stderr)
+      || translate('scheduler.output'),
     status: 'running',
     occurred_at: event.created_at,
     stream_kind: 'output',
@@ -198,7 +202,8 @@ function eventTitle(eventType: string, translate: SchedulerActivityTranslator): 
 
 function eventSummary(event: SchedulerRunEventView, translate: SchedulerActivityTranslator): string {
   const payload = event.payload || {}
-  return String(payload.text || payload.message || payload.summary || payload.stderr || payload.stdout || eventTitle(event.event_type, translate)).trim()
+  return displayText(payload.text) || displayText(payload.message) || displayText(payload.summary)
+    || displayText(payload.stderr) || displayText(payload.stdout) || eventTitle(event.event_type, translate)
 }
 
 function eventStatus(eventType: string): string {

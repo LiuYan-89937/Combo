@@ -9,7 +9,7 @@ import sqlite3
 from combo.sqlite_runtime import DEFAULT_SQLITE_BUSY_TIMEOUT_MS, connect_sqlite
 
 
-DYNAMIC_RUNTIME_DATABASE_SCHEMA = "dynamic_runtime_database.v27"
+DYNAMIC_RUNTIME_DATABASE_SCHEMA = "dynamic_runtime_database.v28"
 DYNAMIC_RUNTIME_SCHEMA_EPOCH = 3
 
 
@@ -1341,6 +1341,40 @@ def _default_migrations() -> tuple[MigrationStep, ...]:
                 where json_type(payload_json, '$.reasoning_intensity') is null
                    or json_extract(payload_json, '$.reasoning_intensity') not in (1, 2, 3)
                 """,
+            ),
+        ),
+        MigrationStep(
+            version=28,
+            name="conversation_message_turn_sequence",
+            statements=(
+                """
+                create table conversation_messages_v28 (
+                  message_id text primary key,
+                  session_id text not null references conversations(session_id),
+                  turn_id text not null references conversation_turns(turn_id),
+                  turn_sequence integer not null check (turn_sequence >= 1),
+                  role text not null check (role in ('user', 'assistant', 'tool')),
+                  status text not null check (status in ('pending', 'committed', 'cancelled')),
+                  payload_json text not null,
+                  created_at text not null,
+                  committed_at text,
+                  unique(turn_id, turn_sequence)
+                )
+                """,
+                """
+                insert into conversation_messages_v28(
+                  message_id, session_id, turn_id, turn_sequence, role, status,
+                  payload_json, created_at, committed_at
+                )
+                select message_id, session_id, turn_id,
+                       row_number() over (partition by turn_id order by rowid),
+                       role, status, payload_json, created_at, committed_at
+                from conversation_messages
+                order by rowid
+                """,
+                "drop table conversation_messages",
+                "alter table conversation_messages_v28 rename to conversation_messages",
+                "create index idx_conversation_messages_turn on conversation_messages(turn_id, turn_sequence)",
             ),
         ),
     )

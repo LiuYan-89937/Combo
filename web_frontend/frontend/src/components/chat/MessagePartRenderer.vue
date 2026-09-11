@@ -3,7 +3,8 @@
     <details
       v-if="part.type === 'reasoning'"
       class="reasoning-panel"
-      :open="isStreaming"
+      :open="reasoningExpanded"
+      @toggle="handleReasoningToggle"
     >
       <summary class="reasoning-summary">
         <span class="summary-left">
@@ -12,8 +13,10 @@
           <span class="summary-chevron" aria-hidden="true">⌄</span>
         </span>
       </summary>
-      <StreamingReasoningText v-if="isStreaming" :text="part.text" />
-      <div v-else class="markdown-content reasoning-markdown" v-html="renderedReasoning"></div>
+      <template v-if="reasoningExpanded">
+        <StreamingReasoningText v-if="isStreaming" :text="part.text" />
+        <div v-else class="markdown-content reasoning-markdown" v-html="renderedReasoning"></div>
+      </template>
     </details>
 
     <div
@@ -26,17 +29,11 @@
       {{ part.text }}
     </div>
 
-    <button
-      v-else-if="part.type === 'attachment' && attachmentImageUrl"
-      type="button"
-      class="message-image-card"
-      :title="attachmentOpenable ? t('attachments.openInWorkspace') : part.attachment.name"
-      :disabled="!attachmentOpenable"
-      @click="openAttachment"
-    >
-      <img :src="attachmentImageUrl" :alt="part.attachment.name" />
-      <span>{{ part.attachment.name }}</span>
-    </button>
+    <MessageImageGallery
+      v-else-if="part.type === 'attachment' && isImageAttachmentPart"
+      :parts="imageAttachmentParts"
+      :workspace-context="workspaceContext"
+    />
 
     <button
       v-else-if="part.type === 'attachment'"
@@ -62,7 +59,8 @@
       v-else-if="part.type === 'tool_call' || part.type === 'tool_result'"
       class="inline-tool-part"
       :class="[`tool-state-${toolState}`]"
-      :open="isToolActive || toolState === 'failed'"
+      :open="toolExpanded"
+      @toggle="handleToolToggle"
     >
       <summary class="inline-tool-summary">
         <span class="tool-summary-main">
@@ -77,11 +75,13 @@
           <span class="summary-chevron" aria-hidden="true">⌄</span>
         </span>
       </summary>
-      <div v-if="toolPayload" class="tool-detail">
-        <div class="tool-detail-label">{{ toolDetailLabel }}</div>
-        <pre>{{ toolPayload }}</pre>
-      </div>
-      <div v-else class="tool-empty">{{ t('tool.noPayload') }}</div>
+      <template v-if="toolExpanded">
+        <div v-if="toolPayload" class="tool-detail">
+          <div class="tool-detail-label">{{ toolDetailLabel }}</div>
+          <pre>{{ toolPayload }}</pre>
+        </div>
+        <div v-else class="tool-empty">{{ t('tool.noPayload') }}</div>
+      </template>
     </details>
 
     <ToolExecutionCard
@@ -142,15 +142,16 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import ResourceIcon from '@/components/common/ResourceIcon.vue'
+import MessageImageGallery from '@/components/chat/MessageImageGallery.vue'
 import ToolExecutionCard from '@/components/chat/ToolExecutionCard.vue'
 import RuntimeErrorCard from '@/components/chat/RuntimeErrorCard.vue'
 import StreamingReasoningText from '@/components/chat/StreamingReasoningText.vue'
 import { useI18n } from '@/composables/useI18n'
+import { useAutoExpandedDetails } from '@/composables/useAutoExpandedDetails'
 import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
 import { useWorkspaceFileOpener } from '@/composables/useWorkspaceFileOpener'
 import { useWorkspaceResourceUrls } from '@/composables/useWorkspaceResourceUrls'
-import { useRuntimeAttachmentObjectUrl } from '@/composables/useRuntimeAttachmentObjectUrl'
-import type { ChatMessagePart, TranscriptAttachmentView } from '@/types/protocol'
+import type { AttachmentMessagePart, ChatMessagePart, TranscriptAttachmentView } from '@/types/protocol'
 import type { WorkspaceRequestContext } from '@/api/resourceTypes'
 import { toolPresentation } from '@/utils/toolPresentation'
 import { isImageResource, workspaceImageSources } from '@/utils/workspaceResources'
@@ -177,13 +178,15 @@ const protectedResourceSources = computed(() => {
   return []
 })
 const protectedResources = useWorkspaceResourceUrls(protectedResourceSources, workspaceContext)
-const uploadedImageAttachmentId = computed(() => {
-  if (props.part.type !== 'attachment') return null
-  const attachment = props.part.attachment
-  if (!isImageResource(attachment.name, attachment.mime_type)) return null
-  return attachment.attachment_id || null
-})
-const { url: uploadedAttachmentUrl } = useRuntimeAttachmentObjectUrl(uploadedImageAttachmentId)
+const isImageAttachmentPart = computed(() => (
+  props.part.type === 'attachment'
+  && isImageResource(props.part.attachment.name, props.part.attachment.mime_type)
+))
+// Uploaded images render through the gallery so several images in one turn keep
+// a regular grid instead of stacking at their natural sizes.
+const imageAttachmentParts = computed<AttachmentMessagePart[]>(() => (
+  props.part.type === 'attachment' && isImageAttachmentPart.value ? [props.part] : []
+))
 
 const isStreaming = computed(() => props.streaming || props.part.status === 'streaming')
 const renderedText = computed(() => (
@@ -204,19 +207,9 @@ const renderedReasoning = computed(() => (
       })
     : ''
 ))
-const attachmentImageUrl = computed(() => {
-  if (props.part.type !== 'attachment') return ''
-  const attachment = props.part.attachment
-  if (!isImageResource(attachment.name, attachment.mime_type)) return ''
-  if (attachment.path) return resolveMessageImageUrl(attachment.path) || uploadedAttachmentUrl.value
-  return uploadedAttachmentUrl.value
-})
 const attachmentOpenable = computed(() => (
   props.part.type === 'attachment'
-  && Boolean(
-    (props.part.attachment.path && props.workspaceContext)
-    || attachmentImageUrl.value
-  )
+  && Boolean(props.part.attachment.path && props.workspaceContext)
 ))
 const artifactImageUrl = computed(() => {
   if (props.part.type !== 'artifact' || !props.part.path) return ''
@@ -267,6 +260,15 @@ const toolState = computed(() => {
   return 'completed'
 })
 const isToolActive = computed(() => toolState.value === 'running' || toolState.value === 'approval')
+
+// Reasoning and inline tool blocks behave like the transcript's tool groups:
+// they open while active and mount their body only once expanded.
+const { expanded: reasoningExpanded, handleToggle: handleReasoningToggle } = useAutoExpandedDetails(
+  computed(() => isStreaming.value),
+)
+const { expanded: toolExpanded, handleToggle: handleToolToggle } = useAutoExpandedDetails(
+  computed(() => isToolActive.value || toolState.value === 'failed'),
+)
 const toolStatusLabel = computed(() => {
   const status = props.part.status || ''
   if (status === 'cancelled') return t('tool.status.cancelled')
@@ -297,17 +299,12 @@ function attachmentKindLabel(attachment: TranscriptAttachmentView): string {
 
 async function openAttachment(): Promise<void> {
   if (props.part.type !== 'attachment') return
-  if (props.part.attachment.path && props.workspaceContext) {
-    await openWorkspaceFile(
-      props.part.attachment.path,
-      props.workspaceContext,
-      props.part.attachment.workspace_scope || 'workdir',
-    )
-    return
-  }
-  if (attachmentImageUrl.value) {
-    window.open(attachmentImageUrl.value, '_blank', 'noopener,noreferrer')
-  }
+  if (!props.part.attachment.path || !props.workspaceContext) return
+  await openWorkspaceFile(
+    props.part.attachment.path,
+    props.workspaceContext,
+    props.part.attachment.workspace_scope || 'workdir',
+  )
 }
 
 function resolveMessageImageUrl(source: string): string | null {
@@ -382,16 +379,36 @@ function escapeRegExp(value: string): string {
 }
 
 .reasoning-summary {
-  display: flex;
+  display: inline-flex;
+  min-height: 27px;
   align-items: center;
   justify-content: flex-start;
   gap: var(--app-space-xs);
-  padding: 2px 0;
-  cursor: pointer;
+  margin: 1px 0;
+  padding: 3px 10px 3px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--app-radius-pill);
   color: var(--app-text-muted);
-  font-size: 13px;
+  font-size: 12px;
+  cursor: pointer;
+  list-style: none;
   user-select: none;
+  transition: background-color var(--app-transition-base), border-color var(--app-transition-base), color var(--app-transition-base);
 }
+
+.reasoning-summary:hover {
+  border-color: var(--app-border);
+  background: var(--app-surface-muted);
+  color: var(--app-text-secondary);
+}
+
+.reasoning-panel[open] > .reasoning-summary {
+  border-color: color-mix(in srgb, var(--app-info) 24%, var(--app-border));
+  background: color-mix(in srgb, var(--app-info) 6%, var(--app-surface-muted));
+  color: var(--app-text-secondary);
+}
+
+.reasoning-summary::-webkit-details-marker { display: none; }
 
 .summary-left,
 .tool-summary-main,
@@ -406,14 +423,19 @@ function escapeRegExp(value: string): string {
 }
 
 .summary-title {
-  font-weight: 600;
+  font-weight: 550;
+  letter-spacing: -0.01em;
 }
 
 .summary-chevron {
   flex: 0 0 auto;
   color: var(--app-text-subtle);
-  transition: transform var(--app-transition-base);
+  font-size: 13px;
+  line-height: 1;
+  transition: transform var(--app-transition-base), color var(--app-transition-base);
 }
+
+.reasoning-summary:hover .summary-chevron { color: var(--app-text-secondary); }
 
 details[open] > summary .summary-chevron {
   transform: rotate(180deg);
@@ -423,7 +445,7 @@ details[open] > summary .summary-chevron {
   max-block-size: min(42vh, 32rem);
   overflow: auto;
   overscroll-behavior: contain;
-  padding: 0 0 var(--app-space-sm);
+  padding: 2px 0 var(--app-space-sm) 9px;
   color: var(--app-text-muted);
 }
 

@@ -82,13 +82,6 @@ PROCESS_TOOL_SPECS: list[ToolSpec] = [
                         "只有需要跨轮次保持运行的长期任务才使用 background；background 会立即返回 process_id。"
                     ),
                 },
-                "max_output_chars": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 200000,
-                    "default": 12000,
-                    "description": "本次返回的 stdout/stderr 尾部最大字符数。",
-                },
             },
             "required": ["command"],
             "additionalProperties": False,
@@ -112,13 +105,6 @@ PROCESS_TOOL_SPECS: list[ToolSpec] = [
             "type": "object",
             "properties": {
                 "process_id": {"type": "string", "description": "shell 返回的 process_id。"},
-                "max_output_chars": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 200000,
-                    "default": 12000,
-                    "description": "本次返回的 stdout/stderr 尾部最大字符数。",
-                },
             },
             "required": ["process_id"],
             "additionalProperties": False,
@@ -146,13 +132,6 @@ PROCESS_TOOL_SPECS: list[ToolSpec] = [
                     "maximum": 300,
                     "default": 2,
                     "description": "请求进程树终止后等待多少秒再强制终止。",
-                },
-                "max_output_chars": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 200000,
-                    "default": 12000,
-                    "description": "本次返回的 stdout/stderr 尾部最大字符数。",
                 },
             },
             "required": ["process_id"],

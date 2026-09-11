@@ -6,7 +6,6 @@ from combo.tooling.builtins.process.manager import (
     ProcessCancellationCheck,
     ProcessOutputObserver,
     is_read_only_process_path,
-    output_limit,
     process_runtime_allowed_roots,
     process_runtime_boundary,
     required_string,
@@ -98,7 +97,6 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
             command=command,
             cwd=cwd,
             mode=mode,
-            max_output_chars=output_limit(arguments),
             on_output=output_observer,
             cancellation_requested=_cancellation_check() if mode == "foreground" else None,
         )

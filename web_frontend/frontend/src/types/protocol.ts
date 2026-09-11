@@ -300,6 +300,7 @@ export interface QueuedMessageView {
   requestId: string
   content: string
   position: number
+  attachmentCount: number
 }
 
 // ========== 节点和阶段 ==========

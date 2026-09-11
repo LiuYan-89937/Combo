@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 import json
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, Sequence
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from combo.dynamic_runtime.runtime_service import (
@@ -171,6 +171,35 @@ class ComposedRuntimeLaunchContextResolver(RuntimeLaunchContextResolver):
         self._attachments = attachments
         self._capability_instructions = capability_instructions
         self._delegations = delegations
+
+    def resolve_runtime_attachments(
+        self,
+        *,
+        principal_id: str,
+        workspace_id: str,
+        references: Sequence[AttachmentRevisionRef],
+        runtime_instance_id: str,
+    ) -> tuple[dict[str, Any], ...]:
+        """Resolve attachment references for a runtime that is already running.
+
+        Steering folds a queued user message into the active runtime, whose
+        attachment set was frozen at launch. The steered message therefore has
+        to resolve and import its own attachments into that runtime's scope.
+        """
+        resolved = tuple(reference for reference in references)
+        if not resolved:
+            return ()
+        workspace = self._workspaces.resolve(
+            principal_id=principal_id,
+            workspace_id=workspace_id,
+        )
+        return _resolve_runtime_attachments(
+            resolver=self._attachments,
+            principal_id=principal_id,
+            references=resolved,
+            workspace=workspace,
+            runtime_instance_id=runtime_instance_id,
+        )
 
     def resolve(
         self,

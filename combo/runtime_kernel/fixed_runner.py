@@ -101,7 +101,7 @@ def make_fixed_runner(
         messages_patch: list[Any] = []
         try:
             injected_messages = (
-                _consume_injected_messages()
+                _consume_steered_inputs(active_state)
                 if implementation.impl_id in {"cognitive.answer", "terminal.commit"}
                 else []
             )
@@ -135,7 +135,7 @@ def make_fixed_runner(
             node_messages, patch = split_graph_patch(raw_patch)
             route_decision = str((patch.get("execution") or {}).get("route_decision") or "")
             if implementation.impl_id == "cognitive.answer" and route_decision != "model.requests_tool":
-                late_messages = _consume_injected_messages()
+                late_messages = _consume_steered_inputs(active_state)
                 if late_messages:
                     node_messages = [*node_messages, *late_messages]
                     conversation_patch = dict(patch.get("conversation") or {})
@@ -189,9 +189,9 @@ def make_fixed_runner(
                         *_interrupted_model_messages(exc, error_code="runtime_cancelled"),
                     ],
                 )
-            steered_messages = _injected_messages(exc.input_injections)
+            steered_messages = _steered_messages(interrupted, exc.input_injections)
             if not steered_messages:
-                steered_messages = _consume_injected_messages()
+                steered_messages = _consume_steered_inputs(interrupted)
             if not steered_messages:
                 raise
             _preserve_interrupted_conversation(interrupted, exc)
@@ -277,13 +277,72 @@ def _consume_injected_messages() -> list[Any]:
     return _injected_messages(consume_runtime_inputs())
 
 
+def _consume_steered_inputs(state: Any) -> list[Any]:
+    """Consume pending steering input and fold it into the runtime state."""
+    return _steered_messages(state, consume_runtime_inputs())
+
+
+def _steered_messages(state: Any, injections: Any) -> list[Any]:
+    messages = _injected_messages(injections)
+    if messages:
+        _apply_steered_inputs(state, injections)
+    return messages
+
+
+def _apply_steered_inputs(state: Any, injections: Any) -> None:
+    """Make a steered user message the current user message of the running turn.
+
+    The runtime's attachment set is frozen at launch, so a steered message has to
+    promote its own attachments here. Without this the model receives the
+    guidance text but never sees the attached images or parsed documents.
+    """
+    conversation = getattr(state, "conversation", None)
+    runtime_config = getattr(state, "runtime_config", None)
+    if conversation is None or runtime_config is None:
+        return
+    for injection in injections or ():
+        if str(getattr(injection, "role", "") or "") != "user":
+            continue
+        content = str(getattr(injection, "content", "") or "")
+        attachments = [
+            dict(item)
+            for item in (getattr(injection, "attachments", ()) or ())
+            if isinstance(item, dict)
+        ]
+        if not content.strip() and not attachments:
+            continue
+        conversation.current_user_input = content
+        if not attachments:
+            continue
+        existing = [
+            dict(item)
+            for item in (getattr(runtime_config, "attachments", None) or [])
+            if isinstance(item, dict)
+        ]
+        known = {
+            str(item.get("attachment_id") or "").strip()
+            for item in existing
+        }
+        runtime_config.attachments = [
+            *existing,
+            *(
+                item
+                for item in attachments
+                if str(item.get("attachment_id") or "").strip() not in known
+            ),
+        ]
+
+
 def _injected_messages(injections: Any) -> list[Any]:
     messages: list[Any] = []
     for injection in injections or ():
         role = str(getattr(injection, "role", "") or "")
         content = str(getattr(injection, "content", "") or "").strip()
         injection_id = str(getattr(injection, "injection_id", "") or "").strip()
-        if not content or not injection_id:
+        attachments = tuple(getattr(injection, "attachments", ()) or ())
+        # An attachment-only steered message carries no text, so the empty
+        # content is expected as long as attachments travel with it.
+        if not injection_id or (not content and not attachments):
             continue
         if role == "user":
             messages.append(HumanMessage(id=injection_id, content=content))

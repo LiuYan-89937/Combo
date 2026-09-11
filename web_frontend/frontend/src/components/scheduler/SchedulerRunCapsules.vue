@@ -5,12 +5,13 @@
       :key="run.run_id"
       :ref="value => setRunElement(run.run_id, value)"
       class="scheduler-capsule-anchor floating-activity-frame"
-      :class="[`side-${runPosition(run.run_id, index).side}`, { 'is-dragging': draggingRunId === run.run_id, expanded: expandedRunId === run.run_id }]"
+      :class="[`side-${runPosition(run.run_id, index).side}`, { 'is-dragging': draggingRunId === run.run_id, expanded: expandedRunId === run.run_id, 'opens-upward': opensUpward(run.run_id, index) }]"
       :style="runStyle(run.run_id, index)"
       @pointerdown="startRunDrag(run.run_id, index, $event)"
       @click.capture="captureRunClick"
     >
       <ActivityCapsule
+        :ref="value => setCapsuleElement(run.run_id, value)"
         :title="capsuleTitle(run)"
         :subtitle="runSummary(run)"
         :active="isActive(run.status)"
@@ -65,6 +66,7 @@ import BackgroundTaskPopover from '@/components/chat/BackgroundTaskPopover.vue'
 import type { BackgroundTaskController } from '@/components/chat/BackgroundTaskCard.vue'
 import ActivityCapsule from '@/components/common/ActivityCapsule.vue'
 import FloatingActivityPanel from '@/components/common/FloatingActivityPanel.vue'
+import { displayText } from '@/utils/displayText'
 import { schedulerActivity } from './schedulerActivity'
 
 const props = defineProps<{ sessionId: string; workspaceId: string }>()
@@ -74,6 +76,7 @@ const runs = ref<SchedulerRunView[]>([])
 const expandedRunId = ref<string | null>(null)
 const dismissed = ref(new Set<string>())
 const runElements = new Map<string, HTMLElement>()
+const capsuleElements = new Map<string, HTMLElement>()
 const positions = ref<Record<string, DockPosition>>(loadPositions())
 const runDrag = ref<RunDragState | null>(null)
 const suppressClick = ref(false)
@@ -98,6 +101,12 @@ interface RunDragState {
 
 const POSITION_STORAGE_KEY = 'combo.schedulerRunCapsulePositions'
 const TERMINAL_VISIBILITY_MS = 15 * 60 * 1000
+/** Matches the flex gap the panel used while it was still an in-flow sibling. */
+const PANEL_GAP_PX = 8
+/** Below this the downward panel is too small to read, so it opens upward instead. */
+const PANEL_MIN_VISIBLE_PX = 180
+/** Mirrors the `min(65vh, 640px)` ceiling in FloatingActivityPanel. */
+const PANEL_PREFERRED_MAX_PX = 640
 const draggingRunId = computed(() => runDrag.value?.runId || null)
 const visibleRuns = computed(() => runs.value.filter(run => {
   if (dismissed.value.has(run.run_id)) return false
@@ -257,8 +266,8 @@ function interactionFromEvents(task: BackgroundTask, events: BackgroundTaskEvent
   return {
     interaction_id: interactionId,
     kind: eventType === 'approval_required' ? 'tool_approval' : 'ask_user',
-    title: String(interrupt.title || (eventType === 'approval_required' ? 'tool.pendingApproval' : 'backgroundTask.activity.input')),
-    message: String(interrupt.message || interrupt.prompt || ''),
+    title: displayText(interrupt.title) || (eventType === 'approval_required' ? 'tool.pendingApproval' : 'backgroundTask.activity.input'),
+    message: displayText(interrupt.message) || displayText(interrupt.prompt),
     source: { scheduler_run_id: task.task_id },
     options: Array.isArray(interrupt.choices) ? interrupt.choices as PendingInteraction['options'] : [],
     requests: Array.isArray(interrupt.requests) ? interrupt.requests as Array<Record<string, unknown>> : [],
@@ -277,8 +286,8 @@ function pendingInteraction(run: SchedulerRunView): PendingInteraction | null {
   return {
     interaction_id: interactionId,
     kind: run.status === 'waiting_approval' ? 'tool_approval' : 'ask_user',
-    title: String(raw?.title || (run.status === 'waiting_approval' ? 'tool.pendingApproval' : 'backgroundTask.activity.input')),
-    message: String(raw?.message || raw?.prompt || ''),
+    title: displayText(raw?.title) || (run.status === 'waiting_approval' ? 'tool.pendingApproval' : 'backgroundTask.activity.input'),
+    message: displayText(raw?.message) || displayText(raw?.prompt),
     source: { scheduler_run_id: run.run_id },
     options: Array.isArray(raw?.options) ? raw.options as PendingInteraction['options'] : [],
     requests: Array.isArray(raw?.requests) ? raw.requests as Array<Record<string, unknown>> : [],
@@ -311,29 +320,38 @@ function runPatchFromTask(task: BackgroundTask): Partial<SchedulerRunView> {
 }
 
 function runTitle(run: SchedulerRunView): string {
-  return String(run.job_snapshot?.task_content || run.task_content || t('scheduler.title'))
+  return displayText(run.job_snapshot?.task_content || run.task_content) || t('scheduler.title')
 }
 
 function capsuleTitle(run: SchedulerRunView): string {
-  const name = String(run.job_snapshot?.display_name || '').trim()
+  const name = displayText(run.job_snapshot?.display_name)
   return `${t('scheduler.title')}${name ? ` · ${name}` : ''}`
 }
 
 function runSummary(run: SchedulerRunView): string {
-  if (run.status === 'failed') return String(run.error?.message || t('scheduler.status.failed'))
-  if (run.status === 'completed' && run.result_summary) return run.result_summary
+  if (run.status === 'failed') return displayText(run.error?.message) || t('scheduler.status.failed')
+  if (run.status === 'completed' && run.result_summary) return displayText(run.result_summary)
   return runTitle(run)
 }
 
+/**
+ * A run result is loosely typed: script runs report `stdout`, agent runs report a
+ * string `content`, and structured results may carry an array of message parts.
+ * A plain `String(...)` on the latter two produced `[object Object]` in the run
+ * card, so unwrap the parts and fall back to the server summary we can read.
+ */
 function delivery(run: SchedulerRunView): string {
-  return String(run.result?.content || run.result?.stdout || run.result_summary || '').trim()
+  const result = run.result
+  return displayText(result?.content)
+    || displayText(result?.stdout)
+    || displayText(run.result_summary)
 }
 
 function schedulerError(error: Record<string, unknown> | undefined): BackgroundTask['error'] {
   if (!error) return null
   return {
-    code: String(error.code || ''),
-    message: String(error.message || error.code || ''),
+    code: displayText(error.code),
+    message: displayText(error.message) || displayText(error.code),
     details: error,
   }
 }
@@ -366,10 +384,75 @@ function runPosition(runId: string, index: number): DockPosition {
 
 function runStyle(runId: string, index: number): CSSProperties {
   const drag = runDrag.value
-  if (drag?.runId === runId) return { left: `${drag.x}px`, right: 'auto', top: `${drag.y}px` }
-  const element = runElements.get(runId)
-  const availableHeight = Math.max(0, (layerRef.value?.clientHeight || 0) - (element?.offsetHeight || 0) - 16)
-  return { top: `${8 + availableHeight * runPosition(runId, index).y}px` }
+  // The panel is absolutely positioned against the capsule, so an expanded run
+  // no longer enlarges the anchor. Positioning off the capsule keeps the dock
+  // maths identical whether the panel is open or closed — previously the
+  // expanded height fed back into `top`, which yanked the capsule upward the
+  // instant it was opened.
+  const geometry = capsuleGeometry(runId, index)
+  const panelHeight = expandedRunId.value === runId && geometry
+    ? { '--capsule-panel-max-height': `${geometry.maxHeight}px` }
+    : {}
+  if (drag?.runId === runId) {
+    return { left: `${drag.x}px`, right: 'auto', top: `${drag.y}px`, ...panelHeight } as CSSProperties
+  }
+  return { top: `${capsuleTop(runId, index)}px`, ...panelHeight } as CSSProperties
+}
+
+interface CapsuleGeometry {
+  /** Intrinsic capsule height; the panel never changes it. */
+  capsuleHeight: number
+  spaceAbove: number
+  spaceBelow: number
+  opensUpward: boolean
+  maxHeight: number
+}
+
+/**
+ * Geometry is derived from the dock ratio rather than read back from the DOM:
+ * a style computed during render would otherwise measure the previous frame and
+ * size the panel for a position the capsule has not moved to yet.
+ */
+function capsuleGeometry(runId: string, index: number): CapsuleGeometry | null {
+  const layerHeight = layerRef.value?.clientHeight || 0
+  if (!layerHeight) return null
+  const drag = runDrag.value
+  const capsuleHeight = capsuleElements.get(runId)?.offsetHeight || 48
+  const top = drag?.runId === runId ? drag.y : capsuleTop(runId, index)
+  const spaceAbove = top - PANEL_GAP_PX
+  const spaceBelow = layerHeight - (top + capsuleHeight) - PANEL_GAP_PX
+  // A sliver of panel below the capsule is unusable, so flip above it instead.
+  const opensUpward = spaceBelow < PANEL_MIN_VISIBLE_PX && spaceAbove > spaceBelow
+  const preferred = Math.min(window.innerHeight * 0.65, PANEL_PREFERRED_MAX_PX)
+  return {
+    capsuleHeight,
+    spaceAbove,
+    spaceBelow,
+    opensUpward,
+    maxHeight: Math.max(
+      PANEL_MIN_VISIBLE_PX,
+      Math.min(preferred, opensUpward ? spaceAbove : spaceBelow),
+    ),
+  }
+}
+
+function capsuleTop(runId: string, index: number): number {
+  const layerHeight = layerRef.value?.clientHeight || 0
+  const capsuleHeight = capsuleElements.get(runId)?.offsetHeight || 48
+  return 8 + Math.max(0, layerHeight - capsuleHeight - 16) * runPosition(runId, index).y
+}
+
+function opensUpward(runId: string, index: number): boolean {
+  if (expandedRunId.value !== runId) return false
+  return Boolean(capsuleGeometry(runId, index)?.opensUpward)
+}
+
+function setCapsuleElement(runId: string, value: Element | ComponentPublicInstance | null): void {
+  const element = value instanceof HTMLElement
+    ? value
+    : value && '$el' in value && value.$el instanceof HTMLElement ? value.$el : null
+  if (element) capsuleElements.set(runId, element)
+  else capsuleElements.delete(runId)
 }
 
 function setRunElement(runId: string, value: Element | ComponentPublicInstance | null): void {
@@ -477,6 +560,23 @@ function clamp(value: number, minimum: number, maximum: number): number {
 .scheduler-capsule-anchor.side-left { left: 12px; right: auto; }
 .scheduler-capsule-anchor.side-right { right: 12px; left: auto; }
 .scheduler-capsule-anchor.is-dragging { z-index: 5; cursor: grabbing; }
+/* The detail panel hangs off the capsule instead of extending the anchor, so
+   opening it cannot change the capsule's own geometry. */
+.scheduler-capsule-anchor :deep(.floating-activity-detail-shell) {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  left: 0;
+  transform-origin: top center;
+}
+.scheduler-capsule-anchor.opens-upward :deep(.floating-activity-detail-shell) {
+  top: auto;
+  bottom: calc(100% + 8px);
+  transform-origin: bottom center;
+}
+.scheduler-capsule-anchor :deep(.floating-activity-detail-panel.scrollable) {
+  max-height: var(--capsule-panel-max-height, min(65vh, 640px));
+}
 .scheduler-capsule-mark { width: 24px; height: 24px; flex: 0 0 auto; display: grid; place-items: center; color: var(--app-text-muted); }
 .scheduler-capsule-elapsed { color: var(--app-text-muted); font-size: 9px; white-space: nowrap; }
 .capsule-grip { padding: 5px 2px; color: var(--app-text-muted); cursor: grab; }

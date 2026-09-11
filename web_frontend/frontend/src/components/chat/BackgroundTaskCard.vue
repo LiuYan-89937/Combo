@@ -183,6 +183,7 @@ import type {
   TranscriptItem,
 } from '@/types/protocol'
 import { backgroundTaskActivityText } from '@/utils/backgroundTaskActivity'
+import { displayText } from '@/utils/displayText'
 
 const props = defineProps<{
   task: BackgroundTask
@@ -374,11 +375,11 @@ function buildView(current: BackgroundTask, timeline: BackgroundTaskEvent[], fal
   const reportsByPhase = new Map<string, ActivityReport>()
   for (const event of timeline) {
     if (event.event_type !== 'background_task_activity') continue
-    const phaseId = String(event.payload.phase_id || '').trim()
-    const titleKey = String(event.payload.title_key || '').trim()
+    const phaseId = displayText(event.payload.phase_id)
+    const titleKey = displayText(event.payload.title_key)
     const title = titleKey === 'backgroundTask.activity.current'
       ? ''
-      : localize(titleKey) || String(event.payload.title || '').trim()
+      : localize(titleKey) || displayText(event.payload.title)
     const incomingDetails = recordValue(event.payload.details)
     const previous = reportsByPhase.get(phaseId)
     const details = mergeActivityDetails(previous?.details, incomingDetails)
@@ -549,10 +550,10 @@ function activitySummary(
   details: Record<string, unknown> | null,
   payload: Record<string, unknown>,
 ): string {
-  const toolName = String(details?.tool_name || details?.tool_id || payload.title || '').trim()
-  const status = String(payload.status || details?.status || '').trim()
+  const toolName = displayText(details?.tool_name || details?.tool_id || payload.title)
+  const status = displayText(payload.status || details?.status)
   if (toolName && status) return `${toolName} ${status}`
-  return String(details?.message || payload.title || '').trim()
+  return displayText(details?.message) || displayText(payload.title)
 }
 
 function messagePartFromReport(report: ActivityReport): ChatMessagePart | null {
@@ -573,14 +574,14 @@ function messagePartFromReport(report: ActivityReport): ChatMessagePart | null {
 function toolExecutionFromReport(report: ActivityReport): ToolExecutionMessagePart[] {
   if (report.category !== 'tool' || !report.details) return []
   const details = report.details
-  const toolName = String(details.model_alias || details.tool_name || details.tool_id || report.title || '').trim()
+  const toolName = displayText(details.model_alias || details.tool_name || details.tool_id || report.title)
   if (!toolName) return []
-  const errorCode = String(details.error_code || '').trim()
+  const errorCode = displayText(details.error_code)
   return [{
     id: report.phaseId,
     type: 'tool_execution',
     toolName,
-    callId: String(details.tool_call_id || '').trim() || null,
+    callId: displayText(details.tool_call_id) || null,
     arguments: details.arguments ?? {},
     output: details.result ?? details.output ?? details.observation ?? null,
     error: errorCode || (typeof details.error === 'string' ? details.error : undefined),

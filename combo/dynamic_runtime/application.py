@@ -140,6 +140,7 @@ class DynamicRuntimeApplication:
         runtime_service: DynamicRuntimeService,
         recovery_report: RuntimeRecoveryReport,
         capability_search: HybridCapabilitySearchIndex,
+        launch_context_resolver: RuntimeLaunchContextResolver,
     ) -> None:
         self.config = config
         self.database = database
@@ -150,6 +151,7 @@ class DynamicRuntimeApplication:
         self.runtime_service = runtime_service
         self.recovery_report = recovery_report
         self.capability_search = capability_search
+        self.launch_context_resolver = launch_context_resolver
         self.command_executions = CommandExecutionRegistry()
         self._closed = False
 
@@ -203,6 +205,11 @@ class DynamicRuntimeApplication:
             ))
             stores.knowledge.refresh_index()
             resolution_config = config.capability_resolution
+            resolved_launch_context_resolver = (
+                launch_context_resolver(stores)
+                if callable(launch_context_resolver)
+                else launch_context_resolver
+            )
             capability_resolver = MainTurnCapabilityResolver(
                 store=stores.capabilities,
                 search_index=capability_search,
@@ -233,11 +240,7 @@ class DynamicRuntimeApplication:
                 execution_commits=stores.execution_commits,
                 run_controls=stores.run_controls,
                 model_resolver=model_resolver,
-                launch_context_resolver=(
-                    launch_context_resolver(stores)
-                    if callable(launch_context_resolver)
-                    else launch_context_resolver
-                ),
+                launch_context_resolver=resolved_launch_context_resolver,
                 delegations=stores.delegations,
                 observation_sink=observation_sink,
             )
@@ -258,6 +261,7 @@ class DynamicRuntimeApplication:
             runtime_service=runtime_service,
             recovery_report=recovery_report,
             capability_search=capability_search,
+            launch_context_resolver=resolved_launch_context_resolver,
         )
 
     def command_dispatcher(self, handlers: Mapping[str, CommandHandler]) -> CommandDispatcher:
@@ -302,6 +306,7 @@ class DynamicRuntimeApplication:
                 commands=self.stores.commands,
                 runtime_instances=self.stores.runtime_instances,
                 run_controls=self.stores.run_controls,
+                attachments=self.launch_context_resolver,
             ),
         }
         return self.command_dispatcher(handlers)
