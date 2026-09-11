@@ -17,6 +17,17 @@
         <summary class="trace-caption">
           <span class="trace-caption-copy">
             <span class="trace-state-dot" aria-hidden="true"></span>
+            <span v-if="toolKinds.visible.length" class="trace-kinds" aria-hidden="true">
+              <span
+                v-for="kind in toolKinds.visible"
+                :key="kind.icon"
+                class="trace-kind"
+                :title="kind.label"
+              >
+                <ToolIcon :name="kind.icon" :size="12" />
+              </span>
+              <span v-if="toolKinds.overflow" class="trace-kind-overflow">+{{ toolKinds.overflow }}</span>
+            </span>
             <span class="trace-count">{{ t('tool.traceCount', { count: summary.count }) }}</span>
             <span v-if="summary.changedFileCount" class="trace-meta">
               {{ t('tool.traceFiles', { count: summary.changedFileCount }) }}
@@ -49,6 +60,7 @@
 import { computed } from 'vue'
 import ToolExecutionChain from '@/components/chat/ToolExecutionChain.vue'
 import ComboFrameAnimation from '@/components/brand/ComboFrameAnimation.vue'
+import ToolIcon from '@/components/common/ToolIcon.vue'
 import { useI18n } from '@/composables/useI18n'
 import { useAutoExpandedDetails } from '@/composables/useAutoExpandedDetails'
 import type { ToolExecutionMessagePart } from '@/types/protocol'
@@ -59,6 +71,7 @@ import {
   isToolExecutionRunning,
   toolTraceSummary,
 } from '@/utils/toolTraceSummary'
+import { toolPresentation, type ToolIconName } from '@/utils/toolPresentation'
 
 const props = withDefaults(defineProps<{
   executions: ToolExecutionMessagePart[]
@@ -89,6 +102,27 @@ const traceState = computed(() => {
 const durationLabel = computed(() => (
   summary.value.durationMs == null ? '' : formatToolTraceDuration(summary.value.durationMs)
 ))
+
+// A collapsed row that only says "executed 9 tools" still forces the reader to
+// open it to learn what happened. A short strip of the distinct tool kinds lets
+// a finished group be scanned without expanding anything.
+const MAX_KIND_ICONS = 4
+const toolKinds = computed(() => {
+  const seen = new Map<string, { icon: ToolIconName; label: string }>()
+  props.executions.forEach((execution) => {
+    const presentation = toolPresentation(execution.toolName, execution.arguments)
+    if (seen.has(presentation.icon)) return
+    seen.set(presentation.icon, {
+      icon: presentation.icon,
+      label: presentation.labelKey ? t(presentation.labelKey as any) : execution.toolName,
+    })
+  })
+  const kinds = [...seen.values()]
+  return {
+    visible: kinds.slice(0, MAX_KIND_ICONS),
+    overflow: Math.max(0, kinds.length - MAX_KIND_ICONS),
+  }
+})
 
 // A long task can produce dozens of groups; keeping every historical group
 // expanded is what made transcripts unreadable. Groups therefore expand while
@@ -184,6 +218,29 @@ const { expanded, handleToggle } = useAutoExpandedDetails(autoExpanded)
 }
 
 .trace-count { font-weight: 550; letter-spacing: -0.01em; }
+
+.trace-kinds {
+  display: inline-flex;
+  align-self: center;
+  align-items: center;
+  gap: 3px;
+}
+
+.trace-kind {
+  display: grid;
+  width: 19px;
+  height: 19px;
+  place-items: center;
+  border-radius: var(--app-radius-sm);
+  background: color-mix(in srgb, var(--app-text) 6%, transparent);
+  color: var(--app-text-muted);
+}
+
+.trace-kind-overflow {
+  color: var(--app-text-subtle);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
 
 .trace-state-dot {
   align-self: center;

@@ -383,20 +383,9 @@ function formatTime(timestamp: string): string {
   line-height: 1.55;
 }
 
-.role-user :deep(.message-image-card) {
-  max-width: min(360px, 100%);
-}
-
-.role-user :deep(.message-image-card img) {
-  max-height: 280px;
-}
-
+/* Attachments are fixed-size tiles, so the user bubble only constrains the row. */
 .role-user :deep(.message-image-gallery) {
   max-width: min(420px, 100%);
-}
-
-.role-user :deep(.gallery-tile.is-single img) {
-  max-height: 280px;
 }
 
 @media (max-width: 680px) {

@@ -1,7 +1,10 @@
 <template>
   <div v-if="loading" class="git-diff-viewer git-diff-state">{{ t('git.loadingDiff') }}</div>
   <div v-else-if="error" class="git-diff-viewer git-diff-state error">{{ error }}</div>
-  <div v-else-if="diff?.binary" class="git-diff-viewer git-diff-state">{{ t('git.binaryDiff') }}</div>
+  <div v-else-if="diff?.binary" class="git-diff-viewer git-diff-state binary-state">
+    <span>{{ t('git.binaryDiff') }}</span>
+    <FileOpenMenu v-if="nativePath" :path="nativePath" />
+  </div>
   <div v-else class="git-diff-viewer unified-diff">
     <div v-if="hasGaps" class="git-diff-toolbar">
       <span class="git-diff-toolbar-text">
@@ -44,6 +47,7 @@ import 'monaco-editor/esm/vs/basic-languages/xml/xml.contribution'
 import 'monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution'
 import type { GitFileDiff } from '@/api/git'
 import { useI18n } from '@/composables/useI18n'
+import FileOpenMenu from '@/components/common/FileOpenMenu.vue'
 import { useUiStore } from '@/stores/ui'
 import {
   buildUnifiedDiff,
@@ -65,9 +69,12 @@ const props = withDefaults(defineProps<{
   diff: GitFileDiff | null
   loading?: boolean
   error?: string
+  /** Absolute native path, used to offer system-app opening for binary files. */
+  nativePath?: string
 }>(), {
   loading: false,
   error: '',
+  nativePath: '',
 })
 const { t } = useI18n()
 const uiStore = useUiStore()
@@ -309,4 +316,6 @@ onBeforeUnmount(disposeEditor)
 }
 .git-diff-state { display: grid; place-items: center; overflow: hidden; border: 1px solid var(--app-border); border-radius: var(--app-radius-lg); color: var(--app-text-muted); }
 .git-diff-state.error { color: var(--app-error); }
+/* 二进制文件没有可对比的文本，这里提供一个直接打开的入口。 */
+.git-diff-state.binary-state { align-content: center; gap: 10px; }
 </style>

@@ -1,10 +1,10 @@
 <template>
-  <div class="message-image-gallery" :class="`gallery-${layoutKey}`">
+  <div class="message-image-gallery" :style="attachmentTileStyle">
     <div
       v-for="(entry, index) in resolvedEntries"
       :key="entry.id"
       class="gallery-tile"
-      :class="{ 'is-single': isSingle, 'is-pending': !entry.url }"
+      :class="{ 'is-pending': !entry.url }"
       role="button"
       tabindex="0"
       :title="entry.name"
@@ -16,8 +16,6 @@
       <img v-if="entry.url" :src="entry.url" :alt="entry.name" loading="lazy" />
       <span v-else class="tile-placeholder" aria-hidden="true"></span>
 
-      <span v-if="isSingle" class="tile-caption" :title="entry.name">{{ entry.name }}</span>
-
       <span class="tile-actions">
         <button
           type="button"
@@ -26,7 +24,7 @@
           :aria-label="t('attachments.viewImage')"
           @click.stop="openAt(index)"
         >
-          <n-icon :size="14"><ExpandOutline /></n-icon>
+          <n-icon :size="13"><ExpandOutline /></n-icon>
         </button>
         <button
           type="button"
@@ -36,17 +34,17 @@
           :disabled="!entry.url"
           @click.stop="copyAt(index)"
         >
-          <n-icon :size="14"><CopyOutline /></n-icon>
+          <n-icon :size="13"><CopyOutline /></n-icon>
         </button>
         <button
-          v-if="entry.openable"
+          v-if="entry.openable || entry.attachmentId"
           type="button"
           class="tile-action"
-          :title="t('attachments.openInWorkspace')"
-          :aria-label="t('attachments.openInWorkspace')"
-          @click.stop="openInWorkspace(index)"
+          :title="t('attachments.openWithSystem')"
+          :aria-label="t('attachments.openWithSystem')"
+          @click.stop="openWithSystem(index)"
         >
-          <n-icon :size="14"><OpenOutline /></n-icon>
+          <n-icon :size="13"><OpenOutline /></n-icon>
         </button>
       </span>
     </div>
@@ -59,6 +57,7 @@
       v-model:open="lightboxOpen"
       v-model:index="lightboxIndex"
       :images="lightboxImages"
+      :workspace-context="workspaceContext"
     />
   </div>
 </template>
@@ -69,10 +68,11 @@ import { NIcon } from 'naive-ui'
 import { CopyOutline, ExpandOutline, OpenOutline } from '@vicons/ionicons5'
 import ImageLightbox from '@/components/chat/ImageLightbox.vue'
 import { useI18n } from '@/composables/useI18n'
-import { useWorkspaceFileOpener } from '@/composables/useWorkspaceFileOpener'
 import { useWorkspaceResourceUrls } from '@/composables/useWorkspaceResourceUrls'
 import { useRuntimeAttachmentObjectUrls } from '@/composables/useRuntimeAttachmentObjectUrls'
 import { writeClipboardImage } from '@/utils/clipboard'
+import { attachmentTileVars } from '@/utils/attachmentTiles'
+import { openAttachmentWithSystemViewer } from '@/utils/systemViewer'
 import { isImageResource } from '@/utils/workspaceResources'
 import type { AttachmentMessagePart } from '@/types/protocol'
 import type { WorkspaceRequestContext, WorkspaceScope } from '@/api/resourceTypes'
@@ -85,13 +85,13 @@ const props = withDefaults(defineProps<{
 })
 
 const { t } = useI18n()
-const { openWorkspaceFile } = useWorkspaceFileOpener()
 
+const attachmentTileStyle = attachmentTileVars()
 const workspaceContext = computed(() => props.workspaceContext)
 
 /**
- * Images are grouped by the transcript order so a multi-image turn always lays
- * out left-to-right, top-to-bottom, no matter how the object URLs resolve.
+ * Images are grouped by transcript order so a multi-image turn always lays out
+ * left-to-right, top-to-bottom, no matter how the object URLs resolve.
  */
 const entries = computed(() => props.parts
   .filter(part => isImageResource(part.attachment.name, part.attachment.mime_type))
@@ -114,19 +114,12 @@ const resolvedEntries = computed(() => entries.value.map(entry => ({
   url: (entry.path ? resolve(entry.path) : '') || runtimeUrls.value[entry.attachmentId] || '',
 })))
 
-const isSingle = computed(() => resolvedEntries.value.length === 1)
-const layoutKey = computed(() => {
-  const count = resolvedEntries.value.length
-  if (count <= 1) return 'single'
-  if (count === 2) return 'pair'
-  if (count === 3) return 'triple'
-  if (count === 4) return 'quad'
-  return 'many'
-})
-
 const lightboxImages = computed(() => resolvedEntries.value.map(entry => ({
   url: entry.url,
   name: entry.name,
+  path: entry.path,
+  scope: entry.scope,
+  attachmentId: entry.attachmentId,
 })))
 const lightboxOpen = ref(false)
 const lightboxIndex = ref(0)
@@ -163,47 +156,65 @@ async function copyAt(index: number): Promise<void> {
   }
 }
 
-async function openInWorkspace(index: number): Promise<void> {
-  const entry = entries.value[index]
-  if (!entry?.openable) return
-  await openWorkspaceFile(entry.path, props.workspaceContext, entry.scope)
+async function openWithSystem(index: number): Promise<void> {
+  const entry = resolvedEntries.value[index]
+  if (!entry) return
+  try {
+    await openAttachmentWithSystemViewer(
+      {
+        path: entry.path,
+        scope: entry.scope,
+        attachmentId: entry.attachmentId,
+        fallbackUrl: entry.url,
+      },
+      props.workspaceContext,
+    )
+    showToast(t('attachments.openedInSystem'), 'success')
+  } catch (error) {
+    showToast(
+      t('attachments.openWithSystemFailed', {
+        reason: error instanceof Error ? error.message : String(error),
+      }),
+      'failed',
+    )
+  }
 }
 </script>
 
 <style scoped>
+/*
+ * Fixed-size tiles in a wrapping row. The previous layout changed both the
+ * column count and the tile size with the number of images, which is what made
+ * a multi-image turn look uneven.
+ */
 .message-image-gallery {
   position: relative;
-  display: grid;
-  gap: 6px;
-  width: fit-content;
-  max-width: min(560px, 100%);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--attachment-tile-gap, 8px);
+  max-width: 100%;
   margin-top: 4px;
 }
 
-.gallery-single { grid-template-columns: minmax(0, 1fr); }
-.gallery-pair,
-.gallery-quad { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.gallery-triple,
-.gallery-many { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-
 .gallery-tile {
   position: relative;
-  aspect-ratio: 1 / 1;
+  width: var(--attachment-tile-size, 80px);
+  height: var(--attachment-tile-size, 80px);
+  flex: 0 0 var(--attachment-tile-size, 80px);
   overflow: hidden;
   border: 1px solid var(--app-border);
-  border-radius: var(--app-radius-md);
-  background: var(--app-surface-muted);
+  border-radius: var(--app-radius-sm);
+  background: color-mix(in srgb, var(--app-text) 4%, transparent);
   cursor: zoom-in;
-  transition: border-color var(--app-transition-fast), transform var(--app-transition-fast);
+  transition: border-color var(--app-transition-fast);
 }
 
 .gallery-tile:hover {
   border-color: var(--app-border-hover);
-  transform: translateY(-1px);
 }
 
 .gallery-tile:focus-visible {
-  outline: 2px solid var(--app-primary);
+  outline: 2px solid var(--app-text);
   outline-offset: 2px;
 }
 
@@ -214,57 +225,25 @@ async function openInWorkspace(index: number): Promise<void> {
   object-fit: cover;
 }
 
-.gallery-tile.is-single {
-  aspect-ratio: auto;
-  overflow: visible;
-  border: 0;
-  background: transparent;
-  transform: none;
-  display: grid;
-  gap: 5px;
-  justify-items: start;
-}
-
-.gallery-tile.is-single img {
-  width: auto;
-  max-width: 100%;
-  max-height: 400px;
-  border: 1px solid var(--app-border);
-  border-radius: var(--app-radius-lg);
-  box-shadow: var(--app-shadow-sm);
-  object-fit: contain;
-}
-
 .tile-placeholder {
   display: block;
   width: 100%;
   height: 100%;
-  background: linear-gradient(100deg, var(--app-surface-muted) 30%, var(--app-surface-hover) 50%, var(--app-surface-muted) 70%);
+  background: linear-gradient(100deg, transparent 30%, color-mix(in srgb, var(--app-text) 8%, transparent) 50%, transparent 70%);
   background-size: 220% 100%;
   animation: gallery-skeleton 1.4s ease-in-out infinite;
 }
 
-.gallery-tile.is-single .tile-placeholder {
-  height: 180px;
-  border: 1px dashed var(--app-border);
-  border-radius: var(--app-radius-lg);
-}
-
-.tile-caption {
-  max-width: 100%;
-  overflow: hidden;
-  color: var(--app-text-muted);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
+/* Hover actions are centred because three 22px buttons and their gaps only just
+   fit inside an 80px tile. */
 .tile-actions {
   position: absolute;
-  top: 6px;
-  right: 6px;
+  inset: 0;
   display: flex;
+  align-items: center;
+  justify-content: center;
   gap: 4px;
+  background: color-mix(in srgb, var(--app-text) 32%, transparent);
   opacity: 0;
   transition: opacity var(--app-transition-fast);
 }
@@ -275,19 +254,22 @@ async function openInWorkspace(index: number): Promise<void> {
 .tile-action {
   appearance: none;
   display: grid;
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   place-items: center;
   padding: 0;
   border: 0;
   border-radius: 50%;
-  background: rgba(0, 0, 0, 0.55);
-  color: #fff;
+  background: color-mix(in srgb, var(--app-text) 78%, transparent);
+  color: var(--app-text-inverse);
   cursor: pointer;
   transition: background-color var(--app-transition-fast);
 }
 
-.tile-action:hover:not(:disabled) { background: rgba(0, 0, 0, 0.75); }
+.tile-action:hover:not(:disabled) {
+  background: var(--app-text);
+}
+
 .tile-action:disabled { opacity: 0.45; cursor: default; }
 
 .gallery-toast {
@@ -299,13 +281,13 @@ async function openInWorkspace(index: number): Promise<void> {
   transform: translateX(-50%);
   border-radius: var(--app-radius-pill);
   background: color-mix(in srgb, var(--app-text) 82%, transparent);
-  color: var(--app-surface);
+  color: var(--app-text-inverse);
   font-size: 11px;
   white-space: nowrap;
 }
 
 .gallery-toast.is-failed {
-  background: color-mix(in srgb, var(--app-error) 88%, transparent);
+  background: var(--app-diff-deletion);
   color: #fff;
 }
 

@@ -8,6 +8,17 @@ pub fn reveal_in_file_manager(source_path: String) -> Result<(), String> {
     reveal_path(&source)
 }
 
+/// Opens a file with the operating system's default application.
+///
+/// Images in the transcript are viewable in the in-app lightbox, but the system
+/// viewer is often what reviewers actually want (zoom, pixel inspection, next/
+/// previous across a folder), so the lightbox offers this as an explicit action.
+#[tauri::command]
+pub fn open_with_system_app(source_path: String) -> Result<(), String> {
+    let source = existing_file(&source_path)?;
+    open_path(&source)
+}
+
 #[tauri::command]
 pub fn save_file_as(source_path: String) -> Result<Option<String>, String> {
     let source = existing_file(&source_path)?;
@@ -82,6 +93,33 @@ fn same_path(left: &Path, right: &Path) -> bool {
 #[cfg(target_os = "macos")]
 fn reveal_path(source: &Path) -> Result<(), String> {
     spawn_file_manager(Command::new("open").arg("-R").arg(source), "Finder")
+}
+
+#[cfg(target_os = "macos")]
+fn open_path(source: &Path) -> Result<(), String> {
+    spawn_file_manager(Command::new("open").arg(source), "the default application")
+}
+
+#[cfg(target_os = "windows")]
+fn open_path(source: &Path) -> Result<(), String> {
+    // `start` is a cmd builtin, and the empty title argument keeps a quoted path
+    // from being consumed as the window title.
+    spawn_file_manager(
+        Command::new("cmd")
+            .arg("/C")
+            .arg("start")
+            .arg("")
+            .arg(source),
+        "the default application",
+    )
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn open_path(source: &Path) -> Result<(), String> {
+    spawn_file_manager(
+        Command::new("xdg-open").arg(source),
+        "the default application",
+    )
 }
 
 #[cfg(target_os = "windows")]

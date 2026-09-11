@@ -43,4 +43,25 @@ def create_attachment_router() -> APIRouter:
             content_disposition_type="inline",
         )
 
+    @router.get("/{attachment_id}/native-path")
+    async def attachment_native_path(
+        attachment_id: str,
+        principal_id: str = Header(alias="X-Combo-Principal"),
+    ) -> dict:
+        """Expose the staged file's local path so the desktop app can hand it to
+        the system viewer. Uploaded attachments live in the staging store rather
+        than the workspace, so the workspace native-path endpoint cannot resolve
+        them."""
+        try:
+            staged = attachment_upload_store().resolve(attachment_id)
+        except AttachmentUploadError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if staged.principal_id != principal_id:
+            raise HTTPException(status_code=404, detail="attachment not found")
+        return {
+            "native_path": str(staged.path),
+            "name": staged.name,
+            "mime_type": staged.mime_type,
+        }
+
     return router

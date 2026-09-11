@@ -21,6 +21,39 @@ export async function revealNativePath(path: string): Promise<void> {
   await invoke('reveal_in_file_manager', { sourcePath: path })
 }
 
+/**
+ * Saves a copy of an absolute native file chosen by the user.
+ *
+ * Separate from `saveWorkspaceFileAs`, which resolves its path through the
+ * workspace API and therefore cannot handle files addressed by absolute path.
+ */
+export async function saveNativeFileAs(path: string): Promise<string | null> {
+  requireDesktopRuntime()
+  return invoke<string | null>('save_file_as', { sourcePath: path })
+}
+
+/**
+ * Hands a file to the operating system's default application.
+ *
+ * Used for attachments: the in-app lightbox covers quick inspection, but the
+ * system image viewer is what people reach for when they want real zooming or to
+ * step through the folder.
+ */
+export async function openNativePathWithSystemApp(path: string): Promise<void> {
+  requireDesktopRuntime()
+  await invoke('open_with_system_app', { sourcePath: path })
+}
+
+export async function openWorkspaceEntryWithSystemApp(
+  scope: WorkspaceScope,
+  path: string,
+  context?: WorkspaceContextInput,
+): Promise<void> {
+  requireDesktopRuntime()
+  const resolved = await workspaceApi.nativePath(scope, path, context)
+  await invoke('open_with_system_app', { sourcePath: resolved.native_path })
+}
+
 export async function saveWorkspaceFileAs(
   scope: WorkspaceScope,
   path: string,

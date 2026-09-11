@@ -44,7 +44,7 @@
       </span>
     </summary>
 
-    <div v-if="cardExpanded" class="tool-body">
+    <div class="tool-body">
       <div v-if="resultFacts.length" class="tool-facts">
         <span v-for="fact in resultFacts" :key="fact">{{ fact }}</span>
       </div>
@@ -129,7 +129,7 @@
         @toggle="handleArgumentsToggle"
       >
         <summary>{{ t('tool.arguments') }}</summary>
-        <pre v-if="argumentsExpanded">{{ formattedArguments }}</pre>
+        <pre>{{ formattedArguments }}</pre>
       </details>
 
       <details
@@ -139,7 +139,7 @@
         @toggle="handleOutputToggle"
       >
         <summary>{{ state === 'failed' ? t('common.error') : t('tool.result') }}</summary>
-        <pre v-if="outputExpanded">{{ formattedOutput }}</pre>
+        <pre>{{ formattedOutput }}</pre>
       </details>
 
       <div v-if="part.artifacts.length" class="tool-artifacts">
@@ -234,9 +234,10 @@ const state = computed(() => {
 })
 const active = computed(() => state.value === 'running' || state.value === 'approval')
 
-// The card body and its argument/result sections mount only while expanded:
-// content rendered inside a collapsed `<details>` can come back blank until the
-// section is toggled again, which is what made arguments/results look empty.
+// `<details>` owns visibility for the whole card; the body and its sections are
+// always mounted so an open panel can never come back blank. Gating the content
+// on the JS expanded state was worse: whenever the DOM `open` and that state
+// drifted apart, the panel stayed empty until the user toggled it again.
 const cardAutoExpanded = computed(() => active.value || state.value === 'failed')
 const { expanded: cardExpanded, handleToggle: handleCardToggle } = useAutoExpandedDetails(cardAutoExpanded)
 const { expanded: argumentsExpanded, handleToggle: handleArgumentsToggle } = useAutoExpandedDetails(computed(() => false))

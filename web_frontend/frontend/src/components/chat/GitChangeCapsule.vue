@@ -22,24 +22,31 @@
     </div>
 
     <div class="git-change-files">
-      <button
+      <div
         v-for="file in visibleFiles"
         :key="file.path"
-        type="button"
-        :title="file.path"
-        @click="openReview(file.path)"
+        class="file-row"
       >
-        <span class="file-name">
-          <span class="file-path">{{ basename(file.path) }}</span>
-          <small v-if="dirname(file.path)" class="file-dir">{{ dirname(file.path) }}</small>
-        </span>
-        <span v-if="file.binary" class="file-binary">{{ t('git.binaryFile') }}</span>
+        <button
+          type="button"
+          class="file-row-main"
+          :title="file.path"
+          @click="openReview(file.path)"
+        >
+          <span class="file-name">
+            <span class="file-path">{{ basename(file.path) }}</span>
+            <small v-if="dirname(file.path)" class="file-dir">{{ dirname(file.path) }}</small>
+          </span>
+        </button>
+        <!-- Binary rows cannot show line counts, so the slot offers a way to
+             actually open the file instead of only labelling it as binary. -->
+        <FileOpenMenu v-if="file.binary" :path="nativePath(file.path)" />
         <span v-else class="file-lines">
           <b v-if="file.additions" :title="t('git.linesAdded', { count: file.additions })">+{{ file.additions }}</b>
           <i v-if="file.deletions" :title="t('git.linesRemoved', { count: file.deletions })">-{{ file.deletions }}</i>
           <span v-if="!file.additions && !file.deletions" class="file-lines-none" :title="t('git.linesUnchanged')">—</span>
         </span>
-      </button>
+      </div>
       <button
         v-if="changes.files.length > COLLAPSED_FILE_LIMIT"
         type="button"
@@ -74,26 +81,31 @@
         :style="{ '--review-file-list-width': `${fileListWidth}px` }"
       >
         <aside class="review-file-list" role="tablist" :aria-label="t('git.changedFilesLabel')">
-          <button
+          <div
             v-for="file in changes.files"
             :key="file.path"
-            type="button"
-            role="tab"
-            :aria-selected="selectedPath === file.path"
+            class="review-file-row"
             :class="{ active: selectedPath === file.path }"
-            @click="selectFile(file.path)"
           >
-            <span class="review-file-copy">
-              <strong>{{ basename(file.path) }}</strong>
-              <small v-if="dirname(file.path)" class="file-dir">{{ dirname(file.path) }}</small>
-            </span>
-            <span v-if="file.binary" class="file-binary">{{ t('git.binaryFile') }}</span>
-            <span v-else class="file-lines">
-              <b v-if="file.additions">+{{ file.additions }}</b>
-              <i v-if="file.deletions">-{{ file.deletions }}</i>
-              <span v-if="!file.additions && !file.deletions" class="file-lines-none">—</span>
-            </span>
-          </button>
+            <button
+              type="button"
+              role="tab"
+              class="review-file-main"
+              :aria-selected="selectedPath === file.path"
+              @click="selectFile(file.path)"
+            >
+              <span class="review-file-copy">
+                <strong>{{ basename(file.path) }}</strong>
+                <small v-if="dirname(file.path)" class="file-dir">{{ dirname(file.path) }}</small>
+              </span>
+              <span v-if="!file.binary" class="file-lines">
+                <b v-if="file.additions">+{{ file.additions }}</b>
+                <i v-if="file.deletions">-{{ file.deletions }}</i>
+                <span v-if="!file.additions && !file.deletions" class="file-lines-none">—</span>
+              </span>
+            </button>
+            <FileOpenMenu v-if="file.binary" :path="nativePath(file.path)" />
+          </div>
         </aside>
 
         <div
@@ -112,7 +124,12 @@
 
         <section class="git-review-content">
           <div class="git-review-path" :title="selectedPath">{{ selectedPath }}</div>
-          <GitDiffViewer :diff="selectedDiff" :loading="diffLoading" :error="diffError" />
+          <GitDiffViewer
+            :diff="selectedDiff"
+            :loading="diffLoading"
+            :error="diffError"
+            :native-path="selectedDiff?.binary ? nativePath(selectedPath) : ''"
+          />
         </section>
       </div>
     </div>
@@ -125,6 +142,8 @@ import { NModal, useDialog, useMessage } from 'naive-ui'
 import { gitApi, type GitFileDiff, type GitTurnChanges } from '@/api/git'
 import { useI18n } from '@/composables/useI18n'
 import GitDiffViewer from '@/components/chat/GitDiffViewer.vue'
+import FileOpenMenu from '@/components/common/FileOpenMenu.vue'
+import { joinNativePath } from '@/utils/nativePath'
 
 const FILE_LIST_DEFAULT_WIDTH = 260
 const FILE_LIST_MIN_WIDTH = 180
@@ -311,6 +330,11 @@ function dirname(path: string): string {
   return parts.join('/')
 }
 
+/** Absolute native path, needed to hand a repository file to a system app. */
+function nativePath(path: string): string {
+  return joinNativePath(props.changes.repository_root, path)
+}
+
 </script>
 
 <style scoped>
@@ -328,12 +352,16 @@ function dirname(path: string): string {
 .capsule-action.primary { border-color: var(--app-text); background: var(--app-text); color: var(--app-text-inverse); }
 .capsule-action:disabled { cursor: default; opacity: .45; }
 .git-change-files { display: grid; border-top: 1px solid var(--app-border); }
-.git-change-files button { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 11px 18px; border: 0; border-bottom: 1px solid var(--app-divider); background: transparent; color: var(--app-text-secondary); text-align: left; cursor: pointer; }
-.git-change-files button:last-child { border-bottom: 0; }.git-change-files button:hover { background: var(--app-surface-hover); }
+/* 行本身是容器而非按钮：二进制行右侧要放「打开方式」下拉，按钮不能嵌套按钮。 */
+.git-change-files .file-row { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 8px 18px; border-bottom: 1px solid var(--app-divider); color: var(--app-text-secondary); }
+.git-change-files .file-row:last-child { border-bottom: 0; }
+.git-change-files .file-row:hover { background: var(--app-surface-hover); }
+.git-change-files .file-row-main { min-width: 0; display: block; padding: 3px 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.git-change-files .file-list-toggle { display: flex; align-items: center; justify-content: center; padding: 11px 18px; border: 0; border-bottom: 1px solid var(--app-divider); background: transparent; color: var(--app-text-muted); font: 11px/1.4 var(--app-font-sans); text-align: center; cursor: pointer; }
+.git-change-files .file-list-toggle:hover { background: var(--app-surface-hover); }
 .file-name { min-width: 0; display: flex; align-items: baseline; gap: 6px; }
 .file-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px/1.5 var(--app-font-mono); }
 .file-dir { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--app-text-muted); font: 10px/1.5 var(--app-font-mono); }
-.file-binary { justify-self: end; color: var(--app-text-muted); font: 10px/1.3 var(--app-font-sans); }
 .file-lines-none { color: var(--app-text-muted); }
 .git-change-files .file-lines, .review-file-list .file-lines { justify-self: end; }
 .git-change-files .file-list-toggle { display: flex; align-items: center; justify-content: center; color: var(--app-text-muted); font: 11px/1.4 var(--app-font-sans); text-align: center; }
@@ -351,9 +379,10 @@ function dirname(path: string): string {
 .review-splitter:hover::before, .review-splitter:focus-visible::before { width: 3px; border-radius: var(--app-radius-pill); background: var(--app-text-muted); }
 .review-splitter:focus-visible { outline: none; }
 .review-file-list { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 4px; padding: 5px; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--app-border); border-radius: var(--app-radius-lg); background: var(--app-surface-muted); }
-.review-file-list button { min-width: 0; flex: 0 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 10px 9px; border: 0; border-radius: var(--app-radius-md); background: transparent; color: var(--app-text-secondary); text-align: left; cursor: pointer; }
-.review-file-list button:hover { background: var(--app-surface-hover); }
-.review-file-list button.active { background: var(--app-surface); color: var(--app-text-strong); }
+.review-file-list .review-file-row { min-width: 0; flex: 0 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 8px 9px; border-radius: var(--app-radius-md); color: var(--app-text-secondary); }
+.review-file-list .review-file-row:hover { background: var(--app-surface-hover); }
+.review-file-list .review-file-row.active { background: var(--app-surface); color: var(--app-text-strong); }
+.review-file-list .review-file-main { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 2px 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .review-file-copy { min-width: 0; display: grid; gap: 2px; }
 .review-file-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .review-file-copy strong { font: 11px/1.35 var(--app-font-mono); }

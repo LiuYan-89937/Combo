@@ -6,7 +6,7 @@
     :alt="attachment.name"
     :style="thumbnailStyle"
   />
-  <span v-else class="uploaded-attachment-fallback">
+  <span v-else class="uploaded-attachment-fallback" :style="thumbnailStyle">
     <ResourceIcon
       :name="attachment.name"
       :mime-type="attachment.mime_type"
@@ -25,9 +25,17 @@ import { isImageResource } from '@/utils/workspaceResources'
 
 const props = withDefaults(defineProps<{
   attachment: RuntimeAttachmentInput
+  /** Edge length used for the standalone thumbnail and the fallback icon. */
   size?: number
+  /**
+   * Stretch to the parent box instead of a fixed square. Fixed-size attachment
+   * tiles own their own geometry, so the thumbnail must not also set a size or
+   * the inline style would win over the tile's box.
+   */
+  fill?: boolean
 }>(), {
   size: 44,
+  fill: false,
 })
 
 const imageAttachment = computed(() => isImageResource(
@@ -38,12 +46,16 @@ const attachmentId = computed(() => (
   imageAttachment.value ? props.attachment.attachment_id : null
 ))
 const { url: previewUrl } = useRuntimeAttachmentObjectUrl(attachmentId)
-const iconSize = computed(() => Math.max(16, Math.round(props.size * 0.4)))
-const thumbnailStyle = computed(() => ({
-  width: `${props.size}px`,
-  height: `${props.size}px`,
-  flexBasis: `${props.size}px`,
-}))
+const iconSize = computed(() => Math.max(16, Math.round(props.size * 0.32)))
+const thumbnailStyle = computed(() => (
+  props.fill
+    ? {}
+    : {
+        width: `${props.size}px`,
+        height: `${props.size}px`,
+        flexBasis: `${props.size}px`,
+      }
+))
 </script>
 
 <style scoped>
@@ -57,7 +69,6 @@ const thumbnailStyle = computed(() => ({
 .uploaded-attachment-fallback {
   display: grid;
   place-items: center;
-  background: var(--app-surface-muted);
   color: var(--app-text-muted);
 }
 </style>

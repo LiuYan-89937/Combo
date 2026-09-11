@@ -7,12 +7,15 @@ mod desktop_file_actions;
 mod error_reporting;
 mod git_repository;
 mod github_account;
+mod open_with;
 mod python_sidecar;
 mod user_environment;
 
 use computer_host::ComputerHost;
 use computer_permissions::{computer_permissions, request_computer_permission};
-use desktop_file_actions::{reveal_in_file_manager, save_file_as, select_directory};
+use desktop_file_actions::{
+    open_with_system_app, reveal_in_file_manager, save_file_as, select_directory,
+};
 use error_reporting::report_error;
 use git_repository::{
     git_add_remote, git_begin_turn_snapshot, git_clone_repository, git_commit,
@@ -26,6 +29,7 @@ use github_account::{
     github_list_repositories, github_logout, github_poll_browser_authorization,
     github_start_browser_authorization,
 };
+use open_with::{list_open_with_applications, open_with_application};
 use python_sidecar::PythonSidecar;
 use std::sync::Mutex;
 use tauri::Manager;
@@ -195,6 +199,9 @@ fn main() {
             request_computer_permission,
             report_error,
             reveal_in_file_manager,
+            open_with_system_app,
+            list_open_with_applications,
+            open_with_application,
             save_file_as,
             select_directory,
             git_repository_status,

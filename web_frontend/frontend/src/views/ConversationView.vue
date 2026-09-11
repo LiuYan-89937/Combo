@@ -55,7 +55,7 @@
             placement="bottom-end"
             :show-arrow="false"
             raw
-            @update:show="showOutline = $event"
+            @update:show="handleOutlineVisibility"
           >
             <template #trigger>
               <n-button
@@ -72,8 +72,9 @@
             </template>
             <div class="outline-panel-shell">
               <ConversationOutline
+                ref="outlineRef"
                 :active-anchor-id="activeAnchorId"
-                @jump="jumpToAnchor"
+                @jump="jumpFromOutline"
               />
             </div>
           </n-popover>
@@ -221,6 +222,7 @@ const bottomLockEpsilonPx = 1
 const upwardScrollEpsilonPx = 0.5
 let userScrollIntentUntil = 0
 const showOutline = ref(false)
+const outlineRef = ref<{ focusList: () => void } | null>(null)
 const activeAnchorId = ref<string | null>(null)
 let activeAnchorFrame: number | null = null
 type PendingWorkspaceAction = {
@@ -492,6 +494,21 @@ function jumpToAnchor(anchorId: string) {
   const offset = anchor.getBoundingClientRect().top - container.getBoundingClientRect().top
   scrollbarRef.value?.scrollTo({ top: Math.max(0, container.scrollTop + offset - 12), behavior: 'smooth' })
   activeAnchorId.value = anchorId
+}
+
+// Picking a turn is a navigation, not a browse step, so the panel gets out of the
+// way once the transcript has moved.
+function jumpFromOutline(anchorId: string) {
+  jumpToAnchor(anchorId)
+  showOutline.value = false
+}
+
+function handleOutlineVisibility(visible: boolean) {
+  showOutline.value = visible
+  if (!visible) return
+  // Handing focus to the list makes arrow-key navigation work on open instead of
+  // requiring a click first.
+  void nextTick(() => outlineRef.value?.focusList())
 }
 
 function followBottomIfNeeded() {

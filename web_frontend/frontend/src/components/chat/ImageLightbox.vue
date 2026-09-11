@@ -17,10 +17,18 @@
             {{ activeIndex + 1 }} / {{ images.length }}
           </span>
           <span class="lightbox-spacer" aria-hidden="true"></span>
+          <Transition name="lightbox-status">
+            <span
+              v-if="actionStatusLabel"
+              class="lightbox-status"
+              :class="{ 'is-failed': actionFailed }"
+              role="status"
+            >{{ actionStatusLabel }}</span>
+          </Transition>
           <button
             type="button"
             class="lightbox-action"
-            :class="{ 'is-success': actionState === 'copied', 'is-failed': actionState === 'failed' }"
+            :class="{ 'is-success': actionSucceeded, 'is-failed': actionFailed }"
             :disabled="!activeImage?.url || actionBusy"
             @click="copyActive"
           >
@@ -30,10 +38,10 @@
           <button
             type="button"
             class="lightbox-action icon-only"
-            :title="t('attachments.openImageInNewTab')"
-            :aria-label="t('attachments.openImageInNewTab')"
-            :disabled="!activeImage?.url"
-            @click="openActiveInNewTab"
+            :title="t('attachments.openWithSystem')"
+            :aria-label="t('attachments.openWithSystem')"
+            :disabled="!activeImage || actionBusy"
+            @click="openActiveWithSystem"
           >
             <n-icon :size="15"><OpenOutline /></n-icon>
           </button>
@@ -85,18 +93,27 @@ import { NIcon } from 'naive-ui'
 import { CloseOutline, CopyOutline, OpenOutline } from '@vicons/ionicons5'
 import { useI18n } from '@/composables/useI18n'
 import { writeClipboardImage } from '@/utils/clipboard'
+import { openAttachmentWithSystemViewer } from '@/utils/systemViewer'
+import type { WorkspaceRequestContext, WorkspaceScope } from '@/api/resourceTypes'
 
 export interface LightboxImage {
   url: string
   name: string
+  /** Workspace-relative path when the image lives in the workspace. */
+  path?: string | null
+  scope?: WorkspaceScope | null
+  /** Staged upload id, used when the image is still only an upload. */
+  attachmentId?: string | null
 }
 
 const props = withDefaults(defineProps<{
   open: boolean
   images: LightboxImage[]
   index?: number
+  workspaceContext?: WorkspaceRequestContext | null
 }>(), {
   index: 0,
+  workspaceContext: null,
 })
 
 const emit = defineEmits<{
@@ -105,7 +122,9 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const actionState = ref<'idle' | 'busy' | 'copied' | 'failed'>('idle')
+type LightboxActionState = 'idle' | 'busy' | 'copied' | 'copyFailed' | 'opened' | 'openFailed'
+const actionState = ref<LightboxActionState>('idle')
+const failedReason = ref('')
 let actionTimer: ReturnType<typeof setTimeout> | null = null
 
 const activeIndex = computed(() => {
@@ -116,8 +135,21 @@ const activeImage = computed(() => props.images[activeIndex.value] || null)
 const actionBusy = computed(() => actionState.value === 'busy')
 const actionLabel = computed(() => {
   if (actionState.value === 'copied') return t('attachments.imageCopied')
-  if (actionState.value === 'failed') return t('attachments.copyImageFailed')
+  if (actionState.value === 'copyFailed') return t('attachments.copyImageFailed')
   return t('attachments.copyImage')
+})
+// The copy button doubles as the status line for the system-viewer action, so it
+// has to report why opening failed rather than falling back to a generic label.
+const actionFailed = computed(() => actionState.value === 'copyFailed' || actionState.value === 'openFailed')
+const actionSucceeded = computed(() => actionState.value === 'copied' || actionState.value === 'opened')
+const actionStatusLabel = computed(() => {
+  if (actionState.value === 'opened') return t('attachments.openedInSystem')
+  if (actionState.value === 'openFailed') {
+    return t('attachments.openWithSystemFailed', { reason: failedReason.value || t('common.unknown') })
+  }
+  if (actionState.value === 'copyFailed') return t('attachments.copyImageFailed')
+  if (actionState.value === 'copied') return t('attachments.imageCopied')
+  return ''
 })
 
 function resetActionState(): void {
@@ -126,9 +158,10 @@ function resetActionState(): void {
     actionTimer = null
   }
   actionState.value = 'idle'
+  failedReason.value = ''
 }
 
-function flashActionState(state: 'copied' | 'failed'): void {
+function flashActionState(state: Exclude<LightboxActionState, 'idle' | 'busy'>): void {
   resetActionState()
   actionState.value = state
   actionTimer = setTimeout(() => { actionState.value = 'idle' }, 1800)
@@ -153,14 +186,32 @@ async function copyActive(): Promise<void> {
     await writeClipboardImage(image.url)
     flashActionState('copied')
   } catch {
-    flashActionState('failed')
+    flashActionState('copyFailed')
   }
 }
 
-function openActiveInNewTab(): void {
-  const url = activeImage.value?.url
-  if (!url) return
-  window.open(url, '_blank', 'noopener,noreferrer')
+/**
+ * Hands the current image to the system viewer. The blob URL is passed along so
+ * the browser dev server still opens something when no desktop runtime exists.
+ */
+async function openActiveWithSystem(): Promise<void> {
+  const image = activeImage.value
+  if (!image || actionBusy.value) return
+  try {
+    await openAttachmentWithSystemViewer(
+      {
+        path: image.path,
+        scope: image.scope,
+        attachmentId: image.attachmentId,
+        fallbackUrl: image.url,
+      },
+      props.workspaceContext,
+    )
+    flashActionState('opened')
+  } catch (error) {
+    failedReason.value = error instanceof Error ? error.message : String(error)
+    flashActionState('openFailed')
+  }
 }
 
 function handleKeydown(event: KeyboardEvent): void {
@@ -225,6 +276,32 @@ if (typeof window !== 'undefined') window.addEventListener('keydown', handleKeyd
 }
 
 .lightbox-spacer { flex: 1; }
+
+/* Status text replaces a toast: the lightbox already owns the viewport, so the
+   feedback belongs in its toolbar instead of a floating layer. */
+.lightbox-status {
+  flex: 0 1 auto;
+  max-width: 46%;
+  overflow: hidden;
+  padding: 3px 9px;
+  border-radius: var(--app-radius-pill);
+  background: rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.94);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lightbox-status.is-failed {
+  background: color-mix(in srgb, var(--app-diff-deletion) 82%, transparent);
+  color: #fff;
+}
+
+.lightbox-status-enter-active,
+.lightbox-status-leave-active { transition: opacity 0.16s ease; }
+
+.lightbox-status-enter-from,
+.lightbox-status-leave-to { opacity: 0; }
 
 .lightbox-action {
   appearance: none;

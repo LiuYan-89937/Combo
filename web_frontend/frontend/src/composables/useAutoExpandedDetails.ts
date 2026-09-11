@@ -17,7 +17,12 @@ export function useAutoExpandedDetails(autoExpand: Ref<boolean>) {
   })
 
   function handleToggle(event: Event): void {
-    const element = (event.currentTarget || event.target) as HTMLDetailsElement | null
+    // `toggle` bubbles. Without this guard a nested `<details>` (an argument or
+    // result section) also drives its ancestors' state, so the two drift apart:
+    // the DOM ends up open while the JS state still says collapsed, and the
+    // panel renders blank until the user toggles it once more.
+    if (event.target !== event.currentTarget) return
+    const element = event.currentTarget as HTMLDetailsElement | null
     if (!element || element.open === expanded.value) return
     userOverride.value = element.open
   }

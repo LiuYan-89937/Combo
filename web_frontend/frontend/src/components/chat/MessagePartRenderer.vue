@@ -13,10 +13,8 @@
           <span class="summary-chevron" aria-hidden="true">⌄</span>
         </span>
       </summary>
-      <template v-if="reasoningExpanded">
-        <StreamingReasoningText v-if="isStreaming" :text="part.text" />
-        <div v-else class="markdown-content reasoning-markdown" v-html="renderedReasoning"></div>
-      </template>
+      <StreamingReasoningText v-if="isStreaming" :text="part.text" />
+      <div v-else class="markdown-content reasoning-markdown" v-html="renderedReasoning"></div>
     </details>
 
     <div
@@ -75,13 +73,11 @@
           <span class="summary-chevron" aria-hidden="true">⌄</span>
         </span>
       </summary>
-      <template v-if="toolExpanded">
-        <div v-if="toolPayload" class="tool-detail">
-          <div class="tool-detail-label">{{ toolDetailLabel }}</div>
-          <pre>{{ toolPayload }}</pre>
-        </div>
-        <div v-else class="tool-empty">{{ t('tool.noPayload') }}</div>
-      </template>
+      <div v-if="toolPayload" class="tool-detail">
+        <div class="tool-detail-label">{{ toolDetailLabel }}</div>
+        <pre>{{ toolPayload }}</pre>
+      </div>
+      <div v-else class="tool-empty">{{ t('tool.noPayload') }}</div>
     </details>
 
     <ToolExecutionCard

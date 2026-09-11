@@ -73,29 +73,35 @@
       </div>
     </div>
 
-    <!-- 附件预览区 -->
-    <div v-if="attachmentsEnabled && attachments.length > 0" class="attachments-preview">
-      <template v-for="(attachment, index) in attachments" :key="`${attachment.name}:${index}`">
-        <div v-if="isImageAttachment(attachment)" class="attachment-tile" :title="attachment.name">
-          <UploadedAttachmentThumbnail :attachment="attachment" :size="72" />
-          <button
-            type="button"
-            class="attachment-tile-remove"
-            :title="t('common.remove')"
-            :aria-label="t('common.remove')"
-            @click="removeAttachment(index)"
-          >
-            <n-icon :size="12"><Close /></n-icon>
-          </button>
-        </div>
-        <div v-else class="attachment-item">
-          <UploadedAttachmentThumbnail :attachment="attachment" />
-          <span class="attachment-name">{{ attachment.name }}</span>
-          <n-button text size="small" @click="removeAttachment(index)">
-            <n-icon><Close /></n-icon>
-          </n-button>
-        </div>
-      </template>
+    <!-- 附件预览区：所有附件统一为固定尺寸方块 -->
+    <div
+      v-if="attachmentsEnabled && attachments.length > 0"
+      class="attachments-preview"
+      :style="attachmentTileStyle"
+    >
+      <div
+        v-for="(attachment, index) in attachments"
+        :key="`${attachment.name}:${index}`"
+        class="attachment-tile"
+        :title="t('attachments.openWithSystem')"
+        role="button"
+        tabindex="0"
+        :aria-label="t('attachments.openWithSystem')"
+        @click="openAttachmentWithSystem(index)"
+        @keydown.enter.prevent="openAttachmentWithSystem(index)"
+        @keydown.space.prevent="openAttachmentWithSystem(index)"
+      >
+        <UploadedAttachmentThumbnail :attachment="attachment" :size="attachmentTileSize" fill />
+        <button
+          type="button"
+          class="attachment-tile-remove"
+          :title="t('common.remove')"
+          :aria-label="t('common.remove')"
+          @click.stop="removeAttachment(index)"
+        >
+          <n-icon :size="12"><Close /></n-icon>
+        </button>
+      </div>
       <n-text depth="3" class="attachment-count">
         {{ t('attachments.limitHint', { count: attachments.length, max: maxAttachments }) }}
       </n-text>
@@ -337,7 +343,8 @@ import {
   saveConversationDraft,
 } from '@/utils/conversationDrafts'
 import { REASONING_INTENSITY_DEFAULT } from '@/utils/reasoning'
-import { isImageResource } from '@/utils/workspaceResources'
+import { ATTACHMENT_TILE_SIZE, attachmentTileVars } from '@/utils/attachmentTiles'
+import { openAttachmentWithSystemViewer } from '@/utils/systemViewer'
 
 const { t } = useI18n()
 const messageApi = useMessage()
@@ -459,6 +466,8 @@ const approvalLabel = computed(() => (
   || approvalOptions.value[1].label
 ))
 const maxAttachments = MAX_RUNTIME_ATTACHMENTS
+const attachmentTileSize = ATTACHMENT_TILE_SIZE
+const attachmentTileStyle = attachmentTileVars()
 const remainingAttachmentSlots = computed(() => Math.max(0, maxAttachments - attachments.value.length - contextReferences.value.length))
 const selectedModelSupportsImageInput = computed(() => (
   props.modelOptions.find(option => option.value === props.selectedModelProfileId)?.supportsImageInput === true
@@ -698,11 +707,20 @@ function removeAttachment(index: number) {
   attachments.value.splice(index, 1)
 }
 
-// Images keep a fixed square tile so several attachments line up in a grid;
-// everything else stays a compact chip with its name.
-function isImageAttachment(attachment: RuntimeAttachmentInput): boolean {
-  if (attachment.content_kind === 'image') return true
-  return isImageResource(attachment.name, attachment.mime_type)
+/**
+ * Uploaded files live in the staging store until the message is sent, so the
+ * composer hands the staged id to the system viewer rather than a workspace path.
+ */
+async function openAttachmentWithSystem(index: number): Promise<void> {
+  const attachment = attachments.value[index]
+  if (!attachment) return
+  try {
+    await openAttachmentWithSystemViewer({ attachmentId: attachment.attachment_id })
+  } catch (error) {
+    messageApi.error(t('attachments.openWithSystemFailed', {
+      reason: error instanceof Error ? error.message : String(error),
+    }))
+  }
 }
 
 function referenceKindLabel(sourceKind?: string): string {
@@ -959,30 +977,37 @@ defineExpose({
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 7px;
-  padding: 7px 9px;
-  background: var(--app-surface-muted);
-  border-radius: var(--app-radius-md);
+  gap: var(--attachment-tile-gap, 8px);
   animation: app-fade-in 0.2s ease both;
 }
 
-/* Image attachments stay square so any number of them lines up in a tidy row. */
+/*
+ * Every attachment is the same fixed square. Sizing tiles from the file's own
+ * dimensions (or swapping in a wider chip for non-images) is what made a
+ * multi-attachment composer row look irregular.
+ */
 .attachment-tile {
   position: relative;
-  width: 72px;
-  height: 72px;
-  flex: 0 0 72px;
+  width: var(--attachment-tile-size, 80px);
+  height: var(--attachment-tile-size, 80px);
+  flex: 0 0 var(--attachment-tile-size, 80px);
   overflow: hidden;
   border: 1px solid var(--app-border);
-  border-radius: var(--app-radius-md);
-  background: var(--app-surface);
+  border-radius: var(--app-radius-sm);
+  background: color-mix(in srgb, var(--app-text) 4%, transparent);
   animation: app-pop-in 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+  transition: border-color var(--app-transition-fast);
 }
 
-.attachment-tile :deep(img) {
+.attachment-tile:hover {
+  border-color: var(--app-border-hover);
+}
+
+.attachment-tile :deep(img),
+.attachment-tile :deep(.uploaded-attachment-fallback) {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  border-radius: 0;
 }
 
 .attachment-tile-remove {
@@ -996,8 +1021,8 @@ defineExpose({
   padding: 0;
   border: 0;
   border-radius: 50%;
-  background: rgba(0, 0, 0, 0.55);
-  color: #fff;
+  background: color-mix(in srgb, var(--app-text) 72%, transparent);
+  color: var(--app-text-inverse);
   cursor: pointer;
   opacity: 0;
   transition: opacity var(--app-transition-fast), background-color var(--app-transition-fast);
@@ -1006,7 +1031,9 @@ defineExpose({
 .attachment-tile:hover .attachment-tile-remove,
 .attachment-tile:focus-within .attachment-tile-remove { opacity: 1; }
 
-.attachment-tile-remove:hover { background: rgba(0, 0, 0, 0.78); }
+.attachment-tile-remove:hover {
+  background: color-mix(in srgb, var(--app-text) 88%, transparent);
+}
 
 .attachment-item {
   display: flex;
