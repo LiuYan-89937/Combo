@@ -7,6 +7,7 @@ from combo.dynamic_runtime.delegation_runtime import (
     DelegationContinuationRequest,
     DelegationMessageRequest,
     DelegationRequest,
+    normalize_isolation,
 )
 from combo.runtime_protocol import ExecutionStrategy
 from combo.tooling.builtins.delegation.specs import DELEGATION_RUNTIME_RESOURCE
@@ -25,6 +26,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
             objective=_required_text(arguments.get("objective"), "objective"),
             capability_names=_text_tuple(arguments.get("capabilities")),
             acceptance_criteria=_text_tuple(arguments.get("acceptance_criteria")),
+            isolation=normalize_isolation(arguments.get("isolation")),
         )
     )
     return tool_envelope(result, summary=f"delegated task {result['status']}")

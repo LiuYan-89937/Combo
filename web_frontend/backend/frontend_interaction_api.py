@@ -14,6 +14,7 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from combo.agent_worktree import AgentWorktreeManager, WorktreeError
 from combo.dynamic_runtime.repositories import utc_now_text
 from combo.dynamic_runtime.knowledge_search import KnowledgeRetrievalSettings
 from combo.dynamic_runtime.schedule_validation import validate_execution_mode, validate_schedule
@@ -2113,6 +2114,51 @@ def _delegated_task_rows(
     return list(rows)
 
 
+def _task_worktree_view(backend: Any, task: Any) -> dict[str, Any]:
+    """Return the persisted isolation mode and current Git worktree identity."""
+    if task.workspace_mode == "shared":
+        return {"isolation": "shared"}
+    try:
+        workspace_root = Path(
+            backend.application.stores.conversations.require_workspace_root(
+                task.workspace_id,
+                task.principal_id,
+            )
+        )
+        manager = AgentWorktreeManager(repository=workspace_root)
+        worktree = manager.lookup(task.task_id)
+    except WorktreeError as exc:
+        return {
+            "isolation": "worktree",
+            "worktree_missing": True,
+            "worktree_error": str(exc),
+        }
+    except (KeyError, LookupError, OSError, RuntimeError, ValueError):
+        return {"isolation": "worktree", "worktree_missing": True, "worktree_error": "工作树状态不可用"}
+    if worktree is None:
+        return {
+            "isolation": "worktree",
+            "worktree_missing": True,
+            "worktree_path": str(manager.expected_path(task.task_id)),
+            "worktree_branch": manager.expected_branch(task.task_id),
+            "worktree_error": "独立工作树不存在或未登记",
+        }
+    if not worktree.path.is_dir():
+        return {
+            "isolation": "worktree",
+            "worktree_missing": True,
+            "worktree_path": str(worktree.path),
+            "worktree_branch": worktree.branch,
+            "worktree_error": "独立工作树目录已丢失",
+        }
+    return {
+        "isolation": "worktree",
+        "worktree_path": str(worktree.path),
+        "worktree_branch": worktree.branch,
+        "worktree_missing": False,
+    }
+
+
 def _delegated_task_row_view(backend: Any, row: Any) -> dict[str, Any]:
     from combo.runtime_protocol import DelegatedTaskEvent, RuntimeInstance, TaskEnvelope
 
@@ -2177,6 +2223,7 @@ def _delegated_task_row_view(backend: Any, row: Any) -> dict[str, Any]:
         "result": {"value": result} if result is not None else None,
         "error": _delegated_error_view(error),
         "pending_interaction": _pending_task_interaction(latest, task_name=task.agent_name),
+        **_task_worktree_view(backend, task),
         "created_at": str(row["created_at"]),
         "updated_at": str(row["updated_at"]),
         "started_at": str(row["created_at"]),

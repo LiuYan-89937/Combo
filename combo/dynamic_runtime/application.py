@@ -186,6 +186,9 @@ class DynamicRuntimeApplication:
         stores = _stores(database, memory_search=memory_search, knowledge_search=knowledge_search)
         capability_search: HybridCapabilitySearchIndex | None = None
         try:
+            stores.delegations.migrate_legacy_workspace_modes(
+                stores.conversations.require_workspace_root,
+            )
             capability_search = HybridCapabilitySearchIndex(
                 database=database,
                 config=config.capability_resolution.search,

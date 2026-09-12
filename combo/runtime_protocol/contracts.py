@@ -18,6 +18,7 @@ PolicyValueSource = Literal["user_policy", "command"]
 ApprovalMode = Literal["ask", "auto", "always_approval"]
 ContextCompressionDetail = Literal["concise", "standard", "detailed"]
 RuntimeRole = Literal["main", "temporary"]
+WorkspaceMode = Literal["shared", "worktree"]
 ModelOperationKind = Literal[
     "main_turn",
     "temporary_turn",
@@ -470,6 +471,7 @@ class RuntimeRequest(FrozenProtocolModel):
     session_id: str
     turn_id: str
     workspace_id: str
+    workspace_mode: WorkspaceMode = "shared"
     runtime_role: RuntimeRole
     strategy: ExecutionStrategy
     capability_requirements: tuple[str, ...] = ()
@@ -508,6 +510,8 @@ class RuntimeRequest(FrozenProtocolModel):
 
     @model_validator(mode="after")
     def _role_matches_parent(self) -> "RuntimeRequest":
+        if self.runtime_role == "main" and self.workspace_mode != "shared":
+            raise ValueError("main runtime must use the shared workspace mode")
         if self.runtime_role == "main" and self.parent_runtime_instance_id is not None:
             raise ValueError("main runtime cannot have parent_runtime_instance_id")
         if self.runtime_role == "temporary" and self.parent_runtime_instance_id is None:
@@ -694,6 +698,7 @@ class TaskEnvelope(FrozenProtocolModel):
     context_facts: tuple[str, ...] = ()
     input_artifacts: tuple[AttachmentRevisionRef, ...] = ()
     workspace_id: str
+    workspace_mode: WorkspaceMode = "shared"
     allowed_write_roots: tuple[str, ...] = ()
     capability_requirements: tuple[str, ...] = ()
     selected_model_profile_id: str | None = None

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import json
 from typing import Any
 from uuid import uuid4
 
+from combo.agent_worktree import AgentWorktreeManager, NotAGitRepository
 from combo.dynamic_runtime.database import DynamicRuntimeDatabase
 from combo.dynamic_runtime.event_persistence import (
     insert_runtime_event_and_outbox,
@@ -50,6 +52,100 @@ class DelegationStore:
 
     def __init__(self, database: DynamicRuntimeDatabase) -> None:
         self._database = database
+
+    def migrate_legacy_workspace_modes(
+        self,
+        workspace_root_resolver: Callable[[str, str], str],
+    ) -> int:
+        """Persist worktree mode for tasks created before the mode field existed.
+
+        Legacy sidecars are consumed once by ``AgentWorktreeManager``. Git
+        registry state is used for all current lookups after this migration;
+        a missing sidecar or a non-Git workspace remains the default shared
+        mode and is never inferred from an arbitrary directory.
+        """
+        with self._database.connection(query_only=True) as conn:
+            rows = conn.execute(
+                """
+                select task_id, task_revision, principal_id, workspace_id, payload_json
+                from delegated_task_revisions
+                order by task_id, task_revision
+                """
+            ).fetchall()
+        migration_candidates: dict[str, tuple[str, str]] = {}
+        for row in rows:
+            try:
+                payload = json.loads(str(row["payload_json"]))
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(payload, dict) or "workspace_mode" in payload:
+                continue
+            migration_candidates.setdefault(
+                str(row["task_id"]),
+                (str(row["workspace_id"]), str(row["principal_id"])),
+            )
+        worktree_tasks: set[str] = set()
+        for task_id, (workspace_id, principal_id) in migration_candidates.items():
+            try:
+                root = workspace_root_resolver(workspace_id, principal_id)
+                manager = AgentWorktreeManager(repository=root)
+                legacy = manager.consume_legacy_worktree(task_id)
+            except NotAGitRepository:
+                legacy = None
+            if legacy is not None:
+                worktree_tasks.add(task_id)
+        if not worktree_tasks:
+            return 0
+        task_ids = tuple(sorted(worktree_tasks))
+        migrated = 0
+        with self._database.transaction() as conn:
+            for row in rows:
+                task_id = str(row["task_id"])
+                if task_id not in worktree_tasks:
+                    continue
+                payload = json.loads(str(row["payload_json"]))
+                if not isinstance(payload, dict) or "workspace_mode" in payload:
+                    continue
+                payload["workspace_mode"] = "worktree"
+                conn.execute(
+                    "update delegated_task_revisions set payload_json = ? "
+                    "where task_id = ? and task_revision = ?",
+                    (
+                        json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                        task_id,
+                        int(row["task_revision"]),
+                    ),
+                )
+                migrated += 1
+            placeholders = ",".join("?" for _ in task_ids)
+            runtime_rows = conn.execute(
+                f"""
+                select runtime_instance_id, payload_json
+                from runtime_instances
+                where runtime_instance_id in (
+                  select child_runtime_instance_id
+                  from delegated_task_revisions
+                  where task_id in ({placeholders})
+                )
+                """,
+                task_ids,
+            ).fetchall()
+            for row in runtime_rows:
+                payload = json.loads(str(row["payload_json"]))
+                if not isinstance(payload, dict):
+                    continue
+                request = payload.get("request")
+                if not isinstance(request, dict) or "workspace_mode" in request:
+                    continue
+                request["workspace_mode"] = "worktree"
+                conn.execute(
+                    "update runtime_instances set payload_json = ? where runtime_instance_id = ?",
+                    (
+                        json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                        str(row["runtime_instance_id"]),
+                    ),
+                )
+        return migrated
 
     def create(
         self,
@@ -641,6 +737,8 @@ def _validate_objects(
         raise ValueError("delegated runtime must use the temporary role")
     if request.strategy != envelope.strategy:
         raise ValueError("delegated runtime strategy differs from the task envelope")
+    if request.workspace_mode != envelope.workspace_mode:
+        raise ValueError("delegated runtime workspace mode differs from the task envelope")
     if capability_snapshot.snapshot_id != child_runtime.capability_snapshot_id:
         raise ValueError("delegated runtime references a different capability snapshot")
     expected = (

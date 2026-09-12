@@ -7,6 +7,7 @@ from threading import RLock
 from types import MappingProxyType
 from typing import Any
 
+from combo.agent_worktree import AgentWorktreeManager, WorktreeError
 from combo.dynamic_runtime.capability_blob_store import CapabilityBlobStore
 from combo.dynamic_runtime.capability_definitions import MCPToolDefinition, ToolDefinition
 from combo.dynamic_runtime.mcp_runtime import MCPRuntimePool
@@ -36,6 +37,7 @@ from combo.dynamic_runtime.launch_context import (
     WorkspaceLaunchProjection,
     WorkspaceLaunchResolver,
 )
+from combo.paths import combo_shared_state_paths
 from combo.resource_system import ResourceDescriptor, ResourceIdentity, ResourceStore
 from combo.runtime_defaults import DEFAULT_BUILTIN_WORKSPACE_ROOT
 from combo.runtime_protocol import (
@@ -194,6 +196,7 @@ class RuntimeFilesystemResourcePool:
         *,
         root: Path,
         allowed_write_paths: tuple[Path, ...] = (),
+        read_only_paths: tuple[Path, ...] = (),
         write_scope_enforced: bool = False,
     ) -> ProjectedRuntimeResource:
         key = _runtime_attempt_key(instance)
@@ -212,6 +215,7 @@ class RuntimeFilesystemResourcePool:
                         ),
                         file_locks=self._file_locks,
                         allowed_write_paths=allowed_write_paths,
+                        read_only_paths=read_only_paths,
                         write_scope_enforced=write_scope_enforced,
                     ),
                     references=0,
@@ -221,6 +225,7 @@ class RuntimeFilesystemResourcePool:
                 raise RuntimeError("runtime attempt filesystem root changed while leased")
             elif (
                 entry.resource.allowed_write_paths != allowed_write_paths
+                or entry.resource.read_only_paths != read_only_paths
                 or entry.resource.write_scope_enforced != write_scope_enforced
             ):
                 raise RuntimeError("runtime attempt filesystem write scope changed while leased")
@@ -522,6 +527,10 @@ def runtime_resource_factory(
             instance.request.workspace_id,
             instance.request.principal_id,
         ))
+        # 临时 agent 若被派到独立工作树，它的文件系统根就是那棵树：写权限 scope 是
+        # 相对根解析的（"." = 整棵树），别名仍是 workspace，所以提示词、路径风格与
+        # 权限语义都不变，只是物理位置从共享工作区换成了那棵树。
+        agent_root = _agent_workspace_root(instance, workspace_root)
         if resource_name == "mcp_content_runtime":
             allowed_server_ids = None
             if instance.request.runtime_role == "temporary":
@@ -534,37 +543,74 @@ def runtime_resource_factory(
                 )
             return ProjectedRuntimeResource(
                 value=mcp_content_runtime.for_workspace(
-                    workspace_root,
+                    agent_root,
                     allowed_server_ids=allowed_server_ids,
                 )
             )
         if resource_name == "image_generation_runtime":
-            return ProjectedRuntimeResource(value=ImageGenerationRuntime(workspace_root))
+            return ProjectedRuntimeResource(value=ImageGenerationRuntime(agent_root))
         if resource_name == "process_runtime":
             if instance.request.runtime_role == "temporary":
                 allowed = _delegated_write_paths(
-                    root=workspace_root,
+                    root=agent_root,
                     values=delegations.for_runtime(instance.runtime_instance_id).grant.allowed_write_roots,
                 )
-                if workspace_root not in allowed:
+                if agent_root not in allowed:
                     raise PermissionError(
                         "temporary process capability requires an explicit full-workspace write grant"
                     )
-            return process_resources.acquire(instance, root=workspace_root)
+            return process_resources.acquire(instance, root=agent_root)
         if instance.request.runtime_role == "temporary":
             allowed = _delegated_write_paths(
-                root=workspace_root,
+                root=agent_root,
                 values=delegations.for_runtime(instance.runtime_instance_id).grant.allowed_write_roots,
             )
             return filesystem_resources.acquire(
                 instance,
-                root=workspace_root,
+                root=agent_root,
                 allowed_write_paths=allowed,
+                read_only_paths=shared_state_read_only_paths(root=agent_root),
                 write_scope_enforced=True,
             )
-        return filesystem_resources.acquire(instance, root=workspace_root)
+        return filesystem_resources.acquire(instance, root=agent_root)
+
 
     return project
+
+
+def _agent_workspace_root(instance: RuntimeInstance, workspace_root: Path) -> Path:
+    """Resolve the filesystem root from the persisted workspace mode.
+
+    A worktree task is never inferred from whether a directory happens to
+    exist. Missing or invalid worktrees fail startup rather than falling back
+    to the main workspace.
+    """
+    if instance.request.runtime_role != "temporary":
+        return workspace_root
+    if instance.request.workspace_mode == "shared":
+        return workspace_root
+    if instance.request.task_id is None:
+        raise WorktreeError("worktree runtime requires a delegated task id")
+    manager = AgentWorktreeManager(repository=workspace_root)
+    return manager.require(instance.request.task_id).path
+
+
+def shared_state_read_only_paths(*, root: Path) -> tuple[Path, ...]:
+    """共享状态里与本次运行时 root 不冲突的条目，作为只读路径注入文件工具。
+
+    会跳过吞掉 root 自身的条目：托管工作区的 root 就是 ``<数据根>/workspaces/<id>``，
+    把 ``workspaces`` 标成只读会把整个工作区冻住。返回绝对路径，文件工具按
+    「路径等于它、或位于它之下」判拒绝写入。
+    """
+    resolved_root = Path(root).expanduser().resolve()
+    protected: list[Path] = []
+    for path in combo_shared_state_paths():
+        candidate = path.expanduser().resolve()
+        if candidate == resolved_root or candidate in resolved_root.parents:
+            continue
+        protected.append(candidate)
+    return tuple(protected)
+
 
 def _delegated_write_paths(*, root: Path, values: tuple[str, ...]) -> tuple[Path, ...]:
     workspace_root = root.expanduser().resolve()

@@ -5,7 +5,12 @@ from combo.tooling.spec import ToolLoopPolicyConfig, ToolSpec
 
 DELEGATION_RUNTIME_RESOURCE = "delegation_runtime"
 DELEGATION_TOOL_IDS = frozenset(
-    {"delegate", "delegate_continue", "delegate_message", "delegation_status"}
+    {
+        "delegate",
+        "delegate_continue",
+        "delegate_message",
+        "delegation_status",
+    }
 )
 DELEGATION_CAPABILITY_IDS = frozenset(
     f"tool://builtin/{tool_id}" for tool_id in DELEGATION_TOOL_IDS
@@ -26,7 +31,11 @@ def get_delegation_tool_specs() -> list[ToolSpec]:
                 "Server makes its complete Tool catalog available to the child. Runtime policy "
                 "supplies the shared workspace scope, selects and freezes a suitable enabled model-pool profile, "
                 "and owns approvals and internal identities. Once accepted, "
-                "do not immediately inspect status, sleep, wait, or poll; task events report subsequent changes."
+                "do not immediately inspect status, sleep, wait, or poll; task events report subsequent changes. "
+                "Set isolation=worktree when the child will change repository files that the main agent or the "
+                "user may also touch: the child then works in its own git worktree and local branch. The main "
+                "agent inspects and applies branch changes after the child finishes. A dirty main workspace is "
+                "allowed; worktree mode requires a Git repository."
             ),
             entrypoint="combo.tooling.builtins.delegation.tool:run",
             input_schema={
@@ -46,6 +55,17 @@ def get_delegation_tool_specs() -> list[ToolSpec]:
                         "type": "string",
                         "enum": ["react", "plan_and_execute"],
                         "description": "Execution graph selected by the main agent for this child task.",
+                    },
+                    "isolation": {
+                        "type": "string",
+                        "enum": ["shared", "worktree"],
+                        "default": "shared",
+                        "description": (
+                            "shared (default) lets the child work directly in the main workspace under file "
+                            "locks; worktree gives it an isolated git worktree and local branch created from "
+                            "the current HEAD. The main agent decides how to apply its changes afterward. "
+                            "A dirty main workspace is allowed; worktree requires a Git workspace."
+                        ),
                     },
                     "system_prompt": {"type": "string", "minLength": 1, "description": "该临时 Agent 的职责、边界和工作方式，不要重复用户全部上下文。"},
                     "objective": {"type": "string", "minLength": 1, "description": "需要临时 Agent 独立完成的具体目标和预期交付物。"},

@@ -20,6 +20,14 @@ export interface BackgroundTask {
   request_id: string
   child_runtime_instance_id: string
   agent_name?: string | null
+  /** 子 agent 是否跑在独立 git 工作树里（与共享工作区相对）。 */
+  isolation?: 'shared' | 'worktree'
+  worktree_path?: string | null
+  worktree_branch?: string | null
+  /** Git registry no longer contains the worktree recorded for this task. */
+  worktree_missing?: boolean
+  /** 工作树登记存在但目录已丢失时由后端带上，用于提示。 */
+  worktree_error?: string | null
   model?: {
     profile_id: string
     provider: string

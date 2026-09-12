@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import logging
+from pathlib import Path
 from threading import RLock
 from typing import Any
 from uuid import uuid4
 
+from combo.agent_worktree import (
+    AgentWorktree,
+    AgentWorktreeManager,
+    WorktreeError,
+)
 from combo.dynamic_runtime.capability_resolver import MainTurnCapabilityResolver
 from combo.dynamic_runtime.delegation_policy import MAIN_RUNTIME_ONLY_CAPABILITY_IDS
 from combo.tooling.builtins.ask_usr.specs import ASK_USR_CAPABILITY_ID
@@ -35,6 +42,7 @@ class DelegationRequest:
     objective: str
     capability_names: tuple[str, ...]
     acceptance_criteria: tuple[str, ...]
+    isolation: str = "shared"
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +68,7 @@ class _BoundServices:
     model_selector: DelegatedTaskModelSelector
     capability_resolver: MainTurnCapabilityResolver
     run_controls: RuntimeRunControlRegistry
+    workspace_roots: Callable[[str, str], str]
 
 
 class DelegationRuntimeCoordinator:
@@ -77,6 +86,7 @@ class DelegationRuntimeCoordinator:
         model_selector: DelegatedTaskModelSelector,
         capability_resolver: MainTurnCapabilityResolver,
         run_controls: RuntimeRunControlRegistry,
+        workspace_roots: Callable[[str, str], str],
     ) -> None:
         services = _BoundServices(
             delegations=delegations,
@@ -84,6 +94,7 @@ class DelegationRuntimeCoordinator:
             model_selector=model_selector,
             capability_resolver=capability_resolver,
             run_controls=run_controls,
+            workspace_roots=workspace_roots,
         )
         with self._lock:
             if self._services is not None:
@@ -125,6 +136,7 @@ class BoundDelegationRuntime:
             objective=request.instruction,
             capability_names=envelope.capability_requirements,
             acceptance_criteria=request.acceptance_criteria or envelope.acceptance_criteria,
+            isolation=envelope.workspace_mode,
         )
         if not continuation.agent_name or not continuation.system_prompt:
             raise RuntimeError("delegated task continuation metadata is incomplete")
@@ -170,6 +182,64 @@ class BoundDelegationRuntime:
         if parent.status != "running" or parent.attempt_id is None:
             raise RuntimeError("delegation requires an actively running parent runtime")
 
+    def _workspace_root(self) -> Path:
+        parent = self.parent
+        return Path(
+            self.services.workspace_roots(
+                parent.request.workspace_id,
+                parent.request.principal_id,
+            )
+        )
+
+    def _worktree_manager(self) -> AgentWorktreeManager:
+        """Return a manager for the parent's repository."""
+        return AgentWorktreeManager(repository=self._workspace_root())
+
+    def _create_worktree(self, task_id: str) -> AgentWorktree:
+        try:
+            return self._worktree_manager().create(task_id)
+        except WorktreeError as exc:
+            raise RuntimeError(
+                f"无法为子任务开独立工作树：{exc}。请确认当前工作区是 Git 仓库。"
+            ) from exc
+
+    def _discard_worktree(self, worktree: AgentWorktree) -> None:
+        """派发失败时清理已经开出来的工作树（尽力而为）。"""
+        try:
+            self._worktree_manager().cleanup_create_failure(worktree)
+        except Exception:  # noqa: BLE001 - 清理失败只记录，不掩盖原始异常
+            logger.warning("Failed to discard agent worktree: %s", worktree.path, exc_info=True)
+
+    def _isolation_view(self, task_id: str, workspace_mode: str) -> dict[str, Any]:
+        """任务胶囊要显示的模式信息：是否在独立工作树、树在哪。"""
+        if workspace_mode == "shared":
+            return {"isolation": "shared"}
+        manager = self._worktree_manager()
+        try:
+            worktree = manager.lookup(task_id)
+        except WorktreeError as exc:
+            return {
+                "isolation": "worktree",
+                "worktree_missing": True,
+                "worktree_path": str(manager.expected_path(task_id)),
+                "worktree_branch": manager.expected_branch(task_id),
+                "worktree_error": str(exc),
+            }
+        if worktree is None or not worktree.path.is_dir():
+            return {
+                "isolation": "worktree",
+                "worktree_missing": True,
+                "worktree_path": str(manager.expected_path(task_id)),
+                "worktree_branch": manager.expected_branch(task_id),
+                "worktree_error": "独立工作树不存在或未登记",
+            }
+        return {
+            "isolation": "worktree",
+            "worktree_path": str(worktree.path),
+            "worktree_branch": worktree.branch,
+            "worktree_missing": False,
+        }
+
     def _spawn(
         self,
         request: DelegationRequest,
@@ -179,6 +249,7 @@ class BoundDelegationRuntime:
         continued_model_profile_id: str | None = None,
     ) -> dict[str, Any]:
         parent = self.parent
+        isolation = normalize_isolation(request.isolation)
         now_value = datetime.now(UTC)
         now = now_value.isoformat()
         grant_id = uuid4().hex
@@ -252,6 +323,7 @@ class BoundDelegationRuntime:
             session_id=parent.request.session_id,
             turn_id=parent.request.turn_id,
             workspace_id=parent.request.workspace_id,
+            workspace_mode=isolation,
             runtime_role="temporary",
             strategy=request.strategy,
             capability_requirements=request.capability_names,
@@ -284,11 +356,12 @@ class BoundDelegationRuntime:
             parent_task_revision=parent.request.task_revision,
             strategy=request.strategy,
             agent_name=request.agent_name,
-            system_prompt=_child_system_prompt(request.system_prompt),
+            system_prompt=_child_system_prompt(request.system_prompt, isolation=isolation),
             objective=request.objective,
             acceptance_criteria=request.acceptance_criteria,
             context_facts=(),
             workspace_id=parent.request.workspace_id,
+            workspace_mode=isolation,
             allowed_write_roots=(SHARED_WORKSPACE_WRITE_SCOPE,),
             capability_requirements=request.capability_names,
             selected_model_profile_id=child_model.snapshot.profile_id,
@@ -318,13 +391,30 @@ class BoundDelegationRuntime:
             ).isoformat(),
             created_at=now,
         )
-        self.services.delegations.create(
-            envelope=envelope,
-            grant=grant,
-            capability_snapshot=child_snapshot,
-            child_runtime=child_runtime,
-            max_parallel_children=parent_policy.max_parallel_temporary_agents,
-        )
+        created_worktree = False
+        if isolation == "worktree":
+            if task_revision == 1:
+                worktree = self._create_worktree(task_id)
+                created_worktree = True
+            else:
+                # A continuation must reuse the persisted isolation boundary.
+                # If the main agent removed it, fail instead of silently
+                # creating a new tree or falling back to shared mode.
+                worktree = self._worktree_manager().require(task_id)
+        else:
+            worktree = None
+        try:
+            self.services.delegations.create(
+                envelope=envelope,
+                grant=grant,
+                capability_snapshot=child_snapshot,
+                child_runtime=child_runtime,
+                max_parallel_children=parent_policy.max_parallel_temporary_agents,
+            )
+        except Exception:
+            if worktree is not None and created_worktree:
+                self._discard_worktree(worktree)
+            raise
         return {
             "status": "queued",
             "task_ref": task_id,
@@ -333,6 +423,9 @@ class BoundDelegationRuntime:
             "objective": request.objective,
             "strategy": request.strategy,
             "capabilities": list(request.capability_names),
+            "isolation": isolation,
+            "worktree_path": str(worktree.path) if worktree is not None else None,
+            "worktree_branch": worktree.branch if worktree is not None else None,
             "model": {
                 "profile_id": child_model.snapshot.profile_id,
                 "provider": child_model.snapshot.provider,
@@ -343,6 +436,12 @@ class BoundDelegationRuntime:
             "message": (
                 "Temporary agent task accepted and its task capsule is available. "
                 "Do not poll it; completion and interaction updates are delivered asynchronously."
+                + (
+                    " This child works in its own local git branch and worktree. The main agent will "
+                    "inspect the branch and decide how to apply its changes after the child finishes."
+                    if worktree is not None
+                    else ""
+                )
             ),
         }
 
@@ -361,6 +460,7 @@ class BoundDelegationRuntime:
                     "objective": record.envelope.objective,
                     "strategy": record.envelope.strategy or record.child_runtime.request.strategy,
                     "status": record.status,
+                    **self._isolation_view(record.envelope.task_id, record.envelope.workspace_mode),
                     "event": (
                         _public_task_event(event)
                         if (event := self.services.delegations.latest_event(
@@ -390,8 +490,26 @@ def _delegated_task_description(request: DelegationRequest) -> str:
     )
 
 
-def _child_system_prompt(system_prompt: str) -> str:
-    return system_prompt.strip()
+def normalize_isolation(value: Any) -> str:
+    """把 isolation 参数归一化为 ``shared`` 或 ``worktree``。"""
+    isolation = str(value or "").strip().lower() or "shared"
+    if isolation not in {"shared", "worktree"}:
+        raise ValueError("isolation must be shared or worktree")
+    return isolation
+
+
+def _child_system_prompt(system_prompt: str, *, isolation: str = "shared") -> str:
+    prompt = system_prompt.strip()
+    if isolation == "worktree":
+        return f"{prompt}{_WORKTREE_DIRECTIVE}"
+    return prompt
+
+
+_WORKTREE_DIRECTIVE = (
+    "\n\nYou are working in your own isolated git worktree on a local branch. Make and, when useful, "
+    "commit changes there. The main agent will inspect the branch and decide whether to merge, "
+    "cherry-pick, or remove it after this task finishes. Do not modify the main workspace directly."
+)
 
 
 def _public_task_event(event: Any) -> dict[str, Any]:

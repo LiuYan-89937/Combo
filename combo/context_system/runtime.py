@@ -79,11 +79,21 @@ class ContextSystemRuntime:
             state=state,
             model_role=model_role,
         )
+        # A runtime may inherit a context count from a previous turn that was
+        # executed with a different model.  The count is useful as a baseline,
+        # but the window and trigger must always come from the model frozen for
+        # this runtime.  Seed the working state before calculating the trigger
+        # count so the inherited values cannot make the threshold jump.
+        _apply_active_context_limits(
+            state=state,
+            active_limits=active_limits,
+            model_role=model_role,
+        )
         compression_policy = policy.compression.model_copy(
             update={"trigger_token_threshold": active_limits.compression_trigger_tokens}
         )
         working_messages = list(messages)
-        working_state = state
+        working_state = state.model_copy(deep=True)
         measured_count = count_messages_tokens(working_messages, services=services)
         effective_count = _effective_compression_count(
             state=working_state,
@@ -127,13 +137,21 @@ class ContextSystemRuntime:
             state=working_state,
             event_type=compression_event_type,
             node_id=node_id,
-            payload=compression_report.model_dump(mode="json"),
+            payload=_compression_event_payload(
+                compression_report=compression_report,
+                measured_count=measured_count,
+                effective_count=effective_count,
+                active_limits=active_limits,
+                model_role=model_role,
+            ),
         )
         if compression_report.status == "completed":
             working_state = _state_with_compressed_token_budget(
                 state=working_state,
                 compression_report=compression_report,
                 messages=compression_messages,
+                active_limits=active_limits,
+                model_role=model_role,
             )
             emit_context_event(
                 services=services,
@@ -512,6 +530,7 @@ def _effective_compression_count(
             or source in {
                 "context_system.compression",
                 "context_system.manual_compression",
+                "runtime_checkpoint.inherited_context",
             }
         )
         and (not observed_role or observed_role == model_role)
@@ -523,6 +542,50 @@ def _effective_compression_count(
             model_role=model_role,
         )
     return measured_count
+
+
+def _apply_active_context_limits(
+    *,
+    state: Any,
+    active_limits: ModelContextLimits,
+    model_role: str,
+) -> None:
+    """Make the current runtime model's limits authoritative on its state.
+
+    This deliberately updates the parsed state before the compression call.
+    If compression fails, the fixed runner still persists this same state in
+    its terminal error patch instead of falling back to an inherited model's
+    limits.
+    """
+    context = getattr(state, "context", None)
+    if context is None or not hasattr(context, "token_budget"):
+        return
+    context.token_budget = {
+        **dict(getattr(context, "token_budget", {}) or {}),
+        "context_window_tokens": active_limits.context_window_tokens,
+        "compression_threshold_tokens": active_limits.compression_trigger_tokens,
+        "model_role": model_role,
+    }
+
+
+def _compression_event_payload(
+    *,
+    compression_report: ContextCompressionReport,
+    measured_count: TokenCountResult,
+    effective_count: TokenCountResult,
+    active_limits: ModelContextLimits,
+    model_role: str,
+) -> dict[str, Any]:
+    return {
+        **compression_report.model_dump(mode="json"),
+        "measured_token_count": measured_count.token_count,
+        "measured_token_count_method": measured_count.method,
+        "effective_token_count": effective_count.token_count,
+        "effective_token_count_method": effective_count.method,
+        "active_context_window_tokens": active_limits.context_window_tokens,
+        "active_compression_threshold_tokens": active_limits.compression_trigger_tokens,
+        "active_model_role": model_role,
+    }
 
 
 def _compression_result_counter(*, services: Any):
@@ -547,6 +610,8 @@ def _state_with_compressed_token_budget(
     state: Any,
     compression_report: ContextCompressionReport,
     messages: list[Any],
+    active_limits: ModelContextLimits,
+    model_role: str,
 ) -> Any:
     updated = state.model_copy(deep=True)
     updated.context.compression_applied = True
@@ -559,5 +624,8 @@ def _state_with_compressed_token_budget(
         "effective_context_tokens": compression_report.token_estimate_after,
         "effective_context_source": compression_report.token_count_method or "compression_estimate",
         "last_provider_message_tokens_after_call": estimate_messages_tokens(messages),
+        "context_window_tokens": active_limits.context_window_tokens,
+        "compression_threshold_tokens": active_limits.compression_trigger_tokens,
+        "model_role": model_role,
     }
     return updated

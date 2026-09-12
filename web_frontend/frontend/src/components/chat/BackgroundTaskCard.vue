@@ -15,6 +15,11 @@
         <small v-if="task.model?.model_name" class="task-model">模型 · {{ task.model.model_name }}</small>
       </span>
       <span class="task-status-label">{{ statusLabel }}</span>
+      <span
+        v-if="isolationLabel"
+        class="task-isolation"
+        :title="task.worktree_path || undefined"
+      >{{ isolationLabel }}</span>
       <n-button
         v-if="!terminal"
         class="task-delete"
@@ -213,6 +218,16 @@ const view = computed(() => buildView(
 ))
 const terminal = computed(() => ['succeeded', 'failed', 'cancelled'].includes(view.value.status))
 const statusLabel = computed(() => t(`backgroundTask.status.${view.value.status}` as any))
+/**
+ * 独立工作树标识。读原始 task 而不是 projectedTask：投影器可能只保留它认识的字段。
+ */
+const isolationLabel = computed(() => {
+  const raw = task.value
+  if (raw.isolation !== 'worktree') return ''
+  const base = t('backgroundTask.isolation.worktree')
+  if (raw.worktree_missing || raw.worktree_error) return `${base} · ${t('backgroundTask.isolation.missing')}`
+  return raw.worktree_branch ? `${base} · ${raw.worktree_branch}` : base
+})
 const currentTitle = computed(() => localize(interaction.value?.title) || statusLabel.value)
 /**
  * Scheduler runs are tagged by `asBackgroundTask` in SchedulerRunCapsules. They
@@ -648,6 +663,7 @@ function formatTime(value: unknown): string {
 .task-mark { width: 46px; height: 46px; display: grid; overflow: hidden; place-items: center; border: 1px solid var(--app-border); border-radius: var(--app-radius-md); background: var(--app-surface-muted); }
 .task-heading { min-width: 0; flex: 1; display: grid; gap: 2px; padding-right: 22px; }
 .task-status-label { flex: 0 0 auto; padding: 4px 8px; border: 1px solid var(--app-border); border-radius: var(--app-radius-pill); color: var(--app-text-secondary); font-size: 10px; }
+.task-isolation { flex: 0 0 auto; padding: 4px 8px; border: 1px dashed var(--app-border); border-radius: var(--app-radius-pill); color: var(--app-text-secondary); font-size: 10px; }
 .task-delete { flex: 0 0 auto; }
 .task-heading strong { overflow-wrap: anywhere; font-size: 14px; }
 .task-heading small { color: var(--app-text-muted); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; white-space: normal; }

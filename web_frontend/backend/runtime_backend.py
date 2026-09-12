@@ -2181,6 +2181,7 @@ class RuntimeBackend:
             model_selector=self.delegated_model_selector,
             capability_resolver=application.capability_resolver,
             run_controls=application.stores.run_controls,
+            workspace_roots=application.stores.conversations.require_workspace_root,
         )
         self.skill_package_installer.bind(
             validator=self._validate_staged_skill_root,

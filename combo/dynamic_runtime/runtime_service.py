@@ -222,14 +222,21 @@ class DynamicRuntimeService:
         limits = self._model_resolver.context_limits_for_snapshot(
             instance.request.policy_snapshot.model
         )
-        return {
-            **limits,
-            **{
-                key: value
-                for key, value in context_window.items()
-                if value is not None
-            },
+        current_limits = {
+            key: value
+            for key, value in limits.items()
+            if value is not None
         }
+        return _recompute_context_window_ratios(
+            {
+                **{
+                    key: value
+                    for key, value in context_window.items()
+                    if value is not None
+                },
+                **current_limits,
+            }
+        )
 
     def compress_main_context(
         self,
@@ -907,10 +914,8 @@ def _inherited_token_budget(context_window: dict[str, Any] | None) -> dict[str, 
     if normalized_count < 0:
         return {}
     method = str(context_window.get("token_count_method") or "provider_usage")
-    source = str(context_window.get("source") or f"model_operation.{method}")
-    model_role = context_window.get("model_role")
-    node_id = context_window.get("node_id")
-    return {
+    source = str(context_window.get("source") or "runtime_checkpoint.inherited_context")
+    inherited: dict[str, Any] = {
         "token_count": normalized_count,
         "token_count_method": method,
         "source": source,
@@ -918,14 +923,16 @@ def _inherited_token_budget(context_window: dict[str, Any] | None) -> dict[str, 
         "effective_context_source": method,
         "last_provider_context_tokens_after_call": normalized_count,
         "last_provider_token_count_method": method,
-        "last_provider_model_role": model_role,
-        "last_provider_node_id": node_id,
-        "last_provider_message_tokens_after_call": context_window.get(
-            "current_message_token_estimate"
-        ),
-        "context_window_tokens": context_window.get("context_window_tokens"),
-        "compression_threshold_tokens": context_window.get("compression_threshold_tokens"),
+        "inherited_context_baseline": True,
     }
+    baseline_message_tokens = context_window.get("current_message_token_estimate")
+    if (
+        isinstance(baseline_message_tokens, (int, float))
+        and not isinstance(baseline_message_tokens, bool)
+        and baseline_message_tokens >= 0
+    ):
+        inherited["last_provider_message_tokens_after_call"] = int(baseline_message_tokens)
+    return inherited
 
 
 def _manual_compression_context_window(
@@ -976,6 +983,7 @@ def _delegated_task_message(
         or envelope.task_revision != instance.request.task_revision
         or envelope.parent_runtime_instance_id != instance.request.parent_runtime_instance_id
         or envelope.capability_snapshot_id != instance.capability_snapshot_id
+        or envelope.workspace_mode != instance.request.workspace_mode
     ):
         raise RuntimeError("delegated task envelope differs from the runtime request")
     instruction = json.dumps(
@@ -1394,20 +1402,24 @@ def _latest_context_window(
     persisted = _context_window_from_token_budget(state, graph_messages=graph_messages)
     observed = _latest_observed_context_window(state)
     if persisted is not None:
-        return {
-            **(observed or {}),
-            **{
-                key: value
-                for key, value in persisted.items()
-                if value is not None
-            },
-            "compression_status": _latest_compression_status(state),
-        }
+        return _recompute_context_window_ratios(
+            {
+                **(observed or {}),
+                **{
+                    key: value
+                    for key, value in persisted.items()
+                    if value is not None
+                },
+                "compression_status": _latest_compression_status(state),
+            }
+        )
     if observed is not None:
-        return {
-            **observed,
-            "compression_status": _latest_compression_status(state),
-        }
+        return _recompute_context_window_ratios(
+            {
+                **observed,
+                "compression_status": _latest_compression_status(state),
+            }
+        )
     return None
 
 
@@ -1501,6 +1513,35 @@ def _context_window_from_token_budget(
     return None
 
 
+def _recompute_context_window_ratios(window: dict[str, Any]) -> dict[str, Any]:
+    """Derive ratios from the final count and active limits.
+
+    Observation events are append-only and may have been produced by a
+    previous runtime model.  Their ratios are therefore presentation data, not
+    authoritative state.  Recomputing here prevents an old threshold from
+    surviving a model switch.
+    """
+    result = dict(window)
+    token_count = _non_negative_int(result.get("token_count"))
+    context_window_tokens = _positive_int(result.get("context_window_tokens"))
+    compression_threshold_tokens = _positive_int(result.get("compression_threshold_tokens"))
+    if token_count is not None and context_window_tokens:
+        result["window_usage_ratio"] = min(
+            float(token_count) / float(context_window_tokens),
+            1.0,
+        )
+    else:
+        result.pop("window_usage_ratio", None)
+    if token_count is not None and compression_threshold_tokens:
+        result["compression_usage_ratio"] = min(
+            float(token_count) / float(compression_threshold_tokens),
+            1.0,
+        )
+    else:
+        result.pop("compression_usage_ratio", None)
+    return result
+
+
 def _final_graph_message_content(messages: list[BaseMessage]) -> Any:
     for message in reversed(messages):
         if getattr(message, "type", "") in {"ai", "assistant"}:
@@ -1580,6 +1621,11 @@ def _non_negative_int(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return parsed if parsed >= 0 else None
+
+
+def _positive_int(value: Any) -> int | None:
+    parsed = _non_negative_int(value)
+    return parsed if parsed is not None and parsed > 0 else None
 
 
 def _run_graph_with_control(
