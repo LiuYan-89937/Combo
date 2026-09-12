@@ -14,7 +14,7 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from combo.agent_worktree import AgentWorktreeManager, WorktreeError
+from combo.agent_worktree import AgentWorktreeManager, WorktreeError, worktree_label
 from combo.dynamic_runtime.repositories import utc_now_text
 from combo.dynamic_runtime.knowledge_search import KnowledgeRetrievalSettings
 from combo.dynamic_runtime.schedule_validation import validate_execution_mode, validate_schedule
@@ -2119,6 +2119,10 @@ def _task_worktree_view(backend: Any, task: Any) -> dict[str, Any]:
     if task.workspace_mode == "shared":
         return {"isolation": "shared"}
     try:
+        label = worktree_label(task.task_id, task.agent_name)
+    except WorktreeError:
+        label = None
+    try:
         workspace_root = Path(
             backend.application.stores.conversations.require_workspace_root(
                 task.workspace_id,
@@ -2126,21 +2130,28 @@ def _task_worktree_view(backend: Any, task: Any) -> dict[str, Any]:
             )
         )
         manager = AgentWorktreeManager(repository=workspace_root)
-        worktree = manager.lookup(task.task_id)
+        worktree = manager.lookup(task.task_id, label=label)
     except WorktreeError as exc:
         return {
             "isolation": "worktree",
+            "worktree_label": label,
             "worktree_missing": True,
             "worktree_error": str(exc),
         }
     except (KeyError, LookupError, OSError, RuntimeError, ValueError):
-        return {"isolation": "worktree", "worktree_missing": True, "worktree_error": "工作树状态不可用"}
+        return {
+            "isolation": "worktree",
+            "worktree_label": label,
+            "worktree_missing": True,
+            "worktree_error": "工作树状态不可用",
+        }
     if worktree is None:
         return {
             "isolation": "worktree",
             "worktree_missing": True,
-            "worktree_path": str(manager.expected_path(task.task_id)),
-            "worktree_branch": manager.expected_branch(task.task_id),
+            "worktree_path": str(manager.expected_path(task.task_id, label=label)),
+            "worktree_branch": manager.expected_branch(task.task_id, label=label),
+            "worktree_label": label,
             "worktree_error": "独立工作树不存在或未登记",
         }
     if not worktree.path.is_dir():
@@ -2149,12 +2160,14 @@ def _task_worktree_view(backend: Any, task: Any) -> dict[str, Any]:
             "worktree_missing": True,
             "worktree_path": str(worktree.path),
             "worktree_branch": worktree.branch,
+            "worktree_label": worktree.label,
             "worktree_error": "独立工作树目录已丢失",
         }
     return {
         "isolation": "worktree",
         "worktree_path": str(worktree.path),
         "worktree_branch": worktree.branch,
+        "worktree_label": worktree.label,
         "worktree_missing": False,
     }
 

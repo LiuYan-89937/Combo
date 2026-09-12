@@ -13,6 +13,7 @@ from combo.agent_worktree import (
     AgentWorktree,
     AgentWorktreeManager,
     WorktreeError,
+    worktree_label,
 )
 from combo.dynamic_runtime.capability_resolver import MainTurnCapabilityResolver
 from combo.dynamic_runtime.delegation_policy import MAIN_RUNTIME_ONLY_CAPABILITY_IDS
@@ -195,9 +196,15 @@ class BoundDelegationRuntime:
         """Return a manager for the parent's repository."""
         return AgentWorktreeManager(repository=self._workspace_root())
 
-    def _create_worktree(self, task_id: str) -> AgentWorktree:
+    def _task_worktree_label(self, task_id: str, agent_name: str | None) -> str:
+        """Deterministic git-side name for one delegated task's tree."""
+        return worktree_label(task_id, agent_name)
+
+    def _create_worktree(self, task_id: str, agent_name: str | None) -> AgentWorktree:
         try:
-            return self._worktree_manager().create(task_id)
+            return self._worktree_manager().create(
+                task_id, label=self._task_worktree_label(task_id, agent_name)
+            )
         except WorktreeError as exc:
             raise RuntimeError(
                 f"无法为子任务开独立工作树：{exc}。请确认当前工作区是 Git 仓库。"
@@ -210,33 +217,42 @@ class BoundDelegationRuntime:
         except Exception:  # noqa: BLE001 - 清理失败只记录，不掩盖原始异常
             logger.warning("Failed to discard agent worktree: %s", worktree.path, exc_info=True)
 
-    def _isolation_view(self, task_id: str, workspace_mode: str) -> dict[str, Any]:
+    def _isolation_view(
+        self, task_id: str, workspace_mode: str, agent_name: str | None = None
+    ) -> dict[str, Any]:
         """任务胶囊要显示的模式信息：是否在独立工作树、树在哪。"""
         if workspace_mode == "shared":
             return {"isolation": "shared"}
         manager = self._worktree_manager()
         try:
-            worktree = manager.lookup(task_id)
+            label = self._task_worktree_label(task_id, agent_name)
+        except WorktreeError:
+            label = None
+        try:
+            worktree = manager.lookup(task_id, label=label)
         except WorktreeError as exc:
             return {
                 "isolation": "worktree",
                 "worktree_missing": True,
-                "worktree_path": str(manager.expected_path(task_id)),
-                "worktree_branch": manager.expected_branch(task_id),
+                "worktree_path": str(manager.expected_path(task_id, label=label)),
+                "worktree_branch": manager.expected_branch(task_id, label=label),
+                "worktree_label": label,
                 "worktree_error": str(exc),
             }
         if worktree is None or not worktree.path.is_dir():
             return {
                 "isolation": "worktree",
                 "worktree_missing": True,
-                "worktree_path": str(manager.expected_path(task_id)),
-                "worktree_branch": manager.expected_branch(task_id),
+                "worktree_path": str(manager.expected_path(task_id, label=label)),
+                "worktree_branch": manager.expected_branch(task_id, label=label),
+                "worktree_label": label,
                 "worktree_error": "独立工作树不存在或未登记",
             }
         return {
             "isolation": "worktree",
             "worktree_path": str(worktree.path),
             "worktree_branch": worktree.branch,
+            "worktree_label": worktree.label,
             "worktree_missing": False,
         }
 
@@ -334,6 +350,7 @@ class BoundDelegationRuntime:
             parent_runtime_instance_id=parent.runtime_instance_id,
             task_id=task_id,
             delegation_grant_id=grant_id,
+            agent_name=request.agent_name,
             created_at=now,
         )
         child_runtime = RuntimeInstance(
@@ -394,13 +411,15 @@ class BoundDelegationRuntime:
         created_worktree = False
         if isolation == "worktree":
             if task_revision == 1:
-                worktree = self._create_worktree(task_id)
+                worktree = self._create_worktree(task_id, request.agent_name)
                 created_worktree = True
             else:
-                # A continuation must reuse the persisted isolation boundary.
-                # If the main agent removed it, fail instead of silently
-                # creating a new tree or falling back to shared mode.
-                worktree = self._worktree_manager().require(task_id)
+                # A continuation must reuse the persisted isolation boundary on
+                # the same branch. If the main agent removed it, fail instead of
+                # silently creating a new tree or falling back to shared mode.
+                worktree = self._worktree_manager().require(
+                    task_id, label=self._task_worktree_label(task_id, request.agent_name)
+                )
         else:
             worktree = None
         try:
@@ -426,6 +445,7 @@ class BoundDelegationRuntime:
             "isolation": isolation,
             "worktree_path": str(worktree.path) if worktree is not None else None,
             "worktree_branch": worktree.branch if worktree is not None else None,
+            "worktree_label": worktree.label if worktree is not None else None,
             "model": {
                 "profile_id": child_model.snapshot.profile_id,
                 "provider": child_model.snapshot.provider,
@@ -437,10 +457,10 @@ class BoundDelegationRuntime:
                 "Temporary agent task accepted and its task capsule is available. "
                 "Do not poll it; completion and interaction updates are delivered asynchronously."
                 + (
-                    " This child works in its own local git branch and worktree, created from the "
-                    "repository's current HEAD. Uncommitted changes in the main workspace are not part "
-                    "of its starting point, so either commit them before applying its branch or expect "
-                    "git to refuse a merge that would overwrite them."
+                    f" This child works in its own local git branch {worktree.branch} and worktree, "
+                    "created from the repository's current HEAD. Uncommitted changes in the main "
+                    "workspace are not part of its starting point, so either commit them before "
+                    "applying its branch or expect git to refuse a merge that would overwrite them."
                     if worktree is not None
                     else ""
                 )
@@ -462,7 +482,11 @@ class BoundDelegationRuntime:
                     "objective": record.envelope.objective,
                     "strategy": record.envelope.strategy or record.child_runtime.request.strategy,
                     "status": record.status,
-                    **self._isolation_view(record.envelope.task_id, record.envelope.workspace_mode),
+                    **self._isolation_view(
+                        record.envelope.task_id,
+                        record.envelope.workspace_mode,
+                        record.envelope.agent_name,
+                    ),
                     "event": (
                         _public_task_event(event)
                         if (event := self.services.delegations.latest_event(

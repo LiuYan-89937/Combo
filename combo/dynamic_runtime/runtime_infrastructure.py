@@ -7,7 +7,7 @@ from threading import RLock
 from types import MappingProxyType
 from typing import Any
 
-from combo.agent_worktree import AgentWorktreeManager, WorktreeError
+from combo.agent_worktree import AgentWorktreeManager, WorktreeError, worktree_label
 from combo.dynamic_runtime.capability_blob_store import CapabilityBlobStore
 from combo.dynamic_runtime.capability_definitions import MCPToolDefinition, ToolDefinition
 from combo.dynamic_runtime.mcp_runtime import MCPRuntimePool
@@ -595,7 +595,10 @@ def _agent_workspace_root(instance: RuntimeInstance, workspace_root: Path) -> Pa
     if instance.request.task_id is None:
         raise WorktreeError("worktree runtime requires a delegated task id")
     manager = AgentWorktreeManager(repository=workspace_root)
-    return manager.require(instance.request.task_id).path
+    return manager.require(
+        instance.request.task_id,
+        label=worktree_label(instance.request.task_id, instance.request.agent_name),
+    ).path
 
 
 def shared_state_read_only_paths(*, root: Path) -> tuple[Path, ...]:

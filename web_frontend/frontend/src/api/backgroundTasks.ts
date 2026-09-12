@@ -24,6 +24,8 @@ export interface BackgroundTask {
   isolation?: 'shared' | 'worktree'
   worktree_path?: string | null
   worktree_branch?: string | null
+  /** 人类可读的工作树短名（子 agent 名字 + 任务短标识），用于胶囊徽标。 */
+  worktree_label?: string | null
   /** Git registry no longer contains the worktree recorded for this task. */
   worktree_missing?: boolean
   /** 工作树登记存在但目录已丢失时由后端带上，用于提示。 */

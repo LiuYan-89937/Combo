@@ -9,6 +9,11 @@ The Git worktree registry is authoritative. Older releases wrote a sidecar JSON
 file next to each worktree; those files are inspected once, only to recognise
 an already existing legacy worktree, and are removed after inspection. They are
 never used as the current state source.
+
+A tree is named after the child that works in it: ``combo/agent/<slug>-<id>``,
+where the slug comes from the child's own name and ``<id>`` is a short slice of
+the task identity. Trees created by earlier releases, which used the bare task
+id as the name, are still recognised.
 """
 
 from __future__ import annotations
@@ -24,6 +29,11 @@ from combo.file_atomic import atomic_write_text
 
 
 _TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+_LABEL_SLUG_PATTERN = re.compile(r"[^\w]+")
+_LABEL_MAX_SLUG_LENGTH = 24
+_LABEL_ID_LENGTH = 6
+# 只用于防御性复核：标识由 worktree_label() 从字母数字下划线构造，本就不会带这些字符。
+_UNSAFE_LABEL_MARKERS = ("/", "\\", "..", "@{", "~", "^", ":", "?", "*", "[", " ")
 _METADATA_SUFFIX = ".combo-agent-task.json"
 DEFAULT_WORKTREES_DIRNAME = Path(".combo") / "worktrees"
 AGENT_BRANCH_PREFIX = "combo/agent/"
@@ -48,6 +58,7 @@ class WorktreeExists(WorktreeError):
 @dataclass(frozen=True, slots=True)
 class AgentWorktree:
     task_id: str
+    label: str
     branch: str
     path: Path
     base_commit: str
@@ -57,6 +68,7 @@ class AgentWorktree:
         """Return diagnostics without making them a persistence authority."""
         return {
             "task_id": self.task_id,
+            "label": self.label,
             "branch": self.branch,
             "path": str(self.path),
             "base_commit": self.base_commit,
@@ -79,6 +91,47 @@ def _validate_task_id(task_id: str) -> str:
     if not _TASK_ID_PATTERN.fullmatch(value):
         raise InvalidTaskId(f"任务标识不合法: {task_id!r}（只允许字母数字与 . _ -，最长 64）")
     return value
+
+
+def _validate_label(label: str) -> str:
+    value = str(label or "").strip()
+    if not value or len(value) > 64 or value.startswith((".", "-")) or value.endswith("."):
+        raise InvalidTaskId(f"工作树标识不合法: {label!r}")
+    for marker in _UNSAFE_LABEL_MARKERS:
+        if marker in value:
+            raise InvalidTaskId(f"工作树标识不合法: {label!r}")
+    return value
+
+
+def _is_safe_label(value: str) -> bool:
+    try:
+        _validate_label(value)
+    except InvalidTaskId:
+        return False
+    return True
+
+
+def worktree_label(task_id: str, agent_name: str | None) -> str:
+    """Return the deterministic git-side name of one delegated task's tree.
+
+    The label is meant to be read by a human: the child's own name in slug form
+    plus a short slice of the task identity, so two children with the same name
+    never collide and no random UUID shows up in the task capsule or in git
+    commands. Names that reduce to nothing usable fall back to ``agent``.
+    """
+    identity = _validate_task_id(task_id)
+    slug = _LABEL_SLUG_PATTERN.sub("-", str(agent_name or "").strip().lower()).strip("-_")
+    slug = slug[:_LABEL_MAX_SLUG_LENGTH].strip("-_") or "agent"
+    return f"{slug}-{identity[:_LABEL_ID_LENGTH]}"
+
+
+def _worktree_identities(task_id: str, label: str | None) -> tuple[str, ...]:
+    """Identities to probe, newest naming first, legacy task id last."""
+    identity = _validate_task_id(task_id)
+    if not label:
+        return (identity,)
+    normalized = _validate_label(label)
+    return (normalized,) if normalized == identity else (normalized, identity)
 
 
 def _read_legacy_sidecar(path: Path) -> dict[str, Any] | None:
@@ -165,59 +218,72 @@ class AgentWorktreeManager:
             and Path(top.stdout.strip()).resolve() == self._repository
         )
 
-    def expected_branch(self, task_id: str) -> str:
-        return f"{AGENT_BRANCH_PREFIX}{_validate_task_id(task_id)}"
+    def expected_branch(self, task_id: str, *, label: str | None = None) -> str:
+        return f"{AGENT_BRANCH_PREFIX}{_worktree_identities(task_id, label)[0]}"
 
-    def expected_path(self, task_id: str) -> Path:
-        return self._root / _validate_task_id(task_id)
+    def expected_path(self, task_id: str, *, label: str | None = None) -> Path:
+        return self._root / _worktree_identities(task_id, label)[0]
 
-    def lookup(self, task_id: str) -> AgentWorktree | None:
+    def lookup(self, task_id: str, *, label: str | None = None) -> AgentWorktree | None:
         """Find a task's worktree by Git registry and deterministic identity."""
-        normalized = _validate_task_id(task_id)
+        identities = _worktree_identities(task_id, label)
         if not self.is_repository():
             raise NotAGitRepository(f"{self._repository} 不是 git 仓库根目录")
-        expected_path = self.expected_path(normalized).resolve()
-        expected_branch = self.expected_branch(normalized)
+        identity = _validate_task_id(task_id)
         entries = _git_worktree_entries(self._repository)
-        for entry in entries:
-            if entry.path == expected_path and entry.branch == expected_branch:
-                self._consume_legacy_sidecar(normalized)
-                return AgentWorktree(
-                    task_id=normalized,
-                    branch=expected_branch,
-                    path=expected_path,
-                    base_commit=self._base_commit_for_branch(expected_branch, entry.head),
-                    repository=self._repository,
-                )
+        for candidate in identities:
+            expected_path = (self._root / candidate).resolve()
+            expected_branch = f"{AGENT_BRANCH_PREFIX}{candidate}"
+            for entry in entries:
+                if entry.path == expected_path and entry.branch == expected_branch:
+                    self._consume_legacy_sidecar(candidate, task_id=identity)
+                    return AgentWorktree(
+                        task_id=identity,
+                        label=candidate,
+                        branch=expected_branch,
+                        path=expected_path,
+                        base_commit=self._base_commit_for_branch(expected_branch, entry.head),
+                        repository=self._repository,
+                    )
 
-        legacy = self._consume_legacy_sidecar(normalized)
-        if legacy is not None:
-            return legacy
+        for candidate in identities:
+            legacy = self._consume_legacy_sidecar(candidate, task_id=identity)
+            if legacy is not None:
+                return legacy
         return None
 
-    def consume_legacy_worktree(self, task_id: str) -> AgentWorktree | None:
+    def consume_legacy_worktree(
+        self, task_id: str, *, label: str | None = None
+    ) -> AgentWorktree | None:
         """Consume one old sidecar for startup migration, if it exists."""
-        normalized = _validate_task_id(task_id)
+        identities = _worktree_identities(task_id, label)
+        identity = _validate_task_id(task_id)
         if not self.is_repository():
             raise NotAGitRepository(f"{self._repository} 不是 git 仓库根目录")
-        sidecar = self._root / f"{normalized}{_METADATA_SUFFIX}"
-        if not sidecar.exists():
-            return None
-        expected_path = self.expected_path(normalized).resolve()
-        expected_branch = self.expected_branch(normalized)
-        entries = _git_worktree_entries(self._repository)
-        if any(entry.path == expected_path and entry.branch == expected_branch for entry in entries):
-            payload = _read_legacy_sidecar(sidecar)
-            sidecar.unlink(missing_ok=True)
-            base_commit = str(payload.get("base_commit") or "") if payload is not None else ""
-            return AgentWorktree(
-                task_id=normalized,
-                branch=expected_branch,
-                path=expected_path,
-                base_commit=base_commit or self._base_commit_for_branch(expected_branch, None),
-                repository=self._repository,
-            )
-        return self._consume_legacy_sidecar(normalized)
+        for candidate in identities:
+            sidecar = self._root / f"{candidate}{_METADATA_SUFFIX}"
+            if not sidecar.exists():
+                continue
+            expected_path = (self._root / candidate).resolve()
+            expected_branch = f"{AGENT_BRANCH_PREFIX}{candidate}"
+            entries = _git_worktree_entries(self._repository)
+            if any(
+                entry.path == expected_path and entry.branch == expected_branch
+                for entry in entries
+            ):
+                payload = _read_legacy_sidecar(sidecar)
+                sidecar.unlink(missing_ok=True)
+                base_commit = str(payload.get("base_commit") or "") if payload is not None else ""
+                return AgentWorktree(
+                    task_id=identity,
+                    label=candidate,
+                    branch=expected_branch,
+                    path=expected_path,
+                    base_commit=base_commit or self._base_commit_for_branch(expected_branch, None),
+                    repository=self._repository,
+                )
+            return self._consume_legacy_sidecar(candidate, task_id=identity)
+        return None
 
     def list_worktrees(self) -> tuple[AgentWorktree, ...]:
         """List registered Combo worktrees, filtered by deterministic names."""
@@ -229,21 +295,23 @@ class AgentWorktreeManager:
         for entry in entries:
             if entry.branch is None or not entry.branch.startswith(prefix):
                 continue
-            task_id = entry.branch[len(prefix):]
-            if not _TASK_ID_PATTERN.fullmatch(task_id) or entry.path.parent != self._root:
+            # 名字来自分支：注册表里只有这个名字，原始 task id 无法反推。
+            name = entry.branch[len(prefix):]
+            if not _is_safe_label(name) or entry.path.parent != self._root:
                 continue
             result.append(
                 AgentWorktree(
-                    task_id=task_id,
+                    task_id=name,
+                    label=name,
                     branch=entry.branch,
                     path=entry.path,
                     base_commit=self._base_commit_for_branch(entry.branch, entry.head),
                     repository=self._repository,
                 )
             )
-        return tuple(sorted(result, key=lambda item: item.task_id))
+        return tuple(sorted(result, key=lambda item: item.label))
 
-    def create(self, task_id: str) -> AgentWorktree:
+    def create(self, task_id: str, *, label: str | None = None) -> AgentWorktree:
         """Create a worktree from the current ``HEAD``.
 
         Uncommitted changes in the main workspace are deliberately not an error:
@@ -251,10 +319,11 @@ class AgentWorktreeManager:
         branch later can therefore conflict with them.
         """
         normalized = _validate_task_id(task_id)
+        identity = _worktree_identities(task_id, label)[0]
         if not self.is_repository():
             raise NotAGitRepository(f"{self._repository} 不是 git 仓库根目录，无法使用工作树模式")
-        branch = self.expected_branch(normalized)
-        path = self.expected_path(normalized)
+        branch = f"{AGENT_BRANCH_PREFIX}{identity}"
+        path = self._root / identity
         if path.exists():
             raise WorktreeExists(f"任务 {normalized} 的工作树路径已存在: {path}")
         if _run_git(
@@ -278,6 +347,7 @@ class AgentWorktreeManager:
             raise WorktreeError(f"创建失败: {message}")
         return AgentWorktree(
             task_id=normalized,
+            label=identity,
             branch=branch,
             path=path.resolve(),
             base_commit=base_commit,
@@ -289,14 +359,15 @@ class AgentWorktreeManager:
         _run_git(["worktree", "remove", "--force", str(worktree.path)], cwd=self._repository)
         _run_git(["branch", "-D", worktree.branch], cwd=self._repository)
 
-    def require(self, task_id: str) -> AgentWorktree:
+    def require(self, task_id: str, *, label: str | None = None) -> AgentWorktree:
         """Resolve a registered worktree or raise an explicit missing error."""
         normalized = _validate_task_id(task_id)
-        worktree = self.lookup(normalized)
+        worktree = self.lookup(normalized, label=label)
         if worktree is None:
             raise WorktreeError(
                 f"任务 {normalized} 的独立工作树不存在或未登记："
-                f"预期路径 {self.expected_path(normalized)}，分支 {self.expected_branch(normalized)}"
+                f"预期路径 {self.expected_path(normalized, label=label)}，"
+                f"分支 {self.expected_branch(normalized, label=label)}"
             )
         if not worktree.path.is_dir():
             raise WorktreeError(f"任务 {normalized} 的工作树目录已丢失: {worktree.path}")
@@ -312,16 +383,16 @@ class AgentWorktreeManager:
         proc = _run_git(["merge-base", "HEAD", branch], cwd=self._repository)
         return proc.stdout.strip() if proc.returncode == 0 and proc.stdout.strip() else (fallback or self._head())
 
-    def _consume_legacy_sidecar(self, task_id: str) -> AgentWorktree | None:
-        path = self._root / f"{task_id}{_METADATA_SUFFIX}"
+    def _consume_legacy_sidecar(self, identity: str, *, task_id: str) -> AgentWorktree | None:
+        path = self._root / f"{identity}{_METADATA_SUFFIX}"
         if not path.exists():
             return None
         payload = _read_legacy_sidecar(path)
         path.unlink(missing_ok=True)
         if payload is None:
             return None
-        expected_path = self.expected_path(task_id).resolve()
-        expected_branch = self.expected_branch(task_id)
+        expected_path = (self._root / identity).resolve()
+        expected_branch = f"{AGENT_BRANCH_PREFIX}{identity}"
         sidecar_path = Path(str(payload.get("path") or "")).expanduser().resolve()
         sidecar_branch = str(payload.get("branch") or "").strip()
         if sidecar_path != expected_path or sidecar_branch != expected_branch:
@@ -332,6 +403,7 @@ class AgentWorktreeManager:
             return None
         return AgentWorktree(
             task_id=task_id,
+            label=identity,
             branch=expected_branch,
             path=expected_path,
             base_commit=str(payload.get("base_commit") or self._head()),

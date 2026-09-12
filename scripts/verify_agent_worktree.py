@@ -4,6 +4,7 @@ Everything runs inside temporary Git repositories and a temporary runtime
 database; the real workspace is never touched. Covered behaviour:
 
 * deterministic identity and unsafe task ids are rejected
+* worktree names come from the child agent's name, and old task-id names still resolve
 * create/lookup/require, duplicate refusal, half-finished create rollback
 * uncommitted main-workspace changes are not carried into a new tree
 * a removed tree fails loudly instead of falling back to the shared workspace
@@ -26,6 +27,7 @@ import sqlite3
 import subprocess
 import tempfile
 from types import SimpleNamespace
+from uuid import uuid4
 
 from combo.agent_worktree import (
     AGENT_BRANCH_PREFIX,
@@ -33,6 +35,7 @@ from combo.agent_worktree import (
     InvalidTaskId,
     WorktreeError,
     WorktreeExists,
+    worktree_label,
 )
 from combo.dynamic_runtime.database import DynamicRuntimeDatabase, DynamicRuntimeMigrationRegistry
 from combo.dynamic_runtime.delegation_store import DelegationStore
@@ -40,12 +43,17 @@ from combo.dynamic_runtime.runtime_infrastructure import SessionProcessResourceP
 
 LEGACY_SUFFIX = ".combo-agent-task.json"
 NOW = "2026-01-01T00:00:00+00:00"
+SHARED_TASK = "a1b2c3d4e5f60718"
+LEGACY_TREE_TASK = "b2c3d4e5f6071829"
+LABEL_TREE_TASK = "c3d4e5f607182930"
+MISSING_TASK = "d4e5f60718293041"
 
 
 def main() -> None:
     with tempfile.TemporaryDirectory(prefix="combo-worktree-verify-") as tmp:
         base = Path(tmp).resolve()
         _verify_identity(base / "identity")
+        _verify_label_naming(base / "label")
         _verify_create_and_rollback(base / "create")
         _verify_missing_tree_is_loud(base / "missing")
         _verify_registry_filtering(base / "listing")
@@ -85,14 +93,21 @@ def _branches(repo: Path) -> set[str]:
     return {line.strip() for line in listed.splitlines() if line.strip()}
 
 
-def _write_sidecar(sidecar: Path, manager: AgentWorktreeManager, task_id: str, *, base_commit: str) -> None:
+def _write_sidecar(
+    sidecar: Path,
+    manager: AgentWorktreeManager,
+    task_id: str,
+    *,
+    base_commit: str,
+    label: str | None = None,
+) -> None:
     sidecar.parent.mkdir(parents=True, exist_ok=True)
     sidecar.write_text(
         json.dumps(
             {
                 "task_id": task_id,
-                "branch": manager.expected_branch(task_id),
-                "path": str(manager.expected_path(task_id)),
+                "branch": manager.expected_branch(task_id, label=label),
+                "path": str(manager.expected_path(task_id, label=label)),
                 "base_commit": base_commit,
             }
         ),
@@ -107,6 +122,9 @@ def _verify_identity(root: Path) -> None:
     assert manager.worktrees_root == repo / ".combo" / "worktrees"
     assert manager.expected_branch("task-a") == f"{AGENT_BRANCH_PREFIX}task-a"
     assert manager.expected_path("task-a") == repo / ".combo" / "worktrees" / "task-a"
+    assert manager.expected_branch("task-a", label="researcher-abc123") == (
+        f"{AGENT_BRANCH_PREFIX}researcher-abc123"
+    )
 
     for unsafe in ("../escape", "a/b", "", "..", ".hidden", "-dash", "with space", "x" * 65):
         try:
@@ -118,6 +136,54 @@ def _verify_identity(root: Path) -> None:
     plain = root / "not-a-repo"
     plain.mkdir()
     assert AgentWorktreeManager(repository=plain).is_repository() is False
+
+
+def _verify_label_naming(root: Path) -> None:
+    repo = _init_repo(root)
+    manager = AgentWorktreeManager(repository=repo)
+    task_id = uuid4().hex
+
+    # The label is the child's own name plus a short slice of the task identity.
+    assert worktree_label(task_id, "Researcher") == f"researcher-{task_id[:6]}"
+    assert worktree_label(task_id, "Presentation Designer") == f"presentation-designer-{task_id[:6]}"
+    assert worktree_label(task_id, "  研究员  ") == f"研究员-{task_id[:6]}"
+    assert worktree_label(task_id, "research/v2: final!") == f"research-v2-final-{task_id[:6]}"
+    assert worktree_label(task_id, None) == f"agent-{task_id[:6]}"
+    assert worktree_label(task_id, "x" * 80) == f"{'x' * 24}-{task_id[:6]}"
+    assert len(worktree_label(task_id, "Research Assistant For The Long Task")) < 40
+
+    label = worktree_label(task_id, "Researcher")
+    worktree = manager.create(task_id, label=label)
+    assert worktree.label == label
+    assert worktree.task_id == task_id
+    assert worktree.branch == f"{AGENT_BRANCH_PREFIX}{label}"
+    assert worktree.path.name == label
+    assert worktree.path.is_dir()
+
+    # A continuation resolves the same tree, and the registry scan reports labels.
+    resumed = manager.require(task_id, label=label)
+    assert (resumed.path, resumed.branch) == (worktree.path, worktree.branch)
+    assert [item.label for item in manager.list_worktrees()] == [label]
+
+    # Trees created before this naming are still found through the task id.
+    legacy_task = uuid4().hex
+    legacy = manager.create(legacy_task)
+    assert legacy.label == legacy_task
+    recovered = manager.require(legacy_task, label=worktree_label(legacy_task, "Researcher"))
+    assert recovered.path == legacy.path
+    assert recovered.label == legacy_task
+
+    # Two children with the same name never share a tree identity.
+    other_task = uuid4().hex
+    assert worktree_label(other_task, "Researcher") != label
+    manager.create(other_task, label=worktree_label(other_task, "Researcher"))
+
+    for unsafe in ("../escape", "a/b", "/absolute", "a b", "a:b", ".."):
+        try:
+            manager.expected_branch(task_id, label=unsafe)
+        except InvalidTaskId:
+            continue
+        raise AssertionError(f"unsafe worktree label accepted: {unsafe!r}")
 
 
 def _verify_create_and_rollback(root: Path) -> None:
@@ -191,18 +257,20 @@ def _verify_missing_tree_is_loud(root: Path) -> None:
 def _verify_registry_filtering(root: Path) -> None:
     repo = _init_repo(root)
     manager = AgentWorktreeManager(repository=repo)
-    kept = {manager.create("t5").task_id, manager.create("t6").task_id}
+    kept = {manager.create("t5").label, manager.create("t6").label}
     stale = manager.create("t7")
     shutil.rmtree(stale.path)  # registration without a directory, as after a manual delete
+    named = manager.create("t8", label="researcher-123456")
 
     outside = repo.parent / "outside-tree"
     feature = repo.parent / "feature-tree"
     _git(repo, "worktree", "add", "-q", "-b", f"{AGENT_BRANCH_PREFIX}outside", str(outside), "HEAD")
     _git(repo, "worktree", "add", "-q", "-b", "feature/other", str(feature), "HEAD")
 
-    listed = {item.task_id for item in manager.list_worktrees()}
+    listed = {item.label for item in manager.list_worktrees()}
     # Combo-prefixed branches outside the worktrees root and unrelated branches stay out.
-    assert listed == kept | {"t7"}, listed
+    assert listed == kept | {stale.label, named.label}, listed
+    assert "researcher-123456" in listed
     assert outside not in {item.path for item in manager.list_worktrees()}
     assert feature not in {item.path for item in manager.list_worktrees()}
     assert "outside" not in listed and "other" not in listed
@@ -277,11 +345,24 @@ def _verify_startup_migration(root: Path) -> None:
     DynamicRuntimeMigrationRegistry().migrate(database)
 
     manager = AgentWorktreeManager(repository=repo)
-    sidecar = manager.worktrees_root / f"legacy-tree{LEGACY_SUFFIX}"
-    _write_sidecar(sidecar, manager, "legacy-tree", base_commit=_head(repo))
+    agent_name = "Data Miner"
+    # Legacy layout: the sidecar and tree are named after the bare task id.
+    legacy_sidecar = manager.worktrees_root / f"{LEGACY_TREE_TASK}{LEGACY_SUFFIX}"
+    _write_sidecar(legacy_sidecar, manager, LEGACY_TREE_TASK, base_commit=_head(repo))
+    # New layout: the sidecar is named after the label built from the child name.
+    label_sidecar = manager.worktrees_root / (
+        f"{worktree_label(LABEL_TREE_TASK, agent_name)}{LEGACY_SUFFIX}"
+    )
+    _write_sidecar(
+        label_sidecar,
+        manager,
+        LABEL_TREE_TASK,
+        base_commit=_head(repo),
+        label=worktree_label(LABEL_TREE_TASK, agent_name),
+    )
 
     with sqlite3.connect(str(database_path)) as conn:
-        for runtime_id in ("rt-ok", "rt-missing", "rt-tree"):
+        for runtime_id in ("rt-shared", "rt-missing", "rt-legacy", "rt-label"):
             conn.execute(
                 "insert into runtime_instances (runtime_instance_id, request_id, session_id, turn_id,"
                 " capability_snapshot_id, status, payload_json, created_at, updated_at)"
@@ -294,10 +375,11 @@ def _verify_startup_migration(root: Path) -> None:
                     NOW,
                 ),
             )
-        for task_id, child_id, workspace_id, grant_id in (
-            ("legacy-ok", "rt-ok", "ws-ok", "grant-ok"),
-            ("legacy-missing", "rt-missing", "ws-missing", "grant-missing"),
-            ("legacy-tree", "rt-tree", "ws-ok", "grant-tree"),
+        for task_id, child_id, workspace_id, grant_id, stored_name in (
+            (SHARED_TASK, "rt-shared", "ws-ok", "grant-shared", agent_name),
+            (MISSING_TASK, "rt-missing", "ws-missing", "grant-missing", agent_name),
+            (LEGACY_TREE_TASK, "rt-legacy", "ws-ok", "grant-legacy", agent_name),
+            (LABEL_TREE_TASK, "rt-label", "ws-ok", "grant-label", agent_name),
         ):
             conn.execute(
                 "insert into delegated_task_revisions (task_id, task_revision, parent_task_revision,"
@@ -310,7 +392,7 @@ def _verify_startup_migration(root: Path) -> None:
                     child_id,
                     grant_id,
                     workspace_id,
-                    json.dumps({"task_id": task_id}),
+                    json.dumps({"task_id": task_id, "agent_name": stored_name}),
                     NOW,
                     NOW,
                 ),
@@ -325,19 +407,22 @@ def _verify_startup_migration(root: Path) -> None:
         return str(repo)
 
     store = DelegationStore(database)
-    assert store.migrate_legacy_workspace_modes(resolver) == 2
-    assert calls.count("ws-ok") == 2, calls
+    assert store.migrate_legacy_workspace_modes(resolver) == 3
+    assert calls.count("ws-ok") == 3, calls
     assert "ws-missing" in calls, calls
 
     task_modes = _stored_modes(database_path, "delegated_task_revisions")
-    assert task_modes["legacy-ok"] == "shared", task_modes
-    assert task_modes["legacy-tree"] == "worktree", task_modes
-    assert "legacy-missing" not in task_modes, task_modes
-    assert not sidecar.exists(), "migration must consume the legacy sidecar"
+    assert task_modes[SHARED_TASK] == "shared", task_modes
+    assert task_modes[LEGACY_TREE_TASK] == "worktree", task_modes
+    assert task_modes[LABEL_TREE_TASK] == "worktree", task_modes
+    assert MISSING_TASK not in task_modes, task_modes
+    assert not legacy_sidecar.exists(), "migration must consume legacy sidecars"
+    assert not label_sidecar.exists(), "migration must consume label sidecars"
 
     request_modes = _stored_modes(database_path, "runtime_instances", nested="request")
-    assert request_modes["rt-ok"] == "shared", request_modes
-    assert request_modes["rt-tree"] == "worktree", request_modes
+    assert request_modes["rt-shared"] == "shared", request_modes
+    assert request_modes["rt-legacy"] == "worktree", request_modes
+    assert request_modes["rt-label"] == "worktree", request_modes
     assert "rt-missing" not in request_modes, request_modes
 
     # A workspace that cannot be resolved is retried, everything else converges.

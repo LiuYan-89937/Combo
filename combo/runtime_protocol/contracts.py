@@ -484,6 +484,7 @@ class RuntimeRequest(FrozenProtocolModel):
     task_id: str | None = None
     delegation_grant_id: str | None = None
     scheduler_run_id: str | None = None
+    agent_name: str | None = None
     created_at: str = Field(default_factory=utc_now_text)
 
     @field_validator(
@@ -498,7 +499,13 @@ class RuntimeRequest(FrozenProtocolModel):
     def _required_request_text(cls, value: str, info: Any) -> str:
         return _required_text(value, info.field_name)
 
-    @field_validator("parent_runtime_instance_id", "task_id", "delegation_grant_id", "scheduler_run_id")
+    @field_validator(
+        "parent_runtime_instance_id",
+        "task_id",
+        "delegation_grant_id",
+        "scheduler_run_id",
+        "agent_name",
+    )
     @classmethod
     def _optional_parent_runtime(cls, value: str | None) -> str | None:
         return _optional_text(value)

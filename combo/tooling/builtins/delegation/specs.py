@@ -65,10 +65,11 @@ def get_delegation_tool_specs() -> list[ToolSpec]:
                         "default": "shared",
                         "description": (
                             "shared (default) lets the child work directly in the main workspace under file "
-                            "locks; worktree gives it an isolated git worktree and local branch created from "
-                            "the current HEAD. The main agent decides how to apply its changes afterward. "
-                            "Worktree requires a Git workspace; a dirty main workspace is allowed, but "
-                            "uncommitted changes are not part of the child's starting point."
+                            "locks; worktree gives it an isolated git worktree and local branch named after "
+                            "the child (combo/agent/<agent name>-<short id>), created from the current HEAD. "
+                            "The main agent decides how to apply its changes afterward. Worktree requires a "
+                            "Git workspace; a dirty main workspace is allowed, but uncommitted changes are "
+                            "not part of the child's starting point."
                         ),
                     },
                     "system_prompt": {"type": "string", "minLength": 1, "description": "该临时 Agent 的职责、边界和工作方式，不要重复用户全部上下文。"},

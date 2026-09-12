@@ -8,7 +8,7 @@ import logging
 from typing import Any
 from uuid import uuid4
 
-from combo.agent_worktree import AgentWorktreeManager
+from combo.agent_worktree import AgentWorktreeManager, worktree_label
 from combo.dynamic_runtime.database import DynamicRuntimeDatabase
 from combo.dynamic_runtime.event_persistence import (
     insert_runtime_event_and_outbox,
@@ -81,7 +81,7 @@ class DelegationStore:
                 order by task_id, task_revision
                 """
             ).fetchall()
-        migration_candidates: dict[str, tuple[str, str]] = {}
+        migration_candidates: dict[str, tuple[str, str, str | None]] = {}
         for row in rows:
             try:
                 payload = json.loads(str(row["payload_json"]))
@@ -91,14 +91,21 @@ class DelegationStore:
                 continue
             migration_candidates.setdefault(
                 str(row["task_id"]),
-                (str(row["workspace_id"]), str(row["principal_id"])),
+                (
+                    str(row["workspace_id"]),
+                    str(row["principal_id"]),
+                    str(payload.get("agent_name") or "") or None,
+                ),
             )
         resolved: dict[str, str] = {}
-        for task_id, (workspace_id, principal_id) in migration_candidates.items():
+        for task_id, (workspace_id, principal_id, agent_name) in migration_candidates.items():
             try:
                 root = workspace_root_resolver(workspace_id, principal_id)
                 manager = AgentWorktreeManager(repository=root)
-                legacy = manager.consume_legacy_worktree(task_id)
+                legacy = manager.consume_legacy_worktree(
+                    task_id,
+                    label=worktree_label(task_id, agent_name),
+                )
             except Exception:  # noqa: BLE001 - 单个候选不可解析不能让启动失败
                 logger.warning(
                     "Skipping workspace mode migration for delegated task %s",
