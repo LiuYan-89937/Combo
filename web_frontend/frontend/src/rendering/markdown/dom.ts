@@ -7,12 +7,84 @@ import { enhanceMermaidDiagrams } from './mermaid'
 const copyHandlerRoots = new WeakSet<EventTarget>()
 const copyResetTimers = new WeakMap<HTMLButtonElement, number>()
 const enhancedExternalLinks = new WeakSet<HTMLAnchorElement>()
+const imageClickRoots = new WeakMap<EventTarget, ImageClickHolder>()
 
-export async function enhanceRenderedMarkdown(root: ParentNode | null): Promise<void> {
+/** One rendered markdown image, as handed to the lightbox. */
+export interface MarkdownImageDescriptor {
+  src: string
+  alt: string
+}
+
+/** Payload of a click on an image inside rendered markdown. */
+export interface MarkdownImageClickEvent extends MarkdownImageDescriptor {
+  /** Every image in the same `.markdown-content` block, in document order. */
+  images: MarkdownImageDescriptor[]
+  index: number
+}
+
+export type MarkdownImageClickHandler = (event: MarkdownImageClickEvent) => void
+
+export interface EnhanceMarkdownOptions {
+  /**
+   * Called when a rendered markdown image is clicked. Without it, image clicks
+   * keep their default behaviour.
+   */
+  onImageClick?: MarkdownImageClickHandler
+}
+
+interface ImageClickHolder {
+  onImageClick?: MarkdownImageClickHandler
+}
+
+export async function enhanceRenderedMarkdown(
+  root: ParentNode | null,
+  options: EnhanceMarkdownOptions = {},
+): Promise<void> {
   if (!root) return
   enhanceCodeCopyButtons(root)
   enhanceExternalLinks(root)
+  enhanceMarkdownImages(root, options.onImageClick)
   await enhanceMermaidDiagrams(root)
+}
+
+/**
+ * Delegated image-click enhancement for rendered markdown.
+ *
+ * Images in chat messages can only carry a resolved URL, so the click is turned
+ * into a lightbox request instead of the default navigation. The listener runs
+ * in the capture phase on purpose: an image that came from a markdown link sits
+ * inside `<a target="_blank">`, and that anchor's own handler (external links)
+ * would otherwise run first and still open a tab.
+ */
+function enhanceMarkdownImages(root: ParentNode, onImageClick?: MarkdownImageClickHandler): void {
+  const eventRoot = root as ParentNode & EventTarget
+  let holder = imageClickRoots.get(eventRoot)
+  if (!holder) {
+    holder = {}
+    imageClickRoots.set(eventRoot, holder)
+    eventRoot.addEventListener('click', event => handleMarkdownImageClick(event, holder as ImageClickHolder), true)
+  }
+  holder.onImageClick = onImageClick
+}
+
+function handleMarkdownImageClick(event: Event, holder: ImageClickHolder): void {
+  const onImageClick = holder.onImageClick
+  if (!onImageClick) return
+  const target = event.target
+  if (!(target instanceof HTMLImageElement)) return
+  // Only markdown body images: attachment/artifact cards keep their own actions.
+  const container = target.closest('.markdown-content')
+  if (!container) return
+  const elements = Array.from(container.querySelectorAll('img'))
+  const index = elements.indexOf(target)
+  if (index < 0) return
+  event.preventDefault()
+  event.stopPropagation()
+  const images = elements.map(image => ({
+    src: image.currentSrc || image.getAttribute('src') || '',
+    alt: image.getAttribute('alt') || '',
+  }))
+  onImageClick({ ...images[index], images, index })
 }
 
 function enhanceExternalLinks(root: ParentNode): void {
@@ -24,6 +96,8 @@ function enhanceExternalLinks(root: ParentNode): void {
     anchor.rel = 'noopener noreferrer'
     anchor.addEventListener('click', (event) => {
       if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+      // 别的处理器（例如图片放大链路）已经接管这次点击时，不要再开一个标签页。
+      if (event.defaultPrevented) return
       event.preventDefault()
       event.stopPropagation()
       void openExternalUrl(url)

@@ -11,6 +11,7 @@ import rehypeStringify from 'rehype-stringify'
 import { rehypeMermaid } from './plugins/rehypeMermaid'
 import { rehypeImageSources } from './plugins/rehypeImageSources'
 import { rehypeCodeBlockControls } from './plugins/rehypeCodeBlockControls'
+import { rehypeTableScroll } from './plugins/rehypeTableScroll'
 import { markdownSanitizeSchema } from './sanitize'
 import { prepareMarkdownSource } from './source'
 import type { MarkdownRenderOptions, MarkdownRenderResult } from './types'
@@ -29,6 +30,7 @@ const processor = unified()
   .use(rehypeKatex)
   .use(rehypeHighlight, { detect: false })
   .use(rehypeCodeBlockControls)
+  .use(rehypeTableScroll)
   .use(rehypeSanitize, markdownSanitizeSchema())
   .use(rehypeStringify)
 

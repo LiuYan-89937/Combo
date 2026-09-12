@@ -37,6 +37,7 @@ export interface AppPalette {
   textStrong: string
   textSecondary: string
   textMuted: string
+  textSubtle: string
   textPlaceholder: string
   textDisabled: string
   textInverse: string
@@ -48,6 +49,9 @@ export interface AppPalette {
   primarySuppl: string
 
   // 语义色
+  //
+  // 默认与前景同色：界面维持单色，状态点靠形状/对比度表达，不靠色相。
+  // 唯一例外是正文链接（`link`），超链接需要可识别。
   success: string
   successHover: string
   successPressed: string
@@ -63,6 +67,8 @@ export interface AppPalette {
   error: string
   errorHover: string
   errorPressed: string
+  /** 正文链接（超链接）专用色；点击由系统默认浏览器打开。 */
+  link: string
 
   // Git 差异（仅用于增删语义，不改变应用全局信号色）
   diffAddition: string
@@ -121,6 +127,8 @@ export const lightPalette: AppPalette = {
   textStrong: '#000000',
   textSecondary: 'rgba(0, 0, 0, 0.72)',
   textMuted: 'rgba(0, 0, 0, 0.52)',
+  // 比 muted 再淡一级的元信息（时间戳、行号槽、空闲状态点）。
+  textSubtle: 'rgba(0, 0, 0, 0.44)',
   textPlaceholder: 'rgba(0, 0, 0, 0.4)',
   textDisabled: 'rgba(0, 0, 0, 0.32)',
   textInverse: '#ffffff',
@@ -131,6 +139,7 @@ export const lightPalette: AppPalette = {
   primaryPressed: '#000000',
   primarySuppl: '#000000',
 
+  // 语义信号色：默认与前景同色（界面单色），只有链接保留色相。
   success: '#000000',
   successHover: '#000000',
   successPressed: '#000000',
@@ -143,6 +152,7 @@ export const lightPalette: AppPalette = {
   error: '#000000',
   errorHover: '#000000',
   errorPressed: '#000000',
+  link: '#0969da',
   diffAddition: '#1a7f37',
   diffAdditionSurface: 'rgba(26, 127, 55, 0.12)',
   diffDeletion: '#cf222e',
@@ -199,6 +209,8 @@ export const darkPalette: AppPalette = {
   textStrong: '#ffffff',
   textSecondary: 'rgba(255, 255, 255, 0.74)',
   textMuted: 'rgba(255, 255, 255, 0.56)',
+  // 比 muted 再淡一级的元信息（时间戳、行号槽、空闲状态点）。
+  textSubtle: 'rgba(255, 255, 255, 0.46)',
   textPlaceholder: 'rgba(255, 255, 255, 0.42)',
   textDisabled: 'rgba(255, 255, 255, 0.34)',
   textInverse: '#000000',
@@ -209,6 +221,7 @@ export const darkPalette: AppPalette = {
   primaryPressed: '#ffffff',
   primarySuppl: '#ffffff',
 
+  // 语义信号色：与亮色一致，默认与前景同色，只有链接保留色相。
   success: '#ffffff',
   successHover: '#ffffff',
   successPressed: '#ffffff',
@@ -221,6 +234,7 @@ export const darkPalette: AppPalette = {
   error: '#ffffff',
   errorHover: '#ffffff',
   errorPressed: '#ffffff',
+  link: '#4493f8',
   diffAddition: '#3fb950',
   diffAdditionSurface: 'rgba(46, 160, 67, 0.2)',
   diffDeletion: '#f85149',

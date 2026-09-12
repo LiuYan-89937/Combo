@@ -1,3 +1,5 @@
 export { enhanceRenderedMarkdown } from './dom'
 export { escapeHtml, renderMarkdownDocument } from './html'
+export { renderMarkdownBlocks, splitMarkdownBlocks } from './blocks'
+export type { MarkdownBlock } from './blocks'
 export type { MarkdownRenderOptions, MarkdownRenderResult, MarkdownRenderSurface } from './types'

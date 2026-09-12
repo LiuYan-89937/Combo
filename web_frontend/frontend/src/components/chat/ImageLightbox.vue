@@ -17,6 +17,52 @@
             {{ activeIndex + 1 }} / {{ images.length }}
           </span>
           <span class="lightbox-spacer" aria-hidden="true"></span>
+          <div
+            class="lightbox-zoom"
+            role="group"
+            :title="t('attachments.zoomHint')"
+          >
+            <button
+              type="button"
+              class="lightbox-action icon-only"
+              :title="t('attachments.zoomOut')"
+              :aria-label="t('attachments.zoomOut')"
+              :disabled="!activeImage?.url || scale <= minScale + 1e-6"
+              @click="zoomBy(1 / ZOOM_STEP)"
+            >
+              <n-icon :size="16"><RemoveOutline /></n-icon>
+            </button>
+            <button
+              type="button"
+              class="lightbox-action lightbox-zoom-value"
+              :title="t('attachments.zoomHint')"
+              :disabled="!activeImage?.url"
+              @click="zoomToActualSize"
+            >
+              {{ zoomPercent }}%
+            </button>
+            <button
+              type="button"
+              class="lightbox-action icon-only"
+              :title="t('attachments.zoomIn')"
+              :aria-label="t('attachments.zoomIn')"
+              :disabled="!activeImage?.url || scale >= maxScale - 1e-6"
+              @click="zoomBy(ZOOM_STEP)"
+            >
+              <n-icon :size="16"><AddOutline /></n-icon>
+            </button>
+            <button
+              type="button"
+              class="lightbox-action"
+              :title="t('attachments.zoomFit')"
+              :aria-label="t('attachments.zoomFit')"
+              :disabled="!activeImage?.url"
+              @click="fitToWindow"
+            >
+              <n-icon :size="15"><ExpandOutline /></n-icon>
+              <span>{{ t('attachments.zoomFit') }}</span>
+            </button>
+          </div>
           <Transition name="lightbox-status">
             <span
               v-if="actionStatusLabel"
@@ -40,7 +86,7 @@
             class="lightbox-action icon-only"
             :title="t('attachments.openWithSystem')"
             :aria-label="t('attachments.openWithSystem')"
-            :disabled="!activeImage || actionBusy"
+            :disabled="!systemOpenable || actionBusy"
             @click="openActiveWithSystem"
           >
             <n-icon :size="15"><OpenOutline /></n-icon>
@@ -56,21 +102,38 @@
           </button>
         </header>
 
-        <div class="lightbox-stage" @click.self="close">
+        <div
+          ref="stageRef"
+          class="lightbox-stage"
+          :class="{ 'is-pannable': pannable, 'is-dragging': dragging }"
+          @click="handleStageClick"
+          @wheel.prevent="handleWheel"
+          @pointerdown="handlePointerDown"
+          @pointermove="handlePointerMove"
+          @pointerup="handlePointerUp"
+          @pointercancel="handlePointerUp"
+        >
           <button
             v-if="images.length > 1"
             type="button"
             class="lightbox-nav prev"
             :aria-label="t('attachments.previousImage')"
+            @pointerdown.stop
             @click.stop="step(-1)"
           >‹</button>
 
           <img
             v-if="activeImage?.url"
+            ref="imageRef"
             class="lightbox-image"
+            :class="{ 'is-ready': imageReady }"
+            :style="imageStyle"
             :src="activeImage.url"
             :alt="activeImage.name"
+            draggable="false"
+            @load="handleImageLoad"
             @click.stop
+            @dblclick.stop.prevent="toggleFitActual"
           />
           <p v-else class="lightbox-empty">{{ t('attachments.imageUnavailable') }}</p>
 
@@ -79,6 +142,7 @@
             type="button"
             class="lightbox-nav next"
             :aria-label="t('attachments.nextImage')"
+            @pointerdown.stop
             @click.stop="step(1)"
           >›</button>
         </div>
@@ -88,9 +152,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NIcon } from 'naive-ui'
-import { CloseOutline, CopyOutline, OpenOutline } from '@vicons/ionicons5'
+import { AddOutline, CloseOutline, CopyOutline, ExpandOutline, OpenOutline, RemoveOutline } from '@vicons/ionicons5'
 import { useI18n } from '@/composables/useI18n'
 import { writeClipboardImage } from '@/utils/clipboard'
 import { openAttachmentWithSystemViewer } from '@/utils/systemViewer'
@@ -132,6 +196,9 @@ const activeIndex = computed(() => {
   return Math.min(Math.max(props.index, 0), props.images.length - 1)
 })
 const activeImage = computed(() => props.images[activeIndex.value] || null)
+// Images coming from the markdown body only carry a URL; there is no file to
+// hand to the system viewer, so that action is disabled instead of failing.
+const systemOpenable = computed(() => Boolean(activeImage.value?.path || activeImage.value?.attachmentId))
 const actionBusy = computed(() => actionState.value === 'busy')
 const actionLabel = computed(() => {
   if (actionState.value === 'copied') return t('attachments.imageCopied')
@@ -151,6 +218,242 @@ const actionStatusLabel = computed(() => {
   if (actionState.value === 'copied') return t('attachments.imageCopied')
   return ''
 })
+
+// --- Zoom / pan -----------------------------------------------------------
+// The image is laid out at `natural size × scale` and centered by the flex
+// stage; panning is a translate on top of that center. `scale` is absolute
+// (1 === 100% of the natural size), so `fitScale` is whatever makes the whole
+// image fit inside the stage.
+const ZOOM_STEP = 1.25
+const MIN_FIT_FACTOR = 0.25
+const MAX_FIT_FACTOR = 8
+
+const stageRef = ref<HTMLElement | null>(null)
+const imageRef = ref<HTMLImageElement | null>(null)
+const stageSize = ref({ width: 0, height: 0 })
+const naturalWidth = ref(0)
+const naturalHeight = ref(0)
+const imageReady = ref(false)
+const scale = ref(1)
+const pan = ref({ x: 0, y: 0 })
+const dragging = ref(false)
+const atFit = ref(true)
+let dragState: { pointerId: number; startX: number; startY: number; panX: number; panY: number } | null = null
+let suppressStageClick = false
+
+const fitScale = computed(() => {
+  if (!naturalWidth.value || !naturalHeight.value) return 1
+  const { width, height } = stageSize.value
+  if (!width || !height) return 1
+  // "Fit" never upscales: an image smaller than the stage stays at 100% rather
+  // than being blown up into a blurry mess.
+  return Math.min(1, width / naturalWidth.value, height / naturalHeight.value)
+})
+const minScale = computed(() => fitScale.value * MIN_FIT_FACTOR)
+const maxScale = computed(() => fitScale.value * MAX_FIT_FACTOR)
+const zoomPercent = computed(() => Math.round(scale.value * 100))
+const isFitView = computed(() => (
+  Math.abs(scale.value - fitScale.value) < 1e-4
+  && Math.abs(pan.value.x) < 0.5
+  && Math.abs(pan.value.y) < 0.5
+))
+const pannable = computed(() => {
+  const { width, height } = stageSize.value
+  if (!width || !height || !naturalWidth.value || !naturalHeight.value) return false
+  return naturalWidth.value * scale.value > width + 0.5
+    || naturalHeight.value * scale.value > height + 0.5
+})
+const imageStyle = computed(() => {
+  if (!naturalWidth.value || !naturalHeight.value) return undefined
+  return {
+    width: `${naturalWidth.value * scale.value}px`,
+    height: `${naturalHeight.value * scale.value}px`,
+    transform: `translate3d(${pan.value.x}px, ${pan.value.y}px, 0)`,
+  }
+})
+
+function clampScale(value: number): number {
+  return Math.min(Math.max(value, minScale.value), maxScale.value)
+}
+
+/** Re-reads the stage box; returns true when the size actually changed. */
+function refreshStageSize(): boolean {
+  const el = stageRef.value
+  if (!el) return false
+  const { clientWidth: width, clientHeight: height } = el
+  if (!width || !height) return false
+  if (width === stageSize.value.width && height === stageSize.value.height) return false
+  stageSize.value = { width, height }
+  return true
+}
+
+/** Keeps the image inside the stage: pannable only while it overflows an axis. */
+function clampPanning(): void {
+  const { width, height } = stageSize.value
+  if (!width || !height) return
+  const limitX = Math.max(0, (naturalWidth.value * scale.value - width) / 2)
+  const limitY = Math.max(0, (naturalHeight.value * scale.value - height) / 2)
+  pan.value = {
+    x: Math.min(limitX, Math.max(-limitX, pan.value.x)),
+    y: Math.min(limitY, Math.max(-limitY, pan.value.y)),
+  }
+}
+
+function applyFit(): void {
+  scale.value = clampScale(fitScale.value)
+  pan.value = { x: 0, y: 0 }
+  atFit.value = true
+}
+
+/** Resets zoom + pan and re-measures; the single entry point for open/switch. */
+function initializeView(): void {
+  imageReady.value = false
+  naturalWidth.value = 0
+  naturalHeight.value = 0
+  dragging.value = false
+  dragState = null
+  suppressStageClick = false
+  scale.value = 1
+  pan.value = { x: 0, y: 0 }
+  atFit.value = true
+  void nextTick(() => {
+    refreshStageSize()
+    // A cached image can already be decoded before `load` is observable.
+    syncImageSize()
+    if (!imageReady.value) scale.value = clampScale(fitScale.value)
+  })
+}
+
+function syncImageSize(): void {
+  const el = imageRef.value
+  if (!el) return
+  const { naturalWidth: width, naturalHeight: height } = el
+  if (!width || !height) return
+  const changed = width !== naturalWidth.value || height !== naturalHeight.value
+  naturalWidth.value = width
+  naturalHeight.value = height
+  imageReady.value = true
+  if (changed) {
+    refreshStageSize()
+    applyFit()
+  }
+}
+
+function handleImageLoad(): void {
+  syncImageSize()
+}
+
+function handleResize(): void {
+  if (!refreshStageSize()) return
+  if (atFit.value) applyFit()
+  else clampPanning()
+}
+
+function stageCenter(): { x: number; y: number } {
+  const rect = stageRef.value?.getBoundingClientRect()
+  if (!rect) return { x: 0, y: 0 }
+  return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+}
+
+/**
+ * Zooms to an absolute scale while keeping the point under (clientX, clientY)
+ * fixed. The offset of the pointer from the stage center is converted into
+ * image-local units before the scale changes, then projected back after it.
+ */
+function zoomTo(target: number, clientX?: number, clientY?: number): void {
+  if (!naturalWidth.value || !naturalHeight.value) return
+  const next = clampScale(target)
+  if (Math.abs(next - scale.value) < 1e-6) return
+  const rect = stageRef.value?.getBoundingClientRect()
+  if (rect && rect.width && rect.height && clientX !== undefined && clientY !== undefined) {
+    const anchorX = clientX - (rect.left + rect.width / 2)
+    const anchorY = clientY - (rect.top + rect.height / 2)
+    const imageX = (anchorX - pan.value.x) / scale.value
+    const imageY = (anchorY - pan.value.y) / scale.value
+    scale.value = next
+    pan.value = { x: anchorX - imageX * next, y: anchorY - imageY * next }
+  } else {
+    scale.value = next
+  }
+  atFit.value = false
+  clampPanning()
+}
+
+function zoomBy(factor: number): void {
+  const center = stageCenter()
+  zoomTo(scale.value * factor, center.x, center.y)
+}
+
+function zoomToActualSize(): void {
+  const center = stageCenter()
+  zoomTo(1, center.x, center.y)
+}
+
+function fitToWindow(): void {
+  applyFit()
+  clampPanning()
+}
+
+function toggleFitActual(): void {
+  if (isFitView.value) zoomToActualSize()
+  else fitToWindow()
+}
+
+function handleWheel(event: WheelEvent): void {
+  if (!activeImage.value?.url) return
+  // Exponential response keeps each notch a constant relative change.
+  const factor = Math.exp(-event.deltaY * 0.0015)
+  zoomTo(scale.value * factor, event.clientX, event.clientY)
+}
+
+function handleStageClick(event: MouseEvent): void {
+  if (event.target !== event.currentTarget) return
+  // A pan ends with a click on the stage; that must not close the viewer.
+  if (suppressStageClick) {
+    suppressStageClick = false
+    return
+  }
+  close()
+}
+
+function handlePointerDown(event: PointerEvent): void {
+  suppressStageClick = false
+  if (event.button !== 0 || !pannable.value) return
+  dragState = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    panX: pan.value.x,
+    panY: pan.value.y,
+  }
+  dragging.value = true
+  try {
+    (event.currentTarget as HTMLElement | null)?.setPointerCapture(event.pointerId)
+  } catch {
+    // Pointer capture is best-effort; dragging still works without it.
+  }
+}
+
+function handlePointerMove(event: PointerEvent): void {
+  if (!dragState || event.pointerId !== dragState.pointerId) return
+  const deltaX = event.clientX - dragState.startX
+  const deltaY = event.clientY - dragState.startY
+  if (Math.abs(deltaX) > 3 || Math.abs(deltaY) > 3) suppressStageClick = true
+  pan.value = { x: dragState.panX + deltaX, y: dragState.panY + deltaY }
+  atFit.value = false
+  clampPanning()
+}
+
+function handlePointerUp(event: PointerEvent): void {
+  if (!dragState || event.pointerId !== dragState.pointerId) return
+  try {
+    (event.currentTarget as HTMLElement | null)?.releasePointerCapture(dragState.pointerId)
+  } catch {
+    // Already released or never captured.
+  }
+  dragState = null
+  dragging.value = false
+}
 
 function resetActionState(): void {
   if (actionTimer) {
@@ -216,24 +519,61 @@ async function openActiveWithSystem(): Promise<void> {
 
 function handleKeydown(event: KeyboardEvent): void {
   if (!props.open) return
-  if (event.key === 'Escape') close()
-  else if (event.key === 'ArrowLeft') step(-1)
+  if (event.key === 'Escape') {
+    close()
+    return
+  }
+  // Never hijack typing in a form control that happens to be on the page.
+  const target = event.target as HTMLElement | null
+  if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return
+  if (event.key === 'ArrowLeft') step(-1)
   else if (event.key === 'ArrowRight') step(1)
+  else if (event.key === '+' || event.key === '=') {
+    event.preventDefault()
+    zoomBy(ZOOM_STEP)
+  } else if (event.key === '-' || event.key === '_') {
+    event.preventDefault()
+    zoomBy(1 / ZOOM_STEP)
+  } else if (event.key === '0') {
+    event.preventDefault()
+    fitToWindow()
+  }
 }
 
+// Opening, switching image and reopening all restart from the fit view; the
+// zoom state is never carried across images.
 watch(() => props.open, (open) => {
   resetActionState()
   if (typeof document === 'undefined') return
   document.documentElement.style.overflow = open ? 'hidden' : ''
+  initializeView()
+})
+
+watch(() => activeImage.value?.url, () => {
+  initializeView()
+})
+
+onMounted(() => {
+  // Mounting already-open (e.g. a deep-linked preview) must lock scrolling the
+  // same way opening later does; the watcher only fires on changes.
+  if (!props.open) return
+  if (typeof document !== 'undefined') document.documentElement.style.overflow = 'hidden'
+  initializeView()
 })
 
 onBeforeUnmount(() => {
   resetActionState()
-  if (typeof window !== 'undefined') window.removeEventListener('keydown', handleKeydown)
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('keydown', handleKeydown)
+    window.removeEventListener('resize', handleResize)
+  }
   if (typeof document !== 'undefined') document.documentElement.style.overflow = ''
 })
 
-if (typeof window !== 'undefined') window.addEventListener('keydown', handleKeydown)
+if (typeof window !== 'undefined') {
+  window.addEventListener('keydown', handleKeydown)
+  window.addEventListener('resize', handleResize)
+}
 </script>
 
 <style scoped>
@@ -276,6 +616,28 @@ if (typeof window !== 'undefined') window.addEventListener('keydown', handleKeyd
 }
 
 .lightbox-spacer { flex: 1; }
+
+/* Compact grouped zoom cluster: − / percent / + / fit. */
+.lightbox-zoom {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--app-radius-pill);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.lightbox-zoom .lightbox-action {
+  border-color: transparent;
+  background: transparent;
+}
+
+.lightbox-zoom-value {
+  min-width: 54px;
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
+}
 
 /* Status text replaces a toast: the lightbox already owns the viewport, so the
    feedback belongs in its toolbar instead of a floating layer. */
@@ -340,21 +702,45 @@ if (typeof window !== 'undefined') window.addEventListener('keydown', handleKeyd
   background: color-mix(in srgb, var(--app-error) 24%, transparent);
 }
 
+/*
+ * Flex centering of an explicitly sized image. `.lightbox-image` keeps its
+ * computed width/height (`flex: none` stops the flex item from shrinking back
+ * to the stage), so `max-height: 100%` is not needed to fit it; the fit scale
+ * is computed from the measured image and stage boxes instead, which is what
+ * fixes the tall/oversized image overflowing and being cropped.
+ */
 .lightbox-stage {
   position: relative;
-  display: grid;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   min-height: 0;
-  place-items: center;
+  overflow: hidden;
+  touch-action: none;
 }
+
+.lightbox-stage.is-pannable { cursor: grab; }
+.lightbox-stage.is-dragging { cursor: grabbing; }
 
 .lightbox-image {
   display: block;
-  max-width: min(96vw, 1400px);
-  max-height: 100%;
+  flex: none;
+  /* The global tailwind reset clamps every image to `max-width: 100%`; the
+     lightbox sizes the image itself, so that clamp has to be lifted or zooming
+     in would be capped at the stage width. */
+  max-width: none;
+  max-height: none;
+  visibility: hidden;
   border-radius: var(--app-radius-md);
   box-shadow: 0 18px 60px rgba(0, 0, 0, 0.45);
   object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+  -webkit-user-select: none;
+  will-change: transform;
 }
+
+.lightbox-image.is-ready { visibility: visible; }
 
 .lightbox-empty {
   margin: 0;

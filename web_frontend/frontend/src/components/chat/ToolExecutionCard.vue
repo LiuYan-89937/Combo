@@ -1,7 +1,7 @@
 <template>
   <details
     class="tool-execution-card"
-    :class="[`tool-state-${state}`]"
+    :class="[`tool-state-${state}`, `tool-variant-${variant}`]"
     :open="cardExpanded"
     @toggle="handleCardToggle"
   >
@@ -151,7 +151,8 @@
           :href="artifactUrl(artifact)"
           :target="artifactUrl(artifact) ? '_blank' : undefined"
           :rel="artifactUrl(artifact) ? 'noopener noreferrer' : undefined"
-          @click="preventUnavailableArtifact($event, artifact)"
+          :title="isImageArtifact(artifact) ? t('attachments.viewImage') : undefined"
+          @click="handleArtifactClick($event, artifact)"
         >
           <img
             v-if="isImageArtifact(artifact) && artifactUrl(artifact)"
@@ -172,6 +173,14 @@
         </a>
       </div>
     </div>
+
+    <!-- 工具产物里的图片走同一套查看器，而不是自己开新标签。 -->
+    <ImageLightbox
+      v-model:open="imageViewerOpen"
+      v-model:index="imageViewerIndex"
+      :images="imageViewerImages"
+      :workspace-context="workspaceContext"
+    />
   </details>
 </template>
 
@@ -180,10 +189,12 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import ResourceIcon from '@/components/common/ResourceIcon.vue'
 import ToolIcon from '@/components/common/ToolIcon.vue'
 import ErrorReportButton from '@/components/common/ErrorReportButton.vue'
+import ImageLightbox from '@/components/chat/ImageLightbox.vue'
 import { useI18n } from '@/composables/useI18n'
 import { useAutoExpandedDetails } from '@/composables/useAutoExpandedDetails'
+import { useImageViewer } from '@/composables/useImageViewer'
 import { useWorkspaceResourceUrls } from '@/composables/useWorkspaceResourceUrls'
-import { isImageResource, workspaceResourceUrl } from '@/utils/workspaceResources'
+import { isImageResource, workspaceFileReference, workspaceResourceUrl } from '@/utils/workspaceResources'
 import { toolPresentation } from '@/utils/toolPresentation'
 import { buildUnifiedDiff, type UnifiedDiffRow } from '@/utils/unifiedDiff'
 import { formatBytes } from '@/utils/format'
@@ -197,8 +208,14 @@ import type { WorkspaceRequestContext } from '@/api/resourceTypes'
 const props = withDefaults(defineProps<{
   part: ToolExecutionMessagePart
   workspaceContext?: WorkspaceRequestContext | null
+  /**
+   * `activity` 用在 AI 回合的工具活动流里：整行压到次级对比度，避免盖过
+   * 正文与最终回答；`default` 保持原来的强调级别，供任务卡等独立场景使用。
+   */
+  variant?: 'default' | 'activity'
 }>(), {
   workspaceContext: null,
+  variant: 'default',
 })
 
 interface ChangedFile {
@@ -239,7 +256,11 @@ const active = computed(() => state.value === 'running' || state.value === 'appr
 // always mounted so an open panel can never come back blank. Gating the content
 // on the JS expanded state was worse: whenever the DOM `open` and that state
 // drifted apart, the panel stayed empty until the user toggled it again.
-const cardAutoExpanded = computed(() => active.value || state.value === 'failed')
+const cardAutoExpanded = computed(() => (
+  // 活动流里的行保持「一行摘要」：失败也默认折叠，失败信息由回合摘要和红色标签表达，
+  // 需要细节时用户再点开。独立场景（任务卡等）沿用失败自动展开。
+  active.value || (state.value === 'failed' && props.variant !== 'activity')
+))
 const { expanded: cardExpanded, handleToggle: handleCardToggle } = useAutoExpandedDetails(cardAutoExpanded)
 const { expanded: argumentsExpanded, handleToggle: handleArgumentsToggle } = useAutoExpandedDetails(computed(() => false))
 const { expanded: outputExpanded, handleToggle: handleOutputToggle } = useAutoExpandedDetails(computed(() => state.value === 'failed'))
@@ -319,6 +340,9 @@ const durationMs = computed(() => {
 const durationLabel = computed(() => {
   const value = durationMs.value
   if (value == null) return ''
+  // 活动流里完成的普通调用不挂耗时：几百毫秒的 chip 只是噪音，
+  // 真正有信息量的是进行中、失败和明显偏慢的调用。
+  if (props.variant === 'activity' && state.value === 'completed' && value < 1000) return ''
   return value < 1000 ? `${Math.round(value)} ms` : `${(value / 1000).toFixed(value < 10_000 ? 1 : 0)} s`
 })
 const resultRecord = computed<Record<string, any> | null>(() => {
@@ -490,10 +514,17 @@ function artifactUrl(artifact: ArtifactMessagePart): string {
   return artifact.path ? protectedResources.resolve(artifact.path) || '' : ''
 }
 
+// 工具产物图片也用共享查看器：`useImageViewer` 的 ref 直接绑到下面的 ImageLightbox。
+const {
+  open: imageViewerOpen,
+  index: imageViewerIndex,
+  images: imageViewerImages,
+  showImage,
+} = useImageViewer()
+
 function isImageArtifact(artifact: ArtifactMessagePart): boolean {
   return isImageResource(artifact.path || artifact.name, artifact.mimeType)
 }
-
 function workspacePathUrl(path: unknown, kind?: unknown): string {
   if (String(kind || '') === 'directory') return ''
   const value = String(path || '').trim()
@@ -504,8 +535,26 @@ function preventUnavailablePath(event: MouseEvent, path: unknown, kind?: unknown
   if (!workspacePathUrl(path, kind)) event.preventDefault()
 }
 
-function preventUnavailableArtifact(event: MouseEvent, artifact: ArtifactMessagePart) {
-  if (!artifactUrl(artifact)) event.preventDefault()
+/**
+ * 产物条目：图片左键走查看器（带修饰键/中键仍可开原始链接），
+ * 没有 URL 的产物保持原来的「拦掉默认跳转」行为。
+ */
+function handleArtifactClick(event: MouseEvent, artifact: ArtifactMessagePart): void {
+  const url = artifactUrl(artifact)
+  if (!url) {
+    event.preventDefault()
+    return
+  }
+  if (!isImageArtifact(artifact)) return
+  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+  const reference = artifact.path ? workspaceFileReference(artifact.path) : null
+  const opened = showImage({
+    url,
+    name: artifact.name,
+    path: reference?.path ?? null,
+    scope: reference?.scope ?? null,
+  })
+  if (opened) event.preventDefault()
 }
 
 function normalizeChangedFile(path: string, changeType: string, summary: unknown): ChangedFile {
@@ -1051,6 +1100,7 @@ details[open] > summary .summary-chevron {
   display: block;
   width: 100%;
   max-height: 320px;
+  cursor: zoom-in;
   border-bottom: 1px solid var(--app-border);
   background: var(--app-surface-muted);
   object-fit: contain;
@@ -1069,5 +1119,51 @@ details[open] > summary .summary-chevron {
 
 .tool-artifact small {
   color: var(--app-text-muted);
+}
+
+/*
+ * 活动流变体：整行降到次级对比度，只给「进行中 / 失败 / 等待确认」和真正
+ * 有信息量的状态保留颜色。工具调用属于回合里的活动节点，不该和正文抢注意力。
+ */
+.tool-variant-activity .tool-copy strong {
+  color: var(--app-text-secondary);
+  font-weight: 600;
+}
+
+.tool-variant-activity .tool-change-path {
+  color: var(--app-text-muted);
+  text-decoration-color: transparent;
+}
+
+.tool-variant-activity .tool-summary-text {
+  color: var(--app-text-muted);
+}
+
+.tool-variant-activity .tool-icon-shell,
+.tool-variant-activity.tool-state-completed .tool-icon-shell {
+  color: var(--app-text-muted);
+}
+
+.tool-variant-activity .summary-chevron {
+  opacity: 0.4;
+}
+
+.tool-variant-activity .tool-duration,
+.tool-variant-activity .tool-status {
+  color: var(--app-text-muted);
+}
+
+/* 进行中和失败仍然要抢眼：那是用户唯一需要立刻反应的状态。 */
+.tool-variant-activity.tool-state-running .tool-copy strong,
+.tool-variant-activity.tool-state-approval .tool-copy strong {
+  color: var(--app-text);
+}
+
+/*
+ * 失败仍沿用 diff 红：调色板的语义色与前景同色（界面保持单色），
+ * 只有正文链接保留色相。
+ */
+.tool-variant-activity.tool-state-failed .tool-copy strong {
+  color: var(--app-diff-deletion);
 }
 </style>

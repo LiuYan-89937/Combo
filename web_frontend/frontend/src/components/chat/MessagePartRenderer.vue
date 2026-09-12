@@ -1,5 +1,5 @@
 <template>
-  <div ref="rootRef" class="message-part" :class="[`part-${part.type}`, { streaming: isStreaming }]">
+  <div ref="rootRef" class="message-part" :class="[`part-${part.type}`, { streaming: isStreaming, 'reasoning-live': isReasoningLive }]">
     <details
       v-if="part.type === 'reasoning'"
       class="reasoning-panel"
@@ -7,21 +7,36 @@
       @toggle="handleReasoningToggle"
     >
       <summary class="reasoning-summary">
-        <span class="summary-left">
-          <span v-if="isStreaming" class="reasoning-live-dot" aria-hidden="true"></span>
-          <span class="summary-title">{{ isStreaming ? t('roles.assistantReasoningActive') : t('roles.assistantReasoning') }}</span>
-          <span class="summary-chevron" aria-hidden="true">⌄</span>
+        <span class="summary-icon" aria-hidden="true">
+          <n-icon :size="18"><BulbOutline /></n-icon>
         </span>
+        <span class="summary-left">
+          <span class="summary-title">{{ isReasoningLive ? t('roles.assistantReasoningActive') : t('roles.assistantReasoning') }}</span>
+        </span>
+        <span class="summary-chevron" aria-hidden="true">⌄</span>
       </summary>
-      <StreamingReasoningText v-if="isStreaming" :text="part.text" />
+      <StreamingReasoningText v-if="isReasoningLive" :text="part.text" />
       <div v-else class="markdown-content reasoning-markdown" v-html="renderedReasoning"></div>
     </details>
 
-    <div
-      v-else-if="part.type === 'text' && part.format === 'markdown'"
-      class="markdown-content"
-      v-html="renderedText"
-    ></div>
+    <template v-else-if="part.type === 'text' && part.format === 'markdown'">
+      <!--
+        Streaming renders each top-level block as its own element keyed by
+        content, so blocks that are already finished keep their DOM (images are
+        not reloaded, code blocks keep scroll and copy state) and only the block
+        still being streamed is re-rendered. The finished message goes back to a
+        single document render.
+      -->
+      <div v-if="streamingBlocks" class="markdown-content">
+        <div
+          v-for="block in streamingBlocks"
+          :key="block.key"
+          class="markdown-block"
+          v-html="block.html"
+        ></div>
+      </div>
+      <div v-else class="markdown-content" v-html="renderedText"></div>
+    </template>
 
     <div v-else-if="part.type === 'text'" class="plain-content">
       {{ part.text }}
@@ -97,6 +112,8 @@
       :href="artifactImageUrl"
       target="_blank"
       rel="noopener noreferrer"
+      :title="t('attachments.viewImage')"
+      @click="handleArtifactImageClick"
     >
       <img :src="artifactImageUrl" :alt="part.name" />
       <span>{{ part.name }}</span>
@@ -132,25 +149,38 @@
       <span>{{ delegatedDeliveryLabel }}</span>
       <span class="delegated-delivery-chevron" aria-hidden="true">›</span>
     </button>
+
+    <!-- Markdown body images open in the same viewer as attachment images. -->
+    <ImageLightbox
+      v-model:open="imageViewerOpen"
+      v-model:index="imageViewerIndex"
+      :images="imageViewerImages"
+      :workspace-context="workspaceContext"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { NIcon } from 'naive-ui'
+import { BulbOutline } from '@/components/icons'
 import ResourceIcon from '@/components/common/ResourceIcon.vue'
 import MessageImageGallery from '@/components/chat/MessageImageGallery.vue'
+import ImageLightbox from '@/components/chat/ImageLightbox.vue'
 import ToolExecutionCard from '@/components/chat/ToolExecutionCard.vue'
 import RuntimeErrorCard from '@/components/chat/RuntimeErrorCard.vue'
 import StreamingReasoningText from '@/components/chat/StreamingReasoningText.vue'
 import { useI18n } from '@/composables/useI18n'
 import { useAutoExpandedDetails } from '@/composables/useAutoExpandedDetails'
+import { useImageViewer } from '@/composables/useImageViewer'
 import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
+import type { MarkdownImageClickEvent } from '@/rendering/markdown/dom'
 import { useWorkspaceFileOpener } from '@/composables/useWorkspaceFileOpener'
 import { useWorkspaceResourceUrls } from '@/composables/useWorkspaceResourceUrls'
 import type { AttachmentMessagePart, ChatMessagePart, TranscriptAttachmentView } from '@/types/protocol'
 import type { WorkspaceRequestContext } from '@/api/resourceTypes'
 import { toolPresentation } from '@/utils/toolPresentation'
-import { isImageResource, workspaceImageSources } from '@/utils/workspaceResources'
+import { isImageResource, workspaceFileReference, workspaceImageSources } from '@/utils/workspaceResources'
 import { formatBytes } from '@/utils/format'
 
 const props = defineProps<{
@@ -164,7 +194,46 @@ const props = defineProps<{
 const { t } = useI18n()
 const { openWorkspaceFile } = useWorkspaceFileOpener()
 const rootRef = ref<HTMLElement | null>(null)
-const { renderMarkdown } = useMarkdownRenderer(rootRef)
+// 正文图片和 artifact 图片卡共用同一个查看器实例。
+const {
+  open: imageViewerOpen,
+  index: imageViewerIndex,
+  images: imageViewerImages,
+  showImage,
+} = useImageViewer()
+
+/**
+ * Markdown 正文图片只有解析后的 URL（没有工作区路径或上传 id），所以查看器
+ * 里「用系统查看器打开」按无 path 判定为禁用，而不是报错。
+ */
+function handleMarkdownImageClick(event: MarkdownImageClickEvent): void {
+  const name = (alt: string) => alt || t('attachments.imagePreview')
+  showImage(
+    { url: event.src, name: name(event.alt) },
+    event.images.map(image => ({ url: image.src, name: name(image.alt) })),
+  )
+}
+
+/**
+ * artifact 图片卡以前是 `<a target="_blank">`，点开只会跳新标签、进不了我们的
+ * 放大链路。现在左键点击走查看器；带修饰键或中键仍保留「开原始链接」这条退路。
+ */
+function handleArtifactImageClick(event: MouseEvent): void {
+  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+  if (props.part.type !== 'artifact') return
+  const reference = props.part.path ? workspaceFileReference(props.part.path) : null
+  const opened = showImage({
+    url: artifactImageUrl.value,
+    name: props.part.name,
+    path: reference?.path ?? null,
+    scope: reference?.scope ?? null,
+  })
+  if (opened) event.preventDefault()
+}
+
+const { renderMarkdown, renderStreamingBlocks } = useMarkdownRenderer(rootRef, {
+  onImageClick: handleMarkdownImageClick,
+})
 const workspaceContext = computed(() => props.workspaceContext)
 const protectedResourceSources = computed(() => {
   if (props.part.type === 'text' || props.part.type === 'reasoning') {
@@ -186,8 +255,22 @@ const imageAttachmentParts = computed<AttachmentMessagePart[]>(() => (
 ))
 
 const isStreaming = computed(() => props.streaming || props.part.status === 'streaming')
+/**
+ * 思考条目「正在进行」的判定：必须看整条消息是否还在流式，而不只是 part 状态——
+ * 回合结束后 part 仍可能留着 `status: 'streaming'`，那样思考行会一直停在进行态。
+ */
+const isReasoningLive = computed(() => props.part.type === 'reasoning' && props.streaming && isStreaming.value)
+const streamingBlocks = computed(() => (
+  props.part.type === 'text' && props.part.format === 'markdown' && isStreaming.value
+    ? renderStreamingBlocks(markdownWithMentions(props.part.text), {
+        streaming: true,
+        surface: 'chat_message',
+        resolveImageUrl: resolveMessageImageUrl,
+      })
+    : null
+))
 const renderedText = computed(() => (
-  props.part.type === 'text'
+  props.part.type === 'text' && props.part.format === 'markdown' && !streamingBlocks.value
     ? renderMarkdown(markdownWithMentions(props.part.text), {
         streaming: isStreaming.value,
         surface: 'chat_message',
@@ -196,9 +279,9 @@ const renderedText = computed(() => (
     : ''
 ))
 const renderedReasoning = computed(() => (
-  props.part.type === 'reasoning' && !isStreaming.value
+  props.part.type === 'reasoning' && !isReasoningLive.value
     ? renderMarkdown(props.part.text, {
-        streaming: isStreaming.value,
+        streaming: isReasoningLive.value,
         surface: 'reasoning',
         resolveImageUrl: resolveMessageImageUrl,
       })
@@ -259,10 +342,10 @@ const toolState = computed(() => {
 const isToolActive = computed(() => toolState.value === 'running' || toolState.value === 'approval')
 
 // Reasoning and inline tool blocks behave like the transcript's tool groups:
-// they open while active and mount their body only once expanded.
-const { expanded: reasoningExpanded, handleToggle: handleReasoningToggle } = useAutoExpandedDetails(
-  computed(() => isStreaming.value),
-)
+// they open while active and mount their body only once expanded. Liveness uses
+// the message-level streaming flag so a lingering part status cannot keep the
+// row open after the turn is over.
+const { expanded: reasoningExpanded, handleToggle: handleReasoningToggle } = useAutoExpandedDetails(isReasoningLive)
 const { expanded: toolExpanded, handleToggle: handleToolToggle } = useAutoExpandedDetails(
   computed(() => isToolActive.value || toolState.value === 'failed'),
 )
@@ -363,28 +446,69 @@ function escapeRegExp(value: string): string {
   margin-bottom: 0;
 }
 
+/* Markdown body images open the lightbox on click. */
+.message-part :deep(.markdown-content img) {
+  cursor: zoom-in;
+}
+
 .reasoning-panel {
   border: 0;
   border-radius: 0;
   background: transparent;
 }
 
+/*
+ * 思考条目按「活动行」渲染：和工具活动行同一条轨道、同一列图标、同样的
+ * 34px 行高与右侧箭头，展开态只显示一行摘要，默认折叠。
+ */
+.part-reasoning {
+  position: relative;
+  padding-left: 18px;
+}
+
+/* 与工具行 `.node-dot` 同规格、同一列，让两类条目在视觉上并列成一条流。 */
+.part-reasoning::before {
+  position: absolute;
+  top: 14px;
+  left: 5px;
+  width: 8px;
+  height: 8px;
+  content: '';
+  border: 2px solid var(--app-surface);
+  border-radius: 50%;
+  background: var(--app-text-muted);
+  box-shadow: 0 0 0 1px var(--app-border-hover);
+}
+
 .reasoning-summary {
-  display: inline-flex;
-  min-height: 27px;
+  display: flex;
+  width: 100%;
+  /* 34px 含上下 1px 边框，和工具活动行等高。 */
+  min-height: 32px;
   align-items: center;
   justify-content: flex-start;
-  gap: var(--app-space-xs);
-  margin: 1px 0;
-  padding: 3px 10px 3px 8px;
+  gap: 8px;
+  margin: 0;
+  /* 3px + 26px 图标 + 3px + 上下 1px 边框 = 34px，与工具活动行等高。 */
+  padding: 3px 6px;
   border: 1px solid transparent;
-  border-radius: var(--app-radius-pill);
-  color: var(--app-text-muted);
+  border-radius: var(--app-radius-sm);
+  color: var(--app-text-secondary);
   font-size: 12px;
   cursor: pointer;
   list-style: none;
   user-select: none;
   transition: background-color var(--app-transition-base), border-color var(--app-transition-base), color var(--app-transition-base);
+}
+
+/* 与工具行的 `.tool-icon-shell` 同宽同高，标题因此落在同一列。 */
+.summary-icon {
+  display: grid;
+  flex: 0 0 26px;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  color: var(--app-text-subtle);
 }
 
 .reasoning-summary:hover {
@@ -410,6 +534,7 @@ function escapeRegExp(value: string): string {
 }
 
 .summary-left {
+  flex: 1 1 auto;
   gap: var(--app-space-xs);
 }
 
@@ -436,14 +561,12 @@ details[open] > summary .summary-chevron {
   max-block-size: min(42vh, 32rem);
   overflow: auto;
   overscroll-behavior: contain;
-  padding: 2px 0 var(--app-space-sm) 9px;
+  padding: 2px 0 var(--app-space-sm) 12px;
   color: var(--app-text-muted);
 }
 
-.reasoning-live-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: var(--app-radius-pill);
+/* 进行中的思考：活性信号放在轨道点上，和工具行的 running 点一致，标题列不会跳动。 */
+.part-reasoning.reasoning-live::before {
   background: var(--app-info);
   animation: app-pulse-soft 1.4s ease-in-out infinite;
 }
@@ -506,6 +629,7 @@ details[open] > summary .summary-chevron {
   border-radius: var(--app-radius-lg);
   box-shadow: var(--app-shadow-sm);
   object-fit: contain;
+  cursor: zoom-in;
 }
 
 .message-image-card span {

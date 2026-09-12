@@ -1,4 +1,5 @@
 import type { ToolExecutionMessagePart } from '@/types/protocol'
+import { toolPresentation, type ToolCategory } from '@/utils/toolPresentation'
 import { isRuntimeCancellation } from '@/utils/runtimeCancellation'
 
 // Mirrors the single-tool card: write tools fall back to the requested target
@@ -21,6 +22,8 @@ export interface ToolTraceSummary {
   runningCount: number
   changedFileCount: number
   durationMs: number | null
+  /** 按工具类别统计的次数，用于回合级的工作摘要。 */
+  byCategory: Partial<Record<ToolCategory, number>>
 }
 
 /**
@@ -30,6 +33,7 @@ export interface ToolTraceSummary {
  */
 export function toolTraceSummary(executions: readonly ToolExecutionMessagePart[]): ToolTraceSummary {
   const changedFiles = new Set<string>()
+  const byCategory: Partial<Record<ToolCategory, number>> = {}
   let failureCount = 0
   let runningCount = 0
   let earliestStart = Number.POSITIVE_INFINITY
@@ -44,6 +48,8 @@ export function toolTraceSummary(executions: readonly ToolExecutionMessagePart[]
       stillRunning = true
     }
     changedFilePaths(execution).forEach(path => changedFiles.add(path))
+    const category = toolPresentation(execution.toolName, execution.arguments).category
+    byCategory[category] = (byCategory[category] || 0) + 1
 
     const startedAt = Date.parse(String(execution.startedAt || ''))
     if (Number.isFinite(startedAt)) earliestStart = Math.min(earliestStart, startedAt)
@@ -57,6 +63,7 @@ export function toolTraceSummary(executions: readonly ToolExecutionMessagePart[]
     runningCount,
     changedFileCount: changedFiles.size,
     durationMs: traceDurationMs(earliestStart, latestCompletion, stillRunning),
+    byCategory,
   }
 }
 

@@ -22,7 +22,20 @@
         <div class="cu-details-content">
         <header><strong>{{ t('conversation.computerUse.screenshot') }}</strong><span>{{ t('cu.snapshot') }}</span></header>
         <p v-if="activity.screenshot && activity.screenshotError" class="error">{{ t('conversation.computerUse.screenshotUnavailable') }}</p>
-        <img v-if="activity.screenshot" class="snapshot" :src="activity.screenshot.dataUrl" :width="activity.screenshot.width" :height="activity.screenshot.height" :alt="title">
+        <img
+          v-if="activity.screenshot"
+          class="snapshot"
+          :src="activity.screenshot.dataUrl"
+          :width="activity.screenshot.width"
+          :height="activity.screenshot.height"
+          :alt="title"
+          role="button"
+          tabindex="0"
+          :title="t('attachments.viewImage')"
+          @click="openSnapshot"
+          @keydown.enter.prevent="openSnapshot"
+          @keydown.space.prevent="openSnapshot"
+        >
         <p v-else>{{ t('conversation.computerUse.screenshotUnavailable') }}</p>
         <ol v-if="operations.length" class="operation-list" :aria-label="t('cu.steps')">
           <li v-for="operation in displayedOperations" :key="operation.id" :class="{ failed: operation.status === 'failed' && !operation.inputVerification && operation.errorCode !== 'observation.after_action', unconfirmed: operation.inputVerification === 'unconfirmed' || operation.errorCode === 'observation.after_action' }">
@@ -38,6 +51,13 @@
         </div>
       </FloatingActivityPanel>
     </aside>
+
+    <!-- 截图以前点了没任何反应，现在同样走共享查看器。 -->
+    <ImageLightbox
+      v-model:open="imageViewerOpen"
+      v-model:index="imageViewerIndex"
+      :images="imageViewerImages"
+    />
   </Teleport>
 </template>
 <script setup lang="ts">
@@ -47,9 +67,11 @@ import { isComputerUseToolName } from '@/utils/computerUse'
 import type { ComputerUseOperationView } from '@/types/protocol'
 import ActivityCapsule from '@/components/common/ActivityCapsule.vue'
 import FloatingActivityPanel from '@/components/common/FloatingActivityPanel.vue'
+import ImageLightbox from '@/components/chat/ImageLightbox.vue'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useCommand } from '@/composables/useCommand'
 import { useI18n } from '@/composables/useI18n'
+import { useImageViewer } from '@/composables/useImageViewer'
 const store = useRuntimeStore()
 const commands = useCommand()
 const { t } = useI18n()
@@ -65,6 +87,21 @@ const displayedOperations = computed(() => [...operations.value].reverse())
 const latestOperation = computed(() => operations.value.at(-1))
 const running = computed(() => ['running', 'approval'].includes(activity.value.status))
 const title = computed(() => latestOperation.value?.app || activity.value.target?.displayName || t('cu.title'))
+
+const {
+  open: imageViewerOpen,
+  index: imageViewerIndex,
+  images: imageViewerImages,
+  showImage,
+} = useImageViewer()
+
+/** 截图点击/回车放大：截图只有 dataURL，没有工作区路径或上传 id。 */
+function openSnapshot(): void {
+  const screenshot = activity.value.screenshot
+  if (!screenshot?.dataUrl) return
+  showImage({ url: screenshot.dataUrl, name: title.value })
+}
+
 const subtitle = computed(() => {
   if (stopping.value && running.value) return t('cu.stopping')
   if (!running.value) return t(`cu.${activity.value.status}` as any)
@@ -167,7 +204,7 @@ function stop() {
 .cu-details-content { padding: 12px; font-size: 12px; }
 .cu-details-content header { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
 .cu-details-content header span { color: var(--app-text-muted); }
-.snapshot { display: block; width: 100%; height: auto; max-height: 36vh; object-fit: contain; }
+.snapshot { display: block; width: 100%; height: auto; max-height: 36vh; object-fit: contain; cursor: zoom-in; }
 .operation-list { list-style: none; margin: 14px 0 0; padding: 0; max-height: 220px; overflow: auto; }
 .operation-list li { display: flex; gap: 10px; padding: 10px 0; border-top: 1px solid var(--app-border); }
 .step-number { flex: 0 0 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; background: var(--app-surface-hover); color: var(--app-text-muted); font-size: 10px; font-variant-numeric: tabular-nums; }

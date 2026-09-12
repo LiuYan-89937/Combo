@@ -12,6 +12,8 @@
       class="image-preview"
       :src="previewSource"
       :alt="file.name"
+      :title="t('attachments.viewImage')"
+      @click="openPreviewImage"
     />
 
     <iframe
@@ -36,6 +38,14 @@
     <n-alert v-if="previewTruncated" type="warning" class="truncate-alert">
       {{ t('workspace.truncated') }}
     </n-alert>
+
+    <!-- 预览里的内容图片同样走共享查看器：图片预览点了不再毫无反应，
+         预览 markdown 里的图片也不再跳新标签。 -->
+    <ImageLightbox
+      v-model:open="imageViewerOpen"
+      v-model:index="imageViewerIndex"
+      :images="imageViewerImages"
+    />
   </div>
 </template>
 
@@ -43,8 +53,11 @@
 import { computed, ref } from 'vue'
 import { NAlert, NEmpty, NIcon } from 'naive-ui'
 import { DocumentOutline } from '@/components/icons'
+import ImageLightbox from '@/components/chat/ImageLightbox.vue'
 import { useI18n } from '@/composables/useI18n'
+import { useImageViewer } from '@/composables/useImageViewer'
 import { useMarkdownRenderer } from '@/composables/useMarkdownRenderer'
+import type { MarkdownImageClickEvent } from '@/rendering/markdown/dom'
 import type { WorkspaceFileView } from '@/types/protocol'
 import { fileExtension, filePreviewDataUrl, filePreviewKind as resolvePreviewKind } from '@/utils/filePreview'
 
@@ -57,7 +70,35 @@ const props = withDefaults(defineProps<{
 
 const { t } = useI18n()
 const markdownPreviewRef = ref<HTMLElement | null>(null)
-const { renderMarkdown } = useMarkdownRenderer(markdownPreviewRef)
+const {
+  open: imageViewerOpen,
+  index: imageViewerIndex,
+  images: imageViewerImages,
+  showImage,
+} = useImageViewer()
+
+/** 预览文件本身是图片时，点击放大它。 */
+function openPreviewImage(): void {
+  showImage({
+    url: previewSource.value,
+    name: props.file.name,
+    path: props.file.path ?? null,
+    scope: props.file.scope ?? null,
+  })
+}
+
+/** 预览 markdown 正文里的图片同样进查看器（同一组图片可左右切换）。 */
+function handleMarkdownImageClick(event: MarkdownImageClickEvent): void {
+  const name = (alt: string) => alt || props.file.name
+  showImage(
+    { url: event.src, name: name(event.alt) },
+    event.images.map(image => ({ url: image.src, name: name(image.alt) })),
+  )
+}
+
+const { renderMarkdown } = useMarkdownRenderer(markdownPreviewRef, {
+  onImageClick: handleMarkdownImageClick,
+})
 const previewKind = computed(() => resolvePreviewKind(props.file))
 const previewSource = computed(() => props.sourceUrl || filePreviewDataUrl(props.file))
 const renderedMarkdown = computed(() => renderMarkdown(
@@ -105,6 +146,7 @@ const previewTruncated = computed(() => {
   max-height: 100%;
   margin: 0 auto;
   object-fit: contain;
+  cursor: zoom-in;
 }
 
 .pdf-preview {
