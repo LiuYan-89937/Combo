@@ -1,45 +1,31 @@
-import { onBeforeUnmount, ref, watch, type Ref } from 'vue'
+import { computed, type Ref } from 'vue'
 import type { WorkspaceRequestContext } from '@/api/resourceTypes'
 import { workspaceApi } from '@/api/workspace'
+import { useReconciledObjectUrls } from '@/composables/useReconciledObjectUrls'
 import { isRemoteResource, workspaceFileReference } from '@/utils/workspaceResources'
 
+/**
+ * Resolves workspace file references to browser-usable URLs.
+ *
+ * Callers recompute their source list freely — during streaming they do it for
+ * every chunk — so the cache reconciles by content and keeps the URL of a path
+ * that is still listed instead of revoking and re-fetching it, which would make
+ * every visible image blink. Switching to another workspace invalidates the
+ * whole cache, because the same path then points at a different file.
+ */
 export function useWorkspaceResourceUrls(
   sources: Ref<string[]>,
   context: Ref<WorkspaceRequestContext | null | undefined>,
 ) {
-  const urls = ref<Record<string, string>>({})
-  let generation = 0
-
-  async function reload(): Promise<void> {
-    const currentGeneration = ++generation
-    releaseAll()
-    const currentContext = context.value
-    if (!currentContext) return
-
-    const next: Record<string, string> = {}
-    await Promise.all(Array.from(new Set(sources.value)).map(async (source) => {
-      const normalized = String(source || '').trim()
-      if (!normalized) return
-      if (isRemoteResource(normalized)) {
-        next[normalized] = normalized
-        return
-      }
-      const reference = workspaceFileReference(normalized)
-      if (!reference) return
-      try {
-        const response = await workspaceApi.rawBlob(reference.scope, reference.path, currentContext)
-        if (currentGeneration !== generation) return
-        next[normalized] = URL.createObjectURL(response.blob)
-      } catch {
-        // The resource stays unavailable; the surrounding message remains renderable.
-      }
-    }))
-    if (currentGeneration !== generation) {
-      Object.values(next).forEach(releaseObjectUrl)
-      return
-    }
-    urls.value = next
-  }
+  const scope = computed(() => contextSignature(context.value))
+  const { urls } = useReconciledObjectUrls(sources, async (source) => {
+    if (isRemoteResource(source)) return source
+    const reference = workspaceFileReference(source)
+    const requestContext = context.value
+    if (!reference || !requestContext) return null
+    const response = await workspaceApi.rawBlob(reference.scope, reference.path, requestContext)
+    return URL.createObjectURL(response.blob)
+  }, scope)
 
   function resolve(source: string): string | null {
     const normalized = String(source || '').trim()
@@ -47,20 +33,18 @@ export function useWorkspaceResourceUrls(
     return isRemoteResource(normalized) ? normalized : urls.value[normalized] || null
   }
 
-  function releaseAll(): void {
-    Object.values(urls.value).forEach(releaseObjectUrl)
-    urls.value = {}
-  }
-
-  watch([sources, context], () => { void reload() }, { immediate: true, deep: true })
-  onBeforeUnmount(() => {
-    generation += 1
-    releaseAll()
-  })
-
   return { resolve }
 }
 
-function releaseObjectUrl(url: string): void {
-  if (url.startsWith('blob:')) URL.revokeObjectURL(url)
+function contextSignature(context: WorkspaceRequestContext | null | undefined): string {
+  if (!context) return ''
+  return [
+    context.resourceMode,
+    context.packageId,
+    context.packageSessionId,
+    context.workspaceId,
+    context.groupId,
+  ]
+    .map(value => String(value ?? ''))
+    .join('\u0000')
 }

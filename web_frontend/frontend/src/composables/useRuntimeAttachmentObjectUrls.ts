@@ -1,54 +1,20 @@
-import { onBeforeUnmount, ref, watch, type Ref } from 'vue'
+import { type Ref } from 'vue'
 import { readRuntimeAttachment } from '@/api/attachments'
+import { useReconciledObjectUrls } from '@/composables/useReconciledObjectUrls'
 
 /**
  * Resolves several runtime attachments at once.
  *
  * A transcript can hold many uploaded images in one turn, so the ids are read
- * as a batch instead of one composable instance per attachment. Object URLs are
- * revoked whenever the id set changes or the component unmounts.
+ * as a batch instead of one composable instance per attachment. Streaming
+ * rebuilds the surrounding message parts on every chunk, so the ids arrive as a
+ * new array each time; the reconciling cache keeps one URL per attachment id and
+ * only revokes ids that really left the turn, which is what stops the images
+ * from flashing mid-stream.
  */
 export function useRuntimeAttachmentObjectUrls(ids: Ref<string[]>) {
-  const urls = ref<Record<string, string>>({})
-  let generation = 0
-
-  function releaseAll(): void {
-    Object.values(urls.value).forEach(releaseObjectUrl)
-    urls.value = {}
-  }
-
-  async function reload(): Promise<void> {
-    const currentGeneration = ++generation
-    releaseAll()
-    const requested = Array.from(new Set(ids.value.map(id => String(id || '').trim()).filter(Boolean)))
-    if (requested.length === 0) return
-
-    const next: Record<string, string> = {}
-    await Promise.all(requested.map(async (id) => {
-      try {
-        const blob = await readRuntimeAttachment(id)
-        if (currentGeneration !== generation) return
-        next[id] = URL.createObjectURL(blob)
-      } catch {
-        // The image stays unresolved and renders its unavailable placeholder.
-      }
-    }))
-    if (currentGeneration !== generation) {
-      Object.values(next).forEach(releaseObjectUrl)
-      return
-    }
-    urls.value = next
-  }
-
-  watch(ids, () => { void reload() }, { immediate: true, deep: true })
-  onBeforeUnmount(() => {
-    generation += 1
-    releaseAll()
+  return useReconciledObjectUrls(ids, async (id) => {
+    const blob = await readRuntimeAttachment(id)
+    return URL.createObjectURL(blob)
   })
-
-  return { urls }
-}
-
-function releaseObjectUrl(url: string): void {
-  if (url.startsWith('blob:')) URL.revokeObjectURL(url)
 }
