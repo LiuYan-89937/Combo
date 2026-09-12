@@ -437,8 +437,10 @@ class BoundDelegationRuntime:
                 "Temporary agent task accepted and its task capsule is available. "
                 "Do not poll it; completion and interaction updates are delivered asynchronously."
                 + (
-                    " This child works in its own local git branch and worktree. The main agent will "
-                    "inspect the branch and decide how to apply its changes after the child finishes."
+                    " This child works in its own local git branch and worktree, created from the "
+                    "repository's current HEAD. Uncommitted changes in the main workspace are not part "
+                    "of its starting point, so either commit them before applying its branch or expect "
+                    "git to refuse a merge that would overwrite them."
                     if worktree is not None
                     else ""
                 )
@@ -508,7 +510,10 @@ def _child_system_prompt(system_prompt: str, *, isolation: str = "shared") -> st
 _WORKTREE_DIRECTIVE = (
     "\n\nYou are working in your own isolated git worktree on a local branch. Make and, when useful, "
     "commit changes there. The main agent will inspect the branch and decide whether to merge, "
-    "cherry-pick, or remove it after this task finishes. Do not modify the main workspace directly."
+    "cherry-pick, or remove it after this task finishes. Do not modify the main workspace directly. "
+    "Keep every git command inside your own worktree: do not stash, reset, rebase, push, tag, switch "
+    "or delete branches, or add or remove worktrees. Those commands change the shared repository or "
+    "another task's worktree, and stashes and tags are shared by every worktree of this repository."
 )
 
 

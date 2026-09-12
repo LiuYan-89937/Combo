@@ -244,7 +244,12 @@ class AgentWorktreeManager:
         return tuple(sorted(result, key=lambda item: item.task_id))
 
     def create(self, task_id: str) -> AgentWorktree:
-        """Create a worktree from current ``HEAD`` without checking dirtiness."""
+        """Create a worktree from the current ``HEAD``.
+
+        Uncommitted changes in the main workspace are deliberately not an error:
+        the child starts from the last commit, never sees them, and applying its
+        branch later can therefore conflict with them.
+        """
         normalized = _validate_task_id(task_id)
         if not self.is_repository():
             raise NotAGitRepository(f"{self._repository} 不是 git 仓库根目录，无法使用工作树模式")
@@ -333,6 +338,15 @@ class AgentWorktreeManager:
             repository=self._repository,
         )
 
+    def _exclude_path(self) -> Path:
+        """Return the repository exclude file, honouring linked worktrees."""
+        result = _run_git(["rev-parse", "--git-path", "info/exclude"], cwd=self._repository)
+        candidate = result.stdout.strip() if result.returncode == 0 else ""
+        if not candidate:
+            return self._repository / ".git" / "info" / "exclude"
+        path = Path(candidate)
+        return path if path.is_absolute() else (self._repository / path)
+
     def _ensure_ignored(self) -> None:
         try:
             relative = self._root.relative_to(self._repository)
@@ -340,10 +354,13 @@ class AgentWorktreeManager:
             return
         if not relative.parts:
             return
-        pattern = f"/{relative.as_posix().rstrip('/')}/"
-        if _run_git(["check-ignore", "-q", pattern], cwd=self._repository).returncode == 0:
+        # check-ignore 接受的是路径，不是 exclude 文件里的 "/dir/" 模式；用模式探测
+        # 会得到 "fatal: Invalid path" 而误判为未忽略，从而反复追加重复条目。
+        probe = _run_git(["check-ignore", "-q", "--", relative.as_posix()], cwd=self._repository)
+        if probe.returncode == 0:
             return
-        exclude = self._repository / ".git" / "info" / "exclude"
+        pattern = f"/{relative.as_posix().rstrip('/')}/"
+        exclude = self._exclude_path()
         exclude.parent.mkdir(parents=True, exist_ok=True)
         existing = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
         if pattern in existing.splitlines():

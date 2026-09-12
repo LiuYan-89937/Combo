@@ -88,16 +88,19 @@ class _ProcessPoolEntry:
 
 
 class SessionProcessResourcePool:
-    """Own one process manager per conversation session.
+    """Own one process manager per conversation workspace root.
 
     Runtime attempts borrow the manager, while background processes remain owned by
-    the session until the conversation is deleted or the backend shuts down.
+    the session and workspace root until the conversation is deleted or the backend
+    shuts down. A shared child uses the same root as its parent; a worktree child
+    must receive a separate manager so its process cwd and background processes stay
+    inside that worktree.
     """
 
     def __init__(self, *, environment: Mapping[str, str]) -> None:
         self._environment = MappingProxyType(dict(environment))
         self._shell_runtime = resolve_shell_runtime(self._environment)
-        self._entries: dict[str, _ProcessPoolEntry] = {}
+        self._entries: dict[tuple[str, str], _ProcessPoolEntry] = {}
         self._lock = RLock()
 
     def acquire(
@@ -108,8 +111,8 @@ class SessionProcessResourcePool:
         allowed_write_paths: tuple[Path, ...] = (),
         write_scope_enforced: bool = False,
     ) -> ProjectedRuntimeResource:
-        key = _runtime_session_key(instance)
         resolved_root = root.expanduser().resolve()
+        key = _runtime_session_key(instance, root=resolved_root)
         with self._lock:
             entry = self._entries.get(key)
             if entry is None:
@@ -162,7 +165,7 @@ class SessionProcessResourcePool:
         for entry in entries:
             entry.resource.manager.close()
 
-    def _release(self, key: str) -> None:
+    def _release(self, key: tuple[str, str]) -> None:
         with self._lock:
             entry = self._entries.get(key)
             if entry is None:
@@ -630,8 +633,9 @@ def _runtime_attempt_key(instance: RuntimeInstance) -> str:
     return f"{instance.runtime_instance_id}:{instance.attempt_id}"
 
 
-def _runtime_session_key(instance: RuntimeInstance) -> str:
-    return _required_identity(instance.request.session_id, "session_id")
+def _runtime_session_key(instance: RuntimeInstance, *, root: Path) -> tuple[str, str]:
+    session_id = _required_identity(instance.request.session_id, "session_id")
+    return session_id, str(root.expanduser().resolve())
 
 
 def _required_identity(value: str, field_name: str) -> str:

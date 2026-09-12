@@ -4,10 +4,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import json
+import logging
 from typing import Any
 from uuid import uuid4
 
-from combo.agent_worktree import AgentWorktreeManager, NotAGitRepository
+from combo.agent_worktree import AgentWorktreeManager
 from combo.dynamic_runtime.database import DynamicRuntimeDatabase
 from combo.dynamic_runtime.event_persistence import (
     insert_runtime_event_and_outbox,
@@ -28,6 +29,8 @@ from combo.runtime_protocol import (
     TaskEnvelope,
 )
 from combo.runtime_protocol.contracts import utc_now_text
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +66,12 @@ class DelegationStore:
         registry state is used for all current lookups after this migration;
         a missing sidecar or a non-Git workspace remains the default shared
         mode and is never inferred from an arbitrary directory.
+
+        A candidate whose workspace cannot be resolved right now (deleted
+        workspace or mount, missing directory, changed owner) is skipped and
+        retried on the next start instead of failing startup. Candidates with no
+        worktree evidence are stamped ``shared`` — the value they already read
+        as — so the scan converges instead of re-resolving them forever.
         """
         with self._database.connection(query_only=True) as conn:
             rows = conn.execute(
@@ -84,29 +93,34 @@ class DelegationStore:
                 str(row["task_id"]),
                 (str(row["workspace_id"]), str(row["principal_id"])),
             )
-        worktree_tasks: set[str] = set()
+        resolved: dict[str, str] = {}
         for task_id, (workspace_id, principal_id) in migration_candidates.items():
             try:
                 root = workspace_root_resolver(workspace_id, principal_id)
                 manager = AgentWorktreeManager(repository=root)
                 legacy = manager.consume_legacy_worktree(task_id)
-            except NotAGitRepository:
-                legacy = None
-            if legacy is not None:
-                worktree_tasks.add(task_id)
-        if not worktree_tasks:
+            except Exception:  # noqa: BLE001 - 单个候选不可解析不能让启动失败
+                logger.warning(
+                    "Skipping workspace mode migration for delegated task %s",
+                    task_id,
+                    exc_info=True,
+                )
+                continue
+            resolved[task_id] = "worktree" if legacy is not None else "shared"
+        if not resolved:
             return 0
-        task_ids = tuple(sorted(worktree_tasks))
+        task_ids = tuple(sorted(resolved))
         migrated = 0
         with self._database.transaction() as conn:
             for row in rows:
                 task_id = str(row["task_id"])
-                if task_id not in worktree_tasks:
+                mode = resolved.get(task_id)
+                if mode is None:
                     continue
                 payload = json.loads(str(row["payload_json"]))
                 if not isinstance(payload, dict) or "workspace_mode" in payload:
                     continue
-                payload["workspace_mode"] = "worktree"
+                payload["workspace_mode"] = mode
                 conn.execute(
                     "update delegated_task_revisions set payload_json = ? "
                     "where task_id = ? and task_revision = ?",
@@ -120,13 +134,13 @@ class DelegationStore:
             placeholders = ",".join("?" for _ in task_ids)
             runtime_rows = conn.execute(
                 f"""
-                select runtime_instance_id, payload_json
-                from runtime_instances
-                where runtime_instance_id in (
-                  select child_runtime_instance_id
-                  from delegated_task_revisions
-                  where task_id in ({placeholders})
-                )
+                select task.task_id as task_id,
+                       runtime.runtime_instance_id as runtime_instance_id,
+                       runtime.payload_json as payload_json
+                from runtime_instances as runtime
+                join delegated_task_revisions as task
+                  on task.child_runtime_instance_id = runtime.runtime_instance_id
+                where task.task_id in ({placeholders})
                 """,
                 task_ids,
             ).fetchall()
@@ -137,7 +151,7 @@ class DelegationStore:
                 request = payload.get("request")
                 if not isinstance(request, dict) or "workspace_mode" in request:
                     continue
-                request["workspace_mode"] = "worktree"
+                request["workspace_mode"] = resolved[str(row["task_id"])]
                 conn.execute(
                     "update runtime_instances set payload_json = ? where runtime_instance_id = ?",
                     (
@@ -145,6 +159,8 @@ class DelegationStore:
                         str(row["runtime_instance_id"]),
                     ),
                 )
+        if migrated:
+            logger.info("Migrated workspace mode for %d delegated task revision(s)", migrated)
         return migrated
 
     def create(

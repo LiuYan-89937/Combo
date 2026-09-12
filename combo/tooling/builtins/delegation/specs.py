@@ -33,9 +33,12 @@ def get_delegation_tool_specs() -> list[ToolSpec]:
                 "and owns approvals and internal identities. Once accepted, "
                 "do not immediately inspect status, sleep, wait, or poll; task events report subsequent changes. "
                 "Set isolation=worktree when the child will change repository files that the main agent or the "
-                "user may also touch: the child then works in its own git worktree and local branch. The main "
-                "agent inspects and applies branch changes after the child finishes. A dirty main workspace is "
-                "allowed; worktree mode requires a Git repository."
+                "user may also touch: the child then works in its own git worktree and local branch, branched "
+                "from the current HEAD, and the main agent inspects and applies branch changes with git after "
+                "the child finishes. Worktree mode requires a Git repository. A dirty main workspace is "
+                "allowed, but the child starts from the last commit, so uncommitted changes are not part of "
+                "its work and applying its branch over the same files may require committing or stashing "
+                "them first."
             ),
             entrypoint="combo.tooling.builtins.delegation.tool:run",
             input_schema={
@@ -64,7 +67,8 @@ def get_delegation_tool_specs() -> list[ToolSpec]:
                             "shared (default) lets the child work directly in the main workspace under file "
                             "locks; worktree gives it an isolated git worktree and local branch created from "
                             "the current HEAD. The main agent decides how to apply its changes afterward. "
-                            "A dirty main workspace is allowed; worktree requires a Git workspace."
+                            "Worktree requires a Git workspace; a dirty main workspace is allowed, but "
+                            "uncommitted changes are not part of the child's starting point."
                         ),
                     },
                     "system_prompt": {"type": "string", "minLength": 1, "description": "该临时 Agent 的职责、边界和工作方式，不要重复用户全部上下文。"},
