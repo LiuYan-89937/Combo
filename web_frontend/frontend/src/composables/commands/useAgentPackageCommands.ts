@@ -90,6 +90,17 @@ export function useAgentPackageCommands() {
     return transport.applyEventRequest(agentPackagesApi.deleteSession(packageId, sessionId))
   }
 
+  const loadEarlierAgentPackageTurns = async (packageId: string, sessionId: string, before: string) => {
+    try {
+      const event = await agentPackagesApi.session(packageId, sessionId, before)
+      // A history page only prepends transcript data. It must not replay old
+      // lifecycle events or replace a concurrently running request.
+      runtimeStore.prependAgentPackageHistory(event.payload?.session, packageId)
+    } catch (error) {
+      transport.reportError(error)
+    }
+  }
+
   const runAgentPackage = (
     packageId: string,
     message: string,
@@ -156,6 +167,7 @@ export function useAgentPackageCommands() {
     initializeAgentPackage,
     shutdownAgentPackageInstance,
     loadAgentPackageSession,
+    loadEarlierAgentPackageTurns,
     deleteAgentPackageSession,
     runAgentPackage,
     sendAgentPackageMessage,

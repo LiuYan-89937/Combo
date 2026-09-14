@@ -177,6 +177,7 @@ class ContextCompressionReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: ContextEventStatus
+    reason: str | None = None
     node_id: str | None = None
     original_message_count: int = 0
     compressed_message_count: int = 0

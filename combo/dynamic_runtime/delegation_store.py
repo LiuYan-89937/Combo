@@ -179,8 +179,10 @@ class DelegationStore:
         child_runtime: RuntimeInstance,
         max_parallel_children: int,
     ) -> DelegatedTaskRecord:
-        if max_parallel_children < 1:
-            raise ValueError("delegation parallel child limit must be positive")
+        if max_parallel_children < 0:
+            raise ValueError("delegation parallel child limit must be nonnegative")
+        if max_parallel_children == 0:
+            raise RuntimeError("Sub-agent creation is disabled by the parallel agent limit (0)")
         _validate_objects(
             envelope=envelope,
             grant=grant,

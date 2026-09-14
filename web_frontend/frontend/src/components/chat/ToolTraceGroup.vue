@@ -15,6 +15,7 @@
       -->
       <ToolExecutionChain
         :executions="executions"
+        :bounded="bounded"
         :workspace-context="workspaceContext"
       />
     </div>
@@ -34,10 +35,12 @@ const props = withDefaults(defineProps<{
   timestamp?: string
   workspaceContext?: WorkspaceRequestContext | null
   embedded?: boolean
+  bounded?: boolean
 }>(), {
   timestamp: '',
   workspaceContext: null,
   embedded: false,
+  bounded: true,
 })
 
 const { locale } = useI18n()

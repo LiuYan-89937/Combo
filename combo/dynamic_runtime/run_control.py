@@ -16,6 +16,8 @@ class RuntimeInputInjection:
     # that belong to this injected user message. Without them a steered message
     # would reach the model as plain text and silently lose its attachments.
     attachments: tuple[dict[str, Any], ...] = ()
+    # Internal results supplement the current goal; they aren't a new user goal.
+    updates_current_user_input: bool = True
 
     def __post_init__(self) -> None:
         _required_text(self.injection_id, "injection_id")

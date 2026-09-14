@@ -30,8 +30,8 @@ class SteeringAttachmentResolver(Protocol):
         ...
 
 
-class SteerRuntimeCommandHandler:
-    """Promote a queued message into the currently active runtime."""
+class QueuedRuntimeInputDelivery:
+    """Deliver a durable queued message at the active runtime's input boundary."""
 
     def __init__(
         self,
@@ -48,7 +48,8 @@ class SteerRuntimeCommandHandler:
 
     def _resolve_attachments(
         self,
-        envelope: CommandEnvelope,
+        command_id: str,
+        principal_id: str,
         active: Any,
         references: Sequence[AttachmentRevisionRef],
     ) -> tuple[dict[str, Any], ...]:
@@ -64,13 +65,13 @@ class SteerRuntimeCommandHandler:
         if self._attachments is None:
             logger.warning(
                 "steering attachments were dropped because no resolver is configured: %s",
-                envelope.command_id,
+                command_id,
             )
             return ()
         request = active.request
         try:
             return self._attachments.resolve_runtime_attachments(
-                principal_id=envelope.principal_id,
+                principal_id=principal_id,
                 workspace_id=request.workspace_id,
                 references=resolved_references,
                 runtime_instance_id=active.runtime_instance_id,
@@ -78,24 +79,23 @@ class SteerRuntimeCommandHandler:
         except Exception:
             logger.warning(
                 "steering attachments could not be resolved for command %s",
-                envelope.command_id,
+                command_id,
                 exc_info=True,
             )
             return ()
 
-    async def handle(
+    def deliver(
         self,
-        envelope: CommandEnvelope,
-        receipt: CommandReceipt,
+        *,
+        command_id: str,
+        principal_id: str,
+        session_id: str,
+        interrupt_active: bool,
     ) -> CommandOutcome:
-        del receipt
-        payload = envelope.payload
-        if not isinstance(payload, SteerRuntimeRequestPayload):
-            raise ValueError("steer runtime handler received a different command kind")
         message, target_receipt = self._commands.message_command_payload(
-            command_id=payload.queued_command_id,
-            principal_id=envelope.principal_id,
-            session_id=envelope.session_id,
+            command_id=command_id,
+            principal_id=principal_id,
+            session_id=session_id,
         )
 
         # The work lane may claim the target after the user submits it but before
@@ -111,8 +111,8 @@ class SteerRuntimeCommandHandler:
             )
         try:
             active = self._runtime_instances.active_main_for_session(
-                session_id=envelope.session_id,
-                principal_id=envelope.principal_id,
+                session_id=session_id,
+                principal_id=principal_id,
             )
         except LookupError:
             return CommandOutcome(
@@ -120,7 +120,7 @@ class SteerRuntimeCommandHandler:
                 rejection_code="active_runtime_not_available_for_steering",
             )
         content = str(message.content or "").strip()
-        attachments = self._resolve_attachments(envelope, active, message.attachments)
+        attachments = self._resolve_attachments(command_id, principal_id, active, message.attachments)
         if not content and not attachments:
             # An attachment-only message whose files can no longer be imported has
             # nothing left to steer with; keep it queued instead of injecting an
@@ -134,6 +134,7 @@ class SteerRuntimeCommandHandler:
             role="user",
             content=content,
             attachments=attachments,
+            updates_current_user_input=message.visibility != "internal",
         )
 
         def acknowledge_checkpoint(messages: list[Any]) -> None:
@@ -146,25 +147,25 @@ class SteerRuntimeCommandHandler:
             if predecessor is None:
                 raise RuntimeError("steered input has no conversation predecessor")
             self._commands.complete_queued_as_steering(
-                command_id=payload.queued_command_id,
-                principal_id=envelope.principal_id,
-                session_id=envelope.session_id,
+                command_id=command_id,
+                principal_id=principal_id,
+                session_id=session_id,
                 runtime_instance_id=active.runtime_instance_id,
                 after_message_id=str(predecessor.id),
             )
 
         def release_pending() -> None:
             self._commands.set_pending_steering(
-                command_id=payload.queued_command_id,
-                principal_id=envelope.principal_id,
-                session_id=envelope.session_id,
+                command_id=command_id,
+                principal_id=principal_id,
+                session_id=session_id,
                 runtime_instance_id=None,
             )
 
         if not self._commands.set_pending_steering(
-            command_id=payload.queued_command_id,
-            principal_id=envelope.principal_id,
-            session_id=envelope.session_id,
+            command_id=command_id,
+            principal_id=principal_id,
+            session_id=session_id,
             runtime_instance_id=active.runtime_instance_id,
         ):
             return CommandOutcome(status="rejected", rejection_code="steering_target_not_active")
@@ -179,6 +180,8 @@ class SteerRuntimeCommandHandler:
                 status="rejected",
                 rejection_code="active_runtime_not_accepting_steering",
             )
+        if not interrupt_active:
+            return CommandOutcome(status="completed")
         self._run_controls.request_tool_interrupt(
             runtime_instance_id=active.runtime_instance_id,
             reason="user_steered",
@@ -196,3 +199,25 @@ class SteerRuntimeCommandHandler:
                 rejection_code="active_runtime_not_available_for_steering",
             )
         return CommandOutcome(status="completed")
+
+
+class SteerRuntimeCommandHandler:
+    """User steering uses the shared delivery path and interrupts active work."""
+
+    def __init__(self, *, commands: CommandInbox, runtime_instances: RuntimeInstanceStore,
+                 run_controls: RuntimeRunControlRegistry,
+                 attachments: SteeringAttachmentResolver | None = None) -> None:
+        self._delivery = QueuedRuntimeInputDelivery(
+            commands=commands, runtime_instances=runtime_instances,
+            run_controls=run_controls, attachments=attachments,
+        )
+
+    async def handle(self, envelope: CommandEnvelope, receipt: CommandReceipt) -> CommandOutcome:
+        del receipt
+        payload = envelope.payload
+        if not isinstance(payload, SteerRuntimeRequestPayload):
+            raise ValueError("steer runtime handler received a different command kind")
+        return self._delivery.deliver(
+            command_id=payload.queued_command_id, principal_id=envelope.principal_id,
+            session_id=envelope.session_id, interrupt_active=True,
+        )

@@ -19,6 +19,7 @@ import {
   isStandaloneMainSession,
 } from '@/utils/sessionPresentation'
 import { sessionDeletionFromPayload } from './runtime/sessionDeletion'
+import { agentSessionSummary } from './runtime/sessionSnapshots'
 
 export function syncDomainStoresFromRuntime(event: RuntimeFrontendEvent): void {
   const runtimeStore = useRuntimeStore()
@@ -94,7 +95,7 @@ export function syncDomainStoresFromRuntime(event: RuntimeFrontendEvent): void {
       event.payload?.session &&
       isStandaloneAgentSession(event.payload.session)
     ) {
-      agentStore.mergeRecentSessions([sessionWithPackage(event.payload.session, event.payload.package_id)])
+      agentStore.mergeRecentSessions([sessionWithPackage(agentSessionSummary(event.payload.session), event.payload.package_id)])
     }
     if (event.event_type === 'agent_package_session_deleted') {
       sessionDeletionFromPayload(event.payload).sessionIds.forEach((sessionId) => {

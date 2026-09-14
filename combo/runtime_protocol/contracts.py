@@ -77,7 +77,7 @@ class UserRuntimePolicy(ProtocolModel):
     browser_operation_timeout_ms: int = Field(default=30_000, ge=1_000)
     browser_navigation_timeout_ms: int = Field(default=45_000, ge=1_000)
     max_model_attempts: int = Field(default=1, ge=1)
-    max_parallel_temporary_agents: int = Field(default=5, ge=1)
+    max_parallel_temporary_agents: int = Field(default=5, ge=0)
     context_compression_detail: ContextCompressionDetail = "standard"
     context_compression_keep_recent_messages: int = Field(default=12, ge=0, le=128)
     memory_auto_write_enabled: bool = True
@@ -160,7 +160,7 @@ class RuntimePolicySnapshot(FrozenProtocolModel):
     browser_operation_timeout_ms: int = Field(default=30_000, ge=1_000)
     browser_navigation_timeout_ms: int = Field(default=45_000, ge=1_000)
     max_model_attempts: int = Field(ge=1)
-    max_parallel_temporary_agents: int = Field(ge=1)
+    max_parallel_temporary_agents: int = Field(ge=0)
     context_compression_detail: ContextCompressionDetail = "standard"
     context_compression_keep_recent_messages: int = Field(default=12, ge=0, le=128)
     memory_auto_write_enabled: bool

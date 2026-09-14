@@ -3,30 +3,20 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue'
+import { ref } from 'vue'
+import { usePinnedScroll } from '@/composables/usePinnedScroll'
 
 const props = defineProps<{ text: string }>()
 const contentRef = ref<HTMLElement | null>(null)
 
-watch(
-  () => props.text.length,
-  () => {
-    const element = contentRef.value
-    if (!element) return
-    const pinned = element.scrollHeight - element.scrollTop - element.clientHeight < 28
-    if (!pinned) return
-    nextTick(() => {
-      if (contentRef.value) contentRef.value.scrollTop = contentRef.value.scrollHeight
-    })
-  },
-)
+usePinnedScroll(contentRef, () => props.text.length)
 </script>
 
 <style scoped>
 .reasoning-markdown {
-  max-block-size: min(42vh, 32rem);
+  max-block-size: var(--app-chat-detail-max-block-size);
   overflow: auto;
-  overscroll-behavior: contain;
+  overscroll-behavior-x: contain;
   padding: 0 var(--app-space-md) var(--app-space-md);
   color: var(--app-text-muted);
 }

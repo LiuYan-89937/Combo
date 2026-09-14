@@ -1,35 +1,47 @@
 <template>
-  <div class="tool-execution-chain">
-    <div
+  <div ref="contentRef" class="tool-execution-chain" :class="{ bounded }">
+    <ViewportContent
       v-for="(execution, index) in executions"
       :key="execution.id"
-      class="chain-node"
-      :class="`node-state-${executionState(execution)}`"
+      :active="['running', 'approval'].includes(executionState(execution))"
     >
-      <span class="node-rail" aria-hidden="true">
-        <span class="node-dot"></span>
-        <span v-if="index < executions.length - 1" class="node-line"></span>
-      </span>
-      <ToolExecutionCard
-        :part="execution"
-        :workspace-context="workspaceContext"
-        variant="activity"
-      />
-    </div>
+      <div
+        class="chain-node"
+        :class="`node-state-${executionState(execution)}`"
+      >
+        <span class="node-rail" aria-hidden="true">
+          <span class="node-dot"></span>
+          <span v-if="index < executions.length - 1" class="node-line"></span>
+        </span>
+        <ToolExecutionCard
+          :part="execution"
+          :workspace-context="workspaceContext"
+          variant="activity"
+        />
+      </div>
+    </ViewportContent>
   </div>
 </template>
 
 <script setup lang="ts">
+import { ref } from 'vue'
+import { usePinnedScroll } from '@/composables/usePinnedScroll'
 import ToolExecutionCard from '@/components/chat/ToolExecutionCard.vue'
+import ViewportContent from './ViewportContent.vue'
 import type { WorkspaceRequestContext } from '@/api/resourceTypes'
 import type { ToolExecutionMessagePart } from '@/types/protocol'
 
-withDefaults(defineProps<{
+const props = withDefaults(defineProps<{
   executions: ToolExecutionMessagePart[]
   workspaceContext?: WorkspaceRequestContext | null
+  bounded?: boolean
 }>(), {
   workspaceContext: null,
+  bounded: true,
 })
+
+const contentRef = ref<HTMLElement | null>(null)
+usePinnedScroll(contentRef, () => props.bounded ? props.executions : null)
 
 function executionState(execution: ToolExecutionMessagePart): string {
   if (execution.status === 'awaiting_approval') return 'approval'
@@ -41,7 +53,15 @@ function executionState(execution: ToolExecutionMessagePart): string {
 </script>
 
 <style scoped>
-.tool-execution-chain { display: grid; }
+.tool-execution-chain {
+  display: grid;
+  min-inline-size: 0;
+}
+.tool-execution-chain.bounded {
+  max-block-size: var(--app-chat-detail-max-block-size);
+  overflow: auto;
+  overscroll-behavior-x: contain;
+}
 .chain-node { position: relative; display: grid; grid-template-columns: 18px minmax(0, 1fr); min-width: 0; }
 .node-rail { position: relative; display: flex; justify-content: center; }
 /*

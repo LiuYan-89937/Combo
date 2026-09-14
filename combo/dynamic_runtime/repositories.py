@@ -562,17 +562,24 @@ class ConversationStore:
             advance_conversation_revision(conn, current.session_id, updated_at=now)
         return terminal
 
-    def messages(self, session_id: str) -> list[ConversationMessage]:
+    def messages(self, session_id: str, *, turn_ids: list[str] | None = None) -> list[ConversationMessage]:
+        if turn_ids is not None and not turn_ids:
+            return []
+        turn_filter = ""
+        parameters: list[Any] = [_required_text(session_id, "session_id")]
+        if turn_ids is not None:
+            turn_filter = f"and message.turn_id in ({','.join('?' for _ in turn_ids)})"
+            parameters.extend(turn_ids)
         with self._database.connection(query_only=True) as conn:
             rows = conn.execute(
-                """
+                f"""
                 select message.payload_json
                 from conversation_messages as message
                 join conversation_turns as turn on turn.turn_id = message.turn_id
-                where message.session_id = ?
+                where message.session_id = ? {turn_filter}
                 order by turn.task_revision, message.turn_sequence
                 """,
-                (_required_text(session_id, "session_id"),),
+                parameters,
             ).fetchall()
         return [ConversationMessage.model_validate_json(str(row["payload_json"])) for row in rows]
 
@@ -864,7 +871,7 @@ class CommandInbox:
         with self._database.transaction() as conn:
             row = conn.execute(
                 """
-                select receipt_json from command_inbox
+                select receipt_json, envelope_json from command_inbox
                 where command_id = ? and principal_id = ? and session_id = ?
                   and command_kind = 'send_message'
                 """,
@@ -929,6 +936,23 @@ class CommandInbox:
             ).rowcount
             if turn_changed != 1:
                 raise RuntimeError("queued steering turn compare-and-set failed")
+            envelope = CommandEnvelope.model_validate_json(str(row["envelope_json"]))
+            if isinstance(envelope.payload, SendMessagePayload) and envelope.payload.notification_event_ids:
+                event_ids = envelope.payload.notification_event_ids
+                placeholders = ",".join("?" for _ in event_ids)
+                # The graph has checkpointed this input. Acknowledge its
+                # notification in the same transaction as the queued turn, so
+                # recovery cannot dispatch the result as a second turn.
+                conn.execute(
+                    f"""
+                    update delegated_task_notifications
+                    set delivered_runtime_instance_id = ?, delivered_at = ?
+                    where principal_id = ? and session_id = ?
+                      and event_id in ({placeholders})
+                      and delivered_runtime_instance_id is null
+                    """,
+                    (runtime_instance_id, now, owner, session, *event_ids),
+                )
             insert_outbox(
                 conn,
                 OutboxRecord(

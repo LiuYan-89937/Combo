@@ -241,6 +241,7 @@ export interface ConversationTurn {
 }
 
 export interface ConversationScopeState {
+  historyBefore: string | null
   transcript: TranscriptItem[]
   conversationTurns: ConversationTurn[]
   timeline: TimelineItem[]
@@ -630,6 +631,7 @@ export interface ContextWindowView {
 }
 
 export interface RuntimeViewState {
+  historyBefore: string | null
   protocolVersion: string
   connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error' | 'reconnecting'
   runtimeOptions: RuntimeOptionsView

@@ -16,6 +16,13 @@
           @keydown="markUserScrollIntent"
         >
           <div ref="messagesListRef" class="messages-list">
+            <div v-if="runtimeStore.historyBefore" class="history-navigation">
+              <n-button
+                quaternary
+                :loading="loadingHistoryScope === runtimeStore.activeConversationScope"
+                @click="loadEarlierTurns"
+              >{{ t('chat.loadEarlier') }}</n-button>
+            </div>
             <div
               v-if="
                 timelineItems.length === 0
@@ -27,18 +34,23 @@
               <ComboMascot state="idle" :size="148" />
             </div>
 
-            <template v-for="item in timelineItems" :key="item.id">
+            <ViewportContent
+              v-for="item in timelineItems"
+              :key="item.id"
+              :data-anchor-id="item.id"
+              :active="isTimelineItemRunning(item) || isTimelineItemStreaming(item)"
+            >
               <MessageItem
-                :data-anchor-id="item.id"
                 :message="item.message"
                 :messages="item.messages"
                 :streaming="isTimelineItemStreaming(item)"
+                :running="isTimelineItemRunning(item)"
                 quoteable
                 :workspace-context="messageWorkspaceContext"
                 :git-changes="gitChangesStore.changesFor(item.message.metadata?.request_id)"
                 @quote="addMessageReference"
               />
-            </template>
+            </ViewportContent>
 
             <CurrentActivitySummary
               v-if="currentActivity"
@@ -170,6 +182,7 @@ import { useConversation } from '@/composables/conversation/useConversation'
 import { useConversationMessageProjection } from '@/composables/conversation/useConversationMessageProjection'
 import { useCommand } from '@/composables/useCommand'
 import MessageItem from '@/components/chat/MessageItem.vue'
+import ViewportContent from '@/components/chat/ViewportContent.vue'
 import MessageInput from '@/components/chat/MessageInput.vue'
 import ComputerUseCapsule from '@/components/chat/ComputerUseCapsule.vue'
 import CurrentActivitySummary from '@/components/chat/CurrentActivitySummary.vue'
@@ -203,6 +216,7 @@ const router = useRouter()
 const { t } = useI18n()
 const scrollbarRef = ref()
 const messagesListRef = ref<HTMLElement | null>(null)
+const loadingHistoryScope = ref<string | null>(null)
 const composerDockRef = ref<HTMLElement | null>(null)
 const composerOcclusion = ref(88)
 const inputRef = ref()
@@ -274,6 +288,7 @@ const {
   hasApprovalRequests,
   hasUserQuestionInterrupt,
   isTimelineItemStreaming,
+  isTimelineItemRunning,
   timelineItems,
 } = useConversationMessageProjection()
 
@@ -414,8 +429,8 @@ function handleMessagesScroll() {
 }
 
 function markUserScrollIntent(event: Event) {
-  const container = scrollContainer()
-  if (container && isNestedScrollableTarget(event.target, container)) return
+  // Reading an expanded detail also suspends main-chat following. Native
+  // scroll chaining decides which viewport moves when a detail hits its edge.
   if (event.type === 'keydown') {
     const key = (event as KeyboardEvent).key
     if (!['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(key)) return
@@ -426,20 +441,10 @@ function markUserScrollIntent(event: Event) {
     // Detach before the next animation frame so an already-scheduled stream
     // follow cannot override a small upward wheel or trackpad gesture.
     followsLatestMessage.value = false
+  } else if (event.type === 'touchmove') {
+    followsLatestMessage.value = false
   }
   userScrollIntentUntil = Date.now() + 500
-}
-
-function isNestedScrollableTarget(target: EventTarget | null, container: HTMLElement): boolean {
-  let element = target instanceof HTMLElement ? target : null
-  while (element && element !== container) {
-    const style = window.getComputedStyle(element)
-    const scrollable = ['auto', 'scroll', 'overlay'].includes(style.overflowY)
-      && element.scrollHeight > element.clientHeight + 1
-    if (scrollable) return true
-    element = element.parentElement
-  }
-  return false
 }
 
 function resumeLatestMessageFollow() {
@@ -450,6 +455,20 @@ function resumeLatestMessageFollow() {
 function jumpToLatest() {
   resumeLatestMessageFollow()
   nextTick(() => scrollToBottom('smooth'))
+}
+
+async function loadEarlierTurns() {
+  const scope = runtimeStore.activeConversationScope
+  const sessionId = runtimeStore.activeAgentSessionId
+  const before = runtimeStore.historyBefore
+  if (!scope || !sessionId || !before || loadingHistoryScope.value === scope) return
+  loadingHistoryScope.value = scope
+  followsLatestMessage.value = false
+  try {
+    await commands.loadEarlierAgentPackageTurns(SYSTEM_CHAT_PACKAGE_ID, sessionId, before)
+  } finally {
+    if (loadingHistoryScope.value === scope) loadingHistoryScope.value = null
+  }
 }
 
 function timelineAnchors(): HTMLElement[] {
@@ -477,9 +496,16 @@ function updateActiveAnchor() {
   }
   const threshold = container.getBoundingClientRect().top + 96
   let active = anchors[0].dataset.anchorId ?? null
-  for (const anchor of anchors) {
-    if (anchor.getBoundingClientRect().top > threshold) break
-    active = anchor.dataset.anchorId ?? active
+  // Anchors are in document order; binary search avoids forcing layout on
+  // every historical message whenever the user scrolls.
+  let left = 0
+  let right = anchors.length - 1
+  while (left <= right) {
+    const middle = (left + right) >>> 1
+    if (anchors[middle].getBoundingClientRect().top <= threshold) {
+      active = anchors[middle].dataset.anchorId ?? active
+      left = middle + 1
+    } else right = middle - 1
   }
   activeAnchorId.value = active
 }
@@ -618,6 +644,26 @@ watch(
 
 watch(messagesListRef, observeMessagesSize, { flush: 'post' })
 watch(composerDockRef, observeComposerSize, { flush: 'post' })
+
+watch(
+  () => [runtimeStore.activeConversationScope, runtimeStore.historyBefore] as const,
+  async ([scope], [previousScope, previousCursor]) => {
+    if (scope !== previousScope || !previousCursor) return
+    const container = scrollContainer()
+    if (!container) return
+    const viewportTop = container.getBoundingClientRect().top
+    const anchor = timelineAnchors().find(element => element.getBoundingClientRect().bottom > viewportTop)
+    if (!anchor) return
+    const top = anchor.getBoundingClientRect().top
+    await nextTick()
+    if (scope !== runtimeStore.activeConversationScope || !anchor.isConnected) return
+    // Apply only the remaining displacement, including on engines without
+    // native scroll anchoring. Growth at the live tail doesn't move this anchor.
+    container.scrollTop += anchor.getBoundingClientRect().top - top
+    latestScrollTop.value = container.scrollTop
+  },
+  { flush: 'pre' },
+)
 
 let routeActivationVersion = 0
 
@@ -781,6 +827,16 @@ function routeParamText(value: unknown): string | null {
     var(--app-space-lg)
     var(--app-space-lg)
     calc(var(--composer-occlusion, 88px) + var(--conversation-tail-room) + 24px);
+}
+
+.history-navigation {
+  display: flex;
+  justify-content: center;
+  overflow-anchor: none;
+}
+
+.messages-list > .viewport-content + .viewport-content {
+  margin-top: 2px;
 }
 
 .scroll-latest-button {

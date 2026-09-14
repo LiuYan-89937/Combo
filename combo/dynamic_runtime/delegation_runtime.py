@@ -271,6 +271,8 @@ class BoundDelegationRuntime:
         grant_id = uuid4().hex
         child_runtime_id = uuid4().hex
         parent_policy = parent.request.policy_snapshot
+        if parent_policy.max_parallel_temporary_agents == 0:
+            raise RuntimeError("Sub-agent creation is disabled by the parallel agent limit (0)")
         parent_model = parent_policy.model
         if continued_model_profile_id:
             selected_profile_id = continued_model_profile_id

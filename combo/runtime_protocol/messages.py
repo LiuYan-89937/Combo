@@ -4,7 +4,26 @@ import json
 from collections.abc import Callable, Sequence
 from typing import Any
 
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+
+
+def represented_input_message_ids(messages: Sequence[Any]) -> set[str]:
+    """Input receipts survive replacement of their message bodies by a summary."""
+    represented: set[str] = set()
+    for message in messages:
+        metadata = dict(getattr(message, "additional_kwargs", {}) or {})
+        if isinstance(message, HumanMessage) or (
+            isinstance(message, SystemMessage) and metadata.get("kind") == "runtime_notification"
+        ):
+            message_id = str(getattr(message, "id", "") or "")
+            if message_id:
+                represented.add(message_id)
+        if isinstance(message, SystemMessage) and metadata.get("source") == "runtime_context_compression":
+            represented.update(
+                value for value in metadata.get("compacted_input_message_ids", [])
+                if isinstance(value, str) and value
+            )
+    return represented
 
 
 def has_complete_tool_call_history(messages: Sequence[Any]) -> bool:

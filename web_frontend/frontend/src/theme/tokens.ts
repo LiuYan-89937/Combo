@@ -64,6 +64,7 @@ export interface DesignTokens {
   toolbarHeight: string
   contentMaxWidth: string
   chatMaxWidth: string
+  chatDetailMaxBlockSize: string
 }
 
 export const designTokens: DesignTokens = {
@@ -127,4 +128,6 @@ export const designTokens: DesignTokens = {
   toolbarHeight: '40px',
   contentMaxWidth: '1440px',
   chatMaxWidth: '960px',
+  // Shared by reasoning, tool results and expanded work records.
+  chatDetailMaxBlockSize: 'min(42vh, 32rem)',
 }

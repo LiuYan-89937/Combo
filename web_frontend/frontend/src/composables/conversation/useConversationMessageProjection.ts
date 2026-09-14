@@ -10,7 +10,7 @@ import type {
   TranscriptItem,
 } from '@/types/protocol'
 import { isToolActivityActive, isToolActivityPendingApproval } from '@/utils/toolActivityState'
-import { conversationVisibleParts } from '@/utils/toolPresentation'
+import { hasConversationVisibleParts } from '@/utils/toolPresentation'
 
 export type ConversationTimelineItem =
   | { kind: 'message'; id: string; timestamp: string; order: number; message: TranscriptItem; messages: TranscriptItem[] }
@@ -42,12 +42,13 @@ export function useConversationMessageProjection() {
     )
   })
   const hasActiveStreams = computed(() => activeStreams.value.length > 0)
+  let previousItems = new Map<string, ConversationTimelineItem>()
   const timelineItems = computed<ConversationTimelineItem[]>(() => {
     const items: ConversationTimelineItem[] = []
     let activeAssistantItem: ConversationTimelineItem | null = null
     orderedTranscript(runtimeStore.transcript).forEach((message, index) => {
       if (isPendingDispatch(message.metadata?.dispatch_state)) return
-      if (conversationVisibleParts(message.parts).length === 0) return
+      if (!hasConversationVisibleParts(message.parts)) return
       const requestId = String(message.metadata?.request_id || '').trim()
       if (message.role === 'assistant' && !message.metadata?.delegated_delivery) {
         const activeRequestId = activeAssistantItem
@@ -79,7 +80,16 @@ export function useConversationMessageProjection() {
         messages: [message],
       })
     })
-    return items
+    const stableItems = items.map(item => {
+      const previous = previousItems.get(item.id)
+      return previous && previous.message === item.message
+        && previous.order === item.order && previous.timestamp === item.timestamp
+        && previous.messages.length === item.messages.length
+        && previous.messages.every((message, index) => message === item.messages[index])
+        ? previous : item
+    })
+    previousItems = new Map(stableItems.map(item => [item.id, item]))
+    return stableItems
   })
   const hasApprovalRequests = computed(() => runtimeStore.currentApprovalRequests.length > 0)
   const hasUserQuestionInterrupt = computed(() => runtimeStore.isAwaitingUserInputInterrupt)
@@ -123,9 +133,10 @@ export function useConversationMessageProjection() {
   })
   const activeStreamContentKey = computed(() => {
     return [
-      runtimeStore.transcript.map(messagePartsKey).join('|'),
+      runtimeStore.transcript.length,
+      runtimeStore.transcript[runtimeStore.transcript.length - 1]?.id || '',
       activeStreams.value
-        .map(stream => `${stream.streamId}:${stream.active}:${stream.content}:${stream.reasoningContent}`)
+        .map(stream => `${stream.streamId}:${stream.active}:${stream.content.length}:${stream.reasoningContent.length}`)
         .join('|'),
       toolActivityHint.value,
       currentActivity.value?.text || '',
@@ -142,6 +153,12 @@ export function useConversationMessageProjection() {
 
   function isTimelineItemStreaming(item: ConversationTimelineItem): boolean {
     return item.messages.some(message => isMessageStreaming(message.streamId))
+  }
+
+  function isTimelineItemRunning(item: ConversationTimelineItem): boolean {
+    const requestId = item.message.metadata?.request_id
+    return Boolean(requestId && requestId === runtimeStore.activeRequestId
+      && ['running', 'stopping', 'interrupted', 'waiting_for_workers'].includes(runtimeStore.runStatus))
   }
 
   function requestOwnsActivePresentation(requestId?: string | null): boolean {
@@ -163,6 +180,7 @@ export function useConversationMessageProjection() {
     hasUserQuestionInterrupt,
     isMessageStreaming,
     isTimelineItemStreaming,
+    isTimelineItemRunning,
     currentActivity,
     timelineItems,
     toolActivityHint,
@@ -268,15 +286,6 @@ function computerUseActivityText(
 function assistantMessagesBelongTogether(activeRequestId: string, nextRequestId: string): boolean {
   if (activeRequestId && nextRequestId) return activeRequestId === nextRequestId
   return true
-}
-
-function messagePartsKey(message: TranscriptItem): string {
-  return message.parts.map((part) => {
-    if (part.type === 'text' || part.type === 'reasoning') {
-      return `${part.id}:${part.status || ''}:${part.text}`
-    }
-    return `${part.id}:${part.type}:${part.status || ''}`
-  }).join(',')
 }
 
 function isToolActivityRunning(tool: ToolActivity): boolean {

@@ -60,8 +60,8 @@
 
       <div class="message-body">
         <!--
-          回合级「工作区」摘要。工具调用是嵌在 AI 回合里的活动节点：回合进行中
-          它们直接铺开，回合结束后整段工作折成这一行，回答留在下面。
+          回合级工作记录：运行中默认展开，结束后折叠；用户的手动选择始终优先。
+          工作记录在独立视口内滚动，最终回答和交付物保持可见。
         -->
         <button
           v-if="showWorkDigest"
@@ -82,34 +82,47 @@
           <span class="digest-chevron" aria-hidden="true">⌄</span>
         </button>
 
-        <template v-for="block in displayBlocks" :key="block.id">
-          <ToolTraceGroup
-            v-if="block.kind === 'tools'"
-            v-show="!workCollapsed"
-            embedded
-            :executions="block.executions"
-            :timestamp="block.timestamp"
-            :workspace-context="workspaceContext"
-          />
-          <MessageImageGallery
-            v-else-if="block.kind === 'images'"
-            :parts="block.parts"
-            :workspace-context="workspaceContext"
-          />
-          <template v-else>
-            <MessagePartRenderer
-              v-for="part in block.parts"
-              v-show="isPartVisible(part)"
-              :key="part.id"
-              :part="part"
-              :streaming="streaming"
-              :class="{ 'is-turn-answer': part.id === answerPartId }"
-              :highlight-mentions="isGroupUserMessage"
-              :mention-names="mentionNames"
+        <div
+          v-for="section in displaySections"
+          :key="section.id"
+          :ref="element => { if (section.isWork) workContentRef = element as HTMLElement | null }"
+          :class="section.isWork ? 'turn-work-content' : 'turn-delivery-content'"
+          :role="section.isWork ? 'region' : undefined"
+          :aria-label="section.isWork ? t('tool.digest.workLabel') : undefined"
+          :tabindex="section.isWork ? 0 : undefined"
+        >
+          <template v-for="block in section.blocks" :key="block.id">
+            <ToolTraceGroup
+              v-if="block.kind === 'tools'"
+              embedded
+              :bounded="!section.isWork"
+              :executions="block.executions"
+              :timestamp="block.timestamp"
               :workspace-context="workspaceContext"
             />
+            <MessageImageGallery
+              v-else-if="block.kind === 'images'"
+              :parts="block.parts"
+              :workspace-context="workspaceContext"
+            />
+            <template v-else-if="block.kind === 'parts'">
+              <ViewportContent
+                v-for="part in block.parts"
+                :key="part.id"
+                :active="!section.isWork || part.status === 'streaming'"
+              >
+                <MessagePartRenderer
+                  :part="part"
+                  :streaming="streaming"
+                  :class="{ 'is-turn-answer': part.id === answerPartId }"
+                  :highlight-mentions="isGroupUserMessage"
+                  :mention-names="mentionNames"
+                  :workspace-context="workspaceContext"
+                />
+              </ViewportContent>
+            </template>
           </template>
-        </template>
+        </div>
 
         <GitChangeCapsule
           v-if="message.role === 'assistant' && gitChanges?.files.length"
@@ -124,10 +137,13 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { usePinnedScroll } from '@/composables/usePinnedScroll'
+import { provideDetailsState, useAutoExpandedDetails } from '@/composables/useAutoExpandedDetails'
 import { NButton, NIcon, NTag, NText } from 'naive-ui'
 import { ReturnUpBackOutline } from '@/components/icons'
 import { useI18n } from '@/composables/useI18n'
 import MessagePartRenderer from './MessagePartRenderer.vue'
+import ViewportContent from './ViewportContent.vue'
 import MessageImageGallery from './MessageImageGallery.vue'
 import ComboFrameAnimation from '@/components/brand/ComboFrameAnimation.vue'
 import ToolTraceGroup from './ToolTraceGroup.vue'
@@ -144,6 +160,7 @@ const props = withDefaults(
   defineProps<{
     message: TranscriptItem
     streaming?: boolean
+    running?: boolean
     quoteable?: boolean
     workspaceContext?: WorkspaceRequestContext | null
     messages?: TranscriptItem[]
@@ -151,6 +168,7 @@ const props = withDefaults(
   }>(),
   {
     streaming: false,
+    running: undefined,
     quoteable: false,
     workspaceContext: null,
     messages: () => [],
@@ -163,6 +181,8 @@ defineEmits<{
 }>()
 
 const { locale, t } = useI18n()
+provideDetailsState()
+const turnRunning = computed(() => props.running ?? props.streaming)
 const roleLabel = computed(() => {
   const displayName = String(props.message.metadata?.display_name || '').trim()
   if (props.message.role === 'assistant' && !props.message.metadata?.agent_group_speaker) return 'Combo'
@@ -183,9 +203,8 @@ type MessageDisplayBlock =
   | { kind: 'images'; id: string; parts: AttachmentMessagePart[] }
   | { kind: 'tools'; id: string; executions: ToolExecutionMessagePart[]; timestamp: string }
 
-const displayBlocks = computed<MessageDisplayBlock[]>(() => {
+function buildDisplayBlocks(parts: ChatMessagePart[]): MessageDisplayBlock[] {
   const blocks: MessageDisplayBlock[] = []
-  const sequence = props.messages.length ? props.messages : [props.message]
   let currentKind: 'parts' | 'images' | 'tools' | null = null
   let currentParts: ChatMessagePart[] = []
   const flush = () => {
@@ -220,7 +239,7 @@ const displayBlocks = computed<MessageDisplayBlock[]>(() => {
     }
     currentParts = []
   }
-  conversationVisibleMessageParts(sequence).forEach((part) => {
+  parts.forEach((part) => {
     const nextKind = part.type === 'tool_execution'
       ? 'tools'
       : part.type === 'attachment' && isImageResource(part.attachment.name, part.attachment.mime_type)
@@ -232,7 +251,7 @@ const displayBlocks = computed<MessageDisplayBlock[]>(() => {
   })
   flush()
   return blocks
-})
+}
 const delegatedDelivery = computed(() => (
   Boolean(props.message.metadata?.delegated_delivery)
   && visibleParts.value.some(part => part.type === 'delegated_delivery')
@@ -255,7 +274,7 @@ const workSummary = computed(() => toolTraceSummary(turnExecutions.value))
 
 /**
  * 「最终回答」= 回合里最后一个文本 part，并且它后面没有再发生工具调用。
- * 用位置判定而不是后端标记：流式过程中就已经成立，而且翻转只改样式、不搬 DOM。
+ * 流式过程中最后一段文本暂作回答；出现后续工具调用时再归入工作记录。
  */
 const answerPartId = computed(() => {
   if (!isAssistantTurn.value) return ''
@@ -272,14 +291,15 @@ const workNoteCount = computed(() => (
   turnParts.value.filter(part => part.type === 'text' && part.id !== answerPartId.value).length
 ))
 
-/** 用户手动开合过的状态；null 表示跟随默认（有失败就展开）。 */
-const workOpenState = ref<boolean | null>(null)
+/** Manual choices survive viewport unmounts and remain stable across turn messages. */
+const { expanded: workExpanded, toggle: toggleWork } = useAutoExpandedDetails(
+  computed(() => turnRunning.value || workSummary.value.failureCount > 0),
+  () => `${props.messages[0]?.id ?? props.message.id}:work`,
+)
 const workCollapsed = computed(() => {
   if (!isAssistantTurn.value) return false
-  if (props.streaming) return false
   if (turnExecutions.value.length === 0) return false
-  const open = workOpenState.value ?? workSummary.value.failureCount > 0
-  return !open
+  return !workExpanded.value
 })
 
 const workDigestSegments = computed<Array<{ text: string; tone: 'default' | 'failed' | 'running' }>>(() => {
@@ -323,11 +343,7 @@ const workDigestSegments = computed<Array<{ text: string; tone: 'default' | 'fai
 })
 
 const workDigestTitle = computed(() => workDigestSegments.value.map(segment => segment.text).join(' · '))
-const showWorkDigest = computed(() => workDigestSegments.value.length > 0 && !props.streaming)
-
-function toggleWork(): void {
-  workOpenState.value = workCollapsed.value
-}
+const showWorkDigest = computed(() => workDigestSegments.value.length > 0)
 
 /**
  * 折叠只收「工作记录」（进展说明 + 工具调用）。产物、附件、错误属于交付物，
@@ -335,11 +351,26 @@ function toggleWork(): void {
  */
 const WORK_ONLY_PART_TYPES = new Set(['text', 'reasoning', 'tool_call', 'tool_result', 'tool_execution', 'status'])
 
-function isPartVisible(part: ChatMessagePart): boolean {
-  if (!workCollapsed.value) return true
-  if (part.id === answerPartId.value) return true
-  return !WORK_ONLY_PART_TYPES.has(part.type)
-}
+const displaySections = computed(() => {
+  if (!showWorkDigest.value) {
+    return [{ id: 'delivery', isWork: false, blocks: buildDisplayBlocks(turnParts.value) }]
+  }
+  const work: ChatMessagePart[] = []
+  const delivery: ChatMessagePart[] = []
+  for (const part of turnParts.value) {
+    const isWork = part.id !== answerPartId.value && WORK_ONLY_PART_TYPES.has(part.type)
+    if (isWork) work.push(part)
+    else delivery.push(part)
+  }
+  return [
+    ...(!workCollapsed.value ? [{ id: 'work', isWork: true, blocks: buildDisplayBlocks(work) }] : []),
+    { id: 'delivery', isWork: false, blocks: buildDisplayBlocks(delivery) },
+  ]
+})
+
+const workContentRef = ref<HTMLElement | null>(null)
+usePinnedScroll(workContentRef, () => turnParts.value)
+
 const isGroupUserMessage = computed(() => (
   props.message.role === 'user' && Boolean(props.message.metadata?.agent_group_message)
 ))
@@ -527,6 +558,21 @@ function formatTime(timestamp: string): string {
 .role-assistant :deep(.message-part.is-turn-answer) .markdown-content {
   color: var(--app-text);
   font-size: 15px;
+}
+
+/* One viewport owns the complete work timeline, including alternating notes
+   and tool groups. The answer and attachments remain in the main chat flow. */
+.turn-work-content {
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  max-block-size: var(--app-chat-detail-max-block-size);
+  overflow: auto;
+  scrollbar-gutter: stable;
+  overflow-wrap: anywhere;
+}
+
+.turn-delivery-content {
+  display: contents;
 }
 
 .turn-work-digest {

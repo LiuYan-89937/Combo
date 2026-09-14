@@ -17,7 +17,7 @@ from combo.context_system.schema import (
 )
 from combo.context_system.token_counter import TokenCountResult
 from combo.context_system.token_estimation import estimate_messages_tokens, estimate_text_tokens
-from combo.runtime_protocol.messages import incomplete_tool_call_ids
+from combo.runtime_protocol.messages import has_complete_tool_call_history, represented_input_message_ids
 from combo.runtime_kernel.structured_output import (
     execute_structured_output_invocation,
     prepare_structured_output_invocation,
@@ -44,7 +44,7 @@ def maybe_compress_messages(
     summary_model: Any,
     summary_model_max_output_tokens: int | None,
     summary_model_metadata: dict[str, Any] | None = None,
-    protected_tail_start_id: str | None = None,
+    protected_message_ids: tuple[str, ...] = (),
     token_counter: Callable[[list[Any]], TokenCountResult] | None = None,
     trigger_count: TokenCountResult | None = None,
     on_start: Callable[[ContextCompressionReport], None] | None = None,
@@ -52,7 +52,7 @@ def maybe_compress_messages(
 ) -> tuple[list[Any], ContextCompressionReport]:
     started = perf_counter()
     if not policy.enabled:
-        return messages, ContextCompressionReport(status="skipped", node_id=node_id)
+        return messages, ContextCompressionReport(status="skipped", node_id=node_id, reason="disabled")
     count_before = trigger_count or _count_messages(messages, token_counter=token_counter)
     if count_before.token_count is None:
         return (
@@ -64,6 +64,7 @@ def maybe_compress_messages(
                 compressed_message_count=len(messages),
                 token_count_method=count_before.method,
                 token_count_error=count_before.error,
+                reason="token_count_unavailable",
                 duration_ms=int((perf_counter() - started) * 1000),
             ),
         )
@@ -74,6 +75,7 @@ def maybe_compress_messages(
             ContextCompressionReport(
                 status="skipped",
                 node_id=node_id,
+                reason="below_threshold",
                 original_message_count=len(messages),
                 compressed_message_count=len(messages),
                 token_estimate_before=token_before,
@@ -85,12 +87,7 @@ def maybe_compress_messages(
     protected, compressible, recent = _partition_messages(
         messages,
         keep_recent=policy.keep_recent_messages,
-        protected_tail_start_id=protected_tail_start_id,
-        minimum_token_reduction=(
-            1
-            if force
-            else max(token_before - policy.trigger_token_threshold, 1)
-        ),
+        protected_message_ids=protected_message_ids,
     )
     if not compressible:
         return (
@@ -98,6 +95,7 @@ def maybe_compress_messages(
             ContextCompressionReport(
                 status="skipped",
                 node_id=node_id,
+                reason="no_compressible_history",
                 original_message_count=len(messages),
                 compressed_message_count=len(messages),
                 token_estimate_before=token_before,
@@ -170,13 +168,26 @@ def maybe_compress_messages(
             )
         if not summary_messages:
             raise RuntimeError("compression input contains no summarizable content")
-        compressed_messages = [
-            _without_inline_image_payload(message)
-            for message in [*protected, *summary_messages, *recent]
-        ]
-        missing = incomplete_tool_call_ids(compressed_messages)
-        if missing:
-            raise RuntimeError("compressed messages contain incomplete tool call history: " + ", ".join(missing))
+        compacted_input_ids = sorted(represented_input_message_ids(compressible))
+        for message in summary_messages:
+            message.additional_kwargs["compacted_input_message_ids"] = compacted_input_ids
+        compressed_messages = [*protected, *summary_messages, *recent]
+        if not has_complete_tool_call_history(compressed_messages):
+            raise RuntimeError("compressed messages contain an invalid tool call history")
+        # Compare like-for-like estimates. Provider usage can include tool
+        # schemas and other overhead that is not part of the compressible text.
+        if estimate_messages_tokens(summary_messages) >= estimate_messages_tokens(compressible):
+            return messages, ContextCompressionReport(
+                status="skipped",
+                reason="no_token_reduction",
+                node_id=node_id,
+                original_message_count=len(messages),
+                compressed_message_count=len(messages),
+                token_estimate_before=token_before,
+                token_estimate_after=token_before,
+                token_count_method=count_before.method,
+                duration_ms=int((perf_counter() - started) * 1000),
+            )
         count_after = _count_messages(compressed_messages, token_counter=token_counter)
         token_after = count_after.token_count or 0
         return (
@@ -232,58 +243,44 @@ def _partition_messages(
     messages: list[Any],
     *,
     keep_recent: int,
-    protected_tail_start_id: str | None,
-    minimum_token_reduction: int,
+    protected_message_ids: tuple[str, ...],
 ) -> tuple[list[Any], list[Any], list[Any]]:
-    normalized = list(messages)
-    protected: list[Any] = []
-    cursor = 0
-    while cursor < len(normalized) and _is_protected_message(normalized[cursor]):
-        protected.append(normalized[cursor])
-        cursor += 1
-    history_count = len(normalized) - cursor
-    if history_count <= keep_recent:
-        return protected, [], normalized[cursor:]
+    """Retain individual instructions and a complete recent tool exchange.
 
-    preferred_boundary = len(normalized) - keep_recent
-    if protected_tail_start_id:
-        protected_tail_start = _message_index(normalized, protected_tail_start_id)
-        if protected_tail_start is None:
-            raise ValueError(
-                "protected compression tail is missing from the conversation: "
-                f"{protected_tail_start_id}"
+    The current user message is a projection anchor, not the beginning of an
+    immutable tail. Completed exchanges after it can be summarized in this turn.
+    """
+    required_ids = set(protected_message_ids)
+    present_ids = {str(getattr(message, "id", "") or "") for message in messages}
+    missing_ids = required_ids - present_ids
+    if missing_ids:
+        raise ValueError("protected compression messages are missing: " + ", ".join(sorted(missing_ids)))
+    latest_instruction = next((
+        message for message in reversed(messages)
+        if isinstance(message, HumanMessage)
+        and message.additional_kwargs.get("updates_current_user_input", True)
+    ), None)
+
+    # Move the boundary backwards until both halves contain complete exchanges.
+    # Incomplete exchanges defer compression; no result is orphaned.
+    for boundary in range(max(0, len(messages) - keep_recent), 0, -1):
+        prefix, recent = messages[:boundary], messages[boundary:]
+        if not has_complete_tool_call_history(prefix) or not has_complete_tool_call_history(recent):
+            continue
+        protected, compressible = [], []
+        for message in prefix:
+            retained = (
+                _is_protected_message(message)
+                or str(getattr(message, "id", "") or "") in required_ids
+                or message is latest_instruction
             )
-        preferred_boundary = min(preferred_boundary, protected_tail_start)
-    selected_boundary: int | None = None
-    for boundary in range(preferred_boundary, cursor, -1):
-        if boundary < len(normalized) and _is_tool_message(normalized[boundary]):
-            continue
-        candidate = normalized[cursor:boundary]
-        recent_candidate = normalized[boundary:]
-        if (
-            not candidate
-            or incomplete_tool_call_ids(candidate)
-            or incomplete_tool_call_ids(recent_candidate)
-        ):
-            continue
-        selected_boundary = boundary
-        break
-    if selected_boundary is None:
-        return protected, [], normalized[cursor:]
-
-    if estimate_messages_tokens(normalized[cursor:selected_boundary]) < minimum_token_reduction:
-        return protected, [], normalized[cursor:]
-
-    compressible = normalized[cursor:selected_boundary]
-    recent = normalized[selected_boundary:]
-    return protected, compressible, recent
-
-
-def _message_index(messages: list[Any], message_id: str) -> int | None:
-    for index in range(len(messages) - 1, -1, -1):
-        if str(getattr(messages[index], "id", "") or "") == message_id:
-            return index
-    return None
+            (protected if retained else compressible).append(message)
+        # Existing summaries alone are not new history to compact on every call.
+        if not any(not is_context_summary_message(message) for message in compressible):
+            return list(messages), [], []
+        if has_complete_tool_call_history(compressible):
+            return protected, compressible, recent
+    return list(messages), [], []
 
 
 def _is_protected_message(message: Any) -> bool:
@@ -298,34 +295,6 @@ def is_context_summary_message(message: Any) -> bool:
         return False
     metadata = dict(getattr(message, "additional_kwargs", {}) or {})
     return metadata.get("kind") in CONTEXT_SUMMARY_KINDS
-
-
-def _is_tool_message(message: Any) -> bool:
-    return isinstance(message, ToolMessage)
-
-
-def _without_inline_image_payload(message: Any) -> Any:
-    content = getattr(message, "content", None)
-    if not isinstance(content, list) or not hasattr(message, "model_copy"):
-        return message
-    retained = [block for block in content if not _is_image_content_block(block)]
-    if retained == content:
-        return message
-    normalized: str | list[Any]
-    if len(retained) == 1 and isinstance(retained[0], dict) and retained[0].get("type") == "text":
-        normalized = str(retained[0].get("text") or "")
-    else:
-        normalized = retained
-    return message.model_copy(update={"content": normalized})
-
-
-def _is_image_content_block(block: Any) -> bool:
-    if not isinstance(block, dict):
-        return False
-    if str(block.get("type") or "").strip() in {"image", "image_url", "input_image"}:
-        return True
-    source = block.get("source")
-    return isinstance(source, dict) and str(source.get("media_type") or "").startswith("image/")
 
 
 def _summary_output_token_limit(policy: CompressionPolicy) -> int:

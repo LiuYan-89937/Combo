@@ -286,6 +286,8 @@ def _apply_steered_inputs(state: Any, injections: Any) -> None:
     if conversation is None or runtime_config is None:
         return
     for injection in injections or ():
+        if not getattr(injection, "updates_current_user_input", True):
+            continue
         if str(getattr(injection, "role", "") or "") != "user":
             continue
         content = str(getattr(injection, "content", "") or "")
@@ -333,7 +335,10 @@ def _injected_messages(injections: Any) -> list[Any]:
             messages.append(HumanMessage(
                 id=injection_id,
                 content=content,
-                additional_kwargs={"kind": "runtime_steered_input"},
+                additional_kwargs={
+                    "kind": "runtime_steered_input",
+                    "updates_current_user_input": getattr(injection, "updates_current_user_input", True),
+                },
             ))
         elif role == "system":
             messages.append(
@@ -371,6 +376,9 @@ def make_context_preparer(
                 messages=messages,
                 services=services,
                 resources=services.runtime_context_resources.current(),
+                # New injections must reach a checkpoint intact before their
+                # queued-command receipt can be acknowledged at the next node.
+                protected_input_ids=tuple(message.id for message in injected if message.id),
                 enable_dynamic_evidence=(
                     state.run.strategy != "plan_and_execute" or node_id == "executor"
                 ),

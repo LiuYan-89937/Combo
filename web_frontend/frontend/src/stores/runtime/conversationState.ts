@@ -1,6 +1,7 @@
 import type { ConversationScopeState, RuntimeViewState } from '@/types/protocol'
 
 export const CONVERSATION_STATE_KEYS = [
+  'historyBefore',
   'transcript',
   'conversationTurns',
   'timeline',
@@ -37,6 +38,7 @@ export function captureConversationScopeState(
   source: ConversationScopeSource,
 ): ConversationScopeState {
   return {
+    historyBefore: source.historyBefore,
     transcript: source.transcript,
     conversationTurns: source.conversationTurns,
     timeline: source.timeline,
@@ -62,6 +64,7 @@ export function captureConversationScopeState(
 
 export function createConversationScopeState(): ConversationScopeState {
   return {
+    historyBefore: null,
     transcript: [],
     conversationTurns: [],
     timeline: [],

@@ -145,7 +145,13 @@ const compressionText = computed(() => {
     return t('status.contextCompressionFailed', { reason: String(payload.error || t('common.unknown')) })
   }
   if (activity.status === 'skipped') {
-    return t('status.contextCompressionSkipped')
+    switch (payload.reason) {
+      case 'below_threshold': return ''
+      case 'disabled': return t('status.contextCompressionDisabled')
+      case 'token_count_unavailable': return t('status.contextCompressionCountUnavailable')
+      case 'no_token_reduction': return t('status.contextCompressionNoReduction')
+      default: return t('status.contextCompressionSkipped')
+    }
   }
   return ''
 })

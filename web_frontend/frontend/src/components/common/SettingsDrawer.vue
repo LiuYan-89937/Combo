@@ -291,11 +291,12 @@
               <n-input-number
                 v-model:value="maxParallelSubAgents"
                 class="field-input"
-                :min="1"
+                :min="0"
                 :step="1"
                 :precision="0"
                 :show-button="true"
               />
+              <p class="field-status">{{ t('settings.maxParallelSubAgentsHint') }}</p>
               <p v-if="runtimePreferences.maxParallelSubAgentsSaveFailed" class="field-error">
                 {{ t('settings.maxParallelSubAgentsSaveFailed') }}
               </p>

@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from combo.context_system.assembly import assemble_context_frame
 from combo.context_system.compression import maybe_compress_messages
 from combo.context_system.events import emit_context_event
+from combo.context_system.history import archive_context_history
 from combo.context_system.schema import (
     ContextCandidate,
     ContextCompressionReport,
@@ -62,6 +63,7 @@ class ContextSystemRuntime:
         services: Any = None,
         resources: Mapping[str, Any] | None = None,
         enable_dynamic_evidence: bool = True,
+        protected_input_ids: tuple[str, ...] = (),
     ) -> ContextPreparationResult:
         if not self.config.enabled:
             retrieval_report = ContextRetrievalReport(status="skipped", node_id=node_id)
@@ -113,7 +115,10 @@ class ContextSystemRuntime:
             messages=working_messages,
             policy=compression_policy,
             node_id=node_id,
-            protected_tail_start_id=working_state.conversation.current_user_input_id,
+            protected_message_ids=tuple(filter(None, (
+                working_state.conversation.current_user_input_id,
+                *protected_input_ids,
+            ))),
             token_counter=compression_result_counter,
             trigger_count=effective_count,
             on_start=lambda report: emit_context_event(
@@ -127,6 +132,10 @@ class ContextSystemRuntime:
             summary_model_max_output_tokens=summary_model_max_output_tokens,
             summary_model_metadata=summary_model_metadata,
         )
+        if compression_report.status == "completed":
+            archive_context_history(
+                store=services.graph_store, state=working_state, messages=working_messages,
+            )
         compression_event_type = {
             "completed": "context_compression_completed",
             "failed": "context_compression_failed",

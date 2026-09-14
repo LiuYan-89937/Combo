@@ -13,9 +13,6 @@ export interface MarkdownBlock {
 
 const parser = unified().use(remarkParse).use(remarkGfm).use(remarkMath)
 
-/** Enough for the largest message; oldest entries are dropped first. */
-const CACHE_LIMIT = 120
-
 /**
  * Splits normalized markdown into its top-level blocks, keeping each block's
  * exact source text.
@@ -38,7 +35,7 @@ export function splitMarkdownBlocks(source: string): { key: string; source: stri
     if (typeof start !== 'number' || typeof end !== 'number' || end <= start) continue
     const text = source.slice(start, end)
     if (!text.trim()) continue
-    blocks.push({ key: blockKey(String(node?.type || 'block'), text), source: text })
+    blocks.push({ key: `${start}:${blockKey(String(node?.type || 'block'), text)}`, source: text })
   }
   return blocks
 }
@@ -46,24 +43,24 @@ export function splitMarkdownBlocks(source: string): { key: string; source: stri
 export function renderMarkdownBlocks(
   content: string,
   options: MarkdownRenderOptions = {},
-  cache?: Map<string, string>,
+  cache?: Map<string, MarkdownBlock>,
 ): MarkdownBlock[] {
   const source = prepareMarkdownSource(content, options)
-  return splitMarkdownBlocks(source).map((block) => {
-    const cached = cache?.get(block.key)
-    if (cached !== undefined) return { key: block.key, html: cached }
-    const html = renderMarkdownDocument(block.source, { ...options, streaming: false }).html
-    if (cache) remember(cache, block.key, html)
-    return { key: block.key, html }
-  })
-}
-
-function remember(cache: Map<string, string>, key: string, html: string): void {
-  if (cache.size >= CACHE_LIMIT) {
-    const oldest = cache.keys().next().value
-    if (oldest !== undefined) cache.delete(oldest)
+  const blocks = splitMarkdownBlocks(source)
+  // Retain only the current document, never previous revisions of a growing
+  // paragraph/code block. Cache space is proportional to displayed content.
+  const keys = new Set(blocks.map(block => block.key))
+  if (cache) {
+    for (const key of cache.keys()) if (!keys.has(key)) cache.delete(key)
   }
-  cache.set(key, html)
+  return blocks.map((block) => {
+    const cached = cache?.get(block.key)
+    if (cached !== undefined) return cached
+    const html = renderMarkdownDocument(block.source, { ...options, streaming: false }).html
+    const rendered = { key: block.key, html }
+    cache?.set(block.key, rendered)
+    return rendered
+  })
 }
 
 /** Short stable id for a block's source text, used as its rendering key. */

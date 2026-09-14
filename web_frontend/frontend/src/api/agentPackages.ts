@@ -156,9 +156,9 @@ export const agentPackagesApi = {
       method: 'DELETE',
     }),
   sessions: (packageId: string) => requestEvent(`/api/agent-packages/${encodeURIComponent(packageId)}/sessions`),
-  session: (packageId: string, sessionId: string) =>
+  session: (packageId: string, sessionId: string, before?: string) =>
     requestEvent(
-      `/api/agent-packages/${encodeURIComponent(packageId)}/sessions/${encodeURIComponent(sessionId)}`
+      withQuery(`/api/agent-packages/${encodeURIComponent(packageId)}/sessions/${encodeURIComponent(sessionId)}`, { before })
     ),
   deleteSession: (packageId: string, sessionId: string) =>
     requestEvent(

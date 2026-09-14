@@ -46,7 +46,7 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
   const browserOperationTimeoutMs = ref(DEFAULT_BROWSER_OPERATION_TIMEOUT_MS)
   const browserNavigationTimeoutMs = ref(DEFAULT_BROWSER_NAVIGATION_TIMEOUT_MS)
   const maxRetries = ref(readStoredInteger(STORAGE_KEYS.maxRetries, DEFAULT_RUNTIME_MAX_RETRIES, 0))
-  const maxParallelSubAgents = ref(readStoredInteger(STORAGE_KEYS.maxParallelSubAgents, DEFAULT_MAX_PARALLEL_SUB_AGENTS, 1))
+  const maxParallelSubAgents = ref(readStoredInteger(STORAGE_KEYS.maxParallelSubAgents, DEFAULT_MAX_PARALLEL_SUB_AGENTS, 0))
   const contextCompressionDetail = ref<ContextCompressionDetail>(DEFAULT_CONTEXT_COMPRESSION_DETAIL)
   const contextCompressionKeepRecentMessages = ref(DEFAULT_CONTEXT_COMPRESSION_KEEP_RECENT_MESSAGES)
   const approvalMode = ref<ApprovalMode>(readStoredApprovalMode())
@@ -99,7 +99,7 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
   }
 
   function setMaxParallelSubAgents(value: number): void {
-    maxParallelSubAgents.value = Math.max(1, Math.round(value))
+    maxParallelSubAgents.value = Math.max(0, Math.round(value))
     writeStoredValue(STORAGE_KEYS.maxParallelSubAgents, String(maxParallelSubAgents.value))
     enqueue({ max_parallel_sub_agents: maxParallelSubAgents.value })
   }

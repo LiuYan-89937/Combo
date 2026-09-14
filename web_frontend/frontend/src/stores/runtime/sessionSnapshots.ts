@@ -1,5 +1,6 @@
 import type {
   ChatMessagePart,
+  ConversationScopeState,
   ContextWindowView,
   ConversationTurn,
   RuntimeFrontendEvent,
@@ -16,6 +17,7 @@ import { isPlanCapsuleDismissed } from '@/utils/planCapsuleDismissals'
 import { isRuntimeCancellation } from '@/utils/runtimeCancellation'
 
 export interface AgentPackageSessionSnapshotView {
+  historyBefore: string | null
   sessionPackageId: string | null
   transcript: TranscriptItem[]
   conversationTurns: ConversationTurn[]
@@ -44,6 +46,7 @@ export function agentPackageSessionSnapshotView(
   const processEvents = normalizedProcessEvents(session?.process_events)
 
   return {
+    historyBefore: stringOrNull(session?.history?.next_before),
     sessionPackageId,
     transcript: restored.transcript,
     conversationTurns: restored.conversationTurns,
@@ -54,6 +57,47 @@ export function agentPackageSessionSnapshotView(
     tools: toolsFromTurns(restored.conversationTurns),
     pendingInterrupt: pendingInterruptFrom(processEvents, restored.activeTurn),
     scope: agentPackageConversationScope(sessionPackageId, session.session_id),
+  }
+}
+
+/** Session lists and request metadata must not retain a second raw history. */
+export function agentSessionSummary(session: any): Record<string, any> {
+  const { turns, process_events, current_plan, context_window, history, ...summary } = session || {}
+  return summary
+}
+
+/** Merge an older page without replacing newer live data or its ordering. */
+export function prependSessionHistory(
+  current: Pick<ConversationScopeState, 'transcript' | 'conversationTurns' | 'tools'>,
+  page: AgentPackageSessionSnapshotView,
+) {
+  const ids = new Set(current.transcript.map(message => message.id))
+  const turnIds = new Set(current.conversationTurns.map(turn => turn.requestId || turn.id))
+  const toolIds = new Set(current.tools.map(tool => tool.activityKey || tool.toolCallId))
+  const turns = [
+    ...page.conversationTurns.filter(turn => !turnIds.has(turn.requestId || turn.id)),
+    ...current.conversationTurns,
+  ]
+  const orderForRequest = new Map(turns.map(turn => [turn.requestId, turn.metadata?.history_order]))
+  const compareOrder = (left?: number[], right?: number[]) => {
+    if (!left) return right ? 1 : 0
+    if (!right) return -1
+    return left[0] - right[0] || left[1] - right[1]
+  }
+  const messages = [
+    ...page.transcript.filter(message => !ids.has(message.id) && !turnIds.has(message.metadata?.request_id)),
+    ...current.transcript,
+  ]
+  messages.sort((left, right) => compareOrder(
+    orderForRequest.get(left.metadata?.request_id) ?? left.metadata?.history_order,
+    orderForRequest.get(right.metadata?.request_id) ?? right.metadata?.history_order,
+  ))
+  turns.sort((left, right) => compareOrder(left.metadata?.history_order, right.metadata?.history_order))
+  return {
+    transcript: orderedTranscript(messages),
+    conversationTurns: turns,
+    tools: [...page.tools.filter(tool => !toolIds.has(tool.activityKey || tool.toolCallId)), ...current.tools],
+    historyBefore: page.historyBefore,
   }
 }
 
@@ -129,7 +173,7 @@ function conversationFromTurns(rawTurns: any[], context: TurnRestoreContext) {
   const conversationTurns: ConversationTurn[] = []
   rawTurns.forEach((turn: any, index: number) => {
     if (!turn || typeof turn !== 'object') return
-    const turnIndex = String(turn.index ?? index + 1)
+    const turnIndex = String(turn.turn_id ?? turn.index ?? index + 1)
     const createdAt = String(turn.created_at || context.fallbackTimestamp || new Date().toISOString())
     const updatedAt = String(turn.updated_at || createdAt)
     const turnMessages = Array.isArray(turn.messages) ? turn.messages : []
@@ -172,6 +216,8 @@ function restoreTurnMessages(options: {
   const status = normalizeTurnStatus(options.turn.status, 'completed')
   const metadata = {
     restored: true,
+    request_id: options.turn.request_id || null,
+    history_order: options.turn.history_order,
     mode: options.context.mode,
     package_id: options.context.packageId,
     agent_session_id: options.context.agentSessionId,

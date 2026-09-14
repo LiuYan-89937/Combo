@@ -3,9 +3,8 @@
     class="tool-execution-card"
     :class="[`tool-state-${state}`, `tool-variant-${variant}`]"
     :open="cardExpanded"
-    @toggle="handleCardToggle"
   >
-    <summary class="tool-summary">
+    <summary class="tool-summary" @click.prevent="toggleCard">
       <span class="tool-main">
         <span class="tool-icon-shell" :class="`tool-category-${presentation.category}`">
           <img
@@ -44,7 +43,7 @@
       </span>
     </summary>
 
-    <div class="tool-body">
+    <div v-if="cardExpanded" class="tool-body">
       <div v-if="resultFacts.length" class="tool-facts">
         <span v-for="fact in resultFacts" :key="fact">{{ fact }}</span>
       </div>
@@ -119,27 +118,25 @@
       </div>
 
       <div v-if="shellOutput" class="structured-results shell-output">
-        <pre ref="shellOutputElement" @scroll="handleShellOutputScroll">{{ shellOutput }}</pre>
+        <pre ref="shellOutputElement">{{ shellOutput }}</pre>
       </div>
 
       <details
         v-if="hasArguments"
         class="tool-section"
         :open="argumentsExpanded"
-        @toggle="handleArgumentsToggle"
       >
-        <summary>{{ t('tool.arguments') }}</summary>
-        <pre>{{ formattedArguments }}</pre>
+        <summary @click.prevent="toggleArguments">{{ t('tool.arguments') }}</summary>
+        <pre v-if="argumentsExpanded">{{ formattedArguments }}</pre>
       </details>
 
       <details
         v-if="hasOutput || part.error"
         class="tool-section"
         :open="outputExpanded"
-        @toggle="handleOutputToggle"
       >
-        <summary>{{ state === 'failed' ? t('common.error') : t('tool.result') }}</summary>
-        <pre>{{ formattedOutput }}</pre>
+        <summary @click.prevent="toggleOutput">{{ state === 'failed' ? t('common.error') : t('tool.result') }}</summary>
+        <pre v-if="outputExpanded">{{ formattedOutput }}</pre>
       </details>
 
       <div v-if="part.artifacts.length" class="tool-artifacts">
@@ -185,13 +182,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import ResourceIcon from '@/components/common/ResourceIcon.vue'
 import ToolIcon from '@/components/common/ToolIcon.vue'
 import ErrorReportButton from '@/components/common/ErrorReportButton.vue'
 import ImageLightbox from '@/components/chat/ImageLightbox.vue'
 import { useI18n } from '@/composables/useI18n'
 import { useAutoExpandedDetails } from '@/composables/useAutoExpandedDetails'
+import { usePinnedScroll } from '@/composables/usePinnedScroll'
 import { useImageViewer } from '@/composables/useImageViewer'
 import { useWorkspaceResourceUrls } from '@/composables/useWorkspaceResourceUrls'
 import { isImageResource, workspaceFileReference, workspaceResourceUrl } from '@/utils/workspaceResources'
@@ -252,18 +250,15 @@ const state = computed(() => {
 })
 const active = computed(() => state.value === 'running' || state.value === 'approval')
 
-// `<details>` owns visibility for the whole card; the body and its sections are
-// always mounted so an open panel can never come back blank. Gating the content
-// on the JS expanded state was worse: whenever the DOM `open` and that state
-// drifted apart, the panel stayed empty until the user toggled it again.
+// Controlled expansion lets collapsed bodies release DOM and resource handles.
 const cardAutoExpanded = computed(() => (
   // 活动流里的行保持「一行摘要」：失败也默认折叠，失败信息由回合摘要和红色标签表达，
   // 需要细节时用户再点开。独立场景（任务卡等）沿用失败自动展开。
   active.value || (state.value === 'failed' && props.variant !== 'activity')
 ))
-const { expanded: cardExpanded, handleToggle: handleCardToggle } = useAutoExpandedDetails(cardAutoExpanded)
-const { expanded: argumentsExpanded, handleToggle: handleArgumentsToggle } = useAutoExpandedDetails(computed(() => false))
-const { expanded: outputExpanded, handleToggle: handleOutputToggle } = useAutoExpandedDetails(computed(() => state.value === 'failed'))
+const { expanded: cardExpanded, toggle: toggleCard } = useAutoExpandedDetails(cardAutoExpanded, () => `${props.part.id}:card`)
+const { expanded: argumentsExpanded, toggle: toggleArguments } = useAutoExpandedDetails(computed(() => false), () => `${props.part.id}:arguments`)
+const { expanded: outputExpanded, toggle: toggleOutput } = useAutoExpandedDetails(computed(() => state.value === 'failed'), () => `${props.part.id}:output`)
 const statusLabel = computed(() => {
   if (state.value === 'cancelled') return t('tool.status.cancelled')
   if (state.value === 'failed') return t('tool.status.failed')
@@ -444,9 +439,9 @@ const editDiffTotals = computed(() => editDiffRows.value.reduce(
   },
   { added: 0, removed: 0 },
 ))
-const displayTotals = computed(() => (
-  changeTotals.value.added || changeTotals.value.removed ? changeTotals.value : editDiffTotals.value
-))
+// The summary uses executor counts; deriving a full diff belongs to the body
+// and must not run for every collapsed edit in a historical transcript.
+const displayTotals = changeTotals
 const visibleDiffRows = computed(() => editDiffRows.value.slice(0, MAX_DIFF_ROWS))
 const diffTruncated = computed(() => editDiffRows.value.length > MAX_DIFF_ROWS)
 const diffFilePath = computed(() => changePath.value || String(argumentRecord.value?.path || '').trim())
@@ -483,32 +478,20 @@ const workspaceEntries = computed<Array<Record<string, any>>>(() => {
   return values.filter(item => item && typeof item === 'object' && item.path).slice(0, 30)
 })
 const workspaceContext = computed(() => props.workspaceContext)
-const protectedResourceSources = computed(() => props.part.artifacts
+const protectedResourceSources = computed(() => (cardExpanded.value ? props.part.artifacts : [])
   .filter(artifact => isImageArtifact(artifact))
   .map(artifact => String(artifact.path || '').trim())
   .filter(Boolean))
 const protectedResources = useWorkspaceResourceUrls(protectedResourceSources, workspaceContext)
 const shellOutput = computed(() => {
+  if (!cardExpanded.value) return ''
   if (presentation.value.category !== 'process') return ''
   const stdout = String(resultRecord.value?.stdout || '').trim()
   const stderr = String(resultRecord.value?.stderr || '').trim()
   return [stdout, stderr].filter(Boolean).join('\n')
 })
 const shellOutputElement = ref<HTMLElement | null>(null)
-const shellOutputPinned = ref(true)
-
-watch(shellOutput, async () => {
-  await nextTick()
-  const element = shellOutputElement.value
-  if (!element || !shellOutputPinned.value) return
-  element.scrollTop = element.scrollHeight
-})
-
-function handleShellOutputScroll() {
-  const element = shellOutputElement.value
-  if (!element) return
-  shellOutputPinned.value = element.scrollHeight - element.scrollTop - element.clientHeight < 24
-}
+usePinnedScroll(shellOutputElement, shellOutput)
 
 function artifactUrl(artifact: ArtifactMessagePart): string {
   return artifact.path ? protectedResources.resolve(artifact.path) || '' : ''
@@ -788,7 +771,7 @@ function displayOutput(value: unknown): unknown {
 .tool-diff-body {
   max-height: min(46vh, 420px);
   overflow: auto;
-  overscroll-behavior: contain;
+  overscroll-behavior-x: contain;
 }
 
 .tool-diff-row {
@@ -870,6 +853,9 @@ details[open] > summary .summary-chevron {
 }
 
 .tool-body {
+  max-block-size: var(--app-chat-detail-max-block-size);
+  overflow: auto;
+  overscroll-behavior-x: contain;
   border-top: 1px solid var(--app-border);
   background: var(--app-surface);
 }

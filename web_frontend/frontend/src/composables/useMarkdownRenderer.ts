@@ -1,4 +1,4 @@
-import { nextTick, onBeforeUnmount, onMounted, onUpdated, type Ref } from 'vue'
+import { onBeforeUnmount, onMounted, onUpdated, type Ref } from 'vue'
 import {
   enhanceRenderedMarkdown,
   renderMarkdownBlocks,
@@ -22,9 +22,10 @@ export function useMarkdownRenderer(
    * The cache lives on the renderer instance, so options that differ per
    * message (image resolution, surface) can never leak between messages.
    */
-  const blockCache = new Map<string, string>()
+  const blockCache = new Map<string, MarkdownBlock>()
 
   function renderMarkdown(content: string, options: MarkdownRenderOptions = {}): string {
+    blockCache.clear()
     return renderMarkdownDocument(content, options).html
   }
 
@@ -35,15 +36,32 @@ export function useMarkdownRenderer(
     return renderMarkdownBlocks(content, options, blockCache)
   }
 
+  let enhancementFrame: number | null = null
+  let enhancing = false
+  let dirty = false
+  let disposed = false
   function refreshMarkdownEnhancements() {
-    nextTick(() => {
-      void enhanceRenderedMarkdown(rootRef.value, { onImageClick: options.onImageClick })
+    dirty = true
+    if (disposed || enhancing || enhancementFrame !== null) return
+    enhancementFrame = requestAnimationFrame(async () => {
+      enhancementFrame = null
+      if (disposed) return
+      dirty = false
+      enhancing = true
+      try {
+        await enhanceRenderedMarkdown(rootRef.value, { onImageClick: options.onImageClick })
+      } finally {
+        enhancing = false
+        if (dirty && !disposed) refreshMarkdownEnhancements()
+      }
     })
   }
 
   onMounted(refreshMarkdownEnhancements)
   onUpdated(refreshMarkdownEnhancements)
   onBeforeUnmount(() => {
+    disposed = true
+    if (enhancementFrame !== null) cancelAnimationFrame(enhancementFrame)
     blockCache.clear()
   })
 

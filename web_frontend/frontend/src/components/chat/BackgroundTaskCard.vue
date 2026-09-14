@@ -61,7 +61,7 @@
       </section>
 
       <section v-if="view.streamMessage" class="task-stream">
-        <MessageItem :message="view.streamMessage" :streaming="view.streaming" />
+        <MessageItem :message="view.streamMessage" :streaming="view.streaming" :running="!terminal" />
       </section>
     </template>
 

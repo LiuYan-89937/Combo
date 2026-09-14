@@ -34,9 +34,13 @@ interface MermaidPreview {
 }
 
 export function enhanceMermaidDiagrams(root: ParentNode): Promise<void> {
+  if (!root.querySelector('.mermaid')) return Promise.resolve()
   ensureControls(root)
   ensureThemeObserver()
-  return enqueueRender(() => renderDiagrams(root))
+  return enqueueRender(() => {
+    if (root instanceof Node && !root.isConnected) return Promise.resolve()
+    return renderDiagrams(root)
+  })
 }
 
 function ensureControls(root: ParentNode): void {

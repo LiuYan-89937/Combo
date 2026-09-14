@@ -4,9 +4,8 @@
       v-if="part.type === 'reasoning'"
       class="reasoning-panel"
       :open="reasoningExpanded"
-      @toggle="handleReasoningToggle"
     >
-      <summary class="reasoning-summary">
+      <summary class="reasoning-summary" @click.prevent="toggleReasoning">
         <span class="summary-icon" aria-hidden="true">
           <n-icon :size="18"><BulbOutline /></n-icon>
         </span>
@@ -15,8 +14,10 @@
         </span>
         <span class="summary-chevron" aria-hidden="true">⌄</span>
       </summary>
-      <StreamingReasoningText v-if="isReasoningLive" :text="part.text" />
-      <div v-else class="markdown-content reasoning-markdown" v-html="renderedReasoning"></div>
+      <template v-if="reasoningExpanded">
+        <StreamingReasoningText v-if="isReasoningLive" :text="displayedText" />
+        <div v-else class="markdown-content reasoning-markdown" v-html="renderedReasoning"></div>
+      </template>
     </details>
 
     <template v-else-if="part.type === 'text' && part.format === 'markdown'">
@@ -31,6 +32,7 @@
         <div
           v-for="block in streamingBlocks"
           :key="block.key"
+          v-memo="[block]"
           class="markdown-block"
           v-html="block.html"
         ></div>
@@ -39,7 +41,7 @@
     </template>
 
     <div v-else-if="part.type === 'text'" class="plain-content">
-      {{ part.text }}
+      {{ displayedText }}
     </div>
 
     <MessageImageGallery
@@ -73,9 +75,8 @@
       class="inline-tool-part"
       :class="[`tool-state-${toolState}`]"
       :open="toolExpanded"
-      @toggle="handleToolToggle"
     >
-      <summary class="inline-tool-summary">
+      <summary class="inline-tool-summary" @click.prevent="toggleTool">
         <span class="tool-summary-main">
           <span class="tool-status-dot" aria-hidden="true"></span>
           <span class="tool-summary-copy">
@@ -88,11 +89,13 @@
           <span class="summary-chevron" aria-hidden="true">⌄</span>
         </span>
       </summary>
-      <div v-if="toolPayload" class="tool-detail">
-        <div class="tool-detail-label">{{ toolDetailLabel }}</div>
-        <pre>{{ toolPayload }}</pre>
-      </div>
-      <div v-else class="tool-empty">{{ t('tool.noPayload') }}</div>
+      <template v-if="toolExpanded">
+        <div v-if="toolPayload" class="tool-detail">
+          <div class="tool-detail-label">{{ toolDetailLabel }}</div>
+          <pre>{{ toolPayload }}</pre>
+        </div>
+        <div v-else class="tool-empty">{{ t('tool.noPayload') }}</div>
+      </template>
     </details>
 
     <ToolExecutionCard
@@ -180,6 +183,7 @@ import { useWorkspaceResourceUrls } from '@/composables/useWorkspaceResourceUrls
 import type { AttachmentMessagePart, ChatMessagePart, TranscriptAttachmentView } from '@/types/protocol'
 import type { WorkspaceRequestContext } from '@/api/resourceTypes'
 import { toolPresentation } from '@/utils/toolPresentation'
+import { useFrameValue } from '@/composables/useFrameValue'
 import { isImageResource, workspaceFileReference, workspaceImageSources } from '@/utils/workspaceResources'
 import { formatBytes } from '@/utils/format'
 
@@ -194,6 +198,15 @@ const props = defineProps<{
 const { t } = useI18n()
 const { openWorkspaceFile } = useWorkspaceFileOpener()
 const rootRef = ref<HTMLElement | null>(null)
+const isStreaming = computed(() => props.streaming && props.part.status === 'streaming')
+const displayedText = useFrameValue(
+  () => props.part.type === 'text' || props.part.type === 'reasoning' ? props.part.text : '',
+  () => isStreaming.value,
+)
+const isReasoningLive = computed(() => props.part.type === 'reasoning' && isStreaming.value)
+const { expanded: reasoningExpanded, toggle: toggleReasoning } = useAutoExpandedDetails(
+  isReasoningLive, () => `${props.part.id}:reasoning`,
+)
 // 正文图片和 artifact 图片卡共用同一个查看器实例。
 const {
   open: imageViewerOpen,
@@ -236,8 +249,9 @@ const { renderMarkdown, renderStreamingBlocks } = useMarkdownRenderer(rootRef, {
 })
 const workspaceContext = computed(() => props.workspaceContext)
 const protectedResourceSources = computed(() => {
+  if (props.part.type === 'reasoning' && !reasoningExpanded.value) return []
   if (props.part.type === 'text' || props.part.type === 'reasoning') {
-    return workspaceImageSources(props.part.text)
+    return workspaceImageSources(displayedText.value)
   }
   if (props.part.type === 'attachment') return props.part.attachment.path ? [props.part.attachment.path] : []
   if (props.part.type === 'artifact') return props.part.path ? [props.part.path] : []
@@ -254,15 +268,9 @@ const imageAttachmentParts = computed<AttachmentMessagePart[]>(() => (
   props.part.type === 'attachment' && isImageAttachmentPart.value ? [props.part] : []
 ))
 
-const isStreaming = computed(() => props.streaming || props.part.status === 'streaming')
-/**
- * 思考条目「正在进行」的判定：必须看整条消息是否还在流式，而不只是 part 状态——
- * 回合结束后 part 仍可能留着 `status: 'streaming'`，那样思考行会一直停在进行态。
- */
-const isReasoningLive = computed(() => props.part.type === 'reasoning' && props.streaming && isStreaming.value)
 const streamingBlocks = computed(() => (
   props.part.type === 'text' && props.part.format === 'markdown' && isStreaming.value
-    ? renderStreamingBlocks(markdownWithMentions(props.part.text), {
+    ? renderStreamingBlocks(markdownWithMentions(displayedText.value), {
         streaming: true,
         surface: 'chat_message',
         resolveImageUrl: resolveMessageImageUrl,
@@ -271,7 +279,7 @@ const streamingBlocks = computed(() => (
 ))
 const renderedText = computed(() => (
   props.part.type === 'text' && props.part.format === 'markdown' && !streamingBlocks.value
-    ? renderMarkdown(markdownWithMentions(props.part.text), {
+    ? renderMarkdown(markdownWithMentions(displayedText.value), {
         streaming: isStreaming.value,
         surface: 'chat_message',
         resolveImageUrl: resolveMessageImageUrl,
@@ -279,8 +287,8 @@ const renderedText = computed(() => (
     : ''
 ))
 const renderedReasoning = computed(() => (
-  props.part.type === 'reasoning' && !isReasoningLive.value
-    ? renderMarkdown(props.part.text, {
+  props.part.type === 'reasoning' && reasoningExpanded.value && !isReasoningLive.value
+    ? renderMarkdown(displayedText.value, {
         streaming: isReasoningLive.value,
         surface: 'reasoning',
         resolveImageUrl: resolveMessageImageUrl,
@@ -341,13 +349,9 @@ const toolState = computed(() => {
 })
 const isToolActive = computed(() => toolState.value === 'running' || toolState.value === 'approval')
 
-// Reasoning and inline tool blocks behave like the transcript's tool groups:
-// they open while active and mount their body only once expanded. Liveness uses
-// the message-level streaming flag so a lingering part status cannot keep the
-// row open after the turn is over.
-const { expanded: reasoningExpanded, handleToggle: handleReasoningToggle } = useAutoExpandedDetails(isReasoningLive)
-const { expanded: toolExpanded, handleToggle: handleToolToggle } = useAutoExpandedDetails(
+const { expanded: toolExpanded, toggle: toggleTool } = useAutoExpandedDetails(
   computed(() => isToolActive.value || toolState.value === 'failed'),
+  () => `${props.part.id}:inline-tool`,
 )
 const toolStatusLabel = computed(() => {
   const status = props.part.status || ''
@@ -558,9 +562,9 @@ details[open] > summary .summary-chevron {
 }
 
 .reasoning-markdown {
-  max-block-size: min(42vh, 32rem);
+  max-block-size: var(--app-chat-detail-max-block-size);
   overflow: auto;
-  overscroll-behavior: contain;
+  overscroll-behavior-x: contain;
   padding: 2px 0 var(--app-space-sm) 12px;
   color: var(--app-text-muted);
 }
@@ -790,7 +794,8 @@ details[open] > summary .summary-chevron {
 }
 
 .inline-tool-part pre {
-  max-height: 420px;
+  max-block-size: var(--app-chat-detail-max-block-size);
+  overscroll-behavior-x: contain;
   margin: 0;
   padding: var(--app-space-sm) var(--app-space-md) var(--app-space-md);
   overflow: auto;

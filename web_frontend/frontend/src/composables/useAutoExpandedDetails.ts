@@ -1,31 +1,22 @@
-import { computed, ref, watch, type Ref } from 'vue'
+import { computed, inject, provide, shallowReactive, type InjectionKey, type Ref } from 'vue'
 
-/**
- * Drives a `<details>` element that opens itself while it is active.
- *
- * A long transcript should not keep every finished reasoning/tool block open,
- * but the user must still be able to open one manually. The explicit toggle
- * therefore wins until the activity state changes again, and the content is
- * only mounted while open so a freshly expanded panel never renders blank.
+const detailsStateKey: InjectionKey<Map<string, boolean>> = Symbol('detailsState')
+
+/** Preserve explicit choices when a folded turn unmounts its expensive bodies. */
+export function provideDetailsState(): void {
+  provide(detailsStateKey, inject(detailsStateKey, null) ?? shallowReactive(new Map<string, boolean>()))
+}
+
+/** Vue owns `open`; only summary activation changes the user preference.
+ * Native `toggle` also fires asynchronously after programmatic updates.
  */
-export function useAutoExpandedDetails(autoExpand: Ref<boolean>) {
-  const userOverride = ref<boolean | null>(null)
-  const expanded = computed(() => userOverride.value ?? autoExpand.value)
+export function useAutoExpandedDetails(autoExpand: Ref<boolean>, key: () => string) {
+  const choices = inject(detailsStateKey, null) ?? shallowReactive(new Map<string, boolean>())
+  const expanded = computed(() => choices.get(key()) ?? autoExpand.value)
 
-  watch(autoExpand, () => {
-    userOverride.value = null
-  })
-
-  function handleToggle(event: Event): void {
-    // `toggle` bubbles. Without this guard a nested `<details>` (an argument or
-    // result section) also drives its ancestors' state, so the two drift apart:
-    // the DOM ends up open while the JS state still says collapsed, and the
-    // panel renders blank until the user toggles it once more.
-    if (event.target !== event.currentTarget) return
-    const element = event.currentTarget as HTMLDetailsElement | null
-    if (!element || element.open === expanded.value) return
-    userOverride.value = element.open
+  function toggle(): void {
+    choices.set(key(), !expanded.value)
   }
 
-  return { expanded, handleToggle }
+  return { expanded, toggle }
 }

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -26,6 +26,7 @@ from combo.runtime_protocol import (
     CommandReceipt,
     DEFAULT_REASONING_INTENSITY,
     RuntimeProtocolDescriptor,
+    RuntimeEvent,
     ToolCallRecord,
     UserRuntimePolicy,
     is_runtime_cancellation,
@@ -52,7 +53,7 @@ class FrontendCommandRequest(BaseModel):
 
 class BackgroundTaskSettingsWrite(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    max_parallel_sub_agents: int
+    max_parallel_sub_agents: int = Field(ge=0)
     revision: int | None = None
 
 
@@ -78,7 +79,7 @@ class RuntimePreferencesWrite(BaseModel):
     browser_operation_timeout_ms: int | None = Field(default=None, ge=1_000, le=600_000)
     browser_navigation_timeout_ms: int | None = Field(default=None, ge=1_000, le=600_000)
     max_retries: int | None = None
-    max_parallel_sub_agents: int | None = None
+    max_parallel_sub_agents: int | None = Field(default=None, ge=0)
     context_compression_detail: Literal["concise", "standard", "detailed"] | None = None
     context_compression_keep_recent_messages: int | None = Field(default=None, ge=0, le=128)
     memory_auto_write_enabled: bool | None = None
@@ -342,10 +343,16 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
         return {"event": _event("agent_package_sessions_listed", {"sessions": sessions})}
 
     @router.get("/api/agent-packages/{package_id}/sessions/{session_id}")
-    async def agent_package_session(request: Request, package_id: str, session_id: str) -> dict[str, Any]:
+    async def agent_package_session(
+        request: Request, package_id: str, session_id: str,
+        before: str | None = Query(default=None, pattern=r"^\d+:\d+$"),
+        limit: int = Query(default=20, ge=1, le=100),
+    ) -> dict[str, Any]:
         _require_system_package(package_id)
         principal_id = _principal(request)
-        session = await asyncio.to_thread(_session_snapshot, backend, principal_id, session_id)
+        session = await asyncio.to_thread(
+            _session_snapshot, backend, principal_id, session_id, before=before, limit=limit,
+        )
         return {
             "event": _event(
                 "agent_package_session_loaded",
@@ -512,7 +519,7 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
                 principal_id=principal_id,
                 policy_id=uuid4().hex,
                 model_profile_id=None,
-                max_parallel_temporary_agents=max(1, payload.max_parallel_sub_agents),
+                max_parallel_temporary_agents=payload.max_parallel_sub_agents,
                 locale=locale,
                 timezone=timezone,
             )
@@ -523,7 +530,7 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
             saved = backend.application.stores.runtime_policies.replace(
                 current.model_copy(update={
                     "revision": current.revision + 1,
-                    "max_parallel_temporary_agents": max(1, payload.max_parallel_sub_agents),
+                    "max_parallel_temporary_agents": payload.max_parallel_sub_agents,
                     "locale": locale,
                     "updated_at": utc_now_text(),
                 }),
@@ -1392,7 +1399,11 @@ def _synchronize_policy(
             if runtime_request.get("max_retries") is not None
             else current.max_model_attempts if current else 2
         ),
-        max_parallel_temporary_agents=int(config.get("max_parallel_sub_agents") or (current.max_parallel_temporary_agents if current else 4)),
+        max_parallel_temporary_agents=(
+            int(config["max_parallel_sub_agents"])
+            if config.get("max_parallel_sub_agents") is not None
+            else current.max_parallel_temporary_agents if current else 4
+        ),
         context_compression_detail=(
             current.context_compression_detail if current else "standard"
         ),
@@ -1576,30 +1587,50 @@ def _session_views(backend: Any, principal_id: str) -> list[dict[str, Any]]:
     return views
 
 
-def _session_snapshot(backend: Any, principal_id: str, session_id: str) -> dict[str, Any]:
+def _session_snapshot(
+    backend: Any, principal_id: str, session_id: str, *, before: str | None = None, limit: int = 20,
+) -> dict[str, Any]:
     identity = backend.application.stores.conversations.require_identity(session_id)
     if identity.principal_id != principal_id:
         raise HTTPException(status_code=404, detail="conversation not found")
-    messages = backend.application.stores.conversations.messages(session_id)
-    grouped: dict[str, list[Any]] = defaultdict(list)
-    for message in messages:
-        grouped[message.turn_id].append(message)
+    # Keyset pagination keeps whole turns together and stays stable while new
+    # turns are appended. Rowid breaks ties between equal task revisions.
+    cursor = tuple(int(value) for value in before.split(":")) if before else None
     with backend.application.database.connection(query_only=True) as connection:
-        rows = connection.execute(
-            """
-            select turn.payload_json, command.queue_sequence
+        turn_query = """
+            select turn.rowid as cursor_rowid, turn.turn_id, turn.task_revision,
+                   turn.payload_json, command.queue_sequence
             from conversation_turns turn left join command_inbox command
               on command.command_id = json_extract(turn.payload_json, '$.source_command_id')
-            where turn.session_id = ? order by turn.task_revision, turn.rowid
-            """,
-            (session_id,),
+            where turn.session_id = ?
+        """
+        rows = connection.execute(
+            turn_query
+            + (" and (turn.task_revision, turn.rowid) < (?, ?)" if cursor else "")
+            + " order by turn.task_revision desc, turn.rowid desc limit ?",
+            (session_id, *cursor, limit + 1) if cursor else (session_id, limit + 1),
         ).fetchall()
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+        next_before = f"{rows[-1]['task_revision']}:{rows[-1]['cursor_rowid']}" if has_more else None
+        if before is None:
+            # Pending/active work must remain available even when a large queue
+            # pushes it outside the latest history page.
+            live_rows = connection.execute(
+                turn_query + " and turn.status not in ('completed', 'cancelled', 'failed', 'stopped')",
+                (session_id,),
+            ).fetchall()
+            rows = list({row["turn_id"]: row for row in [*rows, *live_rows]}.values())
+        rows.sort(key=lambda row: (row["task_revision"], row["cursor_rowid"]))
+        turn_ids = [str(row["turn_id"]) for row in rows]
+        placeholders = ",".join("?" for _ in turn_ids)
         tool_rows = connection.execute(
-            """
+            f"""
             select tool.payload_json
             from tool_calls as tool
             join conversation_turns as turn on turn.turn_id = tool.turn_id
             where turn.session_id = ?
+              and turn.turn_id in ({placeholders})
               and tool.runtime_instance_id = turn.active_runtime_instance_id
             order by
               case when json_extract(tool.payload_json, '$.completed_at') is null then 1 else 0 end,
@@ -1607,8 +1638,15 @@ def _session_snapshot(backend: Any, principal_id: str, session_id: str) -> dict[
               tool.created_at,
               tool.rowid
             """,
-            (session_id,),
-        ).fetchall()
+            (session_id, *turn_ids),
+        ).fetchall() if turn_ids else []
+        session_row = connection.execute(
+            "select created_at, updated_at from conversations where session_id = ?", (session_id,),
+        ).fetchone()
+    messages = backend.application.stores.conversations.messages(session_id, turn_ids=turn_ids)
+    grouped: dict[str, list[Any]] = defaultdict(list)
+    for message in messages:
+        grouped[message.turn_id].append(message)
     tool_calls_by_turn: dict[str, list[ToolCallRecord]] = defaultdict(list)
     for row in tool_rows:
         record = ToolCallRecord.model_validate_json(str(row["payload_json"]))
@@ -1674,6 +1712,8 @@ def _session_snapshot(backend: Any, principal_id: str, session_id: str) -> dict[
         turns.append(
             {
                 "index": turn.task_revision,
+                "turn_id": turn.turn_id,
+                "history_order": [turn.task_revision, row["cursor_rowid"]],
                 "request_id": frontend_request_id,
                 "runtime_instance_id": turn.active_runtime_instance_id,
                 "status": "interrupted" if turn.status in {"waiting_approval", "waiting_external"} else turn.status,
@@ -1693,11 +1733,12 @@ def _session_snapshot(backend: Any, principal_id: str, session_id: str) -> dict[
         "workspace_id": identity.workspace_id,
         "workspace": workspace_view,
         "turns": turns,
-        "process_events": _process_events(backend, session_id),
+        "history": {"before": before, "next_before": next_before},
+        "process_events": _process_events(backend, session_id, turn_ids=turn_ids) if before is None else [],
         "current_plan": current_plan,
         "context_window": context_window,
-        "created_at": turns[0]["created_at"] if turns else utc_now_text(),
-        "updated_at": turns[-1]["updated_at"] if turns else utc_now_text(),
+        "created_at": str(session_row["created_at"]),
+        "updated_at": str(session_row["updated_at"]),
     }
 
 
@@ -1982,12 +2023,19 @@ def _tool_activity_view(backend: Any, record: ToolCallRecord) -> dict[str, Any]:
     }
 
 
-def _process_events(backend: Any, session_id: str) -> list[dict[str, Any]]:
-    events = backend.application.stores.runtime_events.after_session_sequence(
-        session_id=session_id,
-        session_sequence=0,
-        limit=500,
-    )
+def _process_events(backend: Any, session_id: str, *, turn_ids: list[str]) -> list[dict[str, Any]]:
+    if not turn_ids:
+        return []
+    with backend.application.database.connection(query_only=True) as connection:
+        rows = connection.execute(
+            f"""
+            select payload_json from runtime_events
+            where session_id = ? and turn_id in ({','.join('?' for _ in turn_ids)})
+            order by session_sequence desc limit 500
+            """,
+            (session_id, *turn_ids),
+        ).fetchall()
+    events = [RuntimeEvent.model_validate_json(str(row["payload_json"])) for row in reversed(rows)]
     projected = []
     for event in events:
         request_id = backend._frontend_request_id(event.runtime_instance_id, event.request_id)
@@ -2008,14 +2056,23 @@ def _frontend_request_for_runtime(backend: Any, runtime_instance_id: str | None)
 
 
 def _first_user_text(backend: Any, session_id: str) -> str | None:
-    for message in backend.application.stores.conversations.messages(session_id):
-        if message.role != "user":
-            continue
-        for part in message.parts:
-            text = str(getattr(part, "text", "") or "").strip()
-            if text:
-                return text
-    return None
+    # Session navigation needs only a title, never the entire chat payload.
+    with backend.application.database.connection(query_only=True) as connection:
+        row = connection.execute(
+            """
+            select trim(json_extract(part.value, '$.text')) as text
+            from conversation_messages message
+            join conversation_turns turn on turn.turn_id = message.turn_id
+            join json_each(message.payload_json, '$.parts') part
+            where message.session_id = ? and message.role = 'user'
+              and json_type(part.value, '$.text') = 'text'
+              and trim(json_extract(part.value, '$.text')) != ''
+            order by turn.task_revision, message.turn_sequence, cast(part.key as integer)
+            limit 1
+            """,
+            (session_id,),
+        ).fetchone()
+    return str(row["text"]) if row else None
 
 
 def _turn_count(backend: Any, session_id: str) -> int:

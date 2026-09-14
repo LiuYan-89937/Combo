@@ -61,8 +61,10 @@ from combo.runtime_protocol import (
 from combo.runtime_protocol.messages import (
     close_incomplete_tool_call_messages,
     incomplete_tool_call_ids,
+    represented_input_message_ids,
 )
 from combo.context_system.compression import is_context_summary_message, maybe_compress_messages
+from combo.context_system.history import conversation_projection_history, release_context_history
 from combo.context_system.token_counter import context_window_payload
 from combo.context_system.token_estimation import estimate_messages_tokens
 from combo.runtime_i18n import RuntimeLocale
@@ -352,7 +354,7 @@ class DynamicRuntimeService:
         if report.status == "failed":
             raise RuntimeError(report.error or "manual context compression failed")
         if report.status != "completed":
-            return {**report_payload, "reason": "no_compressible_history"}
+            return {**report_payload, "reason": report.reason or "no_compressible_history"}
 
         window = _manual_compression_context_window(
             messages=compressed_messages,
@@ -535,7 +537,13 @@ class DynamicRuntimeService:
             run_control.acknowledge_checkpointed_inputs(graph_messages)
             interrupts = _interrupt_payloads(raw=raw, checkpoint=checkpoint)
             status = _execution_status(state=state, graph_messages=graph_messages, interrupts=interrupts)
-            projection_messages = list(graph_messages)
+            context_messages = (
+                _close_terminal_tool_calls(graph_messages, status=status)
+                if status in {"completed", "failed", "cancelled"} else graph_messages
+            )
+            projection_messages = conversation_projection_history(
+                store=self._service_set.services.graph_store, state=state, messages=context_messages,
+            )
             if status in {"completed", "failed", "cancelled"}:
                 projection_messages = _close_terminal_tool_calls(projection_messages, status=status)
             projected_for_records = graph_messages_to_conversation(
@@ -584,14 +592,14 @@ class DynamicRuntimeService:
                         status=status,
                         interrupts=interrupts,
                         error=error,
-                        graph_messages=projection_messages,
+                        graph_messages=context_messages,
                         conversation_messages=projected_messages,
                         tool_calls=projected_tool_calls,
                     ),
                     messages=projected_messages,
                     tool_calls=projected_tool_calls,
                     context_snapshot=self._execution_context_snapshot(
-                        claimed_instance, state=state, messages=projection_messages, status=status,
+                        claimed_instance, state=state, messages=context_messages, status=status,
                     ),
                     model_usage=_model_usage_records(claimed_instance, state.observability.events),
                     error=error,
@@ -603,7 +611,13 @@ class DynamicRuntimeService:
                 state.execution.finished = True
                 state.execution.finish_status = "cancelled"
                 state.execution.last_error_location = "runtime.cancel"
-                projection_messages = _close_terminal_tool_calls(graph_messages, status=status)
+                context_messages = _close_terminal_tool_calls(graph_messages, status=status)
+                projection_messages = _close_terminal_tool_calls(
+                    conversation_projection_history(
+                        store=self._service_set.services.graph_store, state=state, messages=context_messages,
+                    ),
+                    status=status,
+                )
                 projected_for_records = graph_messages_to_conversation(
                     graph_messages=projection_messages,
                     current_user_message_id=current_user_message.message_id,
@@ -630,7 +644,7 @@ class DynamicRuntimeService:
                         status=status,
                         interrupts=[],
                         error=error,
-                        graph_messages=projection_messages,
+                        graph_messages=context_messages,
                         conversation_messages=projected_messages,
                         tool_calls=_tool_call_records(
                             projected_for_records,
@@ -647,18 +661,20 @@ class DynamicRuntimeService:
                         observations=state.observability.events,
                     ),
                     context_snapshot=self._execution_context_snapshot(
-                        claimed_instance, state=state, messages=projection_messages, status=status,
+                        claimed_instance, state=state, messages=context_messages, status=status,
                     ),
                     model_usage=_model_usage_records(claimed_instance, state.observability.events),
                     error=error,
                 )
+            if status in {"completed", "failed", "cancelled"}:
+                release_context_history(store=self._service_set.services.graph_store, state=state)
             if superseded_checkpoint_thread_id is not None:
                 self._delete_superseded_checkpoint(superseded_checkpoint_thread_id)
             return RuntimeExecutionResult(
                 runtime_instance=committed_instance,
                 capability_snapshot=snapshot,
                 state=state,
-                graph_messages=tuple(projection_messages),
+                graph_messages=tuple(context_messages),
                 conversation_messages=tuple(projected_messages),
                 status=status,
                 interrupt_payloads=tuple(interrupts),
@@ -795,7 +811,7 @@ class DynamicRuntimeService:
         ):
             return None
         included = set(previous.included_user_message_ids if previous else ())
-        included.update(str(message.id) for message in messages if isinstance(message, HumanMessage) and message.id)
+        included.update(represented_input_message_ids(messages))
         return ConversationContextSnapshot(
             session_id=instance.request.session_id,
             principal_id=instance.request.principal_id,

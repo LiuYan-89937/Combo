@@ -9,6 +9,7 @@ from combo.dynamic_runtime.application import DynamicRuntimeApplication
 from combo.dynamic_runtime.dispatcher import CommandDispatcher
 from combo.dynamic_runtime.launch_context import render_delegation_notification_message
 from combo.dynamic_runtime.outbox_publisher import OutboxPublisher
+from combo.dynamic_runtime.steering import QueuedRuntimeInputDelivery
 from combo.runtime_protocol import CommandEnvelope, CommandReceipt, SendMessagePayload
 from combo.runtime_protocol.versioning import RUNTIME_PROTOCOL_VERSION
 
@@ -51,6 +52,12 @@ class DynamicRuntimeSupervisor:
         self._outbox_publisher = outbox_publisher
         self._config = config
         self._report_failure = report_failure
+        self._completion_delivery = QueuedRuntimeInputDelivery(
+            commands=application.stores.commands,
+            runtime_instances=application.stores.runtime_instances,
+            run_controls=application.stores.run_controls,
+            attachments=application.launch_context_resolver,
+        )
         self._stop = asyncio.Event()
         self._command_wakeup: asyncio.Queue[None] = asyncio.Queue(maxsize=1)
         self._control_wakeup: asyncio.Queue[None] = asyncio.Queue(maxsize=1)
@@ -221,6 +228,12 @@ class DynamicRuntimeSupervisor:
                 received_at=created_at,
                 updated_at=created_at,
             ),
+        )
+        # Persist first, then offer the same message to the running graph. If
+        # no runtime accepts it, the ordinary work lane remains the fallback.
+        self._completion_delivery.deliver(
+            command_id=command_id, principal_id=principal_id,
+            session_id=session_id, interrupt_active=False,
         )
 
     async def _wait_for(self, wakeup: asyncio.Queue[None]) -> None:

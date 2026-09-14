@@ -81,6 +81,8 @@ import {
 } from './runtime/scopes'
 import {
   agentPackageSessionSnapshotView,
+  agentSessionSummary,
+  prependSessionHistory,
 } from './runtime/sessionSnapshots'
 import {
   sessionDeletionFromPayload,
@@ -143,6 +145,7 @@ export const useRuntimeStore = defineStore('runtime', {
     currentPlan: null,
     activeConversationScope: null,
     conversationScopes: {},
+    historyBefore: null,
     transcript: [],
     conversationTurns: [],
     timeline: [],
@@ -1234,6 +1237,15 @@ export const useRuntimeStore = defineStore('runtime', {
       this._setRequestDispatchState(event.request_id, dispatchState, event.payload)
     },
 
+    prependAgentPackageHistory(session: any, packageId: string) {
+      if (!session?.session_id || !session?.history?.before) return
+      const snapshot = agentPackageSessionSnapshotView(session, packageId)
+      const state = snapshot.scope === this.activeConversationScope
+        ? this : this.conversationScopes[snapshot.scope]
+      if (!state || state.historyBefore !== session.history.before) return
+      Object.assign(state, prependSessionHistory(state, snapshot))
+    },
+
     _restoreAgentPackageSession(session: any, packageId: string | null = null) {
       if (!session?.session_id) return
       const snapshot = agentPackageSessionSnapshotView(session, packageId)
@@ -1255,6 +1267,7 @@ export const useRuntimeStore = defineStore('runtime', {
           false,
         )
       }
+      this._releaseInactiveConversationScopes()
     },
 
     _applyAgentPackageSessionSnapshot(
@@ -1284,6 +1297,7 @@ export const useRuntimeStore = defineStore('runtime', {
       this.contextWindow = snapshot.contextWindow
       this.memoryActivity = { status: 'idle' }
       this.modelStreams = {}
+      this.historyBefore = snapshot.historyBefore
       this.tools = snapshot.tools
       this.pendingInterrupt = snapshot.pendingInterrupt
 
@@ -1318,7 +1332,7 @@ export const useRuntimeStore = defineStore('runtime', {
         payload: {
           package_id: snapshot.sessionPackageId,
           session_id: session.session_id,
-          agent_session: session,
+          agent_session: agentSessionSummary(session),
         },
       })
     },
@@ -1470,11 +1484,12 @@ export const useRuntimeStore = defineStore('runtime', {
     _upsertAgentSession(session: any) {
       if (!session?.session_id) return
       if (!isStandaloneAgentSession(session)) return
+      const summary = agentSessionSummary(session)
       const index = this.agentSessions.findIndex((item) => item.session_id === session.session_id)
       if (index >= 0) {
-        this.agentSessions[index] = { ...this.agentSessions[index], ...session }
+        this.agentSessions[index] = { ...this.agentSessions[index], ...summary }
       } else {
-        this.agentSessions.unshift(session)
+        this.agentSessions.unshift(summary)
       }
     },
 
@@ -1485,6 +1500,22 @@ export const useRuntimeStore = defineStore('runtime', {
       const state = this.conversationScopes[scope] || createConversationScopeState()
       this.conversationScopes[scope] = state
       this._restoreConversationScope(state)
+      this._releaseInactiveConversationScopes()
+    },
+
+    _releaseInactiveConversationScopes() {
+      const terminal = new Set(['idle', 'completed', 'cancelled', 'stopped', 'failed'])
+      for (const [scope, saved] of Object.entries(this.conversationScopes)) {
+        if (scope === this.activeConversationScope || !saved.activeAgentSessionId || saved.pendingInterrupt) continue
+        if (!terminal.has(saved.runStatus || 'idle')
+          || saved.conversationTurns.some(turn => !terminal.has(turn.status))) continue
+        const requests = Object.values(this.activeRequests).filter(request => request.conversationScope === scope)
+        if (requests.some(request => !terminal.has(request.status) || request.payload?.submission_state === 'pending')) continue
+        // Persisted, idle conversations are reloaded in pages on navigation.
+        // Running/queued/interrupt state remains resident for event routing.
+        delete this.conversationScopes[scope]
+        requests.forEach(request => { delete this.activeRequests[request.requestId] })
+      }
     },
 
     _shouldActivateConversationScope(scope: string): boolean {
@@ -1500,6 +1531,7 @@ export const useRuntimeStore = defineStore('runtime', {
     },
 
     _restoreConversationScope(saved: ConversationScopeState) {
+      this.historyBefore = saved.historyBefore
       this.activeRequestId = saved.activeRequestId ?? null
       this.runStatus = saved.runStatus ?? 'idle'
       this.pendingInterrupt = saved.pendingInterrupt ?? null
@@ -1561,6 +1593,7 @@ export const useRuntimeStore = defineStore('runtime', {
       delete this.conversationScopes[scope]
       this.activeConversationScope = scope
       this._clearConversationViewState()
+      this._releaseInactiveConversationScopes()
     },
 
     _deleteConversationScopesForSessions(sessionIds: string[]) {
@@ -1652,6 +1685,7 @@ export const useRuntimeStore = defineStore('runtime', {
     },
 
     _clearConversationViewState() {
+      this.historyBefore = null
       this.activeRequestId = null
       this.runStatus = 'idle'
       this.pendingInterrupt = null

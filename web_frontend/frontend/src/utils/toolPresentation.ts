@@ -69,6 +69,11 @@ const TOOL_PRESENTATIONS: Record<string, Pick<ToolPresentation, 'category' | 'la
   computer_use: { category: 'process', labelKey: 'tool.names.computerUse', icon: 'pointer' },
 }
 
+/** Presence checks must not construct/merge every historical tool result. */
+export function hasConversationVisibleParts(parts: ChatMessagePart[]): boolean {
+  return parts.some(isVisibleConversationPart)
+}
+
 export function conversationVisibleParts(parts: ChatMessagePart[]): ChatMessagePart[] {
   return mergeToolMessageParts(conversationOrderedParts(parts).filter(isVisibleConversationPart))
 }
