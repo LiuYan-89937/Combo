@@ -8,6 +8,7 @@ import { EventStreamClient, type ConnectionStatus } from '@/api/events'
 import { useI18n } from '@/composables/useI18n'
 import { useRuntimeStore } from '@/stores/runtime'
 import { syncDomainStoresFromRuntime } from '@/stores/runtimeSync'
+import { isRequestScopedEvent } from '@/stores/runtime/eventUtils'
 import { useAgentGroupStore } from '@/stores/agentGroup'
 import { useUiStore } from '@/stores/ui'
 import type { RuntimeFrontendEvent } from '@/types/protocol'
@@ -39,8 +40,13 @@ const BACKGROUND_TASK_TOOL_EVENTS = new Set([
 ])
 let pendingStreamEvents: RuntimeFrontendEvent[] = []
 let streamFlushTimer: number | null = null
+let recovery: { events: RuntimeFrontendEvent[] } | null = null
 
 export function applyRuntimeEvent(event: RuntimeFrontendEvent): void {
+  if (recovery && isRequestScopedEvent(event.event_type)) {
+    recovery.events.push(event)
+    return
+  }
   if (BATCHED_STREAM_EVENTS.has(event.event_type)) {
     enqueueStreamEvent(event)
     return
@@ -75,9 +81,7 @@ function applyRuntimeEventImmediately(event: RuntimeFrontendEvent): void {
   syncDomainStoresFromRuntime(event)
   publishTaskNotificationsForEvent(event, notificationContext)
   if (event.event_type === 'runtime_ready') {
-    void restoreActiveConversation(runtimeStore).catch((error) => {
-      console.error('Failed to restore active conversation after the event stream connected:', error)
-    })
+    void restoreActiveConversation(runtimeStore)
   }
 }
 
@@ -104,9 +108,28 @@ async function restoreActiveConversation(runtimeStore: ReturnType<typeof useRunt
   if (runtimeStore.currentMode === 'agent_package' && runtimeStore.activeAgentSessionId) {
     const packageId = activeAgentPackageId(runtimeStore)
     if (!packageId) return
-    const restored = await agentPackagesApi.session(packageId, runtimeStore.activeAgentSessionId)
-    applyRuntimeEvent(restored)
-    return
+    const sessionId = runtimeStore.activeAgentSessionId
+    const pending = { events: recovery?.events || [] as RuntimeFrontendEvent[] }
+    recovery = pending
+    const covered = new Set<string>()
+    try {
+      const restored = await agentPackagesApi.session(packageId, sessionId)
+      if (recovery !== pending) return
+      // A response for an old selection must never navigate the user back.
+      if (runtimeStore.activeAgentSessionId === sessionId && activeAgentPackageId(runtimeStore) === packageId) {
+        for (const id of restored.payload?.session?.recovery_event_ids || []) covered.add(id)
+        applyRuntimeEventImmediately(restored)
+      }
+    } catch (error) {
+      console.error('Failed to restore active conversation after the event stream connected:', error)
+    } finally {
+      if (recovery === pending) {
+        recovery = null
+        for (const event of pending.events) {
+          if (!covered.has(event.event_id)) applyRuntimeEvent(event)
+        }
+      }
+    }
   }
 }
 
@@ -174,6 +197,7 @@ export function useEventStream() {
   }
 
   function disconnect() {
+    recovery = null
     flushStreamEvents()
     if (!client) return
     client.disconnect()

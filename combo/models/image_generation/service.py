@@ -8,6 +8,7 @@ from uuid import uuid4
 import httpx
 
 from combo.artifact_system import ArtifactStore
+from combo.model_image_inputs import prepare_model_image
 from combo.models.image_generation.adapters import adapter_for_image_provider
 from combo.models.image_generation.protocol import (
     GeneratedAsset,
@@ -81,15 +82,12 @@ def image_input_from_path(path: str | Path, *, attachment_id: str | None = None)
     target = Path(path).expanduser().resolve()
     if not target.is_file():
         raise ValueError(f"image input file does not exist: {path}")
-    data = target.read_bytes()
-    mime_type = mimetypes.guess_type(str(target))[0] or "image/png"
-    if not mime_type.startswith("image/"):
-        raise ValueError(f"image input is not an image: {path}")
+    data, mime_type = prepare_model_image(target.read_bytes())
     return ImageInput(
         source=str(target),
         mime_type=mime_type,
         data=data,
-        filename=target.name,
+        filename=target.with_suffix(_extension_for_mime(mime_type)).name,
         attachment_id=attachment_id,
     )
 

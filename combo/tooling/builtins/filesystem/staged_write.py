@@ -152,9 +152,6 @@ def start_staged_write(arguments: dict[str, Any], resources: dict[str, Any]) -> 
     )
     assert_not_protected_write_path(target, root=root, resources=resources)
     snapshot = _snapshot(target)
-    expected_hash = str(arguments.get("expected_hash") or "").strip()
-    if expected_hash and expected_hash != snapshot.content_hash:
-        raise ValueError("expected_hash does not match current file content")
     staged = _store(resources).create(
         root=root,
         target=target,

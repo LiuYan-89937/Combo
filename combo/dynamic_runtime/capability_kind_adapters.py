@@ -110,8 +110,9 @@ class SkillCapabilityAdapter(TypedCapabilityAdapter[SkillDefinition]):
             definition=skill,
             prompt_fragments=(
                 f"Skill {skill.name}: {skill.display_name} — {skill.description}. "
-                f"When relevant, call the skill tool with action=load and name={skill.name!r}; "
-                "the Skill body is not present in this prompt.",
+                f"When relevant, call the skill tool directly with action=load and name={skill.name!r}; "
+                "list/describe are optional, not prerequisites. The Skill body is not present in this catalog; "
+                "do not reload it if it is already in the current context.",
             ),
         )
 

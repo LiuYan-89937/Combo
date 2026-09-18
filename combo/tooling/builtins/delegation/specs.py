@@ -24,11 +24,10 @@ def get_delegation_tool_specs() -> list[ToolSpec]:
             description=(
                 "Start one non-blocking temporary agent task. Give the child a concise user-facing role name, "
                 "then describe its role and objective and select its execution graph. Delegate independent work "
-                "even when capability search returns no genuinely relevant candidate; in that case pass an empty "
-                "capabilities array and the child receives its stable built-in runtime tools. When search does "
-                "return useful Tool, MCP Server, or Skill candidates, pass only their exact public names. "
-                "Selecting an MCP "
-                "Server makes its complete Tool catalog available to the child. Runtime policy "
+                "with an empty capabilities array to inherit the main Agent's currently enabled capabilities "
+                "and stable built-in tools. Optional capability names are requirements within that enabled "
+                "set; they cannot enable additional Tools, Skills, or MCP Servers. Main-only control tools "
+                "remain excluded. Enabled MCP Servers expose their complete Tool catalogs. Runtime policy "
                 "supplies the shared workspace scope, selects and freezes a suitable enabled model-pool profile, "
                 "and owns approvals and internal identities. Once accepted, "
                 "do not immediately inspect status, sleep, wait, or poll; task events report subsequent changes. "
@@ -80,15 +79,15 @@ def get_delegation_tool_specs() -> list[ToolSpec]:
                             "type": "string",
                             "minLength": 1,
                             "description": (
-                                "An exact public Tool, MCP Server, or Skill name returned by capability search. "
+                                "An exact public Tool, MCP Server, or Skill name already enabled for the main Agent. "
                                 "Never provide IDs, revisions, digests, evidence, or generated handles."
                             ),
                         },
                         "uniqueItems": True,
                         "default": [],
                         "description": (
-                            "Optional public capability names selected from capability search. Use an empty array "
-                            "when no optional match is needed; stable built-in tools remain available."
+                            "Optional requirements checked against inherited enabled capabilities. Empty inherits "
+                            "all enabled capabilities; naming a disabled capability fails instead of enabling it."
                         ),
                     },
                     "acceptance_criteria": {

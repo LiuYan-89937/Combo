@@ -93,6 +93,11 @@ def graph_messages_to_conversation(
     }
     projected: list[ConversationMessage] = []
     internal_tool_call_ids: set[str] = set()
+    results = {
+        message.tool_call_id: message
+        for message in graph_messages[boundary + 1 :]
+        if isinstance(message, ToolMessage)
+    }
     for message in graph_messages[boundary + 1 :]:
         if isinstance(message, AIMessage):
             parts: list[Any] = []
@@ -110,13 +115,15 @@ def graph_messages_to_conversation(
                         internal_tool_call_ids.add(tool_call_id)
                     continue
                 binding = aliases.get(alias)
-                if not alias or binding is None:
-                    raise ValueError(f"graph tool call is not present in capability snapshot: {alias or '<empty>'}")
+                if binding is None:
+                    result_message = results.get(tool_call_id)
+                    if result_message is None or _tool_result_part(result_message).status != "rejected":
+                        raise ValueError(f"unbound graph tool call has no rejection result: {alias or '<empty>'}")
                 parts.append(
                     ToolCallPart(
                         tool_call_id=tool_call_id,
-                        capability_id=binding.capability_id,
-                        capability_revision=binding.revision,
+                        capability_id=binding.capability_id if binding else None,
+                        capability_revision=binding.revision if binding else None,
                         model_alias=alias,
                         arguments=_json_object(call.get("args")),
                     )

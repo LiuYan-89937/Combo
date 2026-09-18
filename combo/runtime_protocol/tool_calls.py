@@ -26,8 +26,8 @@ class ToolCallRecord(BaseModel):
     request_id: str
     turn_id: str
     attempt_id: str
-    capability_id: str
-    capability_revision: int = Field(ge=1)
+    capability_id: str | None = None
+    capability_revision: int | None = Field(default=None, ge=1)
     model_alias: str
     display_alias: str | None = None
     arguments: dict[str, Any] = Field(default_factory=dict)
@@ -45,7 +45,6 @@ class ToolCallRecord(BaseModel):
         "request_id",
         "turn_id",
         "attempt_id",
-        "capability_id",
         "model_alias",
         "created_at",
         "updated_at",
@@ -77,6 +76,13 @@ class ToolCallRecord(BaseModel):
 
     @model_validator(mode="after")
     def _terminal_result_is_explicit(self) -> "ToolCallRecord":
+        if (self.capability_id is None) != (self.capability_revision is None):
+            raise ValueError("tool capability identity and revision must be set together")
+        if self.capability_id is None:
+            if self.status != "rejected":
+                raise ValueError("an unbound tool call can only be recorded as rejected")
+        elif not self.capability_id.strip():
+            raise ValueError("tool capability identity must not be empty")
         if self.status not in TERMINAL_TOOL_CALL_STATUSES:
             if self.result is not None or self.error_code is not None:
                 raise ValueError("non-terminal tool call cannot carry result or error_code")

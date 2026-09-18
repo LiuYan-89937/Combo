@@ -72,9 +72,8 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
                 "end_line": _INTEGER,
                 "total_lines": _INTEGER,
                 "truncated": _BOOLEAN,
-                "content_hash": _STRING,
             },
-            "required": ["path", "content", "start_line", "end_line", "total_lines", "truncated", "content_hash"],
+            "required": ["path", "content", "start_line", "end_line", "total_lines", "truncated"],
             "additionalProperties": False,
         },
         resources=_FILESYSTEM_RESOURCE,
@@ -96,7 +95,8 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
             "必须显式选择写入策略。一次性写入使用 action=write_once，并同时提供 path 和完整 content；"
             "分段写入只接受以下顺序："
             "action=start 提供 path；action=append 提供真实 write_id 和 content；"
-            "action=commit 或 action=abort 提供真实 write_id。不要编造或跨 workspace 复用 write_id。"
+            "action=commit 或 action=abort 提供真实 write_id。append/commit/abort 不接受 path。"
+            "不要编造或跨 workspace 复用 write_id。"
         ),
         entrypoint="combo.tooling.builtins.filesystem.write:run",
         input_schema={
@@ -126,10 +126,6 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
                             "description": "正文需要分章节或模块渐进生成、一次调用存在截断风险，或需要保留中间进度时选择。",
                         },
                         "path": {"type": "string", "description": _WRITE_PATH_DESCRIPTION},
-                        "expected_hash": {
-                            "type": "string",
-                            "description": "可选的当前目标 SHA-256；不匹配时拒绝开始。",
-                        },
                         "create_dirs": {"type": "boolean", "default": True, "description": "目标父目录不存在时是否自动创建。"},
                     },
                     "required": ["action", "path"],
@@ -187,7 +183,11 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
     ),
     ToolSpec(
         id="edit",
-        description="对 workspace 边界内的单个 UTF-8 文件执行精确文本替换。",
+        description=(
+            "对 workspace 边界内的单个 UTF-8 文件执行精确文本替换。先读取同一路径的当前内容，"
+            "从中原样复制 old_text，保留缩进、空格和换行；不要套用另一文件或旧版本中的文本。"
+            "未匹配时文件不会修改，应重新读取目标或用 rg 定位原文，不要直接改成整体覆盖。"
+        ),
         schema_error_guidance=(
             "提供 path、old_text 和 new_text。old_text 默认必须只匹配一处；"
             "需要替换全部匹配时显式设置 replace_all=true。"
@@ -197,7 +197,7 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": _WRITE_PATH_DESCRIPTION},
-                "old_text": {"type": "string", "description": "需要被替换的完整原文本。"},
+                "old_text": {"type": "string", "minLength": 1, "description": "从同一路径当前内容原样复制的非空原文本，包含准确的空白与换行。"},
                 "new_text": {"type": "string", "description": "替换后的文本，可为空字符串。"},
                 "replace_all": {
                     "type": "boolean",

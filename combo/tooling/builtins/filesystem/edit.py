@@ -15,7 +15,8 @@ from combo.tooling.builtins.filesystem.common import (
 )
 from combo.file_atomic import atomic_write_bytes
 from combo.tooling.builtins.filesystem.text_changes import text_change_summary
-from combo.tooling.envelope import tool_envelope
+from combo.tooling.builtins.filesystem.text_replacement import TextReplacementError, replace_exact_text
+from combo.tooling.envelope import tool_envelope, tool_failure
 from combo.tooling.spec import ToolRiskResult
 
 
@@ -30,7 +31,9 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     path = required_string(arguments, "path")
-    old_text = required_string(arguments, "old_text")
+    old_text = arguments.get("old_text")
+    if not isinstance(old_text, str) or not old_text:
+        raise ValueError("old_text must be a non-empty string")
     new_text = arguments.get("new_text")
     if not isinstance(new_text, str):
         raise ValueError("new_text must be a string")
@@ -49,24 +52,27 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         if not target.is_file():
             raise IsADirectoryError(str(target))
         raw = target.read_bytes()
+        current_hash = sha256(raw).hexdigest()
+        failure_context = {
+            "path": str(target), "applied": False,
+        }
         try:
             content = raw.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise ValueError(f"file is not valid utf-8 text: {target}") from exc
-        count = content.count(old_text)
-        if count == 0:
-            raise ValueError("old_text was not found")
-        if not replace_all and count != 1:
-            raise ValueError(
-                f"old_text matched {count} times; set replace_all=true or provide a more specific old_text"
+        try:
+            updated, replacements = replace_exact_text(content, old_text, new_text, replace_all=replace_all)
+        except TextReplacementError as exc:
+            return tool_failure(
+                f"{target}: {exc}. No changes were written.",
+                output={**failure_context, "code": exc.code, "match_count": exc.match_count},
             )
-        updated = content.replace(old_text, new_text) if replace_all else content.replace(old_text, new_text, 1)
         updated_bytes = updated.encode("utf-8")
         atomic_write_bytes(target, updated_bytes)
     output = {
         "path": str(target),
-        "replacements": count if replace_all else 1,
-        "before_hash": sha256(raw).hexdigest(),
+        "replacements": replacements,
+        "before_hash": current_hash,
         "after_hash": sha256(updated_bytes).hexdigest(),
         "change_summary": text_change_summary(content, updated),
     }

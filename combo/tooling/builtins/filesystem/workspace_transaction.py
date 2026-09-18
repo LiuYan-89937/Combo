@@ -19,6 +19,7 @@ from combo.tooling.builtins.filesystem.common import (
     require_file_locks,
 )
 from combo.tooling.builtins.filesystem.text_changes import text_change_summary
+from combo.tooling.builtins.filesystem.text_replacement import TextReplacementError, replace_exact_text
 DEFAULT_TRANSACTION_TTL_SECONDS = 600
 SUPPORTED_OPERATION_TYPES = frozenset({"create", "write", "replace", "move", "copy", "delete"})
 
@@ -118,7 +119,6 @@ def preview_transaction(
         operation_type = operation["type"]
         if operation_type in {"create", "write", "replace", "delete"}:
             relative, _target, existing = current_file(operation["path"])
-            _validate_expected_hash(operation, existing, key="expected_hash", operation_index=index)
             if operation_type == "create":
                 if existing is not None:
                     raise FileExistsError(f"operations[{index}].path already exists: {relative}")
@@ -148,7 +148,6 @@ def preview_transaction(
             destination_relative, _destination, destination_value = current_file(operation["destination_path"])
             if source_relative == destination_relative:
                 raise ValueError(f"operations[{index}] source and destination must differ")
-            _validate_expected_hash(operation, source_value, key="expected_hash", operation_index=index)
             if source_value is None:
                 raise FileNotFoundError(source_relative)
             if destination_value is not None and not operation["overwrite"]:
@@ -231,12 +230,11 @@ def _normalized_operation(value: Any, *, index: int) -> dict[str, Any]:
     if operation_type in {"create", "write"}:
         operation["content"] = _string_value(value, "content", index=index)
     if operation_type == "replace":
-        operation["old_text"] = _required_text(value, "old_text", index=index)
+        operation["old_text"] = _string_value(value, "old_text", index=index)
+        if not operation["old_text"]:
+            raise ValueError(f"operations[{index}].old_text must be non-empty")
         operation["new_text"] = _string_value(value, "new_text", index=index)
         operation["replace_all"] = bool(value.get("replace_all", False))
-    expected_hash = str(value.get("expected_hash") or "").strip()
-    if expected_hash:
-        operation["expected_hash"] = expected_hash
     return operation
 
 
@@ -253,43 +251,18 @@ def _snapshot_file(path: Path) -> tuple[FileSnapshot, VirtualFile | None]:
     )
 
 
-def _validate_expected_hash(
-    operation: dict[str, Any],
-    file_value: VirtualFile | None,
-    *,
-    key: str,
-    operation_index: int,
-) -> None:
-    expected = str(operation.get(key) or "").strip()
-    if not expected:
-        return
-    actual = sha256(file_value.content).hexdigest() if file_value is not None else None
-    if actual != expected:
-        raise ValueError(
-            f"operations[{operation_index}].{key} does not match current file content"
-        )
-
-
 def _replace_text(content: bytes, operation: dict[str, Any], *, operation_index: int) -> bytes:
     try:
         text = content.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ValueError(f"operations[{operation_index}] target is not valid utf-8 text") from exc
-    old_text = operation["old_text"]
-    count = text.count(old_text)
-    if count == 0:
-        raise ValueError(f"operations[{operation_index}].old_text was not found")
-    if not operation["replace_all"] and count != 1:
-        raise ValueError(
-            f"operations[{operation_index}].old_text matched {count} times; "
-            "set replace_all=true or provide a more specific old_text"
+    try:
+        updated, replacements = replace_exact_text(
+            text, operation["old_text"], operation["new_text"], replace_all=operation["replace_all"],
         )
-    updated = (
-        text.replace(old_text, operation["new_text"])
-        if operation["replace_all"]
-        else text.replace(old_text, operation["new_text"], 1)
-    )
-    operation["replacements"] = count if operation["replace_all"] else 1
+    except TextReplacementError as exc:
+        raise ValueError(f"operations[{operation_index}] path={operation['path']!r}: {exc}") from exc
+    operation["replacements"] = replacements
     return updated.encode("utf-8")
 
 

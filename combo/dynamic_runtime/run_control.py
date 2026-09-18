@@ -262,6 +262,9 @@ class RuntimeRunControlRegistry:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._controls: dict[str, RuntimeRunControl] = {}
+        self._shutdown_reason: str | None = None
+        self._idle = threading.Event()
+        self._idle.set()
 
     def register(self, runtime_instance_id: str) -> RuntimeRunControl:
         instance_id = _required_text(runtime_instance_id, "runtime_instance_id")
@@ -269,8 +272,26 @@ class RuntimeRunControlRegistry:
         with self._lock:
             if instance_id in self._controls:
                 raise RuntimeError(f"runtime control is already registered: {instance_id}")
+            if self._shutdown_reason is not None:
+                control.request_drain(self._shutdown_reason)
             self._controls[instance_id] = control
+            self._idle.clear()
         return control
+
+    def begin_shutdown(self) -> None:
+        # Also drain executions that were being prepared when shutdown started.
+        with self._lock:
+            self._shutdown_reason = "shutdown"
+            controls = tuple(self._controls.values())
+        for control in controls:
+            control.request_drain("shutdown")
+
+    def wait_for_idle(self) -> None:
+        self._idle.wait()
+
+    def has_execution(self, runtime_instance_id: str) -> bool:
+        with self._lock:
+            return runtime_instance_id in self._controls
 
     def request_drain(self, *, runtime_instance_id: str | None, reason: str) -> int:
         instance_id = str(runtime_instance_id or "").strip()
@@ -330,10 +351,14 @@ class RuntimeRunControlRegistry:
 
     def release(self, runtime_instance_id: str, control: RuntimeRunControl) -> None:
         instance_id = _required_text(runtime_instance_id, "runtime_instance_id")
-        with self._lock:
-            if self._controls.get(instance_id) is control:
-                self._controls.pop(instance_id, None)
-        control.close()
+        try:
+            control.close()
+        finally:
+            with self._lock:
+                if self._controls.get(instance_id) is control:
+                    self._controls.pop(instance_id, None)
+                if not self._controls:
+                    self._idle.set()
 
 
 def _required_text(value: str, field_name: str) -> str:

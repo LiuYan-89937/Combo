@@ -101,15 +101,15 @@ class DynamicRuntimeSupervisor:
 
     async def stop(self) -> None:
         tasks = tuple(self._tasks)
-        if not tasks:
-            return
         self._stop.set()
+        await asyncio.to_thread(self._application.stores.run_controls.begin_shutdown)
         self.notify_commands()
         self.notify_outbox()
         self.notify_temporary_tasks()
-        for task in tasks:
-            task.cancel()
+        # Cancelling an asyncio wrapper does not stop its to_thread worker.
+        # Let execution owners settle and release checkpoints before teardown.
         await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.to_thread(self._application.stores.run_controls.wait_for_idle)
         self._tasks.clear()
 
     def notify_commands(self) -> None:
@@ -173,6 +173,8 @@ class DynamicRuntimeSupervisor:
                 if isinstance(exc, asyncio.CancelledError):
                     raise
                 self._report_failure(component, exc)
+                self._enqueue_pending_completion_turns()
+                self.notify_outbox()
                 await self._wait_for(self._temporary_wakeup)
 
     def _enqueue_completion_turns(self, child_instance: object) -> None:

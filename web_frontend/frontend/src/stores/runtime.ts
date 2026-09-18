@@ -1335,6 +1335,14 @@ export const useRuntimeStore = defineStore('runtime', {
           agent_session: agentSessionSummary(session),
         },
       })
+      // Replay the active execution after rebuilding the durable transcript.
+      // These events may already have been seen before the connection failed.
+      for (const event of session.recovery_events || []) {
+        this._dispatchEvent(event)
+      }
+      for (const id of session.recovery_event_ids || []) {
+        processedEventIds.add(id)
+      }
     },
 
     _restoreProcessEvents(events: RuntimeFrontendEvent[]) {

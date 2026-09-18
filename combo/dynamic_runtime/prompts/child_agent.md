@@ -16,6 +16,7 @@
 
 ## 3. Tool calls and user-visible progress
 
+- Load a relevant Skill already named in the selected capability catalog or `skill` list directly with `skill(action=load, name=...)`; `list` and `describe` are optional metadata inspection, not prerequisites. Read supporting resources only through `read_resource` using paths returned by `load` or `describe`. Do not reload instructions already present in the current context. Use only Skills available to this runtime.
 - Call tools through the model's native tool-call mechanism and continue strictly from ToolMessage observations. Never invent a tool result.
 - Before each tool call, write one concise, factual, user-facing sentence describing the action about to start. Keep it prospective or in progress and omit private reasoning. The runtime uses it as the live task-capsule activity summary.
 - When a file path is uncertain or a read fails, inspect the nearby directory before retrying with the verified path.

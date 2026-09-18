@@ -69,12 +69,12 @@ class ArtifactPart(FrozenProtocolModel):
 class ToolCallPart(FrozenProtocolModel):
     kind: Literal["tool_call"] = "tool_call"
     tool_call_id: str
-    capability_id: str
-    capability_revision: int = Field(ge=1)
+    capability_id: str | None = None
+    capability_revision: int | None = Field(default=None, ge=1)
     model_alias: str
     arguments: dict[str, JsonValue] = Field(default_factory=dict)
 
-    @field_validator("tool_call_id", "capability_id", "model_alias")
+    @field_validator("tool_call_id", "model_alias")
     @classmethod
     def _tool_call_text_is_present(cls, value: str, info: object) -> str:
         text = str(value or "").strip()
@@ -82,6 +82,14 @@ class ToolCallPart(FrozenProtocolModel):
             field_name = getattr(info, "field_name", "value")
             raise ValueError(f"{field_name} must not be empty")
         return text
+
+    @model_validator(mode="after")
+    def _binding_is_complete(self) -> "ToolCallPart":
+        if (self.capability_id is None) != (self.capability_revision is None):
+            raise ValueError("tool capability identity and revision must be set together")
+        if self.capability_id is not None and not self.capability_id.strip():
+            raise ValueError("tool capability identity must not be empty")
+        return self
 
 
 class ToolResultPart(FrozenProtocolModel):

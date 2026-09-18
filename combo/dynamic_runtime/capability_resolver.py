@@ -172,6 +172,53 @@ class MainTurnCapabilityResolver:
             required_mcp_server_ids=tuple(dict.fromkeys(self._main_agent_mcp_server_ids())),
         )
 
+    def resolve_delegated(
+        self,
+        *,
+        principal_id: str,
+        requirements: tuple[str, ...],
+        policy: ResolvedRuntimePolicy,
+        workspace_id: str,
+        excluded_capability_ids: frozenset[str],
+        required_capability_ids: tuple[str, ...] = (),
+    ) -> CapabilitySnapshot:
+        """Inherit the enabled main profile without expanding it via search."""
+        enabled_ids = tuple(dict.fromkeys(self._main_agent_capability_ids()))
+        enabled_servers = tuple(dict.fromkeys(self._main_agent_mcp_server_ids()))
+        snapshot = self.resolve_requirements(
+            principal_id=principal_id,
+            requirements=(),
+            policy=policy,
+            workspace_id=workspace_id,
+            excluded_capability_ids=excluded_capability_ids,
+            required_capability_ids=tuple(dict.fromkeys((*enabled_ids, *required_capability_ids))),
+            required_mcp_server_ids=enabled_servers,
+        )
+        if not requirements:
+            return snapshot
+        selected_ids = {
+            selection.capability_id
+            for selection in snapshot.selections
+            if selection.status == "selected"
+        }
+        enabled_server_ids = {f"mcp-server://{server}" for server in enabled_servers}
+        candidates = (
+            *search_candidates_from_active_capabilities(tuple(
+                item for item in self._store.active_capabilities()
+                if item.revision.capability_id in selected_ids
+            )),
+            *(item for item in self._mcp_gateway.server_search_candidates()
+              if item.capability_id in enabled_server_ids),
+        )
+        names = {_normalized_public_name(item.display_name) for item in candidates}
+        unavailable = [name for name in requirements if _normalized_public_name(name) not in names]
+        if unavailable:
+            raise CapabilityResolutionError(
+                "delegated capabilities are not enabled or available in the main Agent profile: "
+                + ", ".join(unavailable)
+            )
+        return snapshot
+
     def resolve_requirements(
         self,
         *,

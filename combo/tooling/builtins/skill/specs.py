@@ -4,20 +4,22 @@ from combo.tooling.spec import ToolSpec
 
 
 SKILL_RUNTIME_RESOURCE = "skill_runtime"
+SKILL_TOOL_DESCRIPTION = (
+    "Load relevant Skills on demand. For a Skill already named in the selected capability catalog or skill list, "
+    "call action=load with its exact name directly; list and describe are optional metadata inspection, "
+    "not prerequisites. For a Skill discovered through capability search, use capability action=describe "
+    "to obtain its exact definition before loading, unless that definition is already in context. "
+    "load returns the SKILL.md body; read_resource only reads a path listed by describe or load. "
+    "Do not reload instructions already present in the current context. Main Agents may load active searched "
+    "Skills; child Agents may load only Skills selected for their runtime. Loading affects this runtime only."
+)
 
 
 def get_skill_tool_specs() -> list[ToolSpec]:
     return [
         ToolSpec(
             id="skill",
-            description=(
-                "Progressively load Skills available to this runtime. The main Agent may load an active Skill "
-                "returned by capability search; temporary Agents may load only Skills selected in their immutable "
-                "snapshot. Before loading a searched Skill, inspect that exact Skill with capability describe; for "
-                "a Skill already listed in the runtime snapshot, use this tool's describe action. Load only the "
-                "relevant SKILL.md, and read_resource only for a resource listed by describe or load. Skill loading "
-                "affects this runtime only."
-            ),
+            description=SKILL_TOOL_DESCRIPTION,
             entrypoint="combo.tooling.builtins.skill.tool:run",
             input_schema={
                 "type": "object",

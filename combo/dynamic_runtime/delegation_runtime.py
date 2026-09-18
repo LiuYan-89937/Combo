@@ -315,12 +315,11 @@ class BoundDelegationRuntime:
             chat_model=child_model,
         )
         try:
-            child_snapshot = self.services.capability_resolver.resolve_requirements(
+            child_snapshot = self.services.capability_resolver.resolve_delegated(
                 principal_id=parent.request.principal_id,
                 requirements=request.capability_names,
                 policy=resolved_policy,
                 workspace_id=parent.request.workspace_id,
-                include_system_capabilities=True,
                 excluded_capability_ids=MAIN_RUNTIME_ONLY_CAPABILITY_IDS,
                 required_capability_ids=(ASK_USR_CAPABILITY_ID,),
             )

@@ -1,19 +1,17 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+import logging
 from threading import RLock
 from typing import Any, Callable
 from uuid import uuid4
 
 from combo.runtime_kernel.fixed_graphs import fixed_graph_model_output_visible
 from combo.runtime_protocol import CommandReceipt, OutboxRecord, RuntimeEvent, RuntimeInstance
+from web_frontend.backend.frontend_event_subscription import FrontendEventSubscription
 
 
-@dataclass(eq=False, slots=True)
-class FrontendEventSubscription:
-    principal_id: str
-    queue: asyncio.Queue[dict[str, Any]]
+logger = logging.getLogger(__name__)
 
 
 class FrontendEventBridge:
@@ -60,13 +58,18 @@ class FrontendEventBridge:
 
     def stop(self) -> None:
         with self._lock:
+            loop = self._loop
             self._loop = None
+            subscriptions = tuple(self._subscriptions)
             self._subscriptions.clear()
+        if loop is not None and not loop.is_closed():
+            for subscription in subscriptions:
+                loop.call_soon_threadsafe(subscription.close, "server_shutdown")
 
     async def subscribe(self, principal_id: str) -> FrontendEventSubscription:
         subscription = FrontendEventSubscription(
             principal_id=_required_text(principal_id, "principal_id"),
-            queue=asyncio.Queue(maxsize=self._queue_capacity),
+            capacity=self._queue_capacity,
         )
         with self._lock:
             self._subscriptions.add(subscription)
@@ -75,6 +78,7 @@ class FrontendEventBridge:
     async def unsubscribe(self, subscription: FrontendEventSubscription) -> None:
         with self._lock:
             self._subscriptions.discard(subscription)
+        subscription.close("client_disconnected")
 
     async def publish_record(self, record: OutboxRecord, *, principal_id: str) -> None:
         if record.aggregate_kind == "runtime_instance":
@@ -115,6 +119,15 @@ class FrontendEventBridge:
         )
         if not projected:
             return
+        # Child model output is read through the delegated task activity API.
+        # The main frontend only consumes child tools and interactive requests.
+        if instance.request.runtime_role == "temporary":
+            projected = [event for event in projected if (
+                event["event_type"].startswith("tool_")
+                or event["event_type"] == "interrupt_requested"
+            )]
+        if not projected:
+            return
         with self._lock:
             loop = self._loop
         if loop is None:
@@ -151,10 +164,17 @@ class FrontendEventBridge:
             if principal_id and subscription.principal_id != principal_id:
                 continue
             try:
-                subscription.queue.put_nowait(event)
+                subscription.offer(event)
             except asyncio.QueueFull:
                 with self._lock:
                     self._subscriptions.discard(subscription)
+                subscription.close("queue_overflow")
+                logger.warning(
+                    "Frontend event subscription closed: reason=queue_overflow capacity=%s "
+                    "event_type=%s runtime_instance_id=%s session_id=%s",
+                    self._queue_capacity, event.get("event_type"),
+                    event.get("run_id"), event.get("session_id"),
+                )
 
 
 class RuntimeEventFanout:

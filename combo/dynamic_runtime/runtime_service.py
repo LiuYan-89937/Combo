@@ -188,6 +188,13 @@ class DynamicRuntimeService:
         )
         return tuple(_interrupt_payloads(raw={}, checkpoint=checkpoint))
 
+    def current_observations(self, runtime_instance_id: str) -> list[dict[str, Any]]:
+        return [
+            event.model_dump(mode="json")
+            for event in self._service_set.services.observability_manager.list_events()
+            if event.run_id == runtime_instance_id
+        ]
+
     def current_plan(self, runtime_instance_id: str) -> dict[str, Any] | None:
         instance = self._runtime_instances.get(runtime_instance_id)
         if instance.request.strategy != "plan_and_execute":
@@ -386,12 +393,18 @@ class DynamicRuntimeService:
     ) -> RuntimeExecutionResult:
         instance = self._runtime_instances.get(runtime_instance_id)
         _validate_invocation_status(instance, resuming=resume_payload is not None)
-        claimed_instance = self._execution_commits.begin(
-            runtime_instance_id,
-            resuming=resume_payload is not None,
-            delegation_claim_id=delegation_claim_id,
-        )
-        run_control = self._run_controls.register(claimed_instance.runtime_instance_id)
+        # Register ownership before publishing running; cancellation can then
+        # distinguish an active execution from an abandoned database record.
+        run_control = self._run_controls.register(runtime_instance_id)
+        try:
+            claimed_instance = self._execution_commits.begin(
+                runtime_instance_id,
+                resuming=resume_payload is not None,
+                delegation_claim_id=delegation_claim_id,
+            )
+        except BaseException:
+            self._run_controls.release(runtime_instance_id, run_control)
+            raise
         tool_registry_lease: SnapshotToolRegistryLease | None = None
         model_registered = False
         runtime_leases_owned_by_worker = False
@@ -693,9 +706,11 @@ class DynamicRuntimeService:
                 raise RuntimeError("runtime execution failed and its terminal commit was rejected") from persistence_error
             raise
         finally:
-            if not runtime_leases_owned_by_worker:
-                release_runtime_leases()
-            self._run_controls.release(claimed_instance.runtime_instance_id, run_control)
+            try:
+                if not runtime_leases_owned_by_worker:
+                    release_runtime_leases()
+            finally:
+                self._run_controls.release(claimed_instance.runtime_instance_id, run_control)
 
     def _delegated_continuation_messages(
         self,

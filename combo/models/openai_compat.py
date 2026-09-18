@@ -6,7 +6,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 from langchain_openai import ChatOpenAI
 
-from combo.model_image_inputs import materialize_local_image_messages
+from combo.model_image_inputs import prepare_model_image_messages
 from combo.models.reasoning import (
     coerce_reasoning_content,
     reasoning_content_from_blocks,
@@ -24,7 +24,7 @@ class ThinkingCompatibleChatOpenAI(ChatOpenAI):
     def _get_request_payload(self, input_: Any, *, stop: list[str] | None = None, **kwargs: Any) -> dict:
         source_messages = self._convert_input(input_).to_messages()
         payload = super()._get_request_payload(
-            materialize_local_image_messages(source_messages),
+            prepare_model_image_messages(source_messages),
             stop=stop,
             **kwargs,
         )

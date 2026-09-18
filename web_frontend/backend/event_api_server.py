@@ -259,10 +259,15 @@ def _build_runtime_application(backend: RuntimeBackend) -> FastAPI:
                 yield _frontend_sse(ready)
                 while not await request.is_disconnected():
                     try:
-                        event = await asyncio.wait_for(subscription.queue.get(), timeout=15.0)
+                        event = await asyncio.wait_for(subscription.receive(), timeout=15.0)
                     except asyncio.TimeoutError:
                         yield "event: combo_frontend_heartbeat\ndata: {}\n\n"
                         continue
+                    if event is None:
+                        yield "event: combo_frontend_reset\ndata: " + json.dumps({
+                            "reason": subscription.close_reason,
+                        }) + "\n\n"
+                        break
                     yield _frontend_sse(event)
             finally:
                 await backend.frontend_events.unsubscribe(subscription)

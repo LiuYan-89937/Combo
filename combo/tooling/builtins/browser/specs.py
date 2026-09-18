@@ -246,10 +246,11 @@ def get_browser_tool_specs() -> list[ToolSpec]:
         ),
         _spec(
             "browser_extract",
-            "Extract text, HTML, or links from the page or a CSS selector.",
+            "Extract text, HTML, or links from the page or all elements matching a CSS selector. "
+            "Text and HTML from multiple matches are joined with blank lines in document order.",
             {
                 "page_id": _ACTIVE_PAGE_ID,
-                "selector": {"type": "string", "description": "Optional CSS selector limiting extraction to one subtree."},
+                "selector": {"type": "string", "description": "Optional CSS selector selecting one or more subtrees. All matches are extracted in document order; defaults to body."},
                 "format": {"type": "string", "enum": ["text", "html", "links"], "default": "text", "description": "Content representation to extract."},
                 "max_chars": {
                     "type": "integer",

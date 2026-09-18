@@ -35,7 +35,8 @@ from combo.runtime_i18n import normalize_runtime_locale
 from combo.runtime_protocol.chat_parts import build_chat_turn_messages
 from combo.workspace_directories import WorkspaceDirectoryBrowser
 from combo.tooling.workspace_paths import resolve_workspace_path
-from web_frontend.backend.frontend_event_bridge import project_runtime_event
+from web_frontend.backend.frontend_event_bridge import project_runtime_event, project_runtime_observation
+from web_frontend.backend.frontend_event_subscription import compact_frontend_events
 from web_frontend.backend.attachment_upload_store import (
     AttachmentUploadError,
     StagedAttachment,
@@ -1652,6 +1653,7 @@ def _session_snapshot(
         record = ToolCallRecord.model_validate_json(str(row["payload_json"]))
         tool_calls_by_turn[record.turn_id].append(record)
     turns = []
+    recovery_events: list[dict[str, Any]] = []
     for row in rows:
         from combo.runtime_protocol import ConversationTurn
         turn = ConversationTurn.model_validate_json(str(row["payload_json"]))
@@ -1659,6 +1661,15 @@ def _session_snapshot(
             backend,
             turn.active_runtime_instance_id,
         )
+        if before is None and turn.active_runtime_instance_id and turn.status in {
+            "running", "cancelling", "waiting_approval", "waiting_external",
+        }:
+            instance = backend.application.stores.runtime_instances.get(turn.active_runtime_instance_id)
+            for observation in backend.application.runtime_service.current_observations(instance.runtime_instance_id):
+                recovery_events.extend(project_runtime_observation(
+                    instance, {"type": "node_event", "payload": observation},
+                    request_id=frontend_request_id or instance.request.request_id,
+                ))
         tool_activities = [
             _tool_activity_view(backend, record)
             for record in tool_calls_by_turn.get(turn.turn_id, [])
@@ -1735,6 +1746,8 @@ def _session_snapshot(
         "turns": turns,
         "history": {"before": before, "next_before": next_before},
         "process_events": _process_events(backend, session_id, turn_ids=turn_ids) if before is None else [],
+        "recovery_events": compact_frontend_events(recovery_events),
+        "recovery_event_ids": [event["event_id"] for event in recovery_events],
         "current_plan": current_plan,
         "context_window": context_window,
         "created_at": str(session_row["created_at"]),

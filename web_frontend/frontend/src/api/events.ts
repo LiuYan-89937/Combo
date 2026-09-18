@@ -87,6 +87,7 @@ export class EventStreamClient {
       source.addEventListener('open', this.handleOpen)
       source.addEventListener('combo_frontend_event', this.handleMessage)
       source.addEventListener('combo_frontend_heartbeat', this.handleHeartbeat)
+      source.addEventListener('combo_frontend_reset', this.handleReset)
       source.addEventListener('message', this.handleMessage)
       source.addEventListener('error', this.handleError)
     } catch (error) {
@@ -124,6 +125,13 @@ export class EventStreamClient {
     this.markActivity()
   }
 
+  private handleReset = (event: MessageEvent<string>) => {
+    if (this.stopped) return
+    this.closeSource()
+    this.config.onError(new Error(`Event stream requires resynchronization: ${event.data}`))
+    this.scheduleReconnect()
+  }
+
   private handleError = () => {
     if (this.stopped) return
     this.closeSource()
@@ -152,6 +160,7 @@ export class EventStreamClient {
     source.removeEventListener('open', this.handleOpen)
     source.removeEventListener('combo_frontend_event', this.handleMessage)
     source.removeEventListener('combo_frontend_heartbeat', this.handleHeartbeat)
+    source.removeEventListener('combo_frontend_reset', this.handleReset)
     source.removeEventListener('message', this.handleMessage)
     source.removeEventListener('error', this.handleError)
     source.close()

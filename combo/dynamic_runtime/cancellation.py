@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from uuid import uuid4
 
@@ -47,6 +48,7 @@ class RuntimeCancellationStore:
         *,
         envelope: CommandEnvelope,
         payload: CancelRuntimeRequestPayload,
+        has_execution: Callable[[str], bool],
     ) -> RuntimeCancellationResult:
         now = utc_now_text()
         with self._database.transaction() as conn:
@@ -73,7 +75,7 @@ class RuntimeCancellationStore:
                     "updated_at": now,
                 }
             )
-            if current.status == "running":
+            if current.status == "running" and has_execution(current.runtime_instance_id):
                 requested = requested.model_copy(
                     update={"last_event_sequence": current.last_event_sequence + 1}
                 )
@@ -103,7 +105,9 @@ class RuntimeCancellationStore:
                     now=now,
                     terminal_at=now,
                     expected_task_status=(
-                        "waiting"
+                        "running"
+                        if current.status == "running"
+                        else "waiting"
                         if current.status in {"waiting_approval", "waiting_external"}
                         else "queued"
                     ),
@@ -150,6 +154,7 @@ class CancelRuntimeCommandHandler:
         result = self._cancellations.request(
             envelope=envelope,
             payload=payload,
+            has_execution=self._run_controls.has_execution,
         )
         if result.active_execution:
             self._run_controls.request_drain(

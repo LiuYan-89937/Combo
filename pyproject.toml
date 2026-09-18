@@ -33,6 +33,7 @@ dependencies = [
     "uritemplate>=4.1,<5",
     "pydantic>=2.8",
     "playwright>=1.54,<2",
+    "pillow>=11",
     "pypdf>=4.0",
     "python-pptx>=1.0,<2",
     "ruamel.yaml>=0.18",

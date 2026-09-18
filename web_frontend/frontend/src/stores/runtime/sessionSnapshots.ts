@@ -62,7 +62,7 @@ export function agentPackageSessionSnapshotView(
 
 /** Session lists and request metadata must not retain a second raw history. */
 export function agentSessionSummary(session: any): Record<string, any> {
-  const { turns, process_events, current_plan, context_window, history, ...summary } = session || {}
+  const { turns, process_events, recovery_events, recovery_event_ids, current_plan, context_window, history, ...summary } = session || {}
   return summary
 }
 

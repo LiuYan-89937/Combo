@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from hashlib import sha256
 from typing import Any
 
 from combo.tooling.builtins.filesystem.common import (
@@ -76,5 +75,4 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         "end_line": end_line,
         "total_lines": total_lines,
         "truncated": end_index < total_lines,
-        "content_hash": sha256(raw).hexdigest(),
     })

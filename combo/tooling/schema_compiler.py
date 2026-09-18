@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import importlib
+import re
 from typing import Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
@@ -19,8 +20,12 @@ class CompiledJsonSchema:
     validator: Any
 
     def errors_for(self, value: Any) -> list[str]:
-        errors = sorted(self.validator.iter_errors(value), key=lambda item: list(item.path))
-        return list(dict.fromkeys(_format_error(error) for error in errors))
+        errors = sorted(self.validator.iter_errors(value), key=lambda item: tuple(str(part) for part in item.absolute_path))
+        return list(dict.fromkeys(
+            _format_error(detail)
+            for error in errors
+            for detail in _relevant_errors(error)
+        ))
 
     def validate(self, value: Any) -> None:
         errors = self.errors_for(value)
@@ -133,10 +138,38 @@ def _annotation_for_schema(schema: dict[str, Any], model_name: str) -> Any:
     return Any
 
 
-def _format_error(error: Any) -> str:
+def _relevant_errors(error: Any) -> list[Any]:
+    """Report the selected union variant, rather than an unrelated near match."""
     if error.context:
-        return _format_error(best_match(error.context))
-    path = [str(part) for part in error.path]
+        if error.validator in {"oneOf", "anyOf"} and isinstance(error.instance, dict):
+            selected: list[int] = []
+            for index, branch in enumerate(error.validator_value):
+                if not isinstance(branch, dict):
+                    continue
+                guards = [
+                    (name, {key: constraint[key] for key in ("const", "enum") if key in constraint})
+                    for name, constraint in branch.get("properties", {}).items()
+                    if name in error.instance and isinstance(constraint, dict)
+                    and ("const" in constraint or "enum" in constraint)
+                ]
+                if guards and all(
+                    _draft_validator()(constraint).is_valid(error.instance[name])
+                    for name, constraint in guards
+                ):
+                    selected.append(index)
+            if len(selected) == 1:
+                children = [
+                    child for child in error.context
+                    if child.schema_path and child.schema_path[0] == selected[0]
+                ]
+                if children:
+                    return [detail for child in children for detail in _relevant_errors(child)]
+        return _relevant_errors(best_match(error.context))
+    return [error]
+
+
+def _format_error(error: Any) -> str:
+    path = [str(part) for part in error.absolute_path]
     if error.validator == "required" and isinstance(error.instance, dict):
         missing = [str(name) for name in error.validator_value if name not in error.instance]
         if len(missing) == 1:
@@ -144,7 +177,11 @@ def _format_error(error: Any) -> str:
     if error.validator == "additionalProperties" and isinstance(error.instance, dict):
         schema = error.schema if isinstance(error.schema, dict) else {}
         properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
-        unexpected = sorted(str(name) for name in set(error.instance) - set(properties))
+        patterns = schema.get("patternProperties") or {}
+        unexpected = sorted(
+            str(name) for name in set(error.instance) - set(properties)
+            if not any(re.search(pattern, str(name)) for pattern in patterns)
+        )
         if unexpected:
             return "; ".join(
                 f"{_location([*path, name])}: property is not allowed"

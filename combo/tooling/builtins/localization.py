@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from combo.runtime_i18n import RuntimeLocale
 from combo.tooling.spec import ToolSpec
+from combo.tooling.builtins.skill.specs import SKILL_TOOL_DESCRIPTION
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,11 +18,11 @@ BUILTIN_TOOL_LOCALIZATIONS: dict[str, BuiltinToolLocalization] = {
         description_en_us='Read a bounded line range from a UTF-8 text file in the current workspace. If a path is uncertain, locate it with the files action of rg before concluding that it is unavailable.',
     ),
     'write': BuiltinToolLocalization(
-        description_en_us='Create or fully replace a text file in the current workspace. Use write_once for complete content; use start, append, and commit for staged generation, or abort to discard it. Use edit for local changes.',
-        schema_error_guidance_en_us='Always provide action. write_once requires path and complete content; start requires path; append requires a real write_id and content; commit or abort requires a real write_id.',
+        description_en_us='Create or fully replace a text file in the current workspace. Use write_once with path and complete content; for staged generation use start with path, append with the returned write_id and content, then commit with write_id, or abort to discard it. Only write_once/start accept path; append/commit/abort must not include path. Use edit for local changes.',
+        schema_error_guidance_en_us='Always provide action. write_once requires path and complete content; start requires path; append requires a real write_id and content; commit or abort requires a real write_id. append/commit/abort do not accept path.',
     ),
     'edit': BuiltinToolLocalization(
-        description_en_us='Apply an exact text replacement to one UTF-8 file in the current workspace.',
+        description_en_us='Apply an exact text replacement to one UTF-8 file in the current workspace. Read that same path first and copy old_text exactly, including whitespace and newlines; do not use text from another file or an older version. A failed match leaves the file unchanged: read it again or locate the text with rg, rather than switching to a full overwrite.',
         schema_error_guidance_en_us='Provide path, old_text, and new_text. old_text must match once by default; set replace_all=true to replace every match.',
     ),
     'rg': BuiltinToolLocalization(
@@ -50,10 +51,10 @@ BUILTIN_TOOL_LOCALIZATIONS: dict[str, BuiltinToolLocalization] = {
         description_en_us="Invoke an exact Tool or MCP Tool already confirmed by capability describe. Follow that target's input schema exactly; never guess arguments or probe them through validation errors.",
     ),
     'delegate': BuiltinToolLocalization(
-        description_en_us='Start one bounded child-Agent task without blocking. Provide a user-facing role name, execution strategy, objective, acceptance criteria, and the smallest sufficient capability set; use an empty array when none is needed. Acceptance is not completion; do not poll immediately.',
+        description_en_us="Start one bounded child-Agent task without blocking. The child inherits the main Agent's currently enabled capabilities and stable built-in tools, excluding main-only controls. Optional capability names must already be enabled; an empty array still inherits the enabled set. Provide a role name, strategy, objective, and acceptance criteria. Acceptance is not completion; do not poll immediately.",
     ),
     'delegate_continue': BuiltinToolLocalization(
-        description_en_us='Continue a terminal child-Agent task. Reuse its checkpoint, role, model, and capability context while starting a new task revision for an improvement, correction, or follow-up.',
+        description_en_us='Continue a terminal child-Agent task. Reuse its checkpoint, role, and model while refreshing capabilities from the currently enabled main Agent profile. Start a new task revision for an improvement, correction, or follow-up.',
     ),
     'delegate_message': BuiltinToolLocalization(
         description_en_us='Insert a user message directly into a running child Agent. It is consumed at the next safe execution boundary without cancelling the current tool or using main-conversation steering.',
@@ -83,7 +84,7 @@ BUILTIN_TOOL_LOCALIZATIONS: dict[str, BuiltinToolLocalization] = {
         description_en_us='Install one MCP server after obtaining a complete configuration from an authoritative source. server_config accepts a decoded object or JSON/YAML text, with one server per call. Example: official docs provide {"mcpServers":{"amap":{"url":"https://example.com/mcp"}}}; pass the whole document as server_config. Counterexample: when only a service name is known, do not guess command, URL, headers, or environment values; find the official executable configuration first. Available only to the main Agent.',
     ),
     'skill': BuiltinToolLocalization(
-        description_en_us='Load a Skill available to the current runtime on demand. Describe it first, then load SKILL.md, and read only resources listed by describe or load.',
+        description_en_us=SKILL_TOOL_DESCRIPTION,
     ),
     'browser_open': BuiltinToolLocalization(
         description_en_us='Open an HTTP or HTTPS URL in the isolated browser. Reuse the active page by default; create a new tab only when simultaneous pages are intentional. Returns page state and a page_id for later operations. When page_state is verification_required or authentication_required, immediately stop all browser operations, tell the user in the main conversation to take control and complete the step manually, then end the current response and wait for confirmation. Do not retry or call other browser tools before confirmation. After confirmation, call browser_snapshot once before continuing. Neither state proves that the website is unavailable.',
@@ -110,7 +111,7 @@ BUILTIN_TOOL_LOCALIZATIONS: dict[str, BuiltinToolLocalization] = {
         description_en_us='Wait for a bounded duration or for a target element to reach a requested state.',
     ),
     'browser_extract': BuiltinToolLocalization(
-        description_en_us='Extract text, HTML, or links from the page or a CSS selector.',
+        description_en_us='Extract text, HTML, or links from the page or all elements matching a CSS selector. Text and HTML from multiple matches are joined with blank lines in document order.',
     ),
     'browser_screenshot': BuiltinToolLocalization(
         description_en_us='Capture the current page as a PNG for a vision-capable model. This tool is hidden from text-only models.',

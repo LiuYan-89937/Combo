@@ -135,7 +135,10 @@ class RuntimeExecutionCommitStore:
         model_usage: Iterable[RuntimeModelUsage] = (),
         context_snapshot: ConversationContextSnapshot | None = None,
         error: RuntimeErrorEnvelope | None = None,
+        settle_failure: bool = False,
     ) -> RuntimeInstance:
+        if settle_failure and status != "failed":
+            raise ValueError("failure settlement requires a failed execution outcome")
         if status not in {"waiting_approval", "waiting_external", "completed", "failed", "cancelled"}:
             raise ValueError(f"unsupported runtime execution commit status: {status}")
         now = utc_now_text()
@@ -147,6 +150,26 @@ class RuntimeExecutionCommitStore:
 
         with self._database.transaction() as conn:
             current = _load_instance(conn, claimed_instance.runtime_instance_id)
+            if settle_failure and current.attempt_id == claimed_instance.attempt_id:
+                if current.status in {"completed", "failed", "cancelled"}:
+                    return current
+                if current.cancel_requested_at is not None:
+                    status = "cancelled"
+                    error = RuntimeErrorEnvelope(
+                        code="runtime_cancelled",
+                        category="cancelled",
+                        terminal_status="cancelled",
+                        retryable=False,
+                        user_message_key="runtime.cancelled",
+                        request_id=current.request.request_id,
+                        runtime_instance_id=current.runtime_instance_id,
+                        operation=current.request.policy_snapshot.model.operation,
+                        details={
+                            "reason": current.cancel_reason or "user_cancelled",
+                            "execution_error": error.model_dump(mode="json") if error else None,
+                        },
+                    )
+                    event_payload = {"kind": "cancelled", "error": error.model_dump(mode="json")}
             if current.status != "running" or current.attempt_id != claimed_instance.attempt_id:
                 raise RuntimeError("runtime attempt fence rejected a late or duplicate execution result")
             if current.cancel_requested_at is not None and status != "cancelled":
@@ -231,6 +254,7 @@ class RuntimeExecutionCommitStore:
             status="failed",
             event_payload={"kind": "failed", "error": error.model_dump(mode="json")},
             error=error,
+            settle_failure=True,
         )
 
 

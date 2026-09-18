@@ -898,9 +898,7 @@ class BrowserRuntime:
     ) -> dict[str, Any]:
         session, effective_page_id, page = await self._active_page(session_key, page_id)
         locator = page.locator(selector) if selector else page.locator("body")
-        if format_name == "html":
-            content = await locator.inner_html()
-        elif format_name == "links":
+        if format_name == "links":
             values = await locator.locator("a[href]").evaluate_all(
                 "(els, limit) => els.slice(0, limit).map(el => "
                 "({text: (el.innerText || '').trim(), href: el.href}))",
@@ -908,7 +906,13 @@ class BrowserRuntime:
             )
             content = json.dumps(values, ensure_ascii=False)
         else:
-            content = await locator.inner_text()
+            await locator.first.wait_for(state="attached")
+            content = await locator.evaluate_all(
+                "(els, format) => els.map(el => format === 'html' "
+                "? el.innerHTML : (el.innerText ?? el.textContent ?? ''))"
+                r".join('\n\n')",
+                format_name,
+            )
         session.last_used_at = time.monotonic()
         return {
             **await self._page_summary(page, effective_page_id),
