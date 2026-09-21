@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import atexit
+from collections.abc import Callable
 from contextlib import closing
 from dataclasses import dataclass
 import importlib
@@ -40,7 +41,12 @@ class LangGraphCheckpointerHandle:
 
 
 class LangGraphCheckpointerFactory:
-    def build(self, config: LangGraphCheckpointerConfig) -> LangGraphCheckpointerHandle:
+    def build(
+        self,
+        config: LangGraphCheckpointerConfig,
+        *,
+        on_maintenance_progress: Callable[[str], None] | None = None,
+    ) -> LangGraphCheckpointerHandle:
         if config.backend == "memory":
             return LangGraphCheckpointerHandle(
                 saver=importlib.import_module("langgraph.checkpoint.memory").InMemorySaver(),
@@ -50,11 +56,18 @@ class LangGraphCheckpointerFactory:
             )
         if config.path is None:
             raise ValueError("SQLite checkpointer requires a checkpoint path.")
-        return self._build_sqlite(config.path)
+        return self._build_sqlite(config.path, on_maintenance_progress=on_maintenance_progress)
 
-    def _build_sqlite(self, checkpoint_path: Path) -> LangGraphCheckpointerHandle:
+    def _build_sqlite(
+        self,
+        checkpoint_path: Path,
+        *,
+        on_maintenance_progress: Callable[[str], None] | None,
+    ) -> LangGraphCheckpointerHandle:
         try:
-            sqlite_saver = importlib.import_module("langgraph.checkpoint.sqlite").SqliteSaver
+            sqlite_saver = importlib.import_module(
+                "combo.runtime_kernel.persistence.latest_sqlite"
+            ).LatestSqliteSaver
         except ModuleNotFoundError as exc:
             raise RuntimeError(
                 "SQLite checkpointer backend is configured, but langgraph-checkpoint-sqlite "
@@ -70,7 +83,21 @@ class LangGraphCheckpointerFactory:
                     resolved_path,
                     check_same_thread=False,
                 )
-                saver = sqlite_saver(connection)
+                try:
+                    from combo.runtime_kernel.persistence.checkpoint_maintenance import (
+                        prepare_checkpoint_storage,
+                    )
+
+                    saver = sqlite_saver(connection)
+                    saver.setup()
+                    prepare_checkpoint_storage(
+                        connection,
+                        path=resolved_path,
+                        on_progress=on_maintenance_progress,
+                    )
+                except BaseException:
+                    connection.close()
+                    raise
                 shared = _SharedSQLiteCheckpointer(saver=saver, connection=connection)
                 _SQLITE_CHECKPOINTERS[resolved_path] = shared
                 _PERSISTENT_CHECKPOINTER_IDS.add(id(saver))

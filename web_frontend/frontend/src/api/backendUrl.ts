@@ -15,6 +15,7 @@ interface BackendStatus {
 interface BackendHealth {
   status?: 'starting' | 'ready' | 'failed'
   phase?: string
+  progress_revision?: number
   error?: string
 }
 
@@ -49,7 +50,8 @@ export async function restartBackend(): Promise<void> {
 
 export async function waitForBackendReady(): Promise<void> {
   const healthUrl = await backendUrl('/health')
-  const deadline = Date.now() + BACKEND_READINESS_TIMEOUT_MS
+  let deadline = Date.now() + BACKEND_READINESS_TIMEOUT_MS
+  let lastProgress = ''
   let lastFailure = ''
 
   while (Date.now() < deadline) {
@@ -59,6 +61,13 @@ export async function waitForBackendReady(): Promise<void> {
       if (response.ok && health.status === 'ready') return
       if (health.status === 'failed') {
         throw new BackendInitializationError(health.error || 'Backend initialization failed')
+      }
+      if (health.status === 'starting') {
+        const progress = `${health.phase || ''}:${health.progress_revision ?? ''}`
+        if (progress !== lastProgress) {
+          lastProgress = progress
+          deadline = Date.now() + BACKEND_READINESS_TIMEOUT_MS
+        }
       }
       lastFailure = health.phase || `HTTP ${response.status}`
     } catch (error) {

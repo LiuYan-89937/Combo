@@ -392,6 +392,10 @@ class RuntimeBackend:
         self._finish_startup_timeline()
 
     def _advance_startup_phase(self, phase: str) -> None:
+        if phase == self._startup_phase_name:
+            if self._startup_phase_sink is not None:
+                self._startup_phase_sink(phase)
+            return
         now = perf_counter()
         if self._startup_phase_name is not None:
             self.logger.info(
@@ -2012,8 +2016,10 @@ class RuntimeBackend:
         capability_blobs = CapabilityBlobStore(config.capability_blob_root)
         self._advance_startup_phase("runtime_persistence")
         checkpointer = LangGraphCheckpointerFactory().build(
-            LangGraphCheckpointerConfig(backend="sqlite", path=config.checkpoint_path)
+            LangGraphCheckpointerConfig(backend="sqlite", path=config.checkpoint_path),
+            on_maintenance_progress=self._advance_startup_phase,
         ).saver
+        self._advance_startup_phase("runtime_persistence")
         graph_store = LangGraphStoreFactory().build(
             LangGraphStoreConfig(backend="sqlite", path=config.graph_store_path)
         ).store

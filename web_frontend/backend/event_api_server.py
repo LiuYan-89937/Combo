@@ -33,6 +33,7 @@ class RuntimeStartupState:
         self._started_at = monotonic()
         self._status = "starting"
         self._phase = "loading_runtime"
+        self._progress_revision = 0
         self._error: str | None = None
         self._protocol: dict[str, object] | None = None
         self._runtime_application: FastAPI | None = None
@@ -43,6 +44,7 @@ class RuntimeStartupState:
         with self._lock:
             if self._status == "starting":
                 self._phase = str(phase or "initializing")
+                self._progress_revision += 1
 
     def ready(
         self,
@@ -89,6 +91,7 @@ class RuntimeStartupState:
             payload: dict[str, object] = {
                 "status": self._status,
                 "phase": self._phase,
+                "progress_revision": self._progress_revision,
                 "elapsed_ms": round((monotonic() - self._started_at) * 1000),
             }
             if self._protocol is not None:
