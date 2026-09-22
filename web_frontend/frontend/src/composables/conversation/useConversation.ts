@@ -217,8 +217,10 @@ export function useConversation() {
     void commands.steerRequest(requestId)
   }
 
-  function cancelQueuedRequest(requestId: string) {
+  function cancelQueuedRequest(requestId: string): boolean {
+    if (!runtimeStore.markQueuedRequestCancelling(requestId)) return false
     commands.cancelRequest('user_cancelled', requestId)
+    return true
   }
 
   watch(isAgentChatActive, (active) => {

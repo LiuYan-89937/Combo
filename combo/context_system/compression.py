@@ -8,6 +8,7 @@ from uuid import uuid4
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from pydantic import BaseModel
 
+from combo.context_system.memory_context import project_memory_tool_messages
 from combo.context_system.schema import (
     CompressionDetail,
     CompressionPolicy,
@@ -458,6 +459,9 @@ def _conversation_text(messages: list[Any]) -> str:
 
 
 def _tool_results_text(messages: list[Any]) -> str:
+    # Keep memory provenance as tool history, while its content remains in the
+    # replaceable runtime snapshot instead of becoming a second system summary.
+    messages = project_memory_tool_messages(messages, selected_ids=set())
     tool_calls: dict[str, tuple[str, Any]] = {}
     for message in messages:
         if not isinstance(message, AIMessage):

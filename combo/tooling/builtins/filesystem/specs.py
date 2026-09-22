@@ -50,6 +50,7 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
         id="read",
         description=(
             "读取 workspace 边界内的指定文本文件内容，按行号返回可控范围。"
+            "offset 是从 1 开始的起始行号，limit 是最多返回的行数。"
             f"{_READ_MISSING_GUIDANCE}"
         ),
         entrypoint="combo.tooling.builtins.filesystem.read:run",
@@ -57,7 +58,7 @@ FILESYSTEM_TOOL_SPECS: list[ToolSpec] = [
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": _READ_PATH_DESCRIPTION},
-                "start_line": {"type": "integer", "minimum": 1, "default": 1, "description": "起始行号，从 1 开始。"},
+                "offset": {"type": "integer", "minimum": 1, "default": 1, "description": "起始行号，从 1 开始，默认 1；不是字节偏移量。"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 2000, "default": 200, "description": "最多读取多少行。"},
             },
             "required": ["path"],

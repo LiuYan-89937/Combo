@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import RLock
 from types import MappingProxyType
@@ -97,7 +97,11 @@ class SessionProcessResourcePool:
     inside that worktree.
     """
 
-    def __init__(self, *, environment: Mapping[str, str]) -> None:
+    def __init__(
+        self, *, environment: Mapping[str, str],
+        on_process_completion: Callable[[RuntimeInstance, dict[str, Any]], None],
+    ) -> None:
+        self._on_process_completion = on_process_completion
         self._environment = MappingProxyType(dict(environment))
         self._shell_runtime = resolve_shell_runtime(self._environment)
         self._entries: dict[tuple[str, str], _ProcessPoolEntry] = {}
@@ -134,7 +138,11 @@ class SessionProcessResourcePool:
             elif entry.principal_id != instance.request.principal_id:
                 raise RuntimeError("conversation process owner changed")
             entry.references += 1
-        return ProjectedRuntimeResource(value=entry.resource, release_callback=lambda: self._release(key))
+        resource = replace(
+            entry.resource,
+            on_completion=lambda output: self._on_process_completion(instance, output),
+        )
+        return ProjectedRuntimeResource(value=resource, release_callback=lambda: self._release(key))
 
     def close(self) -> None:
         with self._lock:
@@ -142,6 +150,12 @@ class SessionProcessResourcePool:
             self._entries.clear()
         for entry in entries:
             entry.resource.manager.close()
+
+    def deliver_completions(self) -> None:
+        with self._lock:
+            entries = tuple(self._entries.values())
+        for entry in entries:
+            entry.resource.manager.deliver_completions()
 
     def close_sessions(self, session_ids: tuple[str, ...]) -> None:
         selected = frozenset(_required_identity(value, "session_id") for value in session_ids)

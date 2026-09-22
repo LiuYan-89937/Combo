@@ -226,6 +226,7 @@ export const useRuntimeStore = defineStore('runtime', {
             attachmentCount: turn?.userMessage?.attachments?.length || 0,
             steering: request.payload?.dispatch_state === 'steering',
             submitting: request.payload?.submission_state === 'pending',
+            cancelling: Boolean(request.payload?.cancel_pending),
           }
         })
     },
@@ -354,6 +355,10 @@ export const useRuntimeStore = defineStore('runtime', {
         this.restoreRequestQueued(String(payload?.queued_request_id || event.request_id || ''))
       } else if (type === 'runtime_request_dispatched') {
         this._handleRuntimeRequestDispatched(event)
+      } else if (type === 'runtime_request_cancelled') {
+        this._handleRuntimeRequestCancelled(event)
+      } else if (type === 'runtime_request_cancel_rejected') {
+        this.clearRequestCancelling(String(payload?.target_request_id || ''), true)
       }
 
       // Agent packages
@@ -1144,7 +1149,31 @@ export const useRuntimeStore = defineStore('runtime', {
       this._setRequestDispatchState(event.request_id, 'queued', event.payload)
     },
 
+    _handleRuntimeRequestCancelled(event: RuntimeFrontendEvent) {
+      // This input never reached a runtime. Withdraw only its message and leave
+      // the active turn, streams, tools and pending approvals alone.
+      this._completeActiveRequest(event, 'cancelled')
+      const turn = this.conversationTurns.find(item => item.requestId === event.request_id)
+      if (turn) {
+        turn.status = 'cancelled'
+        turn.completedAt = event.timestamp
+        turn.errorMessage = null
+        if (turn.userMessage) turn.userMessage.status = 'cancelled'
+      }
+      this.transcript.forEach(message => {
+        if (message.role === 'user' && message.metadata?.request_id === event.request_id) {
+          message.status = 'cancelled'
+        }
+      })
+      if (event.request_id && this.activeRequestId === event.request_id) {
+        this.activeRequestId = null
+        this.runStatus = 'cancelled'
+      }
+    },
+
     _handleRuntimeRequestSteering(event: RuntimeFrontendEvent) {
+      const existing = event.request_id ? this.activeRequests[event.request_id] : null
+      if (existing?.status === 'cancelled') return
       this._registerActiveRequest(event, 'completed')
       this._setRequestDispatchState(event.request_id, 'promoted', event.payload)
     },
@@ -1179,6 +1208,7 @@ export const useRuntimeStore = defineStore('runtime', {
           ...(request.payload || {}),
           ...payload,
           dispatch_state: dispatchState,
+          ...(!isPendingDispatch(dispatchState) ? { cancel_pending: false } : {}),
         }
       }
       const turn = this.conversationTurns.find((item) => item.requestId === requestId)
@@ -1862,6 +1892,19 @@ export const useRuntimeStore = defineStore('runtime', {
           this.runStatus = 'failed'
         }
       }
+    },
+
+    markQueuedRequestCancelling(requestId: string): boolean {
+      const request = this.activeRequests[requestId]
+      if (!request || request.status !== 'running' || request.payload?.dispatch_state !== 'queued'
+        || request.payload?.submission_state === 'pending' || request.payload?.cancel_pending) return false
+      request.payload = { ...request.payload, cancel_pending: true, cancel_rejected: false }
+      return true
+    },
+
+    clearRequestCancelling(requestId: string, rejected = false) {
+      const request = this.activeRequests[requestId]
+      if (request) request.payload = { ...request.payload, cancel_pending: false, cancel_rejected: rejected }
     },
 
     markRequestSteering(requestId: string) {

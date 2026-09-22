@@ -132,7 +132,16 @@ export function useRuntimeCommands() {
       packageId,
       runtimeInstanceId,
     })
-    transport.sendRuntimeCommand(command)
+    void transport.sendRuntimeCommand(command).then(
+      response => {
+        if (response.receipt.status === 'rejected' && targetRequestId) {
+          runtimeStore.clearRequestCancelling(targetRequestId, true)
+        }
+      },
+      () => {
+        if (targetRequestId) runtimeStore.clearRequestCancelling(targetRequestId)
+      },
+    )
     return command
   }
 

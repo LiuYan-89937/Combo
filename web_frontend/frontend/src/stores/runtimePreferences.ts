@@ -13,6 +13,7 @@ import {
 import type { ApprovalMode, ExecutionPreference } from '@/api/dynamicRuntime'
 
 export const DEFAULT_RUNTIME_REQUEST_TIMEOUT_SECONDS = 300
+export const DEFAULT_BUILTIN_TOOL_TIMEOUT_SECONDS = 300
 export const DEFAULT_BROWSER_OPERATION_TIMEOUT_MS = 30_000
 export const DEFAULT_BROWSER_NAVIGATION_TIMEOUT_MS = 45_000
 export const DEFAULT_RUNTIME_MAX_RETRIES = 5
@@ -21,7 +22,6 @@ export const DEFAULT_CONTEXT_COMPRESSION_DETAIL: ContextCompressionDetail = 'sta
 export const DEFAULT_CONTEXT_COMPRESSION_KEEP_RECENT_MESSAGES = 12
 export const DEFAULT_APPROVAL_MODE: ApprovalMode = 'ask'
 export const DEFAULT_EXECUTION_PREFERENCE: ExecutionPreference = 'react'
-export const DEFAULT_MEMORY_WRITE_INTERVAL_TURNS = 3
 export const DEFAULT_MEMORY_MAX_INJECTED_ITEMS = 8
 export const DEFAULT_MEMORY_MAX_INJECTED_TOKENS = 1200
 export type RunningMessageMode = 'queue' | 'steer'
@@ -43,6 +43,7 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
   const mainModelProfileId = ref(readStoredText(STORAGE_KEYS.mainModelProfileId))
   const reasoningIntensity = ref(readStoredReasoningIntensity())
   const requestTimeoutSeconds = ref(readStoredInteger(STORAGE_KEYS.requestTimeoutSeconds, DEFAULT_RUNTIME_REQUEST_TIMEOUT_SECONDS, 0))
+  const builtinToolTimeoutSeconds = ref(DEFAULT_BUILTIN_TOOL_TIMEOUT_SECONDS)
   const browserOperationTimeoutMs = ref(DEFAULT_BROWSER_OPERATION_TIMEOUT_MS)
   const browserNavigationTimeoutMs = ref(DEFAULT_BROWSER_NAVIGATION_TIMEOUT_MS)
   const maxRetries = ref(readStoredInteger(STORAGE_KEYS.maxRetries, DEFAULT_RUNTIME_MAX_RETRIES, 0))
@@ -53,8 +54,7 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
   const executionPreference = ref<ExecutionPreference>(readStoredExecutionPreference())
   const forceCollaboration = ref(readStoredBoolean(STORAGE_KEYS.forceCollaboration))
   const runningMessageMode = ref<RunningMessageMode>(readStoredRunningMessageMode())
-  const memoryAutoWriteEnabled = ref(true)
-  const memoryWriteIntervalTurns = ref(DEFAULT_MEMORY_WRITE_INTERVAL_TURNS)
+  const memoryAutoRecallEnabled = ref(true)
   const memoryAgentWriteEnabled = ref(true)
   const memoryMaxInjectedItems = ref(DEFAULT_MEMORY_MAX_INJECTED_ITEMS)
   const memoryMaxInjectedTokens = ref(DEFAULT_MEMORY_MAX_INJECTED_TOKENS)
@@ -80,6 +80,11 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     requestTimeoutSeconds.value = Math.max(0, Math.round(value))
     writeStoredValue(STORAGE_KEYS.requestTimeoutSeconds, String(requestTimeoutSeconds.value))
     enqueue({ request_timeout_seconds: requestTimeoutSeconds.value })
+  }
+
+  function setBuiltinToolTimeoutSeconds(value: number): void {
+    builtinToolTimeoutSeconds.value = Math.max(1, Math.min(3600, Math.round(value)))
+    enqueue({ builtin_tool_timeout_seconds: builtinToolTimeoutSeconds.value })
   }
 
   function setBrowserOperationTimeoutMs(value: number): void {
@@ -139,14 +144,9 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     writeStoredValue(STORAGE_KEYS.runningMessageMode, value)
   }
 
-  function setMemoryAutoWriteEnabled(value: boolean): void {
-    memoryAutoWriteEnabled.value = value
-    enqueue({ memory_auto_write_enabled: value })
-  }
-
-  function setMemoryWriteIntervalTurns(value: number): void {
-    memoryWriteIntervalTurns.value = Math.max(1, Math.round(value))
-    enqueue({ memory_write_interval_turns: memoryWriteIntervalTurns.value })
+  function setMemoryAutoRecallEnabled(value: boolean): void {
+    memoryAutoRecallEnabled.value = value
+    enqueue({ memory_auto_recall_enabled: value })
   }
 
   function setMemoryAgentWriteEnabled(value: boolean): void {
@@ -209,14 +209,14 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     approvalMode.value = value.approval_mode
     executionPreference.value = value.execution_preference
     requestTimeoutSeconds.value = value.request_timeout_seconds
+    builtinToolTimeoutSeconds.value = value.builtin_tool_timeout_seconds
     browserOperationTimeoutMs.value = value.browser_operation_timeout_ms
     browserNavigationTimeoutMs.value = value.browser_navigation_timeout_ms
     maxRetries.value = value.max_retries
     maxParallelSubAgents.value = value.max_parallel_sub_agents
     contextCompressionDetail.value = value.context_compression_detail
     contextCompressionKeepRecentMessages.value = value.context_compression_keep_recent_messages
-    memoryAutoWriteEnabled.value = value.memory_auto_write_enabled
-    memoryWriteIntervalTurns.value = value.memory_write_interval_turns
+    memoryAutoRecallEnabled.value = value.memory_auto_recall_enabled
     memoryAgentWriteEnabled.value = value.memory_agent_write_enabled
     memoryMaxInjectedItems.value = value.memory_max_injected_items
     memoryMaxInjectedTokens.value = value.memory_max_injected_tokens
@@ -236,6 +236,7 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     mainModelProfileId,
     reasoningIntensity,
     requestTimeoutSeconds,
+    builtinToolTimeoutSeconds,
     browserOperationTimeoutMs,
     browserNavigationTimeoutMs,
     maxRetries,
@@ -246,8 +247,7 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     executionPreference,
     forceCollaboration,
     runningMessageMode,
-    memoryAutoWriteEnabled,
-    memoryWriteIntervalTurns,
+    memoryAutoRecallEnabled,
     memoryAgentWriteEnabled,
     memoryMaxInjectedItems,
     memoryMaxInjectedTokens,
@@ -256,6 +256,7 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     setMainModelProfileId,
     setReasoningIntensity,
     setRequestTimeoutSeconds,
+    setBuiltinToolTimeoutSeconds,
     setBrowserOperationTimeoutMs,
     setBrowserNavigationTimeoutMs,
     setMaxRetries,
@@ -266,8 +267,7 @@ export const useRuntimePreferencesStore = defineStore('runtimePreferences', () =
     setExecutionPreference,
     setForceCollaboration,
     setRunningMessageMode,
-    setMemoryAutoWriteEnabled,
-    setMemoryWriteIntervalTurns,
+    setMemoryAutoRecallEnabled,
     setMemoryAgentWriteEnabled,
     setMemoryMaxInjectedItems,
     setMemoryMaxInjectedTokens,

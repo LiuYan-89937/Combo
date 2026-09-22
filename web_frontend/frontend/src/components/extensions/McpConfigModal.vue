@@ -324,7 +324,7 @@ const rules = computed<FormRules>(() => ({
 function emptyForm() {
   return {
     display_name: '', description: '', transport: 'stdio' as McpServerConfig['transport'],
-    command: '', args: '', cwd: '', env: '', url: '', headers: '', timeout_seconds: 60,
+    command: '', args: '', cwd: '', env: '', url: '', headers: '', timeout_seconds: 120,
     connect_timeout_seconds: 30, max_parallel_requests: 1, concurrent_default: true,
     risk_level_default: 'medium' as NonNullable<McpServerConfig['risk_level_default']>,
   }
@@ -344,7 +344,7 @@ function loadForm(item: ExtensionItemView | null | undefined) {
     command: String(payload.command || ''),
     args: mcpConfigArgsText(payload.args),
     cwd: String(payload.cwd || ''), env: bindingText(payload.env), url: String(payload.url || ''), headers: bindingText(payload.headers),
-    timeout_seconds: Number(payload.timeout_seconds || 60),
+    timeout_seconds: Number(payload.timeout_seconds ?? 120),
     connect_timeout_seconds: Number(payload.connect_timeout_seconds || 30),
     max_parallel_requests: Number(payload.max_parallel_requests || 1),
     concurrent_default: payload.concurrent_default !== false,

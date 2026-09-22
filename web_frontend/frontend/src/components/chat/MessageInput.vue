@@ -23,7 +23,7 @@
       >
         <div class="queued-message-copy">
           <span class="queued-message-status">
-            {{ queuedMessage.submitting ? t('chat.messagePreparing') : queuedMessage.steering ? t('chat.messageSteering') : t('chat.messageQueuedAt', { position: queuedMessage.position }) }}
+            {{ queuedMessage.cancelling ? t('chat.messageCancelling') : queuedMessage.submitting ? t('chat.messagePreparing') : queuedMessage.steering ? t('chat.messageSteering') : t('chat.messageQueuedAt', { position: queuedMessage.position }) }}
           </span>
           <span class="queued-message-content">
             {{ queuedMessage.content || t('chat.attachmentMessage') }}
@@ -37,7 +37,7 @@
             size="small"
             text
             class="queued-message-action"
-            :disabled="queuedMessage.steering || queuedMessage.submitting"
+            :disabled="queuedMessage.steering || queuedMessage.submitting || queuedMessage.cancelling"
             @click="emit('cancelQueued', queuedMessage)"
           >
             {{ t('common.cancel') }}
@@ -46,7 +46,7 @@
             size="small"
             text
             class="queued-message-action"
-            :disabled="queuedMessage.steering || queuedMessage.submitting"
+            :disabled="queuedMessage.steering || queuedMessage.submitting || queuedMessage.cancelling"
             @click="emit('steer', queuedMessage.requestId)"
           >
             {{ t('chat.steer') }}
@@ -745,6 +745,14 @@ function clearTrailingAtMention() {
   focus()
 }
 
+function restoreCancelledDraft(message: string) {
+  // Cancellation is acknowledged asynchronously; preserve edits made meanwhile.
+  inputText.value = [inputText.value, message].filter(Boolean).join('\n\n')
+  saveConversationDraft(normalizedDraftScope.value, inputText.value)
+  emit('input', inputText.value)
+  focus()
+}
+
 function restoreDraft(message: string, draftAttachments: RuntimeAttachmentInput[]) {
   inputText.value = message
   saveConversationDraft(normalizedDraftScope.value, message)
@@ -806,6 +814,7 @@ defineExpose({
   focus,
   clearTrailingAtMention,
   restoreDraft,
+  restoreCancelledDraft,
 })
 </script>
 

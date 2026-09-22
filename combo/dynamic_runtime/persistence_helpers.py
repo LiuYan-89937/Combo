@@ -10,6 +10,7 @@ from combo.runtime_protocol import (
     RuntimeInstance,
 )
 from combo.runtime_protocol.contracts import utc_now_text
+from combo.runtime_protocol.state_machines import CONVERSATION_TURN_TRANSITIONS, require_transition
 
 
 def upsert_capability_snapshot(conn: sqlite3.Connection, snapshot: CapabilitySnapshot) -> None:
@@ -140,6 +141,53 @@ def insert_message(conn: sqlite3.Connection, message: ConversationMessage) -> No
             message.committed_at,
         ),
     )
+
+
+def cancel_undelivered_turn(
+    conn: sqlite3.Connection, turn: ConversationTurn, *, updated_at: str,
+) -> None:
+    """Retract a turn and its input inside the command cancellation transaction."""
+    if turn.active_runtime_instance_id is not None or turn.steering is not None:
+        raise ValueError("cannot retract a user message after runtime handoff")
+    require_transition(turn.status, "cancelled", CONVERSATION_TURN_TRANSITIONS, machine="conversation turn")
+    cancelled = turn.model_copy(update={"status": "cancelled", "updated_at": updated_at, "terminal_at": updated_at})
+    changed = conn.execute(
+        """
+        update conversation_turns
+        set status = 'cancelled', payload_json = ?, updated_at = ?, terminal_at = ?
+        where turn_id = ? and status = ?
+        """,
+        (cancelled.model_dump_json(), updated_at, updated_at, turn.turn_id, turn.status),
+    ).rowcount
+    if changed != 1:
+        raise RuntimeError("undelivered conversation turn cancellation compare-and-set failed")
+    changed = conn.execute(
+        """
+        update conversation_messages
+        set status = 'cancelled', committed_at = null,
+            payload_json = json_set(payload_json, '$.status', 'cancelled', '$.committed_at', null)
+        where message_id = ? and turn_id = ? and session_id = ? and role = 'user'
+        """,
+        (turn.user_message_id, turn.turn_id, turn.session_id),
+    ).rowcount
+    if changed != 1:
+        raise RuntimeError("undelivered user message cancellation failed")
+    insert_outbox(conn, OutboxRecord(
+        aggregate_kind="conversation",
+        aggregate_id=turn.session_id,
+        aggregate_revision=turn.task_revision,
+        event_id=f"conversation:{turn.session_id}:turn:{turn.turn_id}:cancelled",
+        event_kind="conversation_turn_cancelled",
+        payload={
+            "session_id": turn.session_id,
+            "turn_id": turn.turn_id,
+            "command_id": turn.source_command_id,
+            "status": "cancelled",
+        },
+        created_at=updated_at,
+        updated_at=updated_at,
+    ))
+    advance_conversation_revision(conn, turn.session_id, updated_at=updated_at)
 
 
 def advance_conversation_revision(conn: sqlite3.Connection, session_id: str, *, updated_at: str) -> None:

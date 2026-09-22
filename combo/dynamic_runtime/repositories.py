@@ -10,6 +10,7 @@ from combo.dynamic_runtime.database import DynamicRuntimeDatabase
 from combo.runtime_protocol.conversation import SteeringPlacement
 from combo.dynamic_runtime.persistence_helpers import (
     advance_conversation_revision,
+    cancel_undelivered_turn,
     insert_runtime_instance,
     insert_message,
     insert_outbox,
@@ -490,23 +491,7 @@ class ConversationStore:
         return ConversationMessage.model_validate_json(str(row["payload_json"]))
 
     def fail_pre_runtime_turn(self, *, source_command_id: str) -> ConversationTurn:
-        return self._terminalize_pre_runtime_turn(
-            source_command_id=source_command_id,
-            status="failed",
-        )
-
-    def cancel_pre_runtime_turn(self, *, source_command_id: str) -> ConversationTurn:
-        return self._terminalize_pre_runtime_turn(
-            source_command_id=source_command_id,
-            status="cancelled",
-        )
-
-    def _terminalize_pre_runtime_turn(
-        self,
-        *,
-        source_command_id: str,
-        status: Literal["failed", "cancelled"],
-    ) -> ConversationTurn:
+        status = "failed"
         command_id = _required_text(source_command_id, "source_command_id")
         now = utc_now_text()
         with self._database.transaction() as conn:
@@ -658,6 +643,10 @@ class ConversationStore:
             ).fetchone()
         revision = row["task_revision"] if row is not None else None
         return int(revision) if revision is not None else None
+
+
+class MessageAlreadyBeingSteered(ValueError):
+    """The runtime owns this input; cancelling its queued record cannot retract it."""
 
 
 class CommandInbox:
@@ -1015,11 +1004,24 @@ class CommandInbox:
             if row is None:
                 raise LookupError(f"queued message command not found: {target_id}")
             receipt = CommandReceipt.model_validate_json(str(row["receipt_json"]))
-            if receipt.status == "cancelled":
-                return receipt
             if receipt.status != "queued":
-                raise ValueError(f"message command is not queued: {target_id}")
+                return receipt
+            turn_row = conn.execute(
+                """
+                select payload_json from conversation_turns
+                where session_id = ? and json_extract(payload_json, '$.source_command_id') = ?
+                """,
+                (session, target_id),
+            ).fetchone()
+            if turn_row is None:
+                raise LookupError(f"conversation turn not found for command: {target_id}")
+            turn = ConversationTurn.model_validate_json(str(turn_row["payload_json"]))
+            # Reservation and cancellation share this transaction boundary. Once
+            # handed to steering, the graph may already have consumed the input.
+            if turn.steering is not None:
+                raise MessageAlreadyBeingSteered(target_id)
             now = utc_now_text()
+            cancel_undelivered_turn(conn, turn, updated_at=now)
             cancelled = receipt.model_copy(
                 update={
                     "status": "cancelled",
@@ -1046,30 +1048,6 @@ class CommandInbox:
             ).rowcount
             if changed != 1:
                 raise RuntimeError("queued message cancellation compare-and-set failed")
-            turn_row = conn.execute(
-                """
-                select payload_json from conversation_turns
-                where json_extract(payload_json, '$.source_command_id') = ?
-                """,
-                (target_id,),
-            ).fetchone()
-            if turn_row is None:
-                raise LookupError(f"conversation turn not found for command: {target_id}")
-            turn = ConversationTurn.model_validate_json(str(turn_row["payload_json"]))
-            require_transition(turn.status, "cancelled", CONVERSATION_TURN_TRANSITIONS, machine="conversation turn")
-            cancelled_turn = turn.model_copy(
-                update={"status": "cancelled", "updated_at": now, "terminal_at": now}
-            )
-            turn_changed = conn.execute(
-                """
-                update conversation_turns
-                set status = 'cancelled', payload_json = ?, updated_at = ?, terminal_at = ?
-                where turn_id = ? and status = 'queued'
-                """,
-                (cancelled_turn.model_dump_json(), now, now, turn.turn_id),
-            ).rowcount
-            if turn_changed != 1:
-                raise RuntimeError("queued conversation turn cancellation compare-and-set failed")
             insert_outbox(
                 conn,
                 OutboxRecord(
@@ -1083,25 +1061,6 @@ class CommandInbox:
                     updated_at=now,
                 ),
             )
-            insert_outbox(
-                conn,
-                OutboxRecord(
-                    aggregate_kind="conversation",
-                    aggregate_id=session,
-                    aggregate_revision=turn.task_revision,
-                    event_id=f"conversation:{session}:turn:{turn.turn_id}:cancelled",
-                    event_kind="conversation_turn_cancelled",
-                    payload={
-                        "session_id": session,
-                        "turn_id": turn.turn_id,
-                        "command_id": target_id,
-                        "status": "cancelled",
-                    },
-                    created_at=now,
-                    updated_at=now,
-                ),
-            )
-            advance_conversation_revision(conn, session, updated_at=now)
         return cancelled
 
     def get_receipt(self, command_id: str) -> CommandReceipt:
@@ -1190,7 +1149,7 @@ class CommandInbox:
     ) -> None:
         with self._database.transaction() as conn:
             row = conn.execute(
-                "select receipt_json from command_inbox where command_id = ?",
+                "select receipt_json, command_kind from command_inbox where command_id = ?",
                 (receipt.command_id,),
             ).fetchone()
             if row is None:
@@ -1217,6 +1176,18 @@ class CommandInbox:
             ).rowcount
             if changed != 1:
                 raise RuntimeError("command receipt compare-and-set failed")
+            if row["command_kind"] == "send_message" and receipt.status == "cancelled" and receipt.runtime_instance_id is None:
+                turn_row = conn.execute(
+                    """
+                    select payload_json from conversation_turns
+                    where session_id = ? and json_extract(payload_json, '$.source_command_id') = ?
+                    """,
+                    (receipt.session_id, receipt.command_id),
+                ).fetchone()
+                if turn_row is None:
+                    raise LookupError(f"conversation turn not found for command: {receipt.command_id}")
+                turn = ConversationTurn.model_validate_json(str(turn_row["payload_json"]))
+                cancel_undelivered_turn(conn, turn, updated_at=receipt.updated_at)
             insert_outbox(conn, outbox)
 
 

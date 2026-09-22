@@ -10,6 +10,7 @@ from combo.context_system.schema import (
     ContextQuery,
     ContextRetrievalReport,
     LLMContextFrame,
+    MemoryContextSnapshot,
     ToolResultsCompressionSummary,
 )
 
@@ -25,5 +26,6 @@ __all__ = [
     "ContextQuery",
     "ContextRetrievalReport",
     "LLMContextFrame",
+    "MemoryContextSnapshot",
     "ToolResultsCompressionSummary",
 ]

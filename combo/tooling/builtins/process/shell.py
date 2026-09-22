@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any
 
 from combo.tooling.builtins.process.manager import (
-    ProcessCancellationCheck,
     ProcessOutputObserver,
     is_read_only_process_path,
     process_runtime_allowed_roots,
@@ -15,10 +14,9 @@ from combo.tooling.builtins.process.manager import (
 from combo.tooling.builtins.process.runtime import shell_runtime_from_identity
 from combo.tooling.envelope import tool_envelope
 from combo.tooling.execution_context import (
-    current_runtime_run_control,
     current_tool_call,
     current_tool_event_sink,
-    runtime_tool_interruption_requested,
+    runtime_tool_cancellation_requested,
 )
 from combo.tooling.spec import ToolRiskResult
 
@@ -92,13 +90,15 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     if is_read_only_process_path(cwd, root=root, resources=resources):
         raise PermissionError(f"cwd is read-only runtime input: {cwd}")
     output_observer = _output_observer()
+    runtime = require_process_runtime(resources)
     return tool_envelope(
-        require_process_runtime(resources).manager.start(
+        runtime.manager.start(
             command=command,
             cwd=cwd,
             mode=mode,
             on_output=output_observer,
-            cancellation_requested=_cancellation_check() if mode == "foreground" else None,
+            on_completion=runtime.on_completion,
+            cancellation_requested=runtime_tool_cancellation_requested if mode == "foreground" else None,
         )
     )
 
@@ -122,17 +122,6 @@ def _output_observer() -> ProcessOutputObserver | None:
         )
 
     return publish
-
-
-def _cancellation_check() -> ProcessCancellationCheck | None:
-    control = current_runtime_run_control()
-    if control is None:
-        return None
-
-    def requested() -> bool:
-        return bool(getattr(control, "drain_requested", False)) or runtime_tool_interruption_requested()
-
-    return requested
 
 
 def _evaluate_cwd(arguments: dict[str, Any], context: dict[str, Any]) -> ToolRiskResult:

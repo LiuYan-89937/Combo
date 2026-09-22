@@ -9,7 +9,7 @@ import sqlite3
 from combo.sqlite_runtime import DEFAULT_SQLITE_BUSY_TIMEOUT_MS, connect_sqlite
 
 
-DYNAMIC_RUNTIME_DATABASE_SCHEMA = "dynamic_runtime_database.v28"
+DYNAMIC_RUNTIME_DATABASE_SCHEMA = "dynamic_runtime_database.v29"
 DYNAMIC_RUNTIME_SCHEMA_EPOCH = 3
 
 
@@ -1375,6 +1375,55 @@ def _default_migrations() -> tuple[MigrationStep, ...]:
                 "drop table conversation_messages",
                 "alter table conversation_messages_v28 rename to conversation_messages",
                 "create index idx_conversation_messages_turn on conversation_messages(turn_id, turn_sequence)",
+            ),
+        ),
+        MigrationStep(
+            version=29,
+            name="retract_cancelled_undelivered_messages",
+            statements=(
+                """
+                update conversation_messages
+                set status = 'cancelled', committed_at = null,
+                    payload_json = json_set(payload_json, '$.status', 'cancelled', '$.committed_at', null)
+                where role = 'user' and status != 'cancelled'
+                  and exists (
+                    select 1 from conversation_turns turn
+                    where turn.turn_id = conversation_messages.turn_id
+                      and turn.user_message_id = conversation_messages.message_id
+                      and turn.status = 'cancelled'
+                      and turn.active_runtime_instance_id is null
+                      and json_extract(turn.payload_json, '$.steering') is null
+                      and not exists (
+                        select 1 from runtime_instances runtime where runtime.turn_id = turn.turn_id
+                      )
+                  )
+                """,
+                # Snapshots are derived context. Rebuild those that could carry
+                # the withdrawn input, including a compressed representation.
+                """
+                delete from conversation_context_snapshots
+                where exists (
+                  select 1 from conversation_messages message
+                  join conversation_turns turn on turn.turn_id = message.turn_id
+                  where message.session_id = conversation_context_snapshots.session_id
+                    and message.role = 'user' and message.status = 'cancelled'
+                    and (
+                      turn.task_revision <= conversation_context_snapshots.through_task_revision
+                      or exists (
+                        select 1 from json_each(conversation_context_snapshots.payload_json, '$.included_user_message_ids') included
+                        where included.value = message.message_id
+                      )
+                    )
+                )
+                """,
+                """
+                update conversations set revision = revision + 1
+                where exists (
+                  select 1 from conversation_messages message
+                  where message.session_id = conversations.session_id
+                    and message.role = 'user' and message.status = 'cancelled'
+                )
+                """,
             ),
         ),
     )

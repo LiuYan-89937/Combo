@@ -96,7 +96,7 @@ function normalizeMcpServer(
     env: stringRecord(raw.env),
     url: url || undefined,
     headers: stringRecord(raw.headers),
-    timeout_seconds: positiveNumber(raw.timeout_seconds || raw.timeout, 60),
+    timeout_seconds: positiveNumber(raw.request_timeout_seconds ?? raw.timeout_seconds ?? raw.timeout, 120),
     connect_timeout_seconds: positiveNumber(raw.connect_timeout_seconds, 30),
     max_parallel_requests: positiveInteger(raw.max_parallel_requests, 1),
     concurrent_default: raw.concurrent_default !== false,

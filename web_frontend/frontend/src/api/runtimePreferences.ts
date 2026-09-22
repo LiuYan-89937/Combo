@@ -10,14 +10,14 @@ export interface RuntimePreferences {
   reasoning_intensity: number
   approval_mode: ApprovalMode
   request_timeout_seconds: number
+  builtin_tool_timeout_seconds: number
   browser_operation_timeout_ms: number
   browser_navigation_timeout_ms: number
   max_retries: number
   max_parallel_sub_agents: number
   context_compression_detail: ContextCompressionDetail
   context_compression_keep_recent_messages: number
-  memory_auto_write_enabled: boolean
-  memory_write_interval_turns: number
+  memory_auto_recall_enabled: boolean
   memory_agent_write_enabled: boolean
   memory_max_injected_items: number
   memory_max_injected_tokens: number
@@ -32,14 +32,14 @@ export type RuntimePreferencesPatch = Partial<Pick<
   | 'reasoning_intensity'
   | 'approval_mode'
   | 'request_timeout_seconds'
+  | 'builtin_tool_timeout_seconds'
   | 'browser_operation_timeout_ms'
   | 'browser_navigation_timeout_ms'
   | 'max_retries'
   | 'max_parallel_sub_agents'
   | 'context_compression_detail'
   | 'context_compression_keep_recent_messages'
-  | 'memory_auto_write_enabled'
-  | 'memory_write_interval_turns'
+  | 'memory_auto_recall_enabled'
   | 'memory_agent_write_enabled'
   | 'memory_max_injected_items'
   | 'memory_max_injected_tokens'

@@ -160,6 +160,7 @@ class CommandDispatcher:
                     **terminal.model_dump(mode="json"),
                     "command_kind": envelope.payload.kind,
                     "queued_command_id": getattr(envelope.payload, "queued_command_id", None),
+                    "target_command_id": getattr(envelope.payload, "target_command_id", None),
                 },
                 created_at=now,
                 updated_at=now,

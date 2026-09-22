@@ -139,7 +139,16 @@ def _runtime_visible_tool_definition(
     definition: ToolDefinition,
     runtime_instance: RuntimeInstance,
 ) -> ToolDefinition:
-    if definition.model_alias != "memory" or runtime_instance.request.policy_snapshot.memory_agent_write_enabled:
+    if definition.runtime_policy.timeout_source == "builtin_default":
+        definition = definition.model_copy(update={
+            "runtime_policy": definition.runtime_policy.model_copy(update={
+                "timeout_seconds": runtime_instance.request.policy_snapshot.builtin_tool_timeout_seconds,
+            }),
+        })
+    if definition.model_alias != "memory":
+        return definition
+    request = runtime_instance.request
+    if request.policy_snapshot.memory_agent_write_enabled and request.runtime_role == "main":
         return definition
     schema = dict(definition.input_schema)
     branches = schema.get("oneOf")
@@ -151,8 +160,9 @@ def _runtime_visible_tool_definition(
     return definition.model_copy(
         update={
             "model_description": (
-                "Search or list the current principal's user/workspace memories, or delete an existing memory. "
-                "Proactive memory writes are disabled for this runtime turn."
+                "Search the current principal's user/workspace memories with action=search and query when "
+                "automatic recall is insufficient. Selected contents are supplied as supplementary memory data. "
+                "Memory writes are unavailable in this runtime."
             ),
             "input_schema": {**schema, "oneOf": visible},
         }

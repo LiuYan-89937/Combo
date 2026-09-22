@@ -32,6 +32,8 @@ _PROCESS_OUTPUT_SCHEMA = {
         "stdout_truncated": _BOOLEAN,
         "stderr_truncated": _BOOLEAN,
         "duration_ms": _INTEGER,
+        "completed_at": {"type": ["string", "null"]},
+        "output_revision": _INTEGER,
     },
     "required": [
         "process_id",
@@ -46,6 +48,8 @@ _PROCESS_OUTPUT_SCHEMA = {
         "stdout_truncated",
         "stderr_truncated",
         "duration_ms",
+        "completed_at",
+        "output_revision",
     ],
     "additionalProperties": False,
 }
@@ -59,8 +63,9 @@ PROCESS_TOOL_SPECS: list[ToolSpec] = [
             "用于构建、检查、格式化、版本控制、运行脚本或服务。"
             "文件路径发现和文件内容搜索使用 rg，按行读取文件使用 read。"
             "子进程默认已位于当前会话工作区根目录，命令应直接使用相对路径，无需先执行 cd。"
-            "foreground 会持续显示 stdout/stderr 并等待命令进入最终状态，一次调用即可获得完整结果；"
-            "仅对服务、监听器等明确需要脱离当前轮次的长期任务使用 background。"
+            "foreground 持续显示 stdout/stderr，并在工具超时范围内等待命令结束。"
+            "渲染、构建等长任务或服务使用 background，立即返回 process_id；结束结果会自动通知。"
+            "需要继续检查时调用 shell_status，不要用 sleep 等待或自行使用 nohup、& 脱离托管。"
         ),
         entrypoint="combo.tooling.builtins.process.shell:run",
         input_schema={
@@ -78,8 +83,8 @@ PROCESS_TOOL_SPECS: list[ToolSpec] = [
                     "enum": ["foreground", "background"],
                     "default": "foreground",
                     "description": (
-                        "普通命令使用 foreground：持续等待到 completed、failed 或 stopped，不需要调用 shell_status。"
-                        "只有需要跨轮次保持运行的长期任务才使用 background；background 会立即返回 process_id。"
+                        "短命令使用 foreground；长任务和服务使用 background。"
+                        "background 返回 process_id，进程不受本次启动调用的超时限制，结束后自动通知。"
                     ),
                 },
             },
@@ -97,7 +102,7 @@ PROCESS_TOOL_SPECS: list[ToolSpec] = [
     ToolSpec(
         id="shell_status",
         description=(
-            "查看由 shell 以 background 模式启动的进程状态和已收集输出。"
+            "查看后台进程状态和输出；可等待结束，或传 after_revision 等待新输出。后台结束结果会自动通知，无需反复轮询。"
             "不要对 foreground 命令调用；foreground 会在原 shell 调用中持续输出并直接返回最终状态。"
         ),
         entrypoint="combo.tooling.builtins.process.shell_status:run",
@@ -105,6 +110,8 @@ PROCESS_TOOL_SPECS: list[ToolSpec] = [
             "type": "object",
             "properties": {
                 "process_id": {"type": "string", "description": "shell 返回的 process_id。"},
+                "wait_seconds": {"type": "integer", "minimum": 0, "maximum": 60, "default": 0, "description": "最多等待多少秒；0 立即返回。等待超时不终止进程。"},
+                "after_revision": {"type": "integer", "minimum": 0, "description": "上次返回的 output_revision；有新输出或进程结束时提前返回。"},
             },
             "required": ["process_id"],
             "additionalProperties": False,

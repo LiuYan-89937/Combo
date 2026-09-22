@@ -61,7 +61,17 @@ class FrozenProtocolModel(ProtocolModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+def _upgrade_memory_policy(value: Any) -> Any:
+    """Read pre-recall-refactor policy snapshots without retaining obsolete settings."""
+    if not isinstance(value, dict):
+        return value
+    return {key: item for key, item in value.items()
+            if key not in {"memory_auto_write_enabled", "memory_write_interval_turns"}}
+
+
 class UserRuntimePolicy(ProtocolModel):
+    _upgrade_memory = model_validator(mode="before")(_upgrade_memory_policy)
+
     principal_id: str
     policy_id: str
     revision: int = Field(default=1, ge=1)
@@ -74,14 +84,14 @@ class UserRuntimePolicy(ProtocolModel):
         le=MAX_REASONING_INTENSITY,
     )
     request_timeout_seconds: int = Field(default=300, ge=1)
+    builtin_tool_timeout_seconds: int = Field(default=300, ge=1, le=3600)
     browser_operation_timeout_ms: int = Field(default=30_000, ge=1_000)
     browser_navigation_timeout_ms: int = Field(default=45_000, ge=1_000)
     max_model_attempts: int = Field(default=1, ge=1)
     max_parallel_temporary_agents: int = Field(default=5, ge=0)
     context_compression_detail: ContextCompressionDetail = "standard"
     context_compression_keep_recent_messages: int = Field(default=12, ge=0, le=128)
-    memory_auto_write_enabled: bool = True
-    memory_write_interval_turns: int = Field(default=3, ge=1, le=1000)
+    memory_auto_recall_enabled: bool = True
     memory_agent_write_enabled: bool = True
     memory_max_injected_items: int = Field(default=8, ge=1, le=64)
     memory_max_injected_tokens: int = Field(default=1200, ge=100, le=32000)
@@ -136,6 +146,8 @@ class ModelSelectionSnapshot(FrozenProtocolModel):
 
 
 class RuntimePolicySnapshot(FrozenProtocolModel):
+    _upgrade_memory = model_validator(mode="before")(_upgrade_memory_policy)
+
     snapshot_id: str = Field(default_factory=lambda: uuid4().hex)
     principal_id: str
     source_policy_id: str
@@ -157,14 +169,14 @@ class RuntimePolicySnapshot(FrozenProtocolModel):
     def _restore_legacy_reasoning_intensity(cls, value: object) -> int:
         return _normalized_reasoning_intensity(value)
     request_timeout_seconds: int = Field(ge=1)
+    builtin_tool_timeout_seconds: int = Field(default=300, ge=1, le=3600)
     browser_operation_timeout_ms: int = Field(default=30_000, ge=1_000)
     browser_navigation_timeout_ms: int = Field(default=45_000, ge=1_000)
     max_model_attempts: int = Field(ge=1)
     max_parallel_temporary_agents: int = Field(ge=0)
     context_compression_detail: ContextCompressionDetail = "standard"
     context_compression_keep_recent_messages: int = Field(default=12, ge=0, le=128)
-    memory_auto_write_enabled: bool
-    memory_write_interval_turns: int = Field(ge=1, le=1000)
+    memory_auto_recall_enabled: bool = True
     memory_agent_write_enabled: bool
     memory_max_injected_items: int = Field(ge=1, le=64)
     memory_max_injected_tokens: int = Field(ge=100, le=32000)

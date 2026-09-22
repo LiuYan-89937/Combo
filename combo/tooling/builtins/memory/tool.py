@@ -3,6 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 from combo.dynamic_runtime.memory_store import ScopedMemoryStore
+from combo.context_system.assembly import assemble_context_frame
+from combo.context_system.memory_context import MEMORY_CONTEXT_KEY, MEMORY_CONTEXT_VERSION
+from combo.context_system.schema import ContextPolicy, ContextQuery, CrossSessionMemoryPolicy
+from combo.context_system.sources import memory_candidate
 from combo.runtime_protocol import MemoryKind, MemoryScope, RuntimeExecutionIdentity
 from combo.tooling.builtins.memory.specs import (
     MEMORY_STORE_RESOURCE,
@@ -13,6 +17,8 @@ from combo.tooling.envelope import tool_envelope
 
 def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     action = str(arguments.get("action") or "").strip()
+    if action == "search":
+        return {"action": "allow", "risk_level": "low", "reasons": ["read-only scoped memory search"]}
     resources = context.get("resources")
     identity = resources.get(RUNTIME_IDENTITY_RESOURCE) if isinstance(resources, dict) else None
     runtime_role = identity.get("runtime_role") if isinstance(identity, dict) else None
@@ -49,7 +55,28 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(identity, RuntimeExecutionIdentity):
         raise RuntimeError("memory tool requires an owned runtime execution identity")
     action = str(arguments.get("action") or "").strip()
-    if action == "write":
+    if action == "search":
+        query_text = _required_text(arguments, "query")
+        policy = CrossSessionMemoryPolicy.model_validate(identity.memory_policy)
+        query = ContextQuery(node_id="memory.search",
+                             components={"explicit_query": query_text}, limit=policy.max_candidates,
+                             min_relevance=policy.min_relevance)
+        candidates = [memory_candidate(item, origin="explicit") for item in store.search(
+            principal_id=identity.principal_id, workspace_id=identity.workspace_id,
+            query=query_text, limit=policy.max_candidates, min_relevance=policy.min_relevance,
+        )]
+        frame = assemble_context_frame(
+            node_id=query.node_id, query=query, candidates=candidates,
+            policy=ContextPolicy(cross_session_memory=policy).assembly_policy(),
+        )
+        output = {
+            "action": action, "query": query_text,
+            MEMORY_CONTEXT_KEY: {"version": MEMORY_CONTEXT_VERSION,
+                                 "runtime_instance_id": identity.runtime_instance_id,
+                                 "items": [item.model_dump(mode="json") for item in frame.items]},
+            "selection": frame.decisions,
+        }
+    elif action == "write":
         _require_main(identity)
         if not identity.memory_agent_write_enabled:
             raise PermissionError("proactive memory writes are disabled in runtime preferences")
@@ -67,7 +94,7 @@ def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
         )
         output = {"action": action, "memory": revision.model_dump(mode="json")}
     else:
-        raise ValueError("memory action must be write")
+        raise ValueError("memory action must be search or write")
     return tool_envelope(output, summary=f"memory {action} completed")
 
 

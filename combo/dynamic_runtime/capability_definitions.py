@@ -202,6 +202,7 @@ class ToolRuntimePolicy(FrozenProtocolModel):
     max_parallel_calls: int = Field(default=1, ge=1)
     serialization_key: str | None = None
     timeout_seconds: float | None = Field(default=300.0, gt=0)
+    timeout_source: Literal["tool", "builtin_default"] = "tool"
     output_projection: Literal["compress", "passthrough"] = "compress"
     output_max_model_chars: int = Field(default=50_000, ge=1_000, le=1_000_000)
     retain_raw_output: bool = True

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+from combo.dynamic_runtime.hybrid_retrieval import RetrievalChannelEvidence
 from uuid import uuid4
 
 from combo.dynamic_runtime.database import DynamicRuntimeDatabase
@@ -12,6 +14,8 @@ from combo.dynamic_runtime.memory_search import HybridMemorySearchIndex
 class MemorySearchResult:
     revision: MemoryRevision
     score: float
+    relevance: float = 0.0
+    evidence: tuple[RetrievalChannelEvidence, ...] = ()
 
 
 class ScopedMemoryStore:
@@ -246,18 +250,33 @@ class ScopedMemoryStore:
         workspace_id: str,
         query: str,
         limit: int,
+        min_relevance: float = 0.0,
     ) -> tuple[MemorySearchResult, ...]:
         if self._search_index is None:
             raise RuntimeError("memory search index is not configured")
         return tuple(
-            MemorySearchResult(revision=item.revision, score=item.score)
+            MemorySearchResult(revision=item.revision, score=item.score, relevance=item.relevance, evidence=item.evidence)
             for item in self._search_index.search(
                 principal_id=principal_id,
                 workspace_id=workspace_id,
                 query=query,
                 limit=limit,
+                min_relevance=min_relevance,
             )
         )
+
+    def search_version(self, *, principal_id: str, workspace_id: str) -> str:
+        if self._search_index is None:
+            raise RuntimeError("memory search index is not configured")
+        return self._search_index.version(principal_id=principal_id, workspace_id=workspace_id)
+
+    def active_references(self, *, principal_id: str, workspace_id: str) -> dict[str, tuple[int, str]]:
+        with self._database.connection(query_only=True) as conn:
+            rows = conn.execute(
+                "select memory_id, revision, content_digest from memory_heads where status='active' and principal_id=? "
+                "and (scope='user' or workspace_id=?)", (principal_id, workspace_id),
+            ).fetchall()
+        return {str(row["memory_id"]): (int(row["revision"]), str(row["content_digest"])) for row in rows}
 
     @staticmethod
     def _insert_revision(conn, revision: MemoryRevision) -> None:

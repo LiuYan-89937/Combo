@@ -8,6 +8,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from combo.context_system.assembly import assemble_context_frame
 from combo.context_system.compression import maybe_compress_messages
+from combo.context_system.memory_context import (
+    context_key, explicit_memory_candidates, memory_query, project_memory_tool_messages,
+    read_memory_snapshot, replace_memory_snapshot,
+)
 from combo.context_system.events import emit_context_event
 from combo.context_system.history import archive_context_history
 from combo.context_system.schema import (
@@ -16,9 +20,9 @@ from combo.context_system.schema import (
     ContextContractConfig,
     ContextInjectionReport,
     ContextPolicy,
-    ContextQuery,
     ContextRetrievalReport,
     LLMContextFrame,
+    MemoryContextSnapshot,
 )
 from combo.context_system.sources import ContextSource, ContextSourceRuntime, default_context_sources
 from combo.context_system.token_counter import (
@@ -58,7 +62,6 @@ class ContextSystemRuntime:
         *,
         state: Any,
         node_id: str,
-        impl: str,
         messages: list[Any],
         services: Any = None,
         resources: Mapping[str, Any] | None = None,
@@ -66,6 +69,8 @@ class ContextSystemRuntime:
         protected_input_ids: tuple[str, ...] = (),
     ) -> ContextPreparationResult:
         if not self.config.enabled:
+            state = state.model_copy(deep=True)
+            replace_memory_snapshot(state, None)
             retrieval_report = ContextRetrievalReport(status="skipped", node_id=node_id)
             injection_report = ContextInjectionReport(status="skipped", node_id=node_id)
             return ContextPreparationResult(
@@ -96,6 +101,7 @@ class ContextSystemRuntime:
         )
         working_messages = list(messages)
         working_state = state.model_copy(deep=True)
+        explicit_candidates = explicit_memory_candidates(working_messages, working_state)
         measured_count = count_messages_tokens(working_messages, services=services)
         effective_count = _effective_compression_count(
             state=working_state,
@@ -183,199 +189,121 @@ class ContextSystemRuntime:
             raise RuntimeError(compression_report.error or "context compression failed")
         messages_changed = compression_messages != working_messages
         working_messages = compression_messages
-        if not enable_dynamic_evidence:
-            retrieval_report = ContextRetrievalReport(status="skipped", node_id=node_id)
-            injection_report = ContextInjectionReport(status="skipped", node_id=node_id)
-            skip_payload = {"reason": "dynamic_evidence_disabled_for_node"}
-            emit_context_event(
-                services=services,
-                state=working_state,
-                event_type="context_retrieval_completed",
-                node_id=node_id,
-                payload={**retrieval_report.model_dump(mode="json"), **skip_payload},
-            )
-            emit_context_event(
-                services=services,
-                state=working_state,
-                event_type="context_assembly_completed",
-                node_id=node_id,
-                payload={**injection_report.model_dump(mode="json"), **skip_payload},
-            )
-            emit_context_event(
-                services=services,
-                state=working_state,
-                event_type="context_injection_completed",
-                node_id=node_id,
-                payload={**injection_report.model_dump(mode="json"), **skip_payload},
-            )
-            return ContextPreparationResult(
-                state=working_state,
-                messages=working_messages,
-                messages_changed=messages_changed,
-                retrieval_report=retrieval_report,
-                injection_report=injection_report,
-            )
-        reused_frame = _reusable_turn_evidence_frame(state=working_state, node_id=node_id)
-        if reused_frame is not None:
-            retrieval_report = ContextRetrievalReport(status="skipped", node_id=node_id)
-            retrieval_report.selected_count = len(reused_frame.items)
-            retrieval_report.token_estimate = reused_frame.token_estimate
-            injection_report = ContextInjectionReport(
-                status="completed" if reused_frame.text else "skipped",
-                node_id=node_id,
-                item_count=len(reused_frame.items),
-                token_estimate=reused_frame.token_estimate,
-            )
-            updated = _state_with_turn_evidence(
-                state=working_state,
-                node_id=node_id,
-                frame=reused_frame,
-            )
-            emit_context_event(
-                services=services,
-                state=updated,
-                event_type="context_retrieval_completed",
-                node_id=node_id,
-                payload={**retrieval_report.model_dump(mode="json"), "reuse": True},
-            )
-            emit_context_event(
-                services=services,
-                state=updated,
-                event_type="context_assembly_completed",
-                node_id=node_id,
-                payload={**injection_report.model_dump(mode="json"), "reuse": True},
-            )
-            emit_context_event(
-                services=services,
-                state=updated,
-                event_type="context_injection_completed",
-                node_id=node_id,
-                payload={**injection_report.model_dump(mode="json"), "reuse": True},
-            )
-            return ContextPreparationResult(
-                state=updated,
-                messages=working_messages,
-                frame=reused_frame,
-                messages_changed=messages_changed,
-                retrieval_report=retrieval_report,
-                injection_report=injection_report,
-            )
-        query = self._query_for_state(state=working_state, node_id=node_id, impl=impl, messages=working_messages)
-        candidates, retrieval_report = self._retrieve(
-            query=query,
-            policy=policy,
-            runtime_context=ContextSourceRuntime(
-                state=working_state,
-                messages=working_messages,
-                services=services,
-                resources=resources or {},
-            ),
-        )
-        frame = assemble_context_frame(
-            node_id=node_id,
-            query=query,
-            candidates=candidates,
-            policy=policy.assembly_policy(),
-        )
-        retrieval_report.selected_count = len(frame.items)
-        retrieval_report.token_estimate = frame.token_estimate
-        injection_report = ContextInjectionReport(
-            status="completed",
-            node_id=node_id,
-            item_count=len(frame.items),
-            token_estimate=frame.token_estimate,
-        )
-        updated = _state_with_turn_evidence(state=working_state, node_id=node_id, frame=frame)
-        emit_context_event(
-            services=services,
-            state=updated,
-            event_type="context_retrieval_completed",
-            node_id=node_id,
-            payload=retrieval_report.model_dump(mode="json"),
-        )
-        emit_context_event(
-            services=services,
-            state=updated,
-            event_type="context_assembly_completed",
-            node_id=node_id,
-            payload=injection_report.model_dump(mode="json"),
-        )
-        emit_context_event(
-            services=services,
-            state=updated,
-            event_type="context_injection_completed",
-            node_id=node_id,
-            payload=injection_report.model_dump(mode="json"),
-        )
-        return ContextPreparationResult(
-            state=updated,
-            messages=working_messages,
-            frame=frame,
-            messages_changed=messages_changed,
-            retrieval_report=retrieval_report,
-            injection_report=injection_report,
+        return self._prepare_memory(
+            state=working_state, messages=working_messages, messages_changed=messages_changed,
+            explicit_candidates=explicit_candidates, node_id=node_id,
+            policy=policy, services=services, resources=resources or {},
+            enabled=enable_dynamic_evidence, active_limits=active_limits,
         )
 
-    def _retrieve(
-        self,
-        *,
-        query: ContextQuery,
-        policy: ContextPolicy,
-        runtime_context: ContextSourceRuntime,
-    ) -> tuple[list[ContextCandidate], ContextRetrievalReport]:
+    def _prepare_memory(
+        self, *, state: Any, messages: list[Any], messages_changed: bool,
+        explicit_candidates: list[ContextCandidate], node_id: str,
+        policy: ContextPolicy, services: Any, resources: Mapping[str, Any],
+        enabled: bool, active_limits: ModelContextLimits,
+    ) -> ContextPreparationResult:
         started = perf_counter()
         memory_policy = policy.cross_session_memory
-        if not memory_policy.enabled or not memory_policy.injection_enabled:
-            return [], ContextRetrievalReport(status="skipped", node_id=query.node_id)
-        candidates: list[ContextCandidate] = []
-        source_counts: dict[str, int] = {}
-        try:
-            for source_id in ("cross_session_memory",):
-                source = self.sources.get(source_id)
-                if source is None:
-                    continue
-                items = [
-                    item
-                    for item in source.retrieve(query=query, runtime_context=runtime_context)
-                    if item.score >= memory_policy.min_score
-                ]
-                source_counts[source_id] = len(items)
-                candidates.extend(items)
-                if len(candidates) >= memory_policy.max_candidates:
-                    candidates = candidates[: memory_policy.max_candidates]
-                    break
-            return (
-                candidates,
-                ContextRetrievalReport(
-                    status="completed",
-                    node_id=query.node_id,
-                    source_counts=source_counts,
-                    candidate_count=len(candidates),
-                    token_estimate=sum(item.token_estimate for item in candidates),
-                    duration_ms=int((perf_counter() - started) * 1000),
-                ),
-            )
-        except Exception as exc:
-            return (
-                [],
-                ContextRetrievalReport(
-                    status="failed",
-                    node_id=query.node_id,
-                    source_counts=source_counts,
-                    error=f"{type(exc).__name__}: {exc}",
-                    duration_ms=int((perf_counter() - started) * 1000),
-                ),
-            )
-
-    def _query_for_state(self, *, state: Any, node_id: str, impl: str, messages: list[Any]) -> ContextQuery:
-        user_input = str(getattr(getattr(state, "conversation", None), "current_user_input", "") or "")
-        chunks = [user_input]
-        for message in messages[-4:]:
-            content = getattr(message, "content", "")
-            if content:
-                chunks.append(str(content))
-        text = "\n".join(chunk for chunk in chunks if chunk.strip())
-        return ContextQuery(node_id=node_id, impl=impl, user_input=user_input or None, text=text)
+        query = memory_query(state, node_id=node_id, policy=memory_policy)
+        report = ContextRetrievalReport(status="skipped", node_id=node_id, query_components=query.components)
+        injection = ContextInjectionReport(status="skipped", node_id=node_id)
+        frame = None
+        previous = read_memory_snapshot(state)
+        replace_memory_snapshot(state, None)
+        if not enabled or not memory_policy.enabled or not memory_policy.injection_enabled:
+            report.reason = "memory_injection_disabled"
+        else:
+            runtime_context = ContextSourceRuntime(state=state, resources=resources)
+            try:
+                identity = runtime_context.memory_identity()
+                versions = {key: source.version(runtime_context=runtime_context) for key, source in self.sources.items()}
+                versions["automatic_recall"] = str(memory_policy.automatic_recall_enabled)
+                reuse = (
+                    previous is not None and previous.principal_id == identity.principal_id
+                    and previous.source_versions == versions
+                    and previous.query.components == query.components
+                    and previous.query.limit == query.limit
+                    and previous.query.min_relevance == query.min_relevance
+                )
+                report.reuse = reuse
+                report.reason = "same_context_and_source_versions" if reuse else "request_task_source_or_policy_changed"
+                if not memory_policy.automatic_recall_enabled:
+                    automatic = []
+                elif reuse:
+                    automatic = [item for item in previous.candidates if item.metadata.get("retrieval_origin") != "explicit"]
+                else:
+                    automatic = []
+                    for source_id, source in self.sources.items():
+                        retrieved = source.retrieve(query=query, runtime_context=runtime_context) if query.text else []
+                        report.source_counts[source_id] = len(retrieved)
+                        automatic.extend(retrieved)
+                retained = (
+                    [item for item in previous.candidates if item.metadata.get("retrieval_origin") == "explicit"]
+                    if previous is not None and previous.principal_id == identity.principal_id else []
+                )
+                proposed = [*explicit_candidates, *retained, *automatic]
+                validated = []
+                for source_id, source in self.sources.items():
+                    validated.extend(source.validate(
+                        [item for item in proposed if item.source_id == source_id], runtime_context=runtime_context,
+                    ))
+                valid_ids = {item.candidate_id for item in validated}
+                unique = {}
+                for item in validated:
+                    unique.setdefault(item.candidate_id, item)
+                candidates = list(unique.values())[:memory_policy.max_candidates]
+                after_versions = {key: source.version(runtime_context=runtime_context) for key, source in self.sources.items()}
+                report.source_versions = after_versions
+                report.status = "completed"
+                report.candidate_count = len(candidates)
+                assembly = policy.assembly_policy()
+                # Full tool memory payloads are replaced by references in the
+                # request projection; their contents share this one budget.
+                projected = project_memory_tool_messages(messages, selected_ids=set())
+                available = max(0, active_limits.compression_trigger_tokens - estimate_messages_tokens(projected))
+                assembly = assembly.model_copy(update={"max_tokens_total": min(assembly.max_tokens_total, available)})
+                frame = assemble_context_frame(node_id=node_id, query=query, candidates=candidates, policy=assembly)
+                frame.decisions.extend(
+                    {"candidate_id": item.candidate_id, "reason": "inactive_revision_or_out_of_scope"}
+                    for item in proposed if item.candidate_id not in valid_ids
+                )
+                frame.decisions.extend(
+                    {"candidate_id": item.candidate_id, "reason": "candidate_budget"}
+                    for item in list(unique.values())[memory_policy.max_candidates:]
+                )
+                selected_ids = [item.candidate_id for item in frame.items]
+                snapshot = MemoryContextSnapshot(
+                    context_key=context_key(state), principal_id=identity.principal_id,
+                    node_id=node_id, query=query,
+                    # If the source changed during retrieval, keep the current
+                    # validated frame but retrieve again at the next boundary.
+                    source_versions=after_versions if after_versions == versions else {},
+                    candidates=candidates, selected_ids=selected_ids,
+                    token_estimate=frame.token_estimate, max_tokens=assembly.max_tokens_total,
+                )
+                replace_memory_snapshot(state, snapshot)
+                report.selected_count = len(frame.items)
+                report.token_estimate = frame.token_estimate
+                injection = ContextInjectionReport(
+                    status="completed", node_id=node_id, item_count=len(frame.items),
+                    selected_ids=selected_ids, decisions=frame.decisions, token_estimate=frame.token_estimate,
+                )
+            except Exception as exc:
+                report.status = "failed"
+                report.error = f"{type(exc).__name__}: {exc}"
+                report.reason = "memory_preparation_failed"
+                # Do not cache failure as an empty successful retrieval.
+                replace_memory_snapshot(state, None)
+        report.duration_ms = int((perf_counter() - started) * 1000)
+        emit_context_event(services=services, state=state, event_type="context_retrieval_completed",
+                           node_id=node_id, payload=report.model_dump(mode="json"))
+        for event_type in ("context_assembly_completed", "context_injection_completed"):
+            emit_context_event(services=services, state=state, event_type=event_type,
+                               node_id=node_id, payload=injection.model_dump(mode="json"))
+        return ContextPreparationResult(
+            state=state, messages=messages, messages_changed=messages_changed,
+            frame=frame, retrieval_report=report, injection_report=injection,
+        )
 
     def model_context_limits(
         self,
@@ -428,42 +356,6 @@ def _runtime_compression_model(
     return model, max_output_tokens, dict(metadata or {})
 
 
-def _reusable_turn_evidence_frame(*, state: Any, node_id: str) -> LLMContextFrame | None:
-    model_context = getattr(getattr(state, "context", None), "model_context", {}) or {}
-    evidence = model_context.get("runtime_turn_evidence") if isinstance(model_context, dict) else None
-    if not isinstance(evidence, dict):
-        return None
-    if evidence.get("run_id") != getattr(getattr(state, "run", None), "run_id", None):
-        return None
-    if evidence.get("current_user_input") != getattr(getattr(state, "conversation", None), "current_user_input", None):
-        return None
-    frame = evidence.get("frame")
-    if not isinstance(frame, dict):
-        return None
-    return LLMContextFrame.model_validate(frame)
-
-
-def _state_with_turn_evidence(*, state: Any, node_id: str, frame: LLMContextFrame) -> Any:
-    updated = state.model_copy(deep=True)
-    frame_payload = frame.model_dump(mode="json")
-    model_context = dict(updated.context.model_context)
-    evidence = dict(model_context.get("runtime_turn_evidence") or {})
-    evidence = {
-        "version": "runtime_turn_evidence.v0",
-        "run_id": updated.run.run_id,
-        "current_user_input": updated.conversation.current_user_input,
-        "source_node_id": str(evidence.get("source_node_id") or node_id),
-        "frame": frame_payload,
-    }
-    updated.context.model_context = {
-        **model_context,
-        "llm_context_frame": frame_payload,
-        node_id: frame_payload,
-        "runtime_turn_evidence": evidence,
-    }
-    return updated
-
-
 def _effective_context_policy(
     default: ContextPolicy,
     resources: Mapping[str, Any] | None,
@@ -492,6 +384,7 @@ def _effective_context_policy(
         return default.model_copy(update={"compression": compression})
     memory = default.cross_session_memory.model_copy(
         update={
+            "automatic_recall_enabled": bool(snapshot.get("automatic_recall_enabled", True)),
             "max_items": int(snapshot["max_items"]),
             "max_tokens": int(snapshot["max_tokens"]),
         }

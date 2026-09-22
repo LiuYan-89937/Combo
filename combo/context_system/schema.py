@@ -68,11 +68,10 @@ class CrossSessionMemoryPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
-    write_enabled: bool = True
     injection_enabled: bool = True
-    write_interval_turns: int = Field(default=3, ge=1, le=1000)
+    automatic_recall_enabled: bool = True
     max_candidates: int = Field(default=24, ge=1, le=128)
-    min_score: float = Field(default=0.55, ge=0.0, le=1.0)
+    min_relevance: float = Field(default=0.55, ge=0.0, le=1.0)
     max_items: int = Field(default=8, ge=1, le=64)
     max_tokens: int = Field(default=1200, ge=100, le=32000)
     per_kind_limits: dict[str, int] = Field(
@@ -103,8 +102,9 @@ class AssemblyPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     max_items_total: int = Field(default=8, ge=1, le=64)
-    max_tokens_total: int = Field(default=1200, ge=100, le=32000)
+    max_tokens_total: int = Field(default=1200, ge=0, le=32000)
     per_source_limits: dict[str, int] = Field(default_factory=dict)
+    per_kind_limits: dict[str, int] = Field(default_factory=dict)
 
 
 class ContextPolicy(BaseModel):
@@ -120,6 +120,7 @@ class ContextPolicy(BaseModel):
             max_items_total=memory.max_items,
             max_tokens_total=memory.max_tokens,
             per_source_limits={"cross_session_memory": memory.max_items},
+            per_kind_limits=memory.per_kind_limits,
         )
 
 
@@ -145,9 +146,13 @@ class ContextQuery(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     node_id: str
-    impl: str
-    text: str = ""
-    user_input: str | None = None
+    components: dict[str, str] = Field(default_factory=dict)
+    limit: int = Field(ge=1, le=128)
+    min_relevance: float = Field(ge=0.0, le=1.0)
+
+    @property
+    def text(self) -> str:
+        return "\n".join(dict.fromkeys(value for value in self.components.values() if value.strip()))
 
 
 class ContextCandidate(BaseModel):
@@ -157,7 +162,8 @@ class ContextCandidate(BaseModel):
     source_id: str
     kind: ContextCandidateKind
     content: str
-    score: float = Field(default=0.0, ge=0.0, le=1.0)
+    score: float = Field(default=0.0, ge=0.0, allow_inf_nan=False)
+    relevance: float = Field(default=0.0, ge=0.0, le=1.0, allow_inf_nan=False)
     token_estimate: int = Field(default=0, ge=0)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -165,12 +171,28 @@ class ContextCandidate(BaseModel):
 class LLMContextFrame(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    version: Literal["llm_context_frame.v0"] = "llm_context_frame.v0"
+    version: Literal["llm_context_frame.v1"] = "llm_context_frame.v1"
     node_id: str
     query: str
     items: list[ContextCandidate] = Field(default_factory=list)
     token_estimate: int = 0
     text: str = ""
+    decisions: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class MemoryContextSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal["memory_context.v1"] = "memory_context.v1"
+    context_key: str
+    principal_id: str
+    node_id: str
+    query: ContextQuery
+    source_versions: dict[str, str]
+    candidates: list[ContextCandidate] = Field(default_factory=list)
+    selected_ids: list[str] = Field(default_factory=list)
+    token_estimate: int = 0
+    max_tokens: int = 0
 
 
 class ContextCompressionReport(BaseModel):
@@ -200,6 +222,10 @@ class ContextRetrievalReport(BaseModel):
     status: ContextEventStatus
     node_id: str | None = None
     source_counts: dict[str, int] = Field(default_factory=dict)
+    query_components: dict[str, str] = Field(default_factory=dict)
+    source_versions: dict[str, str] = Field(default_factory=dict)
+    reuse: bool = False
+    reason: str | None = None
     candidate_count: int = 0
     selected_count: int = 0
     token_estimate: int = 0
@@ -213,6 +239,8 @@ class ContextInjectionReport(BaseModel):
     status: ContextEventStatus
     node_id: str | None = None
     item_count: int = 0
+    selected_ids: list[str] = Field(default_factory=list)
+    decisions: list[dict[str, Any]] = Field(default_factory=list)
     token_estimate: int = 0
     error: str | None = None
     duration_ms: int = 0

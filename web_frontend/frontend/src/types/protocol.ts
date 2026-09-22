@@ -57,7 +57,7 @@ export interface TranscriptReasoningView {
 }
 
 export type ChatMessageRole = 'user' | 'assistant' | 'system'
-export type ChatMessageStatus = 'streaming' | 'completed' | 'failed' | 'stopped'
+export type ChatMessageStatus = 'streaming' | 'completed' | 'failed' | 'stopped' | 'cancelled'
 export type ChatMessagePartStatus =
   | 'streaming'
   | 'completed'
@@ -300,6 +300,7 @@ export interface ActiveRequestView {
 export interface QueuedMessageView {
   steering: boolean
   submitting: boolean
+  cancelling: boolean
   requestId: string
   content: string
   position: number

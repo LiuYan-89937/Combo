@@ -271,14 +271,14 @@ class RuntimePolicyWriteRequest(BaseModel):
     model_profile_id: str
     reasoning_intensity: int = Field(default=DEFAULT_REASONING_INTENSITY, ge=1, le=3)
     request_timeout_seconds: int = Field(ge=1)
+    builtin_tool_timeout_seconds: int = Field(default=300, ge=1, le=3600)
     browser_operation_timeout_ms: int = Field(default=30_000, ge=1_000, le=600_000)
     browser_navigation_timeout_ms: int = Field(default=45_000, ge=1_000, le=600_000)
     max_model_attempts: int = Field(ge=1)
     max_parallel_temporary_agents: int = Field(ge=0)
     context_compression_detail: Literal["concise", "standard", "detailed"] = "standard"
     context_compression_keep_recent_messages: int = Field(default=12, ge=0, le=128)
-    memory_auto_write_enabled: bool = True
-    memory_write_interval_turns: int = Field(default=3, ge=1, le=1000)
+    memory_auto_recall_enabled: bool = True
     memory_agent_write_enabled: bool = True
     memory_max_injected_items: int = Field(default=8, ge=1, le=64)
     memory_max_injected_tokens: int = Field(default=1200, ge=100, le=32000)
@@ -508,7 +508,7 @@ class ToolRuntimePolicyWriteRequest(BaseModel):
     risk_level: Literal["low", "medium", "high"]
     allow_parallel_calls: bool
     max_parallel_calls: int = Field(ge=1, le=128)
-    timeout_seconds: float = Field(gt=0, le=3600)
+    timeout_seconds: float | None = Field(gt=0, le=3600)
     output_projection: Literal["compress", "passthrough"]
     output_max_model_chars: int = Field(ge=1000, le=1_000_000)
     retain_raw_output: bool
@@ -1288,14 +1288,14 @@ def create_dynamic_runtime_router(
             model_profile_id=payload.model_profile_id,
             reasoning_intensity=payload.reasoning_intensity,
             request_timeout_seconds=payload.request_timeout_seconds,
+            builtin_tool_timeout_seconds=payload.builtin_tool_timeout_seconds,
             browser_operation_timeout_ms=payload.browser_operation_timeout_ms,
             browser_navigation_timeout_ms=payload.browser_navigation_timeout_ms,
             max_model_attempts=payload.max_model_attempts,
             max_parallel_temporary_agents=payload.max_parallel_temporary_agents,
             context_compression_detail=payload.context_compression_detail,
             context_compression_keep_recent_messages=payload.context_compression_keep_recent_messages,
-            memory_auto_write_enabled=payload.memory_auto_write_enabled,
-            memory_write_interval_turns=payload.memory_write_interval_turns,
+            memory_auto_recall_enabled=payload.memory_auto_recall_enabled,
             memory_agent_write_enabled=payload.memory_agent_write_enabled,
             memory_max_injected_items=payload.memory_max_injected_items,
             memory_max_injected_tokens=payload.memory_max_injected_tokens,

@@ -298,7 +298,8 @@ def _apply_steered_inputs(state: Any, injections: Any) -> None:
         ]
         if not content.strip() and not attachments:
             continue
-        conversation.current_user_input = content
+        conversation.current_user_input = content.strip()
+        conversation.current_user_input_id = str(injection.injection_id).strip()
         if not attachments:
             continue
         existing = [
@@ -372,16 +373,12 @@ def make_context_preparer(
             result = services.context_system.prepare_before_model_call(
                 state=state,
                 node_id=node_id,
-                impl=implementation.impl_id,
                 messages=messages,
                 services=services,
                 resources=services.runtime_context_resources.current(),
                 # New injections must reach a checkpoint intact before their
                 # queued-command receipt can be acknowledged at the next node.
                 protected_input_ids=tuple(message.id for message in injected if message.id),
-                enable_dynamic_evidence=(
-                    state.run.strategy != "plan_and_execute" or node_id == "executor"
-                ),
             )
             prepared = result.state
             _mark_activity(prepared)

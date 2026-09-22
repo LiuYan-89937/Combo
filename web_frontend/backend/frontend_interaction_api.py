@@ -77,14 +77,14 @@ class RuntimePreferencesWrite(BaseModel):
     reasoning_intensity: int | None = Field(default=None, ge=1, le=3)
     approval_mode: str | None = None
     request_timeout_seconds: int | None = None
+    builtin_tool_timeout_seconds: int | None = Field(default=None, ge=1, le=3600)
     browser_operation_timeout_ms: int | None = Field(default=None, ge=1_000, le=600_000)
     browser_navigation_timeout_ms: int | None = Field(default=None, ge=1_000, le=600_000)
     max_retries: int | None = None
     max_parallel_sub_agents: int | None = Field(default=None, ge=0)
     context_compression_detail: Literal["concise", "standard", "detailed"] | None = None
     context_compression_keep_recent_messages: int | None = Field(default=None, ge=0, le=128)
-    memory_auto_write_enabled: bool | None = None
-    memory_write_interval_turns: int | None = Field(default=None, ge=1, le=1000)
+    memory_auto_recall_enabled: bool | None = None
     memory_agent_write_enabled: bool | None = None
     memory_max_injected_items: int | None = Field(default=None, ge=1, le=64)
     memory_max_injected_tokens: int | None = Field(default=None, ge=100, le=32000)
@@ -473,6 +473,7 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
                 else current.reasoning_intensity if current else DEFAULT_REASONING_INTENSITY
             ),
             request_timeout_seconds=payload.request_timeout_seconds if payload.request_timeout_seconds is not None else current.request_timeout_seconds if current else 300,
+            builtin_tool_timeout_seconds=payload.builtin_tool_timeout_seconds if payload.builtin_tool_timeout_seconds is not None else current.builtin_tool_timeout_seconds if current else 300,
             browser_operation_timeout_ms=payload.browser_operation_timeout_ms if payload.browser_operation_timeout_ms is not None else current.browser_operation_timeout_ms if current else 30_000,
             browser_navigation_timeout_ms=payload.browser_navigation_timeout_ms if payload.browser_navigation_timeout_ms is not None else current.browser_navigation_timeout_ms if current else 45_000,
             max_model_attempts=(payload.max_retries + 1) if payload.max_retries is not None else current.max_model_attempts if current else 6,
@@ -487,8 +488,7 @@ def create_frontend_interaction_router(backend: Any) -> APIRouter:
                 if payload.context_compression_keep_recent_messages is not None
                 else current.context_compression_keep_recent_messages if current else 12
             ),
-            memory_auto_write_enabled=payload.memory_auto_write_enabled if payload.memory_auto_write_enabled is not None else current.memory_auto_write_enabled if current else True,
-            memory_write_interval_turns=payload.memory_write_interval_turns if payload.memory_write_interval_turns is not None else current.memory_write_interval_turns if current else 3,
+            memory_auto_recall_enabled=payload.memory_auto_recall_enabled if payload.memory_auto_recall_enabled is not None else current.memory_auto_recall_enabled if current else True,
             memory_agent_write_enabled=payload.memory_agent_write_enabled if payload.memory_agent_write_enabled is not None else current.memory_agent_write_enabled if current else True,
             memory_max_injected_items=payload.memory_max_injected_items if payload.memory_max_injected_items is not None else current.memory_max_injected_items if current else 8,
             memory_max_injected_tokens=payload.memory_max_injected_tokens if payload.memory_max_injected_tokens is not None else current.memory_max_injected_tokens if current else 1200,
@@ -1393,6 +1393,7 @@ def _synchronize_policy(
             else current.reasoning_intensity if current is not None else DEFAULT_REASONING_INTENSITY
         ),
         request_timeout_seconds=int(runtime_request.get("timeout_seconds") or (current.request_timeout_seconds if current else 300)),
+        builtin_tool_timeout_seconds=current.builtin_tool_timeout_seconds if current else 300,
         browser_operation_timeout_ms=current.browser_operation_timeout_ms if current else 30_000,
         browser_navigation_timeout_ms=current.browser_navigation_timeout_ms if current else 45_000,
         max_model_attempts=(
@@ -1411,8 +1412,7 @@ def _synchronize_policy(
         context_compression_keep_recent_messages=(
             current.context_compression_keep_recent_messages if current else 12
         ),
-        memory_auto_write_enabled=current.memory_auto_write_enabled if current else True,
-        memory_write_interval_turns=current.memory_write_interval_turns if current else 3,
+        memory_auto_recall_enabled=current.memory_auto_recall_enabled if current else True,
         memory_agent_write_enabled=current.memory_agent_write_enabled if current else True,
         memory_max_injected_items=current.memory_max_injected_items if current else 8,
         memory_max_injected_tokens=current.memory_max_injected_tokens if current else 1200,
@@ -1825,6 +1825,8 @@ def _message_view(
     turn_status: str,
     tool_display_names: dict[str, str] | None = None,
 ) -> dict[str, Any] | None:
+    if message.status == "cancelled":
+        return None
     if message.visibility == "internal":
         return _delegated_delivery_message_view(backend, message, request_id=request_id)
     parts = []
@@ -2111,6 +2113,7 @@ def _runtime_preferences_view(policy: UserRuntimePolicy | None) -> dict[str, Any
         "reasoning_intensity": policy.reasoning_intensity if policy else DEFAULT_REASONING_INTENSITY,
         "approval_mode": policy.approval_mode if policy else "ask",
         "request_timeout_seconds": policy.request_timeout_seconds if policy else 300,
+        "builtin_tool_timeout_seconds": policy.builtin_tool_timeout_seconds if policy else 300,
         "browser_operation_timeout_ms": policy.browser_operation_timeout_ms if policy else 30_000,
         "browser_navigation_timeout_ms": policy.browser_navigation_timeout_ms if policy else 45_000,
         "max_retries": max(0, policy.max_model_attempts - 1) if policy else 5,
@@ -2119,8 +2122,7 @@ def _runtime_preferences_view(policy: UserRuntimePolicy | None) -> dict[str, Any
         "context_compression_keep_recent_messages": (
             policy.context_compression_keep_recent_messages if policy else 12
         ),
-        "memory_auto_write_enabled": policy.memory_auto_write_enabled if policy else True,
-        "memory_write_interval_turns": policy.memory_write_interval_turns if policy else 3,
+        "memory_auto_recall_enabled": policy.memory_auto_recall_enabled if policy else True,
         "memory_agent_write_enabled": policy.memory_agent_write_enabled if policy else True,
         "memory_max_injected_items": policy.memory_max_injected_items if policy else 8,
         "memory_max_injected_tokens": policy.memory_max_injected_tokens if policy else 1200,

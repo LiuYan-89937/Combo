@@ -91,6 +91,7 @@ class QueuedRuntimeInputDelivery:
         principal_id: str,
         session_id: str,
         interrupt_active: bool,
+        target_runtime_instance_id: str | None = None,
     ) -> CommandOutcome:
         message, target_receipt = self._commands.message_command_payload(
             command_id=command_id,
@@ -110,10 +111,17 @@ class QueuedRuntimeInputDelivery:
                 rejection_code="steering_target_not_active",
             )
         try:
-            active = self._runtime_instances.active_main_for_session(
-                session_id=session_id,
-                principal_id=principal_id,
+            active = (
+                self._runtime_instances.get(target_runtime_instance_id)
+                if target_runtime_instance_id is not None
+                else self._runtime_instances.active_main_for_session(
+                    session_id=session_id, principal_id=principal_id,
+                )
             )
+            if (active.request.session_id != session_id
+                    or active.request.principal_id != principal_id
+                    or active.status != "running"):
+                raise LookupError("target runtime is not active in this conversation")
         except LookupError:
             return CommandOutcome(
                 status="rejected",

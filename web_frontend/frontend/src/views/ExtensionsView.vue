@@ -235,6 +235,7 @@
             </div>
             <n-empty v-if="!toolCreateForm.context_parameters.length" description="暂无 Context 键值；工具仍可使用 resources_path 等运行时基础字段" />
           </section>
+          <ToolExecutionSettings :policy="toolCreateForm.runtime_policy" @update:policy="value => Object.assign(toolCreateForm.runtime_policy, value)" />
           <section class="form-section">
             <div class="section-title"><strong>Python 依赖</strong></div>
             <n-dynamic-tags v-model:value="toolCreateForm.dependencies" />
@@ -292,11 +293,7 @@
             <n-form-item label="审批策略"><n-select v-model:value="toolForm.approval" :options="approvalOptions" /></n-form-item>
             <n-form-item label="风险级别"><n-select v-model:value="toolForm.risk_level" :options="riskOptions" /></n-form-item>
           </section>
-          <section class="form-section">
-            <div class="section-row"><div class="section-title"><strong>并发调用</strong></div><n-switch v-model:value="toolForm.allow_parallel_calls" @update:value="normalizeParallel" /></div>
-            <n-form-item v-if="toolForm.allow_parallel_calls" label="最大并发请求数"><n-input-number v-model:value="toolForm.max_parallel_calls" :min="1" :max="128" /></n-form-item>
-            <n-form-item label="单次调用超时（秒）"><n-input-number v-model:value="toolForm.timeout_seconds" :min="1" :max="3600" /></n-form-item>
-          </section>
+          <ToolExecutionSettings :policy="toolForm" @update:policy="value => Object.assign(toolForm, value)" />
           <section class="form-section">
             <div class="section-title"><strong>输出控制</strong></div>
             <n-form-item label="输出处理"><n-radio-group v-model:value="toolForm.output_projection"><n-space><n-radio value="compress">超限压缩</n-radio><n-radio value="passthrough">原样传递</n-radio></n-space></n-radio-group></n-form-item>
@@ -506,6 +503,7 @@
 </template>
 
 <script setup lang="ts">
+import ToolExecutionSettings from '@/components/extensions/ToolExecutionSettings.vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import {
   NAlert, NButton, NDrawer, NDrawerContent, NDynamicTags, NEmpty, NForm, NFormItem, NIcon,
@@ -1184,7 +1182,7 @@ async function openToolEditor(item: CapabilityPoolItem) {
       risk_level: item.details.risk_level || 'low',
       allow_parallel_calls: item.details.allow_parallel_calls !== false,
       max_parallel_calls: Number(item.details.max_parallel_calls || 1),
-      timeout_seconds: Number(item.details.timeout_seconds || 300),
+      timeout_seconds: item.details.timeout_seconds === null ? null : Number(item.details.timeout_seconds ?? 300),
       output_projection: item.details.output_projection || 'compress',
       output_max_model_chars: Number(item.details.output_max_model_chars || 50000),
       retain_raw_output: item.details.retain_raw_output !== false,
@@ -1214,7 +1212,7 @@ async function openToolEditor(item: CapabilityPoolItem) {
     const permissions = (manifest.permissions && typeof manifest.permissions === 'object' ? manifest.permissions : {}) as Record<string, unknown>
     const execution = (manifest.execution && typeof manifest.execution === 'object' ? manifest.execution : {}) as Record<string, unknown>
     Object.assign(toolCreateForm.runtime_policy, {
-      approval: permissions.approval || 'inherit', risk_level: permissions.risk_level || 'low', allow_parallel_calls: execution.allow_parallel_calls !== false, max_parallel_calls: Number(execution.max_parallel_calls || 1), timeout_seconds: Number(execution.timeout_seconds || 300), output_projection: execution.output_projection || 'compress', output_max_model_chars: Number(execution.output_max_model_chars || 50000), retain_raw_output: execution.retain_raw_output !== false,
+      approval: permissions.approval || 'inherit', risk_level: permissions.risk_level || 'low', allow_parallel_calls: execution.allow_parallel_calls !== false, max_parallel_calls: Number(execution.max_parallel_calls || 1), timeout_seconds: execution.timeout_seconds === null ? null : Number(execution.timeout_seconds ?? 300), output_projection: execution.output_projection || 'compress', output_max_model_chars: Number(execution.output_max_model_chars || 50000), retain_raw_output: execution.retain_raw_output !== false,
     })
     for (const key of Object.keys(toolPackageFiles)) delete toolPackageFiles[key]
     document.files.filter(file => file.editable).forEach(file => { toolPackageFiles[file.path] = file.content || '' })
@@ -1226,7 +1224,6 @@ async function openToolEditor(item: CapabilityPoolItem) {
     loadingToolPackage.value = false
   }
 }
-function normalizeParallel(value: boolean) { if (!value) toolForm.max_parallel_calls = 1 }
 async function openSkillEditor(item: CapabilityPoolItem) { showSkillEditor.value = true; loadingSkill.value = true; skillDocument.value = null; skillTab.value = 'metadata'; try { const document = await capabilityPoolsApi.skillEditor(item.capability_id); skillDocument.value = document; skillForm.metadata = structuredClone(document.metadata); skillForm.instructions = document.instructions; for (const key of Object.keys(skillResources)) delete skillResources[key]; document.resources.filter(resource => resource.editable).forEach(resource => { skillResources[resource.path] = resource.content || '' }); selectedResourcePath.value = document.resources[0]?.path || '' } catch (error) { showSkillEditor.value = false; message.error(error instanceof Error ? error.message : String(error)) } finally { loadingSkill.value = false } }
 async function saveSkillContent() { if (!skillDocument.value) return; savingSkill.value = true; try { snapshot.value = await capabilityPoolsApi.updateSkillContent(skillDocument.value, { metadata: skillForm.metadata, instructions: skillForm.instructions, resources: { ...skillResources } }); showSkillEditor.value = false; message.success('Skill 已校验并发布') } catch (error) { message.error(error instanceof Error ? error.message : String(error)) } finally { savingSkill.value = false } }
 async function saveMcpServers(servers: McpServerConfig[]) {

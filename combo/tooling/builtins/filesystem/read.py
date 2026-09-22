@@ -36,7 +36,7 @@ def evaluate_risk(arguments: dict[str, Any], context: dict[str, Any]) -> dict[st
 
 def run(arguments: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
     path = required_string(arguments, "path")
-    start_line = positive_int(arguments.get("start_line", 1), "start_line")
+    start_line = positive_int(arguments.get("offset", 1), "offset")
     limit = positive_int(arguments.get("limit", 200), "limit")
     if limit > 2000:
         raise ValueError("limit must be less than or equal to 2000")

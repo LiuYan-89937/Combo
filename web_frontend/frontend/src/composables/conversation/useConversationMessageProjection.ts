@@ -48,6 +48,7 @@ export function useConversationMessageProjection() {
     let activeAssistantItem: ConversationTimelineItem | null = null
     orderedTranscript(runtimeStore.transcript).forEach((message, index) => {
       if (isPendingDispatch(message.metadata?.dispatch_state)) return
+      if (message.role === 'user' && message.status === 'cancelled') return
       if (!hasConversationVisibleParts(message.parts)) return
       const requestId = String(message.metadata?.request_id || '').trim()
       if (message.role === 'assistant' && !message.metadata?.delegated_delivery) {

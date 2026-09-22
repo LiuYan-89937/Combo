@@ -125,9 +125,6 @@ class MainTurnCommandHandler:
                     policy=resolved_policy,
                     workspace_id=conversation.workspace_id,
                 )
-        except asyncio.CancelledError:
-            self._conversations.cancel_pre_runtime_turn(source_command_id=envelope.command_id)
-            raise
         except Exception:
             self._conversations.fail_pre_runtime_turn(source_command_id=envelope.command_id)
             return CommandOutcome(

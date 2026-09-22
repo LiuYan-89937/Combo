@@ -39,6 +39,7 @@ def runtime_execution_identity(instance: RuntimeInstance) -> RuntimeExecutionIde
         ),
         memory_agent_write_enabled=request.policy_snapshot.memory_agent_write_enabled,
         memory_policy={
+            "automatic_recall_enabled": request.policy_snapshot.memory_auto_recall_enabled,
             "max_items": request.policy_snapshot.memory_max_injected_items,
             "max_tokens": request.policy_snapshot.memory_max_injected_tokens,
         },

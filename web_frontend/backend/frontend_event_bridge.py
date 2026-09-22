@@ -690,6 +690,7 @@ def project_command_event(record: OutboxRecord) -> list[dict[str, Any]]:
     queue_sequence = raw.pop("queue_sequence", None)
     steering = raw.pop("steering", None)
     queued_command_id = raw.pop("queued_command_id", None)
+    target_command_id = raw.pop("target_command_id", None)
     try:
         receipt = CommandReceipt.model_validate(raw)
     except Exception:
@@ -713,6 +714,9 @@ def project_command_event(record: OutboxRecord) -> list[dict[str, Any]]:
     elif record.event_kind == "command_steering_rejected" or (command_kind == "steer_runtime_request" and record.event_kind in {"command_failed", "command_rejected"}):
         event_type = "runtime_request_steering_rejected"
         payload = {"queued_request_id": queued_command_id, "reason": receipt.rejection_code}
+    elif command_kind == "cancel_command_request" and record.event_kind in {"command_failed", "command_rejected", "command_cancelled"}:
+        event_type = "runtime_request_cancel_rejected"
+        payload = {"target_request_id": target_command_id, "reason": receipt.rejection_code}
     elif record.event_kind in {"command_failed", "command_rejected"} and receipt.runtime_instance_id is None:
         event_type = "run_failed"
         payload = {
@@ -723,10 +727,11 @@ def project_command_event(record: OutboxRecord) -> list[dict[str, Any]]:
                 "message": receipt.rejection_code or "command failed before runtime startup",
             },
         }
-    elif record.event_kind == "command_cancelled" and receipt.runtime_instance_id is None:
-        event_type = "run_cancelled"
+    elif record.event_kind == "command_cancelled" and command_kind == "send_message" and receipt.runtime_instance_id is None:
+        event_type = "runtime_request_cancelled"
         payload = {
             "dispatch_state": "cancelled",
+            "message_status": "cancelled",
             "reason": "user_cancelled",
         }
     else:

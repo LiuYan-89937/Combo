@@ -73,7 +73,7 @@ export interface ToolRuntimePolicyInput {
   risk_level: 'low' | 'medium' | 'high'
   allow_parallel_calls: boolean
   max_parallel_calls: number
-  timeout_seconds: number
+  timeout_seconds: number | null
   output_projection: 'compress' | 'passthrough'
   output_max_model_chars: number
   retain_raw_output: boolean

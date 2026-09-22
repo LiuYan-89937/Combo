@@ -453,7 +453,7 @@ def _pool_instance(session_id: str, principal_id: str) -> SimpleNamespace:
 def _verify_process_pool_roots(first_root: Path, second_root: Path) -> None:
     first_root.mkdir(parents=True, exist_ok=True)
     second_root.mkdir(parents=True, exist_ok=True)
-    pool = SessionProcessResourcePool(environment=dict(os.environ))
+    pool = SessionProcessResourcePool(environment=dict(os.environ), on_process_completion=lambda instance, output: None)
     instance = _pool_instance("session-1", "principal-1")
     shared_child = _pool_instance("session-1", "principal-1")
     try:

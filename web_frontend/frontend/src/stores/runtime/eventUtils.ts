@@ -23,6 +23,8 @@ const DEDICATED_INTERRUPT_PANEL_TYPES = new Set<string>()
 const REQUEST_TERMINAL_EVENT_TYPES = new Set([
   'run_completed',
   'run_cancelled',
+  'runtime_request_cancelled',
+  'runtime_request_cancel_rejected',
   'run_failed',
   'error',
   'interrupt_requested',

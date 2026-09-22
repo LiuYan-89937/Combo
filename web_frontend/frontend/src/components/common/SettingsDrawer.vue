@@ -119,20 +119,12 @@
           <div class="group-body">
             <div class="field-row">
               <div class="field-copy">
-                <label class="field-label">{{ t('settings.memoryAutoWrite') }}</label>
+                <label class="field-label">{{ t('settings.memoryAutoRecall') }}</label>
+                <p class="field-description">{{ t('settings.memoryRecallDescription') }}</p>
               </div>
-              <n-switch v-model:value="memoryAutoWriteEnabled" />
+              <n-switch v-model:value="memoryAutoRecallEnabled" />
             </div>
 
-            <template v-if="memoryAutoWriteEnabled">
-              <div class="field-divider" aria-hidden="true"></div>
-              <div class="field-block">
-                <label class="field-label">{{ t('settings.memoryWriteInterval') }}</label>
-                <n-input-number v-model:value="memoryWriteIntervalTurns" class="field-input" :min="1" :max="1000" :precision="0">
-                  <template #suffix>{{ t('settings.turns') }}</template>
-                </n-input-number>
-              </div>
-            </template>
 
             <div class="field-divider" aria-hidden="true"></div>
             <div class="field-row">
@@ -211,6 +203,15 @@
               </n-input-number>
             </div>
 
+            <div class="field-divider" aria-hidden="true"></div>
+
+            <div class="field-block">
+              <label class="field-label">{{ t('settings.builtinToolTimeout') }}</label>
+              <n-input-number v-model:value="builtinToolTimeoutSeconds" class="field-input" :min="1" :max="3600" :precision="0">
+                <template #suffix>{{ t('settings.seconds') }}</template>
+              </n-input-number>
+              <p class="field-description">{{ t('settings.builtinToolTimeoutDescription') }}</p>
+            </div>
             <div class="field-divider" aria-hidden="true"></div>
 
             <div class="field-block">
@@ -602,6 +603,13 @@ const requestTimeoutSeconds = computed({
   },
 })
 
+const builtinToolTimeoutSeconds = computed({
+  get: () => runtimePreferences.builtinToolTimeoutSeconds,
+  set: (value: number | null) => {
+    if (value !== null) runtimePreferences.setBuiltinToolTimeoutSeconds(value)
+  },
+})
+
 const browserOperationTimeoutMs = computed({
   get: () => runtimePreferences.browserOperationTimeoutMs,
   set: (value: number | null) => {
@@ -651,13 +659,9 @@ const contextCompressionDetail = computed({
   },
 })
 
-const memoryAutoWriteEnabled = computed({
-  get: () => runtimePreferences.memoryAutoWriteEnabled,
-  set: (value: boolean) => runtimePreferences.setMemoryAutoWriteEnabled(value),
-})
-const memoryWriteIntervalTurns = computed({
-  get: () => runtimePreferences.memoryWriteIntervalTurns,
-  set: (value: number | null) => { if (value !== null) runtimePreferences.setMemoryWriteIntervalTurns(value) },
+const memoryAutoRecallEnabled = computed({
+  get: () => runtimePreferences.memoryAutoRecallEnabled,
+  set: (value: boolean) => runtimePreferences.setMemoryAutoRecallEnabled(value),
 })
 const memoryAgentWriteEnabled = computed({
   get: () => runtimePreferences.memoryAgentWriteEnabled,

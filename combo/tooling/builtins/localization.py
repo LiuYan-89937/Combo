@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from combo.runtime_i18n import RuntimeLocale
 from combo.tooling.spec import ToolSpec
 from combo.tooling.builtins.skill.specs import SKILL_TOOL_DESCRIPTION
+from combo.tooling.builtins.memory.specs import MEMORY_TOOL_DESCRIPTION
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,7 +16,7 @@ class BuiltinToolLocalization:
 
 BUILTIN_TOOL_LOCALIZATIONS: dict[str, BuiltinToolLocalization] = {
     'read': BuiltinToolLocalization(
-        description_en_us='Read a bounded line range from a UTF-8 text file in the current workspace. If a path is uncertain, locate it with the files action of rg before concluding that it is unavailable.',
+        description_en_us='Read a bounded line range from a UTF-8 text file in the current workspace. offset is the 1-based starting line (default 1), not a byte offset; limit is the maximum number of lines (default 200, maximum 2000). If a path is uncertain, locate it with the files action of rg before concluding that it is unavailable.',
     ),
     'write': BuiltinToolLocalization(
         description_en_us='Create or fully replace a text file in the current workspace. Use write_once with path and complete content; for staged generation use start with path, append with the returned write_id and content, then commit with write_id, or abort to discard it. Only write_once/start accept path; append/commit/abort must not include path. Use edit for local changes.',
@@ -33,10 +34,10 @@ BUILTIN_TOOL_LOCALIZATIONS: dict[str, BuiltinToolLocalization] = {
         description_en_us='Ask one focused question in the main conversation when a child Agent cannot continue without required information. Use choices for a small mutually exclusive set and allow_free_text for written answers. Do not use this for approvals or routine progress updates.',
     ),
     'shell': BuiltinToolLocalization(
-        description_en_us='Run build, validation, formatting, version-control, script, or service commands in the current workspace. Use rg for file discovery and file-content search, and read for line-based file reading. Use foreground for ordinary commands and wait for the complete result; use background only for long-lived services or listeners that must outlive the turn.',
+        description_en_us='Run build, validation, formatting, version-control, script, or service commands in the current workspace. Use rg for file discovery and file-content search, and read for line-based file reading. Use foreground for short commands within the tool timeout. Use background for long renders, builds, or services; it returns process_id immediately and completion is reported automatically. Use shell_status to inspect or wait; do not use sleep polling or detach commands with nohup or &.',
     ),
     'shell_status': BuiltinToolLocalization(
-        description_en_us='Inspect the status and collected output of a process started by shell in background mode.',
+        description_en_us='Inspect a background process. wait_seconds waits for completion; after_revision also returns early for new output. Use the last output_revision. Background completion is reported automatically, so repeated polling is unnecessary.',
     ),
     'shell_stop': BuiltinToolLocalization(
         description_en_us='Stop a background process tree started by shell and return its final status and output.',
@@ -63,7 +64,7 @@ BUILTIN_TOOL_LOCALIZATIONS: dict[str, BuiltinToolLocalization] = {
         description_en_us='Inspect authoritative status for all child-Agent tasks in the current conversation. Use only for an explicit progress request or to retrieve delivery details after a terminal notification; do not poll.',
     ),
     'memory': BuiltinToolLocalization(
-        description_en_us='Persist a reusable user preference, constraint, decision, fact, or artifact established in this turn. Cross-session retrieval is automatic; do not use this tool to search memories.',
+        description_en_us=MEMORY_TOOL_DESCRIPTION,
     ),
     'mcp_content': BuiltinToolLocalization(
         description_en_us="Read a confirmed MCP Resource or expand an MCP Prompt with its declared arguments. Search and describe the exact object first; another object's definition is not interchangeable.",

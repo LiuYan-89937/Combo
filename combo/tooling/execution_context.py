@@ -84,6 +84,11 @@ class ToolCancellationScope:
         self._next_id = 0
         self._cancelled = False
 
+    @property
+    def cancelled(self) -> bool:
+        with self._lock:
+            return self._cancelled
+
     def register(self, callback: Callable[[], None]) -> Callable[[], None]:
         with self._lock:
             self._next_id += 1
@@ -198,6 +203,11 @@ def runtime_terminal_cancellation_requested() -> bool:
 def runtime_tool_interruption_requested() -> bool:
     control = current_runtime_run_control()
     return bool(control is not None and getattr(control, "tool_interrupt_requested", False))
+
+
+def runtime_tool_cancellation_requested() -> bool:
+    scope = _TOOL_CANCELLATION_SCOPE.get()
+    return (scope is not None and scope.cancelled) or runtime_terminal_cancellation_requested() or runtime_tool_interruption_requested()
 
 
 def consume_runtime_inputs() -> tuple[Any, ...]:

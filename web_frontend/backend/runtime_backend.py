@@ -280,7 +280,8 @@ class RuntimeBackend:
         )
         self.browser_runtime = BrowserRuntime(config.browser_runtime)
         self.process_resources = SessionProcessResourcePool(
-            environment=dict(config.process_environment)
+            environment=dict(config.process_environment),
+            on_process_completion=lambda instance, output: self.supervisor.enqueue_process_completion(instance, output),
         )
         self.filesystem_resources = RuntimeFilesystemResourcePool(
             staged_write_ttl_seconds=config.staged_write_ttl_seconds,
@@ -382,6 +383,7 @@ class RuntimeBackend:
                 idle_poll_seconds=config.idle_poll_seconds,
             ),
             report_failure=self._report_failure,
+            process_resources=self.process_resources,
         )
         self.scheduler_service = SchedulerService(
             store=self.application.stores.scheduler,

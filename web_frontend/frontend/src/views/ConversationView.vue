@@ -177,6 +177,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { NButton, NIcon, NPopover, NScrollbar } from 'naive-ui'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useAgentStore } from '@/stores/agent'
+import { useUiStore } from '@/stores/ui'
 import { useI18n } from '@/composables/useI18n'
 import { useConversation } from '@/composables/conversation/useConversation'
 import { useConversationMessageProjection } from '@/composables/conversation/useConversationMessageProjection'
@@ -208,6 +209,7 @@ import { ArrowDownOutline, ListOutline } from '@/components/icons'
 
 const runtimeStore = useRuntimeStore()
 const agentStore = useAgentStore()
+const uiStore = useUiStore()
 const commands = useCommand()
 const workspaceStore = useWorkspaceStore()
 const gitChangesStore = useGitChangesStore()
@@ -374,11 +376,40 @@ function handleSteer(requestId: string) {
   steerQueuedRequest(requestId)
 }
 
+const cancelledDrafts = ref<Record<string, { content: string; scope: string | null }>>({})
+
 function handleCancelQueued(message: { requestId: string; content: string }) {
-  cancelQueuedRequest(message.requestId)
-  inputRef.value?.restoreDraft(message.content, [])
-  nextTick(() => inputRef.value?.focus())
+  if (!cancelQueuedRequest(message.requestId)) return
+  cancelledDrafts.value[message.requestId] = {
+    content: message.content,
+    scope: runtimeStore.activeConversationScope,
+  }
 }
+
+watch(() => Object.entries(cancelledDrafts.value).map(([requestId, draft]) => ({
+  requestId,
+  draft,
+  request: runtimeStore.activeRequests[requestId],
+  cancelling: runtimeStore.activeRequests[requestId]?.payload?.cancel_pending,
+  withdrawn: runtimeStore.activeRequests[requestId]?.payload?.message_status === 'cancelled',
+  scope: runtimeStore.activeConversationScope,
+})), entries => {
+  for (const { requestId, draft, request, cancelling, withdrawn, scope } of entries) {
+    if (scope !== draft.scope || !request || !cancelling) {
+      delete cancelledDrafts.value[requestId]
+      if (scope !== draft.scope) continue
+      if (withdrawn) {
+        inputRef.value?.restoreCancelledDraft(draft.content)
+      } else if (request?.payload?.cancel_rejected) {
+        uiStore.addNotification({
+          type: 'warning',
+          title: t('common.cancel'),
+          message: t('chat.messageCancelRejected'),
+        })
+      }
+    }
+  }
+})
 
 function addMessageReference(message: TranscriptItem) {
   referenceStore.add(messageContextReference(message), referenceScope.value)
